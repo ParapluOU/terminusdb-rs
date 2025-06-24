@@ -215,7 +215,7 @@ fn implement_from_instance_for_simple_enum(
 ) -> proc_macro2::TokenStream {
     let variant_matchers = data_enum.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
-        let variant_name_str = variant_ident.to_string();
+        let variant_name_str = variant_ident.to_string().to_lowercase(); // Using lowercase for consistency
 
         quote! {
             if instance.properties.contains_key(#variant_name_str) {

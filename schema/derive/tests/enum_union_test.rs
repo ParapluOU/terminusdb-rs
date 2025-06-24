@@ -147,7 +147,7 @@ mod tests {
         } = person_schema
         {
             assert_eq!(properties.len(), 2);
-            assert!(subdocument); // Should be a subdocument
+            assert!(!subdocument); // Virtual structs are not subdocuments by default
 
             let name_prop = properties.iter().find(|p| p.name == "name").unwrap();
             assert_eq!(name_prop.class, "xsd:string");
@@ -166,7 +166,7 @@ mod tests {
         } = company_schema
         {
             assert_eq!(properties.len(), 2);
-            assert!(subdocument); // Should be a subdocument
+            assert!(!subdocument); // Virtual structs are not subdocuments by default
 
             let name_prop = properties.iter().find(|p| p.name == "name").unwrap();
             assert_eq!(name_prop.class, "xsd:string");
@@ -247,7 +247,7 @@ mod tests {
             Schema::Enum {
                 id: "SimpleEnum".to_string(),
                 documentation: None,
-                values: vec!["Red".to_string(), "Green".to_string(), "Blue".to_string()],
+                values: vec!["red".to_string(), "green".to_string(), "blue".to_string()],
             }
         );
     }

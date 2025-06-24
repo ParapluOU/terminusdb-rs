@@ -30,13 +30,13 @@ mod tests {
     #[test]
     fn test_simple_enum() {
         let schema = <Color as terminusdb_schema::ToTDBSchema>::to_schema();
-        
+
         if let Schema::Enum { id, values, .. } = schema {
             assert_eq!(id, "Color");
             assert_eq!(values.len(), 3);
-            assert!(values.contains(&"Red".to_string()));
-            assert!(values.contains(&"Green".to_string()));
-            assert!(values.contains(&"Blue".to_string()));
+            assert!(values.contains(&"red".to_string()));
+            assert!(values.contains(&"green".to_string()));
+            assert!(values.contains(&"blue".to_string()));
         } else {
             panic!("Expected Enum schema");
         }
@@ -45,19 +45,25 @@ mod tests {
     #[test]
     fn test_documented_enum() {
         let schema = <Status as terminusdb_schema::ToTDBSchema>::to_schema();
-        
-        if let Schema::Enum { id, values, documentation, .. } = schema {
+
+        if let Schema::Enum {
+            id,
+            values,
+            documentation,
+            ..
+        } = schema
+        {
             assert_eq!(id, "Status");
             assert_eq!(values.len(), 4);
-            assert!(values.contains(&"Active".to_string()));
-            assert!(values.contains(&"Inactive".to_string()));
-            assert!(values.contains(&"Pending".to_string()));
-            assert!(values.contains(&"Expired".to_string()));
-            
+            assert!(values.contains(&"active".to_string()));
+            assert!(values.contains(&"inactive".to_string()));
+            assert!(values.contains(&"pending".to_string()));
+            assert!(values.contains(&"expired".to_string()));
+
             // Just check that documentation exists
             assert!(documentation.is_some());
         } else {
             panic!("Expected Enum schema");
         }
     }
-} 
+}

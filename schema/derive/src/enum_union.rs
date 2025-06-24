@@ -16,8 +16,11 @@ pub fn implement_for_tagged_enum(
     
     trace!("Processing TaggedEnum: {}", enum_name);
 
-    // Get the rename strategy from opts  
-    let rename_strategy = opts.get_rename_strategy();
+    // Get the rename strategy from opts, defaulting to lowercase for enum variants
+    let rename_strategy = match opts.get_rename_strategy() {
+        crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
+        other => other,
+    };
     
     // Process enum variants to generate properties
     let variant_properties = process_enum_variants(data_enum, enum_name, rename_strategy);
@@ -96,7 +99,10 @@ pub fn implement_for_tagged_enum(
         generate_abstract_tagged_union_instance_logic(data_enum, enum_name)
     } else {
         // Non-Abstract Tagged Union: Generate standard instance creation code
-        let rename_strategy = opts.get_rename_strategy();
+        let rename_strategy = match opts.get_rename_strategy() {
+            crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
+            other => other,
+        };
         let properties_code = process_tagged_enum_for_instance(data_enum, enum_name, rename_strategy);
         quote! {
             // Create a BTreeMap for properties

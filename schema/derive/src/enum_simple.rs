@@ -14,8 +14,11 @@ pub fn implement_for_simple_enum(
 
     trace!("Processing SimpleEnum: {}", enum_name);
     
-    // Get the rename strategy from opts
-    let rename_strategy = opts.get_rename_strategy();
+    // Get the rename strategy from opts, defaulting to lowercase for enum variants
+    let rename_strategy = match opts.get_rename_strategy() {
+        crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
+        other => other,
+    };
     
     // Extract the variant names from the enum
     let variant_values = data_enum.variants.iter().map(|variant| {
@@ -75,8 +78,12 @@ pub fn implement_for_simple_enum(
         to_schema_tree_impl
     );
     
-    // Generate the body code for the to_instance method for simple enums
-    let properties_code = process_enum_variants_for_instance(data_enum, enum_name, rename_strategy);
+    // Generate the body code for the to_instance method for simple enums  
+    let instance_rename_strategy = match opts.get_rename_strategy() {
+        crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
+        other => other,
+    };
+    let properties_code = process_enum_variants_for_instance(data_enum, enum_name, instance_rename_strategy);
     let instance_body_code = quote! {
         // Create a BTreeMap for properties
         let mut properties = std::collections::BTreeMap::new();

@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use terminusdb_schema::{
     Instance, InstanceProperty, Key, PrimitiveValue, Property, RelationValue, Schema,
     SetCardinality, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
 use terminusdb_schema_derive::TerminusDBModel;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // Simple struct for testing
 #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
@@ -277,7 +277,7 @@ mod tests {
         match &instance.schema {
             Schema::Enum { .. } => {
                 assert_eq!(instance.properties.len(), 1);
-                assert!(instance.properties.contains_key("Blue"));
+                assert!(instance.properties.contains_key("blue"));
             }
             _ => panic!("Expected Schema::Enum"),
         }

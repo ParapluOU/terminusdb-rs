@@ -1,8 +1,8 @@
 use anyhow::*;
-use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema, TypeFamily};
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema, TypeFamily};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Address type used for nested structures
 #[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
@@ -148,9 +148,9 @@ fn test_complex_integration() {
         assert_eq!(enum_values.len(), 3);
 
         let value_names: Vec<String> = enum_values.iter().map(|v| v.to_string()).collect();
-        assert!(value_names.contains(&"Active".to_string()));
-        assert!(value_names.contains(&"Inactive".to_string()));
-        assert!(value_names.contains(&"Suspended".to_string()));
+        assert!(value_names.contains(&"active".to_string()));
+        assert!(value_names.contains(&"inactive".to_string()));
+        assert!(value_names.contains(&"suspended".to_string()));
     }
 
     // Verify ContactInfo union variants
