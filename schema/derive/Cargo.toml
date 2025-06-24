@@ -1,0 +1,39 @@
+[package]
+name = "terminusdb-schema-derive"
+description = "TerminusDB Schema Derive Macros"
+readme = "crates/terminusdb/schema/README.md"
+license = "AGPL-3.0"
+version = "0.1.0"
+edition = "2021"
+publish = false
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[dependencies]
+darling = "0.20.3"
+syn = "2.0.38"
+proc-macro2 = "1.0.68"
+quote = "1.0.33"
+heck = "0.3.2"
+regex = "1"
+itertools = "0.10.3"
+serde = { workspace=true }
+serde_json = {workspace = true}
+anyhow = { workspace=true }
+
+terminusdb-schema = { path = ".." }
+
+# for macro
+log = "*"
+env_logger =  "*"
+multihash = "*"
+
+# for macro
+regexm = "0.2.1"
+chrono.workspace = true
+uuid.workspace = true
+tap = "1.0.1"
+
+[lib]
+path = "src/lib.rs"
+#crate-type = ["cdylib"]
+proc-macro = true

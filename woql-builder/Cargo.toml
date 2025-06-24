@@ -1,0 +1,13 @@
+[package]
+name = "terminusdb-woql-builder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-schema = { path = "../schema" }
+serde_json = "1.0" # Likely needed for constructing JSON eventually
+decimal-rs = "0.1.43" # Added for XSDAnySimpleType::Decimal 
+
+[dev-dependencies]
+terminusdb-woql2 = { path = "../woql2" } # Add for test struct imports, remove feature flag

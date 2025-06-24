@@ -1,0 +1,48 @@
+[package]
+name = "terminusdb-schema"
+version = "0.1.0"
+edition = "2018"
+publish = false
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[dependencies]
+serde = { workspace=true }
+serde_json = {workspace = true}
+itertools = "0.10.3"
+tempfile = "3"
+#filepath = "*"
+#subprocess = "0.2.9"
+decimal-rs = { version = "0.1.38", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+enum_derive = "0.1.7"
+custom_derive = "0.1.7"
+#command-run = "1.1.1"
+exec_time = "0.1.4"
+#zip = "0.6.2"
+rayon = "1.5.3"
+#isahc = { version = "1.7.2", features = ["json"]  }
+glob = { version = "0.3.0"}
+hashable = "*"
+# our local libs
+enum_variant_macros = "0.3.0"
+pseudonym.workspace = true
+anyhow = { workspace=true }
+typestate = { version = "0.1.0", path = "../typestate" }
+uuid = { version = "1.4", features = ["v4", "serde"] }
+tap = "1.0.1"
+sha2 = "0.10.8"
+serde_canonical_json = "1.0.0"
+pretty_assertions = "1.4.1"
+refined = "0.3.1"
+
+[lib]
+path = "src/lib.rs"
+#crate-type = ["cdylib"]
+
+[dev-dependencies]
+terminusdb-schema-derive = { path = "derive" }
+reqwest = "*"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = "1"
+tokio-test = "0.3.0"

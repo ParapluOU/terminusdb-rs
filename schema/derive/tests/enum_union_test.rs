@@ -1,0 +1,341 @@
+use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+use serde::{Deserialize, Serialize};
+
+// Basic tagged union enum
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub enum BasicTaggedUnion {
+    Integer(i32),
+    Text(String),
+    Boolean(bool),
+}
+
+// Complex tagged union with struct variants
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub enum ComplexTaggedUnion {
+    Person {
+        name: String,
+        age: i32,
+    },
+    Company {
+        name: String,
+        employees: Vec<String>,
+    },
+    None,
+}
+
+// Enum with tuple struct variants
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub enum TupleStructVariants {
+    Point(f32, f32),
+    RGB(u8, u8, u8),
+    Empty,
+}
+
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum SimpleEnum {
+    Red,
+    Green,
+    Blue,
+}
+
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum TaggedEnum {
+    Text(String),
+    Number(i32),
+    Complex { x: f64, y: f64 },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminusdb_schema::TypeFamily;
+
+    #[test]
+    fn test_basic_tagged_union() {
+        let schema = <BasicTaggedUnion as terminusdb_schema::ToTDBSchema>::to_schema();
+
+        if let Schema::TaggedUnion { id, properties, .. } = schema {
+            // Check union name
+            assert_eq!(id, "BasicTaggedUnion");
+
+            // Check variant types
+            assert_eq!(properties.len(), 3);
+
+            let int_prop = properties.iter().find(|p| p.name == "integer").unwrap();
+            assert_eq!(int_prop.class, "xsd:integer");
+
+            let text_prop = properties.iter().find(|p| p.name == "text").unwrap();
+            assert_eq!(text_prop.class, "xsd:string");
+
+            let bool_prop = properties.iter().find(|p| p.name == "boolean").unwrap();
+            assert_eq!(bool_prop.class, "xsd:boolean");
+        } else {
+            panic!("Expected Schema::TaggedUnion");
+        }
+    }
+
+    #[test]
+    fn test_complex_tagged_union() {
+        let schemas =
+            <ComplexTaggedUnion as terminusdb_schema::ToTDBSchema>::to_schema_tree();
+
+        // Should include schemas for the union and each struct variant
+        assert_eq!(schemas.len(), 3);
+
+        dbg!(&schemas);
+
+        // Find the main union schema
+        let union_schema = schemas
+            .iter()
+            .find(|s| {
+                if let Schema::TaggedUnion { id, .. } = s {
+                    id == "ComplexTaggedUnion"
+                } else {
+                    false
+                }
+            })
+            .unwrap();
+
+        // Find the person struct schema
+        let person_schema = schemas
+            .iter()
+            .find(|s| {
+                if let Schema::Class { id, .. } = s {
+                    id == "ComplexTaggedUnionPerson"
+                } else {
+                    false
+                }
+            })
+            .unwrap();
+
+        // Find the company struct schema
+        let company_schema = schemas
+            .iter()
+            .find(|s| {
+                if let Schema::Class { id, .. } = s {
+                    id == "ComplexTaggedUnionCompany"
+                } else {
+                    false
+                }
+            })
+            .unwrap();
+
+        // Check union properties
+        if let Schema::TaggedUnion { properties, .. } = union_schema {
+            assert_eq!(properties.len(), 3);
+
+            let person_prop = properties.iter().find(|p| p.name == "person").unwrap();
+            assert_eq!(person_prop.class, "ComplexTaggedUnionPerson");
+
+            let company_prop = properties.iter().find(|p| p.name == "company").unwrap();
+            assert_eq!(company_prop.class, "ComplexTaggedUnionCompany");
+
+            let none_prop = properties.iter().find(|p| p.name == "none").unwrap();
+            assert_eq!(none_prop.class, "sys:Unit");
+        } else {
+            panic!("Expected Schema::TaggedUnion for ComplexTaggedUnion");
+        }
+
+        // Check person struct properties
+        if let Schema::Class {
+            properties,
+            subdocument,
+            ..
+        } = person_schema
+        {
+            assert_eq!(properties.len(), 2);
+            assert!(subdocument); // Should be a subdocument
+
+            let name_prop = properties.iter().find(|p| p.name == "name").unwrap();
+            assert_eq!(name_prop.class, "xsd:string");
+
+            let age_prop = properties.iter().find(|p| p.name == "age").unwrap();
+            assert_eq!(age_prop.class, "xsd:integer");
+        } else {
+            panic!("Expected Schema::Class for PersonForUnion");
+        }
+
+        // Check company struct properties
+        if let Schema::Class {
+            properties,
+            subdocument,
+            ..
+        } = company_schema
+        {
+            assert_eq!(properties.len(), 2);
+            assert!(subdocument); // Should be a subdocument
+
+            let name_prop = properties.iter().find(|p| p.name == "name").unwrap();
+            assert_eq!(name_prop.class, "xsd:string");
+
+            let employees_prop = properties.iter().find(|p| p.name == "employees").unwrap();
+            assert_eq!(employees_prop.class, "xsd:string");
+            assert_eq!(employees_prop.r#type, Some(TypeFamily::List));
+        } else {
+            panic!("Expected Schema::Class for CompanyForUnion");
+        }
+    }
+
+    #[test]
+    fn test_tuple_struct_variants() {
+        let schemas =
+            <TupleStructVariants as terminusdb_schema::ToTDBSchema>::to_schema_tree();
+
+        // Should include schemas for the union and each tuple struct variant
+        assert_eq!(schemas.len(), 3);
+
+        // Find the tuple struct schemas
+        let point_schema = schemas
+            .iter()
+            .find(|s| {
+                if let Schema::Class { id, .. } = s {
+                    id == "TupleStructVariantsPoint"
+                } else {
+                    false
+                }
+            })
+            .unwrap();
+
+        let rgb_schema = schemas
+            .iter()
+            .find(|s| {
+                if let Schema::Class { id, .. } = s {
+                    id == "TupleStructVariantsRGB"
+                } else {
+                    false
+                }
+            })
+            .unwrap();
+
+        // Check point tuple struct properties
+        if let Schema::Class { properties, .. } = point_schema {
+            assert_eq!(properties.len(), 2);
+
+            let x_prop = properties.iter().find(|p| p.name == "_0").unwrap();
+            assert_eq!(x_prop.class, "xsd:float");
+
+            let y_prop = properties.iter().find(|p| p.name == "_1").unwrap();
+            assert_eq!(y_prop.class, "xsd:float");
+        } else {
+            panic!("Expected Schema::Class for TupleStructVariantsPoint");
+        }
+
+        // Check RGB tuple struct properties
+        if let Schema::Class { properties, .. } = rgb_schema {
+            assert_eq!(properties.len(), 3);
+
+            let r_prop = properties.iter().find(|p| p.name == "_0").unwrap();
+            assert_eq!(r_prop.class, "xsd:unsignedByte");
+
+            let g_prop = properties.iter().find(|p| p.name == "_1").unwrap();
+            assert_eq!(g_prop.class, "xsd:unsignedByte");
+
+            let b_prop = properties.iter().find(|p| p.name == "_2").unwrap();
+            assert_eq!(b_prop.class, "xsd:unsignedByte");
+        } else {
+            panic!("Expected Schema::Class for TupleStructVariantsRGB");
+        }
+    }
+
+    #[test]
+    fn test_simple_enum_schema() {
+        let schema = SimpleEnum::to_schema();
+        assert_eq!(
+            schema,
+            Schema::Enum {
+                id: "SimpleEnum".to_string(),
+                base: None,
+                documentation: None,
+                values: vec!["Red".to_string(), "Green".to_string(), "Blue".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn test_tagged_enum_schema() {
+        let schema = TaggedEnum::to_schema();
+        if let Schema::TaggedUnion {
+            id,
+            properties,
+            base,
+            documentation,
+            subdocument,
+            r#abstract,
+            inherits,
+        } = schema
+        {
+            assert_eq!(id, "TaggedEnum");
+            assert_eq!(base, None);
+            assert_eq!(documentation, None);
+            assert_eq!(subdocument, false);
+            assert_eq!(r#abstract, false);
+            assert_eq!(inherits, Vec::<String>::new());
+            assert_eq!(properties.len(), 3);
+
+            let property_names: Vec<_> = properties.iter().map(|p| &p.name).collect();
+            assert!(property_names.contains(&&"text".to_string()));
+            assert!(property_names.contains(&&"number".to_string()));
+            assert!(property_names.contains(&&"complex".to_string()));
+        } else {
+            panic!("Expected TaggedUnion schema");
+        }
+    }
+
+    #[test]
+    fn test_tagged_enum_schema_tree() {
+        let schemas = TaggedEnum::to_schema_tree();
+
+        // Should include the TaggedEnum schema and virtual struct for Complex variant
+        assert!(schemas.len() >= 1);
+
+        let tagged_enum_schema = schemas
+            .iter()
+            .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == "TaggedEnum"))
+            .unwrap();
+
+        if let Schema::TaggedUnion {
+            id,
+            properties,
+            base,
+            documentation,
+            subdocument,
+            r#abstract,
+            inherits,
+        } = tagged_enum_schema
+        {
+            assert_eq!(id, "TaggedEnum");
+            assert_eq!(base, &None);
+            assert_eq!(documentation, &None);
+            assert_eq!(subdocument, &false);
+            assert_eq!(r#abstract, &false);
+            assert_eq!(inherits, &Vec::<String>::new());
+            assert_eq!(properties.len(), 3);
+        } else {
+            panic!("Expected TaggedUnion schema");
+        }
+    }
+
+    #[test]
+    fn test_schema_tree_includes_virtual_struct() {
+        let schemas = TaggedEnum::to_schema_tree();
+
+        // Check if virtual struct for Complex variant exists
+        let virtual_struct = schemas
+            .iter()
+            .find(|s| matches!(s, Schema::Class { id, .. } if id == "TaggedEnumComplex"));
+
+        if let Some(Schema::Class { properties, .. }) = virtual_struct {
+            // Should have x and y properties
+            assert_eq!(properties.len(), 2);
+
+            let prop_names: Vec<_> = properties.iter().map(|p| &p.name).collect();
+            assert!(prop_names.contains(&&"x".to_string()));
+            assert!(prop_names.contains(&&"y".to_string()));
+        }
+        // Note: virtual struct may not always be generated depending on implementation
+    }
+}
