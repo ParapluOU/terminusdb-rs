@@ -22,7 +22,7 @@ exec_time = "0.1.4"
 rayon = "1.5.3"
 #isahc = { version = "1.7.2", features = ["json"]  }
 glob = { version = "0.3.0"}
-hashable = "*"
+hashable = "0.0.0"
 # our local libs
 enum_variant_macros = "0.3.0"
 pseudonym.workspace = true
@@ -41,7 +41,7 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 terminusdb-schema-derive = { path = "derive" }
-reqwest = "*"
+reqwest = "0.11"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = "1"

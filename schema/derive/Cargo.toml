@@ -23,9 +23,9 @@ anyhow = { workspace=true }
 terminusdb-schema = { path = ".." }
 
 # for macro
-log = "*"
-env_logger =  "*"
-multihash = "*"
+log = "0.4.20"
+env_logger = "0.11"
+multihash = "0.19"
 
 # for macro
 regexm = "0.2.1"

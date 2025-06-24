@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
 
 // Basic tagged union enum
 #[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
@@ -80,8 +80,7 @@ mod tests {
 
     #[test]
     fn test_complex_tagged_union() {
-        let schemas =
-            <ComplexTaggedUnion as terminusdb_schema::ToTDBSchema>::to_schema_tree();
+        let schemas = <ComplexTaggedUnion as terminusdb_schema::ToTDBSchema>::to_schema_tree();
 
         // Should include schemas for the union and each struct variant
         assert_eq!(schemas.len(), 3);
@@ -182,8 +181,7 @@ mod tests {
 
     #[test]
     fn test_tuple_struct_variants() {
-        let schemas =
-            <TupleStructVariants as terminusdb_schema::ToTDBSchema>::to_schema_tree();
+        let schemas = <TupleStructVariants as terminusdb_schema::ToTDBSchema>::to_schema_tree();
 
         // Should include schemas for the union and each tuple struct variant
         assert_eq!(schemas.len(), 3);
@@ -243,12 +241,11 @@ mod tests {
 
     #[test]
     fn test_simple_enum_schema() {
-        let schema = SimpleEnum::to_schema();
+        let schema = <SimpleEnum as terminusdb_schema::ToTDBSchema>::to_schema();
         assert_eq!(
             schema,
             Schema::Enum {
                 id: "SimpleEnum".to_string(),
-                base: None,
                 documentation: None,
                 values: vec!["Red".to_string(), "Green".to_string(), "Blue".to_string()],
             }
@@ -257,23 +254,21 @@ mod tests {
 
     #[test]
     fn test_tagged_enum_schema() {
-        let schema = TaggedEnum::to_schema();
+        let schema = <TaggedEnum as terminusdb_schema::ToTDBSchema>::to_schema();
         if let Schema::TaggedUnion {
             id,
             properties,
             base,
             documentation,
-            subdocument,
             r#abstract,
-            inherits,
+            key: _,
+            unfoldable: _,
         } = schema
         {
             assert_eq!(id, "TaggedEnum");
             assert_eq!(base, None);
             assert_eq!(documentation, None);
-            assert_eq!(subdocument, false);
             assert_eq!(r#abstract, false);
-            assert_eq!(inherits, Vec::<String>::new());
             assert_eq!(properties.len(), 3);
 
             let property_names: Vec<_> = properties.iter().map(|p| &p.name).collect();
@@ -287,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_tagged_enum_schema_tree() {
-        let schemas = TaggedEnum::to_schema_tree();
+        let schemas = <TaggedEnum as terminusdb_schema::ToTDBSchema>::to_schema_tree();
 
         // Should include the TaggedEnum schema and virtual struct for Complex variant
         assert!(schemas.len() >= 1);
@@ -302,17 +297,15 @@ mod tests {
             properties,
             base,
             documentation,
-            subdocument,
             r#abstract,
-            inherits,
+            key: _,
+            unfoldable: _,
         } = tagged_enum_schema
         {
             assert_eq!(id, "TaggedEnum");
             assert_eq!(base, &None);
             assert_eq!(documentation, &None);
-            assert_eq!(subdocument, &false);
             assert_eq!(r#abstract, &false);
-            assert_eq!(inherits, &Vec::<String>::new());
             assert_eq!(properties.len(), 3);
         } else {
             panic!("Expected TaggedUnion schema");
@@ -321,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_schema_tree_includes_virtual_struct() {
-        let schemas = TaggedEnum::to_schema_tree();
+        let schemas = <TaggedEnum as terminusdb_schema::ToTDBSchema>::to_schema_tree();
 
         // Check if virtual struct for Complex variant exists
         let virtual_struct = schemas

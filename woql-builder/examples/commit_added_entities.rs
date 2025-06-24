@@ -1,4 +1,4 @@
-use parture_terminusdb_woql_builder::prelude::*;
+use terminusdb_woql_builder::prelude::*;
 // Import the underlying woql2 Query type for potential inspection/serialization
 use terminusdb_schema::ToJson;
 use terminusdb_woql2::prelude::{Query as Woql2Query, ToTDBInstance};

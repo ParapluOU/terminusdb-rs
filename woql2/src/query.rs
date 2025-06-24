@@ -15,10 +15,10 @@ use crate::triple::{
     AddData, AddLink, AddTriple, AddedData, AddedLink, AddedTriple, Data, DeleteLink, DeleteTriple,
     DeletedLink, DeletedTriple, Link, Triple,
 };
-use terminusdb_schema::{FromTDBInstance, ToJson};
-use terminusdb_schema::ToTDBInstance;
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use serde::{Deserialize, Serialize};
+use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBSchema};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // todo: define key type as lexical on the 'name' field
 /// A named query names a specific query for later retrieval and re-use.
@@ -129,12 +129,11 @@ pub enum Query {
     TripleCount(TripleCount),
 }
 
-
 #[test]
 fn test_abstract_query() {
     let query = Query::And(And { and: vec![] });
-    let schema = query.to_schema();
-    assert!(schema.abstract);
+    let schema = Query::to_schema();
+    assert!(schema.is_abstract());
 }
 
 /// A conjunction of queries which must all have a solution.
@@ -190,4 +189,3 @@ pub struct Path {
     /// An optional list of edges traversed.
     pub path: Option<self::Value>,
 }
-

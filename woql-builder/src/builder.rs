@@ -1,4 +1,4 @@
-use crate::value::{IntoWoql2, Var, WoqlInput};
+use crate::value::{IntoWoql2, Var};
 use terminusdb_schema::{GraphType, ToTDBSchema};
 // Import Query from the prelude
 use terminusdb_woql2::prelude::{

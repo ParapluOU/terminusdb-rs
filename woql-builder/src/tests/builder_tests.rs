@@ -379,10 +379,10 @@ fn test_eq_literals() {
     match final_query {
         Woql2Query::Equals(ref eq_q) => {
             assert!(
-                matches!(&eq_q.left, DataValue::Data(XSDAnySimpleType::String(s)) if s == "hello")
+                matches!(&eq_q.left, Woql2Value::Data(XSDAnySimpleType::String(s)) if s == "hello")
             );
             assert!(
-                matches!(&eq_q.right, DataValue::Data(XSDAnySimpleType::String(s)) if s == "hello")
+                matches!(&eq_q.right, Woql2Value::Data(XSDAnySimpleType::String(s)) if s == "hello")
             );
         }
         _ => panic!("Expected Equals query"),
@@ -431,9 +431,9 @@ fn test_triple_and_eq() {
     assert!(matches!(queries[0], Woql2Query::Triple(_)));
     match &queries[1] {
         Woql2Query::Equals(ref eq_q) => {
-            assert!(matches!(&eq_q.left, DataValue::Variable(v_name) if v_name == "Val"));
+            assert!(matches!(&eq_q.left, Woql2Value::Variable(v_name) if v_name == "Val"));
             assert!(
-                matches!(&eq_q.right, DataValue::Data(XSDAnySimpleType::String(s)) if s == "target")
+                matches!(&eq_q.right, Woql2Value::Data(XSDAnySimpleType::String(s)) if s == "target")
             );
         }
         _ => panic!("Expected Equals query in And[1]"),
