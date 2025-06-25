@@ -73,6 +73,7 @@ fn implement_for_enum(
 /// use terminusdb_schema_derive::TerminusDBModel;
 /// use terminusdb_schema::ToTDBSchema;
 /// use terminusdb_schema::ToTDBInstance;
+/// use terminusdb_schema::FromTDBInstance;
 ///
 /// #[derive(TerminusDBModel)]
 /// struct Person {
@@ -83,6 +84,7 @@ fn implement_for_enum(
 /// }
 ///
 /// // Now you can use Person::to_schema() to get the TerminusDB schema
+/// // and Person::from_instance() to deserialize from TerminusDB instances
 /// ```
 ///
 /// ## Enum Example (TaggedUnion)
@@ -91,6 +93,7 @@ fn implement_for_enum(
 /// use terminusdb_schema_derive::TerminusDBModel;
 /// use terminusdb_schema::ToTDBSchema;
 /// use terminusdb_schema::ToTDBInstance;
+/// use terminusdb_schema::FromTDBInstance;
 ///
 /// #[derive(TerminusDBModel)]
 /// #[tdb(class_name = "ContentType")]
@@ -101,6 +104,7 @@ fn implement_for_enum(
 /// }
 ///
 /// // Now you can use Content::to_schema() to get the TerminusDB schema
+/// // and Content::from_instance() to deserialize from TerminusDB instances
 /// ```
 #[proc_macro_derive(TerminusDBModel, attributes(tdb))]
 pub fn derive_terminusdb_model(input: TokenStream) -> TokenStream {
@@ -154,10 +158,17 @@ pub fn derive_terminusdb_model(input: TokenStream) -> TokenStream {
             Err(err) => return err.to_compile_error().into(),
         };
 
+    // Generate FromTDBInstance implementation
+    let from_instance_impl = match from_instance::derive_from_terminusdb_instance(input.clone()) {
+        Result::Ok(ts) => ts,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
     // Combine the results
     let final_output = quote! {
         #expanded
         #instance_from_json_impl
+        #from_instance_impl
     };
 
     final_output.into()
@@ -165,32 +176,32 @@ pub fn derive_terminusdb_model(input: TokenStream) -> TokenStream {
 
 /// Automatically derives the `FromTDBInstance` trait for a struct or enum.
 ///
-/// This macro generates deserialization implementations from TerminusDB instance documents.
-/// It can be used on both structs and enums.
+/// **NOTE: This derive is now a no-op!**
+/// The `FromTDBInstance` functionality has been integrated into `TerminusDBModel`.
+/// Simply derive `TerminusDBModel` instead to get both serialization and deserialization.
 ///
-/// # Examples
+/// This derive is kept for backward compatibility and will not generate any code.
+/// It may be removed in future versions.
 ///
+/// # Migration
+///
+/// Change this:
 /// ```rust
-/// use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
-/// use terminusdb_schema::{FromTDBInstance, ToTDBInstance};
-///
 /// #[derive(TerminusDBModel, FromTDBInstance)]
-/// struct Person {
-///     id: String,
-///     name: String,
-///     age: i32,
-///     email: Option<String>,
-/// }
+/// struct Person { ... }
+/// ```
 ///
-/// // Now you can use Person::from_instance() to deserialize instances
+/// To this:
+/// ```rust
+/// #[derive(TerminusDBModel)]
+/// struct Person { ... }
 /// ```
 #[proc_macro_derive(FromTDBInstance, attributes(tdb))]
 pub fn derive_from_terminusdb_instance(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-
-    // Use the from_instance module implementation
-    match from_instance::derive_from_terminusdb_instance(input) {
-        Result::Ok(ts) => ts.into(),
-        Err(err) => err.to_compile_error().into(),
+    // This is now a no-op - all functionality has been moved to TerminusDBModel
+    quote! {
+        // FromTDBInstance derive is now a no-op
+        // All functionality has been integrated into TerminusDBModel
     }
+    .into()
 }

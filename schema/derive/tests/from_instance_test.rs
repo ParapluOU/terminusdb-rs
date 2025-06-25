@@ -1,11 +1,11 @@
 use anyhow::*;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use terminusdb_schema::{
     build_instance_tree, FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Key,
     PrimitiveValue, Schema, ToTDBInstance, ToTDBInstances, ToTDBSchema,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 // Simple struct for basic instance tests
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
@@ -55,95 +55,14 @@ enum TaggedValue {
     Flag(bool),
 }
 
-#[derive(Debug, Clone, PartialEq, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel)]
 pub struct TestStruct {
     name: String,
     description: Option<String>,
     count: Option<i32>,
 }
 
-impl ToTDBInstance for TestStruct {
-    fn to_instance(&self, id: Option<String>) -> Instance {
-        let mut properties = BTreeMap::new();
-
-        properties.insert(
-            "name".to_string(),
-            InstanceProperty::Primitive(PrimitiveValue::String(self.name.clone())),
-        );
-
-        if let Some(desc) = &self.description {
-            properties.insert(
-                "description".to_string(),
-                InstanceProperty::Primitive(PrimitiveValue::String(desc.clone())),
-            );
-        } else {
-            properties.insert(
-                "description".to_string(),
-                InstanceProperty::Primitive(PrimitiveValue::Null),
-            );
-        }
-
-        if let Some(count_val) = self.count {
-            properties.insert(
-                "count".to_string(),
-                InstanceProperty::Primitive(PrimitiveValue::Number(serde_json::Number::from(
-                    count_val,
-                ))),
-            );
-        } else {
-            properties.insert(
-                "count".to_string(),
-                InstanceProperty::Primitive(PrimitiveValue::Null),
-            );
-        }
-
-        Instance {
-            schema: Schema::Class {
-                id: "TestStruct".to_string(),
-                base: None,
-                key: Key::Random,
-                documentation: None,
-                subdocument: false,
-                r#abstract: false,
-                inherits: vec![],
-                unfoldable: true,
-                properties: vec![],
-            },
-            id: id,
-            capture: false,
-            ref_props: false,
-            properties,
-        }
-    }
-}
-
-impl ToTDBSchema for TestStruct {
-    fn to_schema() -> Schema {
-        Schema::Class {
-            id: "TestStruct".to_string(),
-            base: None,
-            key: Key::Random,
-            documentation: None,
-            subdocument: false,
-            r#abstract: false,
-            inherits: vec![],
-            unfoldable: true,
-            properties: vec![],
-        }
-    }
-
-    fn to_schema_tree() -> Vec<Schema> {
-        vec![Self::to_schema()]
-    }
-}
-
-impl ToTDBInstances for TestStruct {
-    fn to_instance_tree(&self) -> Vec<Instance> {
-        // Use the helper function
-        let instance = self.to_instance(None);
-        build_instance_tree(&instance)
-    }
-}
+// Manual implementations removed - now handled by TerminusDBModel derive
 
 impl TestStruct {
     pub fn test_instance_tree() -> BTreeMap<String, Instance> {
@@ -201,8 +120,8 @@ impl TestStruct {
 
 #[cfg(test)]
 mod tests {
-    use log::trace;
     use super::*;
+    use log::trace;
 
     #[test]
     fn test_simple_struct_instance() {

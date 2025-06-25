@@ -1,11 +1,11 @@
 use anyhow::*;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::BTreeMap;
 use terminusdb_schema::{
     json::InstanceFromJson, Instance, InstanceProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, TerminusDBModel)]
 #[tdb(class_name = "Person")]
@@ -115,19 +115,19 @@ fn test_simple_enum_deserialization() {
 
 #[test]
 fn test_tagged_union_enum_deserialization() {
-    // Test Text variant
-    let json_text = json!({
+    // Test Simple variant
+    let json_simple = json!({
         "@id": "TaggedValue/1",
         "@type": "TaggedValue",
-        "text": "Hello, world!"
+        "simple": "Hello, world!"
     });
 
-    let instance_text =
-        TaggedValue::instance_from_json(json_text).expect("Failed to deserialize Text variant");
+    let instance_simple =
+        TaggedValue::instance_from_json(json_simple).expect("Failed to deserialize Simple variant");
 
-    // Verify the instance properly captures the Text variant
-    assert_eq!(instance_text.id, Some("TaggedValue/1".to_string()));
-    assert!(instance_text.properties.contains_key("text"));
+    // Verify the instance properly captures the Simple variant
+    assert_eq!(instance_simple.id, Some("TaggedValue/1".to_string()));
+    assert!(instance_simple.properties.contains_key("simple"));
 
     // Test Number variant
     let json_number = json!({
@@ -143,11 +143,14 @@ fn test_tagged_union_enum_deserialization() {
     assert_eq!(instance_number.id, Some("TaggedValue/2".to_string()));
     assert!(instance_number.properties.contains_key("number"));
 
-    // Test Point variant (tuple with multiple fields)
+    // Test Point variant (struct with named fields)
     let json_point = json!({
         "@id": "TaggedValue/4",
         "@type": "TaggedValue",
-        "point": [3.14, 2.71]
+        "point": {
+            "x": 3.14,
+            "y": 2.71
+        }
     });
 
     let instance_point =
@@ -163,8 +166,8 @@ fn test_tagged_union_enum_deserialization() {
         "@type": "TaggedValue",
         "complex": {
             "@type": "TaggedValueComplex",
-            "id": "test-123",
-            "data": ["item1", "item2", "item3"]
+            "x": 10.5,
+            "y": 20.3
         }
     });
 
