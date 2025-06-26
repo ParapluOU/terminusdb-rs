@@ -1,4 +1,4 @@
-use log::trace;
+use log::{trace, log};
 use crate::prelude::*;
 use crate::schema::generate_totdbschema_impl;
 use crate::instance::{generate_totdbinstance_impl, process_enum_variants_for_instance};
