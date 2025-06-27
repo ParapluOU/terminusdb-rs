@@ -918,7 +918,7 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<usize> {
         let count_var = vars!("Count");
         let instance_var = vars!("Instance");
-        
+
         // Build a query to count instances of the specific type using the isa2 shortcut
         let query = WoqlBuilder::new()
             .isa2::<T>(&instance_var)
@@ -926,21 +926,50 @@ impl TerminusDBHttpClient {
             .select(vec![count_var.clone()])
             .finalize();
 
+        #[derive(Deserialize, Debug)]
+        struct CountResultBinding {
+            #[serde(rename = "@value")]
+            value: u64,
+        }
+
         // Execute the query
-        let result = self.query::<std::collections::HashMap<String, serde_json::Value>>(
-            Some(spec.clone()), 
-            query
-        ).await?;
+        let result = self
+            .query::<std::collections::HashMap<String, CountResultBinding>>(
+                Some(spec.clone()),
+                query,
+            )
+            .await?;
 
         // Extract count from the result
+        /*
+            parsed typed response: Success(
+            WOQLResult {
+                api_status: Success,
+                api_variable_names: [
+                    "Count",
+                ],
+                bindings: [
+                    {
+                        "Count": Object {
+                            "@type": String("xsd:decimal"),
+                            "@value": Number(1),
+                        },
+                    },
+                ],
+                deletes: 0,
+                inserts: 0,
+                transaction_retry_count: 0,
+            },
+        )
+         */
         if let Some(binding) = result.bindings.first() {
-            if let Some(count_value) = binding.get(&*count_var) {
-                if let Some(count) = count_value.as_u64() {
-                    return Ok(count as usize);
-                }
-            }
+            let CountResultBinding { value } = binding
+                .get(&*count_var)
+                .ok_or_else(|| anyhow!("Count variable not found in result"))?;
+
+            return Ok(*value as usize);
         }
-        
+
         Ok(0)
     }
 }

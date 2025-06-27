@@ -1,6 +1,6 @@
 use crate::{
     json::{InstancePropertyFromJson, ToJson},
-    PrimitiveValue, ToSchemaClass, JSON,
+    InstanceFromJson, PrimitiveValue, ToSchemaClass, JSON,
 };
 use crate::{
     FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
@@ -48,21 +48,3 @@ impl ToSchemaClass for serde_json::Value {
         JSON
     }
 }
-
-// impl<Parent> ToInstanceProperty<Parent> for Option<serde_json::Value> {
-//     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
-//         todo!()
-//     }
-// }
-
-// impl<Parent> InstancePropertyFromJson<Parent> for Option<serde_json::Value> {
-//     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-//         todo!()
-//     }
-// }
-
-// impl FromInstanceProperty for Option<serde_json::Value> {
-//     fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
-//         todo!()
-//     }
-// }
