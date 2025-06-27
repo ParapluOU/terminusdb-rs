@@ -22,8 +22,9 @@ pub trait InstanceQueryable {
         client: &TerminusDBHttpClient,
         spec: &BranchSpec,
         limit: Option<usize>,
+        offset: Option<usize>,
     ) -> anyhow::Result<Vec<Self::Model>> {
-        let query = self.query(limit);
+        let query = self.query(limit, offset);
 
         let v_id = vars!("Subject");
         let v_doc = vars!("doc");
@@ -45,7 +46,7 @@ pub trait InstanceQueryable {
     fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder;
 
     /// returning the query as a WOQL Query enum
-    fn query(&self, limit: Option<usize>) -> Query {
+    fn query(&self, limit: Option<usize>, offset: Option<usize>) -> Query {
         let v_id = vars!("Subject");
         let v_doc = vars!("doc");
 
@@ -65,6 +66,10 @@ pub trait InstanceQueryable {
             .read_document(v_id.clone(), v_doc.clone())
             // .isa(v_id.clone(), node(T::schema_name())) // this didnt work
             .select(vec![v_doc.clone()])
+            .pipe(|q| match offset {
+                None => q,
+                Some(o) => q.start(o as u64),
+            })
             .pipe(|q| match limit {
                 None => q,
                 Some(l) => q.limit(l as u64),

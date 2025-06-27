@@ -894,38 +894,10 @@ impl TerminusDBHttpClient {
         &self,
         spec: &BranchSpec,
         limit: Option<usize>,
+        offset: Option<usize>,
         query: impl InstanceQueryable<Model = T>,
     ) -> anyhow::Result<Vec<T>> {
-        // let v_id = vars!("Subject");
-        // let v_doc = vars!("doc");
-        // let query = WoqlBuilder::new()
-        //     // the triple was neccessary instead of the IsA
-        //     .triple(
-        //         v_id.clone(),
-        //         "rdf:type",
-        //         node(format!("@schema:{}", T::schema_name())),
-        //     )
-        //     .pipe(|q| query(v_id.clone(), q))
-        //     // important: this seems to HAVE to come after the triple
-        //     .read_document(v_id.clone(), v_doc.clone())
-        //     // .isa(v_id.clone(), node(T::schema_name())) // this didnt work
-        //     .select(vec![v_doc.clone()])
-        //     .pipe(|q| match limit {
-        //         None => q,
-        //         Some(l) => q.limit(l as u64),
-        //     })
-        //     .finalize();
-        //
-        // let res = self
-        //     .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
-        //     .await?;
-        //
-        // res.bindings
-        //     .into_iter()
-        //     .filter_map(|mut b| b.remove(&*v_doc).map(|v| T::from_json(v)))
-        //     .collect()
-
-        query.apply(self, spec, limit).await
+        query.apply(self, spec, limit, offset).await
     }
 
     // todo: roll into ORM-like model
@@ -933,8 +905,9 @@ impl TerminusDBHttpClient {
         &self,
         spec: &BranchSpec,
         limit: Option<usize>,
+        offset: Option<usize>,
     ) -> anyhow::Result<Vec<T>> {
-        self.query_instances(spec, limit, ListModels::<T>::default())
+        self.query_instances(spec, limit, offset, ListModels::<T>::default())
             .await
     }
 }
