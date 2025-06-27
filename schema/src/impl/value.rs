@@ -1,6 +1,11 @@
-use crate::json::{InstancePropertyFromJson, ToJson};
+use crate::{
+    json::{InstancePropertyFromJson, ToJson},
+    ToSchemaClass, JSON,
+};
+use crate::{
+    FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
+};
 use serde_json::{Map, Value};
-use crate::{FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty};
 
 impl ToJson for serde_json::Value {
     fn to_map(&self) -> Map<String, Value> {
@@ -17,13 +22,29 @@ impl<Parent> ToSchemaProperty<Parent> for Option<serde_json::Value> {
     }
 }
 
+// impl<Parent> ToSchemaProperty<Parent> for serde_json::Value {
+//     fn to_property(prop_name: &str) -> Property {
+//         Property {
+//             name: prop_name.to_string(),
+//             r#type: None,
+//             class: JSON.to_string(),
+//         }
+//     }
+// }
+
+impl ToSchemaClass for serde_json::Value {
+    fn to_class() -> &'static str {
+        JSON
+    }
+}
+
 impl<Parent> ToInstanceProperty<Parent> for Option<serde_json::Value> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         todo!()
     }
 }
 
-impl<Parent> InstancePropertyFromJson<Parent> for Option<serde_json::Value>{
+impl<Parent> InstancePropertyFromJson<Parent> for Option<serde_json::Value> {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
         todo!()
     }
