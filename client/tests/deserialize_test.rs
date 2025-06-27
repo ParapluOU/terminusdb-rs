@@ -1,9 +1,10 @@
 use anyhow::*;
-use parture_terminusdb_client::deserialize::*;
-use parture_terminusdb_client::DocumentInsertArgs;
+use serde::{Deserialize, Serialize};
+use terminusdb_client::deserialize::*;
+use terminusdb_client::DefaultTDBDeserializer;
+use terminusdb_client::DocumentInsertArgs;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::*;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TerminusDBModel, FromTDBInstance)]
 struct TestStruct {

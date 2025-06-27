@@ -314,6 +314,95 @@ impl FromInstanceProperty for Vec<i32> {
     }
 }
 
+impl FromInstanceProperty for Vec<bool> {
+    default fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitives(arr) => {
+                let mut targets = Vec::with_capacity(arr.len());
+                for primitive in arr {
+                    targets.push(match primitive {
+                        PrimitiveValue::Bool(b) => *b,
+                        _ => {
+                            bail!("Expected PrimitiveValue::Bool, got: {:#?}", primitive)
+                        }
+                    });
+                }
+                Ok(targets)
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl FromInstanceProperty for Vec<usize> {
+    default fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitives(arr) => {
+                let mut targets = Vec::with_capacity(arr.len());
+                for primitive in arr {
+                    targets.push(match primitive {
+                        PrimitiveValue::Number(num) => num
+                            .as_u64()
+                            .ok_or(anyhow!(" Number cannot be converted to u64"))?
+                            as usize,
+                        _ => {
+                            bail!("Expected PrimitiveValue::Number, got: {:#?}", primitive)
+                        }
+                    });
+                }
+                Ok(targets)
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl FromInstanceProperty for Vec<u32> {
+    default fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitives(arr) => {
+                let mut targets = Vec::with_capacity(arr.len());
+                for primitive in arr {
+                    targets.push(match primitive {
+                        PrimitiveValue::Number(num) => num
+                            .as_u64()
+                            .ok_or(anyhow!(" Number cannot be converted to u64"))?
+                            as u32,
+                        _ => {
+                            bail!("Expected PrimitiveValue::Number, got: {:#?}", primitive)
+                        }
+                    });
+                }
+                Ok(targets)
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl FromInstanceProperty for Vec<isize> {
+    default fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitives(arr) => {
+                let mut targets = Vec::with_capacity(arr.len());
+                for primitive in arr {
+                    targets.push(match primitive {
+                        PrimitiveValue::Number(num) => num
+                            .as_i64()
+                            .ok_or(anyhow!(" Number cannot be converted to i64"))?
+                            as isize,
+                        _ => {
+                            bail!("Expected PrimitiveValue::Number, got: {:#?}", primitive)
+                        }
+                    });
+                }
+                Ok(targets)
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
 impl FromInstanceProperty for Vec<f64> {
     default fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
         match prop {

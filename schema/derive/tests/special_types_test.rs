@@ -1,10 +1,10 @@
+use anyhow::*;
 use chrono::{DateTime, Utc};
-use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema};
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use uuid::Uuid;
-use anyhow::*;
 
 /// Test struct with UUID, DateTime and HashMap fields to demonstrate
 /// their handling with TerminusDBModel
@@ -28,6 +28,9 @@ pub struct SpecialTypesModel {
 
     /// Additional metadata as a JSON object
     pub metadata: HashMap<String, serde_json::Value>,
+
+    /// test json data
+    pub blob: serde_json::Value,
 
     /// Tags
     pub tags: Vec<String>,
@@ -62,10 +65,7 @@ mod tests {
             // Check Vec field
             let tags_prop = properties.iter().find(|p| p.name == "tags").unwrap();
             assert_eq!(tags_prop.class, "xsd:string");
-            assert_eq!(
-                tags_prop.r#type,
-                Some(terminusdb_schema::TypeFamily::List)
-            );
+            assert_eq!(tags_prop.r#type, Some(terminusdb_schema::TypeFamily::List));
         } else {
             panic!("Expected Schema::Class");
         }
@@ -80,6 +80,10 @@ mod tests {
             description: Some("A test model".to_string()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            blob: serde_json::json!({
+                "key1": "value1",
+                "key2": 42,
+            }),
             metadata: {
                 let mut map = HashMap::new();
                 map.insert("key1".to_string(), serde_json::json!("value1"));

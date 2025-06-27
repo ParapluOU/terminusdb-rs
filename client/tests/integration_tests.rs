@@ -1,7 +1,7 @@
 // Contents moved from src/test.rs
 // These likely require a running TerminusDB instance or specific CLI setup.
 
-use parture_terminusdb_client::*; // Use crate name directly for integration tests
+use terminusdb_client::*; // Use crate name directly for integration tests
 use terminusdb_schema::*; // Assuming schema types might be needed
 
 // Note: These might need adjustments to find binaries/paths correctly
@@ -221,9 +221,11 @@ fn test_deserde_404() {
 
 // Make sure imports are correct for integration tests
 use anyhow::Result; // Add for async test return types
-use parture_terminusdb_client::err::TypedErrorResponse; // Keep module path import
-use parture_terminusdb_client::info::Info; // Keep module path import
-use parture_terminusdb_client::{
+use serde_json::Value;
+use std::collections::HashMap;
+use terminusdb_client::err::TypedErrorResponse; // Keep module path import
+use terminusdb_client::info::Info; // Keep module path import
+use terminusdb_client::{
     // Imports from the client crate
     // Ensure these are included and uncommented
     BranchSpec,
@@ -245,6 +247,4 @@ use parture_terminusdb_client::{
     // Info, // Removed - Use module path import above
 };
 use terminusdb_schema::Documents;
-use terminusdb_woql_builder::prelude::*;
-use serde_json::Value;
-use std::collections::HashMap; // Needed for QueryResult deserialization // Assuming ApiResponse::Error uses this
+use terminusdb_woql_builder::prelude::*; // Needed for QueryResult deserialization // Assuming ApiResponse::Error uses this

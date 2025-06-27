@@ -2,8 +2,8 @@
 // Note: These tests require a running TerminusDB instance (likely local).
 // They are marked #[ignore] by default.
 
-use parture_terminusdb_client::deserialize::DefaultTDBDeserializer;
-use parture_terminusdb_client::*;
+use terminusdb_client::deserialize::DefaultTDBDeserializer;
+use terminusdb_client::*;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema::ToTDBSchema;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};

@@ -1,8 +1,8 @@
 use terminusdb_woql_builder::prelude::*;
 // Import the underlying woql2 Query type for potential inspection/serialization
+use terminusdb_schema::GraphType;
 use terminusdb_schema::ToJson;
 use terminusdb_woql2::prelude::{Query as Woql2Query, ToTDBInstance};
-
 // --- Placeholder types and data for the example ---
 // In a real scenario, these would come from your application context.
 
@@ -56,10 +56,10 @@ fn main() {
     // Start from the innermost query and wrap outwards
     let query_builder = WoqlBuilder::new()
         .added_triple(
-            id_var.clone(),   // subject: variable "id"
-            "rdf:type",       // predicate: node "rdf:type"
-            node(&type_node), // object: node "@schema:MyType"
-            Some("instance"), // graph: "instance"
+            id_var.clone(),            // subject: variable "id"
+            "rdf:type",                // predicate: node "rdf:type"
+            node(&type_node),          // object: node "@schema:MyType"
+            Some(GraphType::Instance), // graph: "instance"
         )
         .using(commit_collection) // Wrap in commit collection Using
         .using(db_collection) // Wrap in db collection Using
