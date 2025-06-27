@@ -1,6 +1,6 @@
 use crate::{
     json::{InstancePropertyFromJson, ToJson},
-    ToSchemaClass, JSON,
+    PrimitiveValue, ToSchemaClass, JSON,
 };
 use crate::{
     FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
@@ -22,15 +22,26 @@ impl<Parent> ToSchemaProperty<Parent> for Option<serde_json::Value> {
     }
 }
 
-// impl<Parent> ToSchemaProperty<Parent> for serde_json::Value {
-//     fn to_property(prop_name: &str) -> Property {
-//         Property {
-//             name: prop_name.to_string(),
-//             r#type: None,
-//             class: JSON.to_string(),
-//         }
-//     }
-// }
+impl<Parent> ToInstanceProperty<Parent> for serde_json::Value {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        InstanceProperty::Primitive(PrimitiveValue::Object(self))
+    }
+}
+
+impl<Parent> InstancePropertyFromJson<Parent> for serde_json::Value {
+    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+        Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
+    }
+}
+
+impl FromInstanceProperty for serde_json::Value {
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitive(PrimitiveValue::Object(json)) => Ok(json.clone()),
+            _ => anyhow::bail!("Expected object, got {:?}", prop),
+        }
+    }
+}
 
 impl ToSchemaClass for serde_json::Value {
     fn to_class() -> &'static str {
@@ -38,20 +49,20 @@ impl ToSchemaClass for serde_json::Value {
     }
 }
 
-impl<Parent> ToInstanceProperty<Parent> for Option<serde_json::Value> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
-        todo!()
-    }
-}
+// impl<Parent> ToInstanceProperty<Parent> for Option<serde_json::Value> {
+//     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+//         todo!()
+//     }
+// }
 
-impl<Parent> InstancePropertyFromJson<Parent> for Option<serde_json::Value> {
-    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        todo!()
-    }
-}
+// impl<Parent> InstancePropertyFromJson<Parent> for Option<serde_json::Value> {
+//     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+//         todo!()
+//     }
+// }
 
-impl FromInstanceProperty for Option<serde_json::Value> {
-    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
-        todo!()
-    }
-}
+// impl FromInstanceProperty for Option<serde_json::Value> {
+//     fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+//         todo!()
+//     }
+// }
