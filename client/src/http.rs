@@ -910,6 +910,39 @@ impl TerminusDBHttpClient {
         self.query_instances(spec, limit, offset, ListModels::<T>::default())
             .await
     }
+
+    /// Count the total number of instances of a specific type in the database
+    pub async fn count_instances<T: ToTDBSchema>(
+        &self,
+        spec: &BranchSpec,
+    ) -> anyhow::Result<usize> {
+        let count_var = vars!("Count");
+        let instance_var = vars!("Instance");
+        
+        // Build a query to count instances of the specific type using the isa2 shortcut
+        let query = WoqlBuilder::new()
+            .isa2::<T>(&instance_var)
+            .count(count_var.clone())
+            .select(vec![count_var.clone()])
+            .finalize();
+
+        // Execute the query
+        let result = self.query::<std::collections::HashMap<String, serde_json::Value>>(
+            Some(spec.clone()), 
+            query
+        ).await?;
+
+        // Extract count from the result
+        if let Some(binding) = result.bindings.first() {
+            if let Some(count_value) = binding.get(&*count_var) {
+                if let Some(count) = count_value.as_u64() {
+                    return Ok(count as usize);
+                }
+            }
+        }
+        
+        Ok(0)
+    }
 }
 
 // Add a separate impl block for WASM
