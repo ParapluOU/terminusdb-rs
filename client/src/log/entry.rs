@@ -23,6 +23,8 @@ use serde::{Deserialize, Serialize};
 //     "schema":"layer_data:Layer_1c62ac127cdf23607a145076dc5ee060bffa004cfa8d8760f65f44b659ad05ae",
 //     "timestamp":1719865624.9757895
 //   }
+
+// todo: rebase on TerminusDBModel
 #[derive(Deserialize, Debug, Clone)]
 pub struct LogEntry {
     /// should alwas be "ValidCommit/...

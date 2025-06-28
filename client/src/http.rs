@@ -36,7 +36,7 @@ use {
 #[cfg(not(target_arch = "wasm32"))]
 use crate::log::{CommitLogIterator, CommitState, LogEntry, LogOpts};
 
-use terminusdb_schema::{ToJson, ToTDBInstance};
+use terminusdb_schema::{GraphType, ToJson, ToTDBInstance};
 // Add imports for woql2 and builder
 use terminusdb_woql2::prelude::Query as Woql2Query;
 use terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder}; // Import WoqlBuilder too
@@ -289,6 +289,116 @@ impl TerminusDBHttpClient {
             .expect("expected document to exist!");
 
         Ok(res)
+    }
+
+    /// Inserts an instance into TerminusDB and returns both the instance ID and the commit ID
+    /// that created it. This is useful for version tracking where you need to know exactly
+    /// which commit introduced a specific instance.
+    ///
+    /// # Returns
+    /// A tuple of (instance_id, commit_id) where:
+    /// - instance_id: The ID of the inserted instance
+    /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
+    pub async fn insert_instance_with_commit_id<I: ToTDBInstance + Debug + Serialize>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<(String, String)> {
+        // First, insert the instance
+        let insert_result = self.insert_instance(model, args.clone()).await?;
+        
+        // Extract the inserted instance ID
+        let instance_id = match insert_result.values().next() {
+            Some(TDBInsertInstanceResult::Inserted(id)) => id.clone(),
+            Some(TDBInsertInstanceResult::AlreadyExists(id)) => {
+                // For already existing instances, we still need to find their commit
+                id.clone()
+            }
+            None => return Err(anyhow!("Insert operation did not return any ID")),
+        };
+        
+        // Find the commit that contains this instance
+        let commit_id = self.find_commit_for_instance(&instance_id, &args.spec).await
+            .context(format!("Failed to find commit for instance {}", instance_id))?;
+        
+        Ok((instance_id, commit_id))
+    }
+
+    /// Finds the commit that added a specific instance by walking through the commit log
+    /// and checking each commit to see if it added the given instance ID.
+    ///
+    /// Uses the existing `all_commit_created_entity_ids_any_type` helper to get all
+    /// entity IDs created in each commit and checks if our target instance is in that list.
+    async fn find_commit_for_instance(
+        &self,
+        instance_id: &str,
+        spec: &BranchSpec,
+    ) -> anyhow::Result<String> {
+        use futures_util::StreamExt;
+        
+        // Create a commit log iterator to walk through recent commits
+        let mut log_iter = self.log_iter(spec.clone(), LogOpts::default()).await;
+        
+        // Walk through commits until we find the one containing our instance
+        while let Some(log_entry_result) = log_iter.next().await {
+            let log_entry = log_entry_result?;
+            
+            // Get all entity IDs created in this commit (any type)
+            let created_ids = self.all_commit_created_entity_ids_any_type(spec, &log_entry).await?;
+            
+            // Check if our instance ID is in the list of created entities
+            if created_ids.contains(&instance_id.to_string()) {
+                return Ok(log_entry.id.clone());
+            }
+        }
+        
+        Err(anyhow!("Could not find commit for instance {}", instance_id))
+    }
+
+    /// Helper method to get all entity IDs created in a commit, regardless of type
+    async fn all_commit_created_entity_ids_any_type(
+        &self,
+        spec: &BranchSpec,
+        commit: &LogEntry,
+    ) -> anyhow::Result<Vec<EntityID>> {
+        let commit_collection = format!("commit/{}", &commit.identifier);
+        let db_collection = format!("{}/{}", &self.org, &spec.db);
+        
+        let id_var = vars!("id");
+        let type_var = vars!("type");
+        
+        // Query for all added triples (any type)
+        let query = WoqlBuilder::new()
+            .added_triple(
+                id_var.clone(),                 // subject: variable "id"
+                "rdf:type",                     // predicate: "rdf:type"
+                type_var.clone(),               // object: any type
+                GraphType::Instance.into(),
+            )
+            .using(commit_collection)
+            .using(db_collection)
+            .limit(1000)
+            .finalize();
+
+        let json_query = query.to_instance(None).to_json();
+        let res: WOQLResult<Value> = self.query_raw(Some(spec.clone()), json_query).await?;
+
+        let err = format!("failed to deserialize from Value: {:#?}", &res);
+
+        #[derive(Deserialize)]
+        struct ObjectFormat {
+            pub id: String,
+        }
+
+        Ok(res
+            .bindings
+            .into_iter()
+            .map(|bind| serde_json::from_value::<ObjectFormat>(bind))
+            .collect::<Result<Vec<_>, _>>()
+            .context(err)?
+            .into_iter()
+            .map(|obj| obj.id)
+            .collect())
     }
 
     // pub fn insert_instance_chunked<I: ToTDBInstance>(
