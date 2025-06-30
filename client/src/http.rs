@@ -336,23 +336,45 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<String> {
         use futures_util::StreamExt;
         
+        debug!("Looking for commit that created instance: {}", instance_id);
+        
         // Create a commit log iterator to walk through recent commits
         let mut log_iter = self.log_iter(spec.clone(), LogOpts::default()).await;
+        
+        let mut commits_checked = 0;
         
         // Walk through commits until we find the one containing our instance
         while let Some(log_entry_result) = log_iter.next().await {
             let log_entry = log_entry_result?;
+            commits_checked += 1;
+            
+            debug!("Checking commit {} (#{})...", log_entry.id, commits_checked);
             
             // Get all entity IDs created in this commit (any type)
             let created_ids = self.all_commit_created_entity_ids_any_type(spec, &log_entry).await?;
             
+            debug!("Found {} entities in this commit: {:?}", created_ids.len(), created_ids);
+            
             // Check if our instance ID is in the list of created entities
-            if created_ids.contains(&instance_id.to_string()) {
+            // Need to check both with and without schema prefix since insert_instance 
+            // returns IDs without prefix but commits store them with prefix
+            let id_matches = created_ids.iter().any(|id| {
+                id == instance_id || id.split('/').last() == Some(instance_id)
+            });
+            
+            if id_matches {
+                debug!("Found instance {} in commit {}", instance_id, log_entry.id);
                 return Ok(log_entry.id.clone());
+            }
+            
+            // Safety check to avoid infinite loops during debugging
+            if commits_checked > 100 {
+                warn!("Checked 100 commits without finding instance {}", instance_id);
+                break;
             }
         }
         
-        Err(anyhow!("Could not find commit for instance {}", instance_id))
+        Err(anyhow!("Could not find commit for instance {} after checking {} commits", instance_id, commits_checked))
     }
 
     /// Helper method to get all entity IDs created in a commit, regardless of type
