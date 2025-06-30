@@ -16,11 +16,11 @@ impl ToJson for serde_json::Value {
     }
 }
 
-impl<Parent> ToSchemaProperty<Parent> for Option<serde_json::Value> {
-    fn to_property(prop_name: &str) -> Property {
-        todo!()
-    }
-}
+// impl<Parent> ToSchemaProperty<Parent> for Option<serde_json::Value> {
+//     fn to_property(prop_name: &str) -> Property {
+//         todo!()
+//     }
+// }
 
 impl<Parent> ToInstanceProperty<Parent> for serde_json::Value {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
