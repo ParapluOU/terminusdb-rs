@@ -31,7 +31,10 @@ pub enum ApiResponseError {
 
 impl Display for ApiResponseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:#?}", self))
+        match self {
+            ApiResponseError::SchemaCheckFail(error) => Display::fmt(error, f),
+            _ => f.write_str(&format!("{:#?}", self))
+        }
     }
 }
 
@@ -67,9 +70,15 @@ impl Error for TypedErrorResponse {}
 impl Display for TypedErrorResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypedErrorResponse::DocumentError(e) => Display::fmt(e, f),
-            TypedErrorResponse::ReplaceDocumentError(e) => Display::fmt(e, f),
-            TypedErrorResponse::WoqlError(e) => Display::fmt(e, f),
+            TypedErrorResponse::DocumentError(e) => {
+                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            },
+            TypedErrorResponse::ReplaceDocumentError(e) => {
+                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            },
+            TypedErrorResponse::WoqlError(e) => {
+                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            },
         }
     }
 }
@@ -142,7 +151,20 @@ pub struct ErrorResponse<E = ApiResponseError> {
 
 impl Display for ErrorResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:#?}", self))
+        write!(f, "{}", self.api_message)?;
+        
+        if let Some(api_error) = &self.api_error {
+            match api_error {
+                ApiResponseError::SchemaCheckFail(schema_error) => {
+                    write!(f, "\n\n{}", schema_error)?;
+                },
+                _ => {
+                    write!(f, "\n\nError details: {:#?}", api_error)?;
+                }
+            }
+        }
+        
+        Ok(())
     }
 }
 
@@ -222,6 +244,6 @@ pub struct SchemaCheckFailError {
 
 impl Display for SchemaCheckFailError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&format!("{:#?}", self))
+        write!(f, "Schema check failure: {:#?}\n\n💡 Hint: Schema failures often occur when a model's structure was changed after inserting its schema.\nTo resolve this:\n  1. Re-insert the updated schema, or\n  2. Reset the database using client.reset_database()", self)
     }
 }

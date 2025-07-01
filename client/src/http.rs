@@ -1,3 +1,21 @@
+//! TerminusDB HTTP Client
+//!
+//! ## Terminology
+//!
+//! This module uses the following terminology consistently:
+//!
+//! - **Document**: Untyped document/struct that may be formatted according to a schema.
+//!   These are represented as `serde_json::Value` or similar generic types.
+//!   Use `*_document` methods for working with untyped data.
+//!
+//! - **Model/Instance**: Strongly typed structure that adheres to a TerminusDB schema.
+//!   These are Rust structs that derive `TerminusDBModel` and implement `ToTDBInstance`.
+//!   Use `*_instance` methods for working with strongly typed models.
+//!
+//! **Recommendation**: Always prefer `*_instance` methods over `*_document` methods when
+//! working with structs that derive `TerminusDBModel`, as they provide type safety and
+//! better error handling.
+
 #[cfg(not(target_arch = "wasm32"))]
 use {
     futures_util::Stream,
@@ -12,11 +30,12 @@ use {
 use {
     crate::{
         document::{DocumentInsertArgs, DocumentType, GetOpts},
+        result::ResponseWithHeaders,
         spec::BranchSpec,
         *,
     },
     ::log::{debug, error, trace, warn},
-    anyhow::{anyhow, Context},
+    anyhow::{anyhow, bail, Context},
     enum_variant_macros::*,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     serde_json::{json, Value},
@@ -43,6 +62,22 @@ use terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder}; // Import 
 
 pub type EntityID = String;
 
+/// Trait alias for strongly typed TerminusDB models.
+///
+/// This represents any type that can be converted to a TerminusDB instance,
+/// is debuggable, and serializable. Use this for functions that accept
+/// TerminusDB models to make the API clearer and distinguish from untyped documents.
+///
+/// # Example
+/// ```rust
+/// use terminusdb_client::TerminusDBModel;
+/// 
+/// async fn insert_my_model<T: TerminusDBModel>(client: &TerminusDBHttpClient, model: &T) {
+///     client.insert_instance(model, args).await.unwrap();
+/// }
+/// ```
+pub trait TerminusDBModel = ToTDBInstance + Debug + Serialize;
+
 #[derive(Clone, Debug)]
 pub struct TerminusDBHttpClient {
     pub endpoint: Url,
@@ -60,6 +95,26 @@ pub struct TerminusDBHttpClient {
 // Wrap the entire impl block with a conditional compilation attribute
 #[cfg(not(target_arch = "wasm32"))]
 impl TerminusDBHttpClient {
+    /// Creates a client connected to a local TerminusDB instance.
+    ///
+    /// This is a convenience constructor that connects to `http://localhost:6363`
+    /// using default admin credentials. Ideal for development and testing.
+    ///
+    /// # Returns
+    /// A client instance connected to the local TerminusDB server
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// ```
+    ///
+    /// # Equivalent to
+    /// ```rust
+    /// TerminusDBHttpClient::new(
+    ///     Url::parse("http://localhost:6363").unwrap(),
+    ///     "admin", "root", "admin"
+    /// ).await.unwrap()
+    /// ```
     pub async fn local_node() -> Self {
         Self::new(
             Url::parse("http://localhost:6363").unwrap(),
@@ -76,6 +131,19 @@ impl TerminusDBHttpClient {
         client.ensure_database(db).await
     }
 
+    /// Creates a client connected to a local TerminusDB instance with a test database.
+    ///
+    /// This is a convenience constructor that connects to a local TerminusDB server
+    /// and ensures a "test" database exists. Ideal for integration tests and development.
+    ///
+    /// # Returns
+    /// A client instance connected to the local TerminusDB server with "test" database
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node_test().await?;
+    /// // Ready to use with "test" database
+    /// ```
     pub async fn local_node_test() -> anyhow::Result<Self> {
         let client = Self::local_node().await;
         client.ensure_database("test").await
@@ -135,6 +203,22 @@ impl TerminusDBHttpClient {
     //     }
     // }
 
+    /// Ensures a database exists, creating it if it doesn't exist.
+    ///
+    /// This function will create a new database with the given name if it doesn't already exist.
+    /// If the database already exists, this function succeeds without modification.
+    ///
+    /// # Arguments
+    /// * `db` - The name of the database to ensure exists
+    ///
+    /// # Returns
+    /// A cloned instance of the client configured for the database
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let client_with_db = client.ensure_database("my_database").await?;
+    /// ```
     pub async fn ensure_database(&self, db: &str) -> anyhow::Result<Self> {
         let uri = format!("{}/db/{}/{}", &self.endpoint, self.org, db);
 
@@ -175,6 +259,22 @@ impl TerminusDBHttpClient {
         Ok(self.clone())
     }
 
+    /// Deletes a database permanently.
+    ///
+    /// **Warning**: This operation is irreversible and will permanently delete
+    /// all data in the specified database.
+    ///
+    /// # Arguments
+    /// * `db` - The name of the database to delete
+    ///
+    /// # Returns
+    /// A cloned instance of the client
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.delete_database("old_database").await?;
+    /// ```
     pub async fn delete_database(&self, db: &str) -> anyhow::Result<Self> {
         let uri = format!("{}/db/{}/{}", &self.endpoint, self.org, db);
 
@@ -190,6 +290,57 @@ impl TerminusDBHttpClient {
         Ok(self.clone())
     }
 
+    /// Resets a database by deleting it and recreating it.
+    ///
+    /// This is useful when you encounter schema failures due to model structure changes.
+    /// It performs a `delete_database()` followed by `ensure_database()`.
+    ///
+    /// # Arguments
+    /// * `db` - The name of the database to reset
+    ///
+    /// # Example
+    /// ```rust
+    /// // Reset the database to clear old schemas
+    /// client.reset_database("my_db").await?;
+    /// ```
+    pub async fn reset_database(&self, db: &str) -> anyhow::Result<Self> {
+        debug!("resetting database {}", db);
+        
+        self.delete_database(db)
+            .await
+            .context("failed to delete database during reset")?;
+            
+        self.ensure_database(db)
+            .await
+            .context("failed to recreate database during reset")
+    }
+
+    /// Inserts the schema for a strongly-typed model into the database.
+    ///
+    /// This function automatically generates and inserts the schema definition
+    /// for a type that implements `ToTDBSchema` (typically via `#[derive(TerminusDBModel)]`).
+    ///
+    /// # Type Parameters
+    /// * `S` - A type that implements `ToTDBSchema` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `args` - Document insertion arguments specifying the database and branch
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// // Insert the schema for the User type
+    /// client.insert_entity_schema::<User>(args).await?;
+    /// 
+    /// // Now you can insert User instances
+    /// let user = User { name: "Alice".to_string(), age: 30 };
+    /// client.insert_instance(&user, args).await?;
+    /// ```
+    ///
+    /// # Note
+    /// The database will be automatically created if it doesn't exist.
     pub async fn insert_entity_schema<S: ToTDBSchema>(
         &self,
         args: DocumentInsertArgs,
@@ -215,6 +366,28 @@ impl TerminusDBHttpClient {
         Ok(())
     }
 
+    /// Inserts a raw schema definition into the database.
+    ///
+    /// **⚠️ Consider using the strongly-typed alternative instead:**
+    /// - [`insert_entity_schema`](Self::insert_entity_schema) for typed model schemas
+    ///
+    /// This function inserts a manually constructed schema definition. It's typically
+    /// used for advanced scenarios or when working with dynamic schemas.
+    ///
+    /// # Arguments
+    /// * `schema` - The schema definition to insert
+    /// * `args` - Document insertion arguments specifying the database and branch
+    ///
+    /// # Returns
+    /// A cloned instance of the client
+    ///
+    /// # Example
+    /// ```rust
+    /// use terminusdb_schema::Schema;
+    /// 
+    /// let schema = Schema::Class { /* schema definition */ };
+    /// client.insert_schema(&schema, args).await?;
+    /// ```
     pub async fn insert_schema(
         &self,
         schema: &crate::Schema,
@@ -229,7 +402,30 @@ impl TerminusDBHttpClient {
         .await
     }
 
-    pub async fn has_instance<I: ToTDBInstance + Debug + Serialize>(
+    /// Checks if a strongly-typed model instance exists in the database.
+    ///
+    /// This is the **preferred method** for checking existence of typed models.
+    /// Use this instead of `has_document` when working with structs that derive `TerminusDBModel`.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to check for
+    /// * `args` - Document insertion arguments specifying the database and branch
+    ///
+    /// # Returns
+    /// `true` if the instance exists, `false` otherwise
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let user = User { name: "Alice".to_string(), age: 30 };
+    /// let exists = client.has_instance(&user, args).await;
+    /// ```
+    pub async fn has_instance<I: TerminusDBModel>(
         &self,
         model: &I,
         args: DocumentInsertArgs,
@@ -242,11 +438,45 @@ impl TerminusDBHttpClient {
         }
     }
 
-    pub async fn insert_instance<I: ToTDBInstance + Debug + Serialize>(
+    /// Inserts a strongly-typed model instance into the database.
+    ///
+    /// This is the **preferred method** for inserting typed models into TerminusDB.
+    /// Use this instead of `insert_document` when working with structs that derive `TerminusDBModel`.
+    ///
+    /// The response includes the `TerminusDB-Data-Version` header when data is modified,
+    /// which contains the commit ID for the operation.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to insert
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and insert results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let user = User { name: "Alice".to_string(), age: 30 };
+    /// let result = client.insert_instance(&user, args).await?;
+    /// 
+    /// println!("Inserted with commit: {:?}", result.commit_id);
+    /// ```
+    ///
+    /// # See Also
+    /// - [`insert_instance_with_commit_id`](Self::insert_instance_with_commit_id) - For direct access to commit ID
+    /// - [`insert_instances`](Self::insert_instances) - For bulk insertion
+    pub async fn insert_instance<I: TerminusDBModel>(
         &self,
         model: &I,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<HashMap<String, TDBInsertInstanceResult>> {
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         let instance = model.to_instance(None);
 
         let gen_id = instance.gen_id();
@@ -258,10 +488,10 @@ impl TerminusDBHttpClient {
             warn!("not inserted because it already exists");
 
             // todo: if the document is configured to not use HashKey, this cannot work
-            return Ok(HashMap::from([(
+            return Ok(ResponseWithHeaders::without_headers(HashMap::from([(
                 id.clone(),
                 TDBInsertInstanceResult::AlreadyExists(id),
-            )]));
+            )])));
         }
 
         debug!("inserting instance...");
@@ -292,34 +522,55 @@ impl TerminusDBHttpClient {
     }
 
     /// Inserts an instance into TerminusDB and returns both the instance ID and the commit ID
-    /// that created it. This is useful for version tracking where you need to know exactly
-    /// which commit introduced a specific instance.
+    /// that created it. This is much more efficient than the previous implementation as it uses
+    /// the TerminusDB-Data-Version header instead of walking the commit log.
     ///
     /// # Returns
     /// A tuple of (instance_id, commit_id) where:
     /// - instance_id: The ID of the inserted instance
     /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
-    pub async fn insert_instance_with_commit_id<I: ToTDBInstance + Debug + Serialize>(
+    pub async fn insert_instance_with_commit_id<I: TerminusDBModel>(
         &self,
         model: &I,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<(String, String)> {
-        // First, insert the instance
+        // Insert the instance and capture the header
         let insert_result = self.insert_instance(model, args.clone()).await?;
         
         // Extract the inserted instance ID
         let instance_id = match insert_result.values().next() {
             Some(TDBInsertInstanceResult::Inserted(id)) => id.clone(),
             Some(TDBInsertInstanceResult::AlreadyExists(id)) => {
-                // For already existing instances, we still need to find their commit
-                id.clone()
+                // For already existing instances, we need to find their commit the old way
+                debug!("Instance {} already exists, falling back to commit log search", id);
+                let commit_id = self.find_commit_for_instance::<I>(id, &args.spec).await
+                    .context(format!("Failed to find commit for existing instance {}", id))?;
+                return Ok((id.clone(), commit_id));
             }
             None => return Err(anyhow!("Insert operation did not return any ID")),
         };
         
-        // Find the commit that contains this instance
-        let commit_id = self.find_commit_for_instance(&instance_id, &args.spec).await
-            .context(format!("Failed to find commit for instance {}", instance_id))?;
+        // Extract commit ID from the TerminusDB-Data-Version header
+        let commit_id = match &insert_result.commit_id {
+            Some(header_value) => {
+                // According to docs: "colon separated value" where commit ID is on the right side
+                // Format is typically "branch:COMMIT_ID", we want just the COMMIT_ID part
+                if let Some(commit_id) = header_value.split(':').last() {
+                    commit_id.to_string()
+                } else {
+                    return Err(anyhow!(
+                        "Invalid TerminusDB-Data-Version header format: {}. Expected colon-separated value.",
+                        header_value
+                    ));
+                }
+            }
+            None => {
+                // Fallback to the old method if header is not present
+                warn!("TerminusDB-Data-Version header not found, falling back to commit log search");
+                self.find_commit_for_instance::<I>(&instance_id, &args.spec).await
+                    .context(format!("Failed to find commit for instance {}", instance_id))?
+            }
+        };
         
         Ok((instance_id, commit_id))
     }
@@ -329,7 +580,7 @@ impl TerminusDBHttpClient {
     ///
     /// Uses the existing `all_commit_created_entity_ids_any_type` helper to get all
     /// entity IDs created in each commit and checks if our target instance is in that list.
-    async fn find_commit_for_instance(
+    async fn find_commit_for_instance<I: TerminusDBModel>(
         &self,
         instance_id: &str,
         spec: &BranchSpec,
@@ -340,25 +591,10 @@ impl TerminusDBHttpClient {
         debug!("Looking for commit that created instance: {}", instance_id);
         debug!("Using branch spec: db={}, branch={:?}", spec.db, spec.branch);
         
-        // First, check if the instance exists in the current state
-        debug!("Checking if instance {} exists in current state", instance_id);
-        let doc_exists = self.has_document(instance_id, spec).await;
-        if !doc_exists {
-            // Also check with schema prefix
-            let with_prefix = instance_id.contains('/');
-            if !with_prefix {
-                // Try different common prefixes if no prefix provided
-                let prefixes = ["User", "Document", "Entity", "Object"];
-                for prefix in &prefixes {
-                    let prefixed_id = format!("{}/{}", prefix, instance_id);
-                    if self.has_document(&prefixed_id, spec).await {
-                        debug!("Instance found with prefix: {}", prefixed_id);
-                        break;
-                    }
-                }
-            }
+        if !self.has_document(&instance_id, spec).await {
+            return bail!("Instance {} does not exist", instance_id);
         }
-        
+
         // Wrap the entire search operation with a timeout
         let search_future = async {
             // Create a commit log iterator with a smaller batch size
@@ -430,7 +666,7 @@ impl TerminusDBHttpClient {
         };
         
         // Apply overall timeout of 60 seconds
-        let timeout_duration = std::time::Duration::from_secs(60);
+        let timeout_duration = std::time::Duration::from_secs(30);
         match tokio::time::timeout(timeout_duration, search_future).await {
             Ok(result) => {
                 debug!("=== find_commit_for_instance END === Result: {:?}", result.as_ref().map(|s| s.as_str()));
@@ -511,7 +747,7 @@ impl TerminusDBHttpClient {
         Ok(result)
     }
 
-    // pub fn insert_instance_chunked<I: ToTDBInstance>(
+    // pub fn insert_instance_chunked<I: TerminusDBModel>(
     //     &self,
     //     model: &I,
     //     args: DocumentInsertArgs,
@@ -533,11 +769,40 @@ impl TerminusDBHttpClient {
     //     Ok(self)
     // }
 
+    /// Inserts multiple strongly-typed model instances into the database.
+    ///
+    /// This is the **preferred method** for bulk insertion of typed models into TerminusDB.
+    /// Use this instead of [`insert_documents`](Self::insert_documents) when working with
+    /// multiple structs that derive `TerminusDBModel`.
+    ///
+    /// # Arguments
+    /// * `models` - Collection of models that can be converted to TerminusDB instances
+    /// * `args` - Document insertion arguments (DocumentType will be set to Instance automatically)
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and insert results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let users = vec![
+    ///     User { name: "Alice".to_string(), age: 30 },
+    ///     User { name: "Bob".to_string(), age: 25 },
+    /// ];
+    /// let result = client.insert_instances(users, args).await?;
+    /// ```
+    ///
+    /// # See Also
+    /// - [`insert_instance`](Self::insert_instance) - For single instance insertion
     pub async fn insert_instances(
         &self,
         models: impl IntoBoxedTDBInstances,
         mut args: DocumentInsertArgs,
-    ) -> anyhow::Result<HashMap<String, TDBInsertInstanceResult>> {
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         args.ty = DocumentType::Instance;
 
         // let mut instances = models
@@ -568,7 +833,7 @@ impl TerminusDBHttpClient {
         &self,
         mut model: Vec<&Instance>,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<HashMap<String, TDBInsertInstanceResult>> {
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         // dedup_instances_by_id(&mut model);
 
         let selection = model
@@ -579,11 +844,39 @@ impl TerminusDBHttpClient {
         self.insert_documents(selection, args).await
     }
 
+    /// Inserts multiple untyped documents into the database.
+    ///
+    /// **⚠️ Consider using strongly-typed alternatives instead:**
+    /// - [`insert_instances`](Self::insert_instances) for multiple typed models
+    /// - [`insert_instance`](Self::insert_instance) for single typed models
+    ///
+    /// This function accepts any type that implements `ToJson` (like `serde_json::Value`
+    /// or schema definitions) and inserts them as untyped documents.
+    ///
+    /// # Arguments
+    /// * `model` - Vector of references to objects that can be converted to JSON
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with document IDs and insert results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// use serde_json::json;
+    /// 
+    /// let docs = vec![
+    ///     &json!({"@type": "Person", "name": "Alice"}),
+    ///     &json!({"@type": "Person", "name": "Bob"}),
+    /// ];
+    /// let result = client.insert_documents(docs, args).await?;
+    /// ```
     pub async fn insert_documents(
         &self,
         model: Vec<&impl ToJson>,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<HashMap<String, TDBInsertInstanceResult>> {
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         let ty = args.ty.to_string().to_lowercase();
 
         let uri = format!(
@@ -637,30 +930,56 @@ impl TerminusDBHttpClient {
             .send()
             .await?;
 
-        let parsed = self.parse_response::<Vec<String>>(res).await;
+        let parsed = self.parse_response_with_headers::<Vec<String>>(res).await;
 
         trace!("parsed response from insert_documents(): {:#?}", &parsed);
 
-        // panic!("{:#?}", &parsed);
-
-        // todo: create proper response format for this
-        if let Err(e) = parsed {
+        if let Err(e) = &parsed {
             error!("request error: {:#?}", &e);
-
-            // dump request payload to file for debugging
             dump_failed_payload(&json);
-
-            return Err(e);
+            return Err(anyhow!("Insert request failed: {}", e));
         }
 
         debug!("inserted {} into TerminusDB", ty);
 
-        Ok(parsed?
+        let parsed = parsed?;
+        let version_header = parsed.commit_id.clone();
+        let data = parsed.into_inner();
+        let result_map = data
             .into_iter()
             .map(|id| (id.clone(), TDBInsertInstanceResult::Inserted(id)))
-            .collect())
+            .collect();
+
+        Ok(ResponseWithHeaders::new(result_map, version_header))
     }
 
+    /// Inserts a single untyped document into the database.
+    ///
+    /// **⚠️ Consider using the strongly-typed alternative instead:**
+    /// - [`insert_instance`](Self::insert_instance) for typed models
+    ///
+    /// This function accepts any type that implements `ToJson` (like `serde_json::Value`
+    /// or schema definitions) and inserts it as an untyped document.
+    ///
+    /// # Arguments
+    /// * `model` - A reference to an object that can be converted to JSON
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A cloned instance of the client (note: does not include commit ID information)
+    ///
+    /// # Example
+    /// ```rust
+    /// use serde_json::json;
+    /// 
+    /// let doc = json!({"@type": "Person", "name": "Alice"});
+    /// client.insert_document(&doc, args).await?;
+    /// ```
+    ///
+    /// # Note
+    /// This function returns the client instance but does not provide access to
+    /// the commit ID. Use [`insert_documents`](Self::insert_documents) if you need
+    /// commit information from headers.
     pub async fn insert_document(
         &self,
         model: &impl ToJson,
@@ -779,12 +1098,45 @@ impl TerminusDBHttpClient {
         }
     }
 
+    async fn parse_response_with_headers<T: DeserializeOwned + Debug>(
+        &self,
+        res: Response,
+    ) -> anyhow::Result<ResponseWithHeaders<T>> {
+        // Extract the TerminusDB-Data-Version header before consuming the response
+        let terminusdb_data_version = res
+            .headers()
+            .get("TerminusDB-Data-Version")
+            .and_then(|value| value.to_str().ok())
+            .map(|s| s.to_string());
+
+        trace!("[TerminusDBHttpClient] TerminusDB-Data-Version header: {:?}", terminusdb_data_version);
+
+        let json = res.json::<serde_json::Value>().await?;
+
+        trace!("[TerminusDBHttpClient] response: {:#?}", &json);
+        eprintln!("parsed response: {:#?}", &json);
+
+        let response_has_error_prop = json.get("api:error").is_some();
+        let err = format!("failed to deserialize into ApiResponse: {:#?}", &json);
+        let res: ApiResponse<T> = serde_json::from_value(json).context(err.clone())?;
+
+        eprintln!("parsed typed response: {:#?}", &res);
+
+        match res {
+            ApiResponse::Success(r) => {
+                assert!(!response_has_error_prop, "{}", err);
+                Ok(ResponseWithHeaders::new(r, terminusdb_data_version))
+            }
+            ApiResponse::Error(err) => return Err(err.into()),
+        }
+    }
+
     pub async fn log_iter(&self, db: BranchSpec, opts: LogOpts) -> CommitLogIterator {
         CommitLogIterator::new(self.clone(), db, opts)
     }
 
     pub async fn entity_iter<
-        T: ToTDBInstance + 'static,
+        T: TerminusDBModel + 'static,
         Deser: TDBInstanceDeserializer<T> + 'static,
     >(
         &self,
@@ -937,7 +1289,7 @@ impl TerminusDBHttpClient {
         Ok(results)
     }
 
-    // pub fn resolve_objects_from_commit<T: ToTDBInstance>(
+    // pub fn resolve_objects_from_commit<T: TerminusDBModel>(
     //     &self,
     //     spec: &BranchSpec,
     //     deserializer: &mut impl TDBInstanceDeserializer<T>,
@@ -946,7 +1298,7 @@ impl TerminusDBHttpClient {
     //     self.resolve_objects(spec, deserializer, commit.all_added_entities::<T>())
     // }
 
-    // pub fn resolve_objects<T: ToTDBInstance>(
+    // pub fn resolve_objects<T: TerminusDBModel>(
     //     &self,
     //     spec: &BranchSpec,
     //     deserializer: &mut impl TDBInstanceDeserializer<T>,
@@ -958,6 +1310,25 @@ impl TerminusDBHttpClient {
     //         .collect()
     // }
 
+    /// Checks if an untyped document exists in the database by ID.
+    ///
+    /// **⚠️ Consider using the strongly-typed alternative instead:**
+    /// - [`has_instance`](Self::has_instance) for typed models
+    ///
+    /// This function checks for the existence of a document by its raw ID string.
+    /// It works with any document type but provides no type safety.
+    ///
+    /// # Arguments
+    /// * `id` - The document ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification indicating which branch to check
+    ///
+    /// # Returns
+    /// `true` if the document exists, `false` otherwise
+    ///
+    /// # Example
+    /// ```rust
+    /// let exists = client.has_document("12345", &branch_spec).await;
+    /// ```
     pub async fn has_document(
         &self, // number only, no schema class prefix
         id: &str,
@@ -987,6 +1358,35 @@ impl TerminusDBHttpClient {
 
     /// ID here should manually include the type, like
     /// "Song/myid"
+    /// Retrieves an untyped document from the database by ID.
+    ///
+    /// **⚠️ Consider using the strongly-typed alternative instead:**
+    /// - [`get_instance`](Self::get_instance) for typed models with deserialization
+    ///
+    /// This function retrieves a document by its raw ID string and returns it
+    /// as an untyped `serde_json::Value`. It provides no type safety or automatic
+    /// deserialization.
+    ///
+    /// # Arguments
+    /// * `id` - The document ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification indicating which branch to query
+    /// * `opts` - Get options for controlling the query behavior
+    ///
+    /// # Returns
+    /// The document as a `serde_json::Value`
+    ///
+    /// # Example
+    /// ```rust
+    /// let doc = client.get_document("12345", &branch_spec, GetOpts::default()).await?;
+    /// let name = doc["name"].as_str().unwrap();
+    /// ```
+    ///
+    /// # Note
+    /// For time-travel queries, use a branch specification with a commit ID:
+    /// ```rust
+    /// let past_spec = BranchSpec::from("main/local/commit/abc123");
+    /// let old_doc = client.get_document("12345", &past_spec, GetOpts::default()).await?;
+    /// ```
     pub async fn get_document(
         &self, // number only, no schema class prefix
         id: &str,
@@ -1103,6 +1503,47 @@ impl TerminusDBHttpClient {
             .await?;
 
         let json = self.parse_response(res).await?;
+
+        trace!("query result: {:#?}", &json);
+
+        Ok(json)
+    }
+
+    // query_raw_with_headers - similar to query_raw but captures TerminusDB-Data-Version header
+    pub async fn query_raw_with_headers<T: Debug + DeserializeOwned>(
+        &self,
+        spec: Option<BranchSpec>,
+        query: serde_json::Value,
+    ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
+        let uri = match spec {
+            None => {
+                format!("{}/woql", &self.endpoint)
+            }
+            Some(spc) => {
+                format!("{}/woql/{}/{}", &self.endpoint, &self.org, spc.db)
+            }
+        };
+
+        eprintln!("querying at {}...: {:#?}", &uri, &query);
+
+        let json = json!({
+            "query": query
+        });
+
+        let json = serde_json::to_string(&json).unwrap();
+
+        trace!("payload: {}", &json);
+
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .body(json)
+            .send()
+            .await?;
+
+        let json = self.parse_response_with_headers(res).await?;
 
         trace!("query result: {:#?}", &json);
 

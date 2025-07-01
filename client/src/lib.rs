@@ -2,6 +2,7 @@
 #![feature(specialization)]
 #![feature(associated_type_defaults)]
 #![feature(try_blocks)]
+#![feature(trait_alias)]
 #![allow(warnings)]
 
 use enum_variant_macros::FromVariants;

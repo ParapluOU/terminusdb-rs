@@ -14,6 +14,68 @@ use std::slice::Iter;
 use crate::TerminusDBAdapterError::Serde;
 use crate::*;
 
+/// Transparent wrapper that includes both the response data and relevant HTTP headers
+/// Implements Deref so it can be used as a drop-in replacement for the wrapped type
+#[derive(Debug, Clone)]
+pub struct ResponseWithHeaders<T> {
+    data: T,
+    pub commit_id: Option<String>,
+}
+
+impl<T> ResponseWithHeaders<T> {
+    pub fn new(data: T, commit_id: Option<String>) -> Self {
+        Self {
+            data,
+            commit_id,
+        }
+    }
+    
+    pub fn without_headers(data: T) -> Self {
+        Self {
+            data,
+            commit_id: None,
+        }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.data
+    }
+
+    pub fn as_inner(&self) -> &T {
+        &self.data
+    }
+
+    pub fn as_inner_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
+}
+
+impl<T> std::ops::Deref for ResponseWithHeaders<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T> std::ops::DerefMut for ResponseWithHeaders<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl<T> AsRef<T> for ResponseWithHeaders<T> {
+    fn as_ref(&self) -> &T {
+        &self.data
+    }
+}
+
+impl<T> AsMut<T> for ResponseWithHeaders<T> {
+    fn as_mut(&mut self) -> &mut T {
+        &mut self.data
+    }
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub enum ApiResponse<R> {
