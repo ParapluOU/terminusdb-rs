@@ -149,6 +149,28 @@ impl TerminusDBHttpClient {
         client.ensure_database("test").await
     }
 
+    /// Creates a new TerminusDB HTTP client with custom connection parameters.
+    ///
+    /// # Arguments
+    /// * `endpoint` - The TerminusDB server endpoint URL (will have "/api" appended)
+    /// * `user` - Username for authentication
+    /// * `pass` - Password for authentication  
+    /// * `org` - Organization name
+    ///
+    /// # Returns
+    /// A configured client instance
+    ///
+    /// # Example
+    /// ```rust
+    /// use url::Url;
+    /// 
+    /// let client = TerminusDBHttpClient::new(
+    ///     Url::parse("https://my-terminusdb.com").unwrap(),
+    ///     "my_user",
+    ///     "my_password", 
+    ///     "my_org"
+    /// ).await?;
+    /// ```
     pub async fn new(mut endpoint: Url, user: &str, pass: &str, org: &str) -> anyhow::Result<Self> {
         let err = format!("Cannot modify segments for endpoint: {}", &endpoint);
 
@@ -341,6 +363,7 @@ impl TerminusDBHttpClient {
     ///
     /// # Note
     /// The database will be automatically created if it doesn't exist.
+    #[pseudonym::alias(schema)]
     pub async fn insert_entity_schema<S: ToTDBSchema>(
         &self,
         args: DocumentInsertArgs,
@@ -425,6 +448,7 @@ impl TerminusDBHttpClient {
     /// let user = User { name: "Alice".to_string(), age: 30 };
     /// let exists = client.has_instance(&user, args).await;
     /// ```
+    #[pseudonym::alias(has)]
     pub async fn has_instance<I: TerminusDBModel>(
         &self,
         model: &I,
@@ -472,6 +496,7 @@ impl TerminusDBHttpClient {
     /// # See Also
     /// - [`insert_instance_with_commit_id`](Self::insert_instance_with_commit_id) - For direct access to commit ID
     /// - [`insert_instances`](Self::insert_instances) - For bulk insertion
+    #[pseudonym::alias(insert)]
     pub async fn insert_instance<I: TerminusDBModel>(
         &self,
         model: &I,
@@ -798,6 +823,7 @@ impl TerminusDBHttpClient {
     ///
     /// # See Also
     /// - [`insert_instance`](Self::insert_instance) - For single instance insertion
+    #[pseudonym::alias(insert_many)]
     pub async fn insert_instances(
         &self,
         models: impl IntoBoxedTDBInstances,
@@ -1430,6 +1456,39 @@ impl TerminusDBHttpClient {
         }
     }
 
+    /// Retrieves and deserializes a strongly-typed model instance from the database.
+    ///
+    /// This is the **preferred method** for retrieving typed models from TerminusDB.
+    /// Use this instead of [`get_document`](Self::get_document) when working with
+    /// structs that implement `ToTDBInstance`.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instance into (implements `ToTDBInstance`)
+    ///
+    /// # Arguments
+    /// * `id` - The instance ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// The deserialized instance of type `Target`
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let user: User = client.get_instance("12345", &spec, &mut deserializer).await?;
+    /// ```
+    ///
+    /// # Time Travel
+    /// ```rust
+    /// // Retrieve from a specific commit
+    /// let past_spec = BranchSpec::from("main/local/commit/abc123");
+    /// let old_user: User = client.get_instance("12345", &past_spec, &mut deserializer).await?;
+    /// ```
+    #[pseudonym::alias(get)]
     pub async fn get_instance<Target: ToTDBInstance>(
         &self,
         // number only, no schema class prefix
@@ -1456,6 +1515,28 @@ impl TerminusDBHttpClient {
     }
 
     // Refactor query to accept Woql2Query
+    /// Executes a WOQL query and returns typed results.
+    ///
+    /// This function executes Web Object Query Language (WOQL) queries against TerminusDB
+    /// and deserializes the results into the specified type.
+    ///
+    /// # Type Parameters
+    /// * `T` - The type to deserialize query results into
+    ///
+    /// # Arguments
+    /// * `db` - Optional branch specification (if None, uses client's default)
+    /// * `query` - The WOQL query to execute
+    ///
+    /// # Returns
+    /// WOQL query results deserialized to type `T`
+    ///
+    /// # Example
+    /// ```rust
+    /// use terminusdb_woql2::Query;
+    /// 
+    /// let query = Query::select().triple("v:Subject", "v:Predicate", "v:Object");
+    /// let results: WOQLResult<HashMap<String, Value>> = client.query(Some(spec), query).await?;
+    /// ```
     pub async fn query<T: Debug + DeserializeOwned>(
         &self,
         db: Option<BranchSpec>,
