@@ -336,45 +336,111 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<String> {
         use futures_util::StreamExt;
         
+        debug!("=== find_commit_for_instance START ===");
         debug!("Looking for commit that created instance: {}", instance_id);
+        debug!("Using branch spec: org={}, db={}, branch={}", spec.organization, spec.db, spec.branch);
         
-        // Create a commit log iterator to walk through recent commits
-        let mut log_iter = self.log_iter(spec.clone(), LogOpts::default()).await;
-        
-        let mut commits_checked = 0;
-        
-        // Walk through commits until we find the one containing our instance
-        while let Some(log_entry_result) = log_iter.next().await {
-            let log_entry = log_entry_result?;
-            commits_checked += 1;
-            
-            debug!("Checking commit {} (#{})...", log_entry.id, commits_checked);
-            
-            // Get all entity IDs created in this commit (any type)
-            let created_ids = self.all_commit_created_entity_ids_any_type(spec, &log_entry).await?;
-            
-            debug!("Found {} entities in this commit: {:?}", created_ids.len(), created_ids);
-            
-            // Check if our instance ID is in the list of created entities
-            // Need to check both with and without schema prefix since insert_instance 
-            // returns IDs without prefix but commits store them with prefix
-            let id_matches = created_ids.iter().any(|id| {
-                id == instance_id || id.split('/').last() == Some(instance_id)
-            });
-            
-            if id_matches {
-                debug!("Found instance {} in commit {}", instance_id, log_entry.id);
-                return Ok(log_entry.id.clone());
-            }
-            
-            // Safety check to avoid infinite loops during debugging
-            if commits_checked > 100 {
-                warn!("Checked 100 commits without finding instance {}", instance_id);
-                break;
+        // First, check if the instance exists in the current state
+        debug!("Checking if instance {} exists in current state", instance_id);
+        let doc_exists = self.has_document(instance_id, spec).await;
+        if !doc_exists {
+            // Also check with schema prefix
+            let with_prefix = instance_id.contains('/');
+            if !with_prefix {
+                // Try different common prefixes if no prefix provided
+                let prefixes = ["User", "Document", "Entity", "Object"];
+                for prefix in &prefixes {
+                    let prefixed_id = format!("{}/{}", prefix, instance_id);
+                    if self.has_document(&prefixed_id, spec).await {
+                        debug!("Instance found with prefix: {}", prefixed_id);
+                        break;
+                    }
+                }
             }
         }
         
-        Err(anyhow!("Could not find commit for instance {} after checking {} commits", instance_id, commits_checked))
+        // Wrap the entire search operation with a timeout
+        let search_future = async {
+            // Create a commit log iterator with a smaller batch size
+            let log_opts = LogOpts {
+                count: Some(10), // Reduce from default to 10 commits per batch
+                ..Default::default()
+            };
+            let mut log_iter = self.log_iter(spec.clone(), log_opts).await;
+            
+            let mut commits_checked = 0;
+            let max_commits = 10; // Reduced from 100 to 10
+            
+            // Walk through commits until we find the one containing our instance
+            while let Some(log_entry_result) = log_iter.next().await {
+                debug!("Getting next log entry from iterator...");
+                let log_entry = log_entry_result?;
+                commits_checked += 1;
+                
+                debug!("Checking commit {} ({}/{})...", log_entry.id, commits_checked, max_commits);
+                debug!("  Commit timestamp: {:?}", log_entry.author.date);
+                debug!("  Commit message: {:?}", log_entry.comment);
+                
+                // Get all entity IDs created in this commit (any type)
+                debug!("Calling all_commit_created_entity_ids_any_type for commit {}...", log_entry.id);
+                let start_time = std::time::Instant::now();
+                match self.all_commit_created_entity_ids_any_type(spec, &log_entry).await {
+                    Ok(created_ids) => {
+                        let elapsed = start_time.elapsed();
+                        debug!("Query completed in {:?}", elapsed);
+                        debug!("Commit {} has {} entities", log_entry.id, created_ids.len());
+                        if created_ids.len() > 0 {
+                            debug!("First few entity IDs: {:?}", created_ids.iter().take(5).collect::<Vec<_>>());
+                        }
+                        
+                        // Check if our instance ID is in the list of created entities
+                        // Need to check both with and without schema prefix since insert_instance 
+                        // returns IDs without prefix but commits store them with prefix
+                        debug!("Checking if instance_id '{}' is in created_ids...", instance_id);
+                        let id_matches = created_ids.iter().any(|id| {
+                            let matches = id == instance_id || id.split('/').last() == Some(instance_id);
+                            if matches {
+                                debug!("  Found match: {}", id);
+                            }
+                            matches
+                        });
+                        
+                        if id_matches {
+                            debug!("✓ Found instance {} in commit {}", instance_id, log_entry.id);
+                            return Ok(log_entry.id.clone());
+                        } else {
+                            debug!("Instance not found in this commit, continuing...");
+                        }
+                    }
+                    Err(e) => {
+                        let elapsed = start_time.elapsed();
+                        warn!("Failed to query commit {} after {:?}: {}", log_entry.id, elapsed, e);
+                        // Continue to next commit instead of failing entirely
+                    }
+                }
+                
+                // Early exit if we've checked enough commits
+                if commits_checked >= max_commits {
+                    warn!("Reached max commit limit ({}) without finding instance {}", max_commits, instance_id);
+                    break;
+                }
+            }
+            
+            Err(anyhow!("Could not find commit for instance {} after checking {} commits", instance_id, commits_checked))
+        };
+        
+        // Apply overall timeout of 60 seconds
+        let timeout_duration = std::time::Duration::from_secs(60);
+        match tokio::time::timeout(timeout_duration, search_future).await {
+            Ok(result) => {
+                debug!("=== find_commit_for_instance END === Result: {:?}", result.as_ref().map(|s| s.as_str()));
+                result
+            },
+            Err(_) => {
+                error!("Timeout: find_commit_for_instance exceeded 60 seconds for instance {}", instance_id);
+                Err(anyhow!("Operation timed out after 60 seconds while searching for commit containing instance {}", instance_id))
+            }
+        }
     }
 
     /// Helper method to get all entity IDs created in a commit, regardless of type
@@ -385,6 +451,10 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<Vec<EntityID>> {
         let commit_collection = format!("commit/{}", &commit.identifier);
         let db_collection = format!("{}/{}", &self.org, &spec.db);
+        
+        debug!("=== all_commit_created_entity_ids_any_type START ===");
+        debug!("Querying commit {} for added entities", &commit.identifier);
+        debug!("Using collections: commit={}, db={}", &commit_collection, &db_collection);
         
         let id_var = vars!("id");
         let type_var = vars!("type");
@@ -403,7 +473,22 @@ impl TerminusDBHttpClient {
             .finalize();
 
         let json_query = query.to_instance(None).to_json();
-        let res: WOQLResult<Value> = self.query_raw(Some(spec.clone()), json_query).await?;
+        
+        debug!("Running WOQL query: {}", serde_json::to_string_pretty(&json_query).unwrap_or_default());
+        
+        // Add a timeout to prevent hanging forever
+        let query_future = self.query_raw(Some(spec.clone()), json_query);
+        let timeout_duration = std::time::Duration::from_secs(30);
+        
+        let res: WOQLResult<Value> = match tokio::time::timeout(timeout_duration, query_future).await {
+            Ok(result) => result?,
+            Err(_) => {
+                error!("Query timed out after 30 seconds for commit {}", &commit.identifier);
+                return Err(anyhow!("Query timed out"));
+            }
+        };
+
+        debug!("Query returned {} bindings", res.bindings.len());
 
         let err = format!("failed to deserialize from Value: {:#?}", &res);
 
@@ -412,7 +497,7 @@ impl TerminusDBHttpClient {
             pub id: String,
         }
 
-        Ok(res
+        let result: Vec<EntityID> = res
             .bindings
             .into_iter()
             .map(|bind| serde_json::from_value::<ObjectFormat>(bind))
@@ -420,7 +505,10 @@ impl TerminusDBHttpClient {
             .context(err)?
             .into_iter()
             .map(|obj| obj.id)
-            .collect())
+            .collect();
+        
+        debug!("=== all_commit_created_entity_ids_any_type END === Found {} entities", result.len());
+        Ok(result)
     }
 
     // pub fn insert_instance_chunked<I: ToTDBInstance>(
