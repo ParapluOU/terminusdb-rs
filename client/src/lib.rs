@@ -24,7 +24,7 @@ mod document;
 mod endpoint;
 pub mod err;
 #[cfg(not(target_arch = "wasm32"))]
-mod http;
+pub mod http;
 pub mod info;
 #[cfg(not(target_arch = "wasm32"))]
 mod log;
