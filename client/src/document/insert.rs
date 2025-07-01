@@ -38,6 +38,7 @@ impl Default for DocumentInsertArgs {
             spec: BranchSpec {
                 db: "test".to_string(),
                 branch: None,
+                ref_commit: None,
             },
             force: false,
         }

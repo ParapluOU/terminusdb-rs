@@ -78,6 +78,109 @@ pub type EntityID = String;
 /// ```
 pub trait TerminusDBModel = ToTDBInstance + Debug + Serialize;
 
+/// Centralized URL builder for TerminusDB API endpoints.
+/// Eliminates duplication and provides consistent URL construction.
+#[derive(Debug)]
+struct UrlBuilder<'a> {
+    endpoint: &'a Url,
+    org: &'a str,
+    parts: Vec<String>,
+    query_params: Vec<(String, String)>,
+}
+
+impl<'a> UrlBuilder<'a> {
+    fn new(endpoint: &'a Url, org: &'a str) -> Self {
+        Self {
+            endpoint,
+            org,
+            parts: Vec::new(),
+            query_params: Vec::new(),
+        }
+    }
+
+    /// Add an API endpoint type (db, document, woql, log, etc.)
+    fn endpoint(mut self, endpoint: &str) -> Self {
+        self.parts.push(endpoint.to_string());
+        self
+    }
+
+    /// Add a database path (handles both normal and commit-based paths)
+    fn database(mut self, spec: &BranchSpec) -> Self {
+        if let Some(commit_id) = spec.commit_id() {
+            self.parts.push(format!("{}/{}/local/commit/{}", self.org, spec.db, commit_id));
+        } else {
+            self.parts.push(format!("{}/{}", self.org, spec.db));
+        }
+        self
+    }
+
+    /// Add a simple database path for management operations
+    fn simple_database(mut self, db: &str) -> Self {
+        self.parts.push(format!("{}/{}", self.org, db));
+        self
+    }
+
+    /// Add a query parameter
+    fn query(mut self, key: &str, value: &str) -> Self {
+        self.query_params.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    /// Add a query parameter with URL encoding
+    fn query_encoded(mut self, key: &str, value: &str) -> Self {
+        self.query_params.push((key.to_string(), urlencoding::encode(value).to_string()));
+        self
+    }
+
+    /// Add multiple common document query parameters
+    fn document_params(mut self, author: &str, message: &str, graph_type: &str, create: bool) -> Self {
+        self.query_params.extend([
+            ("author".to_string(), author.to_string()),
+            ("message".to_string(), urlencoding::encode(message).to_string()),
+            ("graph_type".to_string(), graph_type.to_string()),
+            ("create".to_string(), create.to_string()),
+        ]);
+        self
+    }
+
+    /// Add document retrieval query parameters
+    fn document_get_params(mut self, id: &str, unfold: bool, as_list: bool) -> Self {
+        self.query_params.extend([
+            ("id".to_string(), id.to_string()),
+            ("unfold".to_string(), unfold.to_string()),
+            ("as_list".to_string(), as_list.to_string()),
+        ]);
+        self
+    }
+
+    /// Add log query parameters
+    fn log_params(mut self, start: usize, count: usize, verbose: bool) -> Self {
+        self.query_params.extend([
+            ("start".to_string(), start.to_string()),
+            ("count".to_string(), count.to_string()),
+            ("verbose".to_string(), verbose.to_string()),
+        ]);
+        self
+    }
+
+    /// Build the final URL string
+    fn build(self) -> String {
+        let mut url = format!("{}/{}", self.endpoint, self.parts.join("/"));
+        
+        if !self.query_params.is_empty() {
+            let query_string = self.query_params
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("&");
+            url.push('?');
+            url.push_str(&query_string);
+        }
+        
+        url
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TerminusDBHttpClient {
     pub endpoint: Url,
@@ -225,6 +328,13 @@ impl TerminusDBHttpClient {
     //     }
     // }
 
+    /// Centralized URL builder for TerminusDB API endpoints.
+    /// Handles all URL construction patterns and eliminates duplication.
+    fn build_url(&self) -> UrlBuilder {
+        UrlBuilder::new(&self.endpoint, &self.org)
+    }
+
+
     /// Ensures a database exists, creating it if it doesn't exist.
     ///
     /// This function will create a new database with the given name if it doesn't already exist.
@@ -242,7 +352,7 @@ impl TerminusDBHttpClient {
     /// let client_with_db = client.ensure_database("my_database").await?;
     /// ```
     pub async fn ensure_database(&self, db: &str) -> anyhow::Result<Self> {
-        let uri = format!("{}/db/{}/{}", &self.endpoint, self.org, db);
+        let uri = self.build_url().endpoint("db").simple_database(db).build();
 
         debug!("post uri: {}", &uri);
 
@@ -298,7 +408,7 @@ impl TerminusDBHttpClient {
     /// client.delete_database("old_database").await?;
     /// ```
     pub async fn delete_database(&self, db: &str) -> anyhow::Result<Self> {
-        let uri = format!("{}/db/{}/{}", &self.endpoint, self.org, db);
+        let uri = self.build_url().endpoint("db").simple_database(db).build();
 
         debug!("deleting database {}", db);
 
@@ -905,15 +1015,11 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         let ty = args.ty.to_string().to_lowercase();
 
-        let uri = format!(
-            "{}/document/{}/{}?author={}&message={}&graph_type={}&create=true",
-            &self.endpoint,
-            &self.org,
-            &args.spec.db,
-            &args.author,
-            (*urlencoding::encode(&args.message)).to_string(),
-            &ty
-        );
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(&args.spec)
+            .document_params(&args.author, &args.message, &ty, true)
+            .build();
 
         let mut to_jsoned = model
             .into_iter()
@@ -1015,15 +1121,11 @@ impl TerminusDBHttpClient {
 
         let ty = args.ty.to_string().to_lowercase();
 
-        let uri = format!(
-            "{}/document/{}/{}?author={}&message={}&graph_type={}&create=true",
-            &self.endpoint,
-            &self.org,
-            &args.spec.db,
-            &args.author,
-            (*urlencoding::encode(&args.message)).to_string(),
-            &ty
-        );
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(&args.spec)
+            .document_params(&args.author, &args.message, &ty, true)
+            .build();
 
         debug!("about to insert {} at URI {}: {:#?}", &ty, &uri, &json);
 
@@ -1046,7 +1148,7 @@ impl TerminusDBHttpClient {
 
     #[pseudonym::alias(verify_connection)]
     pub async fn info(&self) -> anyhow::Result<Info> {
-        let uri = format!("{}/info", &self.endpoint,);
+        let uri = self.build_url().endpoint("info").build();
         debug!(
             "📡 Making HTTP request to TerminusDB info endpoint: {}",
             &uri
@@ -1077,16 +1179,11 @@ impl TerminusDBHttpClient {
             count,
         } = opts;
 
-        let uri = format!(
-            "{}/log/{}/{}?start={}&count={}&verbose={}",
-            // todo: expose default to Config
-            &self.endpoint,
-            self.org,
-            &spec.db,
-            offset.unwrap_or_default(),
-            count.unwrap_or(10),
-            verbose
-        );
+        let uri = self.build_url()
+            .endpoint("log")
+            .simple_database(&spec.db)
+            .log_params(offset.unwrap_or_default(), count.unwrap_or(10), verbose)
+            .build();
 
         debug!("retrieving log at {}...", &uri);
 
@@ -1361,10 +1458,11 @@ impl TerminusDBHttpClient {
         spec: &BranchSpec,
     ) -> bool {
         let r: anyhow::Result<_> = async {
-            let uri = format!(
-                "{}/document/{}/{}?id={}&unfold={}&as_list={}",
-                &self.endpoint, &self.org, spec.db, id, false, false
-            );
+            let uri = self.build_url()
+                .endpoint("document")
+                .database(spec)
+                .document_get_params(id, false, false)
+                .build();
 
             Ok::<Value, anyhow::Error>(
                 self.parse_response::<Value>(
@@ -1423,10 +1521,11 @@ impl TerminusDBHttpClient {
             Err(anyhow!("document #{} does not exist", id))?
         }
 
-        let uri = format!(
-            "{}/document/{}/{}?id={}&unfold={}&as_list={}",
-            &self.endpoint, &self.org, spec.db, id, opts.unfold, opts.as_list
-        );
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_get_params(id, opts.unfold, opts.as_list)
+            .build();
 
         debug!("retrieving document at {}...", &uri);
 
@@ -1557,10 +1656,10 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<WOQLResult<T>> {
         let uri = match spec {
             None => {
-                format!("{}/woql", &self.endpoint)
+                self.build_url().endpoint("woql").build()
             }
             Some(spc) => {
-                format!("{}/woql/{}/{}", &self.endpoint, &self.org, spc.db)
+                self.build_url().endpoint("woql").simple_database(&spc.db).build()
             }
         };
 
@@ -1598,10 +1697,10 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
         let uri = match spec {
             None => {
-                format!("{}/woql", &self.endpoint)
+                self.build_url().endpoint("woql").build()
             }
             Some(spc) => {
-                format!("{}/woql/{}/{}", &self.endpoint, &self.org, spc.db)
+                self.build_url().endpoint("woql").simple_database(&spc.db).build()
             }
         };
 
