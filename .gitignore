@@ -78,4 +78,4 @@ node_modules/
 
 # Rust-specific
 **/*.rs.bk
-*.pdb 
+*.pdb .temp/
