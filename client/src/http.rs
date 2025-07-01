@@ -338,7 +338,7 @@ impl TerminusDBHttpClient {
         
         debug!("=== find_commit_for_instance START ===");
         debug!("Looking for commit that created instance: {}", instance_id);
-        debug!("Using branch spec: org={}, db={}, branch={}", spec.organization, spec.db, spec.branch);
+        debug!("Using branch spec: db={}, branch={:?}", spec.db, spec.branch);
         
         // First, check if the instance exists in the current state
         debug!("Checking if instance {} exists in current state", instance_id);
@@ -378,8 +378,8 @@ impl TerminusDBHttpClient {
                 commits_checked += 1;
                 
                 debug!("Checking commit {} ({}/{})...", log_entry.id, commits_checked, max_commits);
-                debug!("  Commit timestamp: {:?}", log_entry.author.date);
-                debug!("  Commit message: {:?}", log_entry.comment);
+                debug!("  Commit timestamp: {:?}", log_entry.timestamp);
+                debug!("  Commit message: {:?}", log_entry.message);
                 
                 // Get all entity IDs created in this commit (any type)
                 debug!("Calling all_commit_created_entity_ids_any_type for commit {}...", log_entry.id);
