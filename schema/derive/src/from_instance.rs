@@ -287,42 +287,37 @@ fn implement_from_instance_for_tagged_enum(
                 let token_stream = if fields_unnamed.unnamed.len() == 1 {
                     // Single field tuple variant
                     let field_ty = &fields_unnamed.unnamed[0].ty;
-                    let is_primitive = is_primitive_type(field_ty);
 
-                    if is_primitive {
-                        // For primitive tuple variants
-                        quote! {
-                            // Check lowercase variant name
-                            if let Some(prop) = instance.properties.get(#variant_name_str) {
-                                // Use FromInstanceProperty to deserialize the field
+                    // Use compile-time primitive detection with MaybeIsPrimitive trait
+                    quote! {
+                        if let Some(prop) = instance.properties.get(#variant_name_str) {
+                            if <#field_ty as terminusdb_schema::MaybeIsPrimitive>::is_primitive() {
+                                // Direct primitive deserialization for primitive types
                                 match <#field_ty as terminusdb_schema::FromInstanceProperty>::from_property(prop) {
                                     Result::Ok(value) => return Result::Ok(#enum_name::#variant_ident(value)),
                                     Err(e) => return Err(anyhow::anyhow!("Failed to deserialize variant {}: {}", #variant_name_str, e)),
                                 }
+                            } else {
+                                // Complex type deserialization
+                                match <#field_ty as terminusdb_schema::MaybeFromTDBInstance>::maybe_from_property(prop)? {
+                                    Some(value) => return Result::Ok(#enum_name::#variant_ident(value)),
+                                    None => return Err(anyhow::anyhow!("Failed to deserialize complex variant {}", #variant_name_str)),
+                                }
                             }
-                            // Also check capitalized variant name
-                            if let Some(prop) = instance.properties.get(#variant_name_cap) {
-                                // Use FromInstanceProperty to deserialize the field
+                        }
+                        // Also check capitalized variant name
+                        if let Some(prop) = instance.properties.get(#variant_name_cap) {
+                            if <#field_ty as terminusdb_schema::MaybeIsPrimitive>::is_primitive() {
+                                // Direct primitive deserialization for primitive types
                                 match <#field_ty as terminusdb_schema::FromInstanceProperty>::from_property(prop) {
                                     Result::Ok(value) => return Result::Ok(#enum_name::#variant_ident(value)),
                                     Err(e) => return Err(anyhow::anyhow!("Failed to deserialize variant {}: {}", #variant_name_cap, e)),
                                 }
-                            }
-                        }
-                    } else {
-                        // For complex tuple variants - use MaybeFromTDBInstance for type safety
-                        quote! {
-                            if let Some(prop) = instance.properties.get(#variant_name_str) {
-                                // Try complex deserialization first
+                            } else {
+                                // Complex type deserialization
                                 match <#field_ty as terminusdb_schema::MaybeFromTDBInstance>::maybe_from_property(prop)? {
                                     Some(value) => return Result::Ok(#enum_name::#variant_ident(value)),
-                                    None => {
-                                        // Fall back to primitive deserialization
-                                        match <#field_ty as terminusdb_schema::FromInstanceProperty>::from_property(prop) {
-                                            Result::Ok(value) => return Result::Ok(#enum_name::#variant_ident(value)),
-                                            Err(e) => return Err(anyhow::anyhow!("Failed to deserialize variant {}: {}", #variant_name_str, e)),
-                                        }
-                                    }
+                                    None => return Err(anyhow::anyhow!("Failed to deserialize complex variant {}", #variant_name_cap)),
                                 }
                             }
                         }
@@ -354,41 +349,26 @@ fn implement_from_instance_for_tagged_enum(
 
                 let field_parsers = field_names.iter().zip(field_types.iter()).zip(field_strings.iter())
                     .map(|((field_name, field_type), field_string)| {
-                        let is_primitive = is_primitive_type(field_type);
-
-                        if is_primitive {
-                            // For primitive fields
-                            quote! {
-                                let #field_name = match sub_instance.get_property(#field_string) {
-                                    Some(field_prop) => {
+                        // Use compile-time primitive detection with MaybeIsPrimitive trait
+                        quote! {
+                            let #field_name = match sub_instance.get_property(#field_string) {
+                                Some(field_prop) => {
+                                    if <#field_type as terminusdb_schema::MaybeIsPrimitive>::is_primitive() {
+                                        // Direct primitive deserialization for primitive types
                                         match <#field_type as terminusdb_schema::FromInstanceProperty>::from_property(field_prop) {
                                             Result::Ok(value) => value,
                                             Err(e) => return Err(anyhow::anyhow!("Failed to deserialize field {} in variant {}: {}", #field_string, #variant_name_str, e)),
                                         }
-                                    },
-                                    None => return Err(anyhow::anyhow!("Field {} missing in variant {}", #field_string, #variant_name_str)),
-                                };
-                            }
-                        } else {
-                            // For complex fields - use MaybeFromTDBInstance for type safety
-                            quote! {
-                                let #field_name = match sub_instance.get_property(#field_string) {
-                                    Some(field_prop) => {
-                                        // Try complex deserialization first
+                                    } else {
+                                        // Complex type deserialization
                                         match <#field_type as terminusdb_schema::MaybeFromTDBInstance>::maybe_from_property(field_prop)? {
                                             Some(value) => value,
-                                            None => {
-                                                // Fall back to primitive deserialization
-                                                match <#field_type as terminusdb_schema::FromInstanceProperty>::from_property(field_prop) {
-                                                    Result::Ok(value) => value,
-                                                    Err(e) => return Err(anyhow::anyhow!("Failed to deserialize field {} in variant {}: {}", #field_string, #variant_name_str, e)),
-                                                }
-                                            }
+                                            None => return Err(anyhow::anyhow!("Failed to deserialize complex field {} in variant {}", #field_string, #variant_name_str)),
                                         }
-                                    },
-                                    None => return Err(anyhow::anyhow!("Field {} missing in variant {}", #field_string, #variant_name_str)),
-                                };
-                            }
+                                    }
+                                },
+                                None => return Err(anyhow::anyhow!("Field {} missing in variant {}", #field_string, #variant_name_str)),
+                            };
                         }
                     })
                     .collect::<Vec<_>>();
@@ -441,37 +421,4 @@ fn implement_from_instance_for_tagged_enum(
     }
 }
 
-// Helper function to check if a type is a primitive type
-fn is_primitive_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(typepath) = ty {
-        if typepath.path.segments.len() == 1 {
-            let segment = &typepath.path.segments[0];
-            let name = segment.ident.to_string();
-            
-            // Basic primitive types
-            if name == "String" || name == "i32" || name == "i64" || name == "u32" ||
-                name == "u64" || name == "f32" || name == "f64" || name == "bool" ||
-                name == "usize" || name == "isize" || name == "u8" || name == "i8" ||
-                name == "XSDAnySimpleType" || name == "DateTime" || name == "NaiveTime" {
-                return true;
-            }
-            
-            // Vec is primitive if it contains primitive types
-            if name == "Vec" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first() {
-                        return is_primitive_type(inner_type);
-                    }
-                }
-                // If we can't determine the inner type, assume it's not primitive
-                return false;
-            }
-        }
-    }
-    false
-}
-
-// Helper function to check if an inner type inside an Option is a primitive
-fn is_primitive_type_inner(ty: &syn::Type) -> bool {
-    is_primitive_type(ty)
-} 
+ 

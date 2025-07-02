@@ -97,6 +97,6 @@ mod tests {
         let instance = model.to_instance(None);
 
         // Instance should contain all properties
-        assert_eq!(instance.properties.len(), 7);
+        assert_eq!(instance.properties.len(), 8);
     }
 }
