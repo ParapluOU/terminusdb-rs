@@ -1,7 +1,7 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty,
-    ToMaybeTDBSchema, ToSchemaClass, DATETIME, TIME,
+    FromInstanceProperty, InstanceProperty, MaybeFromTDBInstance, Primitive, PrimitiveValue,
+    Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, DATETIME, TIME,
 };
 use anyhow::bail;
 use chrono::{DateTime, NaiveTime, Utc};
@@ -11,6 +11,20 @@ use serde_json::Value;
 impl ToSchemaClass for DateTime<Utc> {
     fn to_class() -> &'static str {
         DATETIME
+    }
+}
+
+impl MaybeFromTDBInstance for DateTime<Utc> {
+    fn maybe_from_instance(instance: &crate::Instance) -> anyhow::Result<Option<Self>> {
+        Ok(None)
+    }
+
+    fn maybe_from_property(prop: &InstanceProperty) -> anyhow::Result<Option<Self>> {
+        if let InstanceProperty::Primitive(PrimitiveValue::String(s)) = prop {
+            Ok(Some(s.parse()?))
+        } else {
+            Ok(None)
+        }
     }
 }
 

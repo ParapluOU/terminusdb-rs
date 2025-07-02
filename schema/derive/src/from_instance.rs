@@ -452,7 +452,7 @@ fn is_primitive_type(ty: &syn::Type) -> bool {
             if name == "String" || name == "i32" || name == "i64" || name == "u32" ||
                 name == "u64" || name == "f32" || name == "f64" || name == "bool" ||
                 name == "usize" || name == "isize" || name == "u8" || name == "i8" ||
-                name == "XSDAnySimpleType" {
+                name == "XSDAnySimpleType" || name == "DateTime" || name == "NaiveTime" {
                 return true;
             }
             

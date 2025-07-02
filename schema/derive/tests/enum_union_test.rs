@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
@@ -9,6 +10,7 @@ pub enum BasicTaggedUnion {
     Integer(i32),
     Text(String),
     Boolean(bool),
+    DateTime(DateTime<Utc>),
 }
 
 // Complex tagged union with struct variants
@@ -63,7 +65,7 @@ mod tests {
             assert_eq!(id, "BasicTaggedUnion");
 
             // Check variant types
-            assert_eq!(properties.len(), 3);
+            assert_eq!(properties.len(), 4);
 
             let int_prop = properties.iter().find(|p| p.name == "integer").unwrap();
             assert_eq!(int_prop.class, "xsd:integer");
@@ -73,6 +75,9 @@ mod tests {
 
             let bool_prop = properties.iter().find(|p| p.name == "boolean").unwrap();
             assert_eq!(bool_prop.class, "xsd:boolean");
+
+            let datetime_prop = properties.iter().find(|p| p.name == "datetime").unwrap();
+            assert_eq!(datetime_prop.class, "xsd:dateTime");
         } else {
             panic!("Expected Schema::TaggedUnion");
         }
