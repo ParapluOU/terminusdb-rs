@@ -260,6 +260,14 @@ impl<T: TdbModel> PartialEq for TdbLazy<T> {
     }
 }
 
+impl<T: TdbModel> Eq for TdbLazy<T> {}
+
+impl<T: TdbModel> std::hash::Hash for TdbLazy<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl<T: TdbModel> FromTDBInstance for TdbLazy<T> {
     fn from_instance(instance: &Instance) -> anyhow::Result<Self> {
         if instance.is_reference() {
