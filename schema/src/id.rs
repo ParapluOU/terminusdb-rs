@@ -141,13 +141,29 @@ impl<T: ToTDBSchema> Hash for EntityIDFor<T> {
     }
 }
 
-impl<T: ToTDBSchema> PartialEq<Self> for EntityIDFor<T> {
+impl<T: ToTDBSchema> PartialEq<EntityIDFor<T>> for EntityIDFor<T> {
     fn eq(&self, other: &Self) -> bool {
         self.typed_id == other.typed_id && self.base == other.base
     }
 }
 
 impl<T: ToTDBSchema> Eq for EntityIDFor<T> {}
+
+impl<T: ToTDBSchema> PartialOrd for EntityIDFor<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T: ToTDBSchema> Ord for EntityIDFor<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // First compare by typed_id, then by base if needed
+        match self.typed_id.cmp(&other.typed_id) {
+            std::cmp::Ordering::Equal => self.base.cmp(&other.base),
+            other => other,
+        }
+    }
+}
 
 impl<T: ToTDBSchema + Clone> TryInto<EntityIDFor<T>> for &EntityIDFor<T> {
     type Error = anyhow::Error;

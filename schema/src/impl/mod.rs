@@ -1,6 +1,7 @@
 pub mod map;
 
 // Special types implementations
+pub mod btreemap;
 pub mod datetime;
 pub mod hashmap;
 pub mod uuid;
@@ -19,7 +20,7 @@ use std::collections::HashSet;
 
 use crate::*;
 pub use {
-    datetime::*, generic::*, hashmap::*, int::*, map::*, opt::*, phantom::*, set::*, str::*,
+    btreemap::*, datetime::*, generic::*, hashmap::*, int::*, map::*, opt::*, phantom::*, set::*, str::*,
     uuid::*, value::*, vec::*,
 };
 
