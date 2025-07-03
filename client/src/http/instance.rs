@@ -507,7 +507,14 @@ impl super::client::TerminusDBHttpClient {
     {
         let doc_id = format_id::<Target>(id);
 
-        let json_instance_doc = self.get_document(&doc_id, spec, Default::default()).await?;
+        // the default here makes stuff unfold
+        let mut opts: GetOpts = Default::default();
+
+        if Target::to_schema().should_unfold() {
+            opts.unfold = true;
+        }
+
+        let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
 
         let res = deserializer.from_instance(json_instance_doc.clone());
 

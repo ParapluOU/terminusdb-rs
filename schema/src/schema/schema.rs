@@ -463,6 +463,14 @@ impl Schema {
         }
     }
 
+    pub fn should_unfold(&self) -> bool {
+        match self {
+            Schema::Class { unfoldable, .. } => *unfoldable,
+            Schema::TaggedUnion { unfoldable, .. } => *unfoldable,
+            _ => false
+        }
+    }
+
     pub fn own_properties(&self) -> Vec<&Property> {
         match self {
             Schema::Class { properties, .. } => properties.iter().collect(),

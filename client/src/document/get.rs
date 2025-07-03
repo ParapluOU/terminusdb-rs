@@ -7,7 +7,7 @@ pub struct GetOpts {
 impl Default for GetOpts {
     fn default() -> Self {
         Self {
-            unfold: true,
+            unfold: false,
             as_list: false,
         }
     }
