@@ -65,6 +65,25 @@ impl<T: TdbModel> TdbLazy<T> {
     pub fn is_loaded(&self) -> bool {
         self.data.is_some()
     }
+
+    /// Get a reference to the inner data, panicking if not loaded.
+    /// 
+    /// # Panics
+    /// Panics if the data has not been loaded yet.
+    pub fn get_expect(&self) -> &T {
+        self.data
+            .as_ref()
+            .expect("TdbLazy data not loaded")
+            .as_ref()
+    }
+
+    /// Take ownership of the inner data, panicking if not loaded.
+    /// 
+    /// # Panics
+    /// Panics if the data has not been loaded yet.
+    pub fn take_expect(self) -> T {
+        *self.data.expect("TdbLazy data not loaded")
+    }
 }
 
 impl<T: TdbModel> From<T> for TdbLazy<T> {
