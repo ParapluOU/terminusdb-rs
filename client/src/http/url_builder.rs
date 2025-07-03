@@ -38,6 +38,13 @@ impl<'a> UrlBuilder<'a> {
         self
     }
 
+    /// Add a database path for history endpoint which includes branch information
+    pub fn database_with_branch(mut self, spec: &crate::spec::BranchSpec) -> Self {
+        let branch = spec.branch.as_deref().unwrap_or("main");
+        self.parts.push(format!("{}/{}/local/branch/{}", self.org, spec.db, branch));
+        self
+    }
+
     /// Add a simple database path for management operations
     pub fn simple_database(mut self, db: &str) -> Self {
         self.parts.push(format!("{}/{}", self.org, db));
@@ -84,6 +91,26 @@ impl<'a> UrlBuilder<'a> {
             ("count".to_string(), count.to_string()),
             ("verbose".to_string(), verbose.to_string()),
         ]);
+        self
+    }
+
+    /// Add history query parameters
+    pub fn history_params(mut self, doc_id: &str, params: &crate::document::DocumentHistoryParams) -> Self {
+        self.query_params.push(("id".to_string(), doc_id.to_string()));
+        
+        if let Some(start) = params.start {
+            self.query_params.push(("start".to_string(), start.to_string()));
+        }
+        if let Some(count) = params.count {
+            self.query_params.push(("count".to_string(), count.to_string()));
+        }
+        if let Some(updated) = params.updated {
+            self.query_params.push(("updated".to_string(), updated.to_string()));
+        }
+        if let Some(created) = params.created {
+            self.query_params.push(("created".to_string(), created.to_string()));
+        }
+        
         self
     }
 

@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        document::{DocumentInsertArgs, GetOpts}, 
+        document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, GetOpts}, 
         result::ResponseWithHeaders, 
         spec::BranchSpec,
         TDBInsertInstanceResult,
@@ -311,5 +311,69 @@ impl super::client::TerminusDBHttpClient {
             .collect::<Vec<_>>();
 
         self.insert_documents(selection, args).await
+    }
+
+    /// Get the commit history for a specific document.
+    ///
+    /// This method retrieves the list of commits where the specified document was modified.
+    /// This is particularly useful for tracking changes to RandomKey entities over time.
+    ///
+    /// # Arguments
+    /// * `document_id` - The full document ID (e.g., "MyEntity/abc123randomkey")
+    /// * `spec` - Branch specification (branch to query history from)
+    /// * `params` - Optional parameters for pagination and filtering
+    ///
+    /// # Returns
+    /// A vector of `CommitHistoryEntry` containing commit details
+    ///
+    /// # Example
+    /// ```rust
+    /// // Get full history for a document
+    /// let history = client.get_document_history(
+    ///     "Person/abc123", 
+    ///     &branch_spec, 
+    ///     None
+    /// ).await?;
+    ///
+    /// // Get last 5 commits
+    /// let params = DocumentHistoryParams::new()
+    ///     .with_start(0)
+    ///     .with_count(5);
+    /// let recent = client.get_document_history(
+    ///     "Person/abc123", 
+    ///     &branch_spec, 
+    ///     Some(params)
+    /// ).await?;
+    /// ```
+    pub async fn get_document_history(
+        &self,
+        document_id: &str,
+        spec: &BranchSpec,
+        params: Option<DocumentHistoryParams>,
+    ) -> anyhow::Result<Vec<CommitHistoryEntry>> {
+        let params = params.unwrap_or_default();
+        
+        let uri = self.build_url()
+            .endpoint("history")
+            .database_with_branch(spec)
+            .history_params(document_id, &params)
+            .build();
+
+        debug!("Fetching document history from: {}", &uri);
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await?;
+
+        let history = self.parse_response::<Vec<CommitHistoryEntry>>(res)
+            .await
+            .context("Failed to parse document history response")?;
+
+        debug!("Retrieved {} history entries for document {}", history.len(), document_id);
+
+        Ok(history)
     }
 }

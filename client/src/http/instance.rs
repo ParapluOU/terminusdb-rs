@@ -2,7 +2,7 @@
 
 use {
     crate::{
-        document::{DocumentInsertArgs, DocumentType, GetOpts},
+        document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, DocumentType, GetOpts},
         result::ResponseWithHeaders,
         spec::BranchSpec,
         TDBInsertInstanceResult, TDBInstanceDeserializer, IntoBoxedTDBInstances,
@@ -525,5 +525,46 @@ impl super::client::TerminusDBHttpClient {
                 super::helpers::dump_json(&json_instance_doc).display()
             )),
         }
+    }
+
+    /// Get the commit history for a strongly-typed model instance.
+    ///
+    /// This is a convenience method that automatically formats the instance ID
+    /// according to the model's type and then retrieves the commit history.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `instance_id` - The instance ID (without type prefix, e.g., "abc123")
+    /// * `spec` - Branch specification (branch to query history from)
+    /// * `params` - Optional parameters for pagination and filtering
+    ///
+    /// # Returns
+    /// A vector of `CommitHistoryEntry` containing commit details
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct Person { name: String, age: i32 }
+    ///
+    /// // Get history for a Person instance
+    /// let history = client.get_instance_history::<Person>(
+    ///     "abc123randomkey",
+    ///     &branch_spec,
+    ///     None
+    /// ).await?;
+    ///
+    /// // This is equivalent to:
+    /// // client.get_document_history("Person/abc123randomkey", &branch_spec, None).await?
+    /// ```
+    pub async fn get_instance_history<I: TerminusDBModel>(
+        &self,
+        instance_id: &str,
+        spec: &BranchSpec,
+        params: Option<DocumentHistoryParams>,
+    ) -> anyhow::Result<Vec<CommitHistoryEntry>> {
+        let full_id = super::helpers::format_id::<I>(instance_id);
+        self.get_document_history(&full_id, spec, params).await
     }
 }

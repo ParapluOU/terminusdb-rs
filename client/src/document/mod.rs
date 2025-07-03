@@ -1,7 +1,8 @@
 mod get;
+mod history;
 mod insert;
 
-pub use {get::*, insert::*};
+pub use {get::*, history::*, insert::*};
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum DocumentType {
