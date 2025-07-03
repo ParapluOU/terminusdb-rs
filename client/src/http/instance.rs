@@ -52,13 +52,13 @@ impl super::client::TerminusDBHttpClient {
     pub async fn has_instance<I: TerminusDBModel>(
         &self,
         model: &I,
-        args: DocumentInsertArgs,
+        spec: &BranchSpec,
     ) -> bool {
         match model.to_instance(None).gen_id() {
             None => {
                 return false;
             }
-            Some(id) => self.has_document(&id, args.as_ref()).await,
+            Some(id) => self.has_document(&id, spec).await,
         }
     }
 
@@ -66,9 +66,9 @@ impl super::client::TerminusDBHttpClient {
     pub async fn has_instance_id<I: TerminusDBModel>(
         &self,
         model_id: &str,
-        args: DocumentInsertArgs,
+        spec: &BranchSpec,
     ) -> bool {
-        self.has_document(&format_id::<I>(model_id), args.as_ref()).await
+        self.has_document(&format_id::<I>(model_id), spec).await
     }
 
     /// Inserts a strongly-typed model instance into the database.
@@ -115,7 +115,7 @@ impl super::client::TerminusDBHttpClient {
 
         let gen_id = instance.gen_id();
 
-        if !args.force && self.has_instance(model, args.clone()).await {
+        if !args.force && self.has_instance(model, &args.spec).await {
             // todo: make strongly typed ID helper
             let id = gen_id.unwrap().split("/").last().unwrap().to_string();
 
