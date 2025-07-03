@@ -62,6 +62,15 @@ impl super::client::TerminusDBHttpClient {
         }
     }
 
+    #[pseudonym::alias(has_id)]
+    pub async fn has_instance_id<I: TerminusDBModel>(
+        &self,
+        model_id: &str,
+        args: DocumentInsertArgs,
+    ) -> bool {
+        self.has_document(&format_id::<I>(model_id), args.as_ref()).await
+    }
+
     /// Inserts a strongly-typed model instance into the database.
     ///
     /// This is the **preferred method** for inserting typed models into TerminusDB.
