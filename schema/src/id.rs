@@ -1,8 +1,5 @@
 use crate::json::InstancePropertyFromJson;
-use crate::{
-    FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, ToInstanceProperty,
-    ToSchemaProperty, ToTDBSchema, STRING,
-};
+use crate::{FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel, ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING};
 use anyhow::{anyhow, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -12,6 +9,7 @@ use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::Deref;
+use rocket::request::FromParam;
 use uuid::Uuid;
 // todo: needs unit tests
 
@@ -288,6 +286,15 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for EntityIDFor<T>
             ))),
             _ => bail!("expected String for EntityIDFor, got: {:#?}", json),
         }
+    }
+}
+
+// todo: put behind rocket-specific feature
+impl<T: ToTDBSchema> FromParam<'_> for EntityIDFor<T> {
+    type Error = anyhow::Error;
+
+    fn from_param(param: &'_ str) -> Result<Self, Self::Error> {
+        todo!("parse EntityIDFor from str param '{param}'")
     }
 }
 

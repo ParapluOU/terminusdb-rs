@@ -34,6 +34,7 @@ sha2 = "0.10.8"
 serde_canonical_json = "1.0.0"
 pretty_assertions = "1.4.1"
 refined = "0.3.1"
+rocket = "0.5.1"
 
 [lib]
 path = "src/lib.rs"
