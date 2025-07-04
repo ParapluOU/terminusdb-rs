@@ -1,7 +1,7 @@
 use crate::json::{InstancePropertyFromJson, NestedRef};
 use crate::{
     EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance, InstanceFromJson,
-    InstanceProperty, Key, PrimitiveValue, Property, RelationValue, Schema, TdbModel,
+    InstanceProperty, Key, PrimitiveValue, Property, RelationValue, Schema, TerminusDBModel,
     ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances,
     ToTDBSchema, URI,
 };
@@ -13,12 +13,12 @@ use std::convert::TryInto;
 
 /// Lazy loading container for TerminusDB instances
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TdbLazy<T: TdbModel> {
+pub struct TdbLazy<T: TerminusDBModel> {
     id: EntityIDFor<T>,
     data: Option<Box<T>>,
 }
 
-impl<T: TdbModel> TdbLazy<T> {
+impl<T: TerminusDBModel> TdbLazy<T> {
     pub fn new(id: EntityIDFor<T>, data: Option<T>) -> Self {
         Self {
             id,
@@ -86,25 +86,25 @@ impl<T: TdbModel> TdbLazy<T> {
     }
 }
 
-impl<T: TdbModel> From<T> for TdbLazy<T> {
+impl<T: TerminusDBModel> From<T> for TdbLazy<T> {
     fn from(value: T) -> Self {
         Self::new_data(value).unwrap()
     }
 }
 
-impl<T: TdbModel> From<EntityIDFor<T>> for TdbLazy<T> {
+impl<T: TerminusDBModel> From<EntityIDFor<T>> for TdbLazy<T> {
     fn from(id: EntityIDFor<T>) -> Self {
         Self::new(id, None)
     }
 }
 
-impl<T: TdbModel + ToSchemaClass> ToSchemaClass for TdbLazy<T> {
+impl<T: TerminusDBModel + ToSchemaClass> ToSchemaClass for TdbLazy<T> {
     fn to_class() -> &'static str {
         T::to_class()
     }
 }
 
-impl<T: TdbModel> ToTDBSchema for TdbLazy<T> {
+impl<T: TerminusDBModel> ToTDBSchema for TdbLazy<T> {
     type Type = T::Type;
 
     fn id() -> Option<String> {
@@ -133,13 +133,13 @@ impl<T: TdbModel> ToTDBSchema for TdbLazy<T> {
     }
 }
 
-// impl<Parent, T: ToSchemaProperty<Parent>+TdbModel> ToSchemaProperty<Parent> for TdbLazy<T> {
+// impl<Parent, T: ToSchemaProperty<Parent>+TerminusDBModel> ToSchemaProperty<Parent> for TdbLazy<T> {
 //     fn to_property(prop_name: &str) -> Property {
 //         T::to_property(prop_name)
 //     }
 // }
 
-// impl<T: TdbModel> FromTDBInstance for TdbLazy<T> {
+// impl<T: TerminusDBModel> FromTDBInstance for TdbLazy<T> {
 //     fn from_instance(instance: &Instance) -> Result<Self, anyhow::Error> {
 //         if let Some(id) = instance.id.as_ref() {
 //             // If this is a full instance (not just a reference), parse it immediately
@@ -169,7 +169,7 @@ impl<T: TdbModel> ToTDBSchema for TdbLazy<T> {
 
 // todo: somehow be able to determine whether the entity already exists
 // so that we dont needlessly nest Instances?
-impl<Parent, T: TdbModel> ToInstanceProperty<Parent> for TdbLazy<T> {
+impl<Parent, T: TerminusDBModel> ToInstanceProperty<Parent> for TdbLazy<T> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         if self.is_loaded() {
             InstanceProperty::Relation(RelationValue::One(
@@ -184,7 +184,7 @@ impl<Parent, T: TdbModel> ToInstanceProperty<Parent> for TdbLazy<T> {
     }
 }
 
-impl<Parent, T: TdbModel + ToSchemaClass + InstanceFromJson> InstancePropertyFromJson<Parent>
+impl<Parent, T: TerminusDBModel + ToSchemaClass + InstanceFromJson> InstancePropertyFromJson<Parent>
     for TdbLazy<T>
 {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
@@ -224,7 +224,7 @@ impl<Parent, T: TdbModel + ToSchemaClass + InstanceFromJson> InstancePropertyFro
     }
 }
 
-// impl<T: TdbModel, Parent> ToInstanceProperty<Parent> for TdbLazy<T> {
+// impl<T: TerminusDBModel, Parent> ToInstanceProperty<Parent> for TdbLazy<T> {
 //     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
 //         if self.is_loaded() {
 //             InstanceProperty::Relation(RelationValue::One(self.data.as_ref().unwrap().to_instance(Some(self.id.clone()))))
@@ -235,7 +235,7 @@ impl<Parent, T: TdbModel + ToSchemaClass + InstanceFromJson> InstancePropertyFro
 //     }
 // }
 
-impl<T: TdbModel> FromInstanceProperty for TdbLazy<T> {
+impl<T: TerminusDBModel> FromInstanceProperty for TdbLazy<T> {
     fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
         match prop {
             InstanceProperty::Primitive(PrimitiveValue::String(id)) => {
@@ -257,13 +257,13 @@ impl<T: TdbModel> FromInstanceProperty for TdbLazy<T> {
     }
 }
 
-impl<T: TdbModel> ToTDBInstances for TdbLazy<T> {
+impl<T: TerminusDBModel> ToTDBInstances for TdbLazy<T> {
     fn to_instance_tree(&self) -> Vec<Instance> {
         todo!()
     }
 }
 
-impl<T: TdbModel> ToTDBInstance for TdbLazy<T> {
+impl<T: TerminusDBModel> ToTDBInstance for TdbLazy<T> {
     fn to_instance(&self, id: Option<String>) -> Instance {
         if self.is_loaded() {
             self.data.as_ref().unwrap().to_instance(id)
@@ -273,21 +273,21 @@ impl<T: TdbModel> ToTDBInstance for TdbLazy<T> {
     }
 }
 
-impl<T: TdbModel> PartialEq for TdbLazy<T> {
+impl<T: TerminusDBModel> PartialEq for TdbLazy<T> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<T: TdbModel> Eq for TdbLazy<T> {}
+impl<T: TerminusDBModel> Eq for TdbLazy<T> {}
 
-impl<T: TdbModel> std::hash::Hash for TdbLazy<T> {
+impl<T: TerminusDBModel> std::hash::Hash for TdbLazy<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-impl<T: TdbModel> FromTDBInstance for TdbLazy<T> {
+impl<T: TerminusDBModel> FromTDBInstance for TdbLazy<T> {
     fn from_instance(instance: &Instance) -> anyhow::Result<Self> {
         if instance.is_reference() {
             return Ok(Self::new(instance.id().unwrap().try_into()?, None));

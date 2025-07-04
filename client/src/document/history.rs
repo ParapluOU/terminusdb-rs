@@ -9,9 +9,11 @@ pub struct DocumentHistoryParams {
     pub start: Option<u32>,
     /// Number of commits to return
     pub count: Option<u32>,
-    /// Include last updated time (excludes full history)
+    /// if this is set to true, the result will be keyed with
+    /// commits organized under a 'updated' property
     pub updated: Option<bool>,
-    /// Include creation date (excludes full history)
+    /// if this is set to true, the result will be keyed with
+    /// commits organized under a 'created' property
     pub created: Option<bool>,
 }
 

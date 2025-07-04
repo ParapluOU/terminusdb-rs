@@ -32,25 +32,11 @@ pub mod url_builder;
 pub use client::TerminusDBHttpClient;
 pub use helpers::{dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema, format_id};
 pub use url_builder::UrlBuilder;
+pub use terminusdb_schema::TerminusDBModel;
 
 // Re-export commonly used types
 pub type EntityID = String;
 
-/// Trait alias for strongly typed TerminusDB models.
-///
-/// This represents any type that can be converted to a TerminusDB instance,
-/// is debuggable, and serializable. Use this for functions that accept
-/// TerminusDB models to make the API clearer and distinguish from untyped documents.
-///
-/// # Example
-/// ```rust
-/// use terminusdb_client::TerminusDBModel;
-/// 
-/// async fn insert_my_model<T: TerminusDBModel>(client: &TerminusDBHttpClient, model: &T) {
-///     client.insert_instance(model, args).await.unwrap();
-/// }
-/// ```
-pub trait TerminusDBModel = terminusdb_schema::ToTDBInstance + std::fmt::Debug + serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TDBInsertInstanceResult {

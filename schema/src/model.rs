@@ -1,6 +1,6 @@
 use crate::{EntityIDFor, FromTDBInstance, ToTDBInstance};
 
-pub trait TdbModel : ToTDBInstance + FromTDBInstance {
+pub trait TerminusDBModel : ToTDBInstance + FromTDBInstance + std::fmt::Debug {
     fn instance_id(&self) -> Option<EntityIDFor<Self>> {
         match self.to_instance(None).gen_id() {
             None => {None}
@@ -11,6 +11,6 @@ pub trait TdbModel : ToTDBInstance + FromTDBInstance {
     }
 }
 
-impl<T> TdbModel for T where T: ToTDBInstance + FromTDBInstance {
+impl<T> TerminusDBModel for T where T: ToTDBInstance + FromTDBInstance + std::fmt::Debug {
 
 }

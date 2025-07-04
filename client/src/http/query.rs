@@ -5,7 +5,7 @@ use {
         spec::BranchSpec, 
         WOQLResult, 
         InstanceFromJson, 
-        TdbModel, 
+        TerminusDBModel, 
         InstanceQueryable, 
         ListModels,
     },
@@ -140,7 +140,7 @@ impl super::client::TerminusDBHttpClient {
     }
 
     // todo: roll into ORM-like model
-    pub async fn query_instances<T: TdbModel + InstanceFromJson>(
+    pub async fn query_instances<T: TerminusDBModel + InstanceFromJson>(
         &self,
         spec: &BranchSpec,
         limit: Option<usize>,
@@ -151,7 +151,7 @@ impl super::client::TerminusDBHttpClient {
     }
 
     // todo: roll into ORM-like model
-    pub async fn list_instances<T: TdbModel + InstanceFromJson>(
+    pub async fn list_instances<T: TerminusDBModel + InstanceFromJson>(
         &self,
         spec: &BranchSpec,
         limit: Option<usize>,

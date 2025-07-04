@@ -1,5 +1,5 @@
 use crate::{BranchSpec, TerminusDBHttpClient};
-use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TdbModel, ToTDBSchema};
+use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TerminusDBModel, ToTDBSchema};
 use terminusdb_woql2::prelude::Query;
 use terminusdb_woql_builder::builder::WoqlBuilder;
 use terminusdb_woql_builder::prelude::{node, Var};
@@ -14,7 +14,7 @@ use tap::Pipe;
 pub trait InstanceQueryable {
     /// the main user model it is returning;
     /// this can also be an ad-hoc deserializable type and is not neccessarily a TerminusDB model
-    type Model: TdbModel + InstanceFromJson;
+    type Model: TerminusDBModel + InstanceFromJson;
 
     /// running the query with an adapter
     async fn apply(
@@ -91,7 +91,7 @@ impl<T> Default for ListModels<T> {
     }
 }
 
-impl<T: TdbModel + InstanceFromJson> InstanceQueryable for ListModels<T> {
+impl<T: TerminusDBModel + InstanceFromJson> InstanceQueryable for ListModels<T> {
     type Model = T;
 
     fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder {
