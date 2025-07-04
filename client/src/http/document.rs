@@ -376,4 +376,118 @@ impl super::client::TerminusDBHttpClient {
 
         Ok(history)
     }
+
+    /// Retrieves multiple untyped documents from the database by IDs.
+    ///
+    /// **⚠️ Consider using the strongly-typed alternative instead:**
+    /// - [`get_instances`](Self::get_instances) for typed models with deserialization
+    ///
+    /// This function retrieves multiple documents by their IDs and returns them
+    /// as untyped `serde_json::Value` objects. It provides no type safety or automatic
+    /// deserialization. For large ID lists, it automatically uses POST with 
+    /// `X-HTTP-Method-Override: GET` to avoid URL length limits.
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of document IDs to retrieve
+    /// * `spec` - Branch specification indicating which branch to query
+    /// * `opts` - Get options for controlling query behavior (skip, count, type filter, etc.)
+    ///
+    /// # Returns
+    /// A vector of documents as `serde_json::Value` objects
+    ///
+    /// # Example
+    /// ```rust
+    /// let ids = vec!["Person/alice".to_string(), "Person/bob".to_string()];
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// let docs = client.get_documents(ids, &branch_spec, opts).await?;
+    /// ```
+    ///
+    /// # Pagination Example
+    /// ```rust
+    /// let ids = vec!["Person/alice".to_string(), "Person/bob".to_string()];
+    /// let opts = GetOpts::paginated(0, 10); // skip 0, take 10
+    /// let docs = client.get_documents(ids, &branch_spec, opts).await?;
+    /// ```
+    ///
+    /// # Type Filtering Example
+    /// ```rust
+    /// let ids = vec![]; // empty means "get all"
+    /// let opts = GetOpts::filtered_by_type("Person").with_count(5);
+    /// let docs = client.get_documents(ids, &branch_spec, opts).await?;
+    /// ```
+    pub async fn get_documents(
+        &self,
+        ids: Vec<String>,
+        spec: &BranchSpec,
+        opts: GetOpts,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        debug!("Retrieving {} documents", ids.len());
+
+        // Build the URL for the document endpoint
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_get_multiple_params(&ids, &opts)
+            .build();
+
+        // Determine if we should use POST method based on URL length or explicit large request
+        let use_post = uri.len() > 2000 || ids.len() > 50; // Use POST for long URLs or many IDs
+
+        debug!("Fetching documents from: {} (using {})", &uri, if use_post { "POST" } else { "GET" });
+
+        let start = Instant::now();
+
+        let res = if use_post {
+            // Use POST with X-HTTP-Method-Override: GET for large requests
+            let base_uri = self.build_url()
+                .endpoint("document")
+                .database(spec)
+                .build();
+
+            // Create query document as JSON
+            let mut query_doc = serde_json::Map::new();
+            if !ids.is_empty() {
+                query_doc.insert("ids".to_string(), serde_json::to_value(&ids)?);
+            }
+            query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
+            query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
+            
+            if let Some(skip) = opts.skip {
+                query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
+            }
+            if let Some(count) = opts.count {
+                query_doc.insert("count".to_string(), serde_json::Value::Number(count.into()));
+            }
+            if let Some(ref type_filter) = opts.type_filter {
+                query_doc.insert("type".to_string(), serde_json::Value::String(type_filter.clone()));
+            }
+
+            let query_json = serde_json::to_string(&query_doc)?;
+
+            self.http
+                .post(base_uri)
+                .basic_auth(&self.user, Some(&self.pass))
+                .header("Content-Type", "application/json")
+                .header("X-HTTP-Method-Override", "GET")
+                .body(query_json)
+                .send()
+                .await?
+        } else {
+            // Use GET for smaller requests
+            self.http
+                .get(uri)
+                .basic_auth(&self.user, Some(&self.pass))
+                .send()
+                .await?
+        };
+
+        debug!("Retrieved documents with status code: {}", res.status());
+
+        // Parse response as array of JSON values
+        let docs = self.parse_response::<Vec<serde_json::Value>>(res).await?;
+
+        debug!("Retrieved {} documents in {:?}", docs.len(), start.elapsed());
+
+        Ok(docs)
+    }
 }

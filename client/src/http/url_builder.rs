@@ -74,13 +74,41 @@ impl<'a> UrlBuilder<'a> {
         self
     }
 
-    /// Add document retrieval query parameters
+    /// Add document retrieval query parameters for single document
     pub fn document_get_params(mut self, id: &str, unfold: bool, as_list: bool) -> Self {
         self.query_params.extend([
             ("id".to_string(), id.to_string()),
             ("unfold".to_string(), unfold.to_string()),
             ("as_list".to_string(), as_list.to_string()),
         ]);
+        self
+    }
+
+    /// Add document retrieval query parameters for multiple documents
+    pub fn document_get_multiple_params(mut self, ids: &[String], opts: &crate::document::GetOpts) -> Self {
+        // Always set as_list to true for multiple documents to get proper JSON array response
+        self.query_params.push(("as_list".to_string(), "true".to_string()));
+        self.query_params.push(("unfold".to_string(), opts.unfold.to_string()));
+
+        // Add the ids as a JSON array
+        if !ids.is_empty() {
+            let ids_json = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_string());
+            self.query_params.push(("ids".to_string(), ids_json));
+        }
+
+        // Add pagination parameters
+        if let Some(skip) = opts.skip {
+            self.query_params.push(("skip".to_string(), skip.to_string()));
+        }
+        if let Some(count) = opts.count {
+            self.query_params.push(("count".to_string(), count.to_string()));
+        }
+
+        // Add type filter
+        if let Some(ref type_filter) = opts.type_filter {
+            self.query_params.push(("type".to_string(), type_filter.clone()));
+        }
+
         self
     }
 

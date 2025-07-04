@@ -567,4 +567,108 @@ impl super::client::TerminusDBHttpClient {
         let full_id = super::helpers::format_id::<I>(instance_id);
         self.get_document_history(&full_id, spec, params).await
     }
+
+    /// Retrieves and deserializes multiple strongly-typed model instances from the database.
+    ///
+    /// This is the **preferred method** for retrieving multiple typed models from TerminusDB.
+    /// Use this instead of [`get_documents`](Self::get_documents) when working with
+    /// structs that implement `TerminusDBModel`.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instances into (implements `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of instance IDs (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `opts` - Get options for controlling query behavior (skip, count, type filter, etc.)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// A vector of deserialized instances of type `Target`
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let ids = vec!["alice_id".to_string(), "bob_id".to_string()];
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// let users: Vec<User> = client.get_instances(ids, &spec, opts, &mut deserializer).await?;
+    /// ```
+    ///
+    /// # Pagination Example
+    /// ```rust
+    /// let opts = GetOpts::paginated(0, 10); // skip 0, take 10
+    /// let users: Vec<User> = client.get_instances(ids, &spec, opts, &mut deserializer).await?;
+    /// ```
+    ///
+    /// # Type Filtering (get all instances of type)
+    /// ```rust
+    /// let empty_ids = vec![]; // empty IDs means get all of the specified type
+    /// let opts = GetOpts::filtered_by_type("User").with_count(5);
+    /// let users: Vec<User> = client.get_instances(empty_ids, &spec, opts, &mut deserializer).await?;
+    /// ```
+    ///
+    /// # Time Travel
+    /// ```rust
+    /// // Retrieve from a specific commit
+    /// let past_spec = BranchSpec::from("main/local/commit/abc123");
+    /// let old_users: Vec<User> = client.get_instances(ids, &past_spec, opts, &mut deserializer).await?;
+    /// ```
+    #[pseudonym::alias(get_many)]
+    pub async fn get_instances<Target: TerminusDBModel>(
+        &self,
+        ids: Vec<String>,
+        spec: &BranchSpec,
+        mut opts: GetOpts,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<Vec<Target>> {
+        // Format IDs with type prefix for untyped document retrieval
+        let formatted_ids = if ids.is_empty() {
+            // If no IDs provided, we rely on type filtering
+            if opts.type_filter.is_none() {
+                // Automatically set type filter based on Target type
+                opts.type_filter = Some(Target::to_schema().class_name().to_string());
+            }
+            vec![]
+        } else {
+            ids.into_iter()
+                .map(|id| super::helpers::format_id::<Target>(&id))
+                .collect()
+        };
+
+        // Set unfold if the target schema requires it
+        if Target::to_schema().should_unfold() {
+            opts.unfold = true;
+        }
+
+        debug!("Getting {} instances of type {}", 
+               if formatted_ids.is_empty() { "all".to_string() } else { formatted_ids.len().to_string() }, 
+               Target::to_schema().class_name());
+
+        // Retrieve the raw JSON documents
+        let json_docs = self.get_documents(formatted_ids, spec, opts).await?;
+
+        debug!("Retrieved {} JSON documents, deserializing...", json_docs.len());
+
+        // Deserialize each document to the target type
+        let mut results = Vec::with_capacity(json_docs.len());
+        for (i, json_doc) in json_docs.into_iter().enumerate() {
+            match deserializer.from_instance(json_doc.clone()) {
+                Ok(instance) => results.push(instance),
+                Err(err) => {
+                    error!("Failed to deserialize document {}: {}", i, err);
+                    return Err(err).context(format!(
+                        "TerminusHTTPClient failed to deserialize instance {}. See: {}",
+                        i,
+                        super::helpers::dump_json(&json_doc).display()
+                    ));
+                }
+            }
+        }
+
+        debug!("Successfully deserialized {} instances", results.len());
+        Ok(results)
+    }
 }
