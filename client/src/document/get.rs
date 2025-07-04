@@ -1,3 +1,5 @@
+use crate::TerminusDBModel;
+
 #[derive(Clone, Debug)]
 pub struct GetOpts {
     pub unfold: bool,
@@ -33,9 +35,9 @@ impl GetOpts {
     }
 
     /// Create a new GetOpts with type filtering
-    pub fn filtered_by_type(type_name: &str) -> Self {
+    pub fn filtered_by_type<T: TerminusDBModel>() -> Self {
         Self {
-            type_filter: Some(type_name.to_string()),
+            type_filter: Some(T::to_schema().class_name().to_string()),
             ..Default::default()
         }
     }
@@ -53,7 +55,13 @@ impl GetOpts {
     }
 
     /// Set type filter for chaining
-    pub fn with_type_filter(mut self, type_name: &str) -> Self {
+    pub fn with_type_filter<T: TerminusDBModel>(mut self) -> Self {
+        self.type_filter = Some(T::to_schema().class_name().to_string());
+        self
+    }
+
+    /// Set type filter for chaining using a string (for cases where the type is not known at compile time)
+    pub fn with_type_filter_string(mut self, type_name: &str) -> Self {
         self.type_filter = Some(type_name.to_string());
         self
     }

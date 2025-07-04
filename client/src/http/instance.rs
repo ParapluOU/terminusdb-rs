@@ -606,7 +606,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Type Filtering (get all instances of type)
     /// ```rust
     /// let empty_ids = vec![]; // empty IDs means get all of the specified type
-    /// let opts = GetOpts::filtered_by_type("User").with_count(5);
+    /// let opts = GetOpts::filtered_by_type::<User>().with_count(5);
     /// let users: Vec<User> = client.get_instances(empty_ids, &spec, opts, &mut deserializer).await?;
     /// ```
     ///

@@ -412,7 +412,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Type Filtering Example
     /// ```rust
     /// let ids = vec![]; // empty means "get all"
-    /// let opts = GetOpts::filtered_by_type("Person").with_count(5);
+    /// let opts = GetOpts::filtered_by_type::<Person>().with_count(5);
     /// let docs = client.get_documents(ids, &branch_spec, opts).await?;
     /// ```
     pub async fn get_documents(
