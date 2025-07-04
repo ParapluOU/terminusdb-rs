@@ -1,5 +1,6 @@
 //! Document history types and operations
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Parameters for querying document history
@@ -59,4 +60,29 @@ pub struct CommitHistoryEntry {
     pub message: String,
     /// When the commit was made
     pub timestamp: String,
+}
+
+impl CommitHistoryEntry {
+    /// Parse the timestamp string into a chrono DateTime<Utc>
+    /// 
+    /// # Returns
+    /// The parsed DateTime or an error if the timestamp format is invalid
+    /// 
+    /// # Example
+    /// ```rust
+    /// let entry = CommitHistoryEntry {
+    ///     author: "user".to_string(),
+    ///     identifier: "abc123".to_string(),
+    ///     message: "Initial commit".to_string(),
+    ///     timestamp: "2023-12-01T10:30:00Z".to_string(),
+    /// };
+    /// 
+    /// let datetime = entry.timestamp_datetime()?;
+    /// println!("Commit was made at: {}", datetime);
+    /// ```
+    pub fn timestamp_datetime(&self) -> anyhow::Result<DateTime<Utc>> {
+        self.timestamp
+            .parse::<DateTime<Utc>>()
+            .map_err(|e| anyhow::anyhow!("Failed to parse timestamp '{}': {}", self.timestamp, e))
+    }
 }
