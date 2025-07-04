@@ -294,7 +294,17 @@ impl<T: ToTDBSchema> FromParam<'_> for EntityIDFor<T> {
     type Error = anyhow::Error;
 
     fn from_param(param: &'_ str) -> Result<Self, Self::Error> {
-        todo!("parse EntityIDFor from str param '{param}'")
+        // The param is the raw URL segment - could be:
+        // 1. Just an ID: "123" 
+        // 2. Type/ID: "Person/123"
+        // 3. Full IRI: "terminusdb://data#Person/123" (though URL encoding might affect this)
+        
+        // URL decode the parameter first in case it contains encoded characters
+        let decoded = urlencoding::decode(param)
+            .map_err(|e| anyhow!("Failed to URL decode parameter: {}", e))?;
+        
+        // Use the existing constructor which handles all formats
+        Self::new(&decoded)
     }
 }
 
