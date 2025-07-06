@@ -5,7 +5,7 @@ use {
     ::log::debug,
     anyhow::Context,
     tap::{Tap, TapFallible},
-    terminusdb_schema::ToTDBSchema,
+    terminusdb_schema::{ToTDBSchema, ToTDBSchemas},
 };
 
 /// Schema management methods for the TerminusDB HTTP client
@@ -96,5 +96,65 @@ impl super::client::TerminusDBHttpClient {
             }),
         )
         .await
+    }
+
+    /// Inserts schemas for multiple strongly-typed models using tuple types.
+    ///
+    /// This method provides a type-safe way to insert schemas for multiple models
+    /// at once using tuple type parameters. The tuple can contain up to 8 different
+    /// types that implement `ToTDBSchema`.
+    ///
+    /// # Type Parameters
+    /// * `T` - A tuple of types that implement `ToTDBSchema` (e.g., `(Person, Company, Product)`)
+    ///
+    /// # Arguments
+    /// * `args` - Document insertion arguments specifying the database and branch
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// #[derive(TerminusDBModel)]
+    /// struct Person { name: String, age: i32 }
+    ///
+    /// #[derive(TerminusDBModel)]
+    /// struct Company { name: String, employees: Vec<Person> }
+    ///
+    /// #[derive(TerminusDBModel)]
+    /// struct Product { name: String, price: f64 }
+    ///
+    /// // Insert schemas for multiple types at once
+    /// client.insert_schemas::<(Person, Company, Product)>(args).await?;
+    /// ```
+    ///
+    /// # Alternative: Using the `schemas!` macro
+    /// ```rust,ignore
+    /// use terminusdb_schema::schemas;
+    /// 
+    /// // More flexible approach using macro
+    /// let schemas = schemas!(Person, Company, Product);
+    /// client.insert_documents(schemas, args.as_schema()).await?;
+    /// ```
+    ///
+    /// # Note
+    /// The database will be automatically created if it doesn't exist.
+    /// For more than 8 types, consider using the `schemas!` macro approach instead.
+    pub async fn insert_schemas<T: ToTDBSchemas>(
+        &self,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<()> {
+        self.ensure_database(&args.spec.db)
+            .await
+            .context("ensuring database")?;
+
+        let schemas = T::to_schemas();
+        
+        debug!("inserting {} schemas", schemas.len());
+
+        self.insert_documents(schemas.iter().collect(), args.as_schema())
+            .await
+            .context("insert_documents()")?;
+
+        debug!("inserted {} schemas into TerminusDB", schemas.len());
+
+        Ok(())
     }
 }
