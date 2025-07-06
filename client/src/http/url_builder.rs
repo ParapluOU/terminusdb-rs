@@ -142,6 +142,22 @@ impl<'a> UrlBuilder<'a> {
         self
     }
 
+    /// Add delete document query parameters
+    pub fn document_delete_params(mut self, author: &str, message: &str, graph_type: &str, delete_opts: &crate::http::document::DeleteOpts, id: Option<&str>) -> Self {
+        self.query_params.extend([
+            ("author".to_string(), author.to_string()),
+            ("message".to_string(), urlencoding::encode(message).to_string()),
+            ("graph_type".to_string(), graph_type.to_string()),
+            ("nuke".to_string(), delete_opts.is_nuke().to_string()),
+        ]);
+        
+        if let Some(doc_id) = id {
+            self.query_params.push(("id".to_string(), doc_id.to_string()));
+        }
+        
+        self
+    }
+
     /// Build the final URL string
     pub fn build(self) -> String {
         let mut url = format!("{}/{}", self.endpoint, self.parts.join("/"));

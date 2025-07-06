@@ -31,6 +31,7 @@ pub mod url_builder;
 
 // Re-export main types and traits
 pub use client::TerminusDBHttpClient;
+pub use document::DeleteOpts;
 pub use helpers::{dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema, format_id};
 pub use url_builder::UrlBuilder;
 pub use terminusdb_schema::TerminusDBModel;

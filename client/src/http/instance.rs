@@ -3,6 +3,7 @@
 use {
     crate::{
         document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, DocumentType, GetOpts},
+        http::document::DeleteOpts,
         result::ResponseWithHeaders,
         spec::BranchSpec,
         TDBInsertInstanceResult, TDBInstanceDeserializer, IntoBoxedTDBInstances,
@@ -864,5 +865,101 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<Vec<T>> {
         let versions = self.list_instance_versions(instance_id, spec, deserializer).await?;
         Ok(versions.into_iter().map(|(instance, _)| instance).collect())
+    }
+
+    /// Deletes a strongly-typed model instance from the database.
+    ///
+    /// This is the **preferred method** for deleting typed models.
+    /// Use this instead of `delete_document` when working with structs that derive `TerminusDBModel`.
+    ///
+    /// **⚠️ Warning**: Using `DeleteOpts::nuke_all_data()` will remove ALL data from the graph.
+    /// Use with extreme caution as this operation is irreversible.
+    ///
+    /// # Type Parameters
+    /// * `T` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `instance` - The strongly-typed model instance to delete
+    /// * `args` - Document insertion arguments specifying the database and branch  
+    /// * `opts` - Delete options controlling the deletion behavior
+    ///
+    /// # Returns
+    /// A cloned instance of the client
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Delete the specific user (safe)
+    /// client.delete_instance(&user, args, DeleteOpts::document_only()).await?;
+    /// 
+    /// // WARNING: Nuclear option - deletes ALL instances
+    /// client.delete_instance(&user, args, DeleteOpts::nuke_all_data()).await?; // DANGEROUS!
+    /// ```
+    pub async fn delete_instance<T: TerminusDBModel>(
+        &self,
+        instance: &T,
+        args: DocumentInsertArgs,
+        opts: DeleteOpts,
+    ) -> anyhow::Result<Self> {
+        let instance_id = instance.instance_id()
+            .ok_or_else(|| anyhow!("Instance has no ID - cannot delete"))?;
+        let id = instance_id.to_string();
+        let full_id = format_id::<T>(&id);
+        
+        debug!("Deleting instance {} (type: {})", &full_id, std::any::type_name::<T>());
+        
+        self.delete_document(
+            Some(&full_id),
+            &args.spec,
+            &args.author,
+            &args.message,
+            &args.ty.to_string(),
+            opts,
+        ).await
+    }
+
+    /// Deletes a strongly-typed model instance by ID from the database.
+    ///
+    /// This method allows deletion by ID without needing the full instance object.
+    /// 
+    /// **⚠️ Warning**: Using `DeleteOpts::nuke_all_data()` will remove ALL data from the graph.
+    /// Use with extreme caution as this operation is irreversible.
+    ///
+    /// # Type Parameters
+    /// * `T` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `instance_id` - The instance ID (without type prefix, e.g., "alice")
+    /// * `args` - Document insertion arguments specifying the database and branch
+    /// * `opts` - Delete options controlling the deletion behavior
+    ///
+    /// # Returns
+    /// A cloned instance of the client
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Delete user by ID (safe)
+    /// client.delete_instance_by_id::<User>("alice", args, DeleteOpts::document_only()).await?;
+    /// 
+    /// // WARNING: Nuclear option - deletes ALL data
+    /// client.delete_instance_by_id::<User>("alice", args, DeleteOpts::nuke_all_data()).await?; // DANGEROUS!
+    /// ```
+    pub async fn delete_instance_by_id<T: TerminusDBModel>(
+        &self,
+        instance_id: &str,
+        args: DocumentInsertArgs,
+        opts: DeleteOpts,
+    ) -> anyhow::Result<Self> {
+        let full_id = format_id::<T>(instance_id);
+        
+        debug!("Deleting instance {} by ID (type: {})", &full_id, std::any::type_name::<T>());
+        
+        self.delete_document(
+            Some(&full_id),
+            &args.spec,
+            &args.author,
+            &args.message,
+            &args.ty.to_string(),
+            opts,
+        ).await
     }
 }

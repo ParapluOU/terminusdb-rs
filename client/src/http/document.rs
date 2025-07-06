@@ -14,6 +14,61 @@ use {
     terminusdb_schema::ToJson,
 };
 
+/// Options for document deletion operations.
+///
+/// This struct provides safe configuration for document deletion,
+/// particularly wrapping the dangerous `nuke` parameter to prevent
+/// accidental misuse.
+#[derive(Debug, Clone, Default)]
+pub struct DeleteOpts {
+    /// If true, removes ALL data from the graph.
+    /// 
+    /// **⚠️ EXTREMELY DANGEROUS**: This will permanently delete ALL documents
+    /// in the graph, not just the specified document. Use with extreme caution.
+    /// This option should only be used when you intentionally want to clear
+    /// the entire database.
+    nuke: bool,
+}
+
+impl DeleteOpts {
+    /// Create default delete options (safe deletion of specific documents only).
+    pub fn new() -> Self {
+        Self { nuke: false }
+    }
+    
+    /// Create delete options for removing a specific document (default behavior).
+    /// 
+    /// This is the safe option that only deletes the specified document.
+    pub fn document_only() -> Self {
+        Self { nuke: false }
+    }
+    
+    /// **⚠️ EXTREMELY DANGEROUS**: Create delete options that will nuke ALL data.
+    /// 
+    /// This will permanently delete ALL documents in the graph, not just the
+    /// specified document. This is irreversible and should only be used when
+    /// you intentionally want to clear the entire database.
+    /// 
+    /// # Safety
+    /// This function is marked as unsafe (conceptually) because it can cause
+    /// massive data loss. Only use this when you are absolutely certain you
+    /// want to delete ALL data in the graph.
+    /// 
+    /// # Example
+    /// ```rust
+    /// // Only use this if you really want to delete EVERYTHING!
+    /// let opts = DeleteOpts::nuke_all_data();  // Very explicit naming
+    /// ```
+    pub fn nuke_all_data() -> Self {
+        Self { nuke: true }
+    }
+    
+    /// Returns true if this will nuke all data (dangerous operation).
+    pub fn is_nuke(&self) -> bool {
+        self.nuke
+    }
+}
+
 use super::helpers::{dedup_documents_by_id, dump_failed_payload};
 
 /// HTTP method to use for document operations
@@ -606,5 +661,83 @@ impl super::client::TerminusDBHttpClient {
         debug!("Retrieved {} documents in {:?}", docs.len(), start.elapsed());
 
         Ok(docs)
+    }
+
+    /// Deletes documents from the database.
+    ///
+    /// **⚠️ Consider using the strongly-typed alternative instead:**
+    /// - [`delete_instance`](Self::delete_instance) for typed models
+    ///
+    /// This function deletes documents by their IDs. It provides no type safety.
+    /// 
+    /// **⚠️ Warning**: Using `DeleteOpts::nuke_all_data()` will remove ALL data from the graph.
+    /// Use with extreme caution as this operation is irreversible.
+    ///
+    /// # Arguments
+    /// * `id` - Optional document ID to delete. If None, uses the request body or nuke behavior
+    /// * `spec` - Branch specification indicating which branch to delete from
+    /// * `author` - Author of the deletion
+    /// * `message` - Commit message for the deletion
+    /// * `graph_type` - Graph type (usually "instance")
+    /// * `opts` - Delete options controlling the deletion behavior
+    ///
+    /// # Returns
+    /// A cloned instance of the client
+    ///
+    /// # Example
+    /// ```rust
+    /// // Delete a specific document (safe)
+    /// client.delete_document(
+    ///     Some("Person/alice"),
+    ///     &branch_spec,
+    ///     "admin",
+    ///     "Removed alice",
+    ///     "instance",
+    ///     DeleteOpts::document_only()
+    /// ).await?;
+    /// 
+    /// // WARNING: Nuclear option - deletes ALL data
+    /// client.delete_document(
+    ///     None,
+    ///     &branch_spec,
+    ///     "admin", 
+    ///     "Reset all data",
+    ///     "instance",
+    ///     DeleteOpts::nuke_all_data()  // DANGEROUS: This deletes everything!
+    /// ).await?;
+    /// ```
+    pub async fn delete_document(
+        &self,
+        id: Option<&str>,
+        spec: &BranchSpec,
+        author: &str,
+        message: &str,
+        graph_type: &str,
+        opts: DeleteOpts,
+    ) -> anyhow::Result<Self> {
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_delete_params(author, message, graph_type, &opts, id)
+            .build();
+
+        debug!("Deleting document at URI: {}", &uri);
+        
+        if opts.is_nuke() {
+            debug!("⚠️  WARNING: Nuclear deletion requested - this will remove ALL data from the graph!");
+        }
+
+        let res = self
+            .http
+            .delete(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await?;
+
+        self.parse_response::<Value>(res).await?;
+
+        debug!("Successfully deleted document");
+
+        Ok(self.clone())
     }
 }
