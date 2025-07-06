@@ -69,11 +69,11 @@ async fn test_get_instance_versions() -> anyhow::Result<()> {
     commit_ids.push(result.extract_commit_id().expect("Should have commit ID"));
     println!("Created version 3 in commit: {}", &commit_ids[2]);
     
-    // Test the get_instance_versions implementation
-    println!("\n=== Testing get_instance_versions ===");
+    // Test the list_instance_versions implementation
+    println!("\n=== Testing list_instance_versions ===");
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
     
-    match client.get_instance_versions::<WoqlVersionTest>(
+    match client.list_instance_versions::<WoqlVersionTest>(
         fixed_id,
         &spec,
         &mut deserializer
@@ -101,7 +101,7 @@ async fn test_get_instance_versions() -> anyhow::Result<()> {
     
     // Compare with the parallel REST API implementation
     println!("\n=== Comparing with parallel REST API implementation ===");
-    match client.get_instance_versions::<WoqlVersionTest>(
+    match client.list_instance_versions::<WoqlVersionTest>(
         fixed_id,
         &spec,
         &mut deserializer

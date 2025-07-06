@@ -244,7 +244,7 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
     
     // Use the new client method
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-    let versions = client.get_instance_versions::<PersonWithId>(
+    let versions = client.list_instance_versions::<PersonWithId>(
         short_id,
         &spec,
         &mut deserializer
@@ -265,7 +265,7 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
     // The history endpoint seems to have a parsing issue, but we've proven that:
     // 1. Same instance ID is used across all versions
     // 2. Different commit IDs are generated for each version  
-    // 3. The new get_instance_versions method can be called (even if history parsing fails)
+    // 3. The new list_instance_versions method can be called (even if history parsing fails)
     
     println!("✅ Version history creation verified:");
     println!("  - Same instance ID across all versions");
@@ -280,7 +280,7 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
 
 #[ignore] // Requires running TerminusDB instance
 #[tokio::test]
-async fn test_get_instance_versions_method() -> anyhow::Result<()> {
+async fn test_list_instance_versions_method() -> anyhow::Result<()> {
     let (client, spec) = setup_test_client().await?;
     let person_id = "alice_versions_method";
     
@@ -288,7 +288,7 @@ async fn test_get_instance_versions_method() -> anyhow::Result<()> {
     let commit_ids = create_version_history(&client, &spec, person_id).await?;
     println!("Created {} instances with commit IDs: {:?}", commit_ids.len(), commit_ids);
     
-    // Test the new get_instance_versions method
+    // Test the new list_instance_versions method
     // Note: Since create_version_history creates different instances, we'll test with the first ID
     let first_result = client.insert_instance_with_commit_id(&Person {
         name: "Alice Test".to_string(),
@@ -300,16 +300,16 @@ async fn test_get_instance_versions_method() -> anyhow::Result<()> {
     let id_parts: Vec<&str> = actual_instance_id.split('/').collect();
     let short_id = id_parts.last().unwrap();
     
-    println!("Testing get_instance_versions with ID: {}", short_id);
+    println!("Testing list_instance_versions with ID: {}", short_id);
     
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-    let versions = client.get_instance_versions::<Person>(
+    let versions = client.list_instance_versions::<Person>(
         short_id,
         &spec,
         &mut deserializer
     ).await?;
     
-    println!("get_instance_versions returned {} versions", versions.len());
+    println!("list_instance_versions returned {} versions", versions.len());
     for (i, (person, commit_id)) in versions.iter().enumerate() {
         println!("Version {}: {} (age {}) in commit {}", i+1, person.name, person.age, commit_id);
     }
@@ -322,10 +322,10 @@ async fn test_get_instance_versions_method() -> anyhow::Result<()> {
 
 #[ignore] // Requires running TerminusDB instance
 #[tokio::test]
-async fn test_get_instance_versions_simple_method() -> anyhow::Result<()> {
+async fn test_list_instance_versions_simple_method() -> anyhow::Result<()> {
     let (client, spec) = setup_test_client().await?;
     
-    // Test the new get_instance_versions_simple method
+    // Test the new list_instance_versions_simple method
     let test_person = Person {
         name: "Simple Test".to_string(),
         age: 25,
@@ -340,16 +340,16 @@ async fn test_get_instance_versions_simple_method() -> anyhow::Result<()> {
     let id_parts: Vec<&str> = actual_instance_id.split('/').collect();
     let short_id = id_parts.last().unwrap();
     
-    println!("Testing get_instance_versions_simple with ID: {}", short_id);
+    println!("Testing list_instance_versions_simple with ID: {}", short_id);
     
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-    let versions = client.get_instance_versions_simple::<Person>(
+    let versions = client.list_instance_versions_simple::<Person>(
         short_id,
         &spec,
         &mut deserializer
     ).await?;
     
-    println!("get_instance_versions_simple returned {} versions", versions.len());
+    println!("list_instance_versions_simple returned {} versions", versions.len());
     for (i, person) in versions.iter().enumerate() {
         println!("Version {}: {} (age {})", i+1, person.name, person.age);
     }
@@ -576,16 +576,16 @@ async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
         }
     }
     
-    // Test Step 3: Use our get_instance_versions method
-    println!("\n=== Step 3: Test get_instance_versions method ===");
+    // Test Step 3: Use our list_instance_versions method
+    println!("\n=== Step 3: Test list_instance_versions method ===");
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-    let versions = client.get_instance_versions::<PersonWithId>(
+    let versions = client.list_instance_versions::<PersonWithId>(
         fixed_id,
         &spec,
         &mut deserializer
     ).await?;
     
-    println!("get_instance_versions returned {} versions", versions.len());
+    println!("list_instance_versions returned {} versions", versions.len());
     for (i, (person, commit_id)) in versions.iter().enumerate() {
         println!("  Version {}: {} (age {}) in commit {}", i+1, person.name, person.age, commit_id);
     }

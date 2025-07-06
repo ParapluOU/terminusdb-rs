@@ -846,7 +846,7 @@ impl super::client::TerminusDBHttpClient {
     /// struct Person { name: String, age: i32 }
     ///
     /// let mut deserializer = DefaultDeserializer::new();
-    /// let versions = client.get_instance_versions_simple::<Person>(
+    /// let versions = client.list_instance_versions_simple::<Person>(
     ///     "abc123randomkey",
     ///     &branch_spec,
     ///     &mut deserializer
@@ -856,13 +856,13 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("{} (age {})", person.name, person.age);
     /// }
     /// ```
-    pub async fn get_instance_versions_simple<T: TerminusDBModel>(
+    pub async fn list_instance_versions_simple<T: TerminusDBModel>(
         &self,
         instance_id: &str,
         spec: &BranchSpec,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Vec<T>> {
-        let versions = self.get_instance_versions(instance_id, spec, deserializer).await?;
+        let versions = self.list_instance_versions(instance_id, spec, deserializer).await?;
         Ok(versions.into_iter().map(|(instance, _)| instance).collect())
     }
 }

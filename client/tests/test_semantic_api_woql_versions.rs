@@ -165,16 +165,16 @@ async fn test_semantic_api_creates_queryable_versions() -> anyhow::Result<()> {
         }
     }
     
-    // Also test the get_instance_versions method
-    println!("\n=== Testing get_instance_versions method ===");
+    // Also test the list_instance_versions method
+    println!("\n=== Testing list_instance_versions method ===");
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-    let versions = client.get_instance_versions::<VersionTestModel>(
+    let versions = client.list_instance_versions::<VersionTestModel>(
         fixed_id,
         &spec,
         &mut deserializer
     ).await?;
     
-    println!("get_instance_versions returned {} versions", versions.len());
+    println!("list_instance_versions returned {} versions", versions.len());
     for (i, (model, commit_id)) in versions.iter().enumerate() {
         println!("  Version {}: {} (v{}) in commit {}", 
                  i+1, model.name, model.version, commit_id);

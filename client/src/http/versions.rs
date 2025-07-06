@@ -16,11 +16,10 @@ use {
 use super::{TerminusDBModel, helpers::format_id};
 
 impl super::client::TerminusDBHttpClient {
-    /// Retrieves all versions of a specific instance across its commit history.
+    /// Retrieves specific versions of an instance by their commit IDs.
     ///
-    /// This method provides time-travel functionality by fetching all historical versions
-    /// of an instance that share the same ID using a single efficient WOQL query.
-    /// It returns versions in reverse chronological order (most recent first).
+    /// This method provides time-travel functionality by fetching specific historical versions
+    /// of an instance using a single efficient WOQL query.
     ///
     /// # Type Parameters
     /// * `T` - The type to deserialize the instances into (implements `TerminusDBModel`)
@@ -28,20 +27,23 @@ impl super::client::TerminusDBHttpClient {
     /// # Arguments
     /// * `instance_id` - The instance ID (without type prefix, e.g., "abc123")
     /// * `spec` - Branch specification (branch to query history from)
+    /// * `commit_ids` - List of specific commit IDs to retrieve versions from
     /// * `deserializer` - Instance deserializer for converting from TerminusDB format
     ///
     /// # Returns
-    /// A vector of tuples containing (instance, commit_id) pairs representing the full version history
+    /// A vector of tuples containing (instance, commit_id) pairs for the requested commits
     ///
     /// # Example
     /// ```rust
     /// #[derive(TerminusDBModel, Serialize, Deserialize)]
     /// struct Person { name: String, age: i32 }
     ///
+    /// let commit_ids = vec!["abc123".to_string(), "def456".to_string()];
     /// let mut deserializer = DefaultDeserializer::new();
     /// let versions = client.get_instance_versions::<Person>(
-    ///     "abc123randomkey",
+    ///     "personid123",
     ///     &branch_spec,
+    ///     commit_ids,
     ///     &mut deserializer
     /// ).await?;
     ///
@@ -53,17 +55,15 @@ impl super::client::TerminusDBHttpClient {
         &self,
         instance_id: &str,
         spec: &BranchSpec,
+        commit_ids: Vec<String>,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Vec<(T, String)>> {
-        debug!("Attempting WOQL-based instance version retrieval for {}", instance_id);
+        debug!("Attempting WOQL-based instance version retrieval for {} with {} specific commits", 
+               instance_id, commit_ids.len());
         
-        // First get the commit history
-        let history = self.get_instance_history::<T>(instance_id, spec, None).await?;
-        if history.is_empty() {
+        if commit_ids.is_empty() {
             return Ok(vec![]);
         }
-        
-        debug!("Found {} commits in history", history.len());
         
         // Build a WOQL query that uses OR to combine queries across commits
         let full_id = format_id::<T>(instance_id);
@@ -72,10 +72,9 @@ impl super::client::TerminusDBHttpClient {
         let mut commit_queries = Vec::new();
         let mut commit_map = HashMap::new();
         
-        for entry in history {
-            let commit_id = entry.identifier.clone();
+        for commit_id in commit_ids {
             // Use the correct format: admin/{db}/local/commit/{commitID}
-            let collection = format!("admin/{}/local/commit/{}", spec.db, &commit_id);
+            let collection = format!("{}/{}/local/commit/{}", self.org, spec.db, &commit_id);
             
             // Create a unique variable for this commit's document
             let doc_var = vars!(format!("Doc_{}", commit_id.replace('/', "_")));
@@ -140,6 +139,64 @@ impl super::client::TerminusDBHttpClient {
                 Err(e)
             }
         }
+    }
+
+    /// Lists all versions of a specific instance across its commit history.
+    ///
+    /// This method provides time-travel functionality by fetching all historical versions
+    /// of an instance that share the same ID using a single efficient WOQL query.
+    /// It returns versions in reverse chronological order (most recent first).
+    ///
+    /// # Type Parameters
+    /// * `T` - The type to deserialize the instances into (implements `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `instance_id` - The instance ID (without type prefix, e.g., "abc123")
+    /// * `spec` - Branch specification (branch to query history from)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// A vector of tuples containing (instance, commit_id) pairs representing the full version history
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct Person { name: String, age: i32 }
+    ///
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let versions = client.list_instance_versions::<Person>(
+    ///     "abc123randomkey",
+    ///     &branch_spec,
+    ///     &mut deserializer
+    /// ).await?;
+    ///
+    /// for (person, commit_id) in versions {
+    ///     println!("Commit {}: {} (age {})", commit_id, person.name, person.age);
+    /// }
+    /// ```
+    pub async fn list_instance_versions<T: TerminusDBModel>(
+        &self,
+        instance_id: &str,
+        spec: &BranchSpec,
+        deserializer: &mut impl TDBInstanceDeserializer<T>,
+    ) -> anyhow::Result<Vec<(T, String)>> {
+        debug!("Listing all versions for instance {}", instance_id);
+        
+        // First get the commit history
+        let history = self.get_instance_history::<T>(instance_id, spec, None).await?;
+        if history.is_empty() {
+            return Ok(vec![]);
+        }
+        
+        debug!("Found {} commits in history", history.len());
+        
+        // Extract commit IDs from history
+        let commit_ids: Vec<String> = history.into_iter()
+            .map(|entry| entry.identifier)
+            .collect();
+        
+        // Use get_instance_versions with the full list of commit IDs
+        self.get_instance_versions(instance_id, spec, commit_ids, deserializer).await
     }
     
     /// Test method to verify which using() format works

@@ -192,7 +192,7 @@ async fn test_semantic_methods_generate_proper_version_history() -> anyhow::Resu
     
     // Get all versions
     let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-    let versions = client.get_instance_versions::<SemanticTestModel>(
+    let versions = client.list_instance_versions::<SemanticTestModel>(
         fixed_id,
         &spec,
         &mut deserializer
