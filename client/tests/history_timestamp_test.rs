@@ -10,7 +10,7 @@ mod tests {
             author: "test_user".to_string(),
             identifier: "abc123".to_string(),
             message: "Test commit".to_string(),
-            timestamp: "2023-12-01T10:30:00Z".to_string(),
+            timestamp: 1701423000.0, // 2023-12-01T10:30:00Z as Unix timestamp
         };
 
         let result = entry.timestamp_datetime();
@@ -31,7 +31,7 @@ mod tests {
             author: "test_user".to_string(),
             identifier: "abc123".to_string(),
             message: "Test commit".to_string(),
-            timestamp: "2023-12-01T10:30:00.123Z".to_string(),
+            timestamp: 1701423000.123, // 2023-12-01T10:30:00.123Z as Unix timestamp
         };
 
         let result = entry.timestamp_datetime();
@@ -47,13 +47,13 @@ mod tests {
             author: "test_user".to_string(),
             identifier: "abc123".to_string(),
             message: "Test commit".to_string(),
-            timestamp: "not a valid timestamp".to_string(),
+            timestamp: -1.0, // Invalid negative timestamp
         };
 
         let result = entry.timestamp_datetime();
         assert!(result.is_err());
         
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Failed to parse timestamp"));
+        assert!(err.to_string().contains("Invalid timestamp"));
     }
 }

@@ -48,6 +48,15 @@ impl<T> ResponseWithHeaders<T> {
     pub fn as_inner_mut(&mut self) -> &mut T {
         &mut self.data
     }
+
+    /// Extract the commit ID from the TerminusDB-Data-Version header
+    /// Format is typically "branch:COMMIT_ID", this returns just the COMMIT_ID part
+    pub fn extract_commit_id(&self) -> Option<String> {
+        self.commit_id.as_ref().and_then(|header_value| {
+            // Split on ':' and take the last part (the actual commit ID)
+            header_value.split(':').last().map(|s| s.to_string())
+        })
+    }
 }
 
 impl<T> std::ops::Deref for ResponseWithHeaders<T> {

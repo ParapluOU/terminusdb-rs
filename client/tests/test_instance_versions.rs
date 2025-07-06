@@ -3,6 +3,8 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use terminusdb_woql_builder::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use chrono;
 
 /// Test model for experimenting with instance versions
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance)]
@@ -17,7 +19,7 @@ struct Person {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct PersonWithId {
-    id: String,
+    id: EntityIDFor<Self>,
     name: String,
     age: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,7 +206,7 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
     
     // Create a single instance and update it multiple times to create real version history
     let person_v1 = PersonWithId {
-        id: "test_version_person_001".to_string(), // Fixed ID for version history
+        id: EntityIDFor::new("test_version_person_001").unwrap(), // Fixed ID for version history
         name: "Version Test Person".to_string(),
         age: 25,
         email: None,
@@ -218,7 +220,7 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
     
     // Update 1: Add email
     let person_v2 = PersonWithId {
-        id: "test_version_person_001".to_string(), // Same ID to create version history
+        id: EntityIDFor::new("test_version_person_001").unwrap(), // Same ID to create version history
         name: "Version Test Person".to_string(),
         age: 25,
         email: Some("test@example.com".to_string()),
@@ -229,7 +231,7 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
     
     // Update 2: Change age
     let person_v3 = PersonWithId {
-        id: "test_version_person_001".to_string(), // Same ID to create version history
+        id: EntityIDFor::new("test_version_person_001").unwrap(), // Same ID to create version history
         name: "Version Test Person".to_string(),
         age: 26,
         email: Some("test@example.com".to_string()),
@@ -360,6 +362,215 @@ async fn test_get_instance_versions_simple_method() -> anyhow::Result<()> {
         assert_eq!(first_version.name, test_person.name);
         assert_eq!(first_version.age, test_person.age);
         assert_eq!(first_version.email, test_person.email);
+    }
+    
+    Ok(())
+}
+
+#[ignore] // Requires running TerminusDB instance
+#[tokio::test]
+async fn test_debug_single_commit_woql_query() -> anyhow::Result<()> {
+    let (client, spec) = setup_test_client().await?;
+    
+    // Create a single person instance
+    let test_person = Person {
+        name: "Debug Test Person".to_string(),
+        age: 30,
+        email: Some("debug@test.com".to_string()),
+    };
+    
+    let (instance_id, commit_id) = client.insert_instance_with_commit_id(
+        &test_person,
+        DocumentInsertArgs::from(spec.clone())
+    ).await?;
+    
+    let short_id = instance_id.split('/').last().unwrap();
+    println!("Created instance {} in commit {}", instance_id, commit_id);
+    
+    // Now try to query this exact instance from this exact commit
+    let commit_collection = format!("commit/{}", commit_id);
+    
+    println!("\n=== Testing simple WOQL query for single commit ===");
+    
+    // Test 1: Simple type query
+    println!("Test 1: Simple type query");
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
+        .using(&commit_collection)
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    println!("Query 1 JSON: {}", serde_json::to_string_pretty(&json_query)?);
+    
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Query 1 result: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    // Test 2: Type query + select subject
+    println!("\nTest 2: Type query + select subject");
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
+        .select(vec![vars!("Subject")])
+        .using(&commit_collection)
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Query 2 result: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    // Test 3: Add read_document
+    println!("\nTest 3: Type query + read_document");
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
+        .read_document(vars!("Subject"), vars!("Doc"))
+        .select(vec![vars!("Subject"), vars!("Doc")])
+        .using(&commit_collection)
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Query 3 result: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    // Test 4: Without using commit collection (should find the instance)
+    println!("\nTest 4: Same query without commit collection");
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
+        .read_document(vars!("Subject"), vars!("Doc"))
+        .select(vec![vars!("Subject"), vars!("Doc")])
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Query 4 result: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    Ok(())
+}
+
+#[ignore] // Requires running TerminusDB instance
+#[tokio::test]
+async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
+    let (client, spec) = setup_test_client().await?;
+    
+    // Use a unique ID to avoid conflicts with previous test runs
+    let fixed_id = &format!("test_same_id_versions_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+    println!("=== Testing same ID across multiple commits ===");
+    
+    // Version 1: Initial version
+    let person_v1 = PersonWithId {
+        id: EntityIDFor::new(fixed_id).unwrap(),
+        name: "Version 1 Person".to_string(),
+        age: 25,
+        email: None,
+    };
+    
+    let (instance_id_1, commit_id_1) = client.insert_instance_with_commit_id(
+        &person_v1,
+        DocumentInsertArgs::from(spec.clone())
+    ).await?;
+    println!("V1: Created {} in commit {}", instance_id_1, commit_id_1);
+    println!("DEBUG V1: instance_id_1 = '{}'", instance_id_1);
+    
+    // Version 2: Same ID, different data
+    let person_v2 = PersonWithId {
+        id: EntityIDFor::new(fixed_id).unwrap(),
+        name: "Version 2 Person".to_string(),
+        age: 30,
+        email: Some("v2@test.com".to_string()),
+    };
+    
+    let args = DocumentInsertArgs::from(spec.clone()).with_force(true);
+    let (instance_id_2, commit_id_2) = client.insert_instance_with_commit_id(&person_v2, args).await?;
+    println!("V2: Updated {} in commit {}", instance_id_2, commit_id_2);
+    println!("DEBUG V2: instance_id_2 = '{}'", instance_id_2);
+    
+    // Version 3: Same ID, different data again
+    let person_v3 = PersonWithId {
+        id: EntityIDFor::new(fixed_id).unwrap(),
+        name: "Version 3 Person".to_string(),
+        age: 35,
+        email: Some("v3@test.com".to_string()),
+    };
+    
+    let args = DocumentInsertArgs::from(spec.clone()).with_force(true);
+    let (instance_id_3, commit_id_3) = client.insert_instance_with_commit_id(&person_v3, args).await?;
+    println!("V3: Updated {} in commit {}", instance_id_3, commit_id_3);
+    
+    // Verify IDs are the same (they should all be the full TerminusDB URI)
+    assert_eq!(instance_id_1, instance_id_2);
+    assert_eq!(instance_id_2, instance_id_3);
+    println!("✓ All versions have same ID: {}", instance_id_1);
+    
+    // Test Step 1: Get history for this specific instance
+    println!("\n=== Step 1: Get instance history ===");
+    let history = client.get_instance_history::<PersonWithId>(fixed_id, &spec, None).await?;
+    println!("History returned {} commits", history.len());
+    for (i, entry) in history.iter().enumerate() {
+        println!("  Commit {}: {}", i+1, entry.identifier);
+    }
+    
+    if history.is_empty() {
+        println!("❌ PROBLEM: History is empty - this means the history endpoint isn't working for version tracking");
+        return Ok(());
+    }
+    
+    // Test Step 2: Query each commit manually to verify data exists
+    println!("\n=== Step 2: Manual WOQL queries per commit ===");
+    let commit_ids: Vec<String> = history.iter().map(|e| e.identifier.clone()).collect();
+    
+    for (i, commit_id) in commit_ids.iter().enumerate() {
+        println!("Querying commit {} ({})", i+1, commit_id);
+        let commit_collection = format!("commit/{}", commit_id);
+        
+        let query = WoqlBuilder::new()
+            .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+            .triple(vars!("Subject"), "@id", vars!("ID"))
+            .read_document(vars!("Subject"), vars!("Doc"))
+            .select(vec![vars!("Subject"), vars!("ID"), vars!("Doc")])
+            .using(&commit_collection)
+            .finalize();
+        
+        let json_query = query.to_instance(None).to_json();
+        let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+        
+        println!("  Commit {} results: {} bindings", i+1, result.bindings.len());
+        for binding in &result.bindings {
+            if let Some(doc) = binding.get("Doc") {
+                println!("    Doc: {}", serde_json::to_string_pretty(doc)?);
+            }
+        }
+    }
+    
+    // Test Step 3: Use our get_instance_versions method
+    println!("\n=== Step 3: Test get_instance_versions method ===");
+    let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
+    let versions = client.get_instance_versions::<PersonWithId>(
+        fixed_id,
+        &spec,
+        &mut deserializer
+    ).await?;
+    
+    println!("get_instance_versions returned {} versions", versions.len());
+    for (i, (person, commit_id)) in versions.iter().enumerate() {
+        println!("  Version {}: {} (age {}) in commit {}", i+1, person.name, person.age, commit_id);
+    }
+    
+    // The key test: do we get all 3 versions back?
+    println!("\n=== RESULT ===");
+    if versions.len() == 3 {
+        println!("✅ SUCCESS: Retrieved all 3 versions!");
+    } else {
+        println!("❌ PROBLEM: Expected 3 versions, got {}", versions.len());
     }
     
     Ok(())
