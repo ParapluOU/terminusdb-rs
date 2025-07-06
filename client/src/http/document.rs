@@ -368,7 +368,8 @@ impl super::client::TerminusDBHttpClient {
             .send()
             .await?;
 
-        let history = self.parse_response::<Vec<CommitHistoryEntry>>(res)
+        // The /history endpoint returns a direct array, not wrapped in ApiResponse
+        let history = res.json::<Vec<CommitHistoryEntry>>()
             .await
             .context("Failed to parse document history response")?;
 
