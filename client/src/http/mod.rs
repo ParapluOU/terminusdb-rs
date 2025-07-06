@@ -22,6 +22,7 @@ pub mod database;
 pub mod document;
 pub mod helpers;
 pub mod instance;
+pub mod versions;
 pub mod log;
 pub mod query;
 pub mod response;

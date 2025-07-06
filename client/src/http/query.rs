@@ -8,6 +8,7 @@ use {
         TerminusDBModel, 
         InstanceQueryable, 
         ListModels,
+        RawQueryable,
     },
     ::log::trace,
     anyhow::Context,
@@ -221,5 +222,56 @@ impl super::client::TerminusDBHttpClient {
         }
 
         Ok(0)
+    }
+    
+    /// Execute a raw WOQL query that returns custom result types.
+    ///
+    /// This method provides a convenient way to execute queries that implement
+    /// the `RawQueryable` trait, allowing for custom deserialization logic.
+    ///
+    /// # Type Parameters
+    /// * `Q` - A type implementing `RawQueryable`
+    ///
+    /// # Arguments
+    /// * `spec` - Branch specification for the query
+    /// * `query` - The query implementation
+    ///
+    /// # Returns
+    /// A vector of custom result types as defined by the query
+    ///
+    /// # Example
+    /// ```rust
+    /// use terminusdb_client::{RawQueryable, RawWoqlQuery};
+    /// use serde::Deserialize;
+    /// 
+    /// #[derive(Deserialize)]
+    /// struct PersonSummary {
+    ///     name: String,
+    ///     total_orders: i32,
+    /// }
+    /// 
+    /// struct OrderSummaryQuery;
+    /// 
+    /// impl RawQueryable for OrderSummaryQuery {
+    ///     type Result = PersonSummary;
+    ///     
+    ///     fn query(&self) -> Query {
+    ///         WoqlBuilder::new()
+    ///             .triple(vars!("Person"), "name", vars!("Name"))
+    ///             .triple(vars!("Person"), "orders", vars!("Orders"))
+    ///             .count(vars!("TotalOrders"), vars!("Orders"))
+    ///             .select(vec![vars!("Name"), vars!("TotalOrders")])
+    ///             .finalize()
+    ///     }
+    /// }
+    /// 
+    /// let summaries = client.execute_raw_query(&spec, OrderSummaryQuery).await?;
+    /// ```
+    pub async fn execute_raw_query<Q: RawQueryable>(
+        &self,
+        spec: &BranchSpec,
+        query: Q,
+    ) -> anyhow::Result<Vec<Q::Result>> {
+        query.apply(self, spec).await
     }
 }

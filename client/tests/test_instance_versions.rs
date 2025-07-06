@@ -530,8 +530,33 @@ async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
     
     for (i, commit_id) in commit_ids.iter().enumerate() {
         println!("Querying commit {} ({})", i+1, commit_id);
-        let commit_collection = format!("commit/{}", commit_id);
+        // Use the correct collection format based on JS client analysis:
+        // {organization}/{database}/{repository}/commit/{commitID}
+        let commit_collection = format!("admin/{}/local/commit/{}", spec.db, commit_id);
+        println!("  Using collection: {}", commit_collection);
         
+        // Try a very simple query first to see if the collection works at all
+        let simple_query = WoqlBuilder::new()
+            .triple(vars!("Subject"), vars!("Predicate"), vars!("Object"))
+            .select(vec![vars!("Subject"), vars!("Predicate"), vars!("Object")])
+            .using(&commit_collection)
+            .limit(5)
+            .finalize();
+        
+        let json_query_simple = simple_query.to_instance(None).to_json();
+        let simple_result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query_simple).await?;
+        println!("  Simple triple query results: {} bindings", simple_result.bindings.len());
+        
+        // Show what triples exist in this commit for debugging
+        for (j, binding) in simple_result.bindings.iter().enumerate() {
+            println!("    Triple {}: Subject={:?}, Predicate={:?}, Object={:?}", 
+                     j+1, 
+                     binding.get("Subject"), 
+                     binding.get("Predicate"), 
+                     binding.get("Object"));
+        }
+        
+        // Now try the specific PersonWithId query
         let query = WoqlBuilder::new()
             .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
             .triple(vars!("Subject"), "@id", vars!("ID"))
@@ -639,32 +664,48 @@ async fn test_woql_query_breakdown() -> anyhow::Result<()> {
     // Test 3: Try different commit collection formats
     println!("\n=== Test 3: Try different commit collection formats ===");
     
-    // Try with "ValidCommit/" prefix
-    let commit_collection_alt1 = format!("ValidCommit/{}", commit_id);
-    println!("Trying commit collection: {}", commit_collection_alt1);
+    // The key insight: commit/{id} returns ALL data, not commit-specific data
+    // Let's try other possible formats
     
-    let query = WoqlBuilder::new()
-        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
-        .select(vec![vars!("Subject")])
-        .using(&commit_collection_alt1)
-        .finalize();
+    // Try with different prefixes and formats
+    let formats_to_try = vec![
+        format!("commit:{}", commit_id),           // colon separator
+        format!("ref:{}", commit_id),              // ref prefix  
+        format!("commit-{}", commit_id),           // dash separator
+        format!("@commit:{}", commit_id),          // @ prefix with colon
+        format!("history/{}", commit_id),          // history collection
+        format!("{}:commit", commit_id),           // reverse format
+    ];
     
-    let json_query = query.to_instance(None).to_json();
-    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
-    println!("Results with ValidCommit/ prefix: {} bindings", result.bindings.len());
-    
-    // Try without any commit prefix (direct commit ID)
-    println!("Trying direct commit ID: {}", commit_id);
-    
-    let query = WoqlBuilder::new()
-        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
-        .select(vec![vars!("Subject")])
-        .using(&commit_id)
-        .finalize();
-    
-    let json_query = query.to_instance(None).to_json();
-    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
-    println!("Results with direct commit ID: {} bindings", result.bindings.len());
+    for (i, commit_format) in formats_to_try.iter().enumerate() {
+        println!("Trying format {}: {}", i+1, commit_format);
+        
+        let query = WoqlBuilder::new()
+            .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+            .select(vec![vars!("Subject")])
+            .using(commit_format)
+            .finalize();
+        
+        let json_query = query.to_instance(None).to_json();
+        
+        match client.query_raw(Some(spec.clone()), json_query).await {
+            Ok(result) => {
+                let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = result;
+                println!("  ✓ Format {} works: {} bindings", i+1, result.bindings.len());
+                
+                // If we get exactly 1 binding, this might be commit-specific!
+                if result.bindings.len() == 1 {
+                    println!("  🎯 POTENTIAL WINNER: Only 1 binding suggests commit-specific query!");
+                    for binding in &result.bindings {
+                        println!("    Binding: {:?}", binding);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("  ✗ Format {} failed: {}", i+1, e);
+            }
+        }
+    }
     
     // Test 4: Try querying with BranchSpec at specific commit
     println!("\n=== Test 4: Try BranchSpec with commit reference ===");

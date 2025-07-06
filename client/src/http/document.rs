@@ -16,6 +16,17 @@ use {
 
 use super::helpers::{dedup_documents_by_id, dump_failed_payload};
 
+/// HTTP method to use for document operations
+#[derive(Debug, Clone, Copy)]
+enum DocumentMethod {
+    /// POST - create new document (fails if exists)
+    Post,
+    /// PUT without create=true - update existing document (fails if doesn't exist)
+    Put,
+    /// PUT with create=true - create or update document
+    PutWithCreate,
+}
+
 /// Untyped document operations for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
     /// Checks if an untyped document exists in the database by ID.
@@ -132,6 +143,114 @@ impl super::client::TerminusDBHttpClient {
         Ok(res)
     }
 
+    /// Internal method for document operations with specific HTTP method
+    async fn insert_documents_with_method(
+        &self,
+        model: Vec<&impl ToJson>,
+        args: DocumentInsertArgs,
+        method: DocumentMethod,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        let ty = args.ty.to_string().to_lowercase();
+
+        let mut to_jsoned = model
+            .into_iter()
+            .map(|t| t.to_json())
+            .rev()
+            .collect::<Vec<_>>();
+
+        dedup_documents_by_id(&mut to_jsoned);
+
+        eprintln!("inserting document(s): {:#?}", &to_jsoned);
+
+        let json = serde_json::to_string(&to_jsoned).unwrap();
+
+        trace!(
+            "about to insert {} at URI with method {:?}: {:#?}",
+            &ty,
+            method,
+            &json[0..(10000.min(json.len()))]
+        );
+
+        // Build request based on method
+        let res = match method {
+            DocumentMethod::Post => {
+                let uri = self.build_url()
+                    .endpoint("document")
+                    .database(&args.spec)
+                    .query("author", &args.author)
+                    .query_encoded("message", &args.message)
+                    .query("graph_type", &ty)
+                    .build();
+
+                debug!("POST {} to URI {}", &ty, &uri);
+                
+                self.http
+                    .post(uri)
+                    .basic_auth(&self.user, Some(&self.pass))
+                    .header("Content-Type", "application/json")
+                    .body(json.clone())
+                    .send()
+                    .await?
+            }
+            DocumentMethod::Put => {
+                let uri = self.build_url()
+                    .endpoint("document")
+                    .database(&args.spec)
+                    .document_params(&args.author, &args.message, &ty, false) // create=false
+                    .build();
+
+                debug!("PUT {} to URI {} (create=false)", &ty, &uri);
+                
+                self.http
+                    .put(uri)
+                    .basic_auth(&self.user, Some(&self.pass))
+                    .header("Content-Type", "application/json")
+                    .body(json.clone())
+                    .send()
+                    .await?
+            }
+            DocumentMethod::PutWithCreate => {
+                let uri = self.build_url()
+                    .endpoint("document")
+                    .database(&args.spec)
+                    .document_params(&args.author, &args.message, &ty, true) // create=true
+                    .build();
+
+                debug!("PUT {} to URI {} (create=true)", &ty, &uri);
+                
+                self.http
+                    .put(uri)
+                    .basic_auth(&self.user, Some(&self.pass))
+                    .header("Content-Type", "application/json")
+                    .body(json.clone())
+                    .send()
+                    .await?
+            }
+        };
+
+        let parsed = self.parse_response_with_headers::<Vec<String>>(res).await;
+
+        trace!("parsed response from insert_documents_with_method(): {:#?}", &parsed);
+
+        if let Err(e) = &parsed {
+            error!("request error: {:#?}", &e);
+            dump_failed_payload(&json);
+            return Err(anyhow!("Document operation failed: {}", e));
+        }
+
+        debug!("{:?} {} into TerminusDB", method, ty);
+
+        let parsed = parsed?;
+        let version_header = parsed.commit_id.clone();
+        let data = parsed.into_inner();
+        let result_map = data
+            .into_iter()
+            .map(|id| (id.clone(), TDBInsertInstanceResult::Inserted(id)))
+            .collect();
+
+        Ok(ResponseWithHeaders::new(result_map, version_header))
+    }
+
     /// Inserts multiple untyped documents into the database.
     ///
     /// **⚠️ Consider using strongly-typed alternatives instead:**
@@ -140,6 +259,8 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// This function accepts any type that implements `ToJson` (like `serde_json::Value`
     /// or schema definitions) and inserts them as untyped documents.
+    ///
+    /// Uses PUT with create=true for backward compatibility.
     ///
     /// # Arguments
     /// * `model` - Vector of references to objects that can be converted to JSON
@@ -165,76 +286,7 @@ impl super::client::TerminusDBHttpClient {
         model: Vec<&impl ToJson>,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
-        let ty = args.ty.to_string().to_lowercase();
-
-        let uri = self.build_url()
-            .endpoint("document")
-            .database(&args.spec)
-            .document_params(&args.author, &args.message, &ty, true)
-            .build();
-
-        let mut to_jsoned = model
-            .into_iter()
-            .map(|t| t.to_json())
-            .rev()
-            .collect::<Vec<_>>();
-
-        // for (i, j) in &mut to_jsoned.iter_mut().enumerate() {
-        //     j.as_object_mut()
-        //         .unwrap()
-        //         .insert("@capture".to_string(), format!("v{}", i).into());
-        // }
-
-        dedup_documents_by_id(&mut to_jsoned);
-
-        eprintln!("inserting document(s): {:#?}", &to_jsoned);
-
-        let json = serde_json::to_string(&to_jsoned).unwrap();
-
-        trace!(
-            "about to insert {} at URI {}: {:#?}",
-            &ty,
-            &uri,
-            // todo: add trailing "..." or "(truncated)" if message was longer
-            &json[0..(10000.min(json.len()))]
-        );
-
-        if args.ty.is_instance() {
-            // panic!("{:#?}", &to_jsoned);
-        }
-
-        // todo: author should probably be node name
-        // todo: dont clone just for the failed paload dumping
-        let res = self
-            .http
-            .put(uri)
-            .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
-            .body(json.clone())
-            .send()
-            .await?;
-
-        let parsed = self.parse_response_with_headers::<Vec<String>>(res).await;
-
-        trace!("parsed response from insert_documents(): {:#?}", &parsed);
-
-        if let Err(e) = &parsed {
-            error!("request error: {:#?}", &e);
-            dump_failed_payload(&json);
-            return Err(anyhow!("Insert request failed: {}", e));
-        }
-
-        debug!("inserted {} into TerminusDB", ty);
-
-        let parsed = parsed?;
-        let version_header = parsed.commit_id.clone();
-        let data = parsed.into_inner();
-        let result_map = data
-            .into_iter()
-            .map(|id| (id.clone(), TDBInsertInstanceResult::Inserted(id)))
-            .collect();
-
-        Ok(ResponseWithHeaders::new(result_map, version_header))
+        self.insert_documents_with_method(model, args, DocumentMethod::PutWithCreate).await
     }
 
     /// Inserts a single untyped document into the database.
@@ -296,6 +348,70 @@ impl super::client::TerminusDBHttpClient {
         debug!("inserted {} into TerminusDB", ty);
 
         Ok(self.clone())
+    }
+
+    /// Creates new documents using POST endpoint.
+    ///
+    /// This method uses the POST endpoint which is designed for creating new documents.
+    /// It will fail if any of the documents already exist.
+    ///
+    /// # Arguments
+    /// * `model` - Vector of references to objects that can be converted to JSON
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with document IDs and insert results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// use serde_json::json;
+    /// 
+    /// let docs = vec![
+    ///     &json!({"@type": "Person", "name": "Alice"}),
+    ///     &json!({"@type": "Person", "name": "Bob"}),
+    /// ];
+    /// let result = client.post_documents(docs, args).await?;
+    /// ```
+    pub async fn post_documents(
+        &self,
+        model: Vec<&impl ToJson>,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        self.insert_documents_with_method(model, args, DocumentMethod::Post).await
+    }
+
+    /// Updates existing documents using PUT endpoint without create.
+    ///
+    /// This method uses the PUT endpoint without the create=true parameter,
+    /// which means it will only update existing documents and fail if any don't exist.
+    ///
+    /// # Arguments
+    /// * `model` - Vector of references to objects that can be converted to JSON
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with document IDs and update results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// use serde_json::json;
+    /// 
+    /// let docs = vec![
+    ///     &json!({"@id": "Person/alice", "@type": "Person", "name": "Alice Updated"}),
+    ///     &json!({"@id": "Person/bob", "@type": "Person", "name": "Bob Updated"}),
+    /// ];
+    /// let result = client.put_documents(docs, args).await?;
+    /// ```
+    pub async fn put_documents(
+        &self,
+        model: Vec<&impl ToJson>,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        self.insert_documents_with_method(model, args, DocumentMethod::Put).await
     }
 
     pub async fn insert_documents_by_schema_type<T: terminusdb_schema::ToTDBSchema>(

@@ -12,7 +12,7 @@ use {
     futures_util::StreamExt,
     std::{collections::HashMap, fmt::Debug},
     tap::{Tap, TapFallible},
-    terminusdb_schema::{Instance, ToTDBInstance, ToJson},
+    terminusdb_schema::{Instance, ToTDBInstance, ToTDBInstances, ToJson},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
     terminusdb_schema::GraphType,
@@ -194,6 +194,177 @@ impl super::client::TerminusDBHttpClient {
         debug!("Extracted commit_id from header: {}", commit_id);
         
         Ok((instance_id, commit_id))
+    }
+
+    /// Creates a new instance in the database using POST.
+    ///
+    /// This method uses the POST endpoint which will fail if the instance already exists.
+    /// Use this when you want to ensure you're creating a new instance, not updating an existing one.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to create
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and insert results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let user = User { name: "Alice".to_string(), age: 30 };
+    /// let result = client.create_instance(&user, args).await?;
+    /// ```
+    #[pseudonym::alias(create)]
+    pub async fn create_instance<I: TerminusDBModel>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        let instance = model.to_instance(None);
+        let instances = instance.to_instance_tree_flatten(true)
+            .into_iter()
+            .map(|mut i| {
+                i.set_random_key_prefix();
+                i.capture = true;
+                i
+            })
+            .filter(|i| !i.is_reference())
+            .collect::<Vec<_>>();
+
+        let models = instances.iter().collect();
+        self.post_documents(models, args).await
+    }
+
+    /// Updates an existing instance in the database using PUT without create.
+    ///
+    /// This method uses the PUT endpoint without create=true, which will fail if the instance doesn't exist.
+    /// Use this when you want to update an existing instance and ensure it already exists.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to update
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and update results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let user = User { name: "Alice Updated".to_string(), age: 31 };
+    /// let result = client.update_instance(&user, args).await?;
+    /// ```
+    #[pseudonym::alias(update)]
+    pub async fn update_instance<I: TerminusDBModel>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        let instance = model.to_instance(None);
+        
+        // Check if instance has an ID
+        if instance.gen_id().is_none() {
+            return Err(anyhow!("Cannot update instance without an ID"));
+        }
+
+        let instances = instance.to_instance_tree_flatten(true)
+            .into_iter()
+            .map(|mut i| {
+                i.set_random_key_prefix();
+                i.capture = true;
+                i
+            })
+            .filter(|i| !i.is_reference())
+            .collect::<Vec<_>>();
+
+        let models = instances.iter().collect();
+        self.put_documents(models, args).await
+    }
+
+    /// Replaces an existing instance in the database.
+    ///
+    /// This is an alias for [`update_instance`](Self::update_instance).
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to replace
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and update results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    #[pseudonym::alias(replace)]
+    pub async fn replace_instance<I: TerminusDBModel>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        self.update_instance(model, args).await
+    }
+
+    /// Saves an instance to the database, creating it if it doesn't exist or updating if it does.
+    ///
+    /// This method first attempts to create the instance using POST. If that fails because
+    /// the instance already exists, it falls back to updating using PUT.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to save
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and save results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let user = User { name: "Alice".to_string(), age: 30 };
+    /// // Works whether user exists or not
+    /// let result = client.save_instance(&user, args).await?;
+    /// ```
+    #[pseudonym::alias(save)]
+    pub async fn save_instance<I: TerminusDBModel>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        // First try to create
+        match self.create_instance(model, args.clone()).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                // If creation failed, check if it's because the instance exists
+                let error_str = e.to_string();
+                if error_str.contains("already exists") || error_str.contains("conflict") {
+                    debug!("Instance already exists, attempting update instead");
+                    self.update_instance(model, args).await
+                } else {
+                    // If it's a different error, propagate it
+                    Err(e)
+                }
+            }
+        }
     }
 
     // /// Finds the commit that added a specific instance by walking through the commit log
@@ -652,125 +823,6 @@ impl super::client::TerminusDBHttpClient {
         Ok(results)
     }
 
-    /// Retrieves all versions of a specific instance across its commit history using a single WOQL query.
-    ///
-    /// This method uses the entity-specific `/history` endpoint to get only commits that modified
-    /// the target instance, then executes a single WOQL query across those commits to retrieve
-    /// all versions efficiently.
-    ///
-    /// # Type Parameters
-    /// * `T` - The type to deserialize the instances into (implements `TerminusDBModel`)
-    ///
-    /// # Arguments
-    /// * `instance_id` - The instance ID (without type prefix, e.g., "abc123")
-    /// * `spec` - Branch specification (branch to query history from)
-    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
-    ///
-    /// # Returns
-    /// A vector of tuples containing (instance, commit_id) pairs representing the full version history
-    ///
-    /// # Example
-    /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
-    /// struct Person { name: String, age: i32 }
-    ///
-    /// let mut deserializer = DefaultDeserializer::new();
-    /// let versions = client.get_instance_versions::<Person>(
-    ///     "abc123randomkey",
-    ///     &branch_spec,
-    ///     &mut deserializer
-    /// ).await?;
-    ///
-    /// for (person, commit_id) in versions {
-    ///     println!("Commit {}: {} (age {})", commit_id, person.name, person.age);
-    /// }
-    /// ```
-    ///
-    /// # Performance
-    /// This method is highly optimized as it:
-    /// - Only queries commits that actually modified the target instance
-    /// - Uses a single WOQL query to retrieve all versions
-    /// - Leverages TerminusDB's entity-specific history endpoint
-    pub async fn get_instance_versions<T: TerminusDBModel>(
-        &self,
-        instance_id: &str,
-        spec: &BranchSpec,
-        deserializer: &mut impl TDBInstanceDeserializer<T>,
-    ) -> anyhow::Result<Vec<(T, String)>> {
-        debug!("Getting instance versions for {} of type {}", instance_id, T::to_schema().class_name());
-        
-        // 1. Get entity-specific commit history (much more efficient than general log)
-        let history = self.get_instance_history::<T>(instance_id, spec, None).await?;
-        debug!("Found {} commits in history for instance {}", history.len(), instance_id);
-        
-        if history.is_empty() {
-            debug!("No history found for instance {}", instance_id);
-            return Ok(vec![]);
-        }
-        
-        // 2. Extract commit IDs from history entries
-        let commit_ids: Vec<String> = history.iter()
-            .map(|entry| entry.identifier.clone())
-            .collect();
-        
-        debug!("Building WOQL query across {} commits: {:?}", commit_ids.len(), commit_ids);
-        
-        // 3. Build WOQL queries for each commit using the proven OR pattern from our test
-        let mut commit_queries = Vec::new();
-        for commit_id in &commit_ids {
-            let commit_collection = format!("commit/{}", commit_id);
-            
-            let commit_query = WoqlBuilder::new()
-                .triple(vars!("Subject"), "rdf:type", node(&format!("@schema:{}", T::to_schema().class_name())))
-                .triple(vars!("Subject"), "@id", vars!("ID"))
-                .read_document(vars!("Subject"), vars!("Doc"))
-                .using(&commit_collection);
-            
-            commit_queries.push(commit_query);
-        }
-        
-        // 4. Create OR query by starting with the first query and adding the rest (proven working pattern)
-        let main_query = if commit_queries.is_empty() {
-            WoqlBuilder::new().finalize()
-        } else {
-            let mut commit_queries_iter = commit_queries.into_iter();
-            let mut main_builder = commit_queries_iter.next().unwrap();
-            for commit_query in commit_queries_iter {
-                main_builder = main_builder.or([commit_query]);
-            }
-            main_builder.select(vec![vars!("Subject"), vars!("ID"), vars!("Doc")]).finalize()
-        };
-        
-        // 5. Execute the query
-        let json_query = main_query.to_instance(None).to_json();
-        debug!("Executing WOQL query: {}", serde_json::to_string_pretty(&json_query).unwrap_or_default());
-        
-        let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = self.query_raw(Some(spec.clone()), json_query).await?;
-        debug!("Query returned {} bindings", result.bindings.len());
-        
-        // 6. Deserialize results and build the response
-        let mut versions = Vec::new();
-        for binding in result.bindings {
-            if let (Some(doc_value), Some(id_value)) = (binding.get("Doc"), binding.get("ID")) {
-                match deserializer.from_instance(doc_value.clone()) {
-                    Ok(instance) => {
-                        // Extract the commit ID from the instance ID or use a default approach
-                        // For now, we'll need to correlate back to commit IDs - this is a simplification
-                        // that works for the basic case but may need refinement for complex scenarios
-                        let commit_id = commit_ids.first().unwrap_or(&"unknown".to_string()).clone();
-                        versions.push((instance, commit_id));
-                    }
-                    Err(err) => {
-                        warn!("Failed to deserialize instance version: {}", err);
-                        continue;
-                    }
-                }
-            }
-        }
-        
-        debug!("Successfully retrieved {} instance versions", versions.len());
-        Ok(versions)
-    }
 
     /// Retrieves all versions of a specific instance across its commit history (simplified version).
     ///

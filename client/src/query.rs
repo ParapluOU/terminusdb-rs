@@ -111,3 +111,102 @@ pub enum QueryType {
     /// or whether the returned type is ad-hoc created by triples and selects
     Custom,
 }
+
+/// Trait for raw WOQL queries that deserialize to custom structs.
+/// 
+/// Unlike `InstanceQueryable`, this trait doesn't assume you're querying for
+/// TerminusDB models with read_document(). Instead, it allows arbitrary WOQL
+/// queries that return custom result types.
+/// 
+/// # Example
+/// ```rust
+/// #[derive(Deserialize)]
+/// struct PersonAge {
+///     name: String,
+///     age: i32,
+/// }
+/// 
+/// struct AgeQuery;
+/// 
+/// impl RawQueryable for AgeQuery {
+///     type Result = PersonAge;
+///     
+///     fn query(&self) -> Query {
+///         WoqlBuilder::new()
+///             .triple(vars!("Person"), "name", vars!("Name"))
+///             .triple(vars!("Person"), "age", vars!("Age"))
+///             .select(vec![vars!("Name"), vars!("Age")])
+///             .finalize()
+///     }
+///     
+///     fn extract_result(&self, binding: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
+///         Ok(PersonAge {
+///             name: serde_json::from_value(binding.get("Name").unwrap().clone())?,
+///             age: serde_json::from_value(binding.get("Age").unwrap().clone())?,
+///         })
+///     }
+/// }
+/// ```
+pub trait RawQueryable {
+    /// The custom result type that query results will be deserialized into
+    type Result: DeserializeOwned;
+    
+    /// Build the WOQL query
+    fn query(&self) -> Query;
+    
+    /// Extract a single result from a binding row
+    /// 
+    /// The default implementation assumes the binding can be directly deserialized
+    /// into the Result type. Override this for custom extraction logic.
+    fn extract_result(&self, binding: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
+        serde_json::from_value(serde_json::to_value(binding)?)
+            .map_err(|e| anyhow::anyhow!("Failed to deserialize query result: {}", e))
+    }
+    
+    /// Execute the query and return results
+    async fn apply(
+        &self,
+        client: &TerminusDBHttpClient,
+        spec: &BranchSpec,
+    ) -> anyhow::Result<Vec<Self::Result>> {
+        let query = self.query();
+        
+        let res = client
+            .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
+            .await?;
+        
+        res.bindings
+            .into_iter()
+            .map(|binding| self.extract_result(binding))
+            .collect()
+    }
+}
+
+/// Builder for constructing raw WOQL queries with custom result types
+pub struct RawWoqlQuery<T> {
+    builder: WoqlBuilder,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: DeserializeOwned> RawWoqlQuery<T> {
+    /// Create a new raw query builder
+    pub fn new() -> Self {
+        Self {
+            builder: WoqlBuilder::new(),
+            _phantom: PhantomData,
+        }
+    }
+    
+    /// Access the underlying WoqlBuilder for query construction
+    pub fn builder(self) -> WoqlBuilder {
+        self.builder
+    }
+}
+
+impl<T: DeserializeOwned> RawQueryable for RawWoqlQuery<T> {
+    type Result = T;
+    
+    fn query(&self) -> Query {
+        self.builder.clone().finalize()
+    }
+}
