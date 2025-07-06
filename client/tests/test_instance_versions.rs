@@ -575,3 +575,129 @@ async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
     
     Ok(())
 }
+
+#[ignore] // Requires running TerminusDB instance
+#[tokio::test]
+async fn test_woql_query_breakdown() -> anyhow::Result<()> {
+    let (client, spec) = setup_test_client().await?;
+    
+    // Use a unique ID to avoid conflicts with previous test runs
+    let fixed_id = &format!("test_woql_breakdown_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+    println!("=== Breaking down WOQL query issues ===");
+    println!("Using ID: {}", fixed_id);
+    
+    // Create a single version first
+    let person = PersonWithId {
+        id: EntityIDFor::new(fixed_id).unwrap(),
+        name: "WOQL Test Person".to_string(),
+        age: 42,
+        email: Some("woql@test.com".to_string()),
+    };
+    
+    let (instance_id, commit_id) = client.insert_instance_with_commit_id(
+        &person,
+        DocumentInsertArgs::from(spec.clone())
+    ).await?;
+    
+    println!("Created instance: {}", instance_id);
+    println!("In commit: {}", commit_id);
+    
+    // Test 1: Query current branch without using commit collection
+    println!("\n=== Test 1: Basic query without commit collection ===");
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+        .select(vec![vars!("Subject")])
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Results without commit collection: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    // Test 2: Try querying the commit collection
+    println!("\n=== Test 2: Query with commit collection ===");
+    let commit_collection = format!("commit/{}", commit_id);
+    println!("Commit collection: {}", commit_collection);
+    
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+        .select(vec![vars!("Subject")])
+        .using(&commit_collection)
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    println!("Query JSON: {}", serde_json::to_string_pretty(&json_query)?);
+    
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Results with commit collection: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    // Test 3: Try different commit collection formats
+    println!("\n=== Test 3: Try different commit collection formats ===");
+    
+    // Try with "ValidCommit/" prefix
+    let commit_collection_alt1 = format!("ValidCommit/{}", commit_id);
+    println!("Trying commit collection: {}", commit_collection_alt1);
+    
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+        .select(vec![vars!("Subject")])
+        .using(&commit_collection_alt1)
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Results with ValidCommit/ prefix: {} bindings", result.bindings.len());
+    
+    // Try without any commit prefix (direct commit ID)
+    println!("Trying direct commit ID: {}", commit_id);
+    
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+        .select(vec![vars!("Subject")])
+        .using(&commit_id)
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Results with direct commit ID: {} bindings", result.bindings.len());
+    
+    // Test 4: Try querying with BranchSpec at specific commit
+    println!("\n=== Test 4: Try BranchSpec with commit reference ===");
+    let commit_spec = BranchSpec::from(format!("{}/commit/{}", spec.db, commit_id));
+    println!("Commit spec: {:?}", commit_spec);
+    
+    let query = WoqlBuilder::new()
+        .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
+        .select(vec![vars!("Subject")])
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(commit_spec), json_query).await?;
+    println!("Results with commit BranchSpec: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().enumerate() {
+        println!("  Binding {}: {:?}", i, binding);
+    }
+    
+    // Test 5: Check what collections exist
+    println!("\n=== Test 5: Query available collections/graphs ===");
+    
+    // Try to find what collections are available
+    let query = WoqlBuilder::new()
+        .triple(vars!("Graph"), "rdf:type", vars!("Type"))
+        .select(vec![vars!("Graph"), vars!("Type")])
+        .finalize();
+    
+    let json_query = query.to_instance(None).to_json();
+    let result: crate::WOQLResult<HashMap<String, serde_json::Value>> = client.query_raw(Some(spec.clone()), json_query).await?;
+    println!("Available graphs/collections: {} bindings", result.bindings.len());
+    for (i, binding) in result.bindings.iter().take(10).enumerate() {
+        println!("  Graph {}: {:?}", i, binding);
+    }
+    
+    Ok(())
+}
