@@ -136,7 +136,7 @@ impl super::client::TerminusDBHttpClient {
             .await
             .tap_err(|_| dump_schema::<I>())?;
 
-        dbg!(&res);
+        // dbg!(&res);
 
         // Get the first inserted ID from the result HashMap's values
         let inserted_tdb_id = match res.values().next() {
