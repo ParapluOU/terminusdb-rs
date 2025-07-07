@@ -1,5 +1,7 @@
 //! Schema-related operations
 
+use std::collections::HashMap;
+use tap::Pipe;
 use {
     crate::{document::DocumentInsertArgs, document::DocumentType, Schema},
     ::log::debug,
@@ -7,6 +9,7 @@ use {
     tap::{Tap, TapFallible},
     terminusdb_schema::{ToTDBSchema, ToTDBSchemas},
 };
+use crate::{ResponseWithHeaders, TDBInsertInstanceResult};
 
 /// Schema management methods for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
@@ -88,14 +91,19 @@ impl super::client::TerminusDBHttpClient {
         &self,
         schema: &Schema,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<Self> {
-        self.insert_document(
-            schema,
-            args.tap_mut(|a| {
-                a.ty = DocumentType::Schema;
-            }),
-        )
-        .await
+    ) -> anyhow::Result<&Self> {
+        Ok(self.insert_schema_instances(vec!(schema.clone()), args).await?.pipe(|_| self))
+    }
+
+    pub async fn insert_schema_instances(
+        &self,
+        schemas: Vec<Schema>,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        debug!("inserting schema instances: {:#?}", schemas.iter().map(|s| s.class_name()).collect::<Vec<_>>());
+        self.insert_documents(schemas.iter().collect(), args.tap_mut(|a| {
+            a.ty = DocumentType::Schema;
+        })).await
     }
 
     /// Inserts schemas for multiple strongly-typed models using tuple types.
