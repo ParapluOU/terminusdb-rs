@@ -115,7 +115,7 @@ where
     T1: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![T1::to_schema()]
+        T1::to_schema_tree()
     }
 }
 
@@ -125,7 +125,10 @@ where
     T2: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![T1::to_schema(), T2::to_schema()]
+        let mut schemas = Vec::new();
+        schemas.extend(T1::to_schema_tree());
+        schemas.extend(T2::to_schema_tree());
+        schemas
     }
 }
 
@@ -136,7 +139,11 @@ where
     T3: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![T1::to_schema(), T2::to_schema(), T3::to_schema()]
+        let mut schemas = Vec::new();
+        schemas.extend(T1::to_schema_tree());
+        schemas.extend(T2::to_schema_tree());
+        schemas.extend(T3::to_schema_tree());
+        schemas
     }
 }
 
@@ -148,7 +155,12 @@ where
     T4: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![T1::to_schema(), T2::to_schema(), T3::to_schema(), T4::to_schema()]
+        let mut schemas = Vec::new();
+        schemas.extend(T1::to_schema_tree());
+        schemas.extend(T2::to_schema_tree());
+        schemas.extend(T3::to_schema_tree());
+        schemas.extend(T4::to_schema_tree());
+        schemas
     }
 }
 
@@ -161,7 +173,13 @@ where
     T5: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![T1::to_schema(), T2::to_schema(), T3::to_schema(), T4::to_schema(), T5::to_schema()]
+        let mut schemas = Vec::new();
+        schemas.extend(T1::to_schema_tree());
+        schemas.extend(T2::to_schema_tree());
+        schemas.extend(T3::to_schema_tree());
+        schemas.extend(T4::to_schema_tree());
+        schemas.extend(T5::to_schema_tree());
+        schemas
     }
 }
 
@@ -175,10 +193,14 @@ where
     T6: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![
-            T1::to_schema(), T2::to_schema(), T3::to_schema(), 
-            T4::to_schema(), T5::to_schema(), T6::to_schema()
-        ]
+        let mut schemas = Vec::new();
+        schemas.extend(T1::to_schema_tree());
+        schemas.extend(T2::to_schema_tree());
+        schemas.extend(T3::to_schema_tree());
+        schemas.extend(T4::to_schema_tree());
+        schemas.extend(T5::to_schema_tree());
+        schemas.extend(T6::to_schema_tree());
+        schemas
     }
 }
 
@@ -194,10 +216,16 @@ where
     T8: ToTDBSchema,
 {
     fn to_schemas() -> Vec<crate::Schema> {
-        vec![
-            T1::to_schema(), T2::to_schema(), T3::to_schema(), T4::to_schema(),
-            T5::to_schema(), T6::to_schema(), T7::to_schema(), T8::to_schema()
-        ]
+        let mut schemas = Vec::new();
+        schemas.extend(T1::to_schema_tree());
+        schemas.extend(T2::to_schema_tree());
+        schemas.extend(T3::to_schema_tree());
+        schemas.extend(T4::to_schema_tree());
+        schemas.extend(T5::to_schema_tree());
+        schemas.extend(T6::to_schema_tree());
+        schemas.extend(T7::to_schema_tree());
+        schemas.extend(T8::to_schema_tree());
+        schemas
     }
 }
 

@@ -59,6 +59,28 @@ fn test_schema_class_tree_generate() {
 }
 
 #[test]
+fn test_tuple_schemas_generate() {
+    // Test single tuple - should return all schemas from Model's tree
+    let schemas1 = <(Model,)>::to_schemas();
+    assert_eq!(schemas1.len(), 2); // Model and SubModel
+    
+    // Test double tuple - should return all schemas from both types
+    let schemas2 = <(SimpleClass, DummyModel)>::to_schemas();
+    assert_eq!(schemas2.len(), 2); // SimpleClass and DummyModel (no nested types)
+    
+    // Test triple tuple with nested types
+    let schemas3 = <(Model, SimpleClass, DummyModel)>::to_schemas();
+    assert_eq!(schemas3.len(), 4); // Model, SubModel, SimpleClass, DummyModel
+    
+    // Verify the schema names are correct
+    let schema_names: Vec<String> = schemas3.iter().map(|s| s.class_name().to_string()).collect();
+    assert!(schema_names.contains(&"Model".to_string()));
+    assert!(schema_names.contains(&"SubModel".to_string()));
+    assert!(schema_names.contains(&"SimpleClass".to_string()));
+    assert!(schema_names.contains(&"DummyModel".to_string()));
+}
+
+#[test]
 fn test_schema_class_generate() {
     let schema = <Model as ToTDBSchema>::to_schema();
 
