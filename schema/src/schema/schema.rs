@@ -753,6 +753,12 @@ pub trait ToTDBSchema {
         Self::to_schema().class_name().clone()
     }
 
+    fn assert_schema_tree_includes<T: ToTDBSchema>() {
+        let schema_tree = Self::to_schema_tree();
+        let class_name = T::schema_name();
+        assert!(schema_tree.iter().any(|s| s.class_name() == &class_name), "expected schema tree of {} to include {}, but was: {:#?}", std::any::type_name::<Self>(), class_name, schema_tree.iter().map(|s| s.class_name()).collect::<Vec<_>>());
+    }
+
     fn to_schema_tree() -> Vec<Schema>;
 
     // Change to_schema_tree_mut to be a static method
