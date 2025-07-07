@@ -23,19 +23,7 @@ impl<K, T: ToTDBSchema> ToTDBSchema for HashMap<K, T> {
     }
 
     fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
-        let schema = <Self as ToTDBSchema>::to_schema();
-        let class_name = schema.class_name().clone();
-
-        // Check if we already have a schema with this class name
-        if !collection
-            .iter()
-            .any(|s: &Schema| s.class_name() == &class_name)
-        {
-            collection.insert(schema);
-
-            // Process the inner type
-            T::to_schema_tree_mut(collection);
-        }
+        T::to_schema_tree_mut(collection);
     }
 }
 
