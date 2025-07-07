@@ -205,6 +205,10 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
         method: DocumentMethod,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        self.ensure_database(&args.spec.db)
+            .await
+            .context("ensuring database")?;
+
         let ty = args.ty.to_string().to_lowercase();
 
         let mut to_jsoned = model

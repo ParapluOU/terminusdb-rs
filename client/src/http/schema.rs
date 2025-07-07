@@ -1,6 +1,6 @@
 //! Schema-related operations
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tap::Pipe;
 use {
     crate::{document::DocumentInsertArgs, document::DocumentType, Schema},
@@ -44,21 +44,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<()> {
-        self.ensure_database(&args.spec.db)
-            .await
-            .context("ensuring database")?;
-
-        let root = S::to_schema();
-
-        debug!("inserting entity schema tree for {}...", root.class_name());
-
-        self.insert_schema_instances(S::to_schema_tree(), args.as_schema())
-            .await
-            .context("insert_documents()")?;
-
-        debug!("inserted schema into TerminusDB");
-
-        Ok(())
+        self.insert_schema_trees::<(S,)>(args).await
     }
 
     /// Inserts a raw schema definition into the database.
@@ -91,6 +77,8 @@ impl super::client::TerminusDBHttpClient {
         Ok(self.insert_schema_instances(vec!(schema.clone()), args).await?.pipe(|_| self))
     }
 
+    /// insert only the given Schemas. because the arguments are schema instances.
+    /// we cannot derive the schema tree dependencies from them
     pub async fn insert_schema_instances(
         &self,
         schemas: Vec<Schema>,
@@ -139,6 +127,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Note
     /// The database will be automatically created if it doesn't exist.
     /// For more than 8 types, consider using the `schemas!` macro approach instead.
+    #[pseudonym::alias(insert_schema_trees)]
     pub async fn insert_schemas<T: ToTDBSchemas>(
         &self,
         args: DocumentInsertArgs,
