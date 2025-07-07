@@ -8,7 +8,33 @@ use anyhow::anyhow;
 use chrono::{DateTime, NaiveTime, Utc};
 use serde;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+
+impl<K, T: ToTDBSchema> ToTDBSchema for BTreeMap<K, T> {
+    fn to_schema() -> Schema {
+        T::to_schema()
+    }
+
+    fn to_schema_tree() -> Vec<Schema> {
+        T::to_schema_tree()
+    }
+
+    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+        let schema = <Self as ToTDBSchema>::to_schema();
+        let class_name = schema.class_name().clone();
+
+        // Check if we already have a schema with this class name
+        if !collection
+            .iter()
+            .any(|s: &Schema| s.class_name() == &class_name)
+        {
+            collection.insert(schema);
+
+            // Process the inner type
+            T::to_schema_tree_mut(collection);
+        }
+    }
+}
 
 // Implement ToSchemaClass for BTreeMap<String, Value>
 impl ToSchemaClass for BTreeMap<String, Value> {
