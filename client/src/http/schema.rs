@@ -39,7 +39,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Note
     /// The database will be automatically created if it doesn't exist.
-    #[pseudonym::alias(schema)]
+    #[pseudonym::alias(schema, insert_schema_tree)]
     pub async fn insert_entity_schema<S: ToTDBSchema>(
         &self,
         args: DocumentInsertArgs,
@@ -50,13 +50,9 @@ impl super::client::TerminusDBHttpClient {
 
         let root = S::to_schema();
 
-        debug!("inserting entity schema for {}...", root.class_name());
+        debug!("inserting entity schema tree for {}...", root.class_name());
 
-        let subs = S::to_schema_tree();
-
-        // panic!("{:#?}", &subs);
-
-        self.insert_documents(subs.iter().collect(), args.as_schema())
+        self.insert_schema_instances(S::to_schema_tree(), args.as_schema())
             .await
             .context("insert_documents()")?;
 
@@ -101,9 +97,7 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         debug!("inserting schema instances: {:#?}", schemas.iter().map(|s| s.class_name()).collect::<Vec<_>>());
-        self.insert_documents(schemas.iter().collect(), args.tap_mut(|a| {
-            a.ty = DocumentType::Schema;
-        })).await
+        self.insert_documents(schemas.iter().collect(), args.as_schema()).await
     }
 
     /// Inserts schemas for multiple strongly-typed models using tuple types.
@@ -154,14 +148,16 @@ impl super::client::TerminusDBHttpClient {
             .context("ensuring database")?;
 
         let schemas = T::to_schemas();
-        
-        debug!("inserting {} schemas", schemas.len());
 
-        self.insert_documents(schemas.iter().collect(), args.as_schema())
+        let count = schemas.len();
+
+        debug!("inserting {} schemas", count);
+
+        self.insert_schema_instances(schemas, args.as_schema())
             .await
             .context("insert_documents()")?;
 
-        debug!("inserted {} schemas into TerminusDB", schemas.len());
+        debug!("inserted {} schemas into TerminusDB", count);
 
         Ok(())
     }
