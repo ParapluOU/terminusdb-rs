@@ -28,6 +28,10 @@ impl<T: ToTDBSchema> ToTDBSchema for EntityIDFor<T> {
     fn to_schema_tree() -> Vec<Schema> {
         vec!(T::to_schema())
     }
+
+    fn id() -> Option<String> {
+        T::id()
+    }
 }
 
 impl<T: ToTDBSchema> EntityIDFor<T> {
