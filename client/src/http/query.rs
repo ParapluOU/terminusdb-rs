@@ -73,7 +73,7 @@ impl super::client::TerminusDBHttpClient {
             }
         };
 
-        eprintln!("querying at {}...: {:#?}", &uri, &query);
+        //eprintln!("querying at {}...: {:#?}", &uri, &query);
 
         let json = json!({
             "query": query
@@ -114,7 +114,7 @@ impl super::client::TerminusDBHttpClient {
             }
         };
 
-        eprintln!("querying at {}...: {:#?}", &uri, &query);
+        //eprintln!("querying at {}...: {:#?}", &uri, &query);
 
         let json = json!({
             "query": query

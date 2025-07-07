@@ -219,7 +219,7 @@ impl super::client::TerminusDBHttpClient {
 
         dedup_documents_by_id(&mut to_jsoned);
 
-        eprintln!("inserting document(s): {:#?}", &to_jsoned);
+        //eprintln!("inserting document(s): {:#?}", &to_jsoned);
 
         let json = serde_json::to_string(&to_jsoned).unwrap();
 

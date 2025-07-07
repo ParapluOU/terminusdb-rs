@@ -24,13 +24,13 @@ impl super::client::TerminusDBHttpClient {
         let json = res.json::<serde_json::Value>().await?;
 
         trace!("[TerminusDBHttpClient] response: {:#?}", &json);
-        eprintln!("parsed response: {:#?}", &json);
+        // eprintln!("parsed response: {:#?}", &json);
 
         let response_has_error_prop = json.get("api:error").is_some();
         let err = format!("failed to deserialize into ApiResponse: {:#?}", &json);
         let res: ApiResponse<T> = serde_json::from_value(json).context(err.clone())?;
 
-        eprintln!("parsed typed response: {:#?}", &res);
+        // eprintln!("parsed typed response: {:#?}", &res);
 
         match res {
             ApiResponse::Success(r) => {
@@ -58,13 +58,13 @@ impl super::client::TerminusDBHttpClient {
         let json = res.json::<serde_json::Value>().await?;
 
         trace!("[TerminusDBHttpClient] response: {:#?}", &json);
-        eprintln!("parsed response: {:#?}", &json);
+        // eprintln!("parsed response: {:#?}", &json);
 
         let response_has_error_prop = json.get("api:error").is_some();
         let err = format!("failed to deserialize into ApiResponse: {:#?}", &json);
         let res: ApiResponse<T> = serde_json::from_value(json).context(err.clone())?;
 
-        eprintln!("parsed typed response: {:#?}", &res);
+        // eprintln!("parsed typed response: {:#?}", &res);
 
         match res {
             ApiResponse::Success(r) => {
