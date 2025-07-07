@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use crate::json::InstancePropertyFromJson;
 use crate::{FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel, ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING};
 use anyhow::{anyhow, bail};
@@ -21,6 +22,12 @@ pub struct EntityIDFor<T: ToTDBSchema> {
     typed_id: String,
     /// allows strong typing
     _ty: PhantomData<T>,
+}
+
+impl<T: ToTDBSchema> ToTDBSchema for EntityIDFor<T> {
+    fn to_schema_tree() -> Vec<Schema> {
+        vec!(T::to_schema())
+    }
 }
 
 impl<T: ToTDBSchema> EntityIDFor<T> {
