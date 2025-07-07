@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use crate::json::InstancePropertyFromJson;
-use crate::{FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel, ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING};
+use crate::{FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel, ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING, URI};
 use anyhow::{anyhow, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -29,8 +29,21 @@ impl<T: ToTDBSchema> ToTDBSchema for EntityIDFor<T> {
         vec!(T::to_schema())
     }
 
+    // Change to_schema_tree_mut to be a static method
+    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+        T::to_schema_tree_mut(collection);
+    }
+
     fn id() -> Option<String> {
         T::id()
+    }
+
+    fn properties() -> Option<Vec<Property>> {
+        T::properties()
+    }
+
+    fn values() -> Option<Vec<URI>> {
+        T::values()
     }
 }
 
