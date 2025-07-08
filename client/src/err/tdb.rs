@@ -23,6 +23,9 @@ pub enum ApiResponseError {
     #[serde(rename = "vio:WOQLSyntaxError")]
     WOQLSyntaxError(WOQLSyntaxError),
 
+    #[serde(rename = "api:DocumentIdAlreadyExists")]
+    DocumentIdAlreadyExists(DocumentIdAlreadyExistsError),
+
     Other(Value),
 
     #[default]
@@ -33,6 +36,7 @@ impl Display for ApiResponseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiResponseError::SchemaCheckFail(error) => Display::fmt(error, f),
+            ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self))
         }
     }
@@ -63,6 +67,9 @@ pub enum TypedErrorResponse {
 
     #[serde(rename = "api:WoqlErrorResponse")]
     WoqlError(ErrorResponse),
+
+    #[serde(rename = "api:InsertDocumentErrorResponse")]
+    InsertDocumentError(ErrorResponse),
 }
 
 impl Error for TypedErrorResponse {}
@@ -77,6 +84,9 @@ impl Display for TypedErrorResponse {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
             },
             TypedErrorResponse::WoqlError(e) => {
+                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            },
+            TypedErrorResponse::InsertDocumentError(e) => {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
             },
         }
@@ -245,5 +255,79 @@ pub struct SchemaCheckFailError {
 impl Display for SchemaCheckFailError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Schema check failure: {:#?}\n\n💡 Hint: Schema failures often occur when a model's structure was changed after inserting its schema.\nTo resolve this:\n  1. Re-insert the updated schema, or\n  2. Reset the database using client.reset_database()", self)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DocumentIdAlreadyExistsError {
+    #[serde(rename = "api:document_id")]
+    pub document_id: String,
+
+    #[serde(rename = "api:document")]
+    pub document: Value,
+}
+
+impl Display for DocumentIdAlreadyExistsError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Document with ID '{}' already exists", self.document_id)
+    }
+}
+
+#[test]
+fn test_deserialize_document_id_already_exists_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:InsertDocumentErrorResponse",
+        "api:error": {
+            "@type": "api:DocumentIdAlreadyExists",
+            "api:document": {
+                "@capture": "WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f",
+                "@id": "WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f",
+                "@type": "WorkflowInstance",
+                "created_at": "2025-07-08T16:59:20.320400+00:00",
+                "id": "WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f",
+                "state": "WorkflowState/38d1a1ef-311c-4bd9-a945-e64c5498dc52",
+                "updated_at": "2025-07-08T16:59:20.320402+00:00",
+                "workflow": "Workflow/aws-main-document-workflow",
+            },
+            "api:document_id": "terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f",
+        },
+        "api:message": "Tried to insert a new document with id 'terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f', but an object with that id already exists",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+    
+    match response {
+        TypedErrorResponse::InsertDocumentError(err) => {
+            assert_eq!(err.api_message, "Tried to insert a new document with id 'terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f', but an object with that id already exists");
+            // Check status by matching instead of equality
+            match err.api_status {
+                TerminusAPIStatus::Failure => {}, // expected
+                _ => panic!("Expected Failure status"),
+            }
+            
+            if let Some(ApiResponseError::DocumentIdAlreadyExists(doc_err)) = err.api_error {
+                assert_eq!(doc_err.document_id, "terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f");
+                assert_eq!(doc_err.document["@id"], "WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f");
+            } else {
+                panic!("Expected DocumentIdAlreadyExists error");
+            }
+        }
+        _ => panic!("Expected InsertDocumentError variant"),
+    }
+    
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+    
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
     }
 }
