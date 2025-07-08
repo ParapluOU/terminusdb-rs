@@ -13,7 +13,7 @@ use {
     futures_util::StreamExt,
     std::{collections::HashMap, fmt::Debug},
     tap::{Tap, TapFallible},
-    terminusdb_schema::{Instance, ToTDBInstance, ToTDBInstances, ToJson},
+    terminusdb_schema::{Instance, ToTDBInstance, ToTDBInstances, ToJson, EntityIDFor},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
     terminusdb_schema::GraphType,
@@ -55,11 +55,12 @@ impl super::client::TerminusDBHttpClient {
         model: &I,
         spec: &BranchSpec,
     ) -> bool {
-        match model.to_instance(None).gen_id() {
-            None => {
-                return false;
+        match model.instance_id() {
+            None => false,
+            Some(entity_id) => {
+                // EntityIDFor implements AsRef<str>
+                self.has_document(entity_id.as_ref(), spec).await
             }
-            Some(id) => self.has_document(&id, spec).await,
         }
     }
 
@@ -72,88 +73,42 @@ impl super::client::TerminusDBHttpClient {
         self.has_document(&format_id::<I>(model_id), spec).await
     }
 
-    /// Inserts a strongly-typed model instance into the database.
-    ///
-    /// This is the **preferred method** for inserting typed models into TerminusDB.
-    /// Use this instead of `insert_document` when working with structs that derive `TerminusDBModel`.
-    ///
-    /// The response includes the `TerminusDB-Data-Version` header when data is modified,
-    /// which contains the commit ID for the operation.
-    ///
-    /// # Type Parameters
-    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
-    ///
-    /// # Arguments
-    /// * `model` - The strongly-typed model instance to insert
-    /// * `args` - Document insertion arguments specifying the database, branch, and options
-    ///
-    /// # Returns
-    /// A `ResponseWithHeaders` containing:
-    /// - `data`: HashMap with instance IDs and insert results
-    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
-    ///
-    /// # Example
-    /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
-    /// struct User { name: String, age: i32 }
-    ///
-    /// let user = User { name: "Alice".to_string(), age: 30 };
-    /// let result = client.insert_instance(&user, args).await?;
-    /// 
-    /// println!("Inserted with commit: {:?}", result.commit_id);
-    /// ```
-    ///
-    /// # See Also
-    /// - [`insert_instance_with_commit_id`](Self::insert_instance_with_commit_id) - For direct access to commit ID
-    /// - [`insert_instances`](Self::insert_instances) - For bulk insertion
-    #[pseudonym::alias(insert)]
-    pub async fn insert_instance<I: TerminusDBModel>(
-        &self,
-        model: &I,
-        args: DocumentInsertArgs,
-    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+
+    /// Prepares instances from a model for database operations
+    fn prepare_instances<I: TerminusDBModel>(model: &I) -> Vec<terminusdb_schema::Instance> {
         let instance = model.to_instance(None);
+        instance.to_instance_tree_flatten(true)
+            .into_iter()
+            .map(|mut i| {
+                i.set_random_key_prefix();
+                i.capture = true;
+                i
+            })
+            .filter(|i| !i.is_reference())
+            .collect::<Vec<_>>()
+    }
 
-        let gen_id = instance.gen_id();
-
-        if !args.force && self.has_instance(model, &args.spec).await {
-            // todo: make strongly typed ID helper
-            let id = gen_id.unwrap().split("/").last().unwrap().to_string();
-
-            warn!("not inserted because it already exists");
-
-            // todo: if the document is configured to not use HashKey, this cannot work
-            return Ok(ResponseWithHeaders::without_headers(HashMap::from([(
-                id.clone(),
-                TDBInsertInstanceResult::AlreadyExists(id),
-            )])));
-        }
-
-        debug!("inserting instance...");
-
-        let res = self
-            .insert_instances(instance, args.clone())
-            .await
-            .tap_err(|_| dump_schema::<I>())?;
-
-        // dbg!(&res);
-
-        // Get the first inserted ID from the result HashMap's values
-        let inserted_tdb_id = match res.values().next() {
-            Some(TDBInsertInstanceResult::Inserted(id)) => id.clone(),
-            Some(TDBInsertInstanceResult::AlreadyExists(id)) => {
-                // If it already existed, we might still want to verify it exists
-                id.clone()
-            }
-            None => return Err(anyhow!("Insert operation did not return any ID")),
-        };
-
-        // assert
-        self.get_document(&inserted_tdb_id, args.as_ref(), GetOpts::default())
-            .await
-            .expect("expected document to exist!");
-
-        Ok(res)
+    /// Common helper for processing instance creation/update operations results
+    /// Finds the root ID and creates a structured result
+    fn process_operation_result<I: TerminusDBModel>(
+        res: crate::result::ResponseWithHeaders<std::collections::HashMap<String, crate::TDBInsertInstanceResult>>,
+    ) -> anyhow::Result<crate::InsertInstanceResult> {
+        // Find the actual root ID in the results using EntityIDFor validation
+        let actual_root_id = res.keys()
+            .find(|k| EntityIDFor::<I>::new(k).is_ok())
+            .cloned()
+            .ok_or_else(|| anyhow!("Could not find root instance ID in operation results"))?;
+        
+        // Create structured result
+        let mut result = crate::InsertInstanceResult::new(
+            (*res).clone(),
+            actual_root_id
+        )?;
+        
+        // Set commit_id from response headers
+        result.commit_id = res.extract_commit_id();
+        
+        Ok(result)
     }
 
     /// Inserts an instance into TerminusDB and returns a structured result with the root entity
@@ -169,37 +124,14 @@ impl super::client::TerminusDBHttpClient {
         model: &I,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<(crate::InsertInstanceResult, String)> {
-        // Generate the instance tree to understand the structure
-        let instance = model.to_instance(None);
-        let instance_tree = instance.to_instance_tree_flatten(true);
-        
-        // The root instance is always the first in the tree
-        let root_instance = instance_tree.first()
-            .ok_or_else(|| anyhow!("Instance tree is empty"))?;
-        
-        let root_id = root_instance.gen_id()
-            .ok_or_else(|| anyhow!("Cannot generate ID for root instance"))?;
-        
-        // Insert the instance
-        let insert_response = self.insert_instance(model, args.clone()).await?;
-        
-        // Find the actual root ID in the results (it might have a URI prefix)
-        let actual_root_id = insert_response.keys()
-            .find(|k| k.ends_with(&root_id) || k.split('/').last() == Some(&root_id))
-            .cloned()
-            .ok_or_else(|| anyhow!("Could not find root instance ID in insert results"))?;
-        
-        // Create structured result
-        let structured_result = crate::InsertInstanceResult::new(
-            (*insert_response).clone(),
-            actual_root_id.clone()
-        )?;
+        // Insert the instance - save_instance now returns InsertInstanceResult directly
+        let mut result = self.save_instance(model, args.clone()).await?;
         
         // Handle commit ID based on whether instance was inserted or already existed
-        let commit_id = match &structured_result.root_result {
+        let commit_id = match &result.root_result {
             TDBInsertInstanceResult::Inserted(_) => {
-                // Extract from header for newly inserted instances
-                insert_response.extract_commit_id()
+                // Extract from stored commit_id for newly inserted instances
+                result.extract_commit_id()
                     .ok_or_else(|| anyhow!("TerminusDB-Data-Version header not found or invalid format"))?
             },
             TDBInsertInstanceResult::AlreadyExists(id) => {
@@ -211,7 +143,7 @@ impl super::client::TerminusDBHttpClient {
             }
         };
         
-        Ok((structured_result, commit_id))
+        Ok((result, commit_id))
     }
 
     /// Creates a new instance in the database using POST.
@@ -244,20 +176,12 @@ impl super::client::TerminusDBHttpClient {
         &self,
         model: &I,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
-        let instance = model.to_instance(None);
-        let instances = instance.to_instance_tree_flatten(true)
-            .into_iter()
-            .map(|mut i| {
-                i.set_random_key_prefix();
-                i.capture = true;
-                i
-            })
-            .filter(|i| !i.is_reference())
-            .collect::<Vec<_>>();
-
+    ) -> anyhow::Result<crate::InsertInstanceResult> {
+        let instances = Self::prepare_instances(model);
         let models = instances.iter().collect();
-        self.post_documents(models, args).await
+        let res = self.post_documents(models, args).await?;
+        
+        Self::process_operation_result::<I>(res)
     }
 
     /// Updates an existing instance in the database using PUT without create.
@@ -285,56 +209,26 @@ impl super::client::TerminusDBHttpClient {
     /// let user = User { name: "Alice Updated".to_string(), age: 31 };
     /// let result = client.update_instance(&user, args).await?;
     /// ```
-    #[pseudonym::alias(update)]
+    #[pseudonym::alias(update, replace_instance, replace)]
     pub async fn update_instance<I: TerminusDBModel>(
         &self,
         model: &I,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+    ) -> anyhow::Result<crate::InsertInstanceResult> {
         let instance = model.to_instance(None);
         
         // Check if instance has an ID
-        if instance.gen_id().is_none() {
+        if !instance.has_id() {
             return Err(anyhow!("Cannot update instance without an ID"));
         }
 
-        let instances = instance.to_instance_tree_flatten(true)
-            .into_iter()
-            .map(|mut i| {
-                i.set_random_key_prefix();
-                i.capture = true;
-                i
-            })
-            .filter(|i| !i.is_reference())
-            .collect::<Vec<_>>();
-
+        let instances = Self::prepare_instances(model);
         let models = instances.iter().collect();
-        self.put_documents(models, args).await
+        let res = self.put_documents(models, args).await?;
+        
+        Self::process_operation_result::<I>(res)
     }
 
-    /// Replaces an existing instance in the database.
-    ///
-    /// This is an alias for [`update_instance`](Self::update_instance).
-    ///
-    /// # Type Parameters
-    /// * `I` - A type that implements `TerminusDBModel` (derives `TerminusDBModel`)
-    ///
-    /// # Arguments
-    /// * `model` - The strongly-typed model instance to replace
-    /// * `args` - Document insertion arguments specifying the database, branch, and options
-    ///
-    /// # Returns
-    /// A `ResponseWithHeaders` containing:
-    /// - `data`: HashMap with instance IDs and update results
-    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
-    #[pseudonym::alias(replace)]
-    pub async fn replace_instance<I: TerminusDBModel>(
-        &self,
-        model: &I,
-        args: DocumentInsertArgs,
-    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
-        self.update_instance(model, args).await
-    }
 
     /// Saves an instance to the database, creating it if it doesn't exist or updating if it does.
     ///
@@ -362,12 +256,32 @@ impl super::client::TerminusDBHttpClient {
     /// // Works whether user exists or not
     /// let result = client.save_instance(&user, args).await?;
     /// ```
-    #[pseudonym::alias(save)]
+    #[pseudonym::alias(save, insert_instance, insert)]
     pub async fn save_instance<I: TerminusDBModel>(
         &self,
         model: &I,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+    ) -> anyhow::Result<crate::InsertInstanceResult> {
+        // First check if instance already exists
+        if !args.force && self.has_instance(model, &args.spec).await {
+            // Get the instance ID for the already existing case
+            if let Some(entity_id) = model.instance_id() {
+                let id = entity_id.id().to_string();
+                warn!("not inserted because it already exists");
+                
+                // Return structured result for already existing instance
+                let mut result = crate::InsertInstanceResult::new(
+                    HashMap::from([(
+                        id.clone(),
+                        TDBInsertInstanceResult::AlreadyExists(id.clone()),
+                    )]),
+                    id
+                )?;
+                result.commit_id = None;
+                return Ok(result);
+            }
+        }
+        
         // First try to create
         match self.create_instance(model, args.clone()).await {
             Ok(result) => Ok(result),

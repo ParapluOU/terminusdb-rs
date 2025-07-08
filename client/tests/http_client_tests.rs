@@ -86,14 +86,10 @@ async fn test_insert_and_get_document() -> anyhow::Result<()> {
     let args = DocumentInsertArgs::from(spec.clone());
 
     // Insert
-    let insert_result_map = client.insert_instance(&doc, args.clone()).await?;
-    println!("Insert result: {:?}", insert_result_map);
+    let insert_result = client.insert_instance(&doc, args.clone()).await?;
+    println!("Insert result: {:?}", insert_result);
     // Get the *actual* inserted ID (short form) from the result
-    let inserted_id_full = match insert_result_map
-        .values()
-        .next()
-        .expect("No ID returned from insert")
-    {
+    let inserted_id_full = match &insert_result.root_result {
         TDBInsertInstanceResult::Inserted(id) => id.clone(),
         TDBInsertInstanceResult::AlreadyExists(id) => id.clone(), // Use existing ID if it already existed
     };

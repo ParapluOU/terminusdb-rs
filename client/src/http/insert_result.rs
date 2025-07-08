@@ -62,6 +62,15 @@ impl InsertInstanceResult {
     pub fn sub_entity_count(&self) -> usize {
         self.sub_entities.len()
     }
+    
+    /// Extract the commit ID from the TerminusDB-Data-Version header
+    /// Format is typically "branch:COMMIT_ID", this returns just the COMMIT_ID part
+    pub fn extract_commit_id(&self) -> Option<String> {
+        self.commit_id.as_ref().and_then(|header_value| {
+            // Split on ':' and take the last part (the actual commit ID)
+            header_value.split(':').last().map(|s| s.to_string())
+        })
+    }
 }
 
 impl Deref for InsertInstanceResult {
