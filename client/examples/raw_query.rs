@@ -74,7 +74,7 @@ fn extract_number(binding: &mut HashMap<String, serde_json::Value>, key: &str) -
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Create client
-    let client = TerminusDBHttpClient::local_node().await?;
+    let client = TerminusDBHttpClient::local_node().await;
     let spec = BranchSpec::from("mydb");
     
     // Execute the custom query

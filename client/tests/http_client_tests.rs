@@ -119,9 +119,7 @@ async fn test_insert_and_get_instance() -> anyhow::Result<()> {
 
     // Get the *actual* inserted ID (short form) from the result
     let inserted_id_full = match insert_result_map
-        .values()
-        .next()
-        .expect("No ID returned from insert")
+        .root_result
     {
         TDBInsertInstanceResult::Inserted(id) => id.clone(),
         TDBInsertInstanceResult::AlreadyExists(id) => id.clone(), // Use existing ID if it already existed
@@ -367,7 +365,7 @@ async fn test_enum_serialization() -> anyhow::Result<()> {
 
     // Insert instance
     let insert_result = client.insert_instance(&item, args.clone()).await?;
-    let inserted_id_full = match insert_result.values().next().unwrap() {
+    let inserted_id_full = match insert_result.root_result {
         TDBInsertInstanceResult::Inserted(id) => id.clone(),
         TDBInsertInstanceResult::AlreadyExists(id) => id.clone(),
     };

@@ -22,7 +22,7 @@ struct Document {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Create client
-    let client = TerminusDBHttpClient::local_node().await?;
+    let client = TerminusDBHttpClient::local_node().await;
     let spec = BranchSpec::from("mydb");
     
     // Example 1: Get specific versions for multiple documents

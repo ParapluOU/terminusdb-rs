@@ -262,8 +262,10 @@ impl super::client::TerminusDBHttpClient {
         model: &I,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<crate::InsertInstanceResult> {
+        let has = self.has_instance(model, &args.spec).await;
+
         // First check if instance already exists
-        if !args.force && self.has_instance(model, &args.spec).await {
+        if !args.force && has {
             // Get the instance ID for the already existing case
             if let Some(entity_id) = model.instance_id() {
                 let id = entity_id.id().to_string();
@@ -281,22 +283,15 @@ impl super::client::TerminusDBHttpClient {
                 return Ok(result);
             }
         }
-        
-        // First try to create
-        match self.create_instance(model, args.clone()).await {
-            Ok(result) => Ok(result),
-            Err(e) => {
-                // If creation failed, check if it's because the instance exists
-                let error_str = e.to_string();
-                if error_str.contains("already exists") || error_str.contains("conflict") {
-                    debug!("Instance already exists, attempting update instead");
-                    self.update_instance(model, args).await
-                } else {
-                    // If it's a different error, propagate it
-                    Err(e)
-                }
-            }
+
+        if has {
+            self.update_instance(model, args).await
         }
+
+        else {
+            self.create_instance(model, args).await
+        }
+
     }
 
     // /// Finds the commit that added a specific instance by walking through the commit log
