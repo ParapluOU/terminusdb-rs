@@ -1,25 +1,30 @@
 //! Strongly-typed instance operations
 
+use super::{
+    helpers::{dedup_instances_by_id, dump_schema, format_id},
+    TerminusDBModel,
+};
+use crate::{DefaultTDBDeserializer, InsertInstanceResult};
 use {
     crate::{
-        document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, DocumentType, GetOpts},
+        document::{
+            CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, DocumentType, GetOpts,
+        },
         http::document::DeleteOpts,
         result::ResponseWithHeaders,
         spec::BranchSpec,
-        TDBInsertInstanceResult, TDBInstanceDeserializer, IntoBoxedTDBInstances,
+        IntoBoxedTDBInstances, TDBInsertInstanceResult, TDBInstanceDeserializer,
     },
-    ::log::{debug, warn, error},
+    ::log::{debug, error, warn},
     anyhow::{anyhow, bail, Context},
     futures_util::StreamExt,
     std::{collections::HashMap, fmt::Debug},
     tap::{Tap, TapFallible},
-    terminusdb_schema::{Instance, ToTDBInstance, ToTDBInstances, ToJson, EntityIDFor},
+    terminusdb_schema::GraphType,
+    terminusdb_schema::{EntityIDFor, Instance, ToJson, ToTDBInstance, ToTDBInstances},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
-    terminusdb_schema::GraphType,
 };
-
-use super::{TerminusDBModel, helpers::{dedup_instances_by_id, dump_schema, format_id}};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::log::{CommitLogIterator, LogEntry, LogOpts};
@@ -50,11 +55,7 @@ impl super::client::TerminusDBHttpClient {
     /// let exists = client.has_instance(&user, args).await;
     /// ```
     #[pseudonym::alias(has)]
-    pub async fn has_instance<I: TerminusDBModel>(
-        &self,
-        model: &I,
-        spec: &BranchSpec,
-    ) -> bool {
+    pub async fn has_instance<I: TerminusDBModel>(&self, model: &I, spec: &BranchSpec) -> bool {
         match model.instance_id() {
             None => false,
             Some(entity_id) => {
@@ -73,11 +74,11 @@ impl super::client::TerminusDBHttpClient {
         self.has_document(&format_id::<I>(model_id), spec).await
     }
 
-
     /// Prepares instances from a model for database operations
     fn prepare_instances<I: TerminusDBModel>(model: &I) -> Vec<terminusdb_schema::Instance> {
         let instance = model.to_instance(None);
-        instance.to_instance_tree_flatten(true)
+        instance
+            .to_instance_tree_flatten(true)
             .into_iter()
             .map(|mut i| {
                 i.set_random_key_prefix();
@@ -91,23 +92,23 @@ impl super::client::TerminusDBHttpClient {
     /// Common helper for processing instance creation/update operations results
     /// Finds the root ID and creates a structured result
     fn process_operation_result<I: TerminusDBModel>(
-        res: crate::result::ResponseWithHeaders<std::collections::HashMap<String, crate::TDBInsertInstanceResult>>,
+        res: crate::result::ResponseWithHeaders<
+            std::collections::HashMap<String, crate::TDBInsertInstanceResult>,
+        >,
     ) -> anyhow::Result<crate::InsertInstanceResult> {
         // Find the actual root ID in the results using EntityIDFor validation
-        let actual_root_id = res.keys()
+        let actual_root_id = res
+            .keys()
             .find(|k| EntityIDFor::<I>::new(k).is_ok())
             .cloned()
             .ok_or_else(|| anyhow!("Could not find root instance ID in operation results"))?;
-        
+
         // Create structured result
-        let mut result = crate::InsertInstanceResult::new(
-            (*res).clone(),
-            actual_root_id
-        )?;
-        
+        let mut result = crate::InsertInstanceResult::new((*res).clone(), actual_root_id)?;
+
         // Set commit_id from response headers
         result.commit_id = res.extract_commit_id();
-        
+
         Ok(result)
     }
 
@@ -126,23 +127,31 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<(crate::InsertInstanceResult, String)> {
         // Insert the instance - save_instance now returns InsertInstanceResult directly
         let mut result = self.save_instance(model, args.clone()).await?;
-        
+
         // Handle commit ID based on whether instance was inserted or already existed
         let commit_id = match &result.root_result {
             TDBInsertInstanceResult::Inserted(_) => {
                 // Extract from stored commit_id for newly inserted instances
-                result.extract_commit_id()
-                    .ok_or_else(|| anyhow!("TerminusDB-Data-Version header not found or invalid format"))?
-            },
+                result.extract_commit_id().ok_or_else(|| {
+                    anyhow!("TerminusDB-Data-Version header not found or invalid format")
+                })?
+            }
             TDBInsertInstanceResult::AlreadyExists(id) => {
                 // For already existing instances, fall back to commit log search
-                debug!("Instance {} already exists, falling back to commit log search", id);
+                debug!(
+                    "Instance {} already exists, falling back to commit log search",
+                    id
+                );
                 let short_id = id.split('/').last().unwrap_or(id);
-                self.get_latest_version::<I>(short_id, &args.spec).await
-                    .context(format!("Failed to find commit for existing instance {}", id))?
+                self.get_latest_version::<I>(short_id, &args.spec)
+                    .await
+                    .context(format!(
+                        "Failed to find commit for existing instance {}",
+                        id
+                    ))?
             }
         };
-        
+
         Ok((result, commit_id))
     }
 
@@ -176,14 +185,18 @@ impl super::client::TerminusDBHttpClient {
         &self,
         models: impl IntoBoxedTDBInstances,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<(ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>, String)> {
+    ) -> anyhow::Result<(
+        ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>,
+        String,
+    )> {
         // Insert the instances
         let result = self.insert_instances(models, args).await?;
-        
+
         // Extract commit ID from the response headers
-        let commit_id = result.extract_commit_id()
+        let commit_id = result
+            .extract_commit_id()
             .ok_or_else(|| anyhow!("TerminusDB-Data-Version header not found or invalid format"))?;
-        
+
         Ok((result, commit_id))
     }
 
@@ -221,7 +234,7 @@ impl super::client::TerminusDBHttpClient {
         let instances = Self::prepare_instances(model);
         let models = instances.iter().collect();
         let res = self.post_documents(models, args).await?;
-        
+
         Self::process_operation_result::<I>(res)
     }
 
@@ -257,7 +270,7 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
     ) -> anyhow::Result<crate::InsertInstanceResult> {
         let instance = model.to_instance(None);
-        
+
         // Check if instance has an ID
         if !instance.has_id() {
             return Err(anyhow!("Cannot update instance without an ID"));
@@ -266,10 +279,9 @@ impl super::client::TerminusDBHttpClient {
         let instances = Self::prepare_instances(model);
         let models = instances.iter().collect();
         let res = self.put_documents(models, args).await?;
-        
+
         Self::process_operation_result::<I>(res)
     }
-
 
     /// Saves an instance to the database, creating it if it doesn't exist or updating if it does.
     ///
@@ -306,33 +318,34 @@ impl super::client::TerminusDBHttpClient {
         let has = self.has_instance(model, &args.spec).await;
 
         // First check if instance already exists
-        if !args.force && has {
-            // Get the instance ID for the already existing case
-            if let Some(entity_id) = model.instance_id() {
-                let id = entity_id.id().to_string();
-                warn!("not inserted because it already exists");
-                
-                // Return structured result for already existing instance
-                let mut result = crate::InsertInstanceResult::new(
-                    HashMap::from([(
-                        id.clone(),
-                        TDBInsertInstanceResult::AlreadyExists(id.clone()),
-                    )]),
-                    id
-                )?;
-                result.commit_id = None;
-                return Ok(result);
-            }
+        if !args.force && has && let Some(entity_id) = model.instance_id() {
+            let id = entity_id.id().to_string();
+            warn!("not inserted because it already exists");
+
+            // Return structured result for already existing instance
+            // todo: make this more convenient to create
+            let mut result = crate::InsertInstanceResult::new(
+                HashMap::from([(
+                    id.clone(),
+                    TDBInsertInstanceResult::AlreadyExists(id.clone()),
+                )]),
+                id.clone(),
+            )?;
+
+            let mut deserializer = DefaultTDBDeserializer {};
+            result.commit_id = self
+                .get_instance_with_headers::<I>(&id, &args.spec, &mut deserializer)
+                .await?
+                .extract_commit_id();
+
+            return Ok(result);
         }
 
         if has {
             self.update_instance(model, args).await
-        }
-
-        else {
+        } else {
             self.create_instance(model, args).await
         }
-
     }
 
     // /// Finds the commit that added a specific instance by walking through the commit log
@@ -438,7 +451,6 @@ impl super::client::TerminusDBHttpClient {
     //     }
     // }
 
-
     /// Helper method to get all entity IDs created in a commit, regardless of type
     #[cfg(not(target_arch = "wasm32"))]
     async fn all_commit_created_entity_ids_any_type(
@@ -448,20 +460,23 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<Vec<crate::EntityID>> {
         let commit_collection = format!("commit/{}", &commit.identifier);
         let db_collection = format!("{}/{}", &self.org, &spec.db);
-        
+
         debug!("=== all_commit_created_entity_ids_any_type START ===");
         debug!("Querying commit {} for added entities", &commit.identifier);
-        debug!("Using collections: commit={}, db={}", &commit_collection, &db_collection);
-        
+        debug!(
+            "Using collections: commit={}, db={}",
+            &commit_collection, &db_collection
+        );
+
         let id_var = vars!("id");
         let type_var = vars!("type");
-        
+
         // Query for all added triples (any type)
         let query = WoqlBuilder::new()
             .added_triple(
-                id_var.clone(),                 // subject: variable "id"
-                "rdf:type",                     // predicate: "rdf:type"
-                type_var.clone(),               // object: any type
+                id_var.clone(),   // subject: variable "id"
+                "rdf:type",       // predicate: "rdf:type"
+                type_var.clone(), // object: any type
                 GraphType::Instance.into(),
             )
             .using(commit_collection)
@@ -470,20 +485,27 @@ impl super::client::TerminusDBHttpClient {
             .finalize();
 
         let json_query = query.to_instance(None).to_json();
-        
-        debug!("Running WOQL query: {}", serde_json::to_string_pretty(&json_query).unwrap_or_default());
-        
+
+        debug!(
+            "Running WOQL query: {}",
+            serde_json::to_string_pretty(&json_query).unwrap_or_default()
+        );
+
         // Add a timeout to prevent hanging forever
         let query_future = self.query_raw(Some(spec.clone()), json_query);
         let timeout_duration = std::time::Duration::from_secs(30);
-        
-        let res: crate::WOQLResult<serde_json::Value> = match tokio::time::timeout(timeout_duration, query_future).await {
-            Ok(result) => result?,
-            Err(_) => {
-                error!("Query timed out after 30 seconds for commit {}", &commit.identifier);
-                return Err(anyhow!("Query timed out"));
-            }
-        };
+
+        let res: crate::WOQLResult<serde_json::Value> =
+            match tokio::time::timeout(timeout_duration, query_future).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    error!(
+                        "Query timed out after 30 seconds for commit {}",
+                        &commit.identifier
+                    );
+                    return Err(anyhow!("Query timed out"));
+                }
+            };
 
         debug!("Query returned {} bindings", res.bindings.len());
 
@@ -503,11 +525,13 @@ impl super::client::TerminusDBHttpClient {
             .into_iter()
             .map(|obj| obj.id)
             .collect();
-        
-        debug!("=== all_commit_created_entity_ids_any_type END === Found {} entities", result.len());
+
+        debug!(
+            "=== all_commit_created_entity_ids_any_type END === Found {} entities",
+            result.len()
+        );
         Ok(result)
     }
-
 
     /// Inserts multiple strongly-typed model instances into the database.
     ///
@@ -692,7 +716,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         let response = self.get_document_with_headers(&doc_id, spec, opts).await?;
-        
+
         // Get the document from the response (using Deref)
         let json_instance_doc = (*response).clone();
 
@@ -755,9 +779,12 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<String> {
         // Use the new header-aware method to get the commit ID directly
         let mut deserializer = crate::deserialize::DefaultTDBDeserializer;
-        let result = self.get_instance_with_headers::<I>(instance_id, spec, &mut deserializer).await?;
-        
-        result.extract_commit_id()
+        let result = self
+            .get_instance_with_headers::<I>(instance_id, spec, &mut deserializer)
+            .await?;
+
+        result
+            .extract_commit_id()
             .ok_or_else(|| anyhow::anyhow!("No commit ID found in response headers"))
     }
 
@@ -836,14 +863,23 @@ impl super::client::TerminusDBHttpClient {
             opts.unfold = true;
         }
 
-        debug!("Getting {} instances of type {}", 
-               if formatted_ids.is_empty() { "all".to_string() } else { formatted_ids.len().to_string() }, 
-               Target::to_schema().class_name());
+        debug!(
+            "Getting {} instances of type {}",
+            if formatted_ids.is_empty() {
+                "all".to_string()
+            } else {
+                formatted_ids.len().to_string()
+            },
+            Target::to_schema().class_name()
+        );
 
         // Retrieve the raw JSON documents
         let json_docs = self.get_documents(formatted_ids, spec, opts).await?;
 
-        debug!("Retrieved {} JSON documents, deserializing...", json_docs.len());
+        debug!(
+            "Retrieved {} JSON documents, deserializing...",
+            json_docs.len()
+        );
 
         // Deserialize each document to the target type
         let mut results = Vec::with_capacity(json_docs.len());
@@ -932,17 +968,29 @@ impl super::client::TerminusDBHttpClient {
             opts.unfold = true;
         }
 
-        debug!("Getting {} instances of type {} with headers", 
-               if formatted_ids.is_empty() { "all".to_string() } else { formatted_ids.len().to_string() }, 
-               Target::to_schema().class_name());
+        debug!(
+            "Getting {} instances of type {} with headers",
+            if formatted_ids.is_empty() {
+                "all".to_string()
+            } else {
+                formatted_ids.len().to_string()
+            },
+            Target::to_schema().class_name()
+        );
 
         // Retrieve the raw JSON documents with headers
-        let response = self.get_documents_with_headers(formatted_ids, spec, opts).await?;
-        
+        let response = self
+            .get_documents_with_headers(formatted_ids, spec, opts)
+            .await?;
+
         // Get the documents from the response (using Deref)
         let json_docs = (*response).clone();
 
-        debug!("Retrieved {} JSON documents with commit ID {:?}, deserializing...", json_docs.len(), response.commit_id);
+        debug!(
+            "Retrieved {} JSON documents with commit ID {:?}, deserializing...",
+            json_docs.len(),
+            response.commit_id
+        );
 
         // Deserialize each document to the target type
         let mut results = Vec::with_capacity(json_docs.len());
@@ -963,7 +1011,6 @@ impl super::client::TerminusDBHttpClient {
         debug!("Successfully deserialized {} instances", results.len());
         Ok(ResponseWithHeaders::new(results, response.commit_id))
     }
-
 
     /// Retrieves all versions of a specific instance across its commit history (simplified version).
     ///
@@ -1003,7 +1050,9 @@ impl super::client::TerminusDBHttpClient {
         spec: &BranchSpec,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Vec<T>> {
-        let versions = self.list_instance_versions(instance_id, spec, deserializer).await?;
+        let versions = self
+            .list_instance_versions(instance_id, spec, deserializer)
+            .await?;
         Ok(versions.into_iter().map(|(instance, _)| instance).collect())
     }
 
@@ -1030,7 +1079,7 @@ impl super::client::TerminusDBHttpClient {
     /// ```rust,ignore
     /// // Delete the specific user (safe)
     /// client.delete_instance(&user, args, DeleteOpts::document_only()).await?;
-    /// 
+    ///
     /// // WARNING: Nuclear option - deletes ALL instances
     /// client.delete_instance(&user, args, DeleteOpts::nuke_all_data()).await?; // DANGEROUS!
     /// ```
@@ -1040,13 +1089,18 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
         opts: DeleteOpts,
     ) -> anyhow::Result<Self> {
-        let instance_id = instance.instance_id()
+        let instance_id = instance
+            .instance_id()
             .ok_or_else(|| anyhow!("Instance has no ID - cannot delete"))?;
         let id = instance_id.to_string();
         let full_id = format_id::<T>(&id);
-        
-        debug!("Deleting instance {} (type: {})", &full_id, std::any::type_name::<T>());
-        
+
+        debug!(
+            "Deleting instance {} (type: {})",
+            &full_id,
+            std::any::type_name::<T>()
+        );
+
         self.delete_document(
             Some(&full_id),
             &args.spec,
@@ -1054,13 +1108,14 @@ impl super::client::TerminusDBHttpClient {
             &args.message,
             &args.ty.to_string(),
             opts,
-        ).await
+        )
+        .await
     }
 
     /// Deletes a strongly-typed model instance by ID from the database.
     ///
     /// This method allows deletion by ID without needing the full instance object.
-    /// 
+    ///
     /// **⚠️ Warning**: Using `DeleteOpts::nuke_all_data()` will remove ALL data from the graph.
     /// Use with extreme caution as this operation is irreversible.
     ///
@@ -1079,7 +1134,7 @@ impl super::client::TerminusDBHttpClient {
     /// ```rust,ignore
     /// // Delete user by ID (safe)
     /// client.delete_instance_by_id::<User>("alice", args, DeleteOpts::document_only()).await?;
-    /// 
+    ///
     /// // WARNING: Nuclear option - deletes ALL data
     /// client.delete_instance_by_id::<User>("alice", args, DeleteOpts::nuke_all_data()).await?; // DANGEROUS!
     /// ```
@@ -1090,9 +1145,13 @@ impl super::client::TerminusDBHttpClient {
         opts: DeleteOpts,
     ) -> anyhow::Result<Self> {
         let full_id = format_id::<T>(instance_id);
-        
-        debug!("Deleting instance {} by ID (type: {})", &full_id, std::any::type_name::<T>());
-        
+
+        debug!(
+            "Deleting instance {} by ID (type: {})",
+            &full_id,
+            std::any::type_name::<T>()
+        );
+
         self.delete_document(
             Some(&full_id),
             &args.spec,
@@ -1100,6 +1159,7 @@ impl super::client::TerminusDBHttpClient {
             &args.message,
             &args.ty.to_string(),
             opts,
-        ).await
+        )
+        .await
     }
 }

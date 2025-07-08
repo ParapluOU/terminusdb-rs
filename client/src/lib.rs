@@ -3,6 +3,7 @@
 #![feature(associated_type_defaults)]
 #![feature(try_blocks)]
 #![feature(trait_alias)]
+#![feature(let_chains)]
 #![allow(warnings)]
 
 use enum_variant_macros::FromVariants;
