@@ -1,6 +1,7 @@
 //! Structured results for instance insertion operations
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use crate::TDBInsertInstanceResult;
 
 /// Result of inserting an instance with sub-entities
@@ -16,9 +17,8 @@ pub struct InsertInstanceResult {
     /// Key is the instance ID, value is the insert result
     pub sub_entities: HashMap<String, TDBInsertInstanceResult>,
     
-    /// All results including root and sub-entities
-    /// This maintains backward compatibility
-    pub all_results: HashMap<String, TDBInsertInstanceResult>,
+    /// The commit ID that created/modified these instances
+    pub commit_id: Option<String>,
 }
 
 impl InsertInstanceResult {
@@ -32,14 +32,14 @@ impl InsertInstanceResult {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Root ID not found in results"))?;
         
-        let mut sub_entities = all_results.clone();
+        let mut sub_entities = all_results;
         sub_entities.remove(&root_id);
         
         Ok(Self {
-            root_id: root_id.clone(),
+            root_id,
             root_result,
             sub_entities,
-            all_results,
+            commit_id: None,
         })
     }
     
@@ -55,11 +55,25 @@ impl InsertInstanceResult {
     
     /// Get the total number of entities (root + sub-entities)
     pub fn total_entities(&self) -> usize {
-        self.all_results.len()
+        1 + self.sub_entities.len()
     }
     
     /// Get the number of sub-entities
     pub fn sub_entity_count(&self) -> usize {
         self.sub_entities.len()
+    }
+}
+
+impl Deref for InsertInstanceResult {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.root_id
+    }
+}
+
+impl AsRef<str> for InsertInstanceResult {
+    fn as_ref(&self) -> &str {
+        &self.root_id
     }
 }
