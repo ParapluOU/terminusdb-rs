@@ -333,7 +333,7 @@ impl super::client::TerminusDBHttpClient {
             )?;
 
             result.commit_id = self
-                .get_document_with_headers(&id, &args.spec, GetOpts::default())
+                .get_document_with_headers(entity_id.typed(), &args.spec, GetOpts::default())
                 .await?
                 .extract_commit_id();
 
