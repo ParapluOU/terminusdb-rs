@@ -697,7 +697,7 @@ impl super::client::TerminusDBHttpClient {
     /// let result = client.get_instance_with_headers::<User>("12345", &past_spec, &mut deserializer).await?;
     /// let old_user = &*result; // Access via Deref
     /// ```
-    pub async fn get_instance_with_headers<Target: ToTDBInstance>(
+    pub async fn get_instance_with_headers<Target: TerminusDBModel>(
         &self,
         id: &str,
         spec: &BranchSpec,
@@ -709,7 +709,7 @@ impl super::client::TerminusDBHttpClient {
         let doc_id = format_id::<Target>(id);
 
         // the default here makes stuff unfold
-        let mut opts: GetOpts = Default::default();
+        let mut opts: GetOpts = GetOpts::default().with_type_filter::<Target>();
 
         if Target::to_schema().should_unfold() {
             opts.unfold = true;
