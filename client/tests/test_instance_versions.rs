@@ -58,9 +58,9 @@ async fn create_version_history(
     
     // Use basic DocumentInsertArgs and manually set ID in JSON if needed
     let args = DocumentInsertArgs::from(spec.clone());
-    let result = client.insert_instance_with_commit_id(&person_v1, args).await?;
-    commit_ids.push(result.1);
-    let actual_person_id = result.0; // Use the actual ID returned
+    let (result, commit_id) = client.insert_instance_with_commit_id(&person_v1, args).await?;
+    commit_ids.push(commit_id);
+    let actual_person_id = result.root_id; // Use the actual ID returned
     
     // Version 2: Replace with updated data (same ID)
     let person_v2 = Person {
@@ -70,8 +70,8 @@ async fn create_version_history(
     };
     
     let args = DocumentInsertArgs::from(spec.clone());
-    let result = client.insert_instance_with_commit_id(&person_v2, args).await?;
-    commit_ids.push(result.1);
+    let (result, commit_id) = client.insert_instance_with_commit_id(&person_v2, args).await?;
+    commit_ids.push(commit_id);
     
     // Version 3: Replace with updated name  
     let person_v3 = Person {
@@ -81,8 +81,8 @@ async fn create_version_history(
     };
     
     let args = DocumentInsertArgs::from(spec.clone());
-    let result = client.insert_instance_with_commit_id(&person_v3, args).await?;
-    commit_ids.push(result.1);
+    let (result, commit_id) = client.insert_instance_with_commit_id(&person_v3, args).await?;
+    commit_ids.push(commit_id);
     
     Ok(commit_ids)
 }
@@ -213,7 +213,8 @@ async fn test_woql_approach_vs_client_method() -> anyhow::Result<()> {
     };
     
     // Insert initial version
-    let (instance_id, commit1) = client.insert_instance_with_commit_id(&person_v1, DocumentInsertArgs::from(spec.clone())).await?;
+    let (result, commit1) = client.insert_instance_with_commit_id(&person_v1, DocumentInsertArgs::from(spec.clone())).await?;
+    let instance_id = result.root_id;
     // Use our fixed ID for querying
     let short_id = "test_version_person_001";
     println!("Created initial instance {} in commit {}", instance_id, commit1);
@@ -290,13 +291,13 @@ async fn test_list_instance_versions_method() -> anyhow::Result<()> {
     
     // Test the new list_instance_versions method
     // Note: Since create_version_history creates different instances, we'll test with the first ID
-    let first_result = client.insert_instance_with_commit_id(&Person {
+    let (first_result, _) = client.insert_instance_with_commit_id(&Person {
         name: "Alice Test".to_string(),
         age: 30,
         email: Some("alice.test@example.com".to_string()),
     }, DocumentInsertArgs::from(spec.clone())).await?;
     
-    let (actual_instance_id, _) = first_result;
+    let actual_instance_id = first_result.root_id;
     let id_parts: Vec<&str> = actual_instance_id.split('/').collect();
     let short_id = id_parts.last().unwrap();
     
@@ -332,10 +333,11 @@ async fn test_list_instance_versions_simple_method() -> anyhow::Result<()> {
         email: None,
     };
     
-    let (actual_instance_id, _) = client.insert_instance_with_commit_id(
+    let (result, _) = client.insert_instance_with_commit_id(
         &test_person,
         DocumentInsertArgs::from(spec.clone())
     ).await?;
+    let actual_instance_id = result.root_id;
     
     let id_parts: Vec<&str> = actual_instance_id.split('/').collect();
     let short_id = id_parts.last().unwrap();
@@ -379,10 +381,11 @@ async fn test_debug_single_commit_woql_query() -> anyhow::Result<()> {
         email: Some("debug@test.com".to_string()),
     };
     
-    let (instance_id, commit_id) = client.insert_instance_with_commit_id(
+    let (result, commit_id) = client.insert_instance_with_commit_id(
         &test_person,
         DocumentInsertArgs::from(spec.clone())
     ).await?;
+    let instance_id = result.root_id;
     
     let short_id = instance_id.split('/').last().unwrap();
     println!("Created instance {} in commit {}", instance_id, commit_id);
@@ -474,10 +477,11 @@ async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
         email: None,
     };
     
-    let (instance_id_1, commit_id_1) = client.insert_instance_with_commit_id(
+    let (result_1, commit_id_1) = client.insert_instance_with_commit_id(
         &person_v1,
         DocumentInsertArgs::from(spec.clone())
     ).await?;
+    let instance_id_1 = result_1.root_id;
     println!("V1: Created {} in commit {}", instance_id_1, commit_id_1);
     println!("DEBUG V1: instance_id_1 = '{}'", instance_id_1);
     
@@ -490,7 +494,8 @@ async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
     };
     
     let args = DocumentInsertArgs::from(spec.clone()).with_force(true);
-    let (instance_id_2, commit_id_2) = client.insert_instance_with_commit_id(&person_v2, args).await?;
+    let (result_2, commit_id_2) = client.insert_instance_with_commit_id(&person_v2, args).await?;
+    let instance_id_2 = result_2.root_id;
     println!("V2: Updated {} in commit {}", instance_id_2, commit_id_2);
     println!("DEBUG V2: instance_id_2 = '{}'", instance_id_2);
     
@@ -503,7 +508,8 @@ async fn test_same_id_multiple_commits_direct() -> anyhow::Result<()> {
     };
     
     let args = DocumentInsertArgs::from(spec.clone()).with_force(true);
-    let (instance_id_3, commit_id_3) = client.insert_instance_with_commit_id(&person_v3, args).await?;
+    let (result_3, commit_id_3) = client.insert_instance_with_commit_id(&person_v3, args).await?;
+    let instance_id_3 = result_3.root_id;
     println!("V3: Updated {} in commit {}", instance_id_3, commit_id_3);
     
     // Verify IDs are the same (they should all be the full TerminusDB URI)
@@ -619,10 +625,11 @@ async fn test_woql_query_breakdown() -> anyhow::Result<()> {
         email: Some("woql@test.com".to_string()),
     };
     
-    let (instance_id, commit_id) = client.insert_instance_with_commit_id(
+    let (result, commit_id) = client.insert_instance_with_commit_id(
         &person,
         DocumentInsertArgs::from(spec.clone())
     ).await?;
+    let instance_id = result.root_id;
     
     println!("Created instance: {}", instance_id);
     println!("In commit: {}", commit_id);

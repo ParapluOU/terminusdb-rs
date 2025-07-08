@@ -156,59 +156,15 @@ impl super::client::TerminusDBHttpClient {
         Ok(res)
     }
 
-    /// Inserts an instance into TerminusDB and returns both the instance ID and the commit ID
-    /// that created it. This is much more efficient than the previous implementation as it uses
-    /// the TerminusDB-Data-Version header instead of walking the commit log.
-    ///
-    /// # Returns
-    /// A tuple of (instance_id, commit_id) where:
-    /// - instance_id: The ID of the inserted instance
-    /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
-    /// 
-    /// # Note
-    /// For models with sub-entities, this returns the first ID in the results which may not
-    /// be the root entity. Consider using `insert_instance_structured` for better control.
-    pub async fn insert_instance_with_commit_id<I: TerminusDBModel>(
-        &self,
-        model: &I,
-        args: DocumentInsertArgs,
-    ) -> anyhow::Result<(String, String)> {
-        // Insert the instance and capture the header
-        let insert_result = self.insert_instance(model, args.clone()).await?;
-        
-        // Extract the inserted instance ID
-        let instance_id = match insert_result.values().next() {
-            Some(TDBInsertInstanceResult::Inserted(id)) => {
-                debug!("Got Inserted case with id: {}", id);
-                id.clone()
-            },
-            Some(TDBInsertInstanceResult::AlreadyExists(id)) => {
-                // For already existing instances, we need to find their commit the old way
-                debug!("Instance {} already exists, falling back to commit log search", id);
-                // Extract the short ID from the full URI for get_latest_version
-                let short_id = id.split('/').last().unwrap_or(id);
-                let commit_id = self.get_latest_version::<I>(short_id, &args.spec).await
-                    .context(format!("Failed to find commit for existing instance {}", id))?;
-                return Ok((id.clone(), commit_id));
-            }
-            None => return Err(anyhow!("Insert operation did not return any ID")),
-        };
-        
-        // Extract commit ID from the TerminusDB-Data-Version header
-        let commit_id = insert_result.extract_commit_id().ok_or(anyhow!("TerminusDB-Data-Version header not found or invalid format"))?;
-        debug!("Extracted commit_id from header: {}", commit_id);
-        
-        Ok((instance_id, commit_id))
-    }
-    
-    /// Inserts an instance and returns a structured result with the root entity clearly identified.
-    /// This method properly handles models with sub-entities by tracking which ID is the root.
+    /// Inserts an instance into TerminusDB and returns a structured result with the root entity
+    /// clearly identified, along with the commit ID that created it. This method properly handles
+    /// models with sub-entities by tracking which ID is the root.
     ///
     /// # Returns
     /// A tuple of (InsertInstanceResult, commit_id) where:
     /// - InsertInstanceResult: Contains the root ID, sub-entity results, and all results
-    /// - commit_id: The commit ID that created these instances
-    pub async fn insert_instance_structured<I: TerminusDBModel>(
+    /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
+    pub async fn insert_instance_with_commit_id<I: TerminusDBModel>(
         &self,
         model: &I,
         args: DocumentInsertArgs,

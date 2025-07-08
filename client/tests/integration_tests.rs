@@ -318,10 +318,10 @@ async fn test_terminusdb_data_version_header() -> anyhow::Result<()> {
         value: 24,
     };
     
-    let (instance_id, commit_id) = client.insert_instance_with_commit_id(&test_model2, args.clone()).await?;
+    let (result, commit_id) = client.insert_instance_with_commit_id(&test_model2, args.clone()).await?;
     
-    println!("✓ insert_instance_with_commit_id returned: instance_id={}, commit_id={}", instance_id, commit_id);
-    assert!(!instance_id.is_empty(), "Instance ID should not be empty");
+    println!("✓ insert_instance_with_commit_id returned: instance_id={}, commit_id={}", result.root_id, commit_id);
+    assert!(!result.root_id.is_empty(), "Instance ID should not be empty");
     assert!(!commit_id.is_empty(), "Commit ID should not be empty");
     
     println!("✓ Header capture functionality is working correctly");
@@ -417,10 +417,10 @@ async fn test_header_capture_functionality() -> anyhow::Result<()> {
         value: 300,
     };
     
-    let (instance_id, commit_id) = client.insert_instance_with_commit_id(&test_model3, args.clone()).await?;
+    let (result, commit_id) = client.insert_instance_with_commit_id(&test_model3, args.clone()).await?;
     
-    println!("✅ insert_instance_with_commit_id returned: instance_id={}, commit_id={}", instance_id, commit_id);
-    assert!(!instance_id.is_empty(), "Instance ID should not be empty");
+    println!("✅ insert_instance_with_commit_id returned: instance_id={}, commit_id={}", result.root_id, commit_id);
+    assert!(!result.root_id.is_empty(), "Instance ID should not be empty");
     assert!(!commit_id.is_empty(), "Commit ID should not be empty");
     // Note: insert_instance_with_commit_id returns just the commit hash (without "branch:" prefix)
     // This is by design - it extracts the hash for convenience
