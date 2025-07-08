@@ -61,39 +61,80 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
                 _ty: Default::default(),
             }
         }
-        // IRI: e.g., terminusdb://data#TestEntity/91011
+        // IRI: e.g., terminusdb://data#TestEntity/91011 or terminusdb:///data/TestEntity/91011
         else if iri_or_id.contains("://") {
-            let parts: Vec<&str> = iri_or_id.splitn(2, '#').collect();
-            if parts.len() != 2 {
-                return Err(anyhow!("Invalid IRI format: missing '#': '{}'", iri_or_id));
-            }
-            let base = parts[0];
-            let typed_id_part = parts[1];
+            // Check if it's fragment-based (contains #) or path-based
+            if iri_or_id.contains('#') {
+                // Fragment-based IRI: terminusdb://data#TestEntity/91011
+                let parts: Vec<&str> = iri_or_id.splitn(2, '#').collect();
+                if parts.len() != 2 {
+                    return Err(anyhow!("Invalid IRI format: missing '#': '{}'", iri_or_id));
+                }
+                let base = parts[0];
+                let typed_id_part = parts[1];
 
-            let typed_parts: Vec<&str> = typed_id_part.splitn(2, '/').collect();
-            if typed_parts.len() != 2 {
-                return Err(anyhow!(
-                    "Invalid IRI format: missing '/' after '#': '{}'",
-                    iri_or_id
-                ));
-            }
-            let type_name = typed_parts[0];
-            let id = typed_parts[1];
+                let typed_parts: Vec<&str> = typed_id_part.splitn(2, '/').collect();
+                if typed_parts.len() != 2 {
+                    return Err(anyhow!(
+                        "Invalid IRI format: missing '/' after '#': '{}'",
+                        iri_or_id
+                    ));
+                }
+                let type_name = typed_parts[0];
+                let id = typed_parts[1];
 
-            // Validate type name
-            if type_name != T::schema_name() {
-                return Err(anyhow!(
-                    "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
-                    T::schema_name(),
-                    type_name,
-                    iri_or_id
-                ));
-            }
+                // Validate type name
+                if type_name != T::schema_name() {
+                    return Err(anyhow!(
+                        "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
+                        T::schema_name(),
+                        type_name,
+                        iri_or_id
+                    ));
+                }
 
-            Self {
-                base: Some(base.to_string()),
-                typed_id: typed_id_part.to_string(),
-                _ty: Default::default(),
+                Self {
+                    base: Some(base.to_string()),
+                    typed_id: typed_id_part.to_string(),
+                    _ty: Default::default(),
+                }
+            } else {
+                // Path-based IRI: terminusdb:///data/TestEntity/91011
+                // Split by / and look for the type name and ID in the path
+                let path_parts: Vec<&str> = iri_or_id.split('/').collect();
+                
+                // Find the type name and ID - they should be the last two components
+                if path_parts.len() < 2 {
+                    return Err(anyhow!(
+                        "Invalid path-based IRI format: not enough path components in '{}'",
+                        iri_or_id
+                    ));
+                }
+                
+                // Get the last two path components (should be Type/ID)
+                let type_name = path_parts[path_parts.len() - 2];
+                let id = path_parts[path_parts.len() - 1];
+                
+                // Validate type name
+                if type_name != T::schema_name() {
+                    return Err(anyhow!(
+                        "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
+                        T::schema_name(),
+                        type_name,
+                        iri_or_id
+                    ));
+                }
+                
+                // Extract base by removing the Type/ID part
+                let base_end = iri_or_id.rfind(&format!("/{}/{}", type_name, id))
+                    .ok_or_else(|| anyhow!("Failed to extract base from IRI: '{}'", iri_or_id))?;
+                let base = &iri_or_id[..base_end];
+                
+                Self {
+                    base: Some(base.to_string()),
+                    typed_id: format!("{}/{}", type_name, id),
+                    _ty: Default::default(),
+                }
             }
         }
         // type/id: e.g., TestEntity/5678
@@ -412,5 +453,25 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Mismatched type in typed ID"));
+    }
+
+    #[test]
+    fn test_parse_path_based_iri() {
+        let iri = "terminusdb:///data/TestEntity/7aec78a3-9749-457e-a113-273df5edf156";
+        let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new(iri).unwrap();
+        assert_eq!(entity_id.id(), "7aec78a3-9749-457e-a113-273df5edf156");
+        assert_eq!(entity_id.typed(), "TestEntity/7aec78a3-9749-457e-a113-273df5edf156");
+        assert_eq!(entity_id.base, Some("terminusdb:///data".to_string()));
+    }
+
+    #[test]
+    fn test_parse_path_based_iri_wrong_type() {
+        let iri = "terminusdb:///data/WrongType/7aec78a3-9749-457e-a113-273df5edf156";
+        let result: Result<EntityIDFor<TestEntity>, _> = EntityIDFor::new(iri);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Mismatched type in IRI"));
     }
 }
