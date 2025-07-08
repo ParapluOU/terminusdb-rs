@@ -635,6 +635,78 @@ impl super::client::TerminusDBHttpClient {
         }
     }
 
+    /// Retrieves and deserializes a strongly-typed model instance from the database with commit ID.
+    ///
+    /// This is a header-aware variant of [`get_instance`](Self::get_instance) that returns
+    /// both the deserialized instance and the commit ID from the TerminusDB-Data-Version header.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instance into (implements `ToTDBInstance`)
+    ///
+    /// # Arguments
+    /// * `id` - The instance ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: The deserialized instance of type `Target`
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let result = client.get_instance_with_headers::<User>("12345", &spec, &mut deserializer).await?;
+    /// let user = &*result; // Access the user via Deref
+    /// if let Some(commit_id) = result.extract_commit_id() {
+    ///     println!("Retrieved user from commit: {}", commit_id);
+    /// }
+    /// ```
+    ///
+    /// # Time Travel
+    /// ```rust
+    /// // Retrieve from a specific commit
+    /// let past_spec = BranchSpec::from("main/local/commit/abc123");
+    /// let result = client.get_instance_with_headers::<User>("12345", &past_spec, &mut deserializer).await?;
+    /// let old_user = &*result; // Access via Deref
+    /// ```
+    pub async fn get_instance_with_headers<Target: ToTDBInstance>(
+        &self,
+        id: &str,
+        spec: &BranchSpec,
+        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<ResponseWithHeaders<Target>>
+    where
+        Target:,
+    {
+        let doc_id = format_id::<Target>(id);
+
+        // the default here makes stuff unfold
+        let mut opts: GetOpts = Default::default();
+
+        if Target::to_schema().should_unfold() {
+            opts.unfold = true;
+        }
+
+        let response = self.get_document_with_headers(&doc_id, spec, opts).await?;
+        
+        // Get the document from the response (using Deref)
+        let json_instance_doc = (*response).clone();
+
+        let res = deserializer.from_instance(json_instance_doc.clone());
+
+        match res {
+            Ok(t) => Ok(ResponseWithHeaders::new(t, response.commit_id)),
+            Err(err) => Err(err).context(format!(
+                "TerminusHTTPClient failed to deserialize Instance. See: {}",
+                super::helpers::dump_json(&json_instance_doc).display()
+            )),
+        }
+    }
+
     /// Get the commit history for a strongly-typed model instance.
     ///
     /// This is a convenience method that automatically formats the instance ID
@@ -681,10 +753,12 @@ impl super::client::TerminusDBHttpClient {
         instance_id: &str,
         spec: &BranchSpec,
     ) -> anyhow::Result<String> {
-        let history = self.get_instance_history::<I>(instance_id, spec, Some(DocumentHistoryParams::new().with_count(1u32))).await?;
-        history.first()
-            .map(|CommitHistoryEntry{ identifier, .. }| identifier.clone())
-            .ok_or(anyhow::anyhow!("No commit history found"))
+        // Use the new header-aware method to get the commit ID directly
+        let mut deserializer = crate::deserialize::DefaultTDBDeserializer;
+        let result = self.get_instance_with_headers::<I>(instance_id, spec, &mut deserializer).await?;
+        
+        result.extract_commit_id()
+            .ok_or_else(|| anyhow::anyhow!("No commit ID found in response headers"))
     }
 
     /// Retrieves and deserializes multiple strongly-typed model instances from the database.
@@ -789,6 +863,105 @@ impl super::client::TerminusDBHttpClient {
 
         debug!("Successfully deserialized {} instances", results.len());
         Ok(results)
+    }
+
+    /// Retrieves and deserializes multiple strongly-typed model instances from the database with commit ID.
+    ///
+    /// This is a header-aware variant of [`get_instances`](Self::get_instances) that returns
+    /// both the deserialized instances and the commit ID from the TerminusDB-Data-Version header.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instances into (implements `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of instance IDs (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `opts` - Get options for controlling query behavior (skip, count, type filter, etc.)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: A vector of deserialized instances of type `Target`
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let ids = vec!["alice_id".to_string(), "bob_id".to_string()];
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// let result = client.get_instances_with_headers(ids, &spec, opts, &mut deserializer).await?;
+    /// let users = &*result; // Access via Deref
+    /// if let Some(commit_id) = result.extract_commit_id() {
+    ///     println!("Retrieved {} users from commit: {}", users.len(), commit_id);
+    /// }
+    /// ```
+    ///
+    /// # Type Filtering (get all instances of type with commit ID)
+    /// ```rust
+    /// let empty_ids = vec![]; // empty IDs means get all of the specified type
+    /// let opts = GetOpts::filtered_by_type::<User>().with_count(5);
+    /// let result = client.get_instances_with_headers(empty_ids, &spec, opts, &mut deserializer).await?;
+    /// let users = &*result; // Access via Deref
+    /// ```
+    pub async fn get_instances_with_headers<Target: TerminusDBModel>(
+        &self,
+        ids: Vec<String>,
+        spec: &BranchSpec,
+        mut opts: GetOpts,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<ResponseWithHeaders<Vec<Target>>> {
+        // Format IDs with type prefix for untyped document retrieval
+        let formatted_ids = if ids.is_empty() {
+            // If no IDs provided, we rely on type filtering
+            if opts.type_filter.is_none() {
+                // Automatically set type filter based on Target type
+                opts.type_filter = Some(Target::to_schema().class_name().to_string());
+            }
+            vec![]
+        } else {
+            ids.into_iter()
+                .map(|id| super::helpers::format_id::<Target>(&id))
+                .collect()
+        };
+
+        // Set unfold if the target schema requires it
+        if Target::to_schema().should_unfold() {
+            opts.unfold = true;
+        }
+
+        debug!("Getting {} instances of type {} with headers", 
+               if formatted_ids.is_empty() { "all".to_string() } else { formatted_ids.len().to_string() }, 
+               Target::to_schema().class_name());
+
+        // Retrieve the raw JSON documents with headers
+        let response = self.get_documents_with_headers(formatted_ids, spec, opts).await?;
+        
+        // Get the documents from the response (using Deref)
+        let json_docs = (*response).clone();
+
+        debug!("Retrieved {} JSON documents with commit ID {:?}, deserializing...", json_docs.len(), response.commit_id);
+
+        // Deserialize each document to the target type
+        let mut results = Vec::with_capacity(json_docs.len());
+        for (i, json_doc) in json_docs.into_iter().enumerate() {
+            match deserializer.from_instance(json_doc.clone()) {
+                Ok(instance) => results.push(instance),
+                Err(err) => {
+                    error!("Failed to deserialize document {}: {}", i, err);
+                    return Err(err).context(format!(
+                        "TerminusHTTPClient failed to deserialize instance {}. See: {}",
+                        i,
+                        super::helpers::dump_json(&json_doc).display()
+                    ));
+                }
+            }
+        }
+
+        debug!("Successfully deserialized {} instances", results.len());
+        Ok(ResponseWithHeaders::new(results, response.commit_id))
     }
 
 

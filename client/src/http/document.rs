@@ -217,6 +217,65 @@ impl super::client::TerminusDBHttpClient {
         Ok(res)
     }
 
+    /// Retrieves a single untyped document from the database and returns both the document and commit ID.
+    ///
+    /// This is a header-aware variant of [`get_document`](Self::get_document) that returns
+    /// the commit ID from the TerminusDB-Data-Version header along with the document.
+    ///
+    /// # Arguments
+    /// * `id` - The document ID (without type prefix, e.g., "12345")
+    /// * `spec` - Branch specification indicating which branch to query
+    /// * `opts` - Get options for controlling query behavior
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: The document as a `serde_json::Value`
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// let result = client.get_document_with_headers("12345", &branch_spec, GetOpts::default()).await?;
+    /// let doc = *result; // Uses Deref to get the inner value
+    /// if let Some(commit_id) = result.extract_commit_id() {
+    ///     println!("Retrieved from commit: {}", commit_id);
+    /// }
+    /// ```
+    pub(crate) async fn get_document_with_headers(
+        &self,
+        id: &str,
+        spec: &BranchSpec,
+        opts: GetOpts,
+    ) -> anyhow::Result<ResponseWithHeaders<serde_json::Value>> {
+        if !self.has_document(id, spec).await {
+            Err(anyhow!("document #{} does not exist", id))?
+        }
+
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_get_params(id, opts.unfold, opts.as_list)
+            .build();
+
+        debug!("retrieving document at {}...", &uri);
+
+        let start = Instant::now();
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await?;
+
+        debug!("retrieved TDB document with status code: {}", res.status());
+
+        let res = self.parse_response_with_headers::<Value>(res).await?;
+
+        debug!("retrieved TDB document in {:?}", start.elapsed());
+
+        Ok(res)
+    }
+
     /// Internal method for document operations with specific HTTP method
     async fn insert_documents_with_method(
         &self,
@@ -707,6 +766,107 @@ impl super::client::TerminusDBHttpClient {
 
         // Parse response as array of JSON values
         let docs = self.parse_response::<Vec<serde_json::Value>>(res).await?;
+
+        debug!("Retrieved {} documents in {:?}", docs.len(), start.elapsed());
+
+        Ok(docs)
+    }
+
+    /// Retrieves multiple untyped documents from the database and returns both the documents and commit ID.
+    ///
+    /// This is a header-aware variant of [`get_documents`](Self::get_documents) that returns
+    /// the commit ID from the TerminusDB-Data-Version header along with the documents.
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of document IDs to retrieve
+    /// * `spec` - Branch specification indicating which branch to query
+    /// * `opts` - Get options for controlling query behavior (skip, count, type filter, etc.)
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: Vector of documents as `serde_json::Value` objects
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Example
+    /// ```rust
+    /// let ids = vec!["Person/alice".to_string(), "Person/bob".to_string()];
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// let result = client.get_documents_with_headers(ids, &branch_spec, opts).await?;
+    /// let docs = *result; // Uses Deref to get the inner value
+    /// if let Some(commit_id) = result.extract_commit_id() {
+    ///     println!("Retrieved from commit: {}", commit_id);
+    /// }
+    /// ```
+    pub(crate) async fn get_documents_with_headers(
+        &self,
+        ids: Vec<String>,
+        spec: &BranchSpec,
+        opts: GetOpts,
+    ) -> anyhow::Result<ResponseWithHeaders<Vec<serde_json::Value>>> {
+        debug!("Retrieving {} documents with headers", ids.len());
+
+        // Build the URL for the document endpoint
+        let uri = self.build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_get_multiple_params(&ids, &opts)
+            .build();
+
+        // Determine if we should use POST method based on URL length or explicit large request
+        let use_post = uri.len() > 2000 || ids.len() > 50; // Use POST for long URLs or many IDs
+
+        debug!("Fetching documents from: {} (using {})", &uri, if use_post { "POST" } else { "GET" });
+
+        let start = Instant::now();
+
+        let res = if use_post {
+            // Use POST with X-HTTP-Method-Override: GET for large requests
+            let base_uri = self.build_url()
+                .endpoint("document")
+                .database(spec)
+                .build();
+
+            // Create query document as JSON
+            let mut query_doc = serde_json::Map::new();
+            if !ids.is_empty() {
+                query_doc.insert("ids".to_string(), serde_json::to_value(&ids)?);
+            }
+            query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
+            query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
+            
+            if let Some(skip) = opts.skip {
+                query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
+            }
+            if let Some(count) = opts.count {
+                query_doc.insert("count".to_string(), serde_json::Value::Number(count.into()));
+            }
+            if let Some(ref type_filter) = opts.type_filter {
+                query_doc.insert("type".to_string(), serde_json::Value::String(type_filter.clone()));
+            }
+
+            let query_json = serde_json::to_string(&query_doc)?;
+
+            self.http
+                .post(base_uri)
+                .basic_auth(&self.user, Some(&self.pass))
+                .header("Content-Type", "application/json")
+                .header("X-HTTP-Method-Override", "GET")
+                .body(query_json)
+                .send()
+                .await?
+        } else {
+            // Use GET for smaller requests
+            self.http
+                .get(uri)
+                .basic_auth(&self.user, Some(&self.pass))
+                .send()
+                .await?
+        };
+
+        debug!("Retrieved documents with status code: {}", res.status());
+
+        // Parse response as array of JSON values with headers
+        let docs = self.parse_response_with_headers::<Vec<serde_json::Value>>(res).await?;
 
         debug!("Retrieved {} documents in {:?}", docs.len(), start.elapsed());
 
