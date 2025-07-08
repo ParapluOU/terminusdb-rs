@@ -240,7 +240,7 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Retrieved from commit: {}", commit_id);
     /// }
     /// ```
-    pub(crate) async fn get_document_with_headers(
+    pub async fn get_document_with_headers(
         &self,
         id: &str,
         spec: &BranchSpec,

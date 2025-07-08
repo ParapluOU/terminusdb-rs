@@ -66,14 +66,14 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
             // Check if it's fragment-based (contains #) or path-based
             if iri_or_id.contains('#') {
                 // Fragment-based IRI: terminusdb://data#TestEntity/91011
-                let parts: Vec<&str> = iri_or_id.splitn(2, '#').collect();
+                let parts: Vec<&str> = iri_or_id.split('#').collect();
                 if parts.len() != 2 {
                     return Err(anyhow!("Invalid IRI format: missing '#': '{}'", iri_or_id));
                 }
                 let base = parts[0];
                 let typed_id_part = parts[1];
 
-                let typed_parts: Vec<&str> = typed_id_part.splitn(2, '/').collect();
+                let typed_parts: Vec<&str> = typed_id_part.split('/').collect();
                 if typed_parts.len() != 2 {
                     return Err(anyhow!(
                         "Invalid IRI format: missing '/' after '#': '{}'",
@@ -139,7 +139,7 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
         }
         // type/id: e.g., TestEntity/5678
         else {
-            let parts: Vec<&str> = iri_or_id.splitn(2, '/').collect();
+            let parts: Vec<&str> = iri_or_id.split('/').collect();
             if parts.len() != 2 {
                 return Err(anyhow!("Invalid typed ID format: '{}'", iri_or_id));
             }
@@ -172,7 +172,7 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
 
     /// return just the identifier part
     pub fn id(&self) -> &str {
-        self.typed_id.splitn(2, "/").last().unwrap()
+        self.typed_id.split("/").last().unwrap()
     }
 
     /// return MyType/1234 format
