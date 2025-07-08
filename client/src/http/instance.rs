@@ -146,6 +146,47 @@ impl super::client::TerminusDBHttpClient {
         Ok((result, commit_id))
     }
 
+    /// Inserts multiple instances into TerminusDB and returns the results along with the commit ID.
+    ///
+    /// This is the plural variant of `insert_instance_with_commit_id` for bulk operations.
+    /// It inserts multiple instances and returns the commit ID that created them.
+    ///
+    /// # Arguments
+    /// * `models` - Collection of models that can be converted to TerminusDB instances
+    /// * `args` - Document insertion arguments (DocumentType will be set to Instance automatically)
+    ///
+    /// # Returns
+    /// A tuple of (ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>, commit_id) where:
+    /// - ResponseWithHeaders: Contains all instance IDs and their insert results, plus the commit_id in headers
+    /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added these instances
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let users = vec![
+    ///     User { name: "Alice".to_string(), age: 30 },
+    ///     User { name: "Bob".to_string(), age: 25 },
+    /// ];
+    /// let (result, commit_id) = client.insert_instances_with_commit_id(users, args).await?;
+    /// println!("Inserted {} users in commit {}", result.len(), commit_id);
+    /// ```
+    pub async fn insert_instances_with_commit_id(
+        &self,
+        models: impl IntoBoxedTDBInstances,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<(ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>, String)> {
+        // Insert the instances
+        let result = self.insert_instances(models, args).await?;
+        
+        // Extract commit ID from the response headers
+        let commit_id = result.extract_commit_id()
+            .ok_or_else(|| anyhow!("TerminusDB-Data-Version header not found or invalid format"))?;
+        
+        Ok((result, commit_id))
+    }
+
     /// Creates a new instance in the database using POST.
     ///
     /// This method uses the POST endpoint which will fail if the instance already exists.

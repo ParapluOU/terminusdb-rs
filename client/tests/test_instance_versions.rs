@@ -749,3 +749,74 @@ async fn test_woql_query_breakdown() -> anyhow::Result<()> {
     
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires running TerminusDB instance"]
+async fn test_insert_instances_with_commit_id() -> anyhow::Result<()> {
+    // Set up test client
+    let (client, spec) = setup_test_client().await?;
+    
+    // Create multiple test instances
+    let people = vec![
+        PersonWithId {
+            id: EntityIDFor::new("alice123")?,
+            name: "Alice".to_string(),
+            age: 30,
+            email: Some("alice@example.com".to_string()),
+        },
+        PersonWithId {
+            id: EntityIDFor::new("bob456")?,
+            name: "Bob".to_string(),
+            age: 25,
+            email: Some("bob@example.com".to_string()),
+        },
+        PersonWithId {
+            id: EntityIDFor::new("charlie789")?,
+            name: "Charlie".to_string(),
+            age: 35,
+            email: None,
+        },
+    ];
+    
+    let args = DocumentInsertArgs::from(spec.clone());
+    
+    // Insert multiple instances and get commit ID
+    let (result, commit_id) = client.insert_instances_with_commit_id(people, args).await?;
+    
+    println!("Inserted {} instances in commit {}", result.len(), commit_id);
+    
+    // Verify we got results for all instances
+    assert_eq!(result.len(), 3);
+    
+    // Verify commit ID format
+    assert!(commit_id.starts_with("ValidCommit/"), "Expected ValidCommit/ prefix, got: {}", commit_id);
+    
+    // Verify each instance was inserted
+    for (id, insert_result) in result.iter() {
+        match insert_result {
+            TDBInsertInstanceResult::Inserted(instance_id) => {
+                println!("Inserted: {}", instance_id);
+                assert!(id.contains("PersonWithId/"));
+            }
+            TDBInsertInstanceResult::AlreadyExists(_) => {
+                panic!("Expected all instances to be newly inserted");
+            }
+        }
+    }
+    
+    // Verify we can retrieve instances using the commit ID
+    let commit_spec = BranchSpec::from(&format!("admin/test/local/commit/{}", commit_id));
+    let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
+    
+    let alice: PersonWithId = client.get_instance("alice123", &commit_spec, &mut deserializer).await?;
+    assert_eq!(alice.name, "Alice");
+    assert_eq!(alice.age, 30);
+    assert_eq!(alice.email, Some("alice@example.com".to_string()));
+    
+    let bob: PersonWithId = client.get_instance("bob456", &commit_spec, &mut deserializer).await?;
+    assert_eq!(bob.name, "Bob");
+    assert_eq!(bob.age, 25);
+    assert_eq!(bob.email, Some("bob@example.com".to_string()));
+    
+    Ok(())
+}
