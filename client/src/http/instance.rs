@@ -164,6 +164,10 @@ impl super::client::TerminusDBHttpClient {
     /// A tuple of (instance_id, commit_id) where:
     /// - instance_id: The ID of the inserted instance
     /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
+    /// 
+    /// # Note
+    /// For models with sub-entities, this returns the first ID in the results which may not
+    /// be the root entity. Consider using `insert_instance_structured` for better control.
     pub async fn insert_instance_with_commit_id<I: TerminusDBModel>(
         &self,
         model: &I,
@@ -195,6 +199,63 @@ impl super::client::TerminusDBHttpClient {
         debug!("Extracted commit_id from header: {}", commit_id);
         
         Ok((instance_id, commit_id))
+    }
+    
+    /// Inserts an instance and returns a structured result with the root entity clearly identified.
+    /// This method properly handles models with sub-entities by tracking which ID is the root.
+    ///
+    /// # Returns
+    /// A tuple of (InsertInstanceResult, commit_id) where:
+    /// - InsertInstanceResult: Contains the root ID, sub-entity results, and all results
+    /// - commit_id: The commit ID that created these instances
+    pub async fn insert_instance_structured<I: TerminusDBModel>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<(crate::InsertInstanceResult, String)> {
+        // Generate the instance tree to understand the structure
+        let instance = model.to_instance(None);
+        let instance_tree = instance.to_instance_tree_flatten(true);
+        
+        // The root instance is always the first in the tree
+        let root_instance = instance_tree.first()
+            .ok_or_else(|| anyhow!("Instance tree is empty"))?;
+        
+        let root_id = root_instance.gen_id()
+            .ok_or_else(|| anyhow!("Cannot generate ID for root instance"))?;
+        
+        // Insert the instance
+        let insert_response = self.insert_instance(model, args.clone()).await?;
+        
+        // Find the actual root ID in the results (it might have a URI prefix)
+        let actual_root_id = insert_response.keys()
+            .find(|k| k.ends_with(&root_id) || k.split('/').last() == Some(&root_id))
+            .cloned()
+            .ok_or_else(|| anyhow!("Could not find root instance ID in insert results"))?;
+        
+        // Create structured result
+        let structured_result = crate::InsertInstanceResult::new(
+            (*insert_response).clone(),
+            actual_root_id.clone()
+        )?;
+        
+        // Handle commit ID based on whether instance was inserted or already existed
+        let commit_id = match &structured_result.root_result {
+            TDBInsertInstanceResult::Inserted(_) => {
+                // Extract from header for newly inserted instances
+                insert_response.extract_commit_id()
+                    .ok_or_else(|| anyhow!("TerminusDB-Data-Version header not found or invalid format"))?
+            },
+            TDBInsertInstanceResult::AlreadyExists(id) => {
+                // For already existing instances, fall back to commit log search
+                debug!("Instance {} already exists, falling back to commit log search", id);
+                let short_id = id.split('/').last().unwrap_or(id);
+                self.get_latest_version::<I>(short_id, &args.spec).await
+                    .context(format!("Failed to find commit for existing instance {}", id))?
+            }
+        };
+        
+        Ok((structured_result, commit_id))
     }
 
     /// Creates a new instance in the database using POST.
