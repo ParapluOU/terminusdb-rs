@@ -10,8 +10,9 @@ use {
     ::log::{debug, error, trace},
     anyhow::{anyhow, Context},
     serde_json::{json, Value},
-    std::{collections::HashMap, fmt::Debug, time::Instant},
+    std::{collections::{HashMap, HashSet}, fmt::Debug, time::Instant},
     terminusdb_schema::ToJson,
+    terminusdb_woql_builder::{prelude::{WoqlBuilder, node, string_literal}, vars},
 };
 
 /// Options for document deletion operations.
@@ -70,6 +71,24 @@ impl DeleteOpts {
 }
 
 use super::helpers::{dedup_documents_by_id, dump_failed_payload};
+
+/// Extracts document IDs from JSON objects that have an "@id" field.
+///
+/// # Arguments
+/// * `documents` - Vector of JSON objects representing documents
+///
+/// # Returns
+/// A vector of document IDs (strings) that were found in the documents
+fn extract_document_ids(documents: &[Value]) -> Vec<String> {
+    documents
+        .iter()
+        .filter_map(|doc| {
+            doc.get("@id")
+                .and_then(|id| id.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect()
+}
 
 /// HTTP method to use for document operations
 #[derive(Debug, Clone, Copy)]
@@ -218,6 +237,33 @@ impl super::client::TerminusDBHttpClient {
             .collect::<Vec<_>>();
 
         dedup_documents_by_id(&mut to_jsoned);
+
+        // For POST method, filter out documents that already exist
+        if matches!(method, DocumentMethod::Post) {
+            let document_ids = extract_document_ids(&to_jsoned);
+            debug!("POST method: Found {} documents with IDs to check", document_ids.len());
+            if !document_ids.is_empty() {
+                debug!("Document IDs to check: {:?}", document_ids);
+                let existing_ids = self.check_existing_ids(&document_ids, &args.spec).await?;
+                if !existing_ids.is_empty() {
+                    debug!("Filtering out {} existing documents from POST operation", existing_ids.len());
+                    let before_count = to_jsoned.len();
+                    to_jsoned.retain(|doc| {
+                        doc.get("@id")
+                            .and_then(|id| id.as_str())
+                            .map(|id| !existing_ids.contains(id))
+                            .unwrap_or(true) // Keep documents without @id
+                    });
+                    debug!("Filtered from {} to {} documents", before_count, to_jsoned.len());
+                }
+            }
+        }
+
+        // If all documents were filtered out, return empty result
+        if to_jsoned.is_empty() {
+            debug!("All documents were filtered out or no documents to insert");
+            return Ok(ResponseWithHeaders::new(HashMap::new(), None));
+        }
 
         //eprintln!("inserting document(s): {:#?}", &to_jsoned);
 
@@ -743,5 +789,114 @@ impl super::client::TerminusDBHttpClient {
         debug!("Successfully deleted document");
 
         Ok(self.clone())
+    }
+
+    /// Checks which of the given IDs already exist in the database using a single WOQL query.
+    ///
+    /// This method uses WOQL's `or()` combined with `count()` queries to check multiple
+    /// IDs in a single database request, making it much more efficient than checking
+    /// each ID individually.
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of document IDs to check for existence
+    /// * `spec` - Branch specification indicating which branch to check
+    ///
+    /// # Returns
+    /// A `HashSet<String>` containing the IDs that already exist in the database
+    ///
+    /// # Example
+    /// ```rust
+    /// let ids = vec!["Person/alice".to_string(), "Person/bob".to_string()];
+    /// let existing = client.check_existing_ids(&ids, &branch_spec).await?;
+    /// // existing will contain only the IDs that already exist in the database
+    /// ```
+    pub async fn check_existing_ids(
+        &self,
+        ids: &[String],
+        spec: &BranchSpec,
+    ) -> anyhow::Result<HashSet<String>> {
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        debug!("Checking existence of {} IDs using WOQL", ids.len());
+        
+        // Create variables for the query
+        let id_var = vars!("ID");
+        let count_var = vars!("Count");
+        let type_var = vars!("Type");
+        
+        // Build count queries for each ID
+        let mut count_queries = Vec::new();
+        let mut count_vars = Vec::new();
+        
+        for (i, id) in ids.iter().enumerate() {
+            let count_var = vars!(format!("Count_{}", i));
+            count_vars.push((id.clone(), count_var.clone()));
+            
+            // Count documents where the document ID (as subject) has any rdf:type
+            // This checks if the document exists
+            let sub_query = WoqlBuilder::new()
+                .triple(node(id.clone()), "rdf:type", type_var.clone());
+                
+            // Create a count query that counts the sub_query results
+            let count_query = sub_query.count(count_var);
+            count_queries.push(count_query);
+        }
+        
+        if count_queries.is_empty() {
+            return Ok(HashSet::new());
+        }
+        
+        // Combine all counts with and() and select the count variables
+        let select_vars: Vec<_> = count_vars.iter().map(|(_, v)| v.clone()).collect();
+        
+        let query = if count_queries.len() == 1 {
+            count_queries.into_iter().next().unwrap()
+        } else {
+            // For multiple queries, chain them with and()
+            let mut iter = count_queries.into_iter();
+            let first = iter.next().unwrap();
+            first.and(iter.collect::<Vec<_>>())
+        }
+        .select(select_vars)
+        .finalize();
+        
+        // Execute the query
+        debug!("Executing WOQL count query for {} IDs", ids.len());
+        let result = self.query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query).await?;
+        debug!("WOQL query returned {} bindings", result.bindings.len());
+        
+        // Extract the existing IDs from the count results
+        let mut existing_ids = HashSet::new();
+        
+        if let Some(binding) = result.bindings.first() {
+            // Check each count variable
+            for (id, count_var) in count_vars.iter() {
+                if let Some(count_obj) = binding.get(count_var.name()) {
+                    // Count is returned as {"@type": "xsd:decimal", "@value": Number}
+                    if let Some(count_map) = count_obj.as_object() {
+                        if let Some(value) = count_map.get("@value") {
+                            if let Some(count) = value.as_u64() {
+                                if count > 0 {
+                                    existing_ids.insert(id.clone());
+                                }
+                            } else if let Some(count) = value.as_f64() {
+                                if count > 0.0 {
+                                    existing_ids.insert(id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        debug!("Found {} existing IDs out of {} checked", existing_ids.len(), ids.len());
+        if !existing_ids.is_empty() {
+            debug!("Existing IDs found: {:?}", existing_ids);
+        }
+
+        Ok(existing_ids)
     }
 }
