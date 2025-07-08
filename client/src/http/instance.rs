@@ -332,9 +332,8 @@ impl super::client::TerminusDBHttpClient {
                 id.clone(),
             )?;
 
-            let mut deserializer = DefaultTDBDeserializer {};
             result.commit_id = self
-                .get_instance_with_headers::<I>(&id, &args.spec, &mut deserializer)
+                .get_document_with_headers(&id, &args.spec, GetOpts::default())
                 .await?
                 .extract_commit_id();
 
