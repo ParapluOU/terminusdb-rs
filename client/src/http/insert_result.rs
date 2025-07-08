@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use crate::TDBInsertInstanceResult;
+use terminusdb_schema::{EntityIDFor, ToTDBSchema};
 
 /// Result of inserting an instance with sub-entities
 #[derive(Debug, Clone)]
@@ -70,6 +71,11 @@ impl InsertInstanceResult {
             // Split on ':' and take the last part (the actual commit ID)
             header_value.split(':').last().map(|s| s.to_string())
         })
+    }
+    
+    /// Get the root ID as a typed EntityIDFor<T>
+    pub fn root_ref<T: ToTDBSchema>(&self) -> anyhow::Result<EntityIDFor<T>> {
+        EntityIDFor::new(&self.root_id)
     }
 }
 
