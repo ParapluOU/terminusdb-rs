@@ -1,16 +1,20 @@
-use std::collections::HashSet;
 use crate::json::InstancePropertyFromJson;
-use crate::{FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel, ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING, URI};
+use crate::{
+    FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel,
+    ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING, URI,
+};
 use anyhow::{anyhow, bail};
+use rocket::form::{self, FromFormField, ValueField};
+use rocket::request::FromParam;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fmt;
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use rocket::request::FromParam;
 use uuid::Uuid;
 // todo: needs unit tests
 
@@ -26,7 +30,7 @@ pub struct EntityIDFor<T: ToTDBSchema> {
 
 impl<T: ToTDBSchema> ToTDBSchema for EntityIDFor<T> {
     fn to_schema_tree() -> Vec<Schema> {
-        vec!(T::to_schema())
+        vec![T::to_schema()]
     }
 
     // Change to_schema_tree_mut to be a static method
@@ -102,7 +106,7 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
                 // Path-based IRI: terminusdb:///data/TestEntity/91011
                 // Split by / and look for the type name and ID in the path
                 let path_parts: Vec<&str> = iri_or_id.split('/').collect();
-                
+
                 // Find the type name and ID - they should be the last two components
                 if path_parts.len() < 2 {
                     return Err(anyhow!(
@@ -110,11 +114,11 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
                         iri_or_id
                     ));
                 }
-                
+
                 // Get the last two path components (should be Type/ID)
                 let type_name = path_parts[path_parts.len() - 2];
                 let id = path_parts[path_parts.len() - 1];
-                
+
                 // Validate type name
                 if type_name != T::schema_name() {
                     return Err(anyhow!(
@@ -124,12 +128,13 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
                         iri_or_id
                     ));
                 }
-                
+
                 // Extract base by removing the Type/ID part
-                let base_end = iri_or_id.rfind(&format!("/{}/{}", type_name, id))
+                let base_end = iri_or_id
+                    .rfind(&format!("/{}/{}", type_name, id))
                     .ok_or_else(|| anyhow!("Failed to extract base from IRI: '{}'", iri_or_id))?;
                 let base = &iri_or_id[..base_end];
-                
+
                 Self {
                     base: Some(base.to_string()),
                     typed_id: format!("{}/{}", type_name, id),
@@ -364,16 +369,31 @@ impl<T: ToTDBSchema> FromParam<'_> for EntityIDFor<T> {
 
     fn from_param(param: &'_ str) -> Result<Self, Self::Error> {
         // The param is the raw URL segment - could be:
-        // 1. Just an ID: "123" 
+        // 1. Just an ID: "123"
         // 2. Type/ID: "Person/123"
         // 3. Full IRI: "terminusdb://data#Person/123" (though URL encoding might affect this)
-        
+
         // URL decode the parameter first in case it contains encoded characters
         let decoded = urlencoding::decode(param)
             .map_err(|e| anyhow!("Failed to URL decode parameter: {}", e))?;
-        
+
         // Use the existing constructor which handles all formats
         Self::new(&decoded)
+    }
+}
+
+// Implement FromFormField for form submissions
+impl<'r, T: ToTDBSchema + Send> FromFormField<'r> for EntityIDFor<T> {
+    fn from_value(field: ValueField<'r>) -> form::Result<'r, Self> {
+        // Use the existing new() method to parse the value
+        match Self::new(field.value) {
+            Ok(entity_id) => Ok(entity_id),
+            Err(e) => Err(form::Error::validation(format!(
+                "Invalid EntityIDFor<{}>: {}",
+                T::schema_name(),
+                e
+            )))?,
+        }
     }
 }
 
@@ -464,7 +484,10 @@ mod tests {
         let iri = "terminusdb:///data/TestEntity/7aec78a3-9749-457e-a113-273df5edf156";
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new(iri).unwrap();
         assert_eq!(entity_id.id(), "7aec78a3-9749-457e-a113-273df5edf156");
-        assert_eq!(entity_id.typed(), "TestEntity/7aec78a3-9749-457e-a113-273df5edf156");
+        assert_eq!(
+            entity_id.typed(),
+            "TestEntity/7aec78a3-9749-457e-a113-273df5edf156"
+        );
         assert_eq!(entity_id.base, Some("terminusdb:///data".to_string()));
     }
 
@@ -477,5 +500,71 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Mismatched type in IRI"));
+    }
+
+    // Test FromFormField implementation
+    #[test]
+    fn test_from_form_field_simple_id() {
+        use rocket::form::ValueField;
+
+        let field = ValueField {
+            name: rocket::form::name::NameView::new("id"),
+            value: "1234",
+        };
+
+        let result = <EntityIDFor<TestEntity> as FromFormField>::from_value(field);
+        assert!(result.is_ok());
+        let entity_id = result.unwrap();
+        assert_eq!(entity_id.id(), "1234");
+        assert_eq!(entity_id.typed(), "TestEntity/1234");
+    }
+
+    #[test]
+    fn test_from_form_field_typed_id() {
+        use rocket::form::ValueField;
+
+        let field = ValueField {
+            name: rocket::form::name::NameView::new("id"),
+            value: "TestEntity/5678",
+        };
+
+        let result = <EntityIDFor<TestEntity> as FromFormField>::from_value(field);
+        assert!(result.is_ok());
+        let entity_id = result.unwrap();
+        assert_eq!(entity_id.id(), "5678");
+        assert_eq!(entity_id.typed(), "TestEntity/5678");
+    }
+
+    #[test]
+    fn test_from_form_field_invalid_type() {
+        use rocket::form::ValueField;
+
+        let field = ValueField {
+            name: rocket::form::name::NameView::new("id"),
+            value: "WrongType/1234",
+        };
+
+        let result = <EntityIDFor<TestEntity> as FromFormField>::from_value(field);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Invalid EntityIDFor<TestEntity>"));
+    }
+
+    #[test]
+    fn test_from_form_field_iri() {
+        use rocket::form::ValueField;
+
+        let field = ValueField {
+            name: rocket::form::name::NameView::new("id"),
+            value: "terminusdb://data#TestEntity/91011",
+        };
+
+        let result = <EntityIDFor<TestEntity> as FromFormField>::from_value(field);
+        assert!(result.is_ok());
+        let entity_id = result.unwrap();
+        assert_eq!(entity_id.id(), "91011");
+        assert_eq!(entity_id.typed(), "TestEntity/91011");
     }
 }
