@@ -1,9 +1,9 @@
 use crate::prelude::*;
+use crate::value::WoqlValue;
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
-use crate::value::WoqlValue;
 
 /// True whenever 'left' is the same as 'right'. Performs unification.
 #[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]

@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
 
 // Represents the abstract class "PathPattern"
 /// An abstract class specifying the AST super-class of all path patterns.
@@ -76,4 +76,3 @@ pub struct PathTimes {
     /// The number of times after which to end the repeition of the pattern.
     pub to: u64,
 }
-

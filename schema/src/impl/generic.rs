@@ -1,4 +1,8 @@
-use crate::{json::ToJson, Instance, InstanceProperty, PrimitiveValue, Property, RelationValue, Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, ToSchemaProperty, ToSchemaPropertyJsonValue, ToSchemaPropertyName, ToTDBInstance, ToTDBInstances, ToTDBSchema};
+use crate::{
+    json::ToJson, Instance, InstanceProperty, PrimitiveValue, Property, RelationValue, Schema,
+    ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, ToSchemaProperty,
+    ToSchemaPropertyJsonValue, ToSchemaPropertyName, ToTDBInstance, ToTDBInstances, ToTDBSchema,
+};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
@@ -39,14 +43,17 @@ where
     default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         let inst = self.to_instance(None);
         if Self::to_schema().is_enum() {
-            return InstanceProperty::Primitive(PrimitiveValue::String(inst.enum_value().expect("enum shoujld have the variant property")))
+            return InstanceProperty::Primitive(PrimitiveValue::String(
+                inst.enum_value()
+                    .expect("enum shoujld have the variant property"),
+            ));
         }
         InstanceProperty::Relation(RelationValue::One(inst))
     }
 }
 
 // Implement ToTDBInstances for references to types that already implement ToTDBInstances
-impl<'a, T: ToTDBInstances+Sync> ToTDBInstances for &'a T {
+impl<'a, T: ToTDBInstances + Sync> ToTDBInstances for &'a T {
     fn to_instance_tree(&self) -> Vec<Instance> {
         (*self).to_instance_tree()
     }

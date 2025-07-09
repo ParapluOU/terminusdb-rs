@@ -1,9 +1,9 @@
+use anyhow::Context;
 use darling::FromField;
 use proc_macro2;
-use quote::{quote, format_ident};
-use syn::{self, Data, DataEnum, DataStruct, Fields, FieldsNamed, Visibility};
+use quote::{format_ident, quote};
 use syn::spanned::Spanned;
-use anyhow::Context;
+use syn::{self, Data, DataEnum, DataStruct, Fields, FieldsNamed, Visibility};
 
 use crate::args::TDBFieldOpts;
 use anyhow::*;
@@ -15,7 +15,9 @@ enum EnumType {
 }
 
 /// Entry point for the FromTDBInstance derive macro
-pub(crate) fn derive_from_terminusdb_instance(input: syn::DeriveInput) -> Result<proc_macro2::TokenStream, syn::Error> {
+pub(crate) fn derive_from_terminusdb_instance(
+    input: syn::DeriveInput,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
     let struct_name = &input.ident;
 
     let result = match &input.data {
@@ -26,8 +28,10 @@ pub(crate) fn derive_from_terminusdb_instance(input: syn::DeriveInput) -> Result
                     implement_from_instance_for_struct(struct_name, data_struct)
                 }
                 _ => {
-                    return Err(syn::Error::new(proc_macro2::Span::call_site(),
-                                               "FromTDBInstance derive macro only supports structs with named fields"));
+                    return Err(syn::Error::new(
+                        proc_macro2::Span::call_site(),
+                        "FromTDBInstance derive macro only supports structs with named fields",
+                    ));
                 }
             }
         }
@@ -35,12 +39,16 @@ pub(crate) fn derive_from_terminusdb_instance(input: syn::DeriveInput) -> Result
             // Generate implementation for enums
             match detect_enum_type(data_enum) {
                 EnumType::Simple => implement_from_instance_for_simple_enum(struct_name, data_enum),
-                EnumType::TaggedUnion => implement_from_instance_for_tagged_enum(struct_name, data_enum),
+                EnumType::TaggedUnion => {
+                    implement_from_instance_for_tagged_enum(struct_name, data_enum)
+                }
             }
         }
         _ => {
-            return Err(syn::Error::new(proc_macro2::Span::call_site(),
-                                       "FromTDBInstance derive macro only supports structs and enums"));
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "FromTDBInstance derive macro only supports structs and enums",
+            ));
         }
     };
 
@@ -49,12 +57,13 @@ pub(crate) fn derive_from_terminusdb_instance(input: syn::DeriveInput) -> Result
 
 /// Detect the type of enum (simple enum with only unit variants or tagged union)
 fn detect_enum_type(data_enum: &DataEnum) -> EnumType {
-    let has_only_unit_variants = data_enum.variants.iter().all(|variant| {
-        match &variant.fields {
+    let has_only_unit_variants = data_enum
+        .variants
+        .iter()
+        .all(|variant| match &variant.fields {
             Fields::Unit => true,
             _ => false,
-        }
-    });
+        });
 
     if has_only_unit_variants {
         EnumType::Simple
@@ -74,9 +83,11 @@ fn implement_from_instance_for_struct(
             process_named_fields_for_deserialization(fields_named, struct_name)
         }
         _ => {
-            return syn::Error::new(proc_macro2::Span::call_site(),
-                                   "FromTDBInstance derive macro only supports structs with named fields")
-                .to_compile_error();
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "FromTDBInstance derive macro only supports structs with named fields",
+            )
+            .to_compile_error();
         }
     };
 
@@ -90,26 +101,26 @@ fn implement_from_instance_for_struct(
                 if !instance.is_of_type::<Self>() {
                     return Err(anyhow::anyhow!("Instance type mismatch, expected {}", stringify!(#struct_name)));
                 }
-                
+
                 #fields_code
-                
+
                 Result::Ok(Self {
                     #(#field_names),*
                 })
             }
-            
+
             fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> Result<Self, anyhow::Error> {
                 if instances.is_empty() {
                     return Err(anyhow::anyhow!("Empty instance tree"));
                 }
-                
+
                 // Find the root instance with the matching type
                 for instance in instances {
                     if instance.is_of_type::<Self>() {
                         return Self::from_instance(instance);
                     }
                 }
-                
+
                 Err(anyhow::anyhow!("No instance with type {} found in tree", stringify!(#struct_name)))
             }
         }
@@ -121,8 +132,15 @@ fn process_named_fields_for_deserialization<'a>(
     fields_named: &'a FieldsNamed,
     struct_name: &syn::Ident,
 ) -> (proc_macro2::TokenStream, Vec<&'a syn::Ident>) {
-    let field_names = fields_named.named.iter()
-        .map(|field| field.ident.as_ref().expect("Named fields should have an identifier"))
+    let field_names = fields_named
+        .named
+        .iter()
+        .map(|field| {
+            field
+                .ident
+                .as_ref()
+                .expect("Named fields should have an identifier")
+        })
         .collect::<Vec<_>>();
 
     let field_parsers = fields_named.named.iter().map(|field| {
@@ -213,16 +231,20 @@ fn implement_from_instance_for_simple_enum(
     enum_name: &syn::Ident,
     data_enum: &DataEnum,
 ) -> proc_macro2::TokenStream {
-    let variant_matchers = data_enum.variants.iter().map(|variant| {
-        let variant_ident = &variant.ident;
-        let variant_name_str = variant_ident.to_string().to_lowercase(); // Using lowercase for consistency
+    let variant_matchers = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            let variant_name_str = variant_ident.to_string().to_lowercase(); // Using lowercase for consistency
 
-        quote! {
-            if instance.properties.contains_key(#variant_name_str) {
-                return Result::Ok(#enum_name::#variant_ident);
+            quote! {
+                if instance.properties.contains_key(#variant_name_str) {
+                    return Result::Ok(#enum_name::#variant_ident);
+                }
             }
-        }
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
     quote! {
         impl terminusdb_schema::FromTDBInstance for #enum_name {
@@ -232,7 +254,7 @@ fn implement_from_instance_for_simple_enum(
                     terminusdb_schema::Schema::Enum { id, .. } if id == stringify!(#enum_name) => {
                         // Check which variant is present
                         #(#variant_matchers)*
-                        
+
                         Err(anyhow::anyhow!("No matching variant found for enum {}", stringify!(#enum_name)))
                     },
                     _ => Err(anyhow::anyhow!("Instance is not an enum or type does not match, expected {}", stringify!(#enum_name))),
@@ -243,7 +265,7 @@ fn implement_from_instance_for_simple_enum(
                 if instances.is_empty() {
                     return Err(anyhow::anyhow!("Empty instance tree"));
                 }
-                
+
                 // Find the root instance with the matching type
                 for instance in instances {
                     if let terminusdb_schema::Schema::Enum { id, .. } = &instance.schema {
@@ -252,7 +274,7 @@ fn implement_from_instance_for_simple_enum(
                         }
                     }
                 }
-                
+
                 Err(anyhow::anyhow!("No instance with type {} found in tree", stringify!(#enum_name)))
             }
         }
@@ -394,7 +416,7 @@ fn implement_from_instance_for_tagged_enum(
                     terminusdb_schema::Schema::TaggedUnion { id, .. } if id == stringify!(#enum_name) => {
                         // Check each variant
                         #(#variant_matchers)*
-                        
+
                         Err(anyhow::anyhow!("No matching variant found for tagged union {}", stringify!(#enum_name)))
                     },
                     _ => Err(anyhow::anyhow!("Instance is not a tagged union or type does not match, expected {}", stringify!(#enum_name))),
@@ -405,7 +427,7 @@ fn implement_from_instance_for_tagged_enum(
                 if instances.is_empty() {
                     return Err(anyhow::anyhow!("Empty instance tree"));
                 }
-                
+
                 // Find the root instance with the matching type
                 for instance in instances {
                     if let terminusdb_schema::Schema::TaggedUnion { id, .. } = &instance.schema {
@@ -414,11 +436,9 @@ fn implement_from_instance_for_tagged_enum(
                         }
                     }
                 }
-                
+
                 Err(anyhow::anyhow!("No instance with type {} found in tree", stringify!(#enum_name)))
             }
         }
     }
 }
-
- 

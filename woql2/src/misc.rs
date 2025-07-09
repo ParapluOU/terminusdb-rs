@@ -1,8 +1,8 @@
 use crate::prelude::*;
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
 
 /// Start a query at the nth solution specified by 'start'. Allows resumption and paging of queries.
 #[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]

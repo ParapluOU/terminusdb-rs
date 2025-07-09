@@ -4,8 +4,8 @@ use terminusdb_woql2::value::Value as Woql2Value;
 use terminusdb_schema::XSDAnySimpleType;
 // NodeValue and DataValue are specific enums used elsewhere
 use decimal_rs::Decimal; // Import the Decimal type
-use terminusdb_woql2::prelude::{DataValue, NodeValue};
-use std::str::FromStr; // Import FromStr for Decimal parsing
+use std::str::FromStr;
+use terminusdb_woql2::prelude::{DataValue, NodeValue}; // Import FromStr for Decimal parsing
 
 /// Represents an input value for WOQL builder functions.
 /// This allows functions to accept variables, IRIs (as strings), or literals easily.

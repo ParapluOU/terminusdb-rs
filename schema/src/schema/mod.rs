@@ -1,10 +1,10 @@
-mod ty;
-mod set;
+mod class;
+mod doc;
 mod family;
 mod key;
-mod doc;
 mod prop;
 mod schema;
-mod class;
+mod set;
+mod ty;
 
-pub use {ty::*, set::*, family::*, key::*, doc::*, prop::*, schema::*, class::*};
+pub use {class::*, doc::*, family::*, key::*, prop::*, schema::*, set::*, ty::*};

@@ -1,5 +1,5 @@
-use std::marker::PhantomData;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NestedRef<T> {
@@ -8,6 +8,5 @@ pub struct NestedRef<T> {
     #[serde(rename = "@ref")]
     pub reference: String,
 
-    _phantom: PhantomData<T>
-
+    _phantom: PhantomData<T>,
 }

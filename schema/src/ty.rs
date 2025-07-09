@@ -1,7 +1,10 @@
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
-use crate::{FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, ToInstanceProperty, ToSchemaProperty, STRING};
 use crate::json::InstancePropertyFromJson;
+use crate::{
+    FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, ToInstanceProperty,
+    ToSchemaProperty, STRING,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 const GRAPH_TYPE_SCHEMA: &str = "schema";
 const GRAPH_TYPE_INSTANCE: &str = "instance";
@@ -12,7 +15,6 @@ pub enum GraphType {
     #[default]
     Instance,
 }
-
 
 impl GraphType {
     pub fn to_str(&self) -> &'static str {

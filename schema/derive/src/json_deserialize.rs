@@ -4,8 +4,8 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Data, DeriveInput, Field, Fields, FieldsNamed, GenericArgument, Ident, Path,
-    PathArguments, Type, TypePath, DataEnum,
+    parse_macro_input, Data, DataEnum, DeriveInput, Field, Fields, FieldsNamed, GenericArgument,
+    Ident, Path, PathArguments, Type, TypePath,
 };
 
 /// Enum type for different kinds of enums
@@ -16,12 +16,13 @@ enum EnumType {
 
 /// Detect the type of enum (simple enum with only unit variants or tagged union)
 fn detect_enum_type(data_enum: &DataEnum) -> EnumType {
-    let has_only_unit_variants = data_enum.variants.iter().all(|variant| {
-        match &variant.fields {
+    let has_only_unit_variants = data_enum
+        .variants
+        .iter()
+        .all(|variant| match &variant.fields {
             Fields::Unit => true,
             _ => false,
-        }
-    });
+        });
 
     if has_only_unit_variants {
         EnumType::Simple
@@ -34,31 +35,29 @@ fn detect_enum_type(data_enum: &DataEnum) -> EnumType {
 pub fn derive_instance_from_json_impl(input: DeriveInput) -> Result<TokenStream, syn::Error> {
     let type_name = &input.ident;
     let opts = TDBModelOpts::from_derive_input(&input)?;
-    
+
     match &input.data {
         Data::Struct(data_struct) => {
             // Handle struct implementation
             implement_instance_from_json_for_struct(type_name, data_struct, &opts)
-        },
+        }
         Data::Enum(data_enum) => {
             // Determine if this is a simple enum or a tagged union
             let enum_type = detect_enum_type(data_enum);
-            
+
             match enum_type {
                 EnumType::Simple => {
                     implement_instance_from_json_for_simple_enum(type_name, data_enum, &opts)
-                },
+                }
                 EnumType::TaggedUnion => {
                     implement_instance_from_json_for_tagged_enum(type_name, data_enum, &opts)
                 }
             }
-        },
-        Data::Union(_) => {
-            Err(syn::Error::new_spanned(
-                input,
-                "InstanceFromJson cannot be derived for unions",
-            ))
         }
+        Data::Union(_) => Err(syn::Error::new_spanned(
+            input,
+            "InstanceFromJson cannot be derived for unions",
+        )),
     }
 }
 
@@ -82,8 +81,9 @@ fn implement_instance_from_json_for_struct(
             ))
         }
     };
-    
-    let field_deserializers = generate_field_deserializers(fields, struct_name, &expected_type_name)?;
+
+    let field_deserializers =
+        generate_field_deserializers(fields, struct_name, &expected_type_name)?;
 
     let expanded = quote! {
         impl terminusdb_schema::json::InstanceFromJson for #struct_name {
@@ -139,38 +139,42 @@ fn implement_instance_from_json_for_struct(
 fn implement_instance_from_json_for_simple_enum(
     enum_name: &Ident,
     data_enum: &DataEnum,
-    opts: &TDBModelOpts
+    opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
     let expected_type_name = opts
         .class_name
         .clone()
         .unwrap_or_else(|| enum_name.to_string());
-    
-    let variant_matchers = data_enum.variants.iter().map(|variant| {
-        let variant_ident = &variant.ident;
-        let variant_name_str = variant_ident.to_string();
-        
-        quote! {
-            if json_map.contains_key(#variant_name_str) {
-                json_map.remove(#variant_name_str);
-                let mut properties = std::collections::BTreeMap::new();
-                properties.insert(
-                    #variant_name_str.to_string(),
-                    terminusdb_schema::InstanceProperty::Primitive(
-                        terminusdb_schema::PrimitiveValue::Unit
-                    )
-                );
-                return Result::Ok(terminusdb_schema::Instance {
-                    id,
-                    schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
-                    capture: false,
-                    ref_props: false,
-                    properties,
-                });
+
+    let variant_matchers = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            let variant_name_str = variant_ident.to_string();
+
+            quote! {
+                if json_map.contains_key(#variant_name_str) {
+                    json_map.remove(#variant_name_str);
+                    let mut properties = std::collections::BTreeMap::new();
+                    properties.insert(
+                        #variant_name_str.to_string(),
+                        terminusdb_schema::InstanceProperty::Primitive(
+                            terminusdb_schema::PrimitiveValue::Unit
+                        )
+                    );
+                    return Result::Ok(terminusdb_schema::Instance {
+                        id,
+                        schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
+                        capture: false,
+                        ref_props: false,
+                        properties,
+                    });
+                }
             }
-        }
-    }).collect::<Vec<_>>();
-    
+        })
+        .collect::<Vec<_>>();
+
     let expanded = quote! {
         impl terminusdb_schema::json::InstanceFromJson for #enum_name {
             fn instance_from_json(json: serde_json::Value) -> anyhow::Result<terminusdb_schema::Instance> {
@@ -178,29 +182,29 @@ fn implement_instance_from_json_for_simple_enum(
                 use serde_json::{Value, Map};
                 use anyhow::{Context, anyhow, Result};
                 use std::collections::BTreeMap;
-                
+
                 let mut json_map = match json {
                     Value::Object(map) => map,
                     _ => return Err(anyhow!("Expected a JSON object for enum deserialization, found {:?}", json)),
                 };
-                
+
                 // Extract @id
                 let id = json_map.remove("@id")
                     .and_then(|v| v.as_str().map(String::from));
-                
+
                 // Extract and verify @type
                 let type_name = json_map.remove("@type")
                     .and_then(|v| v.as_str().map(String::from))
                     .ok_or_else(|| anyhow!("Missing or invalid '@type' field in JSON instance"))?;
-                    
+
                 let expected_type_name = #expected_type_name;
                 if type_name != expected_type_name {
                     return Err(anyhow!("Mismatched '@type': expected '{}', found '{}'", expected_type_name, type_name));
                 }
-                
+
                 // Check each variant
                 #(#variant_matchers)*
-                
+
                 Err(anyhow!("No valid enum variant found in JSON"))
             }
         }
@@ -213,13 +217,13 @@ fn implement_instance_from_json_for_simple_enum(
 fn implement_instance_from_json_for_tagged_enum(
     enum_name: &Ident,
     data_enum: &DataEnum,
-    opts: &TDBModelOpts
+    opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
     let expected_type_name = opts
         .class_name
         .clone()
         .unwrap_or_else(|| enum_name.to_string());
-    
+
     let variant_matchers = data_enum.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
         let variant_name_str = variant_ident.to_string();
@@ -379,7 +383,7 @@ fn implement_instance_from_json_for_tagged_enum(
             }
         }
     }).collect::<Vec<_>>();
-    
+
     let expanded = quote! {
         impl terminusdb_schema::json::InstanceFromJson for #enum_name {
             fn instance_from_json(json: serde_json::Value) -> anyhow::Result<terminusdb_schema::Instance> {
@@ -388,34 +392,34 @@ fn implement_instance_from_json_for_tagged_enum(
                 use serde_json::{Value, Map};
                 use anyhow::{Context, anyhow, Result};
                 use std::collections::BTreeMap;
-                
+
                 let mut json_map = match json {
                     Value::Object(map) => map,
                     _ => return Err(anyhow!("Expected a JSON object for tagged enum deserialization, found {:?}", json)),
                 };
-                
+
                 // Extract @id
                 let id = json_map.remove("@id")
                     .and_then(|v| v.as_str().map(String::from));
-                
+
                 // Extract and verify @type
                 let type_name = json_map.remove("@type")
                     .and_then(|v| v.as_str().map(String::from))
                     .ok_or_else(|| anyhow!("Missing or invalid '@type' field in JSON instance"))?;
-                    
+
                 let expected_type_name = #expected_type_name;
                 if type_name != expected_type_name {
                     return Err(anyhow!("Mismatched '@type': expected '{}', found '{}'", expected_type_name, type_name));
                 }
-                
+
                 // Check each variant
                 #(#variant_matchers)*
-                
+
                 Err(anyhow!("No valid enum variant found in JSON for tagged union {}", #expected_type_name))
             }
         }
     };
-    
+
     Result::Ok(expanded)
 }
 
@@ -425,7 +429,7 @@ fn generate_field_deserializers(
     struct_name: &Ident,
     expected_type_name: &str,
 ) -> Result<TokenStream, syn::Error> {
-    let mut deserializers : Vec<TokenStream> = Vec::new();
+    let mut deserializers: Vec<TokenStream> = Vec::new();
 
     for field in &fields.named {
         let field_ident = field.ident.as_ref().ok_or_else(|| {
@@ -457,4 +461,3 @@ fn generate_field_deserializers(
         #(#deserializers)*
     })
 }
-

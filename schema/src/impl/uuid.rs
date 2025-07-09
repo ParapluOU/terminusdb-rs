@@ -1,7 +1,10 @@
-use serde_json::Value;
-use crate::{InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, STRING, FromInstanceProperty};
-use uuid::Uuid;
 use crate::json::InstancePropertyFromJson;
+use crate::{
+    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty,
+    ToMaybeTDBSchema, ToSchemaClass, STRING,
+};
+use serde_json::Value;
+use uuid::Uuid;
 
 // Implement ToSchemaClass for Uuid
 impl ToSchemaClass for Uuid {
@@ -46,9 +49,7 @@ impl<Parent> InstancePropertyFromJson<Parent> for Uuid {
 impl FromInstanceProperty for Uuid {
     fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
         match prop {
-            InstanceProperty::Primitive(PrimitiveValue::String(s)) => {
-                Ok(Uuid::parse_str(s)?)
-            }
+            InstanceProperty::Primitive(PrimitiveValue::String(s)) => Ok(Uuid::parse_str(s)?),
             _ => Err(anyhow::anyhow!("Expected String primitive")),
         }
     }
@@ -70,11 +71,8 @@ mod tests {
     #[test]
     fn test_uuid_instance_property() {
         let uuid = Uuid::new_v4();
-        let property = <Uuid as ToInstanceProperty<()>>::to_property(
-            uuid,
-            "id",
-            &Schema::empty_class("Test"),
-        );
+        let property =
+            <Uuid as ToInstanceProperty<()>>::to_property(uuid, "id", &Schema::empty_class("Test"));
         match property {
             InstanceProperty::Primitive(PrimitiveValue::String(s)) => {
                 assert_eq!(s, uuid.to_string());

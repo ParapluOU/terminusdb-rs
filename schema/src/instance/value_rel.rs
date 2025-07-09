@@ -87,10 +87,9 @@ impl RelationValue {
             }
             RelationValue::One(nested) => {
                 if !nested.is_reference() {
-                    new_self =
-                        RelationValue::TransactionRef(nested.gen_id().expect(
-                            "could not derive internal ID for referencing entity in transaction",
-                        ));
+                    new_self = RelationValue::TransactionRef(nested.gen_id().expect(
+                        "could not derive internal ID for referencing entity in transaction",
+                    ));
 
                     to_ret.push(nested.clone());
                 }

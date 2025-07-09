@@ -20,8 +20,8 @@ use std::collections::HashSet;
 
 use crate::*;
 pub use {
-    btreemap::*, datetime::*, generic::*, hashmap::*, int::*, map::*, opt::*, phantom::*, set::*, str::*,
-    uuid::*, value::*, vec::*,
+    btreemap::*, datetime::*, generic::*, hashmap::*, int::*, map::*, opt::*, phantom::*, set::*,
+    str::*, uuid::*, value::*, vec::*,
 };
 
 macro_rules! impl_ref_tdb_schema {

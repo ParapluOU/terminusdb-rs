@@ -13,15 +13,17 @@ pub fn generate_totdbinstance_impl(
     // Removed data_enum_opt argument
 ) -> proc_macro2::TokenStream {
     let optid = match args.id_field.as_ref() {
-        None => {quote!{None::<String>}}
+        None => {
+            quote! {None::<String>}
+        }
         Some(field_name) => {
             let ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
-            quote!{
+            quote! {
                 Some( self.#ident.clone().into() )
             }
         }
     };
-    
+
     // This now simply wraps the provided instance_body_code within the impl
     quote! {
         impl terminusdb_schema::ToTDBInstance for #type_name {
@@ -30,12 +32,12 @@ pub fn generate_totdbinstance_impl(
                 let schema = <Self as terminusdb_schema::ToTDBSchema>::to_schema();
                 // Get optional ID from struct field if configured
                 let optid_val = #optid;
-                
+
                 // The entire logic for generating the instance is now contained here
                 #instance_body_code
             }
         }
-        
+
         // Use the helper function from the traits module
         impl terminusdb_schema::ToTDBInstances for #type_name {
             fn to_instance_tree(&self) -> Vec<terminusdb_schema::Instance> {
@@ -52,44 +54,64 @@ pub fn process_fields_for_instance(
     fields_named: &syn::FieldsNamed,
     _struct_name: &syn::Ident,
 ) -> proc_macro2::TokenStream {
-    let field_conversions = fields_named.named.iter().map(|field| {
-        let field_name = field.ident.as_ref().unwrap();
-        let field_ty = &field.ty;
-        let field_opts = TDBFieldOpts::from_field(field).unwrap();
-        let property_name = field_opts.name.unwrap_or_else(|| field_name.to_string());
-        
-        // Extract subdocument value before quote
-        let subdocument = field_opts.subdocument;
+    let field_conversions = fields_named
+        .named
+        .iter()
+        .map(|field| {
+            let field_name = field.ident.as_ref().unwrap();
+            let field_ty = &field.ty;
+            let field_opts = TDBFieldOpts::from_field(field).unwrap();
+            let property_name = field_opts.name.unwrap_or_else(|| field_name.to_string());
 
-        /*
+            // Extract subdocument value before quote
+            let subdocument = field_opts.subdocument;
 
-        // Generate code to check if the field type is a simple enum
-        let enum_check_code = quote! {
-            // Check if the type of this field corresponds to a Schema::Enum
-            // This uses the ToTDBSchema trait bound on the field's type T
-            if let Some(field_schema) = <#field_ty as terminusdb_schema::ToMaybeTDBSchema>::to_schema() {
-                if let terminusdb_schema::Schema::Enum {..} = field_schema {
-                    // It's an enum, serialize as string
-                    properties.insert(
-                        #property_name.to_string(),
-                        terminusdb_schema::InstanceProperty::Primitive(
-                            terminusdb_schema::PrimitiveValue::String(format!("{:?}", self.#field_name))
-                        )
-                    );
+            /*
+
+            // Generate code to check if the field type is a simple enum
+            let enum_check_code = quote! {
+                // Check if the type of this field corresponds to a Schema::Enum
+                // This uses the ToTDBSchema trait bound on the field's type T
+                if let Some(field_schema) = <#field_ty as terminusdb_schema::ToMaybeTDBSchema>::to_schema() {
+                    if let terminusdb_schema::Schema::Enum {..} = field_schema {
+                        // It's an enum, serialize as string
+                        properties.insert(
+                            #property_name.to_string(),
+                            terminusdb_schema::InstanceProperty::Primitive(
+                                terminusdb_schema::PrimitiveValue::String(format!("{:?}", self.#field_name))
+                            )
+                        );
+                    } else {
+                        // Not an enum, use the default ToInstanceProperty
+                        properties.insert(
+                            #property_name.to_string(),
+                            <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
+                                self.#field_name.clone(),
+                                &#property_name,
+                                &schema // 'schema' is the schema of the containing struct
+                            )
+                        );
+                    }
                 } else {
-                    // Not an enum, use the default ToInstanceProperty
-                    properties.insert(
+                     // No schema found for this type, assume it's a relation or needs default handling
+                     properties.insert(
                         #property_name.to_string(),
                         <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
                             self.#field_name.clone(),
                             &#property_name,
-                            &schema // 'schema' is the schema of the containing struct
+                            &schema
                         )
                     );
                 }
-            } else {
-                 // No schema found for this type, assume it's a relation or needs default handling
-                 properties.insert(
+            };
+
+            // Use the conditional code generation
+            enum_check_code
+
+             */
+
+            quote! {
+                properties.insert(
                     #property_name.to_string(),
                     <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
                         self.#field_name.clone(),
@@ -98,26 +120,9 @@ pub fn process_fields_for_instance(
                     )
                 );
             }
-        };
+        })
+        .collect::<Vec<_>>();
 
-        // Use the conditional code generation
-        enum_check_code
-
-         */
-
-        quote! {
-            properties.insert(
-                #property_name.to_string(),
-                <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
-                    self.#field_name.clone(),
-                    &#property_name,
-                    &schema
-                )
-            );
-        }
-
-    }).collect::<Vec<_>>();
-    
     quote! {
         #(#field_conversions)*
     }
@@ -129,23 +134,27 @@ pub fn process_enum_variants_for_instance(
     enum_name: &syn::Ident,
     rename_strategy: crate::args::RenameStrategy,
 ) -> proc_macro2::TokenStream {
-    let variants = data_enum.variants.iter().map(|variant| {
-        let variant_ident = &variant.ident;
-        let variant_name_str = variant_ident.to_string();
-        let renamed_variant = rename_strategy.apply(&variant_name_str);
-        
-        quote! {
-            #enum_name::#variant_ident => {
-                properties.insert(
-                    #renamed_variant.to_string(),
-                    terminusdb_schema::InstanceProperty::Primitive(
-                        terminusdb_schema::PrimitiveValue::Unit
-                    )
-                );
+    let variants = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            let variant_name_str = variant_ident.to_string();
+            let renamed_variant = rename_strategy.apply(&variant_name_str);
+
+            quote! {
+                #enum_name::#variant_ident => {
+                    properties.insert(
+                        #renamed_variant.to_string(),
+                        terminusdb_schema::InstanceProperty::Primitive(
+                            terminusdb_schema::PrimitiveValue::Unit
+                        )
+                    );
+                }
             }
-        }
-    }).collect::<Vec<_>>();
-    
+        })
+        .collect::<Vec<_>>();
+
     quote! {
         match self {
             #(#variants)*
@@ -271,7 +280,7 @@ pub fn process_tagged_enum_for_instance(
             }
         }
     }).collect::<Vec<_>>();
-    
+
     quote! {
         match self {
             #(#variants)*
@@ -288,7 +297,7 @@ pub fn generate_abstract_tagged_union_instance_logic(
     type_name: &syn::Ident,
 ) -> proc_macro2::TokenStream {
     let mut match_arms = Vec::new(); // Initialize vector for match arms
-                    
+
     for variant in data_enum.variants.iter() {
         let variant_ident = &variant.ident;
         let arm = match &variant.fields {
@@ -301,7 +310,7 @@ pub fn generate_abstract_tagged_union_instance_logic(
                         inner_value.to_instance(id.clone())
                     }
                 }
-            },
+            }
             _ => {
                 // Arm for other variants: panic
                 quote! {
@@ -320,4 +329,4 @@ pub fn generate_abstract_tagged_union_instance_logic(
             #(#match_arms),*
         }
     }
-} 
+}

@@ -53,7 +53,8 @@ impl ToMaybeTDBSchema for BTreeMap<String, String> {}
 // Implement conversion from BTreeMap<String, String> to PrimitiveValue
 impl From<BTreeMap<String, String>> for PrimitiveValue {
     fn from(map: BTreeMap<String, String>) -> Self {
-        let json_map: serde_json::Map<String, Value> = map.into_iter()
+        let json_map: serde_json::Map<String, Value> = map
+            .into_iter()
             .map(|(k, v)| (k, Value::String(v)))
             .collect();
         Self::Object(Value::Object(json_map))
@@ -509,7 +510,9 @@ impl<T: ToTDBSchema> From<BTreeMap<EntityIDFor<T>, DateTime<Utc>>> for InstanceP
     }
 }
 
-impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for BTreeMap<EntityIDFor<T>, DateTime<Utc>> {
+impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent>
+    for BTreeMap<EntityIDFor<T>, DateTime<Utc>>
+{
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         self.into()
     }
@@ -963,10 +966,10 @@ mod tests {
         map.insert(entity_id2.clone(), dt2);
 
         // Convert to InstanceProperty
-        let property = <BTreeMap<EntityIDFor<TestEntity>, DateTime<Utc>> as ToInstanceProperty<()>>::to_property(
-            map.clone(),
-            "timestamps",
-            &Schema::empty_class("Test"),
+        let property = <BTreeMap<EntityIDFor<TestEntity>, DateTime<Utc>> as ToInstanceProperty<
+            (),
+        >>::to_property(
+            map.clone(), "timestamps", &Schema::empty_class("Test")
         );
 
         // Convert back from InstanceProperty

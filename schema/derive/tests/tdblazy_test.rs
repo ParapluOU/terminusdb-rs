@@ -1,11 +1,11 @@
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::BTreeMap;
 use terminusdb_schema::{
     Client, FromTDBInstance, Instance, InstanceProperty, Key, PrimitiveValue, RelationValue,
     Schema, TdbLazy, ToTDBInstance, ToTDBSchema,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::collections::BTreeMap;
 
 // Mock client for testing
 struct MockClient;

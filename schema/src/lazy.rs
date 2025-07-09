@@ -67,7 +67,7 @@ impl<T: TerminusDBModel> TdbLazy<T> {
     }
 
     /// Get a reference to the inner data, panicking if not loaded.
-    /// 
+    ///
     /// # Panics
     /// Panics if the data has not been loaded yet.
     pub fn get_expect(&self) -> &T {
@@ -78,7 +78,7 @@ impl<T: TerminusDBModel> TdbLazy<T> {
     }
 
     /// Take ownership of the inner data, panicking if not loaded.
-    /// 
+    ///
     /// # Panics
     /// Panics if the data has not been loaded yet.
     pub fn take_expect(self) -> T {

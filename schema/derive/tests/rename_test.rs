@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::{ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
-use serde::{Deserialize, Serialize};
 
 #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
 #[tdb(rename_all = "lowercase")]

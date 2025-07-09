@@ -1,7 +1,7 @@
 use crate::{FromTDBInstance, PrimitiveValue, ToTDBInstance, ToTDBSchema};
 
 /// marker trait
-pub trait Primitive : Into<PrimitiveValue>{}
+pub trait Primitive: Into<PrimitiveValue> {}
 
 /// Marker trait for compile-time primitive detection in derive macros
 /// Types implementing Primitive automatically get this marker

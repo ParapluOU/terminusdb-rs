@@ -1,4 +1,3 @@
-
 // Special wrapper type for Vec<f32> deserialization
 #[derive(Debug, Clone)]
 pub struct F32Vector(pub Vec<f32>);

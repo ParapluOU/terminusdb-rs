@@ -128,10 +128,10 @@ pub fn implement_for_struct(
     let instance_body_code = quote! {
         // Create a BTreeMap for properties
         let mut properties = std::collections::BTreeMap::new();
-        
+
         // Convert each field to an InstanceProperty
         #properties_code
-        
+
         // Construct the final Instance (optid_val is provided by the wrapper)
         terminusdb_schema::Instance {
             id: id.or( optid_val ).map(|v| schema.format_id(&v)),
@@ -144,10 +144,9 @@ pub fn implement_for_struct(
 
     // Generate the implementation for instance using the simplified wrapper
     let instance_impl = generate_totdbinstance_impl(
-        struct_name, 
-        instance_body_code, // Pass the generated body code 
-        opts.clone()
-        // No longer pass None here
+        struct_name,
+        instance_body_code, // Pass the generated body code
+        opts.clone(),       // No longer pass None here
     );
 
     // Combine both implementations

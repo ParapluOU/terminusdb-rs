@@ -38,7 +38,7 @@ pub trait FromTDBInstance: Sized {
 // INSTANCE
 //
 
-pub trait ToTDBInstances : Send {
+pub trait ToTDBInstances: Send {
     /// Returns a tree of instances that need to be saved, including nested instances
     fn to_instance_tree(&self) -> Vec<Instance>;
 
@@ -56,7 +56,10 @@ pub trait ToTDBInstances : Send {
 
     /// make into trait object so that we can add different model types to a Vec
     /// and insert in a single query for performance
-    fn boxed(self) -> Box<dyn ToTDBInstances> where Self: Sized + 'static {
+    fn boxed(self) -> Box<dyn ToTDBInstances>
+    where
+        Self: Sized + 'static,
+    {
         Box::new(self)
     }
 }
@@ -65,7 +68,7 @@ pub trait IntoBoxedTDBInstances {
     fn into_boxed(self) -> Box<dyn ToTDBInstances>;
 }
 
-impl<T: ToTDBInstances+'static> IntoBoxedTDBInstances for T {
+impl<T: ToTDBInstances + 'static> IntoBoxedTDBInstances for T {
     fn into_boxed(self) -> Box<dyn ToTDBInstances> {
         self.boxed()
     }
@@ -261,7 +264,7 @@ impl Instance {
 
     pub fn enum_value(&self) -> Option<String> {
         for prop in self.properties.keys() {
-            return prop.clone().into()
+            return prop.clone().into();
         }
         None
     }
@@ -344,11 +347,11 @@ impl Instance {
 impl ToJson for Instance {
     fn to_json(&self) -> serde_json::Value {
         if self.is_enum() {
-            return self.enum_value().expect("should not happen; enum instances should always have a proprty with the actual variant name").into()
+            return self.enum_value().expect("should not happen; enum instances should always have a proprty with the actual variant name").into();
         }
 
         if self.is_reference() {
-            return Value::String(self.id().cloned().unwrap())
+            return Value::String(self.id().cloned().unwrap());
         }
 
         // default
@@ -361,8 +364,10 @@ impl ToJson for Instance {
         let mut map = serde_json::Map::new();
 
         let maybe_namespaced_classname = match self.schema.base() {
-            None => {self.schema.class_name().clone()},
-            Some(base) => {format!("{}{}", base, self.schema.class_name())}
+            None => self.schema.class_name().clone(),
+            Some(base) => {
+                format!("{}{}", base, self.schema.class_name())
+            }
         };
 
         // class type name

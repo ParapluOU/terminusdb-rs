@@ -407,4 +407,3 @@ impl<Parent, T: ToInstanceProperty<Self>> ToInstanceProperty<Parent> for BTreeSe
         )
     }
 }
-

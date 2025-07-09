@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 // Removed incorrect imports for TdbDataType, TdbDebug, TdbDisplay
-use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
 use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Represents TaggedUnion "ArithmeticValue"

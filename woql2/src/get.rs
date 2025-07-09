@@ -73,4 +73,3 @@ pub struct Get {
     /// Optional flag indicating if the resource has a header row.
     pub has_header: Option<bool>,
 }
-

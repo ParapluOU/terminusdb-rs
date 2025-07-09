@@ -1,12 +1,12 @@
 // https://terminusdb.com/docs/index/terminusx-db/reference-guides/schema
 
-use std::collections::{BTreeSet, HashSet};
-use std::fs::File;
+use crate::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeSet, HashSet};
+use std::fs::File;
 use std::io::Write;
-use crate::*;
 
 // todo: the derived serialize and deserialize do not comply with the TerminusDB schema and are only used for RPC calls!
 #[derive(Eq, PartialEq, Debug, Clone, Hash, Serialize, Deserialize)]
@@ -425,22 +425,21 @@ impl Schema {
 
     pub fn base(&self) -> Option<&String> {
         match self {
-            Schema::Class { base, .. } => {base.as_ref()}
-            Schema::OneOfClass { base, .. } => {base.as_ref()}
+            Schema::Class { base, .. } => base.as_ref(),
+            Schema::OneOfClass { base, .. } => base.as_ref(),
             // Schema::Enum { base, .. } => {}
-            Schema::TaggedUnion { base, .. } => {base.as_ref()}
-            _ => None
+            Schema::TaggedUnion { base, .. } => base.as_ref(),
+            _ => None,
         }
     }
 
     pub fn is_abstract(&self) -> bool {
         match self {
-            Schema::Class { r#abstract, .. } => {*r#abstract}
-            Schema::OneOfClass { .. } => {false}
-            Schema::Enum { .. } => {false}
-            Schema::TaggedUnion { r#abstract, .. } => {*r#abstract}
+            Schema::Class { r#abstract, .. } => *r#abstract,
+            Schema::OneOfClass { .. } => false,
+            Schema::Enum { .. } => false,
+            Schema::TaggedUnion { r#abstract, .. } => *r#abstract,
         }
-
     }
 
     pub fn is_enum(&self) -> bool {
@@ -451,7 +450,7 @@ impl Schema {
     }
 
     pub fn is_tagged_union(&self) -> bool {
-        matches!(self, Schema::TaggedUnion {..})
+        matches!(self, Schema::TaggedUnion { .. })
     }
 
     pub fn is_key_random(&self) -> bool {
@@ -467,7 +466,7 @@ impl Schema {
         match self {
             Schema::Class { unfoldable, .. } => *unfoldable,
             Schema::TaggedUnion { unfoldable, .. } => *unfoldable,
-            _ => false
+            _ => false,
         }
     }
 
@@ -601,7 +600,7 @@ impl ToJson for Schema {
                 documentation,
                 properties,
                 unfoldable,
-                r#abstract
+                r#abstract,
             } => {
                 map.insert("@type".to_string(), "TaggedUnion".to_string().into());
                 map.insert("@id".to_string(), id.clone().into());
@@ -688,7 +687,6 @@ impl ToString for Schema {
     }
 }
 
-
 /*
    terminusdb_schema::Schema::Class {
        id: <Self as terminusdb_schema::ToSchemaClass>::to_class().to_string(),
@@ -756,7 +754,16 @@ pub trait ToTDBSchema {
     fn assert_schema_tree_includes<T: ToTDBSchema>() {
         let schema_tree = Self::to_schema_tree();
         let class_name = T::schema_name();
-        assert!(schema_tree.iter().any(|s| s.class_name() == &class_name), "expected schema tree of {} to include {}, but was: {:#?}", std::any::type_name::<Self>(), class_name, schema_tree.iter().map(|s| s.class_name()).collect::<Vec<_>>());
+        assert!(
+            schema_tree.iter().any(|s| s.class_name() == &class_name),
+            "expected schema tree of {} to include {}, but was: {:#?}",
+            std::any::type_name::<Self>(),
+            class_name,
+            schema_tree
+                .iter()
+                .map(|s| s.class_name())
+                .collect::<Vec<_>>()
+        );
     }
 
     fn to_schema_tree() -> Vec<Schema>;
@@ -917,13 +924,13 @@ fn test_schema_taggedunion_json() {
                 class: "sys:Unit".to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
             Property {
                 name: "node".to_string(),
                 class: "Node".to_string().to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
         ],
         unfoldable: true,
     };
@@ -961,13 +968,13 @@ fn test_schema_class_exact_json() {
                 class: "xsd:string".to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
             Property {
                 name: "hair_colour".to_string(),
                 class: "Colour".to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
         ],
         unfoldable: true,
     };
@@ -1005,7 +1012,7 @@ fn test_schema_class_oneof_json() {
             class: "xsd:string".to_string(),
             r#type: None,
         }
-            .into()],
+        .into()],
         classes: vec![
             vec![
                 Property {
@@ -1019,8 +1026,8 @@ fn test_schema_class_oneof_json() {
                     r#type: None,
                 },
             ]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
             vec![
                 Property {
                     name: "employers".to_string(),
@@ -1033,8 +1040,8 @@ fn test_schema_class_oneof_json() {
                     r#type: None,
                 },
             ]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
         ],
     };
 
@@ -1075,13 +1082,13 @@ fn test_schema_relation_opt_json() {
                 class: "xsd:string".to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
             Property {
                 name: "comment".to_string(),
                 r#type: Some(TypeFamily::Optional),
                 class: "xsd:string".to_string(),
             }
-                .into(),
+            .into(),
         ],
         unfoldable: true,
     };
@@ -1122,7 +1129,7 @@ fn test_schema_relation_list_json() {
             r#type: Some(TypeFamily::List),
             class: "Task".to_string(),
         }
-            .into()],
+        .into()],
         unfoldable: true,
     };
 
@@ -1162,13 +1169,13 @@ fn test_schema_relation_set_json() {
                 class: "xsd:string".to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
             Property {
                 name: "friends".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::None)),
                 class: "Person".to_string(),
             }
-                .into(),
+            .into(),
         ],
         unfoldable: true,
     };
@@ -1210,25 +1217,25 @@ fn test_schema_relation_set_cardinality_json() {
                 class: "xsd:string".to_string(),
                 r#type: None,
             }
-                .into(),
+            .into(),
             Property {
                 name: "friends".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Exact(3))),
                 class: "Person".to_string(),
             }
-                .into(),
+            .into(),
             Property {
                 name: "friends2".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Min(5))),
                 class: "Person".to_string(),
             }
-                .into(),
+            .into(),
             Property {
                 name: "friends3".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Max(10))),
                 class: "Person".to_string(),
             }
-                .into(),
+            .into(),
         ],
         unfoldable: true,
     };

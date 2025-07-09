@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::prelude::*;
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
 
 // Helper struct for DictionaryTemplate
 // todo: make key type 'Random'

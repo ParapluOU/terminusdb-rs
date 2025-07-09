@@ -1,7 +1,7 @@
-use log::{trace, log};
+use crate::instance::{generate_totdbinstance_impl, process_enum_variants_for_instance};
 use crate::prelude::*;
 use crate::schema::generate_totdbschema_impl;
-use crate::instance::{generate_totdbinstance_impl, process_enum_variants_for_instance};
+use log::{log, trace};
 
 /// Process a simple enum (without variants carrying values) to generate a TerminusDB Enum
 pub fn implement_for_simple_enum(
@@ -10,16 +10,19 @@ pub fn implement_for_simple_enum(
     opts: &TDBModelOpts,
 ) -> proc_macro2::TokenStream {
     let enum_name = &input.ident;
-    let class_name = opts.class_name.clone().unwrap_or_else(|| enum_name.to_string());
+    let class_name = opts
+        .class_name
+        .clone()
+        .unwrap_or_else(|| enum_name.to_string());
 
     trace!("Processing SimpleEnum: {}", enum_name);
-    
+
     // Get the rename strategy from opts, defaulting to lowercase for enum variants
     let rename_strategy = match opts.get_rename_strategy() {
         crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
         other => other,
     };
-    
+
     // Extract the variant names from the enum
     let variant_values = data_enum.variants.iter().map(|variant| {
         let variant_name = &variant.ident;
@@ -55,11 +58,11 @@ pub fn implement_for_simple_enum(
             <Self as terminusdb_schema::ToTDBSchema>::to_schema_tree_mut(&mut collection);
             collection.into_iter().collect()
         }
-        
+
         fn to_schema_tree_mut(collection: &mut std::collections::HashSet<terminusdb_schema::Schema>) {
             let schema = <Self as terminusdb_schema::ToTDBSchema>::to_schema();
             let class_name = schema.class_name().clone();
-            
+
             // Only add if not already present (prevents recursion)
             if !collection.iter().any(|s| s.class_name() == &class_name) {
                 collection.insert(schema);
@@ -75,22 +78,23 @@ pub fn implement_for_simple_enum(
         opts,
         values_impl,
         quote! { SchemaTypeEnum },
-        to_schema_tree_impl
+        to_schema_tree_impl,
     );
-    
-    // Generate the body code for the to_instance method for simple enums  
+
+    // Generate the body code for the to_instance method for simple enums
     let instance_rename_strategy = match opts.get_rename_strategy() {
         crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
         other => other,
     };
-    let properties_code = process_enum_variants_for_instance(data_enum, enum_name, instance_rename_strategy);
+    let properties_code =
+        process_enum_variants_for_instance(data_enum, enum_name, instance_rename_strategy);
     let instance_body_code = quote! {
         // Create a BTreeMap for properties
         let mut properties = std::collections::BTreeMap::new();
-        
+
         // Populate properties based on the enum variant
         #properties_code
-        
+
         // Construct the final Instance (optid_val is provided by the wrapper)
         terminusdb_schema::Instance {
             id: id.or( optid_val ).map(|v| schema.format_id(&v)),
@@ -100,15 +104,14 @@ pub fn implement_for_simple_enum(
             properties,
         }
     };
-    
+
     // Generate the ToTDBInstance implementation using the simplified wrapper
     let instance_impl = generate_totdbinstance_impl(
         enum_name,
         instance_body_code, // Pass the generated body code
-        opts.clone()
-        // No longer pass Some(data_enum) here
+        opts.clone(),       // No longer pass Some(data_enum) here
     );
-    
+
     // Generate the implementation for ToSchemaClass trait
     let schema_class_impl = quote! {
         impl terminusdb_schema::ToSchemaClass for #enum_name {
@@ -117,11 +120,11 @@ pub fn implement_for_simple_enum(
             }
         }
     };
-    
+
     // Combine both implementations
     quote! {
         #schema_impl
-        
+
         #instance_impl
 
         // #schema_class_impl

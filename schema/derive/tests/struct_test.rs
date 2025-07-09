@@ -1,15 +1,13 @@
-use terminusdb_schema::{
-    ClassDocumentation, Key, Schema, ToTDBInstance, ToTDBSchema, TypeFamily,
-};
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use terminusdb_schema::{ClassDocumentation, Key, Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use terminusdb_schema::json::InstanceFromJson;
     use serde_json::Value;
+    use terminusdb_schema::json::InstanceFromJson;
 
     // Basic struct test
     #[derive(TerminusDBModel, Debug, Clone, PartialEq, Serialize, Deserialize)]

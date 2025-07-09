@@ -69,16 +69,16 @@ pub type Unit = ();
 /// # Examples
 /// ```rust,ignore
 /// use terminusdb_schema::{schemas, ToTDBSchema};
-/// 
+///
 /// #[derive(TerminusDBModel)]
 /// struct Person { name: String, age: i32 }
-/// 
-/// #[derive(TerminusDBModel)] 
+///
+/// #[derive(TerminusDBModel)]
 /// struct Company { name: String, employees: Vec<Person> }
-/// 
+///
 /// // Generate schemas for multiple types
 /// let schema_vec = schemas!(Person, Company);
-/// 
+///
 /// // Use with client operations
 /// client.insert_documents(schema_vec, args).await?;
 /// ```

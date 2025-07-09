@@ -19,4 +19,3 @@ make_type_param! {
 }
 
 pub trait SchemaTypeI: Default + Into<SchemaType> {}
-

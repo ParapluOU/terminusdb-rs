@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use serde::{Deserialize, Serialize};
 
 /// Simple test struct to check if Vec<String> works
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -34,10 +34,7 @@ mod tests {
             // Check tags property
             let tags_prop = properties.iter().find(|p| p.name == "tags").unwrap();
             assert_eq!(tags_prop.class, "xsd:string");
-            assert_eq!(
-                tags_prop.r#type,
-                Some(terminusdb_schema::TypeFamily::List)
-            );
+            assert_eq!(tags_prop.r#type, Some(terminusdb_schema::TypeFamily::List));
 
             // Check keywords property
             let keywords_prop = properties.iter().find(|p| p.name == "keywords").unwrap();

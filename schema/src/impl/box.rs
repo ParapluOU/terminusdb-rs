@@ -1,7 +1,7 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    FromTDBInstance, Instance, InstanceFromJson, PrimitiveValue, RelationValue, Schema, TerminusDBModel,
-    ToTDBInstance, ToTDBInstances, ToTDBSchema,
+    FromTDBInstance, Instance, InstanceFromJson, PrimitiveValue, RelationValue, Schema,
+    TerminusDBModel, ToTDBInstance, ToTDBInstances, ToTDBSchema,
 };
 use crate::{InstanceProperty, ToInstanceProperty};
 

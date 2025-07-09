@@ -4,9 +4,9 @@ use crate::{
     ToInstanceProperty, ToTDBInstance,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::marker::PhantomData;
-use serde::de::DeserializeOwned;
 
 // Implementations for primitive types
 impl<Parent> InstancePropertyFromJson<Parent> for String {
@@ -180,13 +180,14 @@ where
         // so we wouldn thave this conditional inside the generic
         if T::to_schema().is_enum() {
             return if let Value::String(enum_variant) = json {
-                let enm : T = serde_json::from_str(&format!("\"{}\"", &enum_variant))?;
+                let enm: T = serde_json::from_str(&format!("\"{}\"", &enum_variant))?;
                 // Ok(InstanceProperty::Primitive(PrimitiveValue::String(enum_variant)))
-                Ok(InstanceProperty::Relation(RelationValue::One(enm.to_instance(None))))
-            }
-            else {
+                Ok(InstanceProperty::Relation(RelationValue::One(
+                    enm.to_instance(None),
+                )))
+            } else {
                 bail!("expected String value for Enum")
-            }
+            };
         }
 
         // Use the InstanceFromJson implementation to create an Instance

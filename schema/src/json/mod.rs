@@ -1,7 +1,7 @@
 // mod map;
 mod impls;
 mod json;
-pub mod normalization;
 mod nested_ref;
+pub mod normalization;
 
 pub use {json::*, nested_ref::*};
