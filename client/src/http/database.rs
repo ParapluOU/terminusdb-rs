@@ -111,11 +111,11 @@ impl super::client::TerminusDBHttpClient {
     /// ```
     pub async fn reset_database(&self, db: &str) -> anyhow::Result<Self> {
         debug!("resetting database {}", db);
-        
+
         self.delete_database(db)
             .await
             .context("failed to delete database during reset")?;
-            
+
         self.ensure_database(db)
             .await
             .context("failed to recreate database during reset")

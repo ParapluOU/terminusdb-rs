@@ -1,18 +1,14 @@
 //! Log and commit tracking operations
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::log::{CommitLogIterator, LogEntry, LogOpts, EntityIterator};
+use crate::log::{CommitLogIterator, EntityIterator, LogEntry, LogOpts};
 
 use {
-    crate::{
-        spec::BranchSpec,
-        TDBInstanceDeserializer,
-        EntityID,
-    },
+    crate::{spec::BranchSpec, EntityID, TDBInstanceDeserializer},
     ::log::debug,
     anyhow::Context,
     serde::Deserialize,
-    terminusdb_schema::{GraphType, ToTDBInstance, ToJson},
+    terminusdb_schema::{GraphType, ToJson, ToTDBInstance},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
 };
@@ -31,7 +27,8 @@ impl super::client::TerminusDBHttpClient {
             count,
         } = opts;
 
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("log")
             .simple_database(&spec.db)
             .log_params(offset.unwrap_or_default(), count.unwrap_or(10), verbose)
@@ -194,7 +191,9 @@ impl super::client::TerminusDBHttpClient {
         _limit: Option<usize>,
     ) -> anyhow::Result<Vec<EntityID>> {
         // WASM stub
-        Err(anyhow::anyhow!("commit_added_entities_ids not implemented for WASM"))
+        Err(anyhow::anyhow!(
+            "commit_added_entities_ids not implemented for WASM"
+        ))
     }
 
     /// return ID for first entity of given type that was created by the given commit
@@ -218,7 +217,9 @@ impl super::client::TerminusDBHttpClient {
         _commit: &LogEntry,
     ) -> anyhow::Result<Option<String>> {
         // WASM stub
-        Err(anyhow::anyhow!("first_commit_created_entity_id not implemented for WASM"))
+        Err(anyhow::anyhow!(
+            "first_commit_created_entity_id not implemented for WASM"
+        ))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -248,7 +249,9 @@ impl super::client::TerminusDBHttpClient {
         _deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Option<T>> {
         // WASM stub
-        Err(anyhow::anyhow!("first_commit_created_entity not implemented for WASM"))
+        Err(anyhow::anyhow!(
+            "first_commit_created_entity not implemented for WASM"
+        ))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -268,7 +271,9 @@ impl super::client::TerminusDBHttpClient {
         _commit: &LogEntry,
     ) -> anyhow::Result<Vec<EntityID>> {
         // WASM stub
-        Err(anyhow::anyhow!("all_commit_created_entity_ids not implemented for WASM"))
+        Err(anyhow::anyhow!(
+            "all_commit_created_entity_ids not implemented for WASM"
+        ))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -306,6 +311,8 @@ impl super::client::TerminusDBHttpClient {
         _deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Vec<T>> {
         // WASM stub
-        Err(anyhow::anyhow!("all_commit_created_entities not implemented for WASM"))
+        Err(anyhow::anyhow!(
+            "all_commit_created_entities not implemented for WASM"
+        ))
     }
 }

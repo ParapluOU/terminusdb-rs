@@ -318,7 +318,10 @@ impl super::client::TerminusDBHttpClient {
         let has = self.has_instance(model, &args.spec).await;
 
         // First check if instance already exists
-        if !args.force && has && let Some(entity_id) = model.instance_id() {
+        if !args.force
+            && has
+            && let Some(entity_id) = model.instance_id()
+        {
             let id = entity_id.id().to_string();
             warn!("not inserted because it already exists");
 

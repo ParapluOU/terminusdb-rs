@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, Datelike, Timelike, Utc};
     use terminusdb_client::CommitHistoryEntry;
-    use chrono::{DateTime, Utc, Datelike, Timelike};
 
     #[test]
     fn test_timestamp_datetime_parsing() {
@@ -15,7 +15,7 @@ mod tests {
 
         let result = entry.timestamp_datetime();
         assert!(result.is_ok());
-        
+
         let datetime = result.unwrap();
         assert_eq!(datetime.year(), 2023);
         assert_eq!(datetime.month(), 12);
@@ -36,7 +36,7 @@ mod tests {
 
         let result = entry.timestamp_datetime();
         assert!(result.is_ok());
-        
+
         let datetime = result.unwrap();
         assert_eq!(datetime.timestamp_millis() % 1000, 123);
     }
@@ -52,7 +52,7 @@ mod tests {
 
         let result = entry.timestamp_datetime();
         assert!(result.is_err());
-        
+
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Invalid timestamp"));
     }

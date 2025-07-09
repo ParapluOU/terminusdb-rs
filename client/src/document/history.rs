@@ -64,10 +64,10 @@ pub struct CommitHistoryEntry {
 
 impl CommitHistoryEntry {
     /// Convert the timestamp float into a chrono DateTime<Utc>
-    /// 
+    ///
     /// # Returns
     /// The parsed DateTime or an error if the timestamp is invalid
-    /// 
+    ///
     /// # Example
     /// ```rust
     /// let entry = CommitHistoryEntry {
@@ -76,12 +76,15 @@ impl CommitHistoryEntry {
     ///     message: "Initial commit".to_string(),
     ///     timestamp: 1751808918.7295272,
     /// };
-    /// 
+    ///
     /// let datetime = entry.timestamp_datetime()?;
     /// println!("Commit was made at: {}", datetime);
     /// ```
     pub fn timestamp_datetime(&self) -> anyhow::Result<DateTime<Utc>> {
-        DateTime::from_timestamp(self.timestamp as i64, ((self.timestamp.fract() * 1_000_000_000.0) as u32))
-            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", self.timestamp))
+        DateTime::from_timestamp(
+            self.timestamp as i64,
+            ((self.timestamp.fract() * 1_000_000_000.0) as u32),
+        )
+        .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", self.timestamp))
     }
 }

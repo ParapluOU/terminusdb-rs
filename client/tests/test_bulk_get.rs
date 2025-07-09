@@ -1,15 +1,11 @@
 //! Test file to verify the new bulk document retrieval functionality
-//! 
+//!
 //! These tests verify that the new get_documents() and get_instances() methods
 //! work correctly with the enhanced GetOpts structure.
 
 #[cfg(test)]
 mod tests {
-    use terminusdb_client::{
-        GetOpts,
-        BranchSpec,
-        TerminusDBHttpClient,
-    };
+    use terminusdb_client::{BranchSpec, GetOpts, TerminusDBHttpClient};
 
     #[test]
     fn test_get_opts_builder_pattern() {
@@ -17,7 +13,7 @@ mod tests {
         let opts = GetOpts::default()
             .with_skip(10)
             .with_count(5)
-            .with_type_filter_string("Person")  // Use string version for testing
+            .with_type_filter_string("Person") // Use string version for testing
             .with_unfold(true)
             .with_as_list(true);
 
@@ -39,7 +35,7 @@ mod tests {
 
         // Note: Type-filtered constructor test commented out as it requires a concrete type
         // that implements TerminusDBModel to test properly
-        // 
+        //
         // let filtered = GetOpts::filtered_by_type::<SomeType>();
         // assert_eq!(filtered.type_filter, Some("SomeType".to_string()));
     }
@@ -56,31 +52,31 @@ mod tests {
 
     // Note: The following would be integration tests that require a running TerminusDB instance
     // They are commented out to avoid test failures in CI
-    
+
     /*
     #[tokio::test]
     async fn test_get_documents_integration() {
         // This would test the actual API call
         let client = TerminusDBHttpClient::local_node();
         let spec = BranchSpec::new("admin", "test_db", Some("main"));
-        
+
         let ids = vec!["Person/alice".to_string(), "Person/bob".to_string()];
         let opts = GetOpts::default().with_unfold(true);
-        
+
         let result = client.get_documents(ids, &spec, opts).await;
         // Would assert based on expected data
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_get_instances_integration() {
         // This would test the typed API call
         let client = TerminusDBHttpClient::local_node();
         let spec = BranchSpec::new("admin", "test_db", Some("main"));
         let mut deserializer = DefaultDeserializer::new();
-        
+
         let ids = vec!["alice_id".to_string(), "bob_id".to_string()];
         let opts = GetOpts::paginated(0, 10);
-        
+
         let result: Result<Vec<Person>, _> = client.get_instances(ids, &spec, opts, &mut deserializer).await;
         // Would assert based on expected data
     }

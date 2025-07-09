@@ -1,12 +1,10 @@
 //! Response parsing utilities for the HTTP client
 
 #[cfg(not(target_arch = "wasm32"))]
-use {
-    reqwest::Response,
-};
+use reqwest::Response;
 
 use {
-    crate::{ApiResponse, result::ResponseWithHeaders},
+    crate::{result::ResponseWithHeaders, ApiResponse},
     ::log::trace,
     anyhow::{anyhow, Context},
     serde::{de::DeserializeOwned, Deserialize, Serialize},
@@ -53,7 +51,10 @@ impl super::client::TerminusDBHttpClient {
             .and_then(|value| value.to_str().ok())
             .map(|s| s.to_string());
 
-        trace!("[TerminusDBHttpClient] TerminusDB-Data-Version header: {:?}", terminusdb_data_version);
+        trace!(
+            "[TerminusDBHttpClient] TerminusDB-Data-Version header: {:?}",
+            terminusdb_data_version
+        );
 
         let json = res.json::<serde_json::Value>().await?;
 

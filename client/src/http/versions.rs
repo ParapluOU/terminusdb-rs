@@ -1,19 +1,15 @@
 //! Instance version retrieval implementation
 
 use {
-    crate::{
-        spec::BranchSpec,
-        TDBInstanceDeserializer,
-        WOQLResult,
-    },
+    crate::{spec::BranchSpec, TDBInstanceDeserializer, WOQLResult},
     ::log::{debug, warn},
     anyhow::{anyhow, Context},
     std::collections::HashMap,
-    terminusdb_schema::{ToTDBInstance, ToJson},
+    terminusdb_schema::{ToJson, ToTDBInstance},
     terminusdb_woql_builder::prelude::{node, vars, WoqlBuilder},
 };
 
-use super::{TerminusDBModel, helpers::format_id};
+use super::{helpers::format_id, TerminusDBModel};
 
 impl super::client::TerminusDBHttpClient {
     /// Retrieves specific versions of an instance by their commit IDs.
@@ -58,62 +54,68 @@ impl super::client::TerminusDBHttpClient {
         commit_ids: Vec<String>,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Vec<(T, String)>> {
-        debug!("Attempting WOQL-based instance version retrieval for {} with {} specific commits", 
-               instance_id, commit_ids.len());
-        
+        debug!(
+            "Attempting WOQL-based instance version retrieval for {} with {} specific commits",
+            instance_id,
+            commit_ids.len()
+        );
+
         if commit_ids.is_empty() {
             return Ok(vec![]);
         }
-        
+
         // Build a WOQL query that uses OR to combine queries across commits
         let full_id = format_id::<T>(instance_id);
-        
+
         // Build individual queries for each commit
         let mut commit_queries = Vec::new();
         let mut commit_map = HashMap::new();
-        
+
         for commit_id in commit_ids {
             // Use the correct format: admin/{db}/local/commit/{commitID}
             let collection = format!("{}/{}/local/commit/{}", self.org, spec.db, &commit_id);
-            
+
             // Create a unique variable for this commit's document
             let doc_var = vars!(format!("Doc_{}", commit_id.replace('/', "_")));
             commit_map.insert(doc_var.to_string(), commit_id.clone());
-            
+
             let query = WoqlBuilder::new()
                 .triple(node(&full_id), "rdf:type", vars!("Type"))
                 .read_document(node(&full_id), doc_var.clone())
                 .select(vec![doc_var])
                 .using(&collection);
-            
+
             commit_queries.push(query);
         }
-        
+
         if commit_queries.is_empty() {
             return Ok(vec![]);
         }
-        
+
         // Combine all queries with OR
         let mut commit_queries_iter = commit_queries.into_iter();
         let mut combined_query = commit_queries_iter.next().unwrap();
         for query in commit_queries_iter {
             combined_query = combined_query.or([query]);
         }
-        
+
         let final_query = combined_query.finalize();
         let json_query = final_query.to_instance(None).to_json();
-        
-        debug!("Executing combined WOQL query for {} commits", commit_map.len());
-        
+
+        debug!(
+            "Executing combined WOQL query for {} commits",
+            commit_map.len()
+        );
+
         // Execute the query
         match self.query_raw(Some(spec.clone()), json_query).await {
             Ok(result) => {
                 let result: WOQLResult<serde_json::Value> = result;
                 debug!("WOQL query returned {} bindings", result.bindings.len());
-                
+
                 // Process results
                 let mut versions = Vec::new();
-                
+
                 for binding in result.bindings {
                     // Find which doc variable has data
                     for (var_name, commit_id) in &commit_map {
@@ -124,14 +126,20 @@ impl super::client::TerminusDBHttpClient {
                                     versions.push((instance, commit_id.clone()));
                                 }
                                 Err(e) => {
-                                    warn!("Failed to deserialize version from commit {}: {}", commit_id, e);
+                                    warn!(
+                                        "Failed to deserialize version from commit {}: {}",
+                                        commit_id, e
+                                    );
                                 }
                             }
                         }
                     }
                 }
-                
-                debug!("Successfully retrieved {} versions via WOQL", versions.len());
+
+                debug!(
+                    "Successfully retrieved {} versions via WOQL",
+                    versions.len()
+                );
                 Ok(versions)
             }
             Err(e) => {
@@ -181,24 +189,25 @@ impl super::client::TerminusDBHttpClient {
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<Vec<(T, String)>> {
         debug!("Listing all versions for instance {}", instance_id);
-        
+
         // First get the commit history
-        let history = self.get_instance_history::<T>(instance_id, spec, None).await?;
+        let history = self
+            .get_instance_history::<T>(instance_id, spec, None)
+            .await?;
         if history.is_empty() {
             return Ok(vec![]);
         }
-        
+
         debug!("Found {} commits in history", history.len());
-        
+
         // Extract commit IDs from history
-        let commit_ids: Vec<String> = history.into_iter()
-            .map(|entry| entry.identifier)
-            .collect();
-        
+        let commit_ids: Vec<String> = history.into_iter().map(|entry| entry.identifier).collect();
+
         // Use get_instance_versions with the full list of commit IDs
-        self.get_instance_versions(instance_id, spec, commit_ids, deserializer).await
+        self.get_instance_versions(instance_id, spec, commit_ids, deserializer)
+            .await
     }
-    
+
     /// Retrieves specific versions for multiple instances in a single query.
     ///
     /// This method efficiently fetches different versions for different documents
@@ -224,7 +233,7 @@ impl super::client::TerminusDBHttpClient {
     ///     ("product1", vec!["commit_a".to_string(), "commit_b".to_string()]),
     ///     ("product2", vec!["commit_c".to_string()]),
     /// ];
-    /// 
+    ///
     /// let mut deserializer = DefaultDeserializer::new();
     /// let versions = client.get_multiple_instance_versions::<Product>(
     ///     queries,
@@ -243,73 +252,79 @@ impl super::client::TerminusDBHttpClient {
         spec: &BranchSpec,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<HashMap<String, Vec<(T, String)>>> {
-        debug!("Attempting multi-document WOQL version retrieval for {} documents", queries.len());
-        
+        debug!(
+            "Attempting multi-document WOQL version retrieval for {} documents",
+            queries.len()
+        );
+
         if queries.is_empty() {
             return Ok(HashMap::new());
         }
-        
+
         // Build individual queries for each document×commit combination
         let mut all_queries = Vec::new();
         let mut var_map: HashMap<String, (String, String)> = HashMap::new();
-        
+
         for (instance_id, commit_ids) in queries {
             if commit_ids.is_empty() {
                 continue;
             }
-            
+
             let full_id = format_id::<T>(instance_id);
-            
+
             for commit_id in commit_ids {
                 // Use the correct format: org/db/local/commit/{commitID}
                 let collection = format!("{}/{}/local/commit/{}", self.org, spec.db, &commit_id);
-                
+
                 // Create unique variables for this document×commit combination
                 let safe_instance_id = instance_id.replace('/', "_").replace('-', "_");
                 let safe_commit_id = commit_id.replace('/', "_").replace('-', "_");
                 let doc_var = vars!(format!("Doc_{}_{}", safe_instance_id, safe_commit_id));
-                
+
                 // Track which document and commit this variable represents
                 var_map.insert(
-                    doc_var.to_string(), 
-                    (instance_id.to_string(), commit_id.clone())
+                    doc_var.to_string(),
+                    (instance_id.to_string(), commit_id.clone()),
                 );
-                
+
                 let query = WoqlBuilder::new()
                     .triple(node(&full_id), "rdf:type", vars!("Type"))
                     .read_document(node(&full_id), doc_var.clone())
                     .select(vec![doc_var])
                     .using(&collection);
-                
+
                 all_queries.push(query);
             }
         }
-        
+
         if all_queries.is_empty() {
             return Ok(HashMap::new());
         }
-        
+
         // Combine all queries with OR
         let mut queries_iter = all_queries.into_iter();
         let mut combined_query = queries_iter.next().unwrap();
         for query in queries_iter {
             combined_query = combined_query.or([query]);
         }
-        
+
         let final_query = combined_query.finalize();
         let json_query = final_query.to_instance(None).to_json();
-        
-        debug!("Executing combined WOQL query for {} document×commit combinations", var_map.len());
-        
+
+        debug!(
+            "Executing combined WOQL query for {} document×commit combinations",
+            var_map.len()
+        );
+
         // Execute the query
         match self.query_raw(Some(spec.clone()), json_query).await {
             Ok(result) => {
                 let result: WOQLResult<serde_json::Value> = result;
                 debug!("WOQL query returned {} bindings", result.bindings.len());
-                
+
                 // Process results and group by document ID
                 let mut results: HashMap<String, Vec<(T, String)>> = HashMap::new();
-                
+
                 for binding in result.bindings {
                     // Find which doc variable has data
                     for (var_name, (doc_id, commit_id)) in &var_map {
@@ -317,20 +332,26 @@ impl super::client::TerminusDBHttpClient {
                             // Deserialize the document
                             match deserializer.from_instance(doc_json.clone()) {
                                 Ok(instance) => {
-                                    results.entry(doc_id.clone())
+                                    results
+                                        .entry(doc_id.clone())
                                         .or_insert_with(Vec::new)
                                         .push((instance, commit_id.clone()));
                                 }
                                 Err(e) => {
-                                    warn!("Failed to deserialize {} from commit {}: {}", 
-                                          doc_id, commit_id, e);
+                                    warn!(
+                                        "Failed to deserialize {} from commit {}: {}",
+                                        doc_id, commit_id, e
+                                    );
                                 }
                             }
                         }
                     }
                 }
-                
-                debug!("Successfully retrieved versions for {} documents", results.len());
+
+                debug!(
+                    "Successfully retrieved versions for {} documents",
+                    results.len()
+                );
                 Ok(results)
             }
             Err(e) => {
@@ -339,7 +360,7 @@ impl super::client::TerminusDBHttpClient {
             }
         }
     }
-    
+
     /// Lists all versions for multiple instances in a single query.
     ///
     /// This convenience method fetches the complete version history for multiple
@@ -381,29 +402,30 @@ impl super::client::TerminusDBHttpClient {
         deserializer: &mut impl TDBInstanceDeserializer<T>,
     ) -> anyhow::Result<HashMap<String, Vec<(T, String)>>> {
         debug!("Listing all versions for {} instances", instance_ids.len());
-        
+
         if instance_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        
+
         // Get history for each instance and build queries structure
         let mut queries: Vec<(&str, Vec<String>)> = Vec::new();
-        
+
         for instance_id in &instance_ids {
             // Get the commit history for this instance
-            let history = self.get_instance_history::<T>(instance_id, spec, None).await?;
-            
+            let history = self
+                .get_instance_history::<T>(instance_id, spec, None)
+                .await?;
+
             if !history.is_empty() {
-                let commit_ids: Vec<String> = history.into_iter()
-                    .map(|entry| entry.identifier)
-                    .collect();
-                
+                let commit_ids: Vec<String> =
+                    history.into_iter().map(|entry| entry.identifier).collect();
+
                 queries.push((instance_id, commit_ids));
             }
         }
-        
-        // Use get_multiple_instance_versions with the collected data
-        self.get_multiple_instance_versions(queries, spec, deserializer).await
-    }
 
+        // Use get_multiple_instance_versions with the collected data
+        self.get_multiple_instance_versions(queries, spec, deserializer)
+            .await
+    }
 }

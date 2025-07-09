@@ -29,10 +29,10 @@ pub mod http;
 pub mod info;
 #[cfg(not(target_arch = "wasm32"))]
 mod log;
+mod query;
 pub mod result;
 mod spec;
 mod r#trait;
-mod query;
 pub use query::*;
 
 use serde::{Deserialize, Serialize};

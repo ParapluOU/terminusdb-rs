@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use terminusdb_woql_builder::prelude::{vars, WoqlBuilder};
 use terminusdb_woql2::prelude::Query;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use terminusdb_woql_builder::prelude::{vars, WoqlBuilder};
 
 /// Test model for raw query testing
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
@@ -30,7 +30,7 @@ struct BooksByAuthorQuery {
 
 impl RawQueryable for BooksByAuthorQuery {
     type Result = BooksByAuthor;
-    
+
     fn query(&self) -> Query {
         WoqlBuilder::new()
             .triple(vars!("Book"), "rdf:type", "@schema:Book")
@@ -41,22 +41,24 @@ impl RawQueryable for BooksByAuthorQuery {
             .select(vec![vars!("Title"), vars!("Pages")])
             .finalize()
     }
-    
-    fn extract_result(&self, mut binding: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
-        let title = binding.remove("Title")
+
+    fn extract_result(
+        &self,
+        mut binding: HashMap<String, serde_json::Value>,
+    ) -> anyhow::Result<Self::Result> {
+        let title = binding
+            .remove("Title")
             .and_then(|v| v.get("@value").cloned())
             .and_then(|v| serde_json::from_value::<String>(v).ok())
             .ok_or_else(|| anyhow::anyhow!("Missing title field"))?;
-            
-        let pages = binding.remove("Pages")
+
+        let pages = binding
+            .remove("Pages")
             .and_then(|v| v.get("@value").cloned())
             .and_then(|v| serde_json::from_value::<i32>(v).ok())
             .unwrap_or(0);
-        
-        Ok(BooksByAuthor {
-            title,
-            pages,
-        })
+
+        Ok(BooksByAuthor { title, pages })
     }
 }
 
@@ -64,11 +66,11 @@ impl RawQueryable for BooksByAuthorQuery {
 async fn setup_test_client() -> anyhow::Result<(TerminusDBHttpClient, BranchSpec)> {
     let client = TerminusDBHttpClient::local_node_test().await?;
     let spec = BranchSpec::from("test");
-    
+
     // Insert schema
     let args = DocumentInsertArgs::from(spec.clone());
     client.insert_entity_schema::<Book>(args).await.ok();
-    
+
     Ok((client, spec))
 }
 
@@ -76,7 +78,7 @@ async fn setup_test_client() -> anyhow::Result<(TerminusDBHttpClient, BranchSpec
 #[tokio::test]
 async fn test_raw_queryable_with_filter() -> anyhow::Result<()> {
     let (client, spec) = setup_test_client().await?;
-    
+
     // Insert test data
     let books = vec![
         Book {
@@ -104,37 +106,39 @@ async fn test_raw_queryable_with_filter() -> anyhow::Result<()> {
             pages: 300,
         },
     ];
-    
+
     for book in &books {
         let args = DocumentInsertArgs::from(spec.clone());
         client.save_instance(book, args).await?;
     }
-    
+
     // Execute raw query to find books by Steve Klabnik
     let query = BooksByAuthorQuery {
         author: "Steve Klabnik".to_string(),
     };
     let steve_books = client.execute_raw_query(&spec, query).await?;
-    
+
     println!("Books by Steve Klabnik:");
     for book in &steve_books {
         println!("  {} - {} pages", book.title, book.pages);
     }
-    
+
     // Verify results
     assert_eq!(steve_books.len(), 2, "Steve Klabnik should have 2 books");
-    
+
     // Check the books
-    let rust_lang = steve_books.iter()
+    let rust_lang = steve_books
+        .iter()
         .find(|b| b.title == "The Rust Programming Language")
         .expect("Should find The Rust Programming Language");
     assert_eq!(rust_lang.pages, 552);
-    
-    let book_of_rust = steve_books.iter()
+
+    let book_of_rust = steve_books
+        .iter()
         .find(|b| b.title == "The Book of Rust")
         .expect("Should find The Book of Rust");
     assert_eq!(book_of_rust.pages, 300);
-    
+
     Ok(())
 }
 
@@ -149,7 +153,7 @@ struct BookSummaryQuery;
 
 impl RawQueryable for BookSummaryQuery {
     type Result = BookSummary;
-    
+
     fn query(&self) -> Query {
         WoqlBuilder::new()
             .triple(vars!("Book"), "rdf:type", "@schema:Book")
@@ -158,18 +162,23 @@ impl RawQueryable for BookSummaryQuery {
             .select(vec![vars!("Title"), vars!("Author")])
             .finalize()
     }
-    
-    fn extract_result(&self, mut binding: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
-        let title = binding.remove("Title")
+
+    fn extract_result(
+        &self,
+        mut binding: HashMap<String, serde_json::Value>,
+    ) -> anyhow::Result<Self::Result> {
+        let title = binding
+            .remove("Title")
             .and_then(|v| v.get("@value").cloned())
             .and_then(|v| serde_json::from_value::<String>(v).ok())
             .ok_or_else(|| anyhow::anyhow!("Missing title field"))?;
-            
-        let author = binding.remove("Author")
+
+        let author = binding
+            .remove("Author")
             .and_then(|v| v.get("@value").cloned())
             .and_then(|v| serde_json::from_value::<String>(v).ok())
             .ok_or_else(|| anyhow::anyhow!("Missing author field"))?;
-        
+
         Ok(BookSummary { title, author })
     }
 }
@@ -178,7 +187,7 @@ impl RawQueryable for BookSummaryQuery {
 #[tokio::test]
 async fn test_raw_queryable_simple_projection() -> anyhow::Result<()> {
     let (client, spec) = setup_test_client().await?;
-    
+
     // Insert a test book
     let book = Book {
         id: EntityIDFor::new("test_book").unwrap(),
@@ -186,24 +195,25 @@ async fn test_raw_queryable_simple_projection() -> anyhow::Result<()> {
         author: "Test Author".to_string(),
         pages: 100,
     };
-    
+
     let args = DocumentInsertArgs::from(spec.clone());
     client.save_instance(&book, args).await?;
-    
+
     // Execute raw query
     let summaries = client.execute_raw_query(&spec, BookSummaryQuery).await?;
-    
+
     println!("Book summaries:");
     for summary in &summaries {
         println!("  {} by {}", summary.title, summary.author);
     }
-    
+
     // Verify we got our book
-    let our_book = summaries.iter()
+    let our_book = summaries
+        .iter()
         .find(|s| s.title == "Test Book")
         .expect("Should find our test book");
-    
+
     assert_eq!(our_book.author, "Test Author");
-    
+
     Ok(())
 }

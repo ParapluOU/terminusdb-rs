@@ -2,6 +2,9 @@
 // Note: These tests require a running TerminusDB instance (likely local).
 // They are marked #[ignore] by default.
 
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
 use terminusdb_client::deserialize::DefaultTDBDeserializer;
 use terminusdb_client::*;
 use terminusdb_schema::ToTDBInstance;
@@ -9,9 +12,6 @@ use terminusdb_schema::ToTDBSchema;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use terminusdb_woql2::prelude::Query;
 use terminusdb_woql_builder::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::HashMap;
 use uuid;
 // --- Helper Structs/Enums for Tests ---
 
@@ -118,9 +118,7 @@ async fn test_insert_and_get_instance() -> anyhow::Result<()> {
     let insert_result_map = client.insert_instance(&doc, args).await?;
 
     // Get the *actual* inserted ID (short form) from the result
-    let inserted_id_full = match insert_result_map
-        .root_result
-    {
+    let inserted_id_full = match insert_result_map.root_result {
         TDBInsertInstanceResult::Inserted(id) => id.clone(),
         TDBInsertInstanceResult::AlreadyExists(id) => id.clone(), // Use existing ID if it already existed
     };

@@ -99,11 +99,11 @@ impl TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// use url::Url;
-    /// 
+    ///
     /// let client = TerminusDBHttpClient::new(
     ///     Url::parse("https://my-terminusdb.com").unwrap(),
     ///     "my_user",
-    ///     "my_password", 
+    ///     "my_password",
     ///     "my_org"
     /// ).await?;
     /// ```

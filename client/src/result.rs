@@ -1,5 +1,4 @@
 use crate::{BranchSpec, TerminusDBAdapterError};
-use terminusdb_woql_builder::prelude::vars;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,6 +9,7 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::iter::FilterMap;
 use std::slice::Iter;
+use terminusdb_woql_builder::prelude::vars;
 
 use crate::TerminusDBAdapterError::Serde;
 use crate::*;
@@ -24,12 +24,9 @@ pub struct ResponseWithHeaders<T> {
 
 impl<T> ResponseWithHeaders<T> {
     pub fn new(data: T, commit_id: Option<String>) -> Self {
-        Self {
-            data,
-            commit_id,
-        }
+        Self { data, commit_id }
     }
-    
+
     pub fn without_headers(data: T) -> Self {
         Self {
             data,
@@ -198,7 +195,7 @@ fn test_woql_response() {
 //   "transaction_retry_count":0
 // }
 #[derive(Serialize, Deserialize, Debug)]
-pub struct WOQLResult<Binding = HashMap<String, QueryResultVariableBinding> > {
+pub struct WOQLResult<Binding = HashMap<String, QueryResultVariableBinding>> {
     // #[serde(rename(deserialize = "@type"))]
     // schema_type: String,
     #[serde(rename(deserialize = "api:status"))]
@@ -222,7 +219,7 @@ impl IWOQLQueryResult for WOQLResult {
             .iter()
             .filter_map(|b| b.get(var.as_ref()))
             .collect();
-        
+
         QueryResultVariableBindingValues::from(values)
     }
 

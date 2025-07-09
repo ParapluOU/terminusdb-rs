@@ -1,5 +1,5 @@
-use terminusdb_schema::*;
 use serde_json::Value;
+use terminusdb_schema::*;
 
 pub trait TDBInstanceDeserializer<T: ToTDBInstance>: Sized + Clone {
     fn from_instance(&mut self, instance: serde_json::Value) -> anyhow::Result<T>;

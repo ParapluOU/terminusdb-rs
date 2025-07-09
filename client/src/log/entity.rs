@@ -3,9 +3,9 @@ use crate::spec::BranchSpec;
 use crate::{CommitLogEntry, CommitLogIterator, TDBInstanceDeserializer, TerminusDBHttpClient};
 use ::log::warn;
 use futures_util::{Future, Stream, StreamExt, TryStreamExt};
-use terminusdb_schema::ToTDBInstance;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use terminusdb_schema::ToTDBInstance;
 
 /// iterator that walks the commit log and returns all entities of a specific type found in it
 #[derive(Debug)]

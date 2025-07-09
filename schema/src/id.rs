@@ -183,6 +183,10 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
     pub fn to_string(&self) -> String {
         self.typed_id.clone()
     }
+
+    pub fn remap<X: ToTDBSchema>(self) -> EntityIDFor<X> {
+        EntityIDFor::new(self.id()).unwrap()
+    }
 }
 
 impl<T: ToTDBSchema> PartialEq<str> for EntityIDFor<T> {

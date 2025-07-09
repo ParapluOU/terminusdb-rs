@@ -2,17 +2,24 @@
 
 use {
     crate::{
-        document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, GetOpts}, 
-        result::ResponseWithHeaders, 
+        document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, GetOpts},
+        result::ResponseWithHeaders,
         spec::BranchSpec,
         TDBInsertInstanceResult,
     },
     ::log::{debug, error, trace},
     anyhow::{anyhow, Context},
     serde_json::{json, Value},
-    std::{collections::{HashMap, HashSet}, fmt::Debug, time::Instant},
+    std::{
+        collections::{HashMap, HashSet},
+        fmt::Debug,
+        time::Instant,
+    },
     terminusdb_schema::ToJson,
-    terminusdb_woql_builder::{prelude::{WoqlBuilder, node, string_literal}, vars},
+    terminusdb_woql_builder::{
+        prelude::{node, string_literal, WoqlBuilder},
+        vars,
+    },
 };
 
 /// Options for document deletion operations.
@@ -23,7 +30,7 @@ use {
 #[derive(Debug, Clone, Default)]
 pub struct DeleteOpts {
     /// If true, removes ALL data from the graph.
-    /// 
+    ///
     /// **⚠️ EXTREMELY DANGEROUS**: This will permanently delete ALL documents
     /// in the graph, not just the specified document. Use with extreme caution.
     /// This option should only be used when you intentionally want to clear
@@ -36,25 +43,25 @@ impl DeleteOpts {
     pub fn new() -> Self {
         Self { nuke: false }
     }
-    
+
     /// Create delete options for removing a specific document (default behavior).
-    /// 
+    ///
     /// This is the safe option that only deletes the specified document.
     pub fn document_only() -> Self {
         Self { nuke: false }
     }
-    
+
     /// **⚠️ EXTREMELY DANGEROUS**: Create delete options that will nuke ALL data.
-    /// 
+    ///
     /// This will permanently delete ALL documents in the graph, not just the
     /// specified document. This is irreversible and should only be used when
     /// you intentionally want to clear the entire database.
-    /// 
+    ///
     /// # Safety
     /// This function is marked as unsafe (conceptually) because it can cause
     /// massive data loss. Only use this when you are absolutely certain you
     /// want to delete ALL data in the graph.
-    /// 
+    ///
     /// # Example
     /// ```rust
     /// // Only use this if you really want to delete EVERYTHING!
@@ -63,7 +70,7 @@ impl DeleteOpts {
     pub fn nuke_all_data() -> Self {
         Self { nuke: true }
     }
-    
+
     /// Returns true if this will nuke all data (dangerous operation).
     pub fn is_nuke(&self) -> bool {
         self.nuke
@@ -128,7 +135,8 @@ impl super::client::TerminusDBHttpClient {
         spec: &BranchSpec,
     ) -> bool {
         let r: anyhow::Result<_> = async {
-            let uri = self.build_url()
+            let uri = self
+                .build_url()
                 .endpoint("document")
                 .database(spec)
                 .document_get_params(id, false, false)
@@ -191,7 +199,8 @@ impl super::client::TerminusDBHttpClient {
             Err(anyhow!("document #{} does not exist", id))?
         }
 
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("document")
             .database(spec)
             .document_get_params(id, opts.unfold, opts.as_list)
@@ -250,7 +259,8 @@ impl super::client::TerminusDBHttpClient {
             Err(anyhow!("document #{} does not exist", id))?
         }
 
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("document")
             .database(spec)
             .document_get_params(id, opts.unfold, opts.as_list)
@@ -300,12 +310,18 @@ impl super::client::TerminusDBHttpClient {
         // For POST method, filter out documents that already exist
         if matches!(method, DocumentMethod::Post) {
             let document_ids = extract_document_ids(&to_jsoned);
-            debug!("POST method: Found {} documents with IDs to check", document_ids.len());
+            debug!(
+                "POST method: Found {} documents with IDs to check",
+                document_ids.len()
+            );
             if !document_ids.is_empty() {
                 debug!("Document IDs to check: {:?}", document_ids);
                 let existing_ids = self.check_existing_ids(&document_ids, &args.spec).await?;
                 if !existing_ids.is_empty() {
-                    debug!("Filtering out {} existing documents from POST operation", existing_ids.len());
+                    debug!(
+                        "Filtering out {} existing documents from POST operation",
+                        existing_ids.len()
+                    );
                     let before_count = to_jsoned.len();
                     to_jsoned.retain(|doc| {
                         doc.get("@id")
@@ -313,7 +329,11 @@ impl super::client::TerminusDBHttpClient {
                             .map(|id| !existing_ids.contains(id))
                             .unwrap_or(true) // Keep documents without @id
                     });
-                    debug!("Filtered from {} to {} documents", before_count, to_jsoned.len());
+                    debug!(
+                        "Filtered from {} to {} documents",
+                        before_count,
+                        to_jsoned.len()
+                    );
                 }
             }
         }
@@ -338,7 +358,8 @@ impl super::client::TerminusDBHttpClient {
         // Build request based on method
         let res = match method {
             DocumentMethod::Post => {
-                let uri = self.build_url()
+                let uri = self
+                    .build_url()
                     .endpoint("document")
                     .database(&args.spec)
                     .query("author", &args.author)
@@ -347,7 +368,7 @@ impl super::client::TerminusDBHttpClient {
                     .build();
 
                 debug!("POST {} to URI {}", &ty, &uri);
-                
+
                 self.http
                     .post(uri)
                     .basic_auth(&self.user, Some(&self.pass))
@@ -357,14 +378,15 @@ impl super::client::TerminusDBHttpClient {
                     .await?
             }
             DocumentMethod::Put => {
-                let uri = self.build_url()
+                let uri = self
+                    .build_url()
                     .endpoint("document")
                     .database(&args.spec)
                     .document_params(&args.author, &args.message, &ty, false) // create=false
                     .build();
 
                 debug!("PUT {} to URI {} (create=false)", &ty, &uri);
-                
+
                 self.http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
@@ -374,14 +396,15 @@ impl super::client::TerminusDBHttpClient {
                     .await?
             }
             DocumentMethod::PutWithCreate => {
-                let uri = self.build_url()
+                let uri = self
+                    .build_url()
                     .endpoint("document")
                     .database(&args.spec)
                     .document_params(&args.author, &args.message, &ty, true) // create=true
                     .build();
 
                 debug!("PUT {} to URI {} (create=true)", &ty, &uri);
-                
+
                 self.http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
@@ -394,7 +417,10 @@ impl super::client::TerminusDBHttpClient {
 
         let parsed = self.parse_response_with_headers::<Vec<String>>(res).await;
 
-        trace!("parsed response from insert_documents_with_method(): {:#?}", &parsed);
+        trace!(
+            "parsed response from insert_documents_with_method(): {:#?}",
+            &parsed
+        );
 
         if let Err(e) = &parsed {
             error!("request error: {:#?}", &e);
@@ -438,7 +464,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// use serde_json::json;
-    /// 
+    ///
     /// let docs = vec![
     ///     &json!({"@type": "Person", "name": "Alice"}),
     ///     &json!({"@type": "Person", "name": "Bob"}),
@@ -450,7 +476,8 @@ impl super::client::TerminusDBHttpClient {
         model: Vec<&impl ToJson>,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
-        self.insert_documents_with_method(model, args, DocumentMethod::PutWithCreate).await
+        self.insert_documents_with_method(model, args, DocumentMethod::PutWithCreate)
+            .await
     }
 
     /// Inserts a single untyped document into the database.
@@ -471,7 +498,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// use serde_json::json;
-    /// 
+    ///
     /// let doc = json!({"@type": "Person", "name": "Alice"});
     /// client.insert_document(&doc, args).await?;
     /// ```
@@ -489,7 +516,8 @@ impl super::client::TerminusDBHttpClient {
 
         let ty = args.ty.to_string().to_lowercase();
 
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("document")
             .database(&args.spec)
             .document_params(&args.author, &args.message, &ty, true)
@@ -531,7 +559,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// use serde_json::json;
-    /// 
+    ///
     /// let docs = vec![
     ///     &json!({"@type": "Person", "name": "Alice"}),
     ///     &json!({"@type": "Person", "name": "Bob"}),
@@ -543,7 +571,8 @@ impl super::client::TerminusDBHttpClient {
         model: Vec<&impl ToJson>,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
-        self.insert_documents_with_method(model, args, DocumentMethod::Post).await
+        self.insert_documents_with_method(model, args, DocumentMethod::Post)
+            .await
     }
 
     /// Updates existing documents using PUT endpoint without create.
@@ -563,7 +592,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// use serde_json::json;
-    /// 
+    ///
     /// let docs = vec![
     ///     &json!({"@id": "Person/alice", "@type": "Person", "name": "Alice Updated"}),
     ///     &json!({"@id": "Person/bob", "@type": "Person", "name": "Bob Updated"}),
@@ -575,7 +604,8 @@ impl super::client::TerminusDBHttpClient {
         model: Vec<&impl ToJson>,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
-        self.insert_documents_with_method(model, args, DocumentMethod::Put).await
+        self.insert_documents_with_method(model, args, DocumentMethod::Put)
+            .await
     }
 
     pub async fn insert_documents_by_schema_type<T: terminusdb_schema::ToTDBSchema>(
@@ -610,8 +640,8 @@ impl super::client::TerminusDBHttpClient {
     /// ```rust
     /// // Get full history for a document
     /// let history = client.get_document_history(
-    ///     "Person/abc123", 
-    ///     &branch_spec, 
+    ///     "Person/abc123",
+    ///     &branch_spec,
     ///     None
     /// ).await?;
     ///
@@ -620,8 +650,8 @@ impl super::client::TerminusDBHttpClient {
     ///     .with_start(0)
     ///     .with_count(5);
     /// let recent = client.get_document_history(
-    ///     "Person/abc123", 
-    ///     &branch_spec, 
+    ///     "Person/abc123",
+    ///     &branch_spec,
     ///     Some(params)
     /// ).await?;
     /// ```
@@ -632,8 +662,9 @@ impl super::client::TerminusDBHttpClient {
         params: Option<DocumentHistoryParams>,
     ) -> anyhow::Result<Vec<CommitHistoryEntry>> {
         let params = params.unwrap_or_default();
-        
-        let uri = self.build_url()
+
+        let uri = self
+            .build_url()
             .endpoint("history")
             .database_with_branch(spec)
             .history_params(document_id, &params)
@@ -649,11 +680,16 @@ impl super::client::TerminusDBHttpClient {
             .await?;
 
         // The /history endpoint returns a direct array, not wrapped in ApiResponse
-        let history = res.json::<Vec<CommitHistoryEntry>>()
+        let history = res
+            .json::<Vec<CommitHistoryEntry>>()
             .await
             .context("Failed to parse document history response")?;
 
-        debug!("Retrieved {} history entries for document {}", history.len(), document_id);
+        debug!(
+            "Retrieved {} history entries for document {}",
+            history.len(),
+            document_id
+        );
 
         Ok(history)
     }
@@ -665,7 +701,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// This function retrieves multiple documents by their IDs and returns them
     /// as untyped `serde_json::Value` objects. It provides no type safety or automatic
-    /// deserialization. For large ID lists, it automatically uses POST with 
+    /// deserialization. For large ID lists, it automatically uses POST with
     /// `X-HTTP-Method-Override: GET` to avoid URL length limits.
     ///
     /// # Arguments
@@ -705,7 +741,8 @@ impl super::client::TerminusDBHttpClient {
         debug!("Retrieving {} documents", ids.len());
 
         // Build the URL for the document endpoint
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("document")
             .database(spec)
             .document_get_multiple_params(&ids, &opts)
@@ -714,16 +751,17 @@ impl super::client::TerminusDBHttpClient {
         // Determine if we should use POST method based on URL length or explicit large request
         let use_post = uri.len() > 2000 || ids.len() > 50; // Use POST for long URLs or many IDs
 
-        debug!("Fetching documents from: {} (using {})", &uri, if use_post { "POST" } else { "GET" });
+        debug!(
+            "Fetching documents from: {} (using {})",
+            &uri,
+            if use_post { "POST" } else { "GET" }
+        );
 
         let start = Instant::now();
 
         let res = if use_post {
             // Use POST with X-HTTP-Method-Override: GET for large requests
-            let base_uri = self.build_url()
-                .endpoint("document")
-                .database(spec)
-                .build();
+            let base_uri = self.build_url().endpoint("document").database(spec).build();
 
             // Create query document as JSON
             let mut query_doc = serde_json::Map::new();
@@ -732,7 +770,7 @@ impl super::client::TerminusDBHttpClient {
             }
             query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
             query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
-            
+
             if let Some(skip) = opts.skip {
                 query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
             }
@@ -740,7 +778,10 @@ impl super::client::TerminusDBHttpClient {
                 query_doc.insert("count".to_string(), serde_json::Value::Number(count.into()));
             }
             if let Some(ref type_filter) = opts.type_filter {
-                query_doc.insert("type".to_string(), serde_json::Value::String(type_filter.clone()));
+                query_doc.insert(
+                    "type".to_string(),
+                    serde_json::Value::String(type_filter.clone()),
+                );
             }
 
             let query_json = serde_json::to_string(&query_doc)?;
@@ -767,7 +808,11 @@ impl super::client::TerminusDBHttpClient {
         // Parse response as array of JSON values
         let docs = self.parse_response::<Vec<serde_json::Value>>(res).await?;
 
-        debug!("Retrieved {} documents in {:?}", docs.len(), start.elapsed());
+        debug!(
+            "Retrieved {} documents in {:?}",
+            docs.len(),
+            start.elapsed()
+        );
 
         Ok(docs)
     }
@@ -806,7 +851,8 @@ impl super::client::TerminusDBHttpClient {
         debug!("Retrieving {} documents with headers", ids.len());
 
         // Build the URL for the document endpoint
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("document")
             .database(spec)
             .document_get_multiple_params(&ids, &opts)
@@ -815,16 +861,17 @@ impl super::client::TerminusDBHttpClient {
         // Determine if we should use POST method based on URL length or explicit large request
         let use_post = uri.len() > 2000 || ids.len() > 50; // Use POST for long URLs or many IDs
 
-        debug!("Fetching documents from: {} (using {})", &uri, if use_post { "POST" } else { "GET" });
+        debug!(
+            "Fetching documents from: {} (using {})",
+            &uri,
+            if use_post { "POST" } else { "GET" }
+        );
 
         let start = Instant::now();
 
         let res = if use_post {
             // Use POST with X-HTTP-Method-Override: GET for large requests
-            let base_uri = self.build_url()
-                .endpoint("document")
-                .database(spec)
-                .build();
+            let base_uri = self.build_url().endpoint("document").database(spec).build();
 
             // Create query document as JSON
             let mut query_doc = serde_json::Map::new();
@@ -833,7 +880,7 @@ impl super::client::TerminusDBHttpClient {
             }
             query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
             query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
-            
+
             if let Some(skip) = opts.skip {
                 query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
             }
@@ -841,7 +888,10 @@ impl super::client::TerminusDBHttpClient {
                 query_doc.insert("count".to_string(), serde_json::Value::Number(count.into()));
             }
             if let Some(ref type_filter) = opts.type_filter {
-                query_doc.insert("type".to_string(), serde_json::Value::String(type_filter.clone()));
+                query_doc.insert(
+                    "type".to_string(),
+                    serde_json::Value::String(type_filter.clone()),
+                );
             }
 
             let query_json = serde_json::to_string(&query_doc)?;
@@ -866,9 +916,15 @@ impl super::client::TerminusDBHttpClient {
         debug!("Retrieved documents with status code: {}", res.status());
 
         // Parse response as array of JSON values with headers
-        let docs = self.parse_response_with_headers::<Vec<serde_json::Value>>(res).await?;
+        let docs = self
+            .parse_response_with_headers::<Vec<serde_json::Value>>(res)
+            .await?;
 
-        debug!("Retrieved {} documents in {:?}", docs.len(), start.elapsed());
+        debug!(
+            "Retrieved {} documents in {:?}",
+            docs.len(),
+            start.elapsed()
+        );
 
         Ok(docs)
     }
@@ -879,7 +935,7 @@ impl super::client::TerminusDBHttpClient {
     /// - [`delete_instance`](Self::delete_instance) for typed models
     ///
     /// This function deletes documents by their IDs. It provides no type safety.
-    /// 
+    ///
     /// **⚠️ Warning**: Using `DeleteOpts::nuke_all_data()` will remove ALL data from the graph.
     /// Use with extreme caution as this operation is irreversible.
     ///
@@ -905,12 +961,12 @@ impl super::client::TerminusDBHttpClient {
     ///     "instance",
     ///     DeleteOpts::document_only()
     /// ).await?;
-    /// 
+    ///
     /// // WARNING: Nuclear option - deletes ALL data
     /// client.delete_document(
     ///     None,
     ///     &branch_spec,
-    ///     "admin", 
+    ///     "admin",
     ///     "Reset all data",
     ///     "instance",
     ///     DeleteOpts::nuke_all_data()  // DANGEROUS: This deletes everything!
@@ -925,14 +981,15 @@ impl super::client::TerminusDBHttpClient {
         graph_type: &str,
         opts: DeleteOpts,
     ) -> anyhow::Result<Self> {
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("document")
             .database(spec)
             .document_delete_params(author, message, graph_type, &opts, id)
             .build();
 
         debug!("Deleting document at URI: {}", &uri);
-        
+
         if opts.is_nuke() {
             debug!("⚠️  WARNING: Nuclear deletion requested - this will remove ALL data from the graph!");
         }
@@ -980,37 +1037,37 @@ impl super::client::TerminusDBHttpClient {
         }
 
         debug!("Checking existence of {} IDs using WOQL", ids.len());
-        
+
         // Create variables for the query
         let id_var = vars!("ID");
         let count_var = vars!("Count");
         let type_var = vars!("Type");
-        
+
         // Build count queries for each ID
         let mut count_queries = Vec::new();
         let mut count_vars = Vec::new();
-        
+
         for (i, id) in ids.iter().enumerate() {
             let count_var = vars!(format!("Count_{}", i));
             count_vars.push((id.clone(), count_var.clone()));
-            
+
             // Count documents where the document ID (as subject) has any rdf:type
             // This checks if the document exists
-            let sub_query = WoqlBuilder::new()
-                .triple(node(id.clone()), "rdf:type", type_var.clone());
-                
+            let sub_query =
+                WoqlBuilder::new().triple(node(id.clone()), "rdf:type", type_var.clone());
+
             // Create a count query that counts the sub_query results
             let count_query = sub_query.count(count_var);
             count_queries.push(count_query);
         }
-        
+
         if count_queries.is_empty() {
             return Ok(HashSet::new());
         }
-        
+
         // Combine all counts with and() and select the count variables
         let select_vars: Vec<_> = count_vars.iter().map(|(_, v)| v.clone()).collect();
-        
+
         let query = if count_queries.len() == 1 {
             count_queries.into_iter().next().unwrap()
         } else {
@@ -1021,15 +1078,17 @@ impl super::client::TerminusDBHttpClient {
         }
         .select(select_vars)
         .finalize();
-        
+
         // Execute the query
         debug!("Executing WOQL count query for {} IDs", ids.len());
-        let result = self.query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query).await?;
+        let result = self
+            .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
+            .await?;
         debug!("WOQL query returned {} bindings", result.bindings.len());
-        
+
         // Extract the existing IDs from the count results
         let mut existing_ids = HashSet::new();
-        
+
         if let Some(binding) = result.bindings.first() {
             // Check each count variable
             for (id, count_var) in count_vars.iter() {
@@ -1051,8 +1110,12 @@ impl super::client::TerminusDBHttpClient {
                 }
             }
         }
-        
-        debug!("Found {} existing IDs out of {} checked", existing_ids.len(), ids.len());
+
+        debug!(
+            "Found {} existing IDs out of {} checked",
+            existing_ids.len(),
+            ids.len()
+        );
         if !existing_ids.is_empty() {
             debug!("Existing IDs found: {:?}", existing_ids);
         }

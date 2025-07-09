@@ -1,7 +1,7 @@
 use crate::LogEntry;
-use terminusdb_schema::ToTDBSchema;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
+use terminusdb_schema::ToTDBSchema;
 
 #[derive(Debug, Clone)]
 pub struct CommitLogEntry {

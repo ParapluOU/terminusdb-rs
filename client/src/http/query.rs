@@ -2,20 +2,15 @@
 
 use {
     crate::{
-        spec::BranchSpec, 
-        WOQLResult, 
-        InstanceFromJson, 
-        TerminusDBModel, 
-        InstanceQueryable, 
-        ListModels,
-        RawQueryable,
+        spec::BranchSpec, InstanceFromJson, InstanceQueryable, ListModels, RawQueryable,
+        TerminusDBModel, WOQLResult,
     },
     ::log::trace,
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},
     std::{collections::HashMap, fmt::Debug},
-    terminusdb_schema::{ToTDBInstance, ToTDBSchema, ToJson},
+    terminusdb_schema::{ToJson, ToTDBInstance, ToTDBSchema},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
 };
@@ -42,7 +37,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// use terminusdb_woql2::Query;
-    /// 
+    ///
     /// let query = Query::select().triple("v:Subject", "v:Predicate", "v:Object");
     /// let results: WOQLResult<HashMap<String, Value>> = client.query(Some(spec), query).await?;
     /// ```
@@ -65,12 +60,12 @@ impl super::client::TerminusDBHttpClient {
         query: serde_json::Value,
     ) -> anyhow::Result<WOQLResult<T>> {
         let uri = match spec {
-            None => {
-                self.build_url().endpoint("woql").build()
-            }
-            Some(spc) => {
-                self.build_url().endpoint("woql").simple_database(&spc.db).build()
-            }
+            None => self.build_url().endpoint("woql").build(),
+            Some(spc) => self
+                .build_url()
+                .endpoint("woql")
+                .simple_database(&spc.db)
+                .build(),
         };
 
         //eprintln!("querying at {}...: {:#?}", &uri, &query);
@@ -106,12 +101,12 @@ impl super::client::TerminusDBHttpClient {
         query: serde_json::Value,
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
         let uri = match spec {
-            None => {
-                self.build_url().endpoint("woql").build()
-            }
-            Some(spc) => {
-                self.build_url().endpoint("woql").simple_database(&spc.db).build()
-            }
+            None => self.build_url().endpoint("woql").build(),
+            Some(spc) => self
+                .build_url()
+                .endpoint("woql")
+                .simple_database(&spc.db)
+                .build(),
         };
 
         //eprintln!("querying at {}...: {:#?}", &uri, &query);
@@ -149,6 +144,14 @@ impl super::client::TerminusDBHttpClient {
         query: impl InstanceQueryable<Model = T>,
     ) -> anyhow::Result<Vec<T>> {
         query.apply(self, spec, limit, offset).await
+    }
+
+    pub async fn query_instances_count<T: TerminusDBModel + InstanceFromJson>(
+        &self,
+        spec: &BranchSpec,
+        query: impl InstanceQueryable<Model = T>,
+    ) -> anyhow::Result<usize> {
+        query.count(self, spec).await
     }
 
     // todo: roll into ORM-like model
@@ -223,7 +226,7 @@ impl super::client::TerminusDBHttpClient {
 
         Ok(0)
     }
-    
+
     /// Execute a raw WOQL query that returns custom result types.
     ///
     /// This method provides a convenient way to execute queries that implement
@@ -243,15 +246,15 @@ impl super::client::TerminusDBHttpClient {
     /// ```rust
     /// use terminusdb_client::{RawQueryable, RawWoqlQuery};
     /// use serde::Deserialize;
-    /// 
+    ///
     /// #[derive(Deserialize)]
     /// struct PersonSummary {
     ///     name: String,
     ///     total_orders: i32,
     /// }
-    /// 
+    ///
     /// struct OrderSummaryQuery;
-    /// 
+    ///
     /// impl RawQueryable for OrderSummaryQuery {
     ///     type Result = PersonSummary;
     ///     
@@ -264,7 +267,7 @@ impl super::client::TerminusDBHttpClient {
     ///             .finalize()
     ///     }
     /// }
-    /// 
+    ///
     /// let summaries = client.execute_raw_query(&spec, OrderSummaryQuery).await?;
     /// ```
     pub async fn execute_raw_query<Q: RawQueryable>(

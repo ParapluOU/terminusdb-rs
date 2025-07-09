@@ -2,14 +2,9 @@
 
 use {
     crate::*,
-    ::log::{debug},
+    ::log::debug,
     serde_json::Value,
-    std::{
-        collections::HashSet,
-        fs::File,
-        io::Write,
-        path::PathBuf,
-    },
+    std::{collections::HashSet, fs::File, io::Write, path::PathBuf},
     terminusdb_schema::{Instance, ToJson, ToTDBInstance, ToTDBSchema},
 };
 

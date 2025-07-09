@@ -37,7 +37,7 @@ impl Display for ApiResponseError {
         match self {
             ApiResponseError::SchemaCheckFail(error) => Display::fmt(error, f),
             ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
-            _ => f.write_str(&format!("{:#?}", self))
+            _ => f.write_str(&format!("{:#?}", self)),
         }
     }
 }
@@ -79,16 +79,16 @@ impl Display for TypedErrorResponse {
         match self {
             TypedErrorResponse::DocumentError(e) => {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
-            },
+            }
             TypedErrorResponse::ReplaceDocumentError(e) => {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
-            },
+            }
             TypedErrorResponse::WoqlError(e) => {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
-            },
+            }
             TypedErrorResponse::InsertDocumentError(e) => {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
-            },
+            }
         }
     }
 }
@@ -162,18 +162,18 @@ pub struct ErrorResponse<E = ApiResponseError> {
 impl Display for ErrorResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.api_message)?;
-        
+
         if let Some(api_error) = &self.api_error {
             match api_error {
                 ApiResponseError::SchemaCheckFail(schema_error) => {
                     write!(f, "\n\n{}", schema_error)?;
-                },
+                }
                 _ => {
                     write!(f, "\n\nError details: {:#?}", api_error)?;
                 }
             }
         }
-        
+
         Ok(())
     }
 }
@@ -298,30 +298,36 @@ fn test_deserialize_document_id_already_exists_error() {
 
     // Test deserialization into TypedErrorResponse
     let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
-    
+
     match response {
         TypedErrorResponse::InsertDocumentError(err) => {
             assert_eq!(err.api_message, "Tried to insert a new document with id 'terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f', but an object with that id already exists");
             // Check status by matching instead of equality
             match err.api_status {
-                TerminusAPIStatus::Failure => {}, // expected
+                TerminusAPIStatus::Failure => {} // expected
                 _ => panic!("Expected Failure status"),
             }
-            
+
             if let Some(ApiResponseError::DocumentIdAlreadyExists(doc_err)) = err.api_error {
-                assert_eq!(doc_err.document_id, "terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f");
-                assert_eq!(doc_err.document["@id"], "WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f");
+                assert_eq!(
+                    doc_err.document_id,
+                    "terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f"
+                );
+                assert_eq!(
+                    doc_err.document["@id"],
+                    "WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f"
+                );
             } else {
                 panic!("Expected DocumentIdAlreadyExists error");
             }
         }
         _ => panic!("Expected InsertDocumentError variant"),
     }
-    
+
     // Test deserialization into ApiResponse
     use crate::result::ApiResponse;
     let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
-    
+
     match api_response {
         ApiResponse::Error(_) => {
             // Success - it correctly identified this as an error
