@@ -2,7 +2,7 @@
 
 use {
     crate::TerminusDBAdapterError,
-    ::tracing::{debug, error},
+    ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde_json::json,
 };
@@ -25,6 +25,15 @@ impl super::client::TerminusDBHttpClient {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// let client_with_db = client.ensure_database("my_database").await?;
     /// ```
+    #[instrument(
+        name = "terminus.database.ensure",
+        skip(self),
+        fields(
+            db = %db,
+            org = %self.org
+        ),
+        err
+    )]
     pub async fn ensure_database(&self, db: &str) -> anyhow::Result<Self> {
         let uri = self.build_url().endpoint("db").simple_database(db).build();
 
@@ -81,6 +90,15 @@ impl super::client::TerminusDBHttpClient {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// client.delete_database("old_database").await?;
     /// ```
+    #[instrument(
+        name = "terminus.database.delete",
+        skip(self),
+        fields(
+            db = %db,
+            org = %self.org
+        ),
+        err
+    )]
     pub async fn delete_database(&self, db: &str) -> anyhow::Result<Self> {
         let uri = self.build_url().endpoint("db").simple_database(db).build();
 
@@ -109,6 +127,15 @@ impl super::client::TerminusDBHttpClient {
     /// // Reset the database to clear old schemas
     /// client.reset_database("my_db").await?;
     /// ```
+    #[instrument(
+        name = "terminus.database.reset",
+        skip(self),
+        fields(
+            db = %db,
+            org = %self.org
+        ),
+        err
+    )]
     pub async fn reset_database(&self, db: &str) -> anyhow::Result<Self> {
         debug!("resetting database {}", db);
 

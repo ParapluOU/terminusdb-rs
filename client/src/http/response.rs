@@ -5,7 +5,7 @@ use reqwest::Response;
 
 use {
     crate::{result::ResponseWithHeaders, ApiResponse},
-    ::tracing::trace,
+    ::tracing::{instrument, trace},
     anyhow::{anyhow, Context},
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     serde_json::{json, Value},
@@ -15,6 +15,14 @@ use {
 /// Response parsing methods for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.response.parse",
+        skip(self, res),
+        fields(
+            response_type = std::any::type_name::<T>()
+        ),
+        err
+    )]
     pub(crate) async fn parse_response<T: DeserializeOwned + Debug>(
         &self,
         res: Response,
@@ -40,6 +48,14 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.response.parse_with_headers",
+        skip(self, res),
+        fields(
+            response_type = std::any::type_name::<T>()
+        ),
+        err
+    )]
     pub(crate) async fn parse_response_with_headers<T: DeserializeOwned + Debug>(
         &self,
         res: Response,

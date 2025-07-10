@@ -7,7 +7,7 @@ use {
         spec::BranchSpec,
         TDBInsertInstanceResult,
     },
-    ::tracing::{debug, error, trace},
+    ::tracing::{debug, error, instrument, trace},
     anyhow::{anyhow, Context},
     serde_json::{json, Value},
     std::{
@@ -129,6 +129,15 @@ impl super::client::TerminusDBHttpClient {
     /// ```rust
     /// let exists = client.has_document("12345", &branch_spec).await;
     /// ```
+    #[instrument(
+        name = "terminus.document.has",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id = %id
+        )
+    )]
     pub async fn has_document(
         &self, // number only, no schema class prefix
         id: &str,
@@ -189,6 +198,18 @@ impl super::client::TerminusDBHttpClient {
     /// let past_spec = BranchSpec::from("main/local/commit/abc123");
     /// let old_doc = client.get_document("12345", &past_spec, GetOpts::default()).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.get",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id = %id,
+            unfold = opts.unfold,
+            as_list = opts.as_list
+        ),
+        err
+    )]
     pub async fn get_document(
         &self, // number only, no schema class prefix
         id: &str,
@@ -249,6 +270,18 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Retrieved from commit: {}", commit_id);
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.document.get_with_headers",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id = %id,
+            unfold = opts.unfold,
+            as_list = opts.as_list
+        ),
+        err
+    )]
     pub async fn get_document_with_headers(
         &self,
         id: &str,
@@ -287,6 +320,18 @@ impl super::client::TerminusDBHttpClient {
     }
 
     /// Internal method for document operations with specific HTTP method
+    #[instrument(
+        name = "terminus.document.insert_with_method",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            method = ?method,
+            document_count = model.len(),
+            graph_type = ?args.ty
+        ),
+        err
+    )]
     async fn insert_documents_with_method(
         &self,
         model: Vec<&impl ToJson>,
@@ -500,6 +545,17 @@ impl super::client::TerminusDBHttpClient {
     /// ];
     /// let result = client.insert_documents(docs, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.insert_multiple",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            document_count = model.len(),
+            graph_type = ?args.ty
+        ),
+        err
+    )]
     pub async fn insert_documents(
         &self,
         model: Vec<&impl ToJson>,
@@ -536,6 +592,16 @@ impl super::client::TerminusDBHttpClient {
     /// This function returns the client instance but does not provide access to
     /// the commit ID. Use [`insert_documents`](Self::insert_documents) if you need
     /// commit information from headers.
+    #[instrument(
+        name = "terminus.document.insert",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            graph_type = ?args.ty
+        ),
+        err
+    )]
     pub async fn insert_document(
         &self,
         model: &impl ToJson,
@@ -595,6 +661,17 @@ impl super::client::TerminusDBHttpClient {
     /// ];
     /// let result = client.post_documents(docs, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.post",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            document_count = model.len(),
+            graph_type = ?args.ty
+        ),
+        err
+    )]
     pub async fn post_documents(
         &self,
         model: Vec<&impl ToJson>,
@@ -628,6 +705,17 @@ impl super::client::TerminusDBHttpClient {
     /// ];
     /// let result = client.put_documents(docs, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.put",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            document_count = model.len(),
+            graph_type = ?args.ty
+        ),
+        err
+    )]
     pub async fn put_documents(
         &self,
         model: Vec<&impl ToJson>,
@@ -637,6 +725,17 @@ impl super::client::TerminusDBHttpClient {
             .await
     }
 
+    #[instrument(
+        name = "terminus.document.insert_by_schema_type",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            schema_type = %T::schema_name(),
+            document_count = model.len()
+        ),
+        err
+    )]
     pub async fn insert_documents_by_schema_type<T: terminusdb_schema::ToTDBSchema>(
         &self,
         mut model: Vec<&terminusdb_schema::Instance>,
@@ -684,6 +783,18 @@ impl super::client::TerminusDBHttpClient {
     ///     Some(params)
     /// ).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.get_history",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            document_id = %document_id,
+            start = params.as_ref().and_then(|p| p.start).unwrap_or(0),
+            count = params.as_ref().and_then(|p| p.count)
+        ),
+        err
+    )]
     pub async fn get_document_history(
         &self,
         document_id: &str,
@@ -761,6 +872,20 @@ impl super::client::TerminusDBHttpClient {
     /// let opts = GetOpts::filtered_by_type::<Person>().with_count(5);
     /// let docs = client.get_documents(ids, &branch_spec, opts).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.get_multiple",
+        skip(self, ids),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id_count = ids.len(),
+            unfold = opts.unfold,
+            skip = opts.skip,
+            count = opts.count,
+            type_filter = opts.type_filter
+        ),
+        err
+    )]
     pub async fn get_documents(
         &self,
         ids: Vec<String>,
@@ -871,6 +996,20 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Retrieved from commit: {}", commit_id);
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.document.get_multiple_with_headers",
+        skip(self, ids),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id_count = ids.len(),
+            unfold = opts.unfold,
+            skip = opts.skip,
+            count = opts.count,
+            type_filter = opts.type_filter
+        ),
+        err
+    )]
     pub(crate) async fn get_documents_with_headers(
         &self,
         ids: Vec<String>,
@@ -1001,6 +1140,18 @@ impl super::client::TerminusDBHttpClient {
     ///     DeleteOpts::nuke_all_data()  // DANGEROUS: This deletes everything!
     /// ).await?;
     /// ```
+    #[instrument(
+        name = "terminus.document.delete",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id = ?id,
+            graph_type = %graph_type,
+            nuke = opts.is_nuke()
+        ),
+        err
+    )]
     pub async fn delete_document(
         &self,
         id: Option<&str>,
@@ -1056,6 +1207,16 @@ impl super::client::TerminusDBHttpClient {
     /// let existing = client.check_existing_ids(&ids, &branch_spec).await?;
     /// // existing will contain only the IDs that already exist in the database
     /// ```
+    #[instrument(
+        name = "terminus.document.check_existing_ids",
+        skip(self, ids),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id_count = ids.len()
+        ),
+        err
+    )]
     pub async fn check_existing_ids(
         &self,
         ids: &[String],

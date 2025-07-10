@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use tap::Pipe;
 use {
     crate::{document::DocumentInsertArgs, document::DocumentType, Schema},
-    ::tracing::debug,
+    ::tracing::{debug, instrument},
     anyhow::Context,
     tap::{Tap, TapFallible},
     terminusdb_schema::{ToTDBSchema, ToTDBSchemas},
@@ -39,6 +39,16 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Note
     /// The database will be automatically created if it doesn't exist.
+    #[instrument(
+        name = "terminus.schema.insert_entity",
+        skip(self, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %S::schema_name()
+        ),
+        err
+    )]
     #[pseudonym::alias(schema, insert_schema_tree)]
     pub async fn insert_entity_schema<S: ToTDBSchema>(
         &self,
@@ -69,6 +79,16 @@ impl super::client::TerminusDBHttpClient {
     /// let schema = Schema::Class { /* schema definition */ };
     /// client.insert_schema(&schema, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.schema.insert_raw",
+        skip(self, schema, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            schema_type = %schema.class_name()
+        ),
+        err
+    )]
     pub async fn insert_schema(
         &self,
         schema: &Schema,
@@ -82,6 +102,16 @@ impl super::client::TerminusDBHttpClient {
 
     /// insert only the given Schemas. because the arguments are schema instances.
     /// we cannot derive the schema tree dependencies from them
+    #[instrument(
+        name = "terminus.schema.insert_instances",
+        skip(self, schemas, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            schema_count = schemas.len()
+        ),
+        err
+    )]
     pub async fn insert_schema_instances(
         &self,
         schemas: Vec<Schema>,
@@ -134,6 +164,15 @@ impl super::client::TerminusDBHttpClient {
     /// # Note
     /// The database will be automatically created if it doesn't exist.
     /// For more than 8 types, consider using the `schemas!` macro approach instead.
+    #[instrument(
+        name = "terminus.schema.insert_multiple",
+        skip(self, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch
+        ),
+        err
+    )]
     #[pseudonym::alias(insert_schema_trees)]
     pub async fn insert_schemas<T: ToTDBSchemas>(
         &self,

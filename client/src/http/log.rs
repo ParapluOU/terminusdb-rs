@@ -5,7 +5,7 @@ use crate::log::{CommitLogIterator, EntityIterator, LogEntry, LogOpts};
 
 use {
     crate::{spec::BranchSpec, EntityID, TDBInstanceDeserializer},
-    ::tracing::debug,
+    ::tracing::{debug, instrument},
     anyhow::Context,
     serde::Deserialize,
     terminusdb_schema::{GraphType, ToJson, ToTDBInstance},
@@ -20,6 +20,18 @@ impl super::client::TerminusDBHttpClient {
     // returns commit log entries from new to old
     // todo: accept parameter to define ordering
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.get_entries",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            offset = opts.offset.unwrap_or(0),
+            count = opts.count.unwrap_or(10),
+            verbose = opts.verbose
+        ),
+        err
+    )]
     pub async fn log(&self, spec: &BranchSpec, opts: LogOpts) -> anyhow::Result<Vec<LogEntry>> {
         let LogOpts {
             offset,
@@ -53,6 +65,17 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.iterate",
+        skip(self),
+        fields(
+            db = %db.db,
+            branch = ?db.branch,
+            offset = opts.offset.unwrap_or(0),
+            count = opts.count.unwrap_or(10),
+            verbose = opts.verbose
+        )
+    )]
     pub async fn log_iter(&self, db: BranchSpec, opts: LogOpts) -> CommitLogIterator {
         CommitLogIterator::new(self.clone(), db, opts)
     }
@@ -64,6 +87,18 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.entity_iterate",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            offset = opts.offset.unwrap_or(0),
+            count = opts.count.unwrap_or(10),
+            verbose = opts.verbose
+        )
+    )]
     pub async fn entity_iter<
         T: TerminusDBModel + 'static,
         Deser: TDBInstanceDeserializer<T> + 'static,
@@ -102,6 +137,17 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.build_commit_query",
+        skip(self, commit),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            commit_id = %commit.identifier,
+            limit = limit.unwrap_or(1000)
+        )
+    )]
     pub async fn commit_added_entities_query<T: ToTDBInstance>(
         &self,
         spec: &BranchSpec,
@@ -143,6 +189,18 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.commit_added_entities_ids",
+        skip(self, commit),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            commit_id = %commit.identifier,
+            limit = limit.unwrap_or(1000)
+        ),
+        err
+    )]
     pub async fn commit_added_entities_ids<T: ToTDBInstance>(
         &self,
         spec: &BranchSpec,
@@ -198,6 +256,17 @@ impl super::client::TerminusDBHttpClient {
 
     /// return ID for first entity of given type that was created by the given commit
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.first_commit_created_entity_id",
+        skip(self, commit),
+        fields(
+            db = %db.db,
+            branch = ?db.branch,
+            entity_type = %T::schema_name(),
+            commit_id = %commit.identifier
+        ),
+        err
+    )]
     pub async fn first_commit_created_entity_id<T: ToTDBInstance>(
         &self,
         db: &BranchSpec,
@@ -223,6 +292,17 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.first_commit_created_entity",
+        skip(self, commit, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            commit_id = %commit.identifier
+        ),
+        err
+    )]
     pub async fn first_commit_created_entity<T: ToTDBInstance>(
         &self,
         spec: &BranchSpec,
@@ -255,6 +335,17 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.all_commit_created_entity_ids",
+        skip(self, commit),
+        fields(
+            db = %db.db,
+            branch = ?db.branch,
+            entity_type = %T::schema_name(),
+            commit_id = %commit.identifier
+        ),
+        err
+    )]
     pub async fn all_commit_created_entity_ids<T: ToTDBInstance>(
         &self,
         db: &BranchSpec,
@@ -277,6 +368,17 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.all_commit_created_entities",
+        skip(self, commit, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            commit_id = %commit.identifier
+        ),
+        err
+    )]
     pub async fn all_commit_created_entities<T: ToTDBInstance>(
         &self,
         spec: &BranchSpec,

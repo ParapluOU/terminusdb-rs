@@ -5,7 +5,7 @@ use {
         spec::BranchSpec, InstanceFromJson, InstanceQueryable, ListModels, RawQueryable,
         TerminusDBModel, WOQLResult,
     },
-    ::tracing::trace,
+    ::tracing::{instrument, trace},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},
@@ -41,6 +41,15 @@ impl super::client::TerminusDBHttpClient {
     /// let query = Query::select().triple("v:Subject", "v:Predicate", "v:Object");
     /// let results: WOQLResult<HashMap<String, Value>> = client.query(Some(spec), query).await?;
     /// ```
+    #[instrument(
+        name = "terminus.query.execute",
+        skip(self, query),
+        fields(
+            db = db.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
+            branch = ?db.as_ref().and_then(|s| s.branch.as_ref())
+        ),
+        err
+    )]
     pub async fn query<T: Debug + DeserializeOwned>(
         &self,
         db: Option<BranchSpec>,
@@ -54,6 +63,15 @@ impl super::client::TerminusDBHttpClient {
     }
 
     // query_raw remains the same, accepting serde_json::Value
+    #[instrument(
+        name = "terminus.query.execute_raw",
+        skip(self, query),
+        fields(
+            db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
+            branch = ?spec.as_ref().and_then(|s| s.branch.as_ref())
+        ),
+        err
+    )]
     pub async fn query_raw<T: Debug + DeserializeOwned>(
         &self,
         spec: Option<BranchSpec>,
@@ -95,6 +113,15 @@ impl super::client::TerminusDBHttpClient {
     }
 
     // query_raw_with_headers - similar to query_raw but captures TerminusDB-Data-Version header
+    #[instrument(
+        name = "terminus.query.execute_raw_with_headers",
+        skip(self, query),
+        fields(
+            db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
+            branch = ?spec.as_ref().and_then(|s| s.branch.as_ref())
+        ),
+        err
+    )]
     pub async fn query_raw_with_headers<T: Debug + DeserializeOwned>(
         &self,
         spec: Option<BranchSpec>,
@@ -136,6 +163,18 @@ impl super::client::TerminusDBHttpClient {
     }
 
     // todo: roll into ORM-like model
+    #[instrument(
+        name = "terminus.query.query_instances",
+        skip(self, query),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            limit = limit,
+            offset = offset
+        ),
+        err
+    )]
     pub async fn query_instances<T: TerminusDBModel + InstanceFromJson>(
         &self,
         spec: &BranchSpec,
@@ -146,6 +185,16 @@ impl super::client::TerminusDBHttpClient {
         query.apply(self, spec, limit, offset).await
     }
 
+    #[instrument(
+        name = "terminus.query.query_instances_count",
+        skip(self, query),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name()
+        ),
+        err
+    )]
     pub async fn query_instances_count<T: TerminusDBModel + InstanceFromJson>(
         &self,
         spec: &BranchSpec,
@@ -155,6 +204,18 @@ impl super::client::TerminusDBHttpClient {
     }
 
     // todo: roll into ORM-like model
+    #[instrument(
+        name = "terminus.query.list_instances",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            limit = limit,
+            offset = offset
+        ),
+        err
+    )]
     pub async fn list_instances<T: TerminusDBModel + InstanceFromJson>(
         &self,
         spec: &BranchSpec,
@@ -166,6 +227,16 @@ impl super::client::TerminusDBHttpClient {
     }
 
     /// Count the total number of instances of a specific type in the database
+    #[instrument(
+        name = "terminus.query.count_instances",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name()
+        ),
+        err
+    )]
     pub async fn count_instances<T: ToTDBSchema>(
         &self,
         spec: &BranchSpec,
@@ -270,6 +341,15 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// let summaries = client.execute_raw_query(&spec, OrderSummaryQuery).await?;
     /// ```
+    #[instrument(
+        name = "terminus.query.execute_raw_custom",
+        skip(self, query),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch
+        ),
+        err
+    )]
     pub async fn execute_raw_query<Q: RawQueryable>(
         &self,
         spec: &BranchSpec,

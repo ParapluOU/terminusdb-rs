@@ -2,7 +2,7 @@
 
 use {
     crate::{spec::BranchSpec, TDBInstanceDeserializer, WOQLResult},
-    ::tracing::{debug, warn},
+    ::tracing::{debug, instrument, warn},
     anyhow::{anyhow, Context},
     std::collections::HashMap,
     terminusdb_schema::{ToJson, ToTDBInstance},
@@ -47,6 +47,18 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Commit {}: {} (age {})", commit_id, person.name, person.age);
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.versions.get_instance_versions",
+        skip(self, commit_ids, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            instance_id = %instance_id,
+            commit_count = commit_ids.len()
+        ),
+        err
+    )]
     pub async fn get_instance_versions<T: TerminusDBModel>(
         &self,
         instance_id: &str,
@@ -182,6 +194,17 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Commit {}: {} (age {})", commit_id, person.name, person.age);
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.versions.list_instance_versions",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            instance_id = %instance_id
+        ),
+        err
+    )]
     pub async fn list_instance_versions<T: TerminusDBModel>(
         &self,
         instance_id: &str,
@@ -245,6 +268,17 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Product {}: {} versions", product_id, versions.len());
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.versions.get_multiple_instance_versions",
+        skip(self, queries, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            document_count = queries.len()
+        ),
+        err
+    )]
     #[pseudonym::alias(get_instances_versions)]
     pub async fn get_multiple_instance_versions<T: TerminusDBModel>(
         &self,
@@ -394,6 +428,17 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("Product {} has {} versions", product_id, versions.len());
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.versions.list_multiple_instance_versions",
+        skip(self, instance_ids, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            instance_count = instance_ids.len()
+        ),
+        err
+    )]
     #[pseudonym::alias(list_instances_versions)]
     pub async fn list_multiple_instance_versions<T: TerminusDBModel>(
         &self,

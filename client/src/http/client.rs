@@ -5,7 +5,7 @@ use reqwest::Client;
 
 use {
     crate::{Info, TerminusDBAdapterError},
-    ::tracing::debug,
+    ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     std::fmt::Debug,
@@ -51,6 +51,7 @@ impl TerminusDBHttpClient {
     ///     "admin", "root", "admin"
     /// ).await.unwrap()
     /// ```
+    #[instrument(name = "terminus.client.local_node")]
     pub async fn local_node() -> Self {
         Self::new(
             Url::parse("http://localhost:6363").unwrap(),
@@ -62,6 +63,7 @@ impl TerminusDBHttpClient {
         .unwrap()
     }
 
+    #[instrument(name = "terminus.client.local_node_with_database", fields(db = %db))]
     pub async fn local_node_with_database(db: &str) -> anyhow::Result<Self> {
         let client = Self::local_node().await;
         client.ensure_database(db).await
@@ -80,6 +82,7 @@ impl TerminusDBHttpClient {
     /// let client = TerminusDBHttpClient::local_node_test().await?;
     /// // Ready to use with "test" database
     /// ```
+    #[instrument(name = "terminus.client.local_node_test")]
     pub async fn local_node_test() -> anyhow::Result<Self> {
         let client = Self::local_node().await;
         client.ensure_database("test").await
@@ -107,6 +110,16 @@ impl TerminusDBHttpClient {
     ///     "my_org"
     /// ).await?;
     /// ```
+    #[instrument(
+        name = "terminus.client.new",
+        skip(pass),
+        fields(
+            endpoint = %endpoint,
+            user = %user,
+            org = %org
+        ),
+        err
+    )]
     pub async fn new(mut endpoint: Url, user: &str, pass: &str, org: &str) -> anyhow::Result<Self> {
         let err = format!("Cannot modify segments for endpoint: {}", &endpoint);
 
@@ -123,6 +136,17 @@ impl TerminusDBHttpClient {
         })
     }
 
+    #[instrument(
+        name = "terminus.client.new_with_database",
+        skip(pass),
+        fields(
+            endpoint = %endpoint,
+            user = %user,
+            org = %org,
+            db = %db
+        ),
+        err
+    )]
     pub async fn new_with_database(
         endpoint: Url,
         user: &str,
@@ -140,6 +164,15 @@ impl TerminusDBHttpClient {
         UrlBuilder::new(&self.endpoint, &self.org)
     }
 
+    #[instrument(
+        name = "terminus.client.info",
+        skip(self),
+        fields(
+            endpoint = %self.endpoint,
+            org = %self.org
+        ),
+        err
+    )]
     #[pseudonym::alias(verify_connection)]
     pub async fn info(&self) -> anyhow::Result<Info> {
         let uri = self.build_url().endpoint("info").build();
@@ -160,6 +193,13 @@ impl TerminusDBHttpClient {
         self.parse_response(res).await
     }
 
+    #[instrument(
+        name = "terminus.client.is_running",
+        skip(self),
+        fields(
+            endpoint = %self.endpoint
+        )
+    )]
     pub async fn is_running(&self) -> bool {
         self.info().await.is_ok()
     }

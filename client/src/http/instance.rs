@@ -15,7 +15,7 @@ use {
         spec::BranchSpec,
         IntoBoxedTDBInstances, TDBInsertInstanceResult, TDBInstanceDeserializer,
     },
-    ::tracing::{debug, error, warn},
+    ::tracing::{debug, error, instrument, warn},
     anyhow::{anyhow, bail, Context},
     futures_util::StreamExt,
     std::{collections::HashMap, fmt::Debug},
@@ -54,6 +54,15 @@ impl super::client::TerminusDBHttpClient {
     /// let user = User { name: "Alice".to_string(), age: 30 };
     /// let exists = client.has_instance(&user, args).await;
     /// ```
+    #[instrument(
+        name = "terminus.instance.has",
+        skip(self, model),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %I::schema_name()
+        )
+    )]
     #[pseudonym::alias(has)]
     pub async fn has_instance<I: TerminusDBModel>(&self, model: &I, spec: &BranchSpec) -> bool {
         match model.instance_id() {
@@ -65,6 +74,16 @@ impl super::client::TerminusDBHttpClient {
         }
     }
 
+    #[instrument(
+        name = "terminus.instance.has_by_id",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %I::schema_name(),
+            id = %model_id
+        )
+    )]
     #[pseudonym::alias(has_id)]
     pub async fn has_instance_id<I: TerminusDBModel>(
         &self,
@@ -120,6 +139,16 @@ impl super::client::TerminusDBHttpClient {
     /// A tuple of (InsertInstanceResult, commit_id) where:
     /// - InsertInstanceResult: Contains the root ID, sub-entity results, and all results
     /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
+    #[instrument(
+        name = "terminus.instance.insert_with_commit_id",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %I::schema_name()
+        ),
+        err
+    )]
     pub async fn insert_instance_with_commit_id<I: TerminusDBModel>(
         &self,
         model: &I,
@@ -181,6 +210,15 @@ impl super::client::TerminusDBHttpClient {
     /// let (result, commit_id) = client.insert_instances_with_commit_id(users, args).await?;
     /// println!("Inserted {} users in commit {}", result.len(), commit_id);
     /// ```
+    #[instrument(
+        name = "terminus.instance.insert_multiple_with_commit_id",
+        skip(self, models, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch
+        ),
+        err
+    )]
     pub async fn insert_instances_with_commit_id(
         &self,
         models: impl IntoBoxedTDBInstances,
@@ -225,6 +263,16 @@ impl super::client::TerminusDBHttpClient {
     /// let user = User { name: "Alice".to_string(), age: 30 };
     /// let result = client.create_instance(&user, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.instance.create",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %I::schema_name()
+        ),
+        err
+    )]
     #[pseudonym::alias(create)]
     pub async fn create_instance<I: TerminusDBModel>(
         &self,
@@ -263,6 +311,16 @@ impl super::client::TerminusDBHttpClient {
     /// let user = User { name: "Alice Updated".to_string(), age: 31 };
     /// let result = client.update_instance(&user, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.instance.update",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %I::schema_name()
+        ),
+        err
+    )]
     #[pseudonym::alias(update, replace_instance, replace)]
     pub async fn update_instance<I: TerminusDBModel>(
         &self,
@@ -310,6 +368,17 @@ impl super::client::TerminusDBHttpClient {
     /// // Works whether user exists or not
     /// let result = client.save_instance(&user, args).await?;
     /// ```
+    #[instrument(
+        name = "terminus.instance.save",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %I::schema_name(),
+            force = args.force
+        ),
+        err
+    )]
     #[pseudonym::alias(save, insert_instance, insert)]
     pub async fn save_instance<I: TerminusDBModel>(
         &self,
@@ -565,6 +634,15 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # See Also
     /// - [`insert_instance`](Self::insert_instance) - For single instance insertion
+    #[instrument(
+        name = "terminus.instance.insert_multiple",
+        skip(self, models, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch
+        ),
+        err
+    )]
     #[pseudonym::alias(insert_many)]
     pub async fn insert_instances(
         &self,
@@ -634,6 +712,17 @@ impl super::client::TerminusDBHttpClient {
     /// let past_spec = BranchSpec::from("main/local/commit/abc123");
     /// let old_user: User = client.get_instance("12345", &past_spec, &mut deserializer).await?;
     /// ```
+    #[instrument(
+        name = "terminus.instance.get",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id = %id
+        ),
+        err
+    )]
     #[pseudonym::alias(get)]
     pub async fn get_instance<Target: ToTDBInstance>(
         &self,
@@ -696,6 +785,17 @@ impl super::client::TerminusDBHttpClient {
     /// let user: User = client.get_instance_unfolded("12345", &spec, &mut deserializer).await?;
     /// // user.address will contain the full Address object, not just a reference
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_unfolded",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id = %id
+        ),
+        err
+    )]
     pub async fn get_instance_unfolded<Target: ToTDBInstance>(
         &self,
         id: &str,
@@ -750,6 +850,20 @@ impl super::client::TerminusDBHttpClient {
     ///     .with_as_list(true);
     /// let user: User = client.get_instance_with_opts("12345", &spec, opts, &mut deserializer).await?;
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_with_opts",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id = %id,
+            unfold = opts.unfold,
+            skip = opts.skip,
+            count = opts.count
+        ),
+        err
+    )]
     pub async fn get_instance_with_opts<Target: ToTDBInstance>(
         &self,
         id: &str,
@@ -813,6 +927,17 @@ impl super::client::TerminusDBHttpClient {
     /// let result = client.get_instance_with_headers::<User>("12345", &past_spec, &mut deserializer).await?;
     /// let old_user = &*result; // Access via Deref
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_with_headers",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id = %id
+        ),
+        err
+    )]
     pub async fn get_instance_with_headers<Target: TerminusDBModel>(
         &self,
         id: &str,
@@ -878,6 +1003,19 @@ impl super::client::TerminusDBHttpClient {
     /// // This is equivalent to:
     /// // client.get_document_history("Person/abc123randomkey", &branch_spec, None).await?
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_history",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %I::schema_name(),
+            instance_id = %instance_id,
+            start = params.as_ref().and_then(|p| p.start).unwrap_or(0),
+            count = params.as_ref().and_then(|p| p.count)
+        ),
+        err
+    )]
     pub async fn get_instance_history<I: TerminusDBModel>(
         &self,
         instance_id: &str,
@@ -888,6 +1026,17 @@ impl super::client::TerminusDBHttpClient {
         self.get_document_history(&full_id, spec, params).await
     }
 
+    #[instrument(
+        name = "terminus.instance.get_latest_version",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %I::schema_name(),
+            instance_id = %instance_id
+        ),
+        err
+    )]
     pub async fn get_latest_version<I: TerminusDBModel>(
         &self,
         instance_id: &str,
@@ -956,6 +1105,21 @@ impl super::client::TerminusDBHttpClient {
     /// let past_spec = BranchSpec::from("main/local/commit/abc123");
     /// let old_users: Vec<User> = client.get_instances(ids, &past_spec, opts, &mut deserializer).await?;
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_multiple",
+        skip(self, ids, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id_count = ids.len(),
+            unfold = opts.unfold,
+            skip = opts.skip,
+            count = opts.count,
+            type_filter = opts.type_filter
+        ),
+        err
+    )]
     #[pseudonym::alias(get_many)]
     pub async fn get_instances<Target: TerminusDBModel>(
         &self,
@@ -1052,6 +1216,17 @@ impl super::client::TerminusDBHttpClient {
     /// let users: Vec<User> = client.get_instances_unfolded(ids, &spec, &mut deserializer).await?;
     /// // Each user.address will contain the full Address object, not just a reference
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_multiple_unfolded",
+        skip(self, ids, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id_count = ids.len()
+        ),
+        err
+    )]
     pub async fn get_instances_unfolded<Target: TerminusDBModel>(
         &self,
         ids: Vec<String>,
@@ -1145,6 +1320,21 @@ impl super::client::TerminusDBHttpClient {
     /// let result = client.get_instances_with_headers(empty_ids, &spec, opts, &mut deserializer).await?;
     /// let users = &*result; // Access via Deref
     /// ```
+    #[instrument(
+        name = "terminus.instance.get_multiple_with_headers",
+        skip(self, ids, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id_count = ids.len(),
+            unfold = opts.unfold,
+            skip = opts.skip,
+            count = opts.count,
+            type_filter = opts.type_filter
+        ),
+        err
+    )]
     pub async fn get_instances_with_headers<Target: TerminusDBModel>(
         &self,
         ids: Vec<String>,
@@ -1247,6 +1437,17 @@ impl super::client::TerminusDBHttpClient {
     ///     println!("{} (age {})", person.name, person.age);
     /// }
     /// ```
+    #[instrument(
+        name = "terminus.instance.list_versions_simple",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            instance_id = %instance_id
+        ),
+        err
+    )]
     pub async fn list_instance_versions_simple<T: TerminusDBModel>(
         &self,
         instance_id: &str,
@@ -1286,6 +1487,17 @@ impl super::client::TerminusDBHttpClient {
     /// // WARNING: Nuclear option - deletes ALL instances
     /// client.delete_instance(&user, args, DeleteOpts::nuke_all_data()).await?; // DANGEROUS!
     /// ```
+    #[instrument(
+        name = "terminus.instance.delete",
+        skip(self, instance, args, opts),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %T::schema_name(),
+            nuke = opts.is_nuke()
+        ),
+        err
+    )]
     pub async fn delete_instance<T: TerminusDBModel>(
         &self,
         instance: &T,
@@ -1341,6 +1553,18 @@ impl super::client::TerminusDBHttpClient {
     /// // WARNING: Nuclear option - deletes ALL data
     /// client.delete_instance_by_id::<User>("alice", args, DeleteOpts::nuke_all_data()).await?; // DANGEROUS!
     /// ```
+    #[instrument(
+        name = "terminus.instance.delete_by_id",
+        skip(self, args, opts),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %T::schema_name(),
+            instance_id = %instance_id,
+            nuke = opts.is_nuke()
+        ),
+        err
+    )]
     pub async fn delete_instance_by_id<T: TerminusDBModel>(
         &self,
         instance_id: &str,
