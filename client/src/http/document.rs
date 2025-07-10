@@ -307,6 +307,8 @@ impl super::client::TerminusDBHttpClient {
 
         dedup_documents_by_id(&mut to_jsoned);
 
+        let mut documents_to_update_instead = vec!();
+
         // For POST method, filter out documents that already exist
         if matches!(method, DocumentMethod::Post) {
             let document_ids = extract_document_ids(&to_jsoned);
@@ -321,20 +323,16 @@ impl super::client::TerminusDBHttpClient {
                 let existing_ids = self.check_existing_ids(&document_ids, &args.spec).await?;
 
                 if !existing_ids.is_empty() {
-                    // insert existing documents with PUT
-                    let update_res = Box::pin(self.insert_documents_with_method(
-                        to_jsoned
-                            .iter()
-                            .filter(|d| {
-                                existing_ids.contains(
-                                    d.get("@id").and_then(|id| id.as_str()).unwrap_or_default(),
-                                )
-                            })
-                            .collect(),
-                        args.clone(),
-                        DocumentMethod::Put,
-                    ))
-                    .await?;
+
+
+                    documents_to_update_instead = to_jsoned
+                        .iter()
+                        .filter(|d| {
+                            existing_ids.contains(
+                                d.get("@id").and_then(|id| id.as_str()).unwrap_or_default(),
+                            )
+                        }).cloned()
+                        .collect();
 
                     debug!(
                         "Filtering out {} existing documents from POST operation",
@@ -387,13 +385,26 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("POST {} to URI {}", &ty, &uri);
 
-                self.http
+                let r = self.http
                     .post(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
                     .body(json.clone())
                     .send()
-                    .await?
+                    .await?;
+
+                // insert existing documents with PUT
+                let update_res = Box::pin(self.insert_documents_with_method(
+                    documents_to_update_instead.iter().collect(),
+                    args.clone(),
+                    DocumentMethod::Put,
+                ))
+                    .await
+                    .map_err(|e| {
+                        error!("Error updating existing documents during POST: {}", e);
+                    });
+
+                r
             }
             DocumentMethod::Put => {
                 let uri = self
