@@ -1,8 +1,9 @@
 use crate::json::InstancePropertyFromJson;
-use crate::{FromInstanceProperty, FromTDBInstance, InstanceProperty, Primitive, Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, TypeFamily};
+use crate::{FromInstanceProperty, FromTDBInstance, InstanceProperty, Primitive, Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBSchema, TypeFamily};
 use anyhow::anyhow;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
+use std::hash::Hash;
 
 impl<T: ToTDBSchema> ToTDBSchema for HashSet<T> {
     fn to_schema() -> Schema {
@@ -40,35 +41,52 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for BTreeSet<T> {
     }
 }
 
-// Implement ToInstanceProperty for HashSet<T> where T implements ToInstanceProperty
-impl<Parent, T> ToInstanceProperty<Parent> for HashSet<T>
-where
-    T: ToInstanceProperty<Parent>,
-{
-    fn to_property(self, _field_name: &str, parent: &Schema) -> InstanceProperty {
-        let values: Vec<InstanceProperty> = self
-            .into_iter()
-            .map(|item| item.to_property("", parent))
-            .collect();
-
-        // Check if all values are primitives
-        if values
-            .iter()
-            .all(|v| matches!(v, InstanceProperty::Primitive(_)))
-        {
-            let primitives: Vec<_> = values
-                .into_iter()
-                .filter_map(|v| match v {
-                    InstanceProperty::Primitive(prim) => Some(prim),
-                    _ => None,
-                })
-                .collect();
-            InstanceProperty::Primitives(primitives)
-        } else {
-            InstanceProperty::Any(values)
-        }
+// Implement ToInstanceProperty for Vec<T> where T implements ToTDBInstance
+impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Hash, S> ToInstanceProperty<S> for HashSet<T> {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        InstanceProperty::Relations(
+            self.into_iter()
+                .map(|item| RelationValue::One(item.to_instance(None)))
+                .collect(),
+        )
     }
 }
+
+impl<T: Primitive+ToInstanceProperty<S>, S> ToInstanceProperty<S> for HashSet<T> {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
+    }
+}
+
+// Implement ToInstanceProperty for HashSet<T> where T implements ToInstanceProperty
+// impl<Parent, T> ToInstanceProperty<Parent> for HashSet<T>
+// where
+//     T: ToInstanceProperty<Parent>,
+// {
+//     fn to_property(self, _field_name: &str, parent: &Schema) -> InstanceProperty {
+//         let values: Vec<InstanceProperty> = self
+//             .into_iter()
+//             .map(|item| item.to_property("", parent))
+//             .collect();
+//
+//         // Check if all values are primitives
+//         if values
+//             .iter()
+//             .all(|v| matches!(v, InstanceProperty::Primitive(_)))
+//         {
+//             let primitives: Vec<_> = values
+//                 .into_iter()
+//                 .filter_map(|v| match v {
+//                     InstanceProperty::Primitive(prim) => Some(prim),
+//                     _ => None,
+//                 })
+//                 .collect();
+//             InstanceProperty::Primitives(primitives)
+//         } else {
+//             InstanceProperty::Any(values)
+//         }
+//     }
+// }
 
 // === FromInstanceProperty implementations ===
 
@@ -209,34 +227,43 @@ where
     }
 }
 
-impl<Parent, T> InstancePropertyFromJson<Parent> for HashSet<T>
-where
-    T: FromTDBInstance + InstancePropertyFromJson<Parent> + Eq + std::hash::Hash,
-{
-    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        match json {
-            Value::Array(arr) => {
-                Ok(InstanceProperty::Relations({
-                    arr.into_iter().map(|item| {
-                        Ok(match T::property_from_json(item)? {
-                            // possibly URI's
-                            InstanceProperty::Relation(rel) => {
-                                rel
-                            },
-                            v => {
-                                return Err(anyhow::anyhow!(
-                                    "Expected relation values in HashSet JSON array, but got {:#?}", v
-                                ))
-                            }
-                        })
-                    }).collect::<anyhow::Result<_>>()?
+// impl<Parent, T> ToInstanceProperty<Parent> for HashSet<T>
+// where
+//     T: Eq + FromTDBInstance + InstancePropertyFromJson<Parent> + std::hash::Hash,
+// {
+//     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+//         todo!()
+//     }
+// }
 
-                }))
-            }
-            _ => Err(anyhow::anyhow!("Expected relation/URI array for HashSet")),
-        }
-    }
-}
+// impl<Parent, T> InstancePropertyFromJson<Parent> for HashSet<T>
+// where
+//     T: FromTDBInstance + InstancePropertyFromJson<Parent> + Eq + std::hash::Hash,
+// {
+//     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+//         match json {
+//             Value::Array(arr) => {
+//                 Ok(InstanceProperty::Relations({
+//                     arr.into_iter().map(|item| {
+//                         Ok(match T::property_from_json(item)? {
+//                             // possibly URI's
+//                             InstanceProperty::Relation(rel) => {
+//                                 rel
+//                             },
+//                             v => {
+//                                 return Err(anyhow::anyhow!(
+//                                     "Expected relation values in HashSet JSON array, but got {:#?}", v
+//                                 ))
+//                             }
+//                         })
+//                     }).collect::<anyhow::Result<_>>()?
+//
+//                 }))
+//             }
+//             _ => Err(anyhow::anyhow!("Expected relation/URI array for HashSet")),
+//         }
+//     }
+// }
 
 impl<Parent, T> InstancePropertyFromJson<Parent> for BTreeSet<T>
 where
