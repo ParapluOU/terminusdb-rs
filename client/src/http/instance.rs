@@ -603,6 +603,11 @@ impl super::client::TerminusDBHttpClient {
     /// Use this instead of [`get_document`](Self::get_document) when working with
     /// structs that implement `ToTDBInstance`.
     ///
+    /// **Note on Unfold Behavior**: This method automatically sets `unfold=true` if the
+    /// target schema has the `@unfoldable` attribute. To override this behavior, use
+    /// [`get_instance_with_opts`](Self::get_instance_with_opts) or explicitly control
+    /// unfolding with [`get_instance_unfolded`](Self::get_instance_unfolded).
+    ///
     /// # Type Parameters
     /// * `Target` - The type to deserialize the instance into (implements `ToTDBInstance`)
     ///
@@ -648,6 +653,114 @@ impl super::client::TerminusDBHttpClient {
         if Target::to_schema().should_unfold() {
             opts.unfold = true;
         }
+
+        let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
+
+        let res = deserializer.from_instance(json_instance_doc.clone());
+
+        match res {
+            Ok(t) => Ok(t),
+            Err(err) => Err(err).context(format!(
+                "TerminusHTTPClient failed to deserialize Instance. See: {}",
+                super::helpers::dump_json(&json_instance_doc).display()
+            )),
+        }
+    }
+
+    /// Retrieves and deserializes a strongly-typed model instance with explicit unfold control.
+    ///
+    /// This method always unfolds linked documents regardless of the schema's @unfoldable attribute.
+    /// Use this when you want to ensure all referenced documents are included in the response.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instance into (implements `ToTDBInstance`)
+    ///
+    /// # Arguments
+    /// * `id` - The instance ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// The deserialized instance of type `Target` with all linked documents unfolded
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { 
+    ///     name: String, 
+    ///     age: i32,
+    ///     address: Address // This will be unfolded
+    /// }
+    ///
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let user: User = client.get_instance_unfolded("12345", &spec, &mut deserializer).await?;
+    /// // user.address will contain the full Address object, not just a reference
+    /// ```
+    pub async fn get_instance_unfolded<Target: ToTDBInstance>(
+        &self,
+        id: &str,
+        spec: &BranchSpec,
+        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<Target>
+    where
+        Target:,
+    {
+        let doc_id = format_id::<Target>(id);
+        let opts = GetOpts::default().with_unfold(true);
+
+        let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
+
+        let res = deserializer.from_instance(json_instance_doc.clone());
+
+        match res {
+            Ok(t) => Ok(t),
+            Err(err) => Err(err).context(format!(
+                "TerminusHTTPClient failed to deserialize Instance. See: {}",
+                super::helpers::dump_json(&json_instance_doc).display()
+            )),
+        }
+    }
+
+    /// Retrieves and deserializes a strongly-typed model instance with full control over options.
+    ///
+    /// This method accepts a full `GetOpts` structure, allowing complete control over the retrieval
+    /// behavior including unfold, pagination, and other options. This is the most flexible variant
+    /// of the get_instance methods.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instance into (implements `ToTDBInstance`)
+    ///
+    /// # Arguments
+    /// * `id` - The instance ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `opts` - Get options for controlling query behavior
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// The deserialized instance of type `Target`
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let opts = GetOpts::default()
+    ///     .with_unfold(false)  // Override automatic unfolding
+    ///     .with_as_list(true);
+    /// let user: User = client.get_instance_with_opts("12345", &spec, opts, &mut deserializer).await?;
+    /// ```
+    pub async fn get_instance_with_opts<Target: ToTDBInstance>(
+        &self,
+        id: &str,
+        spec: &BranchSpec,
+        opts: GetOpts,
+        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<Target>
+    where
+        Target:,
+    {
+        let doc_id = format_id::<Target>(id);
 
         let json_instance_doc = self.get_document(&doc_id, spec, opts).await?;
 
@@ -797,6 +910,10 @@ impl super::client::TerminusDBHttpClient {
     /// Use this instead of [`get_documents`](Self::get_documents) when working with
     /// structs that implement `TerminusDBModel`.
     ///
+    /// **Note on Unfold Behavior**: This method automatically sets `unfold=true` if the
+    /// target schema has the `@unfoldable` attribute. The `opts` parameter allows you to
+    /// override this behavior. For simpler unfold control, see [`get_instances_unfolded`](Self::get_instances_unfolded).
+    ///
     /// # Type Parameters
     /// * `Target` - The type to deserialize the instances into (implements `TerminusDBModel`)
     ///
@@ -902,6 +1019,89 @@ impl super::client::TerminusDBHttpClient {
 
         debug!("Successfully deserialized {} instances", results.len());
         Ok(results)
+    }
+
+    /// Retrieves and deserializes multiple strongly-typed model instances with explicit unfold control.
+    ///
+    /// This method always unfolds linked documents regardless of the schema's @unfoldable attribute.
+    /// Use this when you want to ensure all referenced documents are included in the response
+    /// for bulk operations.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instances into (implements `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of instance IDs (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// A vector of deserialized instances of type `Target` with all linked documents unfolded
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { 
+    ///     name: String, 
+    ///     age: i32,
+    ///     address: Address // This will be unfolded
+    /// }
+    ///
+    /// let ids = vec!["alice_id".to_string(), "bob_id".to_string()];
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let users: Vec<User> = client.get_instances_unfolded(ids, &spec, &mut deserializer).await?;
+    /// // Each user.address will contain the full Address object, not just a reference
+    /// ```
+    pub async fn get_instances_unfolded<Target: TerminusDBModel>(
+        &self,
+        ids: Vec<String>,
+        spec: &BranchSpec,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<Vec<Target>> {
+        let opts = GetOpts::default().with_unfold(true);
+        self.get_instances(ids, spec, opts, deserializer).await
+    }
+
+    /// Retrieves and deserializes multiple strongly-typed model instances with full control over options.
+    ///
+    /// This method accepts a full `GetOpts` structure, allowing complete control over the retrieval
+    /// behavior including unfold, pagination, type filtering, and other options. This is the most 
+    /// flexible variant of the get_instances methods and is an alias for the standard get_instances
+    /// method, provided for API consistency.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instances into (implements `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `ids` - Vector of instance IDs (number only, no schema class prefix)
+    /// * `spec` - Branch specification (for time-travel, use commit-specific specs)
+    /// * `opts` - Get options for controlling query behavior
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// A vector of deserialized instances of type `Target`
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let ids = vec!["alice_id".to_string(), "bob_id".to_string()];
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// let opts = GetOpts::default()
+    ///     .with_unfold(false)  // Override automatic unfolding
+    ///     .with_count(10);     // Limit results
+    /// let users: Vec<User> = client.get_instances_with_opts(ids, &spec, opts, &mut deserializer).await?;
+    /// ```
+    #[inline]
+    pub async fn get_instances_with_opts<Target: TerminusDBModel>(
+        &self,
+        ids: Vec<String>,
+        spec: &BranchSpec,
+        opts: GetOpts,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<Vec<Target>> {
+        self.get_instances(ids, spec, opts, deserializer).await
     }
 
     /// Retrieves and deserializes multiple strongly-typed model instances from the database with commit ID.
