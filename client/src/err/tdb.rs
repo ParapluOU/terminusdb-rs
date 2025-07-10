@@ -26,6 +26,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:DocumentIdAlreadyExists")]
     DocumentIdAlreadyExists(DocumentIdAlreadyExistsError),
 
+    #[serde(rename = "api:UnresolvableAbsoluteDescriptor")]
+    UnresolvableAbsoluteDescriptor(UnresolvableAbsoluteDescriptorError),
+
     Other(Value),
 
     #[default]
@@ -37,6 +40,7 @@ impl Display for ApiResponseError {
         match self {
             ApiResponseError::SchemaCheckFail(error) => Display::fmt(error, f),
             ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
+            ApiResponseError::UnresolvableAbsoluteDescriptor(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -273,6 +277,18 @@ impl Display for DocumentIdAlreadyExistsError {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct UnresolvableAbsoluteDescriptorError {
+    #[serde(rename = "api:absolute_descriptor")]
+    pub absolute_descriptor: String,
+}
+
+impl Display for UnresolvableAbsoluteDescriptorError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Could not resolve descriptor: '{}'", self.absolute_descriptor)
+    }
+}
+
 #[test]
 fn test_deserialize_document_id_already_exists_error() {
     // Test the exact JSON from the user's error message
@@ -322,6 +338,62 @@ fn test_deserialize_document_id_already_exists_error() {
             }
         }
         _ => panic!("Expected InsertDocumentError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_unresolvable_absolute_descriptor_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:WoqlErrorResponse",
+        "api:error": {
+            "@type": "api:UnresolvableAbsoluteDescriptor",
+            "api:absolute_descriptor": "admin/test/local/branch/main",
+        },
+        "api:message": "The following descriptor could not be resolved to a resource: 'admin/test/local/branch/main'",
+        "api:status": "api:not_found",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::WoqlError(err) => {
+            assert_eq!(
+                err.api_message,
+                "The following descriptor could not be resolved to a resource: 'admin/test/local/branch/main'"
+            );
+            // Check status
+            match err.api_status {
+                TerminusAPIStatus::NotFound => {} // expected
+                _ => panic!("Expected NotFound status"),
+            }
+
+            if let Some(ApiResponseError::UnresolvableAbsoluteDescriptor(desc_err)) =
+                err.api_error
+            {
+                assert_eq!(
+                    desc_err.absolute_descriptor,
+                    "admin/test/local/branch/main"
+                );
+            } else {
+                panic!("Expected UnresolvableAbsoluteDescriptor error");
+            }
+        }
+        _ => panic!("Expected WoqlError variant"),
     }
 
     // Test deserialization into ApiResponse

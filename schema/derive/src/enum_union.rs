@@ -5,7 +5,7 @@ use crate::instance::{
 use crate::prelude::*;
 use crate::r#struct::process_named_fields;
 use crate::schema::generate_totdbschema_impl;
-use log::{log, trace};
+use tracing::trace;
 use quote::format_ident;
 
 /// Process a tagged union enum (with variants carrying values) to generate a TerminusDB TaggedUnion

@@ -17,8 +17,6 @@ pub use {deserialize::*, document::*, err::*, info::*, r#trait::*, result::*, sp
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::*;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use log::*;
 
 pub mod deserialize;
 mod document;

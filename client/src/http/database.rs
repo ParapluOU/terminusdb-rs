@@ -2,7 +2,7 @@
 
 use {
     crate::TerminusDBAdapterError,
-    ::log::{debug, error},
+    ::tracing::{debug, error},
     anyhow::Context,
     serde_json::json,
 };

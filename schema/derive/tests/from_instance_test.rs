@@ -121,7 +121,7 @@ impl TestStruct {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use log::trace;
+    use tracing::trace;
 
     #[test]
     fn test_simple_struct_instance() {

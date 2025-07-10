@@ -1,7 +1,7 @@
 use crate::instance::{generate_totdbinstance_impl, process_enum_variants_for_instance};
 use crate::prelude::*;
 use crate::schema::generate_totdbschema_impl;
-use log::{log, trace};
+use tracing::trace;
 
 /// Process a simple enum (without variants carrying values) to generate a TerminusDB Enum
 pub fn implement_for_simple_enum(

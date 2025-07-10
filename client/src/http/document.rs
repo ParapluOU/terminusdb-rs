@@ -7,7 +7,7 @@ use {
         spec::BranchSpec,
         TDBInsertInstanceResult,
     },
-    ::log::{debug, error, trace},
+    ::tracing::{debug, error, trace},
     anyhow::{anyhow, Context},
     serde_json::{json, Value},
     std::{

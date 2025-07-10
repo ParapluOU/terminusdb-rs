@@ -5,7 +5,7 @@ use reqwest::Response;
 
 use {
     crate::{result::ResponseWithHeaders, ApiResponse},
-    ::log::trace,
+    ::tracing::trace,
     anyhow::{anyhow, Context},
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     serde_json::{json, Value},

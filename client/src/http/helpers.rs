@@ -2,7 +2,7 @@
 
 use {
     crate::*,
-    ::log::debug,
+    ::tracing::debug,
     serde_json::Value,
     std::{collections::HashSet, fs::File, io::Write, path::PathBuf},
     terminusdb_schema::{Instance, ToJson, ToTDBInstance, ToTDBSchema},

@@ -5,7 +5,7 @@ use {
         spec::BranchSpec, InstanceFromJson, InstanceQueryable, ListModels, RawQueryable,
         TerminusDBModel, WOQLResult,
     },
-    ::log::trace,
+    ::tracing::trace,
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},

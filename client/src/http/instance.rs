@@ -15,7 +15,7 @@ use {
         spec::BranchSpec,
         IntoBoxedTDBInstances, TDBInsertInstanceResult, TDBInstanceDeserializer,
     },
-    ::log::{debug, error, warn},
+    ::tracing::{debug, error, warn},
     anyhow::{anyhow, bail, Context},
     futures_util::StreamExt,
     std::{collections::HashMap, fmt::Debug},

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use tap::Pipe;
 use {
     crate::{document::DocumentInsertArgs, document::DocumentType, Schema},
-    ::log::debug,
+    ::tracing::debug,
     anyhow::Context,
     tap::{Tap, TapFallible},
     terminusdb_schema::{ToTDBSchema, ToTDBSchemas},

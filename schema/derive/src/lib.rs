@@ -14,7 +14,7 @@ use crate::enum_simple::implement_for_simple_enum;
 use crate::enum_union::implement_for_tagged_enum;
 use crate::prelude::*;
 use crate::r#struct::implement_for_struct;
-use log::{log, trace};
+use tracing::trace;
 
 /// Determine whether an enum is a simple enum or a tagged union, and delegate to the appropriate implementation
 fn implement_for_enum(

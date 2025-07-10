@@ -2,7 +2,7 @@
 
 use {
     crate::{spec::BranchSpec, TDBInstanceDeserializer, WOQLResult},
-    ::log::{debug, warn},
+    ::tracing::{debug, warn},
     anyhow::{anyhow, Context},
     std::collections::HashMap,
     terminusdb_schema::{ToJson, ToTDBInstance},

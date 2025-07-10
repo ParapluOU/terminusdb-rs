@@ -5,7 +5,7 @@ use reqwest::Client;
 
 use {
     crate::{Info, TerminusDBAdapterError},
-    ::log::debug,
+    ::tracing::debug,
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     std::fmt::Debug,

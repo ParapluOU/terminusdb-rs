@@ -5,7 +5,7 @@ use crate::log::{CommitLogIterator, EntityIterator, LogEntry, LogOpts};
 
 use {
     crate::{spec::BranchSpec, EntityID, TDBInstanceDeserializer},
-    ::log::debug,
+    ::tracing::debug,
     anyhow::Context,
     serde::Deserialize,
     terminusdb_schema::{GraphType, ToJson, ToTDBInstance},

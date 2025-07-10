@@ -19,7 +19,7 @@ rayon = "1.5.3"
 glob = { version = "0.3.0"}
 async-stream = "0.3.3"
 futures-util = "0.3.23"
-log = "0.4.20"
+tracing = { workspace = true }
 anyhow = "1.0"
 tap = "1.0"
 http = "0.2"

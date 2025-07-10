@@ -23,8 +23,8 @@ anyhow = { workspace=true }
 terminusdb-schema = { path = ".." }
 
 # for macro
-log = "0.4.20"
-env_logger = "0.11"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 multihash = "0.19"
 
 # for macro

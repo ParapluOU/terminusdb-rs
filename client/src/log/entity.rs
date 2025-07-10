@@ -1,7 +1,7 @@
 use crate::log::{LogEntry, LogOpts};
 use crate::spec::BranchSpec;
 use crate::{CommitLogEntry, CommitLogIterator, TDBInstanceDeserializer, TerminusDBHttpClient};
-use ::log::warn;
+use tracing::warn;
 use futures_util::{Future, Stream, StreamExt, TryStreamExt};
 use std::pin::Pin;
 use std::task::{Context, Poll};

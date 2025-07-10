@@ -24,7 +24,7 @@ serde_json = "1.0"
 # Added dependencies from the workspace
 thiserror = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-log = { workspace = true }
+tracing = { workspace = true }
 rust_decimal = { version = "1", features = ["serde-str"] }
 
 # Added dev-dependencies from the workspace
