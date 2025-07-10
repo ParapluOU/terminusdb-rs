@@ -318,30 +318,30 @@ impl super::client::TerminusDBHttpClient {
         let has = self.has_instance(model, &args.spec).await;
 
         // First check if instance already exists
-        if !args.force
-            && has
-            && let Some(entity_id) = model.instance_id()
-        {
-            let id = entity_id.id().to_string();
-            warn!("not inserted because it already exists");
-
-            // Return structured result for already existing instance
-            // todo: make this more convenient to create
-            let mut result = crate::InsertInstanceResult::new(
-                HashMap::from([(
-                    id.clone(),
-                    TDBInsertInstanceResult::AlreadyExists(id.clone()),
-                )]),
-                id.clone(),
-            )?;
-
-            result.commit_id = self
-                .get_document_with_headers(entity_id.typed(), &args.spec, GetOpts::default())
-                .await?
-                .extract_commit_id();
-
-            return Ok(result);
-        }
+        // if !args.force
+        //     && has
+        //     && let Some(entity_id) = model.instance_id()
+        // {
+        //     let id = entity_id.id().to_string();
+        //     warn!("not inserted because it already exists");
+        //
+        //     // Return structured result for already existing instance
+        //     // todo: make this more convenient to create
+        //     let mut result = crate::InsertInstanceResult::new(
+        //         HashMap::from([(
+        //             id.clone(),
+        //             TDBInsertInstanceResult::AlreadyExists(id.clone()),
+        //         )]),
+        //         id.clone(),
+        //     )?;
+        //
+        //     result.commit_id = self
+        //         .get_document_with_headers(entity_id.typed(), &args.spec, GetOpts::default())
+        //         .await?
+        //         .extract_commit_id();
+        //
+        //     return Ok(result);
+        // }
 
         if has {
             self.update_instance(model, args).await
