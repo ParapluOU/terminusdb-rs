@@ -180,52 +180,52 @@ where
     }
 }
 
-// === InstancePropertyFromJson implementations ===
-
-impl<Parent, T> InstancePropertyFromJson<Parent> for HashSet<T>
-where
-    T: Primitive + InstancePropertyFromJson<Parent> + Eq + std::hash::Hash,
-{
-    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        match json {
-            Value::Array(arr) => {
-                Ok(InstanceProperty::Primitives({
-                    arr.into_iter().map(|item| {
-                        Ok(match T::property_from_json(item)? {
-                            // possibly URI's
-                            InstanceProperty::Primitive(prim) => {
-                                prim
-                            },
-                            v => {
-                                return Err(anyhow::anyhow!(
-                                    "Expected primitive values in HashSet JSON array, but got {:#?}", v
-                                ))
-                            }
-                        })
-                    }).collect::<anyhow::Result<_>>()?
-
-                    // let mut primitive_values = Vec::new();
-                    // for item in arr {
-                    //     let item_prop = T::property_from_json(item)?;
-                    //     match item_prop {
-                    //         // possibly URI's
-                    //         InstanceProperty::Primitive(prim) => {
-                    //             primitive_values.push(prim);
-                    //         }
-                    //         v => {
-                    //             return Err(anyhow::anyhow!(
-                    //             "Expected primitive values in HashSet JSON array, but got {:#?}", v
-                    //         ))
-                    //         }
-                    //     }
-                    // }
-                    // primitive_values
-                }))
-            }
-            _ => Err(anyhow::anyhow!("Expected primitive array for HashSet")),
-        }
-    }
-}
+// // === InstancePropertyFromJson implementations ===
+//
+// impl<Parent, T> InstancePropertyFromJson<Parent> for HashSet<T>
+// where
+//     T: Primitive + InstancePropertyFromJson<Parent> + Eq + std::hash::Hash,
+// {
+//     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+//         match json {
+//             Value::Array(arr) => {
+//                 Ok(InstanceProperty::Primitives({
+//                     arr.into_iter().map(|item| {
+//                         Ok(match T::property_from_json(item)? {
+//                             // possibly URI's
+//                             InstanceProperty::Primitive(prim) => {
+//                                 prim
+//                             },
+//                             v => {
+//                                 return Err(anyhow::anyhow!(
+//                                     "Expected primitive values in HashSet JSON array, but got {:#?}", v
+//                                 ))
+//                             }
+//                         })
+//                     }).collect::<anyhow::Result<_>>()?
+//
+//                     // let mut primitive_values = Vec::new();
+//                     // for item in arr {
+//                     //     let item_prop = T::property_from_json(item)?;
+//                     //     match item_prop {
+//                     //         // possibly URI's
+//                     //         InstanceProperty::Primitive(prim) => {
+//                     //             primitive_values.push(prim);
+//                     //         }
+//                     //         v => {
+//                     //             return Err(anyhow::anyhow!(
+//                     //             "Expected primitive values in HashSet JSON array, but got {:#?}", v
+//                     //         ))
+//                     //         }
+//                     //     }
+//                     // }
+//                     // primitive_values
+//                 }))
+//             }
+//             _ => Err(anyhow::anyhow!("Expected primitive array for HashSet")),
+//         }
+//     }
+// }
 
 // impl<Parent, T> ToInstanceProperty<Parent> for HashSet<T>
 // where
@@ -264,6 +264,65 @@ where
 //         }
 //     }
 // }
+
+impl<T, Parent> InstancePropertyFromJson<Parent> for HashSet<T>
+where
+    T: InstancePropertyFromJson<Parent>,
+    HashSet<T>: ToInstanceProperty<Parent>,
+{
+    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+        match json {
+            Value::Array(array) => {
+                // For each element in the array, convert to InstanceProperty
+                let mut properties = Vec::with_capacity(array.len());
+
+                for value in array {
+                    let prop = T::property_from_json(value)?;
+                    properties.push(prop);
+                }
+
+                // Determine what kind of container to use based on the first element
+                if properties.is_empty() {
+                    Ok(InstanceProperty::Primitives(Vec::new()))
+                } else if properties[0].is_primitive() {
+                    // Convert all to primitives
+                    let primitives = properties
+                        .into_iter()
+                        .map(|p| {
+                            if let InstanceProperty::Primitive(pv) = p {
+                                Ok(pv)
+                            } else {
+                                Err(anyhow!(
+                                    "Expected all array elements to be primitive values"
+                                ))
+                            }
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+
+                    Ok(InstanceProperty::Primitives(primitives))
+                } else if properties[0].is_relation() {
+                    // Convert all to relations
+                    let relations = properties
+                        .into_iter()
+                        .map(|p| {
+                            if let InstanceProperty::Relation(rv) = p {
+                                Ok(rv)
+                            } else {
+                                Err(anyhow!("Expected all array elements to be relations"))
+                            }
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+
+                    Ok(InstanceProperty::Relations(relations))
+                } else {
+                    // Mixed or other types
+                    Ok(InstanceProperty::Any(properties))
+                }
+            }
+            _ => Err(anyhow!("Expected an array, got {:?}", json)),
+        }
+    }
+}
 
 impl<Parent, T> InstancePropertyFromJson<Parent> for BTreeSet<T>
 where
