@@ -203,6 +203,7 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         match self {
             XSDAnySimpleType::String(s) => InstanceProperty::Primitive(PrimitiveValue::String(s)),
+            XSDAnySimpleType::Boolean(b) => InstanceProperty::Primitive(PrimitiveValue::Bool(b)),
             _ => todo!(),
         }
     }
