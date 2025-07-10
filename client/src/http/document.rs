@@ -310,14 +310,32 @@ impl super::client::TerminusDBHttpClient {
         // For POST method, filter out documents that already exist
         if matches!(method, DocumentMethod::Post) {
             let document_ids = extract_document_ids(&to_jsoned);
+
             debug!(
                 "POST method: Found {} documents with IDs to check",
                 document_ids.len()
             );
+
             if !document_ids.is_empty() {
                 debug!("Document IDs to check: {:?}", document_ids);
                 let existing_ids = self.check_existing_ids(&document_ids, &args.spec).await?;
+
                 if !existing_ids.is_empty() {
+                    // insert existing documents with PUT
+                    let update_res = Box::pin(self.insert_documents_with_method(
+                        to_jsoned
+                            .iter()
+                            .filter(|d| {
+                                existing_ids.contains(
+                                    d.get("@id").and_then(|id| id.as_str()).unwrap_or_default(),
+                                )
+                            })
+                            .collect(),
+                        args.clone(),
+                        DocumentMethod::Put,
+                    ))
+                    .await?;
+
                     debug!(
                         "Filtering out {} existing documents from POST operation",
                         existing_ids.len()
