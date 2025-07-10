@@ -278,7 +278,8 @@ impl super::client::TerminusDBHttpClient {
 
         let instances = Self::prepare_instances(model);
         let models = instances.iter().collect();
-        let res = self.put_documents(models, args).await?;
+        // let res = self.put_documents(models, args).await?;
+        let res = self.insert_documents(models, args).await?;
 
         Self::process_operation_result::<I>(res)
     }
