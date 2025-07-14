@@ -7,6 +7,8 @@ members = [
     "woql-builder", 
     "woql2",
     "typestate",
+    "woql-dsl",
+    "mcp-server",
 ]
 
 [workspace.dependencies]

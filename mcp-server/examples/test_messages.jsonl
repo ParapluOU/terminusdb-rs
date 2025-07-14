@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"roots":{"listChanged":true}},"clientInfo":{"name":"TestClient","version":"1.0.0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_woql","arguments":{"query":"select ?x ?y where { ?x a ?y }","database":"_system"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_schema","arguments":{"database":"_system"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_databases","arguments":{}}}

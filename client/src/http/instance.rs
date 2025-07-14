@@ -972,6 +972,81 @@ impl super::client::TerminusDBHttpClient {
         }
     }
 
+    /// Retrieves and deserializes a strongly-typed model instance if it exists.
+    ///
+    /// This method is designed for cases where an instance might not exist and that's 
+    /// an expected scenario (e.g., checking before create). Unlike `get_instance`, 
+    /// this method returns `None` for non-existent instances without logging errors.
+    ///
+    /// # Type Parameters
+    /// * `Target` - The type to deserialize the instance into (implements `TerminusDBModel`)
+    ///
+    /// # Arguments
+    /// * `id` - The instance ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification indicating which branch to query
+    /// * `deserializer` - Instance deserializer for converting from TerminusDB format
+    ///
+    /// # Returns
+    /// * `Ok(Some(instance))` - If the instance exists and was successfully deserialized
+    /// * `Ok(None)` - If the instance doesn't exist
+    /// * `Err(error)` - Only for actual errors (network, parsing, deserialization, etc.)
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel)]
+    /// struct User { name: String, age: i32 }
+    ///
+    /// let mut deserializer = DefaultDeserializer::new();
+    /// match client.get_instance_if_exists::<User>("12345", &spec, &mut deserializer).await? {
+    ///     Some(user) => println!("User exists: {}", user.name),
+    ///     None => println!("User not found"),
+    /// }
+    /// ```
+    #[instrument(
+        name = "terminus.instance.get_if_exists",
+        skip(self, deserializer),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %Target::schema_name(),
+            id = %id
+        )
+        // Note: no 'err' attribute - we don't want to log DocumentNotFound as errors
+    )]
+    pub async fn get_instance_if_exists<Target: TerminusDBModel>(
+        &self,
+        id: &str,
+        spec: &BranchSpec,
+        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+    ) -> anyhow::Result<Option<Target>>
+    where
+        Target:,
+    {
+        let doc_id = format_id::<Target>(id);
+
+        // the default here makes stuff unfold
+        let mut opts: GetOpts = GetOpts::default().with_type_filter::<Target>();
+
+        if Target::to_schema().should_unfold() {
+            opts.unfold = true;
+        }
+
+        match self.get_document_if_exists(&doc_id, spec, opts).await? {
+            Some(json_instance_doc) => {
+                let res = deserializer.from_instance(json_instance_doc.clone());
+
+                match res {
+                    Ok(t) => Ok(Some(t)),
+                    Err(err) => Err(err).context(format!(
+                        "TerminusHTTPClient failed to deserialize Instance. See: {}",
+                        super::helpers::dump_json(&json_instance_doc).display()
+                    )),
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Get the commit history for a strongly-typed model instance.
     ///
     /// This is a convenience method that automatically formats the instance ID

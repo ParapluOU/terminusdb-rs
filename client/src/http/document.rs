@@ -5,7 +5,7 @@ use {
         document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, GetOpts},
         result::ResponseWithHeaders,
         spec::BranchSpec,
-        TDBInsertInstanceResult,
+        TDBInsertInstanceResult, TypedErrorResponse, TerminusAPIStatus,
     },
     ::tracing::{debug, error, instrument, trace},
     anyhow::{anyhow, Context},
@@ -143,28 +143,12 @@ impl super::client::TerminusDBHttpClient {
         id: &str,
         spec: &BranchSpec,
     ) -> bool {
-        let r: anyhow::Result<_> = async {
-            let uri = self
-                .build_url()
-                .endpoint("document")
-                .database(spec)
-                .document_get_params(id, false, false)
-                .build();
-
-            Ok::<Value, anyhow::Error>(
-                self.parse_response::<Value>(
-                    self.http
-                        .get(uri)
-                        .basic_auth(&self.user, Some(&self.pass))
-                        .send()
-                        .await?,
-                )
-                .await?,
-            )
+        // Use get_document_if_exists to avoid error logging for expected "not found" cases
+        match self.get_document_if_exists(id, spec, GetOpts::default()).await {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(_) => false, // Treat any real errors as "not exists"
         }
-        .await;
-
-        r.is_ok()
     }
 
     /// ID here should manually include the type, like
@@ -317,6 +301,96 @@ impl super::client::TerminusDBHttpClient {
         debug!("retrieved TDB document in {:?}", start.elapsed());
 
         Ok(res)
+    }
+
+    /// Retrieves an untyped document from the database if it exists.
+    ///
+    /// This method is designed for cases where a document might not exist and that's 
+    /// an expected scenario (e.g., checking before create). Unlike `get_document`, 
+    /// this method returns `None` for non-existent documents without logging errors.
+    ///
+    /// # Arguments
+    /// * `id` - The document ID (number only, no schema class prefix)
+    /// * `spec` - Branch specification indicating which branch to query
+    /// * `opts` - Get options for controlling the query behavior
+    ///
+    /// # Returns
+    /// * `Ok(Some(document))` - If the document exists
+    /// * `Ok(None)` - If the document doesn't exist
+    /// * `Err(error)` - Only for actual errors (network, parsing, etc.)
+    ///
+    /// # Example
+    /// ```rust
+    /// match client.get_document_if_exists("12345", &branch_spec, GetOpts::default()).await? {
+    ///     Some(doc) => println!("Document exists: {:?}", doc),
+    ///     None => println!("Document not found"),
+    /// }
+    /// ```
+    #[instrument(
+        name = "terminus.document.get_if_exists",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            id = %id,
+            unfold = opts.unfold,
+            as_list = opts.as_list
+        )
+        // Note: no 'err' attribute - we don't want to log DocumentNotFound as errors
+    )]
+    pub async fn get_document_if_exists(
+        &self,
+        id: &str,
+        spec: &BranchSpec,
+        opts: GetOpts,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        let uri = self
+            .build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_get_params(id, opts.unfold, opts.as_list)
+            .build();
+
+        debug!("retrieving document at {}...", &uri);
+
+        let start = Instant::now();
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await?;
+
+        debug!("retrieved TDB document with status code: {}", res.status());
+
+        // Check if it's a 404 Not Found
+        if res.status() == 404 {
+            debug!("Document #{} not found", id);
+            return Ok(None);
+        }
+
+        // Parse the response - this might still contain an error response
+        match self.parse_response::<Value>(res).await {
+            Ok(doc) => {
+                debug!("retrieved TDB document in {:?}", start.elapsed());
+                Ok(Some(doc))
+            }
+            Err(err) => {
+                // Check if the error is DocumentNotFound
+                if let Some(err_response) = err.downcast_ref::<TypedErrorResponse>() {
+                    match err_response {
+                        TypedErrorResponse::DocumentError(err) if matches!(err.api_status, TerminusAPIStatus::NotFound) => {
+                            debug!("Document #{} not found (from error response)", id);
+                            return Ok(None);
+                        }
+                        _ => {}
+                    }
+                }
+                // For any other error, propagate it
+                Err(err)
+            }
+        }
     }
 
     /// Internal method for document operations with specific HTTP method

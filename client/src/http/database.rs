@@ -1,7 +1,7 @@
 //! Database administration operations
 
 use {
-    crate::TerminusDBAdapterError,
+    crate::{Database, TerminusDBAdapterError},
     ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde_json::json,
@@ -146,5 +146,86 @@ impl super::client::TerminusDBHttpClient {
         self.ensure_database(db)
             .await
             .context("failed to recreate database during reset")
+    }
+
+    /// Lists all databases available to the authenticated user.
+    ///
+    /// This function retrieves a list of all databases that the current user has access to.
+    /// The list includes database metadata such as name, type, creation date, and state.
+    ///
+    /// # Arguments
+    /// * `branches` - Whether to include branch information (default: false)
+    /// * `verbose` - Whether to return all available information (default: false)
+    ///
+    /// # Returns
+    /// A vector of `Database` objects containing information about each available database
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let databases = client.list_databases(false, false).await?;
+    /// for db in databases {
+    ///     println!("Database: {} ({})", db.name, db.id);
+    /// }
+    /// ```
+    #[instrument(
+        name = "terminus.database.list",
+        skip(self),
+        fields(
+            org = %self.org,
+            branches = %branches,
+            verbose = %verbose
+        ),
+        err
+    )]
+    pub async fn list_databases(&self, branches: bool, verbose: bool) -> anyhow::Result<Vec<Database>> {
+        let uri = self
+            .build_url()
+            .endpoint("db")
+            .query("branches", &branches.to_string())
+            .query("verbose", &verbose.to_string())
+            .build();
+        
+        debug!("Listing databases with URI: {}", &uri);
+        
+        let res = self
+            .http
+            .get(uri.clone())
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context(format!("Failed to list databases from {}", &uri))?;
+        
+        debug!("Received response from TerminusDB, parsing database list...");
+        
+        // The /db endpoint returns a direct array, not wrapped in ApiResponse
+        let databases: Vec<Database> = res.json().await
+            .context("Failed to parse database list response")?;
+        
+        Ok(databases)
+    }
+
+    /// Lists all databases with default options (no branches, not verbose).
+    ///
+    /// This is a convenience method that calls `list_databases(false, false)`.
+    ///
+    /// # Returns
+    /// A vector of `Database` objects
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let databases = client.list_databases_simple().await?;
+    /// ```
+    #[instrument(
+        name = "terminus.database.list_simple",
+        skip(self),
+        fields(
+            org = %self.org
+        ),
+        err
+    )]
+    pub async fn list_databases_simple(&self) -> anyhow::Result<Vec<Database>> {
+        self.list_databases(false, false).await
     }
 }

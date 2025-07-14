@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "terminusdb": {
+      "command": "cargo",
+      "args": ["run", "--quiet", "--package", "terminusdb-mcp-server"],
+      "env": {
+        "RUST_LOG": "info",
+        "TERMINUSDB_HOST": "http://localhost:6363",
+        "TERMINUSDB_USER": "admin",
+        "TERMINUSDB_PASSWORD": "root"
+      }
+    }
+  }
+}

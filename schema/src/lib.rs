@@ -101,7 +101,7 @@ macro_rules! schemas {
 
 /// Trait for converting tuples of types into vectors of schemas.
 ///
-/// This trait is implemented for tuples up to 16 elements, where each element
+/// This trait is implemented for tuples up to 20 elements, where each element
 /// must implement `ToTDBSchema`. It provides a type-safe way to generate
 /// multiple schemas at compile time.
 pub trait ToTDBSchemas {
@@ -109,125 +109,56 @@ pub trait ToTDBSchemas {
     fn to_schemas() -> Vec<crate::Schema>;
 }
 
-// Implement ToTDBSchemas for tuples of various sizes
-impl<T1> ToTDBSchemas for (T1,)
-where
-    T1: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        T1::to_schema_tree()
-    }
+// Macro to generate ToTDBSchemas implementations for tuples
+macro_rules! impl_to_tdb_schemas_for_tuple {
+    // Base case for single element tuple
+    ($T:ident) => {
+        impl<$T> ToTDBSchemas for ($T,)
+        where
+            $T: ToTDBSchema,
+        {
+            fn to_schemas() -> Vec<crate::Schema> {
+                $T::to_schema_tree()
+            }
+        }
+    };
+    
+    // Recursive case for multiple elements
+    ($($T:ident),+) => {
+        impl<$($T),+> ToTDBSchemas for ($($T,)+)
+        where
+            $($T: ToTDBSchema,)+
+        {
+            fn to_schemas() -> Vec<crate::Schema> {
+                let mut schemas = Vec::new();
+                $(schemas.extend($T::to_schema_tree());)+
+                schemas
+            }
+        }
+    };
 }
 
-impl<T1, T2> ToTDBSchemas for (T1, T2)
-where
-    T1: ToTDBSchema,
-    T2: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        let mut schemas = Vec::new();
-        schemas.extend(T1::to_schema_tree());
-        schemas.extend(T2::to_schema_tree());
-        schemas
-    }
-}
-
-impl<T1, T2, T3> ToTDBSchemas for (T1, T2, T3)
-where
-    T1: ToTDBSchema,
-    T2: ToTDBSchema,
-    T3: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        let mut schemas = Vec::new();
-        schemas.extend(T1::to_schema_tree());
-        schemas.extend(T2::to_schema_tree());
-        schemas.extend(T3::to_schema_tree());
-        schemas
-    }
-}
-
-impl<T1, T2, T3, T4> ToTDBSchemas for (T1, T2, T3, T4)
-where
-    T1: ToTDBSchema,
-    T2: ToTDBSchema,
-    T3: ToTDBSchema,
-    T4: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        let mut schemas = Vec::new();
-        schemas.extend(T1::to_schema_tree());
-        schemas.extend(T2::to_schema_tree());
-        schemas.extend(T3::to_schema_tree());
-        schemas.extend(T4::to_schema_tree());
-        schemas
-    }
-}
-
-impl<T1, T2, T3, T4, T5> ToTDBSchemas for (T1, T2, T3, T4, T5)
-where
-    T1: ToTDBSchema,
-    T2: ToTDBSchema,
-    T3: ToTDBSchema,
-    T4: ToTDBSchema,
-    T5: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        let mut schemas = Vec::new();
-        schemas.extend(T1::to_schema_tree());
-        schemas.extend(T2::to_schema_tree());
-        schemas.extend(T3::to_schema_tree());
-        schemas.extend(T4::to_schema_tree());
-        schemas.extend(T5::to_schema_tree());
-        schemas
-    }
-}
-
-impl<T1, T2, T3, T4, T5, T6> ToTDBSchemas for (T1, T2, T3, T4, T5, T6)
-where
-    T1: ToTDBSchema,
-    T2: ToTDBSchema,
-    T3: ToTDBSchema,
-    T4: ToTDBSchema,
-    T5: ToTDBSchema,
-    T6: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        let mut schemas = Vec::new();
-        schemas.extend(T1::to_schema_tree());
-        schemas.extend(T2::to_schema_tree());
-        schemas.extend(T3::to_schema_tree());
-        schemas.extend(T4::to_schema_tree());
-        schemas.extend(T5::to_schema_tree());
-        schemas.extend(T6::to_schema_tree());
-        schemas
-    }
-}
-
-impl<T1, T2, T3, T4, T5, T6, T7, T8> ToTDBSchemas for (T1, T2, T3, T4, T5, T6, T7, T8)
-where
-    T1: ToTDBSchema,
-    T2: ToTDBSchema,
-    T3: ToTDBSchema,
-    T4: ToTDBSchema,
-    T5: ToTDBSchema,
-    T6: ToTDBSchema,
-    T7: ToTDBSchema,
-    T8: ToTDBSchema,
-{
-    fn to_schemas() -> Vec<crate::Schema> {
-        let mut schemas = Vec::new();
-        schemas.extend(T1::to_schema_tree());
-        schemas.extend(T2::to_schema_tree());
-        schemas.extend(T3::to_schema_tree());
-        schemas.extend(T4::to_schema_tree());
-        schemas.extend(T5::to_schema_tree());
-        schemas.extend(T6::to_schema_tree());
-        schemas.extend(T7::to_schema_tree());
-        schemas.extend(T8::to_schema_tree());
-        schemas
-    }
-}
+// Generate implementations for tuples up to size 20
+impl_to_tdb_schemas_for_tuple!(T1);
+impl_to_tdb_schemas_for_tuple!(T1, T2);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19);
+impl_to_tdb_schemas_for_tuple!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20);
 
 #[test]
 fn test_compile() {}
