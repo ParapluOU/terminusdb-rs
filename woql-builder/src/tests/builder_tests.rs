@@ -760,6 +760,54 @@ fn test_concatenate_alias() {
 }
 
 #[test]
+fn test_concat_with_list_literal() {
+    let result_var = Var::new("Result");
+    
+    // Test with list() helper function
+    let builder = WoqlBuilder::new().concat(
+        list(vec![string_literal("Hello"), string_literal(" "), string_literal("World")]), 
+        result_var.clone()
+    );
+    let final_query = builder.finalize();
+    match final_query {
+        Woql2Query::Concatenate(concat_q) => {
+            // Verify the list contains the expected string literals
+            match &concat_q.list {
+                DataValue::List(items) => {
+                    assert_eq!(items.len(), 3);
+                    assert!(matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Hello"));
+                    assert!(matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == " "));
+                    assert!(matches!(&items[2], DataValue::Data(XSDAnySimpleType::String(s)) if s == "World"));
+                }
+                _ => panic!("Expected list literal, found {:?}", concat_q.list),
+            }
+            assert!(matches!(concat_q.result_string, DataValue::Variable(v) if v == "Result"));
+        }
+        _ => panic!("Expected Concatenate query, found {:?}", final_query),
+    }
+    
+    // Test with Vec conversion
+    let builder2 = WoqlBuilder::new().concat(
+        vec![string_literal("Foo"), string_literal("Bar")], 
+        result_var.clone()
+    );
+    let final_query2 = builder2.finalize();
+    match final_query2 {
+        Woql2Query::Concatenate(concat_q) => {
+            match &concat_q.list {
+                DataValue::List(items) => {
+                    assert_eq!(items.len(), 2);
+                    assert!(matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Foo"));
+                    assert!(matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Bar"));
+                }
+                _ => panic!("Expected list literal from vec, found {:?}", concat_q.list),
+            }
+        }
+        _ => panic!("Expected Concatenate query from vec, found {:?}", final_query2),
+    }
+}
+
+#[test]
 fn test_substring() {
     let (str_var, before_var, len_var, after_var, sub_var) = vars!("S", "B", "L", "A", "Sub");
     let builder = WoqlBuilder::new().substring(

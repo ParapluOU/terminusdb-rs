@@ -22,7 +22,7 @@ pub mod prelude {
     };
 
     // Value items
-    pub use crate::value::{node, string_literal, IntoWoql2, Var, WoqlInput};
+    pub use crate::value::{list, node, string_literal, IntoWoql2, Var, WoqlInput};
 
     // Make the vars! macro available via the prelude
     pub use crate::vars;

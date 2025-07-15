@@ -17,6 +17,7 @@ pub enum WoqlInput {
     Boolean(bool),  // Represents a Data Literal (boolean)
     Integer(i64),   // Represents a Data Literal (integer)
     Decimal(String), // Represents a Data Literal (decimal, stored as string)
+    List(Vec<WoqlInput>), // Represents a list of values
                     // TODO: Add other literal types (date, dateTime, etc.)
 }
 
@@ -95,6 +96,15 @@ macro_rules! impl_from_integer {
 }
 impl_from_integer!(i8, u8, i16, u16, i32, u32, i64, u64);
 
+impl<T> From<Vec<T>> for WoqlInput
+where
+    T: Into<WoqlInput>,
+{
+    fn from(vec: Vec<T>) -> Self {
+        WoqlInput::List(vec.into_iter().map(Into::into).collect())
+    }
+}
+
 /// Creates multiple `Var` instances from string literals.
 ///
 /// # Example
@@ -152,6 +162,9 @@ impl IntoWoql2 for WoqlInput {
             WoqlInput::Decimal(d) => Woql2Value::Data(XSDAnySimpleType::Decimal(
                 Decimal::from_str(&d).expect("Invalid decimal string format"),
             )),
+            WoqlInput::List(items) => Woql2Value::List(
+                items.into_iter().map(|item| item.into_woql2_value()).collect()
+            ),
         }
     }
 
@@ -179,6 +192,9 @@ impl IntoWoql2 for WoqlInput {
             WoqlInput::Decimal(d) => DataValue::Data(XSDAnySimpleType::Decimal(
                 Decimal::from_str(&d).expect("Invalid decimal string format"),
             )),
+            WoqlInput::List(items) => DataValue::List(
+                items.into_iter().map(|item| item.into_woql2_data_value()).collect()
+            ),
             _ => panic!(
                 "Attempted to convert a Node IRI input ({:?}) into a DataValue",
                 self
@@ -204,6 +220,16 @@ pub fn node(s: impl Into<String>) -> WoqlInput {
     }
 }
 
+/// Helper function to create a list literal.
+/// Accepts an iterator of items that can be converted into WoqlInput.
+pub fn list<I, T>(items: I) -> WoqlInput 
+where
+    I: IntoIterator<Item = T>,
+    T: Into<WoqlInput>,
+{
+    WoqlInput::List(items.into_iter().map(Into::into).collect())
+}
+
 // Blanket implementations for convenience types
 
 macro_rules! impl_into_woql2_for {
@@ -223,6 +249,24 @@ macro_rules! impl_into_woql2_for {
 }
 
 impl_into_woql2_for!(Var, &str, String, bool, i8, u8, i16, u16, i32, u32, i64, u64);
+
+// Add IntoWoql2 implementation for Vec<T>
+impl<T> IntoWoql2 for Vec<T>
+where
+    T: Into<WoqlInput>,
+{
+    fn into_woql2_value(self) -> Woql2Value {
+        WoqlInput::from(self).into_woql2_value()
+    }
+    
+    fn into_woql2_node_value(self) -> NodeValue {
+        WoqlInput::from(self).into_woql2_node_value()
+    }
+    
+    fn into_woql2_data_value(self) -> DataValue {
+        WoqlInput::from(self).into_woql2_data_value()
+    }
+}
 
 impl IntoWoql2 for f32 {
     fn into_woql2_node_value(self) -> NodeValue {
