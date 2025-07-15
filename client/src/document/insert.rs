@@ -1,5 +1,6 @@
 use crate::document::DocumentType;
 use crate::spec::BranchSpec;
+use std::time::Duration;
 use tap::Tap;
 
 #[derive(Clone)]
@@ -14,6 +15,8 @@ pub struct DocumentInsertArgs {
     pub spec: BranchSpec,
     /// force despite it already exists
     pub force: bool,
+    /// optional request timeout
+    pub timeout: Option<Duration>,
 }
 
 impl DocumentInsertArgs {
@@ -25,6 +28,11 @@ impl DocumentInsertArgs {
 
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 }
@@ -41,6 +49,7 @@ impl Default for DocumentInsertArgs {
                 ref_commit: None,
             },
             force: false,
+            timeout: None,
         }
     }
 }

@@ -114,6 +114,17 @@ pub struct CheckServerStatusTool {
     pub connection: ConnectionConfig,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "reset_database",
+    description = "Reset a database by deleting and recreating it. WARNING: This permanently deletes all data in the database!"
+)]
+pub struct ResetDatabaseTool {
+    pub database: String,
+    #[serde(default)]
+    pub connection: ConnectionConfig,
+}
+
 pub struct TerminusDBMcpHandler;
 
 impl TerminusDBMcpHandler {
@@ -270,6 +281,21 @@ impl TerminusDBMcpHandler {
             }))
         }
     }
+
+    async fn reset_database(&self, request: ResetDatabaseTool) -> Result<serde_json::Value> {
+        info!("Resetting database: {}", request.database);
+
+        let client = Self::create_client(&request.connection).await?;
+        
+        // Reset the database using the client method
+        client.reset_database(&request.database).await?;
+        
+        Ok(serde_json::json!({
+            "status": "success",
+            "message": format!("Database '{}' has been reset successfully", request.database),
+            "database": request.database
+        }))
+    }
 }
 
 #[async_trait]
@@ -285,6 +311,7 @@ impl ServerHandler for TerminusDBMcpHandler {
                 ListDatabasesTool::tool(),
                 GetSchemaTool::tool(),
                 CheckServerStatusTool::tool(),
+                ResetDatabaseTool::tool(),
             ],
             meta: None,
             next_cursor: None,
@@ -387,6 +414,33 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.check_server_status(tool_request).await {
+                    Ok(result) => {
+                        // Convert to pretty string for text content
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        // Extract as object for structured content if possible
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == ResetDatabaseTool::tool_name() => {
+                let tool_request: ResetDatabaseTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.reset_database(tool_request).await {
                     Ok(result) => {
                         // Convert to pretty string for text content
                         let text_content = serde_json::to_string_pretty(&result)

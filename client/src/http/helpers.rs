@@ -4,7 +4,7 @@ use {
     crate::*,
     ::tracing::debug,
     serde_json::Value,
-    std::{collections::HashSet, fs::File, io::Write, path::PathBuf},
+    std::{collections::HashSet, fs::{self, File}, io::Write, path::PathBuf},
     terminusdb_schema::{Instance, ToJson, ToTDBInstance, ToTDBSchema},
 };
 
@@ -30,14 +30,21 @@ pub fn dedup_documents_by_id(values: &mut Vec<Value>) {
 }
 
 pub fn dump_failed_payload(payload: &str) {
+    // Ensure the logs directory exists
+    let log_dir = PathBuf::from("./logs/terminusdb");
+    if let Err(e) = fs::create_dir_all(&log_dir) {
+        panic!("Could not create log directory: {}", e);
+    }
+
     // Get the current datetime
     let current_datetime = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     // Define the log filename with the datetime
     let log_filename = format!("tdb-failed-request-{}.log.json", current_datetime);
+    let log_path = log_dir.join(&log_filename);
 
     // Write the string to the log file
-    let mut file = match File::create(&log_filename) {
+    let mut file = match File::create(&log_path) {
         Ok(file) => file,
         Err(e) => panic!("Could not create file: {}", e),
     };
@@ -45,18 +52,25 @@ pub fn dump_failed_payload(payload: &str) {
     match file.write_all(payload.as_bytes()) {
         Ok(_) => debug!(
             "Successfully dumped failed request payload to file {}",
-            log_filename
+            log_path.display()
         ),
         Err(e) => panic!("Could not write to file: {}", e),
     };
 }
 
 pub fn dump_schema<S: ToTDBSchema>() {
+    // Ensure the logs directory exists
+    let log_dir = PathBuf::from("./logs/terminusdb");
+    if let Err(e) = fs::create_dir_all(&log_dir) {
+        panic!("Could not create log directory: {}", e);
+    }
+
     // Get the current datetime
     let current_datetime = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     // Define the log filename with the datetime
     let log_filename = format!("tdb-failed-schema-{}.log.json", current_datetime);
+    let log_path = log_dir.join(&log_filename);
 
     let schema_json = serde_json::Value::Array(
         S::to_schema_tree()
@@ -68,7 +82,7 @@ pub fn dump_schema<S: ToTDBSchema>() {
     let payload = serde_json::to_string_pretty(&schema_json).unwrap();
 
     // Write the string to the log file
-    let mut file = match File::create(&log_filename) {
+    let mut file = match File::create(&log_path) {
         Ok(file) => file,
         Err(e) => panic!("Could not create file: {}", e),
     };
@@ -76,23 +90,30 @@ pub fn dump_schema<S: ToTDBSchema>() {
     match file.write_all(payload.as_bytes()) {
         Ok(_) => debug!(
             "Successfully dumped failed request payload to file {}",
-            log_filename
+            log_path.display()
         ),
         Err(e) => panic!("Could not write to file: {}", e),
     };
 }
 
 pub fn dump_json(json: &Value) -> PathBuf {
+    // Ensure the logs directory exists
+    let log_dir = PathBuf::from("./logs/terminusdb");
+    if let Err(e) = fs::create_dir_all(&log_dir) {
+        panic!("Could not create log directory: {}", e);
+    }
+
     // Get the current datetime
     let current_datetime = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
 
     // Define the log filename with the datetime
     let log_filename = format!("tdb-retrieved-json-{}.log.json", current_datetime);
+    let log_path = log_dir.join(&log_filename);
 
     let payload = serde_json::to_string_pretty(json).unwrap();
 
     // Write the string to the log file
-    let mut file = match File::create(&log_filename) {
+    let mut file = match File::create(&log_path) {
         Ok(file) => file,
         Err(e) => panic!("Could not create file: {}", e),
     };
@@ -101,9 +122,9 @@ pub fn dump_json(json: &Value) -> PathBuf {
         Ok(_) => {
             debug!(
                 "Successfully dumped success response to file {}",
-                log_filename
+                log_path.display()
             );
-            PathBuf::from(log_filename)
+            log_path
         }
         Err(e) => panic!("Could not write to file: {}", e),
     }

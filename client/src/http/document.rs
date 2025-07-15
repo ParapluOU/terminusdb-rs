@@ -504,13 +504,17 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("POST {} to URI {}", &ty, &uri);
 
-                let r = self.http
+                let mut request = self.http
                     .post(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
-                    .body(json.clone())
-                    .send()
-                    .await?;
+                    .body(json.clone());
+                
+                if let Some(timeout) = args.timeout {
+                    request = request.timeout(timeout);
+                }
+                
+                let r = request.send().await?;
 
                 // insert existing documents with PUT
                 let update_res = Box::pin(self.insert_documents_with_method(
@@ -535,13 +539,17 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("PUT {} to URI {} (create=false)", &ty, &uri);
 
-                self.http
+                let mut request = self.http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
-                    .body(json.clone())
-                    .send()
-                    .await?
+                    .body(json.clone());
+                
+                if let Some(timeout) = args.timeout {
+                    request = request.timeout(timeout);
+                }
+                
+                request.send().await?
             }
             DocumentMethod::PutWithCreate => {
                 let uri = self
@@ -553,13 +561,17 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("PUT {} to URI {} (create=true)", &ty, &uri);
 
-                self.http
+                let mut request = self.http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
-                    .body(json.clone())
-                    .send()
-                    .await?
+                    .body(json.clone());
+                
+                if let Some(timeout) = args.timeout {
+                    request = request.timeout(timeout);
+                }
+                
+                request.send().await?
             }
         };
 
