@@ -61,7 +61,15 @@ fn default_password() -> String {
 }
 
 fn default_branch() -> String {
-    "main".to_string()
+    env::var("TERMINUSDB_BRANCH").unwrap_or_else(|_| "main".to_string())
+}
+
+fn default_database() -> Option<String> {
+    env::var("TERMINUSDB_DATABASE").ok()
+}
+
+fn default_commit_ref() -> Option<String> {
+    env::var("TERMINUSDB_COMMIT_REF").ok()
 }
 
 impl Default for ConnectionConfig {
@@ -70,9 +78,9 @@ impl Default for ConnectionConfig {
             host: default_host(),
             user: default_user(),
             password: default_password(),
-            database: None,
+            database: default_database(),
             branch: default_branch(),
-            commit_ref: None,
+            commit_ref: default_commit_ref(),
         }
     }
 }

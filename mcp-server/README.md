@@ -193,6 +193,9 @@ Set these environment variables before starting the server:
 - `TERMINUSDB_HOST`: Default server URL (default: "http://localhost:6363")
 - `TERMINUSDB_USER`: Default username (default: "admin")
 - `TERMINUSDB_PASSWORD`: Default password (default: "root")
+- `TERMINUSDB_DATABASE`: Default database name (optional)
+- `TERMINUSDB_BRANCH`: Default branch name (default: "main")
+- `TERMINUSDB_COMMIT_REF`: Default commit reference for time-travel queries (optional)
 
 ### 2. Using .env Files
 You can load environment variables from a .env file using the `connect` command:
