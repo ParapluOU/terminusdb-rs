@@ -84,15 +84,11 @@ impl Default for ConnectionConfig {
     description = "Establish and save a connection to TerminusDB. Once connected, other commands will use these saved credentials automatically. Optionally provide an env_file path to load environment variables."
 )]
 pub struct ConnectTool {
-    #[serde(default = "default_host")]
-    pub host: String,
-    #[serde(default = "default_user")]
-    pub user: String,
-    #[serde(default = "default_password")]
-    pub password: String,
+    pub host: Option<String>,
+    pub user: Option<String>,
+    pub password: Option<String>,
     pub database: Option<String>,
-    #[serde(default = "default_branch")]
-    pub branch: String,
+    pub branch: Option<String>,
     /// Commit ID for time-travel queries (optional)
     pub commit_ref: Option<String>,
     /// Path to .env file to load additional environment variables
@@ -186,7 +182,7 @@ impl TerminusDBMcpHandler {
     async fn connect(&self, request: ConnectTool) -> Result<serde_json::Value> {
         info!("Establishing connection to TerminusDB");
 
-        // Load env file if provided
+        // Load env file if provided (this updates the environment for subsequent reads)
         if let Some(env_file) = &request.env_file {
             if let Err(e) = dotenv::from_path(env_file) {
                 info!("Failed to load env file {}: {}", env_file, e);
@@ -194,14 +190,17 @@ impl TerminusDBMcpHandler {
             }
         }
 
-        // Create connection config from request
+        // Start with defaults/environment variables (these will now read from the updated environment)
+        let base_config = ConnectionConfig::default();
+        
+        // Merge request values with base config (request values take precedence)
         let config = ConnectionConfig {
-            host: request.host,
-            user: request.user,
-            password: request.password,
-            database: request.database,
-            branch: request.branch,
-            commit_ref: request.commit_ref,
+            host: request.host.unwrap_or(base_config.host),
+            user: request.user.unwrap_or(base_config.user),
+            password: request.password.unwrap_or(base_config.password),
+            database: request.database.or(base_config.database),
+            branch: request.branch.unwrap_or(base_config.branch),
+            commit_ref: request.commit_ref.or(base_config.commit_ref),
         };
 
         // Test the connection
