@@ -28,6 +28,7 @@ tracing-subscriber = { workspace = true }
 schemars = "0.8"
 url = { workspace = true }
 async-trait = "0.1"
+dotenv = "0.15"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -12,8 +12,11 @@ use rust_mcp_sdk::{
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
+use std::sync::Arc;
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
+use terminusdb_woql2::prelude::{Query, FromTDBInstance};
 use terminusdb_woql_dsl::parse_woql_dsl;
+use tokio::sync::RwLock;
 use tracing::info;
 use tracing_subscriber;
 use url::Url;
@@ -30,7 +33,7 @@ impl fmt::Display for McpError {
 
 impl std::error::Error for McpError {}
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ConnectionConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -77,20 +80,41 @@ impl Default for ConnectionConfig {
 // Tool definitions using mcp_tool macro
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[mcp_tool(
+    name = "connect",
+    description = "Establish and save a connection to TerminusDB. Once connected, other commands will use these saved credentials automatically. Optionally provide an env_file path to load environment variables."
+)]
+pub struct ConnectTool {
+    #[serde(default = "default_host")]
+    pub host: String,
+    #[serde(default = "default_user")]
+    pub user: String,
+    #[serde(default = "default_password")]
+    pub password: String,
+    pub database: Option<String>,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+    /// Commit ID for time-travel queries (optional)
+    pub commit_ref: Option<String>,
+    /// Path to .env file to load additional environment variables
+    pub env_file: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
     name = "execute_woql",
-    description = "Execute a WOQL query using DSL syntax. The DSL uses a compositional, function-based syntax. Variables are prefixed with $ (e.g., $Person). Common operations include: triple($Subject, predicate, $Object), and(...), or(...), select([$Var1, $Var2], query), greater($Var, value). For full syntax and examples, see the woql-dsl crate source code and README.md in woql-dsl/."
+    description = "Execute a WOQL query using either DSL syntax or JSON-LD format. DSL syntax uses a compositional, function-based syntax with variables prefixed with $ (e.g., $Person). Common operations include: triple($Subject, predicate, $Object), and(...), or(...), select([$Var1, $Var2], query), greater($Var, value). Alternatively, you can provide a JSON-LD query object following the WOQL schema. The tool automatically detects the format and parses accordingly."
 )]
 pub struct ExecuteWoqlTool {
     pub query: String,
-    #[serde(default)]
-    pub connection: ConnectionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[mcp_tool(name = "list_databases", description = "List all available databases")]
 pub struct ListDatabasesTool {
-    #[serde(default)]
-    pub connection: ConnectionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -100,8 +124,8 @@ pub struct ListDatabasesTool {
 )]
 pub struct GetSchemaTool {
     pub database: String,
-    #[serde(default)]
-    pub connection: ConnectionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -110,8 +134,8 @@ pub struct GetSchemaTool {
     description = "Check if the TerminusDB server is running and accessible"
 )]
 pub struct CheckServerStatusTool {
-    #[serde(default)]
-    pub connection: ConnectionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -121,13 +145,21 @@ pub struct CheckServerStatusTool {
 )]
 pub struct ResetDatabaseTool {
     pub database: String,
-    #[serde(default)]
-    pub connection: ConnectionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
 }
 
-pub struct TerminusDBMcpHandler;
+pub struct TerminusDBMcpHandler {
+    saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
+}
 
 impl TerminusDBMcpHandler {
+    fn new() -> Self {
+        Self {
+            saved_config: Arc::new(RwLock::new(None)),
+        }
+    }
+
     async fn create_client(config: &ConnectionConfig) -> Result<TerminusDBHttpClient> {
         let url = Url::parse(&config.host)?;
         TerminusDBHttpClient::new(
@@ -139,25 +171,98 @@ impl TerminusDBMcpHandler {
         .await
     }
 
+    async fn get_connection_config(&self, provided: Option<ConnectionConfig>) -> ConnectionConfig {
+        if let Some(config) = provided {
+            return config;
+        }
+
+        if let Some(config) = self.saved_config.read().await.clone() {
+            return config;
+        }
+
+        ConnectionConfig::default()
+    }
+
+    async fn connect(&self, request: ConnectTool) -> Result<serde_json::Value> {
+        info!("Establishing connection to TerminusDB");
+
+        // Load env file if provided
+        if let Some(env_file) = &request.env_file {
+            if let Err(e) = dotenv::from_path(env_file) {
+                info!("Failed to load env file {}: {}", env_file, e);
+                // Don't fail hard, just log the error
+            }
+        }
+
+        // Create connection config from request
+        let config = ConnectionConfig {
+            host: request.host,
+            user: request.user,
+            password: request.password,
+            database: request.database,
+            branch: request.branch,
+            commit_ref: request.commit_ref,
+        };
+
+        // Test the connection
+        match Self::create_client(&config).await {
+            Ok(client) => {
+                // Check if server is running
+                if !client.is_running().await {
+                    return Err(anyhow::anyhow!("Server is not running at {}", config.host));
+                }
+
+                // Save the config
+                let mut saved = self.saved_config.write().await;
+                *saved = Some(config.clone());
+
+                Ok(serde_json::json!({
+                    "status": "connected",
+                    "host": config.host,
+                    "user": config.user,
+                    "database": config.database,
+                    "branch": config.branch,
+                    "message": "Connection established and saved successfully"
+                }))
+            }
+            Err(e) => Err(anyhow::anyhow!("Failed to connect: {}", e)),
+        }
+    }
+
     async fn execute_woql(&self, request: ExecuteWoqlTool) -> Result<serde_json::Value> {
         info!("Executing WOQL query: {}", request.query);
 
-        // Parse the WOQL DSL
-        let query = parse_woql_dsl(&request.query)?;
+        // Try to parse as JSON-LD first, then fall back to DSL
+        let query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&request.query) {
+            // Try to parse as WOQL JSON-LD using FromTDBInstance
+            match Query::from_json(json_value) {
+                Ok(query) => query,
+                Err(_) => {
+                    // If JSON-LD parsing fails, try parsing as WOQL DSL
+                    parse_woql_dsl(&request.query)?
+                }
+            }
+        } else {
+            // If it's not valid JSON, parse as WOQL DSL
+            parse_woql_dsl(&request.query)?
+        };
+
+        // Get connection config
+        let config = self.get_connection_config(request.connection).await;
 
         // Create client
-        let client = Self::create_client(&request.connection).await?;
+        let client = Self::create_client(&config).await?;
 
         // Execute query
-        if let Some(database) = &request.connection.database {
-            let branch_spec = match &request.connection.commit_ref {
+        if let Some(database) = &config.database {
+            let branch_spec = match &config.commit_ref {
                 Some(commit_id) => {
                     // Time-travel query to specific commit
                     BranchSpec::with_commit(database, commit_id)
                 }
                 None => {
                     // Regular query on branch
-                    BranchSpec::with_branch(database, &request.connection.branch)
+                    BranchSpec::with_branch(database, &config.branch)
                 }
             };
             let response: terminusdb_client::WOQLResult<serde_json::Value> =
@@ -171,7 +276,8 @@ impl TerminusDBMcpHandler {
     async fn list_databases(&self, request: ListDatabasesTool) -> Result<serde_json::Value> {
         info!("Listing databases");
 
-        let client = Self::create_client(&request.connection).await?;
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
         
         // List databases with default options (not verbose, no branches)
         let databases = client.list_databases_simple().await?;
@@ -219,15 +325,16 @@ impl TerminusDBMcpHandler {
     async fn get_schema(&self, request: GetSchemaTool) -> Result<serde_json::Value> {
         info!("Getting schema for database: {}", request.database);
 
-        let client = Self::create_client(&request.connection).await?;
-        let branch_spec = match &request.connection.commit_ref {
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        let branch_spec = match &config.commit_ref {
             Some(commit_id) => {
                 // Time-travel query to specific commit
                 BranchSpec::with_commit(&request.database, commit_id)
             }
             None => {
                 // Regular query on branch
-                BranchSpec::with_branch(&request.database, &request.connection.branch)
+                BranchSpec::with_branch(&request.database, &config.branch)
             }
         };
 
@@ -254,7 +361,8 @@ impl TerminusDBMcpHandler {
     ) -> Result<serde_json::Value> {
         info!("Checking TerminusDB server status");
 
-        let client = Self::create_client(&request.connection).await?;
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
 
         // Use the is_running() method from TerminusDBHttpClient
         let is_running = client.is_running().await;
@@ -285,7 +393,8 @@ impl TerminusDBMcpHandler {
     async fn reset_database(&self, request: ResetDatabaseTool) -> Result<serde_json::Value> {
         info!("Resetting database: {}", request.database);
 
-        let client = Self::create_client(&request.connection).await?;
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
         
         // Reset the database using the client method
         client.reset_database(&request.database).await?;
@@ -307,6 +416,7 @@ impl ServerHandler for TerminusDBMcpHandler {
     ) -> Result<ListToolsResult, RpcError> {
         Ok(ListToolsResult {
             tools: vec![
+                ConnectTool::tool(),
                 ExecuteWoqlTool::tool(),
                 ListDatabasesTool::tool(),
                 GetSchemaTool::tool(),
@@ -327,6 +437,33 @@ impl ServerHandler for TerminusDBMcpHandler {
         let args = request.params.arguments.clone().unwrap_or_default();
 
         match tool_name.as_str() {
+            name if name == ConnectTool::tool_name() => {
+                let tool_request: ConnectTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.connect(tool_request).await {
+                    Ok(result) => {
+                        // Convert to pretty string for text content
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        // Extract as object for structured content if possible
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
             name if name == ExecuteWoqlTool::tool_name() => {
                 let tool_request: ExecuteWoqlTool =
                     serde_json::from_value(serde_json::Value::Object(args))
@@ -500,7 +637,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let transport = StdioTransport::new(TransportOptions::default())?;
 
     // Create handler
-    let handler = TerminusDBMcpHandler;
+    let handler = TerminusDBMcpHandler::new();
 
     // Create and start server
     let server = server_runtime::create_server(server_details, transport, handler);
