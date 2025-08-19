@@ -57,7 +57,7 @@ fn default_user() -> String {
 }
 
 fn default_password() -> String {
-    env::var("TERMINUSDB_PASSWORD").unwrap_or_else(|_| "root".to_string())
+    env::var("TERMINUSDB_PASS").unwrap_or_else(|_| "root".to_string())
 }
 
 fn default_branch() -> String {

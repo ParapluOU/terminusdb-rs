@@ -79,3 +79,4 @@ node_modules/
 # Rust-specific
 **/*.rs.bk
 *.pdb .temp/
+/mcp-server/.secrets.env
