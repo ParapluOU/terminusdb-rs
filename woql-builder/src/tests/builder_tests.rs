@@ -441,11 +441,19 @@ fn test_triple_and_eq() {
 }
 
 #[test]
-#[should_panic] // Expect panic because eq expects DataValue, but node() produces NodeValue
-fn test_eq_node_panics() {
-    let _ = WoqlBuilder::new()
-        .eq(node("doc:a"), node("doc:b"))
-        .finalize();
+fn test_eq_with_nodes() {
+    // eq actually accepts WoqlValue, which includes nodes, so this should work
+    let builder = WoqlBuilder::new()
+        .eq(node("doc:a"), node("doc:b"));
+    let query = builder.finalize();
+    
+    match query {
+        Woql2Query::Equals(eq_q) => {
+            assert!(matches!(&eq_q.left, Woql2Value::Node(n) if n == "doc:a"));
+            assert!(matches!(&eq_q.right, Woql2Value::Node(n) if n == "doc:b"));
+        }
+        _ => panic!("Expected Equals query"),
+    }
 }
 
 #[test]
@@ -1557,4 +1565,84 @@ fn test_nested_limit_and_clauses() {
         generated_json_val, expected_json_val,
         "Generated JSON does not match expected JSON"
     );
+}
+
+#[test]
+fn test_datetime_comparisons() {
+    use crate::value::{datetime_literal, date_literal, time_literal};
+    
+    // Test DateTime comparison
+    let (event_time_var, cutoff_time) = (vars!("EventTime"), datetime_literal("2025-08-19T00:00:00Z"));
+    let builder = WoqlBuilder::new()
+        .triple("event123", "hasTimestamp", event_time_var.clone())
+        .greater(event_time_var.clone(), cutoff_time.clone());
+    
+    let query = builder.finalize();
+    match query {
+        Woql2Query::And(and_q) => {
+            assert_eq!(and_q.and.len(), 2);
+            // Check that the second query is a Greater comparison
+            match &and_q.and[1] {
+                Woql2Query::Greater(greater_q) => {
+                    assert!(matches!(&greater_q.left, DataValue::Variable(ref v) if v == "EventTime"));
+                    assert!(matches!(
+                        &greater_q.right,
+                        DataValue::Data(XSDAnySimpleType::DateTime(_))
+                    ));
+                }
+                _ => panic!("Expected Greater query in And"),
+            }
+        }
+        _ => panic!("Expected And query, found {:?}", query),
+    }
+    
+    // Test Date comparison
+    let (birth_date_var, reference_date) = (vars!("BirthDate"), date_literal("2000-01-01"));
+    let builder2 = WoqlBuilder::new()
+        .triple("person123", "birthDate", birth_date_var.clone())
+        .less(birth_date_var.clone(), reference_date.clone());
+    
+    let query2 = builder2.finalize();
+    match query2 {
+        Woql2Query::And(and_q) => {
+            assert_eq!(and_q.and.len(), 2);
+            // Check that the second query is a Less comparison
+            match &and_q.and[1] {
+                Woql2Query::Less(less_q) => {
+                    assert!(matches!(&less_q.left, DataValue::Variable(ref v) if v == "BirthDate"));
+                    assert!(matches!(
+                        &less_q.right,
+                        DataValue::Data(XSDAnySimpleType::Date(_))
+                    ));
+                }
+                _ => panic!("Expected Less query in And"),
+            }
+        }
+        _ => panic!("Expected And query, found {:?}", query2),
+    }
+    
+    // Test Time comparison with equals
+    let (start_time_var, target_time) = (vars!("StartTime"), time_literal("14:30:00"));
+    let builder3 = WoqlBuilder::new()
+        .triple("meeting123", "startTime", start_time_var.clone())
+        .eq(start_time_var.clone(), target_time.clone());
+    
+    let query3 = builder3.finalize();
+    match query3 {
+        Woql2Query::And(and_q) => {
+            assert_eq!(and_q.and.len(), 2);
+            // Check that the second query is an Equals comparison
+            match &and_q.and[1] {
+                Woql2Query::Equals(eq_q) => {
+                    assert!(matches!(&eq_q.left, Woql2Value::Variable(ref v) if v == "StartTime"));
+                    assert!(matches!(
+                        &eq_q.right,
+                        Woql2Value::Data(XSDAnySimpleType::Time(_))
+                    ));
+                }
+                _ => panic!("Expected Equals query in And"),
+            }
+        }
+        _ => panic!("Expected And query, found {:?}", query3),
+    }
 }

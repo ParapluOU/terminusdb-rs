@@ -137,6 +137,70 @@ fn test_connect_with_env_file() {
         panic!("Connect request failed with error: {:?}", error);
     }
 
+    // Now test that subsequent commands use the saved connection
+    // Send check_server_status request without connection parameter
+    let status_request = json!({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "check_server_status",
+            "arguments": {}  // No connection parameter - should use saved connection
+        },
+        "id": 3
+    });
+    send_request(&mut stdin, status_request);
+
+    // Wait for status response
+    thread::sleep(Duration::from_millis(500));
+    let status_response = rx.recv_timeout(Duration::from_secs(5))
+        .expect("Timeout waiting for status response");
+    
+    println!("Status response: {}", serde_json::to_string_pretty(&status_response).unwrap());
+    
+    // Check the response
+    assert_eq!(status_response["id"], 3);
+    
+    if let Some(result) = status_response.get("result") {
+        if let Some(content) = result.get("content").and_then(|c| c.as_array()).and_then(|arr| arr.first()) {
+            if let Some(text) = content.get("text").and_then(|t| t.as_str()) {
+                let parsed: serde_json::Value = serde_json::from_str(text).expect("Failed to parse content text");
+                
+                // Verify the server is running
+                assert_eq!(parsed.get("status").and_then(|s| s.as_str()), Some("running"));
+                assert_eq!(parsed.get("connected").and_then(|c| c.as_bool()), Some(true));
+            }
+        }
+    } else if let Some(error) = status_response.get("error") {
+        panic!("Status request failed with error: {:?}", error);
+    }
+
+    // Also test list_databases to ensure it uses the saved connection
+    let list_db_request = json!({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+            "name": "list_databases",
+            "arguments": {}  // No connection parameter - should use saved connection
+        },
+        "id": 4
+    });
+    send_request(&mut stdin, list_db_request);
+
+    // Wait for list databases response
+    thread::sleep(Duration::from_millis(500));
+    let list_db_response = rx.recv_timeout(Duration::from_secs(5))
+        .expect("Timeout waiting for list databases response");
+    
+    println!("List databases response: {}", serde_json::to_string_pretty(&list_db_response).unwrap());
+    
+    // Check the response
+    assert_eq!(list_db_response["id"], 4);
+    
+    // Verify we got a successful response (not checking specific databases as they may vary)
+    if let Some(error) = list_db_response.get("error") {
+        panic!("List databases request failed with error: {:?}", error);
+    }
+
     // Clean up
     child.kill().expect("Failed to kill child process");
     drop(stdin);

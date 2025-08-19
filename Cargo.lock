@@ -2597,6 +2597,7 @@ dependencies = [
 name = "terminusdb-woql-builder"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "decimal-rs",
  "serde_json",
  "terminusdb-schema",

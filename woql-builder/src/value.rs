@@ -6,6 +6,7 @@ use terminusdb_schema::XSDAnySimpleType;
 use decimal_rs::Decimal; // Import the Decimal type
 use std::str::FromStr;
 use terminusdb_woql2::prelude::{DataValue, NodeValue}; // Import FromStr for Decimal parsing
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc}; // Import chrono types for datetime support
 
 /// Represents an input value for WOQL builder functions.
 /// This allows functions to accept variables, IRIs (as strings), or literals easily.
@@ -17,8 +18,10 @@ pub enum WoqlInput {
     Boolean(bool),  // Represents a Data Literal (boolean)
     Integer(i64),   // Represents a Data Literal (integer)
     Decimal(String), // Represents a Data Literal (decimal, stored as string)
+    DateTime(String), // Represents a Data Literal (datetime, ISO 8601 format)
+    Date(String),    // Represents a Data Literal (date, ISO 8601 format)
+    Time(String),    // Represents a Data Literal (time, ISO 8601 format)
     List(Vec<WoqlInput>), // Represents a list of values
-                    // TODO: Add other literal types (date, dateTime, etc.)
 }
 
 /// Represents a WOQL variable.
@@ -110,7 +113,7 @@ where
 /// # Example
 /// ```
 /// // Import Var from the value module and vars! from the crate root
-/// # use parture_terminusdb_woql_builder::{value::Var, vars};
+/// # use terminusdb_woql_builder::{value::Var, vars};
 /// let (name_var, age_var) = vars!("Name", "Age");
 /// assert_eq!(name_var, Var::new("Name"));
 /// assert_eq!(age_var, Var::new("Age"));
@@ -162,6 +165,23 @@ impl IntoWoql2 for WoqlInput {
             WoqlInput::Decimal(d) => Woql2Value::Data(XSDAnySimpleType::Decimal(
                 Decimal::from_str(&d).expect("Invalid decimal string format"),
             )),
+            WoqlInput::DateTime(dt) => {
+                let datetime = DateTime::parse_from_rfc3339(&dt)
+                    .expect("Invalid datetime format, expected ISO 8601")
+                    .with_timezone(&Utc);
+                Woql2Value::Data(XSDAnySimpleType::DateTime(datetime))
+            }
+            WoqlInput::Date(d) => {
+                let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")
+                    .expect("Invalid date format, expected YYYY-MM-DD");
+                Woql2Value::Data(XSDAnySimpleType::Date(date))
+            }
+            WoqlInput::Time(t) => {
+                let time = NaiveTime::parse_from_str(&t, "%H:%M:%S")
+                    .or_else(|_| NaiveTime::parse_from_str(&t, "%H:%M:%S%.f"))
+                    .expect("Invalid time format, expected HH:MM:SS[.fff]");
+                Woql2Value::Data(XSDAnySimpleType::Time(time))
+            }
             WoqlInput::List(items) => Woql2Value::List(
                 items.into_iter().map(|item| item.into_woql2_value()).collect()
             ),
@@ -192,6 +212,23 @@ impl IntoWoql2 for WoqlInput {
             WoqlInput::Decimal(d) => DataValue::Data(XSDAnySimpleType::Decimal(
                 Decimal::from_str(&d).expect("Invalid decimal string format"),
             )),
+            WoqlInput::DateTime(dt) => {
+                let datetime = DateTime::parse_from_rfc3339(&dt)
+                    .expect("Invalid datetime format, expected ISO 8601")
+                    .with_timezone(&Utc);
+                DataValue::Data(XSDAnySimpleType::DateTime(datetime))
+            }
+            WoqlInput::Date(d) => {
+                let date = NaiveDate::parse_from_str(&d, "%Y-%m-%d")
+                    .expect("Invalid date format, expected YYYY-MM-DD");
+                DataValue::Data(XSDAnySimpleType::Date(date))
+            }
+            WoqlInput::Time(t) => {
+                let time = NaiveTime::parse_from_str(&t, "%H:%M:%S")
+                    .or_else(|_| NaiveTime::parse_from_str(&t, "%H:%M:%S%.f"))
+                    .expect("Invalid time format, expected HH:MM:SS[.fff]");
+                DataValue::Data(XSDAnySimpleType::Time(time))
+            }
             WoqlInput::List(items) => DataValue::List(
                 items.into_iter().map(|item| item.into_woql2_data_value()).collect()
             ),
@@ -228,6 +265,24 @@ where
     T: Into<WoqlInput>,
 {
     WoqlInput::List(items.into_iter().map(Into::into).collect())
+}
+
+/// Helper function to create a datetime literal input.
+/// Accepts ISO 8601 formatted datetime strings (e.g., "2025-08-19T00:00:00Z").
+pub fn datetime_literal(datetime_str: impl Into<String>) -> WoqlInput {
+    WoqlInput::DateTime(datetime_str.into())
+}
+
+/// Helper function to create a date literal input.
+/// Accepts ISO 8601 formatted date strings (e.g., "2025-08-19").
+pub fn date_literal(date_str: impl Into<String>) -> WoqlInput {
+    WoqlInput::Date(date_str.into())
+}
+
+/// Helper function to create a time literal input.
+/// Accepts ISO 8601 formatted time strings (e.g., "14:30:00" or "14:30:00.123").
+pub fn time_literal(time_str: impl Into<String>) -> WoqlInput {
+    WoqlInput::Time(time_str.into())
 }
 
 // Blanket implementations for convenience types
@@ -337,8 +392,6 @@ impl IntoWoql2 for isize {
 mod value_tests {
     use super::*; // Import items from the parent module (value.rs)
     use crate::vars; // Import the macro from the crate root
-    use terminusdb_schema::XSDAnySimpleType;
-    use terminusdb_woql2::prelude::{DataValue, NodeValue, Value as Woql2Value};
 
     #[test]
     fn test_vars_macro() {

@@ -7,7 +7,8 @@ edition = "2021"
 terminusdb-woql2 = { path = "../woql2" }
 terminusdb-schema = { path = "../schema" }
 serde_json = "1.0" # Likely needed for constructing JSON eventually
-decimal-rs = "0.1.43" # Added for XSDAnySimpleType::Decimal 
+decimal-rs = "0.1.43" # Added for XSDAnySimpleType::Decimal
+chrono = "0.4" # Added for DateTime support 
 
 [dev-dependencies]
 terminusdb-woql2 = { path = "../woql2" } # Add for test struct imports, remove feature flag

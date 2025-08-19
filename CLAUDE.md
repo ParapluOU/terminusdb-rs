@@ -127,3 +127,7 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 ## Common Troubleshooting
 
 - When TerminusDB returns an error indicating a "Schema failure", it most often means we have changed a model's shape after inserting its schema. This can be resolved by dropping the database using the client::delete_database() function.
+
+## Testing and Development Insights
+
+- When writing tests for WOQL functionality, nothing is proving it is "working" until the WOQL is tested against an actual database. Whether a WOQL functionality works can only be determined based on the result of an actual query with it. The client can be called in a unit/integration test, but Claude can also use the TerminusDB MCP server to realtime test/debug queries

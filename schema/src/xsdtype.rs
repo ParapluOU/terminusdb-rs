@@ -204,7 +204,28 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
         match self {
             XSDAnySimpleType::String(s) => InstanceProperty::Primitive(PrimitiveValue::String(s)),
             XSDAnySimpleType::Boolean(b) => InstanceProperty::Primitive(PrimitiveValue::Bool(b)),
-            _ => todo!(),
+            XSDAnySimpleType::Decimal(d) => InstanceProperty::Primitive(PrimitiveValue::String(d.to_string())),
+            XSDAnySimpleType::Float(f) => InstanceProperty::Primitive(PrimitiveValue::Number(
+                serde_json::Number::from_f64(f).expect("parse f64 to serde_json Number")
+            )),
+            XSDAnySimpleType::HexBinary(s) => InstanceProperty::Primitive(PrimitiveValue::String(s)),
+            XSDAnySimpleType::URI(u) => InstanceProperty::Primitive(PrimitiveValue::String(u.to_string())),
+            XSDAnySimpleType::DateTime(dt) => InstanceProperty::Primitive(PrimitiveValue::Object(
+                serde_json::json!({
+                    "@type": "xsd:dateTime",
+                    "@value": dt.to_rfc3339()
+                })
+            )),
+            XSDAnySimpleType::Date(d) => InstanceProperty::Primitive(PrimitiveValue::String(d.to_string())),
+            XSDAnySimpleType::Time(t) => InstanceProperty::Primitive(PrimitiveValue::Object(
+                serde_json::json!({
+                    "@type": "xsd:time",
+                    "@value": t.format("%H:%M:%S%.f").to_string()
+                })
+            )),
+            XSDAnySimpleType::UnsignedInt(i) => InstanceProperty::Primitive(PrimitiveValue::Number(
+                serde_json::Number::from_u128(i as u128).expect("parse usize to serde_json Number")
+            )),
         }
     }
 }

@@ -120,7 +120,7 @@ impl super::client::TerminusDBHttpClient {
             .keys()
             .find(|k| EntityIDFor::<I>::new(k).is_ok())
             .cloned()
-            .ok_or_else(|| anyhow!("Could not find root instance ID in operation results"))?;
+            .ok_or_else(|| anyhow!("Could not find root instance ID in operation results; instead:{:?}", res.keys().collect::<Vec<_>>()))?;
 
         // Create structured result
         let mut result = crate::InsertInstanceResult::new((*res).clone(), actual_root_id)?;
