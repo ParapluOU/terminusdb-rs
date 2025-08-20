@@ -8,7 +8,9 @@ use {
     ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
-    std::fmt::Debug,
+    std::{fmt::Debug, sync::{Arc, RwLock}},
+    terminusdb_schema::{ToTDBInstance, ToJson},
+    terminusdb_woql2::prelude::Query,
     url::Url,
 };
 
@@ -26,6 +28,8 @@ pub struct TerminusDBHttpClient {
     pub(crate) pass: String,
     /// organization that we are logging in for
     pub(crate) org: String,
+    /// stores the last executed WOQL query for debugging purposes
+    last_query: Arc<RwLock<Option<Query>>>,
 }
 
 // Wrap the entire impl block with a conditional compilation attribute
@@ -133,6 +137,7 @@ impl TerminusDBHttpClient {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             org: org.to_string(),
+            last_query: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -156,6 +161,69 @@ impl TerminusDBHttpClient {
     ) -> anyhow::Result<Self> {
         let client = Self::new(endpoint, user, pass, org).await?;
         client.ensure_database(db).await
+    }
+
+    /// Returns a clone of the last executed WOQL query for debugging purposes.
+    ///
+    /// This method provides access to the most recently executed query, which can be
+    /// useful for debugging, logging, or re-executing queries.
+    ///
+    /// # Returns
+    /// `Some(Query)` if a query has been executed, `None` otherwise
+    ///
+    /// # Example
+    /// ```ignore
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// 
+    /// // Execute a query
+    /// let query = Query::select().triple("v:Subject", "rdf:type", "owl:Class");
+    /// client.query(Some(spec), query).await?;
+    /// 
+    /// // Retrieve the last executed query
+    /// if let Some(last_query) = client.last_query() {
+    ///     println!("Last query: {:?}", last_query);
+    /// }
+    /// ```
+    pub fn last_query(&self) -> Option<Query> {
+        self.last_query.read().ok().and_then(|guard| guard.clone())
+    }
+
+    /// Returns the last executed WOQL query as JSON for debugging purposes.
+    ///
+    /// This method converts the last executed query to its JSON-LD representation,
+    /// which can be useful for debugging, API inspection, or external tools.
+    ///
+    /// # Returns
+    /// `Some(serde_json::Value)` if a query has been executed, `None` otherwise
+    ///
+    /// # Example
+    /// ```ignore
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// 
+    /// // Execute a query
+    /// let query = Query::select().triple("v:Subject", "rdf:type", "owl:Class");
+    /// client.query(Some(spec), query).await?;
+    /// 
+    /// // Retrieve the last executed query as JSON
+    /// if let Some(last_query_json) = client.last_query_json() {
+    ///     println!("Last query JSON: {}", serde_json::to_string_pretty(&last_query_json).unwrap());
+    /// }
+    /// ```
+    pub fn last_query_json(&self) -> Option<serde_json::Value> {
+        self.last_query().map(|query| query.to_instance(None).to_json())
+    }
+
+    /// Internal method to store a query for debugging purposes
+    pub(crate) fn store_last_query(&self, query: Query) {
+        if let Ok(mut last_query) = self.last_query.write() {
+            *last_query = Some(query);
+        }
+    }
+
+    /// Test-only method to store a query for debugging purposes
+    #[cfg(test)]
+    pub fn test_store_last_query(&self, query: Query) {
+        self.store_last_query(query);
     }
 
     /// Centralized URL builder for TerminusDB API endpoints.

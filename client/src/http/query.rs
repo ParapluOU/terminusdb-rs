@@ -55,6 +55,9 @@ impl super::client::TerminusDBHttpClient {
         db: Option<BranchSpec>,
         query: Woql2Query, // Changed input type
     ) -> anyhow::Result<WOQLResult<T>> {
+        // Store the query for debugging purposes
+        self.store_last_query(query.clone());
+        
         // Serialize the query to JSON-LD here
         let json_query = query.to_instance(None).to_json();
         let woql_context = crate::Context::woql().to_json();
@@ -149,14 +152,22 @@ impl super::client::TerminusDBHttpClient {
         query_string: &str,
     ) -> anyhow::Result<WOQLResult<T>> {
         // Try to parse as JSON-LD first, then fall back to DSL
-        let json_query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
+        let (json_query, parsed_query) = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
             // If it's valid JSON, use it directly as the query payload
-            json_value
+            // Try to parse it back to a Query for storage, but don't fail if it can't be parsed
+            let query_opt = serde_json::from_value::<Woql2Query>(json_value.clone()).ok();
+            (json_value, query_opt)
         } else {
             // If it's not valid JSON, parse as WOQL DSL and convert to JSON
             let query = terminusdb_woql_dsl::parse_woql_dsl(query_string)?;
-            query.to_json()
+            let json = query.to_json();
+            (json, Some(query))
         };
+        
+        // Store the parsed query for debugging if we have one
+        if let Some(query) = parsed_query {
+            self.store_last_query(query);
+        }
         
         self.query_raw(spec, json_query).await
     }
@@ -238,14 +249,22 @@ impl super::client::TerminusDBHttpClient {
         query_string: &str,
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
         // Try to parse as JSON-LD first, then fall back to DSL
-        let json_query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
+        let (json_query, parsed_query) = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
             // If it's valid JSON, use it directly as the query payload
-            json_value
+            // Try to parse it back to a Query for storage, but don't fail if it can't be parsed
+            let query_opt = serde_json::from_value::<Woql2Query>(json_value.clone()).ok();
+            (json_value, query_opt)
         } else {
             // If it's not valid JSON, parse as WOQL DSL and convert to JSON
             let query = terminusdb_woql_dsl::parse_woql_dsl(query_string)?;
-            query.to_json()
+            let json = query.to_json();
+            (json, Some(query))
         };
+        
+        // Store the parsed query for debugging if we have one
+        if let Some(query) = parsed_query {
+            self.store_last_query(query);
+        }
         
         self.query_raw_with_headers(spec, json_query).await
     }
