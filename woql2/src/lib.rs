@@ -23,6 +23,7 @@ pub mod query;
 pub mod string;
 pub mod triple;
 pub mod value;
+pub mod dsl;
 
 pub mod prelude {
     // Re-export core types
@@ -56,6 +57,9 @@ pub mod prelude {
     // Removed re-exports for non-existent TdbDataType, TdbDebug, TdbDisplay
     pub use terminusdb_schema::FromTDBInstance;
     pub use terminusdb_schema::ToTDBInstance;
+    
+    // DSL rendering trait
+    pub use super::dsl::ToDSL;
 }
 
 #[test]
