@@ -14,8 +14,6 @@ use std::env;
 use std::fmt;
 use std::sync::Arc;
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
-use terminusdb_woql2::prelude::ToTDBInstance;
-use terminusdb_woql_dsl::parse_woql_dsl;
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing_subscriber;
@@ -239,17 +237,6 @@ impl TerminusDBMcpHandler {
     async fn execute_woql(&self, request: ExecuteWoqlTool) -> Result<serde_json::Value> {
         info!("Executing WOQL query: {}", request.query);
 
-        // Try to parse as JSON-LD first, then fall back to DSL
-        let json_query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&request.query) {
-            // If it's valid JSON, use it directly as the query payload
-            // The API expects the JSON-LD format directly, not parsed into a Query object
-            json_value
-        } else {
-            // If it's not valid JSON, parse as WOQL DSL and convert to JSON
-            let query = parse_woql_dsl(&request.query)?;
-            query.to_json()
-        };
-
         // Get connection config
         let config = self.get_connection_config(request.connection).await;
 
@@ -268,9 +255,9 @@ impl TerminusDBMcpHandler {
                     BranchSpec::with_branch(database, &config.branch)
                 }
             };
-            // Use query_raw to send the JSON directly
+            // Use the new query_string method that handles both DSL and JSON-LD
             let response: terminusdb_client::WOQLResult<serde_json::Value> =
-                client.query_raw(Some(branch_spec), json_query).await?;
+                client.query_string(Some(branch_spec), &request.query).await?;
             Ok(serde_json::to_value(&response)?)
         } else {
             Err(anyhow::anyhow!("Database must be specified"))
@@ -353,9 +340,8 @@ impl TerminusDBMcpHandler {
             )
         "#;
 
-        let query = parse_woql_dsl(schema_query)?;
         let response: terminusdb_client::WOQLResult<serde_json::Value> =
-            client.query(Some(branch_spec), query).await?;
+            client.query_string(Some(branch_spec), schema_query).await?;
         Ok(serde_json::to_value(&response)?)
     }
 

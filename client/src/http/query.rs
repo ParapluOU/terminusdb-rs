@@ -112,6 +112,55 @@ impl super::client::TerminusDBHttpClient {
         Ok(json)
     }
 
+    /// Execute a query from a string that can be either WOQL DSL or JSON-LD format.
+    /// 
+    /// # Arguments
+    /// * `spec` - Optional database and branch specification
+    /// * `query_string` - The query as a string (either WOQL DSL or JSON-LD)
+    /// 
+    /// # Examples
+    /// 
+    /// ```ignore
+    /// // Using WOQL DSL syntax
+    /// let results = client.query_string(
+    ///     Some(spec),
+    ///     r#"select([$Subject, $Predicate, $Object], triple($Subject, $Predicate, $Object))"#
+    /// ).await?;
+    /// 
+    /// // Using JSON-LD format
+    /// let results = client.query_string(
+    ///     Some(spec),
+    ///     r#"{"@type": "Select", "variables": ["Subject"], "query": {"@type": "Triple", ...}}"#
+    /// ).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.query.execute_string",
+        skip(self, query_string),
+        fields(
+            db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
+            branch = ?spec.as_ref().and_then(|s| s.branch.as_ref()),
+            format = %if serde_json::from_str::<serde_json::Value>(query_string).is_ok() { "json-ld" } else { "dsl" }
+        ),
+        err
+    )]
+    pub async fn query_string<T: Debug + DeserializeOwned>(
+        &self,
+        spec: Option<BranchSpec>,
+        query_string: &str,
+    ) -> anyhow::Result<WOQLResult<T>> {
+        // Try to parse as JSON-LD first, then fall back to DSL
+        let json_query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
+            // If it's valid JSON, use it directly as the query payload
+            json_value
+        } else {
+            // If it's not valid JSON, parse as WOQL DSL and convert to JSON
+            let query = terminusdb_woql_dsl::parse_woql_dsl(query_string)?;
+            query.to_json()
+        };
+        
+        self.query_raw(spec, json_query).await
+    }
+
     // query_raw_with_headers - similar to query_raw but captures TerminusDB-Data-Version header
     #[instrument(
         name = "terminus.query.execute_raw_with_headers",
@@ -160,6 +209,45 @@ impl super::client::TerminusDBHttpClient {
         trace!("query result: {:#?}", &json);
 
         Ok(json)
+    }
+
+    /// Execute a query from a string (WOQL DSL or JSON-LD) and capture response headers.
+    /// 
+    /// Similar to `query_string` but also returns the TerminusDB-Data-Version header
+    /// which contains commit information.
+    /// 
+    /// # Arguments
+    /// * `spec` - Optional database and branch specification
+    /// * `query_string` - The query as a string (either WOQL DSL or JSON-LD)
+    /// 
+    /// # Returns
+    /// A `ResponseWithHeaders` containing the query results and optional commit_id header
+    #[instrument(
+        name = "terminus.query.execute_string_with_headers",
+        skip(self, query_string),
+        fields(
+            db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
+            branch = ?spec.as_ref().and_then(|s| s.branch.as_ref()),
+            format = %if serde_json::from_str::<serde_json::Value>(query_string).is_ok() { "json-ld" } else { "dsl" }
+        ),
+        err
+    )]
+    pub async fn query_string_with_headers<T: Debug + DeserializeOwned>(
+        &self,
+        spec: Option<BranchSpec>,
+        query_string: &str,
+    ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
+        // Try to parse as JSON-LD first, then fall back to DSL
+        let json_query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
+            // If it's valid JSON, use it directly as the query payload
+            json_value
+        } else {
+            // If it's not valid JSON, parse as WOQL DSL and convert to JSON
+            let query = terminusdb_woql_dsl::parse_woql_dsl(query_string)?;
+            query.to_json()
+        };
+        
+        self.query_raw_with_headers(spec, json_query).await
     }
 
     // todo: roll into ORM-like model
