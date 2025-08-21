@@ -1,10 +1,11 @@
 //! Database administration operations
 
 use {
-    crate::{Database, TerminusDBAdapterError},
+    crate::{Database, TerminusDBAdapterError, debug::{OperationEntry, OperationType, QueryLogEntry}},
     ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde_json::json,
+    std::time::Instant,
 };
 
 /// Database administration methods for the TerminusDB HTTP client
@@ -35,9 +36,16 @@ impl super::client::TerminusDBHttpClient {
         err
     )]
     pub async fn ensure_database(&self, db: &str) -> anyhow::Result<Self> {
+        let start_time = Instant::now();
         let uri = self.build_url().endpoint("db").simple_database(db).build();
 
         debug!("post uri: {}", &uri);
+
+        // Create operation entry
+        let mut operation = OperationEntry::new(
+            OperationType::CreateDatabase,
+            format!("/api/db/{}", db)
+        ).with_context(Some(db.to_string()), None);
 
         // todo: author should probably be node name
         let res = self
@@ -58,14 +66,74 @@ impl super::client::TerminusDBHttpClient {
             .await
             .context("failed to ensure database")?;
 
-        // todo: use parse_response()
-        if ![200, 400].contains(&res.status().as_u16()) {
-            error!("could not ensure database");
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
 
-            Err(TerminusDBAdapterError::Other(format!(
-                "request failed: {:#?}",
-                res.text().await?
-            )))?;
+        // todo: use parse_response()
+        if ![200, 400].contains(&status) {
+            error!("could not ensure database");
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("request failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation.clone());
+            
+            // Log to query log if enabled
+            let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+            if let Some(logger) = logger_opt {
+                let log_entry = QueryLogEntry {
+                    timestamp: chrono::Utc::now(),
+                    operation_type: "create_database".to_string(),
+                    database: Some(db.to_string()),
+                    branch: None,
+                    endpoint: format!("/api/db/{}", db),
+                    details: json!({
+                        "comment": "Song database specific for this node",
+                        "label": db,
+                        "public": true,
+                        "schema": true
+                    }),
+                    success: false,
+                    result_count: None,
+                    duration_ms,
+                    error: Some(error_msg.clone()),
+                };
+                let _ = logger.log(log_entry).await;
+            }
+
+            Err(TerminusDBAdapterError::Other(error_msg))?;
+        }
+
+        // Success (200) or already exists (400)
+        let context = if status == 400 { "already exists" } else { "created" };
+        operation = operation.success(None, duration_ms)
+            .with_additional_context(context.to_string());
+        self.operation_log.push(operation);
+        
+        // Log to query log if enabled
+        let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+        if let Some(logger) = logger_opt {
+            let log_entry = QueryLogEntry {
+                timestamp: chrono::Utc::now(),
+                operation_type: "create_database".to_string(),
+                database: Some(db.to_string()),
+                branch: None,
+                endpoint: format!("/api/db/{}", db),
+                details: json!({
+                    "comment": "Song database specific for this node",
+                    "label": db,
+                    "public": true,
+                    "schema": true,
+                    "status": status,
+                    "context": context
+                }),
+                success: true,
+                result_count: None,
+                duration_ms,
+                error: None,
+            };
+            let _ = logger.log(log_entry).await;
         }
 
         // todo: dont print if it already existed
@@ -100,18 +168,76 @@ impl super::client::TerminusDBHttpClient {
         err
     )]
     pub async fn delete_database(&self, db: &str) -> anyhow::Result<Self> {
+        let start_time = Instant::now();
         let uri = self.build_url().endpoint("db").simple_database(db).build();
 
         debug!("deleting database {}", db);
 
-        self.http
+        // Create operation entry
+        let mut operation = OperationEntry::new(
+            OperationType::DeleteDatabase,
+            format!("/api/db/{}", db)
+        ).with_context(Some(db.to_string()), None);
+
+        let result = self.http
             .delete(uri)
             .basic_auth(&self.user, Some(&self.pass))
             .send()
             .await
-            .context("failed to delete database")?;
+            .context("failed to delete database");
 
-        Ok(self.clone())
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(_) => {
+                operation = operation.success(None, duration_ms);
+                self.operation_log.push(operation);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "delete_database".to_string(),
+                        database: Some(db.to_string()),
+                        branch: None,
+                        endpoint: format!("/api/db/{}", db),
+                        details: json!({}),
+                        success: true,
+                        result_count: None,
+                        duration_ms,
+                        error: None,
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+                
+                Ok(self.clone())
+            }
+            Err(e) => {
+                operation = operation.failure(e.to_string(), duration_ms);
+                self.operation_log.push(operation);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "delete_database".to_string(),
+                        database: Some(db.to_string()),
+                        branch: None,
+                        endpoint: format!("/api/db/{}", db),
+                        details: json!({}),
+                        success: false,
+                        result_count: None,
+                        duration_ms,
+                        error: Some(e.to_string()),
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+                
+                Err(e)
+            }
+        }
     }
 
     /// Resets a database by deleting it and recreating it.

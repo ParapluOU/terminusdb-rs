@@ -31,6 +31,8 @@ mod query;
 pub mod result;
 mod spec;
 mod r#trait;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod debug;
 pub use query::*;
 
 use serde::{Deserialize, Serialize};

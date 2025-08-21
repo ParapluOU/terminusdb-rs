@@ -14,11 +14,12 @@ use {
         result::ResponseWithHeaders,
         spec::BranchSpec,
         IntoBoxedTDBInstances, TDBInsertInstanceResult, TDBInstanceDeserializer,
+        debug::{OperationEntry, OperationType, QueryLogEntry},
     },
     ::tracing::{debug, error, instrument, warn},
     anyhow::{anyhow, bail, Context},
     futures_util::StreamExt,
-    std::{collections::HashMap, fmt::Debug},
+    std::{collections::HashMap, fmt::Debug, time::Instant},
     tap::{Tap, TapFallible},
     terminusdb_schema::GraphType,
     terminusdb_schema::{EntityIDFor, Instance, ToJson, ToTDBInstance, ToTDBInstances},
@@ -385,6 +386,7 @@ impl super::client::TerminusDBHttpClient {
         model: &I,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<crate::InsertInstanceResult> {
+        let start_time = Instant::now();
         let has = self.has_instance(model, &args.spec).await;
 
         // First check if instance already exists
@@ -413,11 +415,83 @@ impl super::client::TerminusDBHttpClient {
         //     return Ok(result);
         // }
 
-        if has {
-            self.update_instance(model, args).await
+        let operation_type = if has { OperationType::Update } else { OperationType::Insert };
+        let endpoint = format!("/api/db/{}/document/{}", args.spec.db, I::schema_name());
+        
+        let result = if has {
+            self.update_instance(model, args.clone()).await
         } else {
-            self.create_instance(model, args).await
+            self.create_instance(model, args.clone()).await
+        };
+        
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        
+        // Create operation entry
+        let mut operation = OperationEntry::new(operation_type.clone(), endpoint.clone())
+            .with_context(Some(args.spec.db.clone()), args.spec.branch.clone());
+        
+        // Log the operation
+        match &result {
+            Ok(res) => {
+                let count = res.sub_entities.values().count();
+                operation = operation.success(Some(count), duration_ms);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let details = serde_json::json!({
+                        "entity_type": I::schema_name(),
+                        "instance_id": model.instance_id().map(|id| id.id().to_string()),
+                        "force": args.force,
+                    });
+                    
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: operation_type.to_string(),
+                        database: Some(args.spec.db.clone()),
+                        branch: args.spec.branch.clone(),
+                        endpoint,
+                        details,
+                        success: true,
+                        result_count: Some(count),
+                        duration_ms,
+                        error: None,
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+            Err(e) => {
+                operation = operation.failure(e.to_string(), duration_ms);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let details = serde_json::json!({
+                        "entity_type": I::schema_name(),
+                        "instance_id": model.instance_id().map(|id| id.id().to_string()),
+                        "force": args.force,
+                    });
+                    
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: operation_type.to_string(),
+                        database: Some(args.spec.db.clone()),
+                        branch: args.spec.branch.clone(),
+                        endpoint,
+                        details,
+                        success: false,
+                        result_count: None,
+                        duration_ms,
+                        error: Some(e.to_string()),
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
         }
+        
+        self.operation_log.push(operation);
+        
+        result
     }
 
     // /// Finds the commit that added a specific instance by walking through the commit log

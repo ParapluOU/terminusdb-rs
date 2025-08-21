@@ -4,12 +4,13 @@ use {
     crate::{
         spec::BranchSpec, InstanceFromJson, InstanceQueryable, ListModels, RawQueryable,
         TerminusDBModel, WOQLResult,
+        debug::{OperationEntry, OperationType, QueryLogEntry},
     },
     ::tracing::{instrument, trace},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},
-    std::{collections::HashMap, fmt::Debug},
+    std::{collections::HashMap, fmt::Debug, time::Instant},
     terminusdb_schema::{ToJson, ToTDBInstance, ToTDBSchema},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
@@ -55,14 +56,77 @@ impl super::client::TerminusDBHttpClient {
         db: Option<BranchSpec>,
         query: Woql2Query, // Changed input type
     ) -> anyhow::Result<WOQLResult<T>> {
-        // Store the query for debugging purposes
-        self.store_last_query(query.clone());
+        let start_time = Instant::now();
         
         // Serialize the query to JSON-LD here
         let json_query = query.to_instance(None).to_json();
         let woql_context = crate::Context::woql().to_json();
-        // self.query_raw(db, Value::Array(vec!(woql_context, json_query))).await // Pass serialized JSON to query_raw
-        self.query_raw(db, json_query).await // Pass serialized JSON to query_raw
+        
+        // Create operation entry with the query
+        let mut operation = OperationEntry::new(
+            OperationType::Query,
+            format!("/api/woql/{}", db.as_ref().map(|s| s.db.as_str()).unwrap_or("default"))
+        ).with_context(
+            db.as_ref().map(|s| s.db.clone()),
+            db.as_ref().and_then(|s| s.branch.clone())
+        ).with_query(query.clone());
+        
+        // Execute the query
+        let result = self.query_raw(db.clone(), json_query.clone()).await;
+        
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        
+        // Update operation entry based on result
+        match &result {
+            Ok(res) => {
+                let result_count = res.bindings.len();
+                operation = operation.success(Some(result_count), duration_ms);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "query".to_string(),
+                        database: db.as_ref().map(|s| s.db.clone()),
+                        branch: db.as_ref().and_then(|s| s.branch.clone()),
+                        endpoint: operation.endpoint.clone(),
+                        details: json_query,
+                        success: true,
+                        result_count: Some(result_count),
+                        duration_ms,
+                        error: None,
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+            Err(e) => {
+                operation = operation.failure(e.to_string(), duration_ms);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "query".to_string(),
+                        database: db.as_ref().map(|s| s.db.clone()),
+                        branch: db.as_ref().and_then(|s| s.branch.clone()),
+                        endpoint: operation.endpoint.clone(),
+                        details: json_query,
+                        success: false,
+                        result_count: None,
+                        duration_ms,
+                        error: Some(e.to_string()),
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+        }
+        
+        // Add to operation log
+        self.operation_log.push(operation);
+        
+        result
     }
 
     // query_raw remains the same, accepting serde_json::Value
@@ -80,6 +144,8 @@ impl super::client::TerminusDBHttpClient {
         spec: Option<BranchSpec>,
         query: serde_json::Value,
     ) -> anyhow::Result<WOQLResult<T>> {
+        let start_time = Instant::now();
+        
         let uri = match spec {
             None => self.build_url().endpoint("woql").build(),
             Some(spc) => self
@@ -95,16 +161,16 @@ impl super::client::TerminusDBHttpClient {
             "query": query
         });
 
-        let json = serde_json::to_string(&json).unwrap();
+        let json_string = serde_json::to_string(&json).unwrap();
 
-        trace!("payload: {}", &json);
+        trace!("payload: {}", &json_string);
 
         let res = self
             .http
-            .post(uri)
+            .post(uri.clone())
             .basic_auth(&self.user, Some(&self.pass))
             .header("Content-Type", "application/json")
-            .body(json)
+            .body(json_string)
             .send()
             .await?;
 
@@ -151,6 +217,8 @@ impl super::client::TerminusDBHttpClient {
         spec: Option<BranchSpec>,
         query_string: &str,
     ) -> anyhow::Result<WOQLResult<T>> {
+        let start_time = Instant::now();
+        
         // Try to parse as JSON-LD first, then fall back to DSL
         let (json_query, parsed_query) = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
             // If it's valid JSON, use it directly as the query payload
@@ -164,12 +232,74 @@ impl super::client::TerminusDBHttpClient {
             (json, Some(query))
         };
         
-        // Store the parsed query for debugging if we have one
-        if let Some(query) = parsed_query {
-            self.store_last_query(query);
+        // Create operation entry
+        let mut operation = OperationEntry::new(
+            OperationType::Query,
+            format!("/api/woql/{}", spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"))
+        ).with_context(
+            spec.as_ref().map(|s| s.db.clone()),
+            spec.as_ref().and_then(|s| s.branch.clone())
+        );
+        
+        // Add the parsed query if we have one
+        if let Some(query) = parsed_query.clone() {
+            operation = operation.with_query(query);
         }
         
-        self.query_raw(spec, json_query).await
+        let result = self.query_raw(spec.clone(), json_query.clone()).await;
+        
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        
+        // Update operation entry based on result
+        match &result {
+            Ok(res) => {
+                let result_count = res.bindings.len();
+                operation = operation.success(Some(result_count), duration_ms);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "query_string".to_string(),
+                        database: spec.as_ref().map(|s| s.db.clone()),
+                        branch: spec.as_ref().and_then(|s| s.branch.clone()),
+                        endpoint: operation.endpoint.clone(),
+                        details: json!({"query_string": query_string, "parsed": json_query}),
+                        success: true,
+                        result_count: Some(result_count),
+                        duration_ms,
+                        error: None,
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+            Err(e) => {
+                operation = operation.failure(e.to_string(), duration_ms);
+                
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "query_string".to_string(),
+                        database: spec.as_ref().map(|s| s.db.clone()),
+                        branch: spec.as_ref().and_then(|s| s.branch.clone()),
+                        endpoint: operation.endpoint.clone(),
+                        details: json!({"query_string": query_string}),
+                        success: false,
+                        result_count: None,
+                        duration_ms,
+                        error: Some(e.to_string()),
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+        }
+        
+        self.operation_log.push(operation);
+        
+        result
     }
 
     // query_raw_with_headers - similar to query_raw but captures TerminusDB-Data-Version header
@@ -261,10 +391,6 @@ impl super::client::TerminusDBHttpClient {
             (json, Some(query))
         };
         
-        // Store the parsed query for debugging if we have one
-        if let Some(query) = parsed_query {
-            self.store_last_query(query);
-        }
         
         self.query_raw_with_headers(spec, json_query).await
     }

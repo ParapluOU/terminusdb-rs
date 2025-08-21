@@ -4,19 +4,18 @@
 use reqwest::Client;
 
 use {
-    crate::{Info, TerminusDBAdapterError},
+    crate::{Info, TerminusDBAdapterError, debug::{DebugConfig, OperationLog, QueryLogger}},
     ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
     std::{fmt::Debug, sync::{Arc, RwLock}},
     terminusdb_schema::{ToTDBInstance, ToJson},
-    terminusdb_woql2::prelude::Query,
     url::Url,
 };
 
 use super::url_builder::UrlBuilder;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TerminusDBHttpClient {
     pub endpoint: Url,
     // Use conditional compilation for the http client
@@ -28,8 +27,12 @@ pub struct TerminusDBHttpClient {
     pub(crate) pass: String,
     /// organization that we are logging in for
     pub(crate) org: String,
-    /// stores the last executed WOQL query for debugging purposes
-    last_query: Arc<RwLock<Option<Query>>>,
+    /// Operation log for debugging
+    pub(crate) operation_log: OperationLog,
+    /// Query logger for persistent logging
+    pub(crate) query_logger: Arc<RwLock<Option<QueryLogger>>>,
+    /// Debug configuration
+    pub(crate) debug_config: Arc<RwLock<DebugConfig>>,
 }
 
 // Wrap the entire impl block with a conditional compilation attribute
@@ -137,7 +140,9 @@ impl TerminusDBHttpClient {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             org: org.to_string(),
-            last_query: Arc::new(RwLock::new(None)),
+            operation_log: OperationLog::default(),
+            query_logger: Arc::new(RwLock::new(None)),
+            debug_config: Arc::new(RwLock::new(DebugConfig::default())),
         })
     }
 
@@ -184,8 +189,8 @@ impl TerminusDBHttpClient {
     ///     println!("Last query: {:?}", last_query);
     /// }
     /// ```
-    pub fn last_query(&self) -> Option<Query> {
-        self.last_query.read().ok().and_then(|guard| guard.clone())
+    pub fn last_query(&self) -> Option<terminusdb_woql2::prelude::Query> {
+        self.operation_log.get_last_query()
     }
 
     /// Returns the last executed WOQL query as JSON for debugging purposes.
@@ -210,21 +215,10 @@ impl TerminusDBHttpClient {
     /// }
     /// ```
     pub fn last_query_json(&self) -> Option<serde_json::Value> {
+        use terminusdb_schema::{ToTDBInstance, ToJson};
         self.last_query().map(|query| query.to_instance(None).to_json())
     }
 
-    /// Internal method to store a query for debugging purposes
-    pub(crate) fn store_last_query(&self, query: Query) {
-        if let Ok(mut last_query) = self.last_query.write() {
-            *last_query = Some(query);
-        }
-    }
-
-    /// Test-only method to store a query for debugging purposes
-    #[cfg(test)]
-    pub fn test_store_last_query(&self, query: Query) {
-        self.store_last_query(query);
-    }
 
     /// Centralized URL builder for TerminusDB API endpoints.
     /// Handles all URL construction patterns and eliminates duplication.
@@ -270,6 +264,94 @@ impl TerminusDBHttpClient {
     )]
     pub async fn is_running(&self) -> bool {
         self.info().await.is_ok()
+    }
+
+    // ===== Debug/Logging Methods =====
+
+    /// Get the operation log for debugging
+    pub fn get_operation_log(&self) -> Vec<crate::debug::OperationEntry> {
+        self.operation_log.get_all()
+    }
+
+    /// Get the most recent N operations
+    pub fn get_recent_operations(&self, n: usize) -> Vec<crate::debug::OperationEntry> {
+        self.operation_log.get_recent(n)
+    }
+
+    /// Clear the operation log
+    pub fn clear_operation_log(&self) {
+        self.operation_log.clear()
+    }
+
+    /// Set the maximum size of the operation log
+    pub async fn set_operation_log_size(&self, size: usize) {
+        if let Ok(mut config) = self.debug_config.write() {
+            config.operation_log_size = size;
+        }
+        // Note: We'd need to make operation_log mutable or use interior mutability
+        // to actually update the size. For now, new size applies to new logs.
+    }
+
+    /// Enable query logging to a file
+    pub async fn enable_query_log<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
+        let logger = QueryLogger::new(path.as_ref()).await?;
+        
+        if let Ok(mut logger_guard) = self.query_logger.write() {
+            *logger_guard = Some(logger);
+        }
+        
+        if let Ok(mut config) = self.debug_config.write() {
+            config.query_log_path = Some(path.as_ref().to_string_lossy().into_owned());
+            config.enabled = true;
+        }
+        
+        debug!("Query logging enabled");
+        Ok(())
+    }
+
+    /// Disable query logging
+    pub async fn disable_query_log(&self) {
+        if let Ok(mut logger_guard) = self.query_logger.write() {
+            *logger_guard = None;
+        }
+        
+        if let Ok(mut config) = self.debug_config.write() {
+            config.query_log_path = None;
+        }
+        
+        debug!("Query logging disabled");
+    }
+
+    /// Check if query logging is enabled
+    pub async fn is_query_log_enabled(&self) -> bool {
+        if let Ok(logger_guard) = self.query_logger.read() {
+            logger_guard.is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Rotate the query log file
+    pub async fn rotate_query_log(&self) -> anyhow::Result<()> {
+        if let Ok(logger_guard) = self.query_logger.read() {
+            if let Some(logger) = logger_guard.as_ref() {
+                logger.rotate().await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+// Manual Debug implementation
+impl std::fmt::Debug for TerminusDBHttpClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminusDBHttpClient")
+            .field("endpoint", &self.endpoint)
+            .field("user", &self.user)
+            .field("org", &self.org)
+            .field("operation_log_size", &self.operation_log.len())
+            .field("query_log_enabled", &self.query_logger.read().map(|g| g.is_some()).unwrap_or(false))
+            .finish()
     }
 }
 

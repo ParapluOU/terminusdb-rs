@@ -79,7 +79,7 @@ pub struct If {
 // Renamed from Optional due to Rust keyword conflict
 /// A query which will succeed (without bindings) even in the case of failure.
 #[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
-
+#[tdb(class_name = "Optional")]
 pub struct WoqlOptional {
     /// The query to run.
     pub query: Box<Query>,
