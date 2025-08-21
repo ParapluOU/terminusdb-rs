@@ -444,14 +444,21 @@ fn generate_field_deserializers(
         let deserializer = quote_spanned! {field.span()=>
             // let err = concat!("Failed to deserialize field '{}' for type '{}'", #json_key_name, #expected_type_name);
 
+            let json_value = json_map.remove(#json_key_name);
+
             // Use property_from_maybe_json for all fields
             let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name>>::property_from_maybe_json(
-                json_map.remove(#json_key_name)
+                json_value.clone()
             )
             // .context(&err)?;
-            .context("generate_field_deserializers()")?;
+            .context("generate_field_deserializers()");
+            ;
 
-            _properties.insert(#json_key_name.to_string(), _prop);
+            if let Err(ref e) = _prop {
+                ::tracing::error!("failed to deserialize field '{}' of type {}: {}. payload: {:#?}", #json_key_name, stringify!(#field_ty), e, json_value);
+            }
+
+            _properties.insert(#json_key_name.to_string(), _prop?);
         };
 
         deserializers.push(deserializer);
