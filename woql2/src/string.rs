@@ -1,5 +1,7 @@
 use crate::prelude::*;
-use serde::{Deserialize, Serialize};
+use crate::value::ListOrVariable;
+use serde::{Deserialize, Serialize, Serializer};
+use serde::ser::SerializeStruct;
 use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
@@ -66,7 +68,7 @@ pub struct Split {
 
 pub struct Join {
     /// The list to concatenate.
-    pub list: DataValue, // Should be List<DataValue>
+    pub list: ListOrVariable,
     /// The separator between each joined string
     pub separator: DataValue,
     /// The result string.
@@ -79,7 +81,7 @@ pub struct Join {
 
 pub struct Concatenate {
     /// The list to concatenate.
-    pub list: DataValue, // Should be List<DataValue>
+    pub list: ListOrVariable,
     /// The result string.
     #[tdb(name = "result")]
     pub result_string: DataValue,

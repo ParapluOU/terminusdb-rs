@@ -1203,7 +1203,7 @@ fn parse_concat_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
         ))),
     };
     
-    Ok(Query::Concatenate(Concatenate { list, result_string }))
+    Ok(Query::Concatenate(Concatenate { list: list.into(), result_string }))
 }
 
 fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&'static str>>> {

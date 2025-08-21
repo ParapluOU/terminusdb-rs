@@ -34,7 +34,7 @@ fn render_list_value<T: ToDSL>(items: &[T]) -> String {
 }
 
 // Implementations for value types
-use crate::value::{Value, NodeValue, DataValue};
+use crate::value::{Value, NodeValue, DataValue, ListOrVariable};
 use terminusdb_schema::XSDAnySimpleType;
 
 impl ToDSL for Value {
@@ -68,6 +68,21 @@ impl ToDSL for DataValue {
             DataValue::Variable(var) => format!("${}", var),
             DataValue::Data(data) => data.to_dsl(),
             DataValue::List(items) => render_list_value(items),
+        }
+    }
+}
+
+impl ToDSL for Vec<DataValue> {
+    fn to_dsl(&self) -> String {
+        render_list_value(self)
+    }
+}
+
+impl ToDSL for ListOrVariable {
+    fn to_dsl(&self) -> String {
+        match self {
+            ListOrVariable::List(items) => render_list_value(items),
+            ListOrVariable::Variable(var) => var.to_dsl(),
         }
     }
 }
@@ -114,6 +129,7 @@ impl ToDSL for Query {
             Query::Count(count) => count.to_dsl(),
             Query::Sum(sum) => sum.to_dsl(),
             Query::Concatenate(concat) => concat.to_dsl(),
+            Query::Join(join) => join.to_dsl(),
             Query::Substring(substring) => substring.to_dsl(),
             Query::Trim(trim) => trim.to_dsl(),
             Query::Upper(upper) => upper.to_dsl(),
@@ -182,7 +198,7 @@ use crate::misc::{Limit, Start, Count};
 use crate::order::{OrderBy, GroupBy, OrderTemplate, Order};
 use crate::compare::{Greater, Less, Equals, IsA, TypeOf, Subsumption};
 use crate::collection::Sum;
-use crate::string::{Concatenate, Substring, Trim, Upper, Lower, Regexp};
+use crate::string::{Concatenate, Substring, Trim, Upper, Lower, Regexp, Join};
 use crate::document::{ReadDocument, InsertDocument, UpdateDocument, DeleteDocument};
 
 impl ToDSL for Select {
@@ -288,6 +304,12 @@ impl ToDSL for Sum {
 impl ToDSL for Concatenate {
     fn to_dsl(&self) -> String {
         render_function("concat", &[self.list.to_dsl(), self.result_string.to_dsl()])
+    }
+}
+
+impl ToDSL for Join {
+    fn to_dsl(&self) -> String {
+        render_function("join", &[self.list.to_dsl(), self.separator.to_dsl(), self.result_string.to_dsl()])
     }
 }
 

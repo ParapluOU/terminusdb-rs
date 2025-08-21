@@ -15,6 +15,7 @@ use terminusdb_woql2::prelude::{
     // Import types for new tests
     Value as Woql2Value,
 };
+use terminusdb_woql2::value::ListOrVariable;
 // Import specific woql2 Path types for assertions
 use terminusdb_woql2::path::{
     InversePathPredicate as Woql2InversePathPredicate, PathOr as Woql2PathOr,
@@ -727,7 +728,9 @@ fn test_join() {
     let final_query = builder.finalize();
     match final_query {
         Woql2Query::Join(join_q) => {
-            assert!(matches!(join_q.list, DataValue::Variable(v) if v == "InputList"));
+            // join expects a list, but the variable conversion will fail at runtime
+            // This test now checks that the list was created from the variable
+            assert!(matches!(&join_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList"));
             assert!(matches!(join_q.separator, DataValue::Variable(v) if v == "Separator"));
             assert!(matches!(join_q.result_string, DataValue::Variable(v) if v == "Result"));
         }
@@ -742,7 +745,7 @@ fn test_concat() {
     let final_query = builder.finalize();
     match final_query {
         Woql2Query::Concatenate(concat_q) => {
-            assert!(matches!(concat_q.list, DataValue::Variable(v) if v == "InputList"));
+            assert!(matches!(concat_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList"));
             assert!(matches!(concat_q.result_string, DataValue::Variable(v) if v == "Result"));
         }
         _ => panic!("Expected Concatenate query, found {:?}", final_query),
@@ -757,7 +760,7 @@ fn test_concatenate_alias() {
     let final_query = builder.finalize();
     match final_query {
         Woql2Query::Concatenate(concat_q) => {
-            assert!(matches!(concat_q.list, DataValue::Variable(v) if v == "InputList"));
+            assert!(matches!(concat_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList"));
             assert!(matches!(concat_q.result_string, DataValue::Variable(v) if v == "Result"));
         }
         _ => panic!(
@@ -781,7 +784,7 @@ fn test_concat_with_list_literal() {
         Woql2Query::Concatenate(concat_q) => {
             // Verify the list contains the expected string literals
             match &concat_q.list {
-                DataValue::List(items) => {
+                ListOrVariable::List(items) => {
                     assert_eq!(items.len(), 3);
                     assert!(matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Hello"));
                     assert!(matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == " "));
@@ -803,7 +806,7 @@ fn test_concat_with_list_literal() {
     match final_query2 {
         Woql2Query::Concatenate(concat_q) => {
             match &concat_q.list {
-                DataValue::List(items) => {
+                ListOrVariable::List(items) => {
                     assert_eq!(items.len(), 2);
                     assert!(matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Foo"));
                     assert!(matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Bar"));

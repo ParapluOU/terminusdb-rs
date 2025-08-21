@@ -2,6 +2,7 @@ use crate::value::{IntoWoql2, Var};
 use terminusdb_schema::{GraphType, ToTDBSchema};
 // Import Query from the prelude
 use terminusdb_woql2::prelude::{
+    DataValue,
     // Import Triple Ops
     AddTriple as Woql2AddTriple,
     AddedTriple as Woql2AddedTriple,
@@ -71,6 +72,7 @@ use terminusdb_woql2::prelude::{
     // Import WoqlOptional
     WoqlOptional,
 };
+use terminusdb_woql2::value::ListOrVariable;
 // Import expression types and the finalizer trait
 use crate::expression::{ArithmeticExpression, FinalizeWoqlExpr};
 use crate::path::{FinalizeWoqlPath, PathPattern};
@@ -491,8 +493,17 @@ impl WoqlBuilder {
         S: IntoWoql2,
         R: IntoWoql2,
     {
+        let list_data_value = input_list.into_woql2_data_value();
+        
+        // Convert DataValue to ListOrVariable
+        let list_or_var = match list_data_value {
+            DataValue::List(items) => ListOrVariable::List(items),
+            DataValue::Variable(_) => ListOrVariable::Variable(list_data_value),
+            _ => panic!("join expects a list or variable, but got: {:?}", list_data_value),
+        };
+        
         let join_query = Woql2Query::Join(Woql2Join {
-            list: input_list.into_woql2_data_value(),
+            list: list_or_var,
             separator: separator.into_woql2_data_value(),
             result_string: result_string.into_woql2_data_value(),
         });
@@ -506,8 +517,17 @@ impl WoqlBuilder {
         L: IntoWoql2, // Should resolve to List DataValue
         R: IntoWoql2,
     {
+        let list_data_value = input_list.into_woql2_data_value();
+        
+        // Convert DataValue to ListOrVariable
+        let list_or_var = match list_data_value {
+            DataValue::List(items) => ListOrVariable::List(items),
+            DataValue::Variable(_) => ListOrVariable::Variable(list_data_value),
+            _ => panic!("concatenate expects a list or variable, but got: {:?}", list_data_value),
+        };
+        
         let concat_query = Woql2Query::Concatenate(Woql2Concatenate {
-            list: input_list.into_woql2_data_value(),
+            list: list_or_var,
             result_string: result_string.into_woql2_data_value(),
         });
         self.add_query_component(concat_query)
