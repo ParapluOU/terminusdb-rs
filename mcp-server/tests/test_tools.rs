@@ -225,4 +225,150 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_get_document_tool_request_basic() {
+        // Test basic get_document request with just document_id
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "get_document",
+                "arguments": {
+                    "document_id": "Person/12345"
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["name"], "get_document");
+        assert_eq!(request["params"]["arguments"]["document_id"], "Person/12345");
+    }
+
+    #[test]
+    fn test_get_document_tool_request_with_type_name() {
+        // Test get_document with separate type_name and document_id
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "get_document",
+                "arguments": {
+                    "document_id": "12345",
+                    "type_name": "Person"
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["arguments"]["document_id"], "12345");
+        assert_eq!(request["params"]["arguments"]["type_name"], "Person");
+    }
+
+    #[test]
+    fn test_get_document_tool_request_with_options() {
+        // Test get_document with all optional parameters
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "get_document",
+                "arguments": {
+                    "document_id": "Person/12345",
+                    "unfold": true,
+                    "as_list": false,
+                    "include_headers": true,
+                    "connection": {
+                        "database": "test_db",
+                        "host": "http://localhost:6363",
+                        "user": "admin",
+                        "password": "root"
+                    }
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["arguments"]["unfold"], true);
+        assert_eq!(request["params"]["arguments"]["as_list"], false);
+        assert_eq!(request["params"]["arguments"]["include_headers"], true);
+        assert!(request["params"]["arguments"]["connection"].is_object());
+    }
+
+    #[test]
+    fn test_get_document_response_format_simple() {
+        // Test expected response format for simple document retrieval
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\n  \"@id\": \"Person/12345\",\n  \"@type\": \"Person\",\n  \"name\": \"John Doe\",\n  \"age\": 30\n}"
+                    }
+                ]
+            }
+        });
+
+        assert!(response["result"]["content"].is_array());
+        let content = &response["result"]["content"][0];
+        assert_eq!(content["type"], "text");
+
+        // Parse the JSON text content to verify document structure
+        if let Some(text) = content["text"].as_str() {
+            let document: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            assert!(document["@id"].is_string());
+            assert!(document["@type"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_get_document_response_format_with_headers() {
+        // Test expected response format when include_headers is true
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\n  \"document\": {\n    \"@id\": \"Person/12345\",\n    \"@type\": \"Person\",\n    \"name\": \"John Doe\"\n  },\n  \"commit_id\": \"ValidCommit/abc123...\",\n  \"metadata\": {\n    \"unfold\": true,\n    \"as_list\": false,\n    \"database\": \"test_db\",\n    \"branch\": \"main\"\n  }\n}"
+                    }
+                ]
+            }
+        });
+
+        assert!(response["result"]["content"].is_array());
+        let content = &response["result"]["content"][0];
+
+        // Parse the JSON text content to verify structure with headers
+        if let Some(text) = content["text"].as_str() {
+            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            assert!(parsed["document"].is_object());
+            assert!(parsed["commit_id"].is_string());
+            assert!(parsed["metadata"].is_object());
+            assert!(parsed["metadata"]["database"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_get_document_error_response() {
+        // Test error response when document not found
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "error": {
+                "code": -32000,
+                "message": "Tool execution failed",
+                "data": {
+                    "details": "document #12345 does not exist"
+                }
+            }
+        });
+
+        assert!(error_response["error"].is_object());
+        assert_eq!(error_response["error"]["code"], -32000);
+        assert!(error_response["error"]["data"]["details"].as_str().unwrap().contains("does not exist"));
+    }
 }

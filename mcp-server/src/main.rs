@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
 use std::sync::Arc;
-use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
+use terminusdb_client::{BranchSpec, TerminusDBHttpClient, GetOpts};
 use tokio::sync::RwLock;
 use tracing::info;
 use tracing_subscriber;
@@ -147,6 +147,29 @@ pub struct CheckServerStatusTool {
 )]
 pub struct ResetDatabaseTool {
     pub database: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "get_document",
+    description = "Retrieve a document by ID from TerminusDB. Returns the document as JSON with optional metadata like commit ID."
+)]
+pub struct GetDocumentTool {
+    /// Document ID to retrieve (e.g., "Person/12345" or just "12345" with type_name)
+    pub document_id: String,
+    /// Optional document type/class name (e.g., "Person") - used if document_id doesn't include type prefix
+    pub type_name: Option<String>,
+    /// Whether to unfold linked documents (default: false)
+    #[serde(default)]
+    pub unfold: bool,
+    /// Return document as list format (default: false)
+    #[serde(default)]
+    pub as_list: bool,
+    /// Include commit/version information in response (default: false)
+    #[serde(default)]
+    pub include_headers: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
@@ -395,6 +418,52 @@ impl TerminusDBMcpHandler {
             "database": request.database
         }))
     }
+
+    async fn get_document(&self, request: GetDocumentTool) -> Result<serde_json::Value> {
+        info!("Retrieving document: {}", request.document_id);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        if config.database.is_none() {
+            return Err(anyhow::anyhow!("Database must be specified"));
+        }
+        
+        let db = config.database.unwrap();
+        let branch_spec = match &config.commit_ref {
+            Some(commit_id) => BranchSpec::with_commit(&db, commit_id),
+            None => BranchSpec::with_branch(&db, &config.branch)
+        };
+
+        // Format document ID if type_name is provided
+        let formatted_id = match &request.type_name {
+            Some(type_name) if !request.document_id.contains('/') => {
+                format!("{}/{}", type_name, request.document_id)
+            }
+            _ => request.document_id.clone()
+        };
+
+        let opts = GetOpts::default()
+            .with_unfold(request.unfold)
+            .with_as_list(request.as_list);
+
+        if request.include_headers {
+            let result = client.get_document_with_headers(&formatted_id, &branch_spec, opts).await?;
+            Ok(serde_json::json!({
+                "document": *result,
+                "commit_id": result.extract_commit_id(),
+                "metadata": {
+                    "unfold": request.unfold,
+                    "as_list": request.as_list,
+                    "database": db,
+                    "branch": config.branch
+                }
+            }))
+        } else {
+            let document = client.get_document(&formatted_id, &branch_spec, opts).await?;
+            Ok(document)
+        }
+    }
 }
 
 #[async_trait]
@@ -412,6 +481,7 @@ impl ServerHandler for TerminusDBMcpHandler {
                 GetSchemaTool::tool(),
                 CheckServerStatusTool::tool(),
                 ResetDatabaseTool::tool(),
+                GetDocumentTool::tool(),
             ],
             meta: None,
             next_cursor: None,
@@ -568,6 +638,33 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.reset_database(tool_request).await {
+                    Ok(result) => {
+                        // Convert to pretty string for text content
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        // Extract as object for structured content if possible
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == GetDocumentTool::tool_name() => {
+                let tool_request: GetDocumentTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.get_document(tool_request).await {
                     Ok(result) => {
                         // Convert to pretty string for text content
                         let text_content = serde_json::to_string_pretty(&result)
