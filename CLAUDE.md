@@ -131,3 +131,7 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 ## Testing and Development Insights
 
 - When writing tests for WOQL functionality, nothing is proving it is "working" until the WOQL is tested against an actual database. Whether a WOQL functionality works can only be determined based on the result of an actual query with it. The client can be called in a unit/integration test, but Claude can also use the TerminusDB MCP server to realtime test/debug queries
+
+## Model Serialization and Trait Implementation Notes
+
+- If serializing TerminusDB models (structs/enums deriving TerminusDBModel) have issues with how they are serialized, then DONT try to fix it with a custom Serialize, Deserialize impl, as these are not used by our implementation. If the struct is supposed to be a "model", it should be converteable to an Instance, so derive TerminusDBModel. If the layout of it has to change use the tdb() proc-macro attributes defined in the schema/derive. If structs represent pritimitive values, they need implementations of ToInstanceProperty instead so that they are convertable to field values without representing a model.

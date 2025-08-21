@@ -35,14 +35,15 @@ fn test_concat_generates_correct_json_ld() {
     let list_array = list_value.as_array().unwrap();
     assert_eq!(list_array.len(), 2);
     
-    // Check the first element - it should be {"Data": {"String": "..."}}
+    // Check the first element - it should be {"@type": "DataValue", "data": "AwsDBPublication/"}
     let first_elem = list_array[0].as_object().unwrap();
-    let data_obj = first_elem.get("Data").unwrap().as_object().unwrap();
-    assert_eq!(data_obj.get("String").unwrap().as_str().unwrap(), "AwsDBPublication/");
+    assert_eq!(first_elem.get("@type").unwrap().as_str().unwrap(), "DataValue");
+    assert_eq!(first_elem.get("data").unwrap().as_str().unwrap(), "AwsDBPublication/");
     
-    // Check the second element - it should be {"Variable": "PubId"}
+    // Check the second element - it should be {"@type": "DataValue", "variable": "PubId"}
     let second_elem = list_array[1].as_object().unwrap();
-    assert_eq!(second_elem.get("Variable").unwrap().as_str().unwrap(), "PubId");
+    assert_eq!(second_elem.get("@type").unwrap().as_str().unwrap(), "DataValue");
+    assert_eq!(second_elem.get("variable").unwrap().as_str().unwrap(), "PubId");
     
     println!("Test passed! The list is correctly serialized as a direct array.");
 }

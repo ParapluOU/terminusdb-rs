@@ -69,10 +69,11 @@ fn test_join_with_variable_list() {
     let json_obj = json_ld.as_object().unwrap();
     assert_eq!(json_obj.get("@type").unwrap().as_str().unwrap(), "Join");
     
-    // The list should be a variable object
+    // The list should be a DataValue object with variable
     let list_value = json_obj.get("list").unwrap();
     let list_obj = list_value.as_object().unwrap();
-    assert_eq!(list_obj.get("Variable").unwrap().as_str().unwrap(), "Parts");
+    assert_eq!(list_obj.get("@type").unwrap().as_str().unwrap(), "DataValue");
+    assert_eq!(list_obj.get("variable").unwrap().as_str().unwrap(), "Parts");
     
     println!("Test passed! The join with variable list is correctly serialized.");
 }

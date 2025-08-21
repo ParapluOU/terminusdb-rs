@@ -5,7 +5,7 @@ use crate::prelude::*;
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 use terminusdb_schema::{FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty, ToTDBInstance};
 use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
-use terminusdb_schema::json::InstancePropertyFromJson;
+use terminusdb_schema::json::{InstancePropertyFromJson, ToJson};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Helper struct for DictionaryTemplate
@@ -71,6 +71,7 @@ pub struct DictionaryTemplate {
 )]
 #[tdb(class_name = "Value")]
 #[tdb(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum WoqlValue {
     /// An xsd data type value.
     Data(XSDAnySimpleType),
@@ -90,6 +91,7 @@ pub type Value = WoqlValue;
 /// A variable or node.
 #[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[tdb(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum NodeValue {
     /// A URI representing a resource.
     Node(String),
@@ -101,6 +103,7 @@ pub enum NodeValue {
 /// A variable or node.
 #[derive(TerminusDBModel, FromTDBInstance, Deserialize, Serialize, Debug, Clone, PartialEq)]
 #[tdb(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum DataValue {
     /// An xsd data type value.
     Data(XSDAnySimpleType),
@@ -137,12 +140,16 @@ impl<Parent> ToInstanceProperty<Parent> for ListOrVariable {
         // Convert ListOrVariable to a JSON value that can be stored as a primitive
         let json_value = match self {
             ListOrVariable::List(items) => {
-                // Serialize the list directly as an array
-                serde_json::to_value(items).unwrap()
+                // Convert each DataValue to JSON using to_instance().to_json()
+                let json_items: Vec<serde_json::Value> = items
+                    .into_iter()
+                    .map(|item| item.to_instance(None).to_json())
+                    .collect();
+                serde_json::Value::Array(json_items)
             }
             ListOrVariable::Variable(var) => {
-                // Serialize the variable as a DataValue object
-                serde_json::to_value(var).unwrap()
+                // Convert the variable using to_instance().to_json()
+                var.to_instance(None).to_json()
             }
         };
         
