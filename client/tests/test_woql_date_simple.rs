@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use terminusdb_client::*;
 use terminusdb_woql_builder::prelude::*;
 use terminusdb_woql_builder::value::{datetime_literal, date_literal};
+use terminusdb_schema::{ToTDBInstance, ToJson};
 
 #[tokio::test]
 #[ignore] // This test requires a running TerminusDB instance
@@ -15,7 +16,7 @@ async fn test_date_comparison_simple() -> anyhow::Result<()> {
     let spec = BranchSpec::from("test_date_simple");
     
     // Create database if it doesn't exist
-    if let Err(_) = client.get_database(&spec).await {
+    if !client.has_database(&spec).await? {
         client.create_database(&spec).await?;
     }
     

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use crate::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
@@ -97,7 +97,7 @@ pub enum NodeValue {
 
 // Represents TaggedUnion "DataValue"
 /// A variable or node.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Deserialize, Debug, Clone, PartialEq)]
 #[tdb(rename_all = "lowercase")]
 pub enum DataValue {
     /// An xsd data type value.
@@ -106,4 +106,33 @@ pub enum DataValue {
     List(Vec<DataValue>),
     /// A variable.
     Variable(String),
+}
+
+// Custom Serialize implementation for DataValue
+// This handles the List variant specially to serialize as a JSON array
+// rather than as an object with a "list" field
+impl Serialize for DataValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            // For List variant, serialize directly as an array
+            DataValue::List(items) => items.serialize(serializer),
+            
+            // For other variants, use the default object serialization
+            DataValue::Data(data) => {
+                let mut state = serializer.serialize_struct("DataValue", 2)?;
+                state.serialize_field("@type", "DataValue")?;
+                state.serialize_field("data", data)?;
+                state.end()
+            }
+            DataValue::Variable(var) => {
+                let mut state = serializer.serialize_struct("DataValue", 2)?;
+                state.serialize_field("@type", "DataValue")?;
+                state.serialize_field("variable", var)?;
+                state.end()
+            }
+        }
+    }
 }
