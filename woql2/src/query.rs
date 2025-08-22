@@ -16,6 +16,7 @@ use crate::triple::{
     DeletedLink, DeletedTriple, Link, Triple,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
@@ -128,6 +129,7 @@ pub enum Query {
     Size(Size),
     TripleCount(TripleCount),
 }
+
 
 #[test]
 fn test_abstract_query() {

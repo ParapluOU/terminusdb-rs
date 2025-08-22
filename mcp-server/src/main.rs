@@ -905,9 +905,10 @@ impl ServerHandler for TerminusDBMcpHandler {
                 ResetDatabaseTool::tool(),
                 GetDocumentTool::tool(),
                 QueryLogTool::tool(),
-                InsertDocumentTool::tool(),
-                InsertDocumentsTool::tool(),
-                ReplaceDocumentTool::tool(),
+                // Temporarily disabled due to serde_json::Value schema issues
+                // InsertDocumentTool::tool(),
+                // InsertDocumentsTool::tool(),
+                // ReplaceDocumentTool::tool(),
             ],
             meta: None,
             next_cursor: None,
