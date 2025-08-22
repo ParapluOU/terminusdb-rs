@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt;
 use std::sync::Arc;
-use terminusdb_client::{BranchSpec, TerminusDBHttpClient, GetOpts};
+use terminusdb_client::{BranchSpec, TerminusDBHttpClient, GetOpts, DocumentInsertArgs};
+use terminusdb_client::debug::QueryLogEntry;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber;
 use url::Url;
 
@@ -170,6 +171,95 @@ pub struct GetDocumentTool {
     /// Include commit/version information in response (default: false)
     #[serde(default)]
     pub include_headers: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "query_log",
+    description = "Manage and view TerminusDB query logging. Supports enabling/disabling file-based query logging, viewing recent entries, and log rotation."
+)]
+pub struct QueryLogTool {
+    /// Action to perform: "status", "enable", "disable", "rotate", "view"
+    pub action: String,
+    /// Path to log file (required for "enable" action)
+    pub log_path: Option<String>,
+    /// For "view" action: number of recent entries to return (default: 20, max: 100)
+    pub limit: Option<String>,
+    /// For "view" action: number of entries to skip from the end (for pagination)
+    pub offset: Option<String>,
+    /// For "view" action: filter by operation type
+    pub operation_type_filter: Option<String>,
+    /// For "view" action: filter by success status
+    pub success_filter: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "insert_document",
+    description = "Insert a single JSON document into TerminusDB. The document must include @id and @type fields. Supports both creation and update (upsert) behavior."
+)]
+pub struct InsertDocumentTool {
+    /// JSON document to insert (must include @id and @type fields)
+    pub document: serde_json::Value,
+    /// Database name
+    pub database: String,
+    /// Branch name (defaults to "main" if not specified)
+    pub branch: Option<String>,
+    /// Commit message (defaults to "insert document")
+    pub message: Option<String>,
+    /// Author name (defaults to "system")
+    pub author: Option<String>,
+    /// Force insertion even if document exists
+    #[serde(default)]
+    pub force: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "insert_documents",
+    description = "Insert multiple JSON documents into TerminusDB in a single transaction. All documents must include @id and @type fields. This is an atomic operation - all documents succeed or all fail."
+)]
+pub struct InsertDocumentsTool {
+    /// Array of JSON documents to insert (each must include @id and @type fields)
+    pub documents: Vec<serde_json::Value>,
+    /// Database name
+    pub database: String,
+    /// Branch name (defaults to "main" if not specified)
+    pub branch: Option<String>,
+    /// Commit message (defaults to "insert documents")
+    pub message: Option<String>,
+    /// Author name (defaults to "system")
+    pub author: Option<String>,
+    /// Force insertion for existing documents
+    #[serde(default)]
+    pub force: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "replace_document",
+    description = "Replace an existing document entirely. This operation will fail if the document doesn't exist (safer than upsert). Use this when you want to guarantee the document already exists."
+)]
+pub struct ReplaceDocumentTool {
+    /// JSON document to replace with (must include @id and @type fields)
+    pub document: serde_json::Value,
+    /// Database name
+    pub database: String,
+    /// Branch name (defaults to "main" if not specified)
+    pub branch: Option<String>,
+    /// Commit message (defaults to "replace document")
+    pub message: Option<String>,
+    /// Author name (defaults to "system")
+    pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
@@ -464,6 +554,338 @@ impl TerminusDBMcpHandler {
             Ok(document)
         }
     }
+
+    async fn handle_query_log(&self, request: QueryLogTool) -> Result<serde_json::Value> {
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        let action = request.action.as_str();
+        match action {
+            "status" => {
+                let enabled = client.is_query_log_enabled().await;
+                // Query log path is not directly accessible from client
+                let path: Option<String> = None;
+                
+                Ok(serde_json::json!({
+                    "enabled": enabled,
+                    "log_path": path,
+                    "message": if enabled {
+                        format!("Query logging is enabled to: {:?}", path)
+                    } else {
+                        "Query logging is disabled".to_string()
+                    }
+                }))
+            }
+            
+            "enable" => {
+                let path = request.log_path.as_deref()
+                    .unwrap_or("/tmp/terminusdb_queries.log");
+                
+                client.enable_query_log(path).await?;
+                
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "enabled": true,
+                    "log_path": path,
+                    "message": format!("Query logging enabled to: {}", path)
+                }))
+            }
+            
+            "disable" => {
+                client.disable_query_log().await;
+                
+                Ok(serde_json::json!({
+                    "status": "success", 
+                    "enabled": false,
+                    "message": "Query logging disabled"
+                }))
+            }
+            
+            "rotate" => {
+                // TODO: Fix Send trait issue in client rotate_query_log
+                // client.rotate_query_log().await?;
+                
+                Err(anyhow::anyhow!("Query log rotation is temporarily unavailable due to client implementation"))?
+            }
+            
+            "view" => {
+                // For now, we'll use the default path or the one from request
+                let path = request.log_path.as_deref()
+                    .unwrap_or("/tmp/terminusdb_queries.log");
+                
+                // Read the log file
+                let content = tokio::fs::read_to_string(&path).await
+                    .map_err(|e| anyhow::anyhow!("Failed to read log file: {}", e))?;
+                
+                // Parse log entries
+                let mut entries: Vec<QueryLogEntry> = Vec::new();
+                for line in content.lines() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    
+                    match serde_json::from_str::<QueryLogEntry>(line) {
+                        Ok(entry) => entries.push(entry),
+                        Err(e) => {
+                            warn!("Failed to parse log entry: {}", e);
+                        }
+                    }
+                }
+                
+                // Apply filters
+                let mut filtered = entries;
+                
+                // Filter by operation type
+                if let Some(op_type) = &request.operation_type_filter {
+                    filtered.retain(|e| e.operation_type == *op_type);
+                }
+                
+                // Filter by success status
+                if let Some(success) = request.success_filter {
+                    filtered.retain(|e| e.success == success);
+                }
+                
+                // Sort by timestamp (newest first)
+                filtered.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                
+                // Apply pagination
+                let limit = request.limit
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(20);
+                let offset = request.offset
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(0);
+                
+                let total = filtered.len();
+                let paginated: Vec<_> = filtered.into_iter()
+                    .skip(offset)
+                    .take(limit)
+                    .collect();
+                
+                Ok(serde_json::json!({
+                    "entries": paginated,
+                    "pagination": {
+                        "total": total,
+                        "limit": limit,
+                        "offset": offset,
+                        "has_more": offset + paginated.len() < total
+                    }
+                }))
+            }
+            _ => Err(anyhow::anyhow!("Invalid action: {}. Must be one of: status, enable, disable, rotate, view", action))?
+        }
+    }
+
+    async fn handle_insert_document(&self, request: InsertDocumentTool) -> Result<serde_json::Value> {
+        // Validate document has required fields
+        if !request.document.is_object() {
+            return Err(anyhow::anyhow!("Document must be a JSON object"));
+        }
+        
+        let doc_obj = request.document.as_object().unwrap();
+        if !doc_obj.contains_key("@id") || !doc_obj.contains_key("@type") {
+            return Err(anyhow::anyhow!("Document must contain @id and @type fields"));
+        }
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Set database in config
+        let mut config = config;
+        config.database = Some(request.database.clone());
+        
+        // Create branch spec
+        let branch_spec = BranchSpec::with_branch(
+            &request.database,
+            &request.branch.unwrap_or_else(|| "main".to_string())
+        );
+        
+        // Create insert args
+        let args = DocumentInsertArgs {
+            spec: branch_spec,
+            message: request.message.unwrap_or_else(|| "insert document".to_string()),
+            author: request.author.unwrap_or_else(|| "system".to_string()),
+            force: request.force,
+            ..Default::default()
+        };
+        
+        // Insert the document
+        let doc_vec = vec![&request.document];
+        let result = client.insert_documents(doc_vec, args).await?;
+        
+        // Extract results
+        let mut response = serde_json::json!({
+            "status": "success",
+            "database": request.database,
+            "results": {}
+        });
+        
+        if let Some(results_map) = response.get_mut("results").and_then(|v| v.as_object_mut()) {
+            for (id, insert_result) in result.iter() {
+                let status = match insert_result {
+                    terminusdb_client::TDBInsertInstanceResult::Inserted(_) => "inserted",
+                    terminusdb_client::TDBInsertInstanceResult::AlreadyExists(_) => "already_exists",
+                };
+                results_map.insert(id.clone(), serde_json::json!({
+                    "id": id,
+                    "status": status
+                }));
+            }
+        }
+        
+        // Add commit ID if available
+        if let Some(commit_id) = result.extract_commit_id() {
+            response["commit_id"] = serde_json::Value::String(commit_id);
+        }
+        
+        Ok(response)
+    }
+
+    async fn handle_insert_documents(&self, request: InsertDocumentsTool) -> Result<serde_json::Value> {
+        // Validate all documents have required fields
+        for (idx, doc) in request.documents.iter().enumerate() {
+            if !doc.is_object() {
+                return Err(anyhow::anyhow!("Document at index {} must be a JSON object", idx));
+            }
+            
+            let doc_obj = doc.as_object().unwrap();
+            if !doc_obj.contains_key("@id") || !doc_obj.contains_key("@type") {
+                return Err(anyhow::anyhow!("Document at index {} must contain @id and @type fields", idx));
+            }
+        }
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Set database in config
+        let mut config = config;
+        config.database = Some(request.database.clone());
+        
+        // Create branch spec
+        let branch_spec = BranchSpec::with_branch(
+            &request.database,
+            &request.branch.unwrap_or_else(|| "main".to_string())
+        );
+        
+        // Create insert args
+        let args = DocumentInsertArgs {
+            spec: branch_spec,
+            message: request.message.unwrap_or_else(|| "insert documents".to_string()),
+            author: request.author.unwrap_or_else(|| "system".to_string()),
+            force: request.force,
+            ..Default::default()
+        };
+        
+        // Convert documents to references
+        let doc_refs: Vec<&serde_json::Value> = request.documents.iter().collect();
+        
+        // Insert the documents
+        let result = client.insert_documents(doc_refs, args).await?;
+        
+        // Build response
+        let mut response = serde_json::json!({
+            "status": "success",
+            "database": request.database,
+            "total_documents": request.documents.len(),
+            "results": {}
+        });
+        
+        let mut inserted_count = 0;
+        let mut already_exists_count = 0;
+        
+        if let Some(results_map) = response.get_mut("results").and_then(|v| v.as_object_mut()) {
+            for (id, insert_result) in result.iter() {
+                let status = match insert_result {
+                    terminusdb_client::TDBInsertInstanceResult::Inserted(_) => {
+                        inserted_count += 1;
+                        "inserted"
+                    },
+                    terminusdb_client::TDBInsertInstanceResult::AlreadyExists(_) => {
+                        already_exists_count += 1;
+                        "already_exists"
+                    },
+                };
+                results_map.insert(id.clone(), serde_json::json!({
+                    "id": id,
+                    "status": status
+                }));
+            }
+        }
+        
+        response["summary"] = serde_json::json!({
+            "inserted": inserted_count,
+            "already_exists": already_exists_count
+        });
+        
+        // Add commit ID if available
+        if let Some(commit_id) = result.extract_commit_id() {
+            response["commit_id"] = serde_json::Value::String(commit_id);
+        }
+        
+        Ok(response)
+    }
+
+    async fn handle_replace_document(&self, request: ReplaceDocumentTool) -> Result<serde_json::Value> {
+        // Validate document has required fields
+        if !request.document.is_object() {
+            return Err(anyhow::anyhow!("Document must be a JSON object"));
+        }
+        
+        let doc_obj = request.document.as_object().unwrap();
+        if !doc_obj.contains_key("@id") || !doc_obj.contains_key("@type") {
+            return Err(anyhow::anyhow!("Document must contain @id and @type fields"));
+        }
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Set database in config
+        let mut config = config;
+        config.database = Some(request.database.clone());
+        
+        // Create branch spec
+        let branch_spec = BranchSpec::with_branch(
+            &request.database,
+            &request.branch.unwrap_or_else(|| "main".to_string())
+        );
+        
+        // Create insert args
+        let args = DocumentInsertArgs {
+            spec: branch_spec,
+            message: request.message.unwrap_or_else(|| "replace document".to_string()),
+            author: request.author.unwrap_or_else(|| "system".to_string()),
+            force: false, // Never force for replace operation
+            ..Default::default()
+        };
+        
+        // Use put_documents which requires document to exist
+        let doc_vec = vec![&request.document];
+        let result = client.put_documents(doc_vec, args).await?;
+        
+        // Extract results
+        let mut response = serde_json::json!({
+            "status": "success",
+            "database": request.database,
+            "operation": "replace",
+            "results": {}
+        });
+        
+        if let Some(results_map) = response.get_mut("results").and_then(|v| v.as_object_mut()) {
+            for (id, _) in result.iter() {
+                results_map.insert(id.clone(), serde_json::json!({
+                    "id": id,
+                    "status": "replaced"
+                }));
+            }
+        }
+        
+        // Add commit ID if available
+        if let Some(commit_id) = result.extract_commit_id() {
+            response["commit_id"] = serde_json::Value::String(commit_id);
+        }
+        
+        Ok(response)
+    }
 }
 
 #[async_trait]
@@ -482,6 +904,10 @@ impl ServerHandler for TerminusDBMcpHandler {
                 CheckServerStatusTool::tool(),
                 ResetDatabaseTool::tool(),
                 GetDocumentTool::tool(),
+                QueryLogTool::tool(),
+                InsertDocumentTool::tool(),
+                InsertDocumentsTool::tool(),
+                ReplaceDocumentTool::tool(),
             ],
             meta: None,
             next_cursor: None,
@@ -671,6 +1097,108 @@ impl ServerHandler for TerminusDBMcpHandler {
                             .unwrap_or_else(|_| result.to_string());
 
                         // Extract as object for structured content if possible
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == QueryLogTool::tool_name() => {
+                let tool_request: QueryLogTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_query_log(tool_request).await {
+                    Ok(result) => {
+                        // Convert to pretty string for text content
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        // Extract as object for structured content if possible
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == InsertDocumentTool::tool_name() => {
+                let tool_request: InsertDocumentTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_insert_document(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == InsertDocumentsTool::tool_name() => {
+                let tool_request: InsertDocumentsTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_insert_documents(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == ReplaceDocumentTool::tool_name() => {
+                let tool_request: ReplaceDocumentTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_replace_document(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
                         let structured = match result {
                             serde_json::Value::Object(map) => Some(map),
                             _ => None,

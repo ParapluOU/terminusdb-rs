@@ -371,4 +371,339 @@ mod tests {
         assert_eq!(error_response["error"]["code"], -32000);
         assert!(error_response["error"]["data"]["details"].as_str().unwrap().contains("does not exist"));
     }
+
+    #[test]
+    fn test_query_log_tool_request_format() {
+        // Test basic query log status request
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "query_log",
+                "arguments": {
+                    "action": "status"
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["name"], "query_log");
+        assert_eq!(request["params"]["arguments"]["action"], "status");
+    }
+
+    #[test]
+    fn test_query_log_enable_request() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": {
+                "name": "query_log",
+                "arguments": {
+                    "action": "enable",
+                    "log_path": "/tmp/test_queries.log"
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["arguments"]["action"], "enable");
+        assert_eq!(request["params"]["arguments"]["log_path"], "/tmp/test_queries.log");
+    }
+
+    #[test]
+    fn test_query_log_view_request_with_filters() {
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {
+                "name": "query_log",
+                "arguments": {
+                    "action": "view",
+                    "limit": "50",
+                    "offset": "10",
+                    "operation_type_filter": "query",
+                    "success_filter": true
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["arguments"]["action"], "view");
+        assert_eq!(request["params"]["arguments"]["limit"], "50");
+        assert_eq!(request["params"]["arguments"]["offset"], "10");
+        assert_eq!(request["params"]["arguments"]["operation_type_filter"], "query");
+        assert_eq!(request["params"]["arguments"]["success_filter"], true);
+    }
+
+    #[test]
+    fn test_query_log_view_response_format() {
+        // Test expected response format for view action
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 14,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\n  \"entries\": [\n    {\n      \"timestamp\": \"2025-01-01T12:00:00Z\",\n      \"operation_type\": \"query\",\n      \"database\": \"test_db\",\n      \"branch\": \"main\",\n      \"endpoint\": \"/api/db/test_db/query\",\n      \"details\": {\"query_type\": \"select\"},\n      \"success\": true,\n      \"result_count\": 10,\n      \"duration_ms\": 25,\n      \"error\": null\n    }\n  ],\n  \"pagination\": {\n    \"total\": 1,\n    \"limit\": 20,\n    \"offset\": 0,\n    \"has_more\": false\n  }\n}"
+                    }
+                ]
+            }
+        });
+
+        assert!(response["result"]["content"].is_array());
+        let content = &response["result"]["content"][0];
+        
+        // Parse the JSON text content to verify structure
+        if let Some(text) = content["text"].as_str() {
+            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            assert!(parsed["entries"].is_array());
+            assert!(parsed["pagination"].is_object());
+            assert!(parsed["pagination"]["total"].is_number());
+            assert!(parsed["pagination"]["has_more"].is_boolean());
+        }
+    }
+
+    #[test]
+    fn test_query_log_status_response_format() {
+        // Test expected response format for status action
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 15,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\n  \"enabled\": true,\n  \"log_path\": null,\n  \"message\": \"Query logging is enabled to: None\"\n}"
+                    }
+                ]
+            }
+        });
+
+        assert!(response["result"]["content"].is_array());
+        let content = &response["result"]["content"][0];
+        
+        // Parse the JSON text content to verify structure
+        if let Some(text) = content["text"].as_str() {
+            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            assert!(parsed["enabled"].is_boolean());
+            assert!(parsed["message"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_insert_document_tool_request() {
+        // Test basic single document insertion
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 16,
+            "method": "tools/call",
+            "params": {
+                "name": "insert_document",
+                "arguments": {
+                    "document": {
+                        "@id": "Person/123",
+                        "@type": "Person",
+                        "name": "Alice",
+                        "age": 30
+                    },
+                    "database": "test_db",
+                    "message": "Added new person"
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["name"], "insert_document");
+        assert!(request["params"]["arguments"]["document"].is_object());
+        assert_eq!(request["params"]["arguments"]["document"]["@id"], "Person/123");
+        assert_eq!(request["params"]["arguments"]["document"]["@type"], "Person");
+        assert_eq!(request["params"]["arguments"]["database"], "test_db");
+    }
+
+    #[test]
+    fn test_insert_documents_tool_request() {
+        // Test batch document insertion
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 17,
+            "method": "tools/call",
+            "params": {
+                "name": "insert_documents",
+                "arguments": {
+                    "documents": [
+                        {
+                            "@id": "Person/124",
+                            "@type": "Person",
+                            "name": "Bob",
+                            "age": 25
+                        },
+                        {
+                            "@id": "Person/125",
+                            "@type": "Person",
+                            "name": "Carol",
+                            "age": 28
+                        }
+                    ],
+                    "database": "test_db",
+                    "branch": "feature",
+                    "author": "test_user",
+                    "force": true
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["name"], "insert_documents");
+        assert!(request["params"]["arguments"]["documents"].is_array());
+        assert_eq!(request["params"]["arguments"]["documents"].as_array().unwrap().len(), 2);
+        assert_eq!(request["params"]["arguments"]["branch"], "feature");
+        assert_eq!(request["params"]["arguments"]["force"], true);
+    }
+
+    #[test]
+    fn test_replace_document_tool_request() {
+        // Test document replacement
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 18,
+            "method": "tools/call",
+            "params": {
+                "name": "replace_document",
+                "arguments": {
+                    "document": {
+                        "@id": "Person/123",
+                        "@type": "Person",
+                        "name": "Alice Updated",
+                        "age": 31
+                    },
+                    "database": "test_db",
+                    "message": "Updated person data"
+                }
+            }
+        });
+
+        assert_eq!(request["params"]["name"], "replace_document");
+        assert!(request["params"]["arguments"]["document"].is_object());
+        assert_eq!(request["params"]["arguments"]["document"]["name"], "Alice Updated");
+    }
+
+    #[test]
+    fn test_insert_document_response_format() {
+        // Test expected response format for single document insertion
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 16,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\n  \"status\": \"success\",\n  \"database\": \"test_db\",\n  \"results\": {\n    \"Person/123\": {\n      \"id\": \"Person/123\",\n      \"status\": \"inserted\"\n    }\n  },\n  \"commit_id\": \"abc123def456\"\n}"
+                    }
+                ]
+            }
+        });
+
+        assert!(response["result"]["content"].is_array());
+        let content = &response["result"]["content"][0];
+        
+        // Parse the JSON text content to verify structure
+        if let Some(text) = content["text"].as_str() {
+            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            assert_eq!(parsed["status"], "success");
+            assert!(parsed["results"].is_object());
+            assert!(parsed["commit_id"].is_string());
+        }
+    }
+
+    #[test]
+    fn test_insert_documents_response_format() {
+        // Test expected response format for batch insertion
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 17,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "{\n  \"status\": \"success\",\n  \"database\": \"test_db\",\n  \"total_documents\": 2,\n  \"results\": {\n    \"Person/124\": {\n      \"id\": \"Person/124\",\n      \"status\": \"inserted\"\n    },\n    \"Person/125\": {\n      \"id\": \"Person/125\",\n      \"status\": \"already_exists\"\n    }\n  },\n  \"summary\": {\n    \"inserted\": 1,\n    \"already_exists\": 1\n  },\n  \"commit_id\": \"abc123def456\"\n}"
+                    }
+                ]
+            }
+        });
+
+        assert!(response["result"]["content"].is_array());
+        let content = &response["result"]["content"][0];
+        
+        // Parse the JSON text content to verify structure
+        if let Some(text) = content["text"].as_str() {
+            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            assert_eq!(parsed["status"], "success");
+            assert_eq!(parsed["total_documents"], 2);
+            assert!(parsed["results"].is_object());
+            assert!(parsed["summary"].is_object());
+            assert_eq!(parsed["summary"]["inserted"], 1);
+            assert_eq!(parsed["summary"]["already_exists"], 1);
+        }
+    }
+
+    #[test]
+    fn test_insert_document_error_missing_fields() {
+        // Test error when @id or @type is missing
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 19,
+            "method": "tools/call",
+            "params": {
+                "name": "insert_document",
+                "arguments": {
+                    "document": {
+                        "name": "Invalid Document",
+                        "description": "Missing required fields"
+                    },
+                    "database": "test_db"
+                }
+            }
+        });
+
+        // The handler should reject documents without @id and @type
+        let doc = &request["params"]["arguments"]["document"];
+        assert!(doc.get("@id").is_none());
+        assert!(doc.get("@type").is_none());
+    }
+
+    #[test]
+    fn test_insert_with_all_optional_params() {
+        // Test insertion with all optional parameters specified
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "insert_document",
+                "arguments": {
+                    "document": {
+                        "@id": "Person/126",
+                        "@type": "Person",
+                        "name": "David"
+                    },
+                    "database": "test_db",
+                    "branch": "feature/new-person",
+                    "message": "Adding David to the system",
+                    "author": "admin_user",
+                    "force": false,
+                    "connection": {
+                        "host": "http://custom-host:6363",
+                        "user": "custom_user",
+                        "password": "custom_pass"
+                    }
+                }
+            }
+        });
+
+        let args = &request["params"]["arguments"];
+        assert_eq!(args["branch"], "feature/new-person");
+        assert_eq!(args["message"], "Adding David to the system");
+        assert_eq!(args["author"], "admin_user");
+        assert_eq!(args["force"], false);
+        assert!(args["connection"].is_object());
+    }
 }
