@@ -7,7 +7,7 @@
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let x = var!(x); // Creates Value::Variable("x".to_string())
 /// let person = var!("Person"); // Creates Value::Variable("Person".to_string())
 /// ```
@@ -25,7 +25,7 @@ macro_rules! var {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let x = node_var!(x); // Creates NodeValue::Variable("x".to_string())
 /// ```
 #[macro_export]
@@ -42,7 +42,7 @@ macro_rules! node_var {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let person = node!("Person"); // Creates Value::Node("Person".to_string())
 /// let rdf_type = node!("rdf:type"); // Creates Value::Node("rdf:type".to_string())
 /// ```
@@ -57,7 +57,7 @@ macro_rules! node {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let person = node_value!("Person"); // Creates NodeValue::Node("Person".to_string())
 /// ```
 #[macro_export]
@@ -71,7 +71,7 @@ macro_rules! node_value {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let age = data!(42); // Creates Value::Data with integer
 /// let name = data!("John"); // Creates Value::Data with string
 /// let score = data!(3.14); // Creates Value::Data with float
@@ -87,7 +87,7 @@ macro_rules! data {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let dt = datetime!("2024-01-01T00:00:00Z"); // Creates Value::Data(XsdAnySimpleType::DateTime)
 /// let dt2 = datetime!("2024-12-31T23:59:59Z");
 /// ```
@@ -106,7 +106,7 @@ macro_rules! datetime {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let items = list![data!(1), data!(2), data!(3)];
 /// let mixed = list![var!(x), node!("item"), data!("text")];
 /// ```
@@ -121,7 +121,7 @@ macro_rules! list {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let t = triple!(var!(x), "rdf:type", "Person");
 /// let t2 = triple!(node_var!(x), node_value!("name"), var!(name));
 /// ```
@@ -149,7 +149,7 @@ macro_rules! triple {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = and!(
 ///     triple!(var!(x), "rdf:type", "Person"),
 ///     triple!(var!(x), "name", var!(name))
@@ -168,7 +168,7 @@ macro_rules! and {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = or!(
 ///     triple!(var!(x), "rdf:type", "Person"),
 ///     triple!(var!(x), "rdf:type", "Organization")
@@ -187,7 +187,7 @@ macro_rules! or {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = not!(triple!(var!(x), "archived", data!(true)));
 /// ```
 #[macro_export]
@@ -203,11 +203,11 @@ macro_rules! not {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
-/// let q = select![x, name], and!(
+/// # use terminusdb_woql2::*;
+/// let q = select!([x, name], and!(
 ///     triple!(var!(x), "rdf:type", "Person"),
 ///     triple!(var!(x), "name", var!(name))
-/// );
+/// ));
 /// ```
 #[macro_export]
 macro_rules! select {
@@ -229,7 +229,7 @@ macro_rules! select {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = eq!(var!(x), data!(42));
 /// ```
 #[macro_export]
@@ -246,7 +246,7 @@ macro_rules! eq {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = greater!(var!(age), data!(18));
 /// ```
 #[macro_export]
@@ -263,7 +263,7 @@ macro_rules! greater {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = less!(var!(age), data!(65));
 /// ```
 #[macro_export]
@@ -280,7 +280,7 @@ macro_rules! less {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// use woql2::path::PathPattern;
 /// let pattern = PathPattern::Predicate(...);
 /// let q = path!(var!(start), pattern, var!(end));
@@ -309,7 +309,7 @@ macro_rules! path {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = limit!(10, triple!(var!(x), "rdf:type", "Person"));
 /// ```
 #[macro_export]
@@ -326,7 +326,7 @@ macro_rules! limit {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// use woql2::expression::ArithmeticExpression;
 /// let expr = ArithmeticExpression::Plus(...);
 /// let q = eval!(expr, var!(result));
@@ -345,7 +345,7 @@ macro_rules! eval {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = read_doc!(node!("doc:123"), var!(doc));
 /// ```
 #[macro_export]
@@ -362,7 +362,7 @@ macro_rules! read_doc {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = insert_doc!(var!(doc));
 /// let q2 = insert_doc!(var!(doc), node!("doc:123"));
 /// ```
@@ -386,7 +386,7 @@ macro_rules! insert_doc {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = update_doc!(var!(doc));
 /// let q2 = update_doc!(var!(doc), node!("doc:123"));
 /// ```
@@ -410,7 +410,7 @@ macro_rules! update_doc {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = delete_doc!(node!("doc:123"));
 /// ```
 #[macro_export]
@@ -426,7 +426,7 @@ macro_rules! delete_doc {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = if_then_else!(
 ///     greater!(var!(age), data!(18)),
 ///     triple!(var!(x), "status", "adult"),
@@ -451,7 +451,7 @@ macro_rules! if_then_else {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = type!(var!(x), "Person"); // equivalent to triple!(var!(x), "rdf:type", "Person")
 /// let q2 = type!(var!(x), var!(type)); // with variable type
 /// ```
@@ -466,7 +466,7 @@ macro_rules! type_ {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = isa!(var!(x), "Person"); // checks if x is of type Person
 /// ```
 #[macro_export]
@@ -483,7 +483,7 @@ macro_rules! isa {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = optional!(triple!(var!(x), "email", var!(email)));
 /// ```
 #[macro_export]
@@ -499,7 +499,7 @@ macro_rules! optional {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = distinct_vars!([x, y], triple!(var!(x), "knows", var!(y)));
 /// ```
 #[macro_export]
@@ -522,7 +522,7 @@ macro_rules! distinct_vars {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = count_into!(triple!(var!(x), "rdf:type", "Person"), var!(count));
 /// ```
 #[macro_export]
@@ -539,7 +539,7 @@ macro_rules! count_into {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = cast!(var!(x), "xsd:integer", var!(int_x));
 /// ```
 #[macro_export]
@@ -557,7 +557,7 @@ macro_rules! cast {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = sum!(var!(numbers), var!(total));
 /// ```
 #[macro_export]
@@ -574,7 +574,7 @@ macro_rules! sum {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = concat!(list![data!("Hello"), data!(" "), data!("World")], var!(result));
 /// ```
 #[macro_export]
@@ -591,7 +591,7 @@ macro_rules! concat {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = member!(var!(item), var!(list));
 /// ```
 #[macro_export]
@@ -608,7 +608,7 @@ macro_rules! member {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = immediately!(insert_doc!(var!(doc)));
 /// ```
 #[macro_export]
@@ -624,7 +624,7 @@ macro_rules! immediately {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = link!(var!(person), "friend", var!(friend));
 /// ```
 #[macro_export]
@@ -651,7 +651,7 @@ macro_rules! link {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = data_triple!(var!(person), "age", data!(25));
 /// ```
 #[macro_export]
@@ -678,7 +678,7 @@ macro_rules! data_triple {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = regex!("^[A-Z]", var!(name)); // match names starting with uppercase
 /// let q2 = regex!("\\d+", var!(text), var!(matches)); // capture matches
 /// ```
@@ -704,7 +704,7 @@ macro_rules! regex {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = trim!(var!(input), var!(output));
 /// ```
 #[macro_export]
@@ -721,7 +721,7 @@ macro_rules! trim {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = true_!(); // always succeeds
 /// ```
 #[macro_export]
@@ -735,7 +735,7 @@ macro_rules! true_ {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = starts_with!(var!(name), "Dr.");
 /// let q2 = starts_with!(var!(title), data!("Chapter"));
 /// ```
@@ -750,7 +750,7 @@ macro_rules! starts_with {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = ends_with!(var!(email), "@example.com");
 /// let q2 = ends_with!(var!(filename), ".pdf");
 /// ```
@@ -765,7 +765,7 @@ macro_rules! ends_with {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = contains!(var!(description), "important");
 /// let q2 = contains!(var!(text), "search term");
 /// ```
@@ -780,7 +780,7 @@ macro_rules! contains {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
+/// # use terminusdb_woql2::*;
 /// let q = compare!((var!(date)) == (today!()));
 /// let q2 = after!(var!(created), today!());
 /// ```
@@ -795,8 +795,8 @@ macro_rules! today {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
-/// let q = after!(var!(end_date), data!("2024-01-01T00:00:00Z"));
+/// # use terminusdb_woql2::*;
+/// let q = after!(var!(end_date), datetime!("2024-01-01T00:00:00Z"));
 /// let q2 = after!(var!(created), today!());
 /// ```
 #[macro_export]
@@ -810,8 +810,8 @@ macro_rules! after {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
-/// let q = before!(var!(start_date), data!("2024-12-31T23:59:59Z"));
+/// # use terminusdb_woql2::*;
+/// let q = before!(var!(start_date), datetime!("2024-12-31T23:59:59Z"));
 /// let q2 = before!(var!(deadline), today!());
 /// ```
 #[macro_export]
@@ -825,9 +825,9 @@ macro_rules! before {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
-/// let q = in_between!(var!(date), data!("2024-01-01T00:00:00Z"), data!("2024-12-31T23:59:59Z"));
-/// let q2 = in_between!(var!(event_date), today!(), data!("2025-01-01T00:00:00Z"));
+/// # use terminusdb_woql2::*;
+/// let q = in_between!(var!(date), datetime!("2024-01-01T00:00:00Z"), datetime!("2024-12-31T23:59:59Z"));
+/// let q2 = in_between!(var!(event_date), today!(), datetime!("2025-01-01T00:00:00Z"));
 /// ```
 #[macro_export]
 macro_rules! in_between {
@@ -843,8 +843,8 @@ macro_rules! in_between {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
-/// let q = today_in_between!(data!("2024-01-01T00:00:00Z"), data!("2024-12-31T23:59:59Z"));
+/// # use terminusdb_woql2::*;
+/// let q = today_in_between!(datetime!("2024-01-01T00:00:00Z"), datetime!("2024-12-31T23:59:59Z"));
 /// let q2 = today_in_between!(var!(start_date), var!(end_date));
 /// ```
 #[macro_export]
@@ -858,12 +858,12 @@ macro_rules! today_in_between {
 /// 
 /// # Examples
 /// ```
-/// # use woql2::macros::*;
-/// let q = compare!(var!(age) > data!(18));      // Greater
-/// let q2 = compare!(var!(age) < data!(65));     // Less
-/// let q3 = compare!(var!(x) == var!(y));        // Equals
-/// let q4 = compare!(var!(age) >= data!(18));    // Greater or equal (using Or)
-/// let q5 = compare!(var!(age) <= data!(65));    // Less or equal (using Or)
+/// # use terminusdb_woql2::*;
+/// let q = compare!((var!(age)) > (data!(18)));      // Greater
+/// let q2 = compare!((var!(age)) < (data!(65)));     // Less
+/// let q3 = compare!((var!(x)) == (var!(y)));        // Equals
+/// let q4 = compare!((var!(age)) >= (data!(18)));    // Greater or equal (using Or)
+/// let q5 = compare!((var!(age)) <= (data!(65)));    // Less or equal (using Or)
 /// ```
 #[macro_export]
 macro_rules! compare {
