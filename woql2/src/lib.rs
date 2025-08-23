@@ -24,6 +24,7 @@ pub mod string;
 pub mod triple;
 pub mod value;
 pub mod dsl;
+pub mod macros;
 
 pub mod prelude {
     // Re-export core types
@@ -52,6 +53,22 @@ pub mod prelude {
         DeleteTriple, DeletedLink, DeletedTriple, Link, Triple,
     };
     pub use super::value::{DataValue, DictionaryTemplate, FieldValuePair, NodeValue, Value};
+
+    // Re-export macros
+    pub use crate::{
+        var, node_var, node, node_value, data, list,
+        triple, and, or, not, select, eq, greater, less,
+        path, limit, eval, read_doc, insert_doc, update_doc, delete_doc,
+        if_then_else,
+        // Shortcut macros
+        type_, isa, optional, distinct_vars, count_into, cast,
+        sum, concat, member, immediately, link, data_triple,
+        regex, trim, true_, compare,
+        // String operation macros
+        starts_with, ends_with, contains,
+        // Date/time macros
+        today, after, before, in_between
+    };
 
     // Potentially re-export common traits if needed
     // Removed re-exports for non-existent TdbDataType, TdbDebug, TdbDisplay
