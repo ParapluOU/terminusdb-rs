@@ -1,7 +1,7 @@
 use terminusdb_woql2::prelude::*;
 use terminusdb_woql2::query::{Query, And, Or, Not};
 use terminusdb_woql2::triple::Triple;
-use terminusdb_woql2::value::{Value, NodeValue};
+use terminusdb_woql2::value::{Value, NodeValue, ListOrVariable};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
 #[test]
@@ -160,7 +160,7 @@ fn test_eval_arithmetic_rendering() {
 #[test]
 fn test_string_operations_rendering() {
     let concat = Query::Concatenate(Concatenate {
-        list: DataValue::Variable("Parts".to_string()),
+        list: ListOrVariable::Variable(DataValue::Variable("Parts".to_string())),
         result_string: DataValue::Variable("Result".to_string()),
     });
     

@@ -83,6 +83,25 @@ macro_rules! data {
     };
 }
 
+/// Create a DateTime value
+/// 
+/// # Examples
+/// ```
+/// # use woql2::macros::*;
+/// let dt = datetime!("2024-01-01T00:00:00Z"); // Creates Value::Data(XsdAnySimpleType::DateTime)
+/// let dt2 = datetime!("2024-12-31T23:59:59Z");
+/// ```
+#[macro_export]
+macro_rules! datetime {
+    ($value:expr) => {
+        $crate::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(
+            chrono::DateTime::parse_from_rfc3339($value)
+                .expect("Invalid datetime format, expected RFC3339 (e.g., '2024-01-01T00:00:00Z')")
+                .with_timezone(&chrono::Utc)
+        ))
+    };
+}
+
 /// Create a List value
 /// 
 /// # Examples
@@ -768,10 +787,7 @@ macro_rules! contains {
 #[macro_export]
 macro_rules! today {
     () => {
-        data!({
-            let now = chrono::Utc::now();
-            now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
-        })
+        $crate::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(chrono::Utc::now()))
     };
 }
 
