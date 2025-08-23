@@ -149,6 +149,34 @@ fn test_date_macros_with_today() {
         data!("2025-12-31T23:59:59Z")
     );
     assert!(matches!(future_range, Query::And(_)));
+    
+    // Test today_in_between! macro
+    let today_check = today_in_between!(
+        data!("2020-01-01T00:00:00Z"),
+        data!("2030-12-31T23:59:59Z")
+    );
+    match today_check {
+        Query::And(and) => {
+            assert_eq!(and.and.len(), 2);
+            // First should be >= comparison with today
+            match &and.and[0] {
+                Query::Or(or) => {
+                    assert_eq!(or.or.len(), 2);
+                    // Should contain a Greater and an Equals
+                }
+                _ => panic!("Expected Or for >= comparison"),
+            }
+            // Second should be <= comparison with today
+            match &and.and[1] {
+                Query::Or(or) => {
+                    assert_eq!(or.or.len(), 2);
+                    // Should contain a Less and an Equals
+                }
+                _ => panic!("Expected Or for <= comparison"),
+            }
+        }
+        _ => panic!("Expected And query"),
+    }
 }
 
 #[test]
@@ -198,4 +226,46 @@ fn test_practical_filter_example() {
     let dsl = query.to_dsl();
     assert!(dsl.contains("regexp("));
     assert!(dsl.contains("DOC-"));
+}
+
+#[test]
+fn test_today_in_between_practical() {
+    // Example: Find active subscriptions (where today is between start and end dates)
+    let query = select!([subscription, name, start_date, end_date], and!(
+        type_!(var!(subscription), "Subscription"),
+        triple!(var!(subscription), "name", var!(name)),
+        triple!(var!(subscription), "start_date", var!(start_date)),
+        triple!(var!(subscription), "end_date", var!(end_date)),
+        today_in_between!(var!(start_date), var!(end_date))
+    ));
+    
+    // Verify query structure
+    match &query {
+        Query::Select(s) => {
+            assert_eq!(s.variables.len(), 4);
+            match &*s.query {
+                Query::And(a) => {
+                    assert_eq!(a.and.len(), 5);
+                    // The last condition should be an And (from today_in_between!)
+                    match &a.and[4] {
+                        Query::And(inner_and) => {
+                            assert_eq!(inner_and.and.len(), 2);
+                        }
+                        _ => panic!("Expected And query from today_in_between!"),
+                    }
+                }
+                _ => panic!("Expected And query"),
+            }
+        }
+        _ => panic!("Expected Select query"),
+    }
+    
+    // Test with constant dates
+    let holiday_check = today_in_between!(
+        data!("2024-12-20T00:00:00Z"),
+        data!("2025-01-10T00:00:00Z")
+    );
+    
+    // Should produce an And query with two Or conditions
+    assert!(matches!(holiday_check, Query::And(_)));
 }

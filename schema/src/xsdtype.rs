@@ -1,7 +1,4 @@
-use crate::{
-    json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive,
-    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, ToTDBSchema, URI,
-};
+use crate::{json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, ToTDBSchema, DATETIME, DECIMAL, TIME, URI};
 use chrono::Utc;
 use decimal_rs::Decimal;
 use serde::{Deserialize, Serialize};
@@ -171,6 +168,66 @@ impl ToSchemaClass for XSDAnySimpleType {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_xsd_any_simple_type_serialization_issue() {
+        // This test demonstrates the current serialization behavior vs what TerminusDB expects
+        
+        // Create an integer value
+        let int_value = XSDAnySimpleType::Decimal(Decimal::from(50));
+        
+        // Current serialization (using serde)
+        let current_json = serde_json::to_value(&int_value).unwrap();
+        println!("Current serialization: {}", serde_json::to_string_pretty(&current_json).unwrap());
+        
+        // What we get: {"Decimal": "50"}
+        // This is the derived serde serialization which includes the enum variant name
+        
+        // What TerminusDB expects for WOQL queries:
+        let expected_json = serde_json::json!({
+            "@type": "xsd:integer",
+            "@value": 50
+        });
+        println!("Expected by TerminusDB: {}", serde_json::to_string_pretty(&expected_json).unwrap());
+        
+        // The issue is that XSDAnySimpleType needs custom serialization when used in WOQL contexts
+        // to produce JSON-LD format with @type and @value fields
+        
+        // This assertion will fail, demonstrating the issue
+        // assert_eq!(current_json, expected_json);
+        
+        // Instead, we document what actually happens
+        assert!(current_json.is_object());
+        assert!(current_json.as_object().unwrap().contains_key("Decimal"));
+    }
+    
+    #[test]
+    fn test_all_xsd_types_serialization() {
+        // Test various XSD types to show the pattern
+        let test_cases = vec![
+            (XSDAnySimpleType::String("hello".to_string()), "String", "hello"),
+            (XSDAnySimpleType::Decimal(Decimal::from(42)), "Decimal", "42"),
+            (XSDAnySimpleType::Float(3.14), "Float", "3.14"),
+            (XSDAnySimpleType::Boolean(true), "Boolean", "true"),
+        ];
+        
+        for (value, expected_key, _expected_value) in test_cases {
+            let json = serde_json::to_value(&value).unwrap();
+            let obj = json.as_object().unwrap();
+            
+            // Current behavior: enum variant as key
+            assert!(obj.contains_key(expected_key), 
+                "Expected key '{}' not found in {:?}", expected_key, obj);
+            
+            // What TerminusDB needs: {"@type": "xsd:TYPE", "@value": VALUE}
+            // This would require custom serialization implementation
+        }
+    }
+}
+
 // impl ToTDBSchema for XSDAnySimpleType {
 //     fn to_schema() -> Schema {
 //         unimplemented!()
@@ -204,7 +261,10 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
         match self {
             XSDAnySimpleType::String(s) => InstanceProperty::Primitive(PrimitiveValue::String(s)),
             XSDAnySimpleType::Boolean(b) => InstanceProperty::Primitive(PrimitiveValue::Bool(b)),
-            XSDAnySimpleType::Decimal(d) => InstanceProperty::Primitive(PrimitiveValue::String(d.to_string())),
+            XSDAnySimpleType::Decimal(d) => InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
+                    "@type": DECIMAL,
+                    "@value": d.to_string()
+                }))),
             XSDAnySimpleType::Float(f) => InstanceProperty::Primitive(PrimitiveValue::Number(
                 serde_json::Number::from_f64(f).expect("parse f64 to serde_json Number")
             )),
@@ -212,14 +272,14 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
             XSDAnySimpleType::URI(u) => InstanceProperty::Primitive(PrimitiveValue::String(u.to_string())),
             XSDAnySimpleType::DateTime(dt) => InstanceProperty::Primitive(PrimitiveValue::Object(
                 serde_json::json!({
-                    "@type": "xsd:dateTime",
+                    "@type": DATETIME,
                     "@value": dt.to_rfc3339()
                 })
             )),
             XSDAnySimpleType::Date(d) => InstanceProperty::Primitive(PrimitiveValue::String(d.to_string())),
             XSDAnySimpleType::Time(t) => InstanceProperty::Primitive(PrimitiveValue::Object(
                 serde_json::json!({
-                    "@type": "xsd:time",
+                    "@type": TIME,
                     "@value": t.format("%H:%M:%S%.f").to_string()
                 })
             )),

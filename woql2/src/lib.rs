@@ -67,7 +67,7 @@ pub mod prelude {
         // String operation macros
         starts_with, ends_with, contains,
         // Date/time macros
-        today, after, before, in_between
+        today, after, before, in_between, today_in_between
     };
 
     // Potentially re-export common traits if needed

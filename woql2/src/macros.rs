@@ -669,7 +669,7 @@ macro_rules! regex {
         $crate::query::Query::Regexp($crate::string::Regexp {
             pattern: $crate::macros::into_data_value($pattern),
             string: $crate::macros::into_data_value($string),
-            result: None,
+            result: Some($crate::macros::into_data_value(var!(_regex_result))),
         })
     };
     ($pattern:expr, $string:expr, $result:expr) => {
@@ -820,6 +820,21 @@ macro_rules! in_between {
             compare!(($date) >= ($start)),
             compare!(($date) <= ($end))
         )
+    };
+}
+
+/// Check if today's date is between two dates (inclusive)
+/// 
+/// # Examples
+/// ```
+/// # use woql2::macros::*;
+/// let q = today_in_between!(data!("2024-01-01T00:00:00Z"), data!("2024-12-31T23:59:59Z"));
+/// let q2 = today_in_between!(var!(start_date), var!(end_date));
+/// ```
+#[macro_export]
+macro_rules! today_in_between {
+    ($start:expr, $end:expr) => {
+        in_between!(today!(), $start, $end)
     };
 }
 
@@ -1186,6 +1201,18 @@ mod conversion {
     impl IntoDataValue for i32 {
         fn into_data_value(self) -> DataValue {
             DataValue::Data(XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self)))
+        }
+    }
+
+    impl IntoDataValue for u32 {
+        fn into_data_value(self) -> DataValue {
+            DataValue::Data(XSDAnySimpleType::UnsignedInt(self as usize))
+        }
+    }
+
+    impl IntoDataValue for usize {
+        fn into_data_value(self) -> DataValue {
+            DataValue::Data(XSDAnySimpleType::UnsignedInt(self as usize))
         }
     }
 
