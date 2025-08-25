@@ -130,12 +130,95 @@ pub enum Query {
     TripleCount(TripleCount),
 }
 
+impl Query {
+    /// Unwraps pagination operations (Start, Limit) to get the underlying query.
+    /// This is useful when you need to count all results regardless of pagination.
+    pub fn unwrap_pagination(self) -> Query {
+        match self {
+            Query::Limit(limit) => (*limit.query).unwrap_pagination(),
+            Query::Start(start) => (*start.query).unwrap_pagination(),
+            _ => self,
+        }
+    }
+}
 
 #[test]
 fn test_abstract_query() {
     let query = Query::And(And { and: vec![] });
     let schema = Query::to_schema();
     assert!(schema.is_abstract());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unwrap_pagination_removes_limit() {
+        let inner = Query::True(True {});
+        let with_limit = Query::Limit(Limit {
+            limit: 10,
+            query: Box::new(inner.clone()),
+        });
+        
+        let unwrapped = with_limit.unwrap_pagination();
+        assert_eq!(unwrapped, inner);
+    }
+
+    #[test]
+    fn test_unwrap_pagination_removes_start() {
+        let inner = Query::True(True {});
+        let with_start = Query::Start(Start {
+            start: 5,
+            query: Box::new(inner.clone()),
+        });
+        
+        let unwrapped = with_start.unwrap_pagination();
+        assert_eq!(unwrapped, inner);
+    }
+
+    #[test]
+    fn test_unwrap_pagination_removes_nested_start_limit() {
+        let inner = Query::True(True {});
+        let with_limit = Query::Limit(Limit {
+            limit: 10,
+            query: Box::new(inner.clone()),
+        });
+        let with_start_and_limit = Query::Start(Start {
+            start: 5,
+            query: Box::new(with_limit),
+        });
+        
+        let unwrapped = with_start_and_limit.unwrap_pagination();
+        assert_eq!(unwrapped, inner);
+    }
+
+    #[test]
+    fn test_unwrap_pagination_removes_nested_limit_start() {
+        let inner = Query::True(True {});
+        let with_start = Query::Start(Start {
+            start: 5,
+            query: Box::new(inner.clone()),
+        });
+        let with_limit_and_start = Query::Limit(Limit {
+            limit: 10,
+            query: Box::new(with_start),
+        });
+        
+        let unwrapped = with_limit_and_start.unwrap_pagination();
+        assert_eq!(unwrapped, inner);
+    }
+
+    #[test]
+    fn test_unwrap_pagination_leaves_other_queries_unchanged() {
+        let and_query = Query::And(And { and: vec![] });
+        let unwrapped = and_query.clone().unwrap_pagination();
+        assert_eq!(unwrapped, and_query);
+
+        let or_query = Query::Or(Or { or: vec![] });
+        let unwrapped = or_query.clone().unwrap_pagination();
+        assert_eq!(unwrapped, or_query);
+    }
 }
 
 /// A conjunction of queries which must all have a solution.

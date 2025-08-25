@@ -91,5 +91,51 @@ async fn main() -> Result<()> {
         _ => println!("✗ query_count() did not produce a Count query"),
     }
 
+    // Demonstrate pagination unwrapping
+    println!("\n--- Demonstrating pagination unwrapping ---");
+    
+    // Create a paginated query
+    use terminusdb_woql2::misc::{Limit, Start};
+    let paginated_query = Query::Limit(Limit {
+        limit: 10,
+        query: Box::new(Query::Start(Start {
+            start: 5,
+            query: Box::new(query.query()),
+        })),
+    });
+    
+    println!("Original query has pagination: Limit(10, Start(5, ...))");
+    
+    // Create a custom queryable that returns the paginated query
+    struct PaginatedQuery {
+        query: Query,
+    }
+    impl RawQueryable for PaginatedQuery {
+        type Result = BookInfo;
+        fn query(&self) -> Query { 
+            self.query.clone() 
+        }
+        fn extract_result(&self, _: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
+            unimplemented!()
+        }
+    }
+    
+    let paginated = PaginatedQuery { query: paginated_query };
+    let count_query = paginated.query_count();
+    
+    match count_query {
+        Query::Count(count) => {
+            match &*count.query {
+                Query::Limit(_) | Query::Start(_) => {
+                    println!("✗ Pagination was NOT removed from count query");
+                }
+                _ => {
+                    println!("✓ Pagination was correctly removed from count query");
+                }
+            }
+        }
+        _ => println!("✗ query_count() did not produce a Count query"),
+    }
+
     Ok(())
 }

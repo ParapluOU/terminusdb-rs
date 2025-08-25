@@ -245,10 +245,11 @@ pub trait RawQueryable {
 
     /// Build a count query for this queryable
     /// 
-    /// The default implementation checks if the query is already a Count query.
-    /// If it is, returns it as-is. Otherwise, wraps the query in a Count operation.
+    /// The default implementation first removes any pagination (Limit/Start) operations,
+    /// then checks if the query is already a Count query. If it is, returns it as-is. 
+    /// Otherwise, wraps the query in a Count operation.
     fn query_count(&self) -> Query {
-        let query = self.query();
+        let query = self.query().unwrap_pagination();
         
         // Check if the query is already a Count
         match query {
