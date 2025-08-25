@@ -151,6 +151,11 @@ pub trait ToTDBInstance: ToTDBSchema + ToTDBInstances {
         self.to_instance(None).to_json()
     }
 
+    fn to_json_string(&self) -> String {
+        serde_json::to_string_pretty(&self.to_json())
+            .expect("Failed to serialize instance to JSON string")
+    }
+
     // fn from_value(
     //     instance: serde_json::Value,
     // ) -> anyhow::Result<<<Self as ToRelational>::Relational as Relational<Model = Self>> + Cacheable,
