@@ -5,7 +5,8 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use tap::Pipe;
 use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TerminusDBModel, ToTDBSchema};
-use terminusdb_woql2::prelude::Query;
+use terminusdb_woql2::misc::Count;
+use terminusdb_woql2::prelude::{DataValue, Query};
 use terminusdb_woql_builder::builder::WoqlBuilder;
 use terminusdb_woql_builder::prelude::{node, Var};
 use terminusdb_woql_builder::vars;
@@ -240,6 +241,58 @@ pub trait RawQueryable {
             .into_iter()
             .map(|binding| self.extract_result(binding))
             .collect()
+    }
+
+    /// Build a count query for this queryable
+    /// 
+    /// The default implementation checks if the query is already a Count query.
+    /// If it is, returns it as-is. Otherwise, wraps the query in a Count operation.
+    fn query_count(&self) -> Query {
+        let query = self.query();
+        
+        // Check if the query is already a Count
+        match query {
+            Query::Count(_) => query,
+            _ => {
+                // Wrap the query in a Count operation
+                let v_count = vars!("Count");
+                Query::Count(Count {
+                    query: Box::new(query),
+                    count: DataValue::Variable(v_count.name().to_string()),
+                })
+            }
+        }
+    }
+
+    /// Execute the query and return the count of results
+    async fn count(
+        &self,
+        client: &TerminusDBHttpClient,
+        spec: &BranchSpec,
+    ) -> anyhow::Result<usize> {
+        let query = self.query_count();
+        let v_count = vars!("Count");
+
+        let res = client
+            .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
+            .await?;
+
+        // The count query should return a single binding with the Count variable
+        res.bindings
+            .into_iter()
+            .next()
+            .and_then(|mut binding| binding.remove(&*v_count))
+            .and_then(|value| {
+                // Try to extract the count from @value field
+                if let Some(obj) = value.as_object() {
+                    if let Some(val) = obj.get("@value") {
+                        return val.as_u64().map(|v| v as usize);
+                    }
+                }
+                // Fallback: try to parse the value directly as a number
+                value.as_u64().map(|v| v as usize)
+            })
+            .ok_or_else(|| anyhow::anyhow!("Failed to extract count from query result"))
     }
 }
 
