@@ -412,6 +412,11 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
         method: DocumentMethod,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        if model.is_empty() {
+            debug!("All documents were filtered out or no documents to insert");
+            return Ok(ResponseWithHeaders::new(HashMap::new(), None));
+        }
+
         self.ensure_database(&args.spec.db)
             .await
             .context("ensuring database")?;
@@ -513,7 +518,7 @@ impl super::client::TerminusDBHttpClient {
                 if let Some(timeout) = args.timeout {
                     request = request.timeout(timeout);
                 }
-                
+
                 let r = request.send().await?;
 
                 // insert existing documents with PUT
