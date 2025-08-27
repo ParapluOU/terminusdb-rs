@@ -36,6 +36,16 @@ impl super::client::TerminusDBHttpClient {
         err
     )]
     pub async fn ensure_database(&self, db: &str) -> anyhow::Result<Self> {
+        // Check cache first
+        {
+            let cache = self.ensured_databases.lock()
+                .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
+            if cache.contains(db) {
+                debug!("Database {} already ensured (cached)", db);
+                return Ok(self.clone());
+            }
+        }
+
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("db").simple_database(db).build();
 
@@ -136,6 +146,13 @@ impl super::client::TerminusDBHttpClient {
             let _ = logger.log(log_entry).await;
         }
 
+        // Add to cache on success
+        {
+            let mut cache = self.ensured_databases.lock()
+                .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
+            cache.insert(db.to_string());
+        }
+
         // todo: dont print if it already existed
         debug!("ensured database {}", db);
 
@@ -192,6 +209,13 @@ impl super::client::TerminusDBHttpClient {
             Ok(_) => {
                 operation = operation.success(None, duration_ms);
                 self.operation_log.push(operation);
+                
+                // Remove from cache on successful deletion
+                {
+                    let mut cache = self.ensured_databases.lock()
+                        .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
+                    cache.remove(db);
+                }
                 
                 // Log to query log if enabled
                 let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
@@ -353,5 +377,41 @@ impl super::client::TerminusDBHttpClient {
     )]
     pub async fn list_databases_simple(&self) -> anyhow::Result<Vec<Database>> {
         self.list_databases(false, false).await
+    }
+
+    /// Clears the ensured databases cache.
+    ///
+    /// This forces all subsequent `ensure_database()` calls to check with the server
+    /// rather than relying on the cache. Useful when external changes might have
+    /// occurred to the database.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.clear_database_cache()?;
+    /// ```
+    pub fn clear_database_cache(&self) -> anyhow::Result<()> {
+        let mut cache = self.ensured_databases.lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
+        cache.clear();
+        debug!("Cleared ensured databases cache");
+        Ok(())
+    }
+
+    /// Returns the list of databases currently in the cache.
+    ///
+    /// This shows which databases have been ensured and won't require server
+    /// verification on the next `ensure_database()` call.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let cached = client.get_cached_databases()?;
+    /// println!("Cached databases: {:?}", cached);
+    /// ```
+    pub fn get_cached_databases(&self) -> anyhow::Result<Vec<String>> {
+        let cache = self.ensured_databases.lock()
+            .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
+        Ok(cache.iter().cloned().collect())
     }
 }

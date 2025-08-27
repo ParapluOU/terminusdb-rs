@@ -8,7 +8,7 @@ use {
     ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
-    std::{fmt::Debug, sync::{Arc, RwLock}},
+    std::{fmt::Debug, sync::{Arc, Mutex, RwLock}, collections::HashSet},
     terminusdb_schema::{ToTDBInstance, ToJson},
     url::Url,
 };
@@ -33,6 +33,8 @@ pub struct TerminusDBHttpClient {
     pub(crate) query_logger: Arc<RwLock<Option<QueryLogger>>>,
     /// Debug configuration
     pub(crate) debug_config: Arc<RwLock<DebugConfig>>,
+    /// Cache of ensured databases to avoid repeated ensure_database calls
+    pub(crate) ensured_databases: Arc<Mutex<HashSet<String>>>,
 }
 
 // Wrap the entire impl block with a conditional compilation attribute
@@ -143,6 +145,7 @@ impl TerminusDBHttpClient {
             operation_log: OperationLog::default(),
             query_logger: Arc::new(RwLock::new(None)),
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),
+            ensured_databases: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -351,6 +354,7 @@ impl std::fmt::Debug for TerminusDBHttpClient {
             .field("org", &self.org)
             .field("operation_log_size", &self.operation_log.len())
             .field("query_log_enabled", &self.query_logger.read().map(|g| g.is_some()).unwrap_or(false))
+            .field("ensured_databases_count", &self.ensured_databases.lock().map(|g| g.len()).unwrap_or(0))
             .finish()
     }
 }
@@ -366,6 +370,10 @@ impl TerminusDBHttpClient {
             user: user.to_string(),
             pass: pass.to_string(),
             org: org.to_string(),
+            operation_log: OperationLog::default(),
+            query_logger: Arc::new(RwLock::new(None)),
+            debug_config: Arc::new(RwLock::new(DebugConfig::default())),
+            ensured_databases: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
