@@ -1,9 +1,11 @@
 use crate::{
     FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue, Property,
     RelationValue, Schema, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance,
-    ToTDBInstances, ToTDBSchema, TypeFamily,
+    ToTDBInstances, ToTDBSchema, TypeFamily, STRING,
 };
 use std::collections::HashSet;
+
+use super::EntityIDFor;
 
 impl<T: ToTDBSchema> ToTDBSchema for Option<T> {
     fn to_schema() -> Schema {
@@ -63,6 +65,16 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<T> {
             name: name.to_string(),
             r#type: Some(TypeFamily::Optional),
             class: T::to_class().to_string(),
+        }
+    }
+}
+
+impl<Parent, T: ToTDBSchema> ToSchemaProperty<Parent> for Option<EntityIDFor<T>> {
+    fn to_property(name: &str) -> Property {
+        Property {
+            name: name.to_string(),
+            r#type: Some(TypeFamily::Optional),
+            class: STRING.to_string(), // EntityIDFor is always a string type
         }
     }
 }

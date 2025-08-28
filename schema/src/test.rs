@@ -769,3 +769,83 @@ mod tests {
         }
     }
 }
+
+// Test for Option<EntityIDFor<T>>
+#[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
+#[tdb(key = "random", id_field = "id")]
+pub struct ModelWithOptionalEntityID {
+    pub id: Option<EntityIDFor<Self>>, // Self-referential, as used in real code
+    pub name: String,
+}
+
+#[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
+#[tdb(key = "lexical", key_fields = "email", id_field = "id")]
+pub struct UserWithOptionalEntityID {
+    pub id: Option<EntityIDFor<Self>>, // Self-referential, as used in real code
+    pub email: String,
+    pub username: String,
+}
+
+#[test]
+fn test_optional_entity_id_compiles_and_works() {
+    use crate::{ToSchemaProperty, ToInstanceProperty};
+    
+    // Simple test - just verify compilation works
+    let _model = ModelWithOptionalEntityID {
+        id: Some(EntityIDFor::new("test-123").unwrap()),
+        name: "Test Model".to_string(),
+    };
+    
+    let _model2 = ModelWithOptionalEntityID {
+        id: None,
+        name: "Another Model".to_string(),
+    };
+    
+    // Test that the type implements ToSchemaProperty
+    let prop_name = "id";
+    let prop = <Option<EntityIDFor<ModelWithOptionalEntityID>> as ToSchemaProperty<ModelWithOptionalEntityID>>::to_property(prop_name);
+    assert_eq!(prop.name, "id");
+    assert_eq!(prop.r#type, Some(TypeFamily::Optional));
+    assert_eq!(prop.class, STRING); // Should be xsd:string, not the model name
+    
+    // Test to_instance works without stack overflow
+    let instance1 = _model.to_instance(None);
+    assert!(instance1.id.is_some(), "Model with Some(EntityIDFor) should have ID");
+    assert_eq!(instance1.id.as_ref().unwrap(), "ModelWithOptionalEntityID/test-123");
+    
+    let instance2 = _model2.to_instance(None); 
+    assert!(instance2.id.is_none(), "Model with None EntityIDFor should not have ID");
+    
+    // Test lexical key model - it should panic if ID is set
+    let _user_with_id = UserWithOptionalEntityID {
+        id: Some(EntityIDFor::new("user-456").unwrap()),
+        email: "test@example.com".to_string(),
+        username: "testuser".to_string(),
+    };
+    // Note: We don't call to_instance on _user_with_id because it would trigger
+    // runtime validation panic for non-Random key with ID set
+    
+    // This should work fine with None ID
+    let user_without_id = UserWithOptionalEntityID {
+        id: None,
+        email: "test2@example.com".to_string(),  
+        username: "testuser2".to_string(),
+    };
+    
+    let user_instance = user_without_id.to_instance(None);
+    assert!(user_instance.id.is_none());
+    
+    // Test schema generation doesn't stack overflow
+    let schema = <ModelWithOptionalEntityID as ToTDBSchema>::to_schema();
+    match &schema {
+        Schema::Class { properties, .. } => {
+            let id_prop = properties.iter().find(|p| p.name == "id").expect("id property not found");
+            assert_eq!(id_prop.r#type, Some(TypeFamily::Optional));
+            assert_eq!(id_prop.class, STRING);
+        }
+        _ => panic!("Expected Schema::Class"),
+    }
+    
+    // If we get here, everything works correctly
+    assert!(true, "Option<EntityIDFor<Self>> works without stack overflow!");
+}

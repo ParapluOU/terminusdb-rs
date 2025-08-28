@@ -1,7 +1,7 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel,
-    ToInstanceProperty, ToSchemaProperty, ToTDBSchema, STRING, URI,
+    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, STRING, URI,
 };
 use anyhow::{anyhow, bail};
 use rocket::form::{self, FromFormField, ValueField};
@@ -50,6 +50,12 @@ impl<T: ToTDBSchema> ToTDBSchema for EntityIDFor<T> {
         T::values()
     }
 }
+
+// impl<T: ToTDBSchema + ToSchemaClass> ToSchemaClass for EntityIDFor<T> {
+//     fn to_class() -> &'static str {
+//         T::to_class()
+//     }
+// }
 
 impl<T: ToTDBSchema> EntityIDFor<T> {
     pub fn random() -> Self {
