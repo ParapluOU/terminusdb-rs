@@ -46,6 +46,10 @@ pub struct TDBModelOpts {
     /// Rename strategy for enum variants (e.g., "lowercase", "UPPERCASE", "PascalCase", "camelCase", "snake_case", "SCREAMING_SNAKE_CASE", "kebab-case")
     #[darling(default)]
     pub(crate) rename_all: Option<String>,
+
+    /// Fields to use for Lexical or Hash key strategies
+    #[darling(default)]
+    pub(crate) key_fields: Option<String>,
 }
 
 /// Rename case conversion strategies
@@ -108,6 +112,17 @@ impl TDBModelOpts {
             }
             None => RenameStrategy::None,
         }
+    }
+
+    /// Parse key_fields string into a vector of field names
+    pub fn get_key_fields(&self) -> Option<Vec<String>> {
+        self.key_fields.as_ref().map(|fields_str| {
+            fields_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
     }
 
     /// Extracts docstring from struct or enum doc comments

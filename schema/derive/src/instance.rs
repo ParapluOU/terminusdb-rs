@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use quote::format_ident;
+use syn::FieldsNamed;
 // No longer need DataEnum here
 // use syn::DataEnum;
 
@@ -12,14 +13,29 @@ pub fn generate_totdbinstance_impl(
     args: TDBModelOpts,
     // Removed data_enum_opt argument
 ) -> proc_macro2::TokenStream {
+    // Generate the optid expression based on whether an id_field is configured
     let optid = match args.id_field.as_ref() {
         None => {
             quote! {None::<String>}
         }
         Some(field_name) => {
             let ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
-            quote! {
-                Some( self.#ident.clone().into() )
+            // Check if we're using a non-random key strategy
+            let is_non_random_key = match args.key.as_ref().map(|k| k.as_str()) {
+                Some("lexical") | Some("hash") | Some("value_hash") => true,
+                _ => false,
+            };
+            
+            if is_non_random_key {
+                // For non-random keys, we've validated the field is Option<String>
+                quote! {
+                    self.#ident.clone()
+                }
+            } else {
+                // For random keys or no key, wrap non-Option fields in Some()
+                quote! {
+                    Some(self.#ident.clone())
+                }
             }
         }
     };

@@ -20,10 +20,23 @@ pub fn generate_totdbschema_impl(
     let key = if let Some(key) = &opts.key {
         match key.as_str() {
             "random" => quote! { terminusdb_schema::Key::Random },
-            "hash" => quote! { terminusdb_schema::Key::Hash(vec!["id".to_string()]) },
+            "hash" => {
+                if let Some(fields) = opts.get_key_fields() {
+                    let field_strings = fields.iter().map(|f| quote! { #f.to_string() });
+                    quote! { terminusdb_schema::Key::Hash(vec![#(#field_strings),*]) }
+                } else {
+                    quote! { terminusdb_schema::Key::Hash(vec!["id".to_string()]) }
+                }
+            }
             "value_hash" => quote! { terminusdb_schema::Key::ValueHash },
-            // todo: allow configuring fields using attr
-            "lexical" => quote! { terminusdb_schema::Key::Lexical(vec!["id".to_string()]) },
+            "lexical" => {
+                if let Some(fields) = opts.get_key_fields() {
+                    let field_strings = fields.iter().map(|f| quote! { #f.to_string() });
+                    quote! { terminusdb_schema::Key::Lexical(vec![#(#field_strings),*]) }
+                } else {
+                    quote! { terminusdb_schema::Key::Lexical(vec!["id".to_string()]) }
+                }
+            }
             _ => quote! { terminusdb_schema::Key::Random },
         }
     } else {

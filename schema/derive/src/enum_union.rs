@@ -314,6 +314,7 @@ fn generate_virtual_structs(
                         original_input: None,
                         id_field: None,
                         rename_all: None,
+                        key_fields: None,
                     },
                     quote! { None },
                     quote! { SchemaTypeClass },
@@ -375,6 +376,7 @@ fn generate_virtual_structs(
                         original_input: None,
                         id_field: None,
                         rename_all: None,
+                        key_fields: None,
                     },
                 );
 
@@ -427,6 +429,7 @@ fn generate_virtual_structs(
                     // todo: should this be configurable?
                     id_field: None,
                     rename_all: None,
+                    key_fields: None,
                 };
 
                 // Process the struct fields to generate instance conversions
