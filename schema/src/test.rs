@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn test_lazy_with_reference_only() {
         // Create a TdbLazy directly with just an ID for testing reference behavior
-        let mut lazy = TdbLazy::<Activity>::new(EntityIDFor::new("activity1").unwrap(), None);
+        let mut lazy = TdbLazy::<Activity>::new(Some(EntityIDFor::new("activity1").unwrap()), None);
         assert_eq!(lazy.id().id(), "activity1");
 
         // Data should be loaded on demand
@@ -683,7 +683,7 @@ mod tests {
         let instance = create_test_instance(None, Some("Activity".to_string()), vec![]);
 
         // Test creating a TdbLazy directly with empty string ID (should be invalid)
-        let mut lazy = TdbLazy::<Activity>::new(EntityIDFor::new("").unwrap(), None);
+        let mut lazy = TdbLazy::<Activity>::new(Some(EntityIDFor::new("").unwrap()), None);
         let client = MockClient;
 
         // This should fail when we try to get the activity because the ID is empty
@@ -692,7 +692,7 @@ mod tests {
 
         // Test with invalid instance reference
         let non_existent_id = "non_existent_activity_id";
-        let mut lazy = TdbLazy::<Activity>::new(EntityIDFor::new(non_existent_id).unwrap(), None);
+        let mut lazy = TdbLazy::<Activity>::new(Some(EntityIDFor::new(non_existent_id).unwrap()), None);
 
         // Try to load a non-existent activity
         let result = lazy.get(&client);
@@ -849,3 +849,91 @@ fn test_optional_entity_id_compiles_and_works() {
     // If we get here, everything works correctly
     assert!(true, "Option<EntityIDFor<Self>> works without stack overflow!");
 }
+
+#[test]
+fn test_tdb_lazy_with_lexical_key() {
+    use crate::{TdbLazy, ToTDBInstance, FromTDBInstance};
+    
+    // Define a model with lexical key
+    #[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
+    #[tdb(key = "lexical", key_fields = "email")]
+    pub struct LexicalUser {
+        pub email: String,
+        pub name: String,
+    }
+    
+    // Create a user without an ID (will be server-generated)
+    let user = LexicalUser {
+        email: "test@example.com".to_string(),
+        name: "Test User".to_string(),
+    };
+    
+    // Create TdbLazy from data - should work without ID
+    let lazy_result = TdbLazy::new_data(user.clone());
+    assert!(lazy_result.is_ok(), "Should be able to create TdbLazy without ID for lexical key model");
+    
+    let mut lazy = lazy_result.unwrap();
+    
+    // But we should be able to access the data first
+    assert_eq!(lazy.get_expect().email, "test@example.com");
+    assert_eq!(lazy.get_expect().name, "Test User");
+    
+    // Create another lazy for testing id() panic
+    let lazy2 = TdbLazy::new_data(user.clone()).unwrap();
+    
+    // Accessing id() should panic since there's no ID yet
+    let id_result = std::panic::catch_unwind(|| {
+        lazy2.id();
+    });
+    assert!(id_result.is_err(), "id() should panic when ID is None");
+    
+    // Test ToInstanceProperty - should include full instance when data is loaded
+    use crate::{ToInstanceProperty, Schema, Key};
+    let schema = Schema::Class {
+        id: "TestParent".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: false,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![],
+        unfoldable: false,
+    };
+    
+    // Create another lazy for ToInstanceProperty test since to_property consumes self
+    let lazy3 = TdbLazy::new_data(user.clone()).unwrap();
+    let prop = <TdbLazy<LexicalUser> as ToInstanceProperty<Schema>>::to_property(lazy3, "user", &schema);
+    match prop {
+        InstanceProperty::Relation(RelationValue::One(instance)) => {
+            // The instance should have no ID
+            assert!(instance.id.is_none(), "Instance should have no ID for lexical key without ID");
+        }
+        _ => panic!("Expected Relation::One for loaded TdbLazy")
+    }
+    
+    // Test creating TdbLazy with just an ID (for existing entities)
+    let lazy_with_id = TdbLazy::<LexicalUser>::new(
+        Some(EntityIDFor::new("LexicalUser/test@example.com").unwrap()),
+        None
+    );
+    
+    // This should work and return the ID
+    assert_eq!(lazy_with_id.id().to_string(), "LexicalUser/test@example.com");
+    
+    // Test FromTDBInstance with no ID
+    let instance_no_id = user.to_instance(None);
+    assert!(instance_no_id.id.is_none());
+    
+    let lazy_from_instance = TdbLazy::<LexicalUser>::from_instance(&instance_no_id).unwrap();
+    
+    // Should panic when accessing ID
+    let id_result2 = std::panic::catch_unwind(|| {
+        lazy_from_instance.id();
+    });
+    assert!(id_result2.is_err(), "id() should panic for instance without ID");
+    
+    // But data should be available
+    assert_eq!(lazy_from_instance.get_expect().email, "test@example.com");
+}
+

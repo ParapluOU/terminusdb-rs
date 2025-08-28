@@ -307,7 +307,8 @@ impl Instance {
                 todo!()
             }
             Some(Key::Lexical(_)) => {
-                todo!()
+                // For lexical keys, ID is server-generated based on key fields
+                None
             }
             Some(Key::ValueHash) => {
                 todo!()

@@ -14,12 +14,12 @@ use std::convert::TryInto;
 /// Lazy loading container for TerminusDB instances
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TdbLazy<T: TerminusDBModel> {
-    id: EntityIDFor<T>,
+    id: Option<EntityIDFor<T>>,
     data: Option<Box<T>>,
 }
 
 impl<T: TerminusDBModel> TdbLazy<T> {
-    pub fn new(id: EntityIDFor<T>, data: Option<T>) -> Self {
+    pub fn new(id: Option<EntityIDFor<T>>, data: Option<T>) -> Self {
         Self {
             id,
             data: data.map(Box::new),
@@ -28,28 +28,32 @@ impl<T: TerminusDBModel> TdbLazy<T> {
 
     pub fn new_id(id: &str) -> anyhow::Result<Self> {
         Ok(Self {
-            id: EntityIDFor::new(&id)?,
+            id: Some(EntityIDFor::new(&id)?),
             data: None,
         })
     }
 
     pub fn new_id_unchecked(id: &str) -> Self {
-        (Self {
-            id: EntityIDFor::new(&id).unwrap(),
+        Self {
+            id: Some(EntityIDFor::new(&id).unwrap()),
             data: None,
-        })
+        }
     }
 
     pub fn new_data(data: T) -> anyhow::Result<Self> {
-        data.instance_id()
-            .ok_or(anyhow!("could not derive ID"))
-            .and_then(|id| Ok(Self::new(id, Some(data))))
+        // Try to get the ID, but it's ok if it's not available (e.g., for lexical keys)
+        let id = data.instance_id();
+        Ok(Self::new(id, Some(data)))
     }
 
     pub fn get(&mut self, client: &impl Client) -> Result<&T, anyhow::Error> {
         if self.data.is_none() {
+            // We need an ID to fetch data
+            let id = self.id.as_ref()
+                .ok_or_else(|| anyhow!("Cannot fetch data: TdbLazy has neither data nor ID"))?;
+            
             // Fetch the data from the store
-            let instance = client.get_instance(&self.id.typed())?;
+            let instance = client.get_instance(&id.typed())?;
             let data = T::from_instance(&instance)?;
             self.data = Some(Box::new(data));
         }
@@ -59,7 +63,8 @@ impl<T: TerminusDBModel> TdbLazy<T> {
     }
 
     pub fn id(&self) -> &EntityIDFor<T> {
-        &self.id
+        self.id.as_ref()
+            .expect("TdbLazy ID is None - this typically happens with lexical key models before they are saved")
     }
 
     pub fn is_loaded(&self) -> bool {
@@ -94,7 +99,7 @@ impl<T: TerminusDBModel> From<T> for TdbLazy<T> {
 
 impl<T: TerminusDBModel> From<EntityIDFor<T>> for TdbLazy<T> {
     fn from(id: EntityIDFor<T>) -> Self {
-        Self::new(id, None)
+        Self::new(Some(id), None)
     }
 }
 
@@ -172,14 +177,20 @@ impl<T: TerminusDBModel> ToTDBSchema for TdbLazy<T> {
 impl<Parent, T: TerminusDBModel> ToInstanceProperty<Parent> for TdbLazy<T> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         if self.is_loaded() {
+            // When loaded, pass the ID if available (it might be None for lexical keys)
+            let id = self.id.as_ref().map(|id| id.to_string());
             InstanceProperty::Relation(RelationValue::One(
                 self.data
                     .as_ref()
                     .unwrap()
-                    .to_instance(Some((*self.id).clone())),
+                    .to_instance(id),
             ))
         } else {
-            InstanceProperty::Relation(RelationValue::ExternalReference(self.id.to_string()))
+            // When not loaded, we need an ID to reference
+            match self.id.as_ref() {
+                Some(id) => InstanceProperty::Relation(RelationValue::ExternalReference(id.to_string())),
+                None => panic!("Cannot convert TdbLazy to property: has neither data nor ID")
+            }
         }
     }
 }
@@ -239,13 +250,13 @@ impl<T: TerminusDBModel> FromInstanceProperty for TdbLazy<T> {
     fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
         match prop {
             InstanceProperty::Primitive(PrimitiveValue::String(id)) => {
-                Ok(Self::new(id.try_into()?, None))
+                Ok(Self::new(Some(id.try_into()?), None))
             }
             InstanceProperty::Relation(RelationValue::One(one)) => {
                 Ok(Self::new_data(T::from_instance(one)?)?)
             }
             InstanceProperty::Relation(RelationValue::ExternalReference(r)) => {
-                Ok(Self::new(r.try_into()?, None))
+                Ok(Self::new(Some(r.try_into()?), None))
             }
             _ => {
                 bail!(
@@ -268,7 +279,11 @@ impl<T: TerminusDBModel> ToTDBInstance for TdbLazy<T> {
         if self.is_loaded() {
             self.data.as_ref().unwrap().to_instance(id)
         } else {
-            Instance::new_reference::<T>(&self.id)
+            // When not loaded, we need an ID to create a reference
+            match self.id.as_ref() {
+                Some(ref_id) => Instance::new_reference::<T>(&ref_id.to_string()),
+                None => panic!("Cannot create instance reference: TdbLazy has neither data nor ID")
+            }
         }
     }
 }
@@ -290,14 +305,21 @@ impl<T: TerminusDBModel> std::hash::Hash for TdbLazy<T> {
 impl<T: TerminusDBModel> FromTDBInstance for TdbLazy<T> {
     fn from_instance(instance: &Instance) -> anyhow::Result<Self> {
         if instance.is_reference() {
-            return Ok(Self::new(instance.id().unwrap().try_into()?, None));
+            // For references, we need an ID
+            match instance.id() {
+                Some(id) => Ok(Self::new(Some(id.try_into()?), None)),
+                None => bail!("Cannot create TdbLazy from reference without ID")
+            }
+        } else {
+            // For full instances, create from data
+            let inst = T::from_instance(instance)?;
+            let mut lazy = Self::new_data(inst)?;
+            // Update the ID if the instance has one
+            if let Some(id) = instance.id() {
+                lazy.id = Some(id.try_into()?);
+            }
+            Ok(lazy)
         }
-        let inst = T::from_instance(instance)?;
-        let mut lazy = Self::new_data(inst)?;
-        if let Some(id) = instance.id() {
-            lazy.id = id.try_into()?;
-        }
-        Ok(lazy)
     }
 }
 
