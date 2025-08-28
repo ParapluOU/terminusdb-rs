@@ -78,29 +78,35 @@ fn test_valid_no_id_field() {
     }
 }
 
-// The following would fail compilation if uncommented:
-/*
-// Invalid: String with lexical key
+// The following are now valid (previously would fail compilation):
+// The runtime validation in HttpClient will ensure these don't have IDs set for non-Random keys
+
+// Valid: String with lexical key (runtime validation enforced)
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "name", id_field = "id")]
-pub struct InvalidLexicalWithString {
-    pub id: String, // This should be Option<String>
+pub struct LexicalWithString {
+    pub id: String, // Now allowed, but runtime will panic if ID is set
     pub name: String,
 }
 
-// Invalid: String with hash key
+// Valid: EntityIDFor with hash key
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email", id_field = "id")]
-pub struct InvalidHashWithString {
-    pub id: String, // This should be Option<String>
+pub struct HashWithEntityIDFor {
+    pub id: terminusdb_schema::EntityIDFor<Self>,
     pub email: String,
 }
 
-// Invalid: String with value_hash key
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
-#[tdb(key = "value_hash", id_field = "id")]
-pub struct InvalidValueHashWithString {
-    pub id: String, // This should be Option<String>
-    pub data: String,
+#[test]
+fn test_string_id_with_lexical_key_compiles() {
+    // This now compiles, but runtime validation will prevent setting an ID
+    let instance = LexicalWithString {
+        id: String::new(), // Empty string for unset ID
+        name: "Test".to_string(),
+    };
+    
+    // The to_instance method will extract the ID properly
+    let tdb_instance = instance.to_instance(None);
+    // For a String field with empty value, the schema class prefix is added
+    assert_eq!(tdb_instance.id, Some("LexicalWithString/".to_string()));
 }
-*/

@@ -2564,6 +2564,7 @@ dependencies = [
  "terminusdb-schema-derive",
  "tokio 1.45.1",
  "tokio-test",
+ "tracing",
  "typestate",
  "urlencoding",
  "uuid",

@@ -20,21 +20,26 @@ pub fn generate_totdbinstance_impl(
         }
         Some(field_name) => {
             let ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
-            // Check if we're using a non-random key strategy
-            let is_non_random_key = match args.key.as_ref().map(|k| k.as_str()) {
-                Some("lexical") | Some("hash") | Some("value_hash") => true,
-                _ => false,
-            };
             
-            if is_non_random_key {
-                // For non-random keys, we've validated the field is Option<String>
-                quote! {
-                    self.#ident.clone()
-                }
-            } else {
-                // For random keys or no key, wrap non-Option fields in Some()
-                quote! {
-                    Some(self.#ident.clone())
+            // Convert the id field to Option<String> using ToInstanceProperty
+            // This works for any type that implements ToInstanceProperty
+            quote! {
+                match <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
+                    self.#ident.clone(), 
+                    "id", 
+                    &schema
+                ) {
+                    terminusdb_schema::InstanceProperty::Primitive(
+                        terminusdb_schema::PrimitiveValue::String(s)
+                    ) => Some(s),
+                    terminusdb_schema::InstanceProperty::Primitive(
+                        terminusdb_schema::PrimitiveValue::Null
+                    ) => None,
+                    // Handle EntityIDFor case - it produces a Relation
+                    terminusdb_schema::InstanceProperty::Relation(
+                        terminusdb_schema::RelationValue::ExternalReference(id)
+                    ) => Some(id),
+                    _ => None
                 }
             }
         }
