@@ -101,16 +101,6 @@ impl super::client::TerminusDBHttpClient {
             .to_instance_tree_flatten(true)
             .into_iter()
             .map(|mut i| {
-                // Validate key generation strategy
-                if !matches!(i.schema.key(), Some(Key::Random) | None) && i.has_id() {
-                    panic!(
-                        "Model '{}' uses {:?} key generation strategy and cannot have an @id field set. \
-                         The ID will be automatically generated based on the key strategy.",
-                        i.schema.class_name(),
-                        i.schema.key()
-                    );
-                }
-                
                 i.set_random_key_prefix();
                 i.capture = true;
                 i
@@ -937,16 +927,6 @@ impl super::client::TerminusDBHttpClient {
         let mut instances = models.into_boxed().to_instance_tree_flatten(true);
 
         for instance in &mut instances {
-            // Validate key generation strategy
-            if !matches!(instance.schema.key(), Some(Key::Random) | None) && instance.has_id() {
-                panic!(
-                    "Model '{}' uses {:?} key generation strategy and cannot have an @id field set. \
-                     The ID will be automatically generated based on the key strategy.",
-                    instance.schema.class_name(),
-                    instance.schema.key()
-                );
-            }
-            
             instance.set_random_key_prefix();
             // instance.ref_props = false; // todo: make configurable
             instance.capture = true;

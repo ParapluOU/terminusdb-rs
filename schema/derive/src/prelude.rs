@@ -17,3 +17,14 @@ pub fn is_option_type(ty: &syn::Type) -> bool {
     }
     false
 }
+
+/// Check if a type is ServerIDFor<T>
+pub fn is_server_id_for_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(typepath) = ty {
+        if typepath.path.segments.len() == 1 {
+            let segment = &typepath.path.segments[0];
+            return segment.ident == "ServerIDFor";
+        }
+    }
+    false
+}

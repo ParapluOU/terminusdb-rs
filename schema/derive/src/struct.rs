@@ -2,7 +2,7 @@ use crate::instance::{generate_totdbinstance_impl, process_fields_for_instance};
 use crate::prelude::*;
 use crate::schema::generate_totdbschema_impl;
 
-/// Validate that id_field exists when specified
+/// Validate that id_field exists when specified and has the correct type for the key strategy
 fn validate_id_field_type(
     fields_named: &FieldsNamed,
     opts: &TDBModelOpts,
@@ -10,7 +10,7 @@ fn validate_id_field_type(
     // Only validate if id_field is specified
     if let Some(ref id_field_name) = opts.id_field {
         // Find the field with the matching name
-        fields_named
+        let field = fields_named
             .named
             .iter()
             .find(|f| f.ident.as_ref().map(|i| i.to_string()) == Some(id_field_name.clone()))
@@ -21,11 +21,31 @@ fn validate_id_field_type(
                 )
             })?;
         
-        // Note: We no longer enforce Option<T> type requirement here.
-        // The field just needs to implement ToInstanceProperty, which will be 
-        // checked at compile time when the generated code is compiled.
-        // For non-Random keys, the runtime validation in HttpClient will ensure
-        // that no ID is set before insertion.
+        // Check if the key strategy is non-Random
+        let key_strategy = opts.key.as_ref().map(|s| s.as_str());
+        let is_non_random_key = match key_strategy {
+            Some("random") | None => false, // Random is the default
+            Some("lexical") | Some("hash") | Some("value_hash") => true,
+            Some(other) => {
+                return Err(syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    format!("Unknown key strategy: {}", other),
+                ));
+            }
+        };
+        
+        // For non-Random keys, enforce that id_field is ServerIDFor<T>
+        if is_non_random_key && !is_server_id_for_type(&field.ty) {
+            return Err(syn::Error::new(
+                field.ty.span(),
+                format!(
+                    "id_field '{}' must be of type ServerIDFor<Self> when using '{}' key strategy. \
+                     ServerIDFor is required for server-generated IDs with non-Random key strategies.",
+                    id_field_name,
+                    key_strategy.unwrap()
+                ),
+            ));
+        }
     }
     Ok(())
 }

@@ -781,7 +781,7 @@ pub struct ModelWithOptionalEntityID {
 #[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
 #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 pub struct UserWithOptionalEntityID {
-    pub id: Option<EntityIDFor<Self>>, // Self-referential, as used in real code
+    pub id: ServerIDFor<Self>, // Updated to use ServerIDFor for lexical key
     pub email: String,
     pub username: String,
 }
@@ -816,18 +816,19 @@ fn test_optional_entity_id_compiles_and_works() {
     let instance2 = _model2.to_instance(None); 
     assert!(instance2.id.is_none(), "Model with None EntityIDFor should not have ID");
     
-    // Test lexical key model - it should panic if ID is set
+    // Test lexical key model with ServerIDFor
     let _user_with_id = UserWithOptionalEntityID {
-        id: Some(EntityIDFor::new("user-456").unwrap()),
+        id: ServerIDFor::from_entity_id(EntityIDFor::new("user-456").unwrap()),
         email: "test@example.com".to_string(),
         username: "testuser".to_string(),
     };
-    // Note: We don't call to_instance on _user_with_id because it would trigger
-    // runtime validation panic for non-Random key with ID set
+    // With ServerIDFor, this is now allowed and won't panic
+    let instance_with_id = _user_with_id.to_instance(None);
+    assert!(instance_with_id.id.is_some());
     
-    // This should work fine with None ID
+    // This should work fine with empty ServerIDFor
     let user_without_id = UserWithOptionalEntityID {
-        id: None,
+        id: ServerIDFor::new(),
         email: "test2@example.com".to_string(),  
         username: "testuser2".to_string(),
     };
