@@ -485,13 +485,6 @@ impl<T: ToTDBSchema> Clone for ServerIDFor<T> {
     }
 }
 
-// Default implementation - creates an empty ServerIDFor
-impl<T: ToTDBSchema> Default for ServerIDFor<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // PartialEq implementation
 impl<T: ToTDBSchema> PartialEq for ServerIDFor<T> {
     fn eq(&self, other: &Self) -> bool {
