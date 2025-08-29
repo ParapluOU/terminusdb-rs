@@ -1,7 +1,7 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel,
-    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, STRING, URI,
+    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, TypeFamily, STRING, URI,
 };
 use anyhow::{anyhow, bail};
 use rocket::form::{self, FromFormField, ValueField};
@@ -403,6 +403,255 @@ impl<'r, T: ToTDBSchema + Send> FromFormField<'r> for EntityIDFor<T> {
     }
 }
 
+/// A server-managed ID that wraps Option<EntityIDFor<T>> but is read-only for users.
+/// This type can only be set by the HTTP client when retrieving models from the server.
+#[derive(Debug, Default)]
+pub struct ServerIDFor<T: ToTDBSchema> {
+    /// The internal ID, which may be None for new instances
+    inner: Option<EntityIDFor<T>>,
+}
+
+impl<T: ToTDBSchema> ServerIDFor<T> {
+    /// Creates a new empty ServerIDFor (for new instances without an ID yet)
+    pub fn new() -> Self {
+        Self { inner: None }
+    }
+
+    /// Creates a ServerIDFor from an existing EntityIDFor
+    /// This is marked with doc(hidden) as it should only be used internally
+    #[doc(hidden)]
+    pub fn from_entity_id(id: EntityIDFor<T>) -> Self {
+        Self { inner: Some(id) }
+    }
+
+    /// Creates a ServerIDFor from an Option<EntityIDFor>
+    /// This is marked with doc(hidden) as it should only be used internally
+    #[doc(hidden)]
+    pub fn from_option(id: Option<EntityIDFor<T>>) -> Self {
+        Self { inner: id }
+    }
+
+    /// Sets the ID from the server. This method is intentionally doc(hidden)
+    /// as it should only be used by the client crate when retrieving instances.
+    /// Users should not be able to modify ServerIDFor values directly.
+    #[doc(hidden)]
+    pub fn __set_from_server(&mut self, id: EntityIDFor<T>) {
+        self.inner = Some(id);
+    }
+
+    /// Sets the ID from the server using an Option. This method is intentionally doc(hidden)
+    /// as it should only be used by the client crate when retrieving instances.
+    #[doc(hidden)]
+    pub fn __set_from_server_option(&mut self, id: Option<EntityIDFor<T>>) {
+        self.inner = id;
+    }
+
+    /// Gets the inner Option<EntityIDFor<T>> for cases where direct access is needed
+    pub fn as_option(&self) -> &Option<EntityIDFor<T>> {
+        &self.inner
+    }
+
+    /// Checks if the ID is set
+    pub fn is_some(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    /// Checks if the ID is not set
+    pub fn is_none(&self) -> bool {
+        self.inner.is_none()
+    }
+
+    /// Gets the ID if present
+    pub fn as_ref(&self) -> Option<&EntityIDFor<T>> {
+        self.inner.as_ref()
+    }
+}
+
+// Implement Deref to allow transparent access to the Option<EntityIDFor<T>>
+impl<T: ToTDBSchema> Deref for ServerIDFor<T> {
+    type Target = Option<EntityIDFor<T>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+// Clone implementation
+impl<T: ToTDBSchema> Clone for ServerIDFor<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+// Default implementation - creates an empty ServerIDFor
+impl<T: ToTDBSchema> Default for ServerIDFor<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// PartialEq implementation
+impl<T: ToTDBSchema> PartialEq for ServerIDFor<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<T: ToTDBSchema> Eq for ServerIDFor<T> {}
+
+// Hash implementation
+impl<T: ToTDBSchema> Hash for ServerIDFor<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.inner.hash(state);
+    }
+}
+
+// Display implementation
+impl<T: ToTDBSchema> fmt::Display for ServerIDFor<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.inner {
+            Some(id) => write!(f, "{}", id),
+            None => write!(f, "None"),
+        }
+    }
+}
+
+// Serialize implementation - serializes transparently as Option<EntityIDFor<T>>
+impl<T: ToTDBSchema> Serialize for ServerIDFor<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.inner.serialize(serializer)
+    }
+}
+
+// Deserialize implementation - deserializes from Option<EntityIDFor<T>>
+impl<'de, T: ToTDBSchema> Deserialize<'de> for ServerIDFor<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let inner = Option::<EntityIDFor<T>>::deserialize(deserializer)?;
+        Ok(Self { inner })
+    }
+}
+
+// ToTDBSchema implementation - delegates to EntityIDFor
+impl<T: ToTDBSchema> ToTDBSchema for ServerIDFor<T> {
+    fn to_schema_tree() -> Vec<Schema> {
+        EntityIDFor::<T>::to_schema_tree()
+    }
+
+    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+        EntityIDFor::<T>::to_schema_tree_mut(collection);
+    }
+
+    fn id() -> Option<String> {
+        // ServerIDFor doesn't have its own ID, it delegates to T
+        T::id()
+    }
+
+    fn properties() -> Option<Vec<Property>> {
+        EntityIDFor::<T>::properties()
+    }
+
+    fn values() -> Option<Vec<URI>> {
+        EntityIDFor::<T>::values()
+    }
+}
+
+// ToSchemaProperty implementation - treats it as an optional string property
+impl<T: ToTDBSchema, Parent> ToSchemaProperty<Parent> for ServerIDFor<T> {
+    fn to_property(prop_name: &str) -> Property {
+        // Same as Option<EntityIDFor<T>> would be - an optional string
+        Property {
+            name: prop_name.to_string(),
+            r#type: Some(TypeFamily::Optional),
+            class: STRING.to_string(),
+        }
+    }
+}
+
+// ToInstanceProperty implementation
+impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for ServerIDFor<T> {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        match self.inner {
+            Some(id) => {
+                <EntityIDFor<T> as ToInstanceProperty<Parent>>::to_property(id, field_name, parent)
+            }
+            None => InstanceProperty::Primitive(PrimitiveValue::Null),
+        }
+    }
+}
+
+// FromInstanceProperty implementation
+impl<T: ToTDBSchema> FromInstanceProperty for ServerIDFor<T> {
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitive(PrimitiveValue::Null) => Ok(Self { inner: None }),
+            InstanceProperty::Primitive(PrimitiveValue::String(id)) => {
+                let entity_id = EntityIDFor::new(id)?;
+                Ok(Self {
+                    inner: Some(entity_id),
+                })
+            }
+            _ => bail!(
+                "expected InstanceProperty::Primitive(PrimitiveValue::Null) or InstanceProperty::Primitive(PrimitiveValue::String), got: {:#?}",
+                prop
+            ),
+        }
+    }
+}
+
+impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for ServerIDFor<T> {
+    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+        match &json {
+            Value::Null => Ok(InstanceProperty::Primitive(PrimitiveValue::Null)),
+            Value::String(id) => Ok(InstanceProperty::Primitive(PrimitiveValue::String(
+                id.clone(),
+            ))),
+            _ => bail!("expected null or String for ServerIDFor, got: {:#?}", json),
+        }
+    }
+}
+
+// Rocket FromParam implementation
+impl<T: ToTDBSchema> FromParam<'_> for ServerIDFor<T> {
+    type Error = anyhow::Error;
+
+    fn from_param(param: &'_ str) -> Result<Self, Self::Error> {
+        // URL decode the parameter first
+        let decoded = urlencoding::decode(param)
+            .map_err(|e| anyhow!("Failed to URL decode parameter: {}", e))?;
+
+        // Parse as EntityIDFor
+        let entity_id = EntityIDFor::new(&decoded)?;
+        Ok(Self {
+            inner: Some(entity_id),
+        })
+    }
+}
+
+// Rocket FromFormField implementation
+impl<'r, T: ToTDBSchema + Send> FromFormField<'r> for ServerIDFor<T> {
+    fn from_value(field: ValueField<'r>) -> form::Result<'r, Self> {
+        // Try to parse as EntityIDFor
+        match EntityIDFor::<T>::new(field.value) {
+            Ok(entity_id) => Ok(Self {
+                inner: Some(entity_id),
+            }),
+            Err(e) => Err(form::Error::validation(format!(
+                "Invalid ServerIDFor<{}>: {}",
+                T::schema_name(),
+                e
+            )))?,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,5 +821,208 @@ mod tests {
         let entity_id = result.unwrap();
         assert_eq!(entity_id.id(), "91011");
         assert_eq!(entity_id.typed(), "TestEntity/91011");
+    }
+
+    // ServerIDFor tests
+    #[test]
+    fn test_server_id_for_new() {
+        let server_id: ServerIDFor<TestEntity> = ServerIDFor::new();
+        assert!(server_id.is_none());
+        assert!(!server_id.is_some());
+        assert_eq!(server_id.as_ref(), None);
+    }
+
+    #[test]
+    fn test_server_id_for_from_entity_id() {
+        let entity_id = EntityIDFor::<TestEntity>::new("123").unwrap();
+        let server_id = ServerIDFor::from_entity_id(entity_id.clone());
+        assert!(server_id.is_some());
+        assert_eq!(server_id.as_ref(), Some(&entity_id));
+        assert_eq!(server_id.as_ref().unwrap().id(), "123");
+    }
+
+    #[test]
+    fn test_server_id_for_from_option() {
+        // Test with Some
+        let entity_id = EntityIDFor::<TestEntity>::new("456").unwrap();
+        let server_id = ServerIDFor::from_option(Some(entity_id.clone()));
+        assert!(server_id.is_some());
+        assert_eq!(server_id.as_ref(), Some(&entity_id));
+
+        // Test with None
+        let server_id_none: ServerIDFor<TestEntity> = ServerIDFor::from_option(None);
+        assert!(server_id_none.is_none());
+    }
+
+    #[test]
+    fn test_server_id_for_deref() {
+        let entity_id = EntityIDFor::<TestEntity>::new("789").unwrap();
+        let server_id = ServerIDFor::from_entity_id(entity_id.clone());
+
+        // Test deref
+        let deref_result: &Option<EntityIDFor<TestEntity>> = &*server_id;
+        assert_eq!(deref_result, &Some(entity_id));
+    }
+
+    #[test]
+    fn test_server_id_for_clone() {
+        let entity_id = EntityIDFor::<TestEntity>::new("abc").unwrap();
+        let server_id = ServerIDFor::from_entity_id(entity_id);
+        let cloned = server_id.clone();
+        assert_eq!(server_id, cloned);
+    }
+
+    #[test]
+    fn test_server_id_for_default() {
+        let server_id: ServerIDFor<TestEntity> = Default::default();
+        assert!(server_id.is_none());
+    }
+
+    #[test]
+    fn test_server_id_for_equality() {
+        let entity_id1 = EntityIDFor::<TestEntity>::new("123").unwrap();
+        let entity_id2 = EntityIDFor::<TestEntity>::new("123").unwrap();
+        let entity_id3 = EntityIDFor::<TestEntity>::new("456").unwrap();
+
+        let server_id1 = ServerIDFor::from_entity_id(entity_id1);
+        let server_id2 = ServerIDFor::from_entity_id(entity_id2);
+        let server_id3 = ServerIDFor::from_entity_id(entity_id3);
+
+        assert_eq!(server_id1, server_id2);
+        assert_ne!(server_id1, server_id3);
+    }
+
+    #[test]
+    fn test_server_id_for_display() {
+        let entity_id = EntityIDFor::<TestEntity>::new("display-test").unwrap();
+        let server_id = ServerIDFor::from_entity_id(entity_id);
+        assert_eq!(server_id.to_string(), "TestEntity/display-test");
+
+        let server_id_none: ServerIDFor<TestEntity> = ServerIDFor::new();
+        assert_eq!(server_id_none.to_string(), "None");
+    }
+
+    #[test]
+    fn test_server_id_for_serialize_deserialize() {
+        use serde_json;
+
+        // Test with Some
+        let entity_id = EntityIDFor::<TestEntity>::new("ser-test").unwrap();
+        let server_id = ServerIDFor::from_entity_id(entity_id);
+
+        let json = serde_json::to_value(&server_id).unwrap();
+        assert_eq!(json, serde_json::json!("TestEntity/ser-test"));
+
+        let deserialized: ServerIDFor<TestEntity> = serde_json::from_value(json).unwrap();
+        assert_eq!(server_id, deserialized);
+
+        // Test with None
+        let server_id_none: ServerIDFor<TestEntity> = ServerIDFor::new();
+        let json_none = serde_json::to_value(&server_id_none).unwrap();
+        assert_eq!(json_none, serde_json::json!(null));
+
+        let deserialized_none: ServerIDFor<TestEntity> = serde_json::from_value(json_none).unwrap();
+        assert_eq!(server_id_none, deserialized_none);
+    }
+
+    #[test]
+    fn test_server_id_for_from_instance_property() {
+        // Test with string
+        let prop =
+            InstanceProperty::Primitive(PrimitiveValue::String("TestEntity/prop-test".to_string()));
+        let server_id = ServerIDFor::<TestEntity>::from_property(&prop).unwrap();
+        assert!(server_id.is_some());
+        assert_eq!(server_id.as_ref().unwrap().id(), "prop-test");
+
+        // Test with null
+        let prop_null = InstanceProperty::Primitive(PrimitiveValue::Null);
+        let server_id_null = ServerIDFor::<TestEntity>::from_property(&prop_null).unwrap();
+        assert!(server_id_null.is_none());
+    }
+
+    #[test]
+    fn test_server_id_for_to_instance_property() {
+        let entity_id = EntityIDFor::<TestEntity>::new("to-prop").unwrap();
+        let server_id = ServerIDFor::from_entity_id(entity_id);
+        let schema = Schema::Class {
+            id: "TestEntity".to_string(),
+            base: None,
+            key: Key::Random,
+            documentation: None,
+            subdocument: false,
+            r#abstract: false,
+            inherits: vec![],
+            unfoldable: false,
+            properties: vec![],
+        };
+
+        let prop = <ServerIDFor<TestEntity> as ToInstanceProperty<TestEntity>>::to_property(
+            server_id, "id", &schema,
+        );
+        match prop {
+            InstanceProperty::Primitive(PrimitiveValue::String(s)) => {
+                assert_eq!(s, "TestEntity/to-prop");
+            }
+            _ => panic!("Expected string property"),
+        }
+
+        // Test with None
+        let server_id_none: ServerIDFor<TestEntity> = ServerIDFor::new();
+        let prop_none = <ServerIDFor<TestEntity> as ToInstanceProperty<TestEntity>>::to_property(
+            server_id_none,
+            "id",
+            &schema,
+        );
+        assert_eq!(prop_none, InstanceProperty::Primitive(PrimitiveValue::Null));
+    }
+
+    #[test]
+    fn test_server_id_for_from_param() {
+        use rocket::request::FromParam;
+
+        // Simple ID
+        let result = ServerIDFor::<TestEntity>::from_param("simple-id");
+        assert!(result.is_ok());
+        let server_id = result.unwrap();
+        assert_eq!(server_id.as_ref().unwrap().id(), "simple-id");
+
+        // Typed ID
+        let result_typed = ServerIDFor::<TestEntity>::from_param("TestEntity/typed-id");
+        assert!(result_typed.is_ok());
+        let server_id_typed = result_typed.unwrap();
+        assert_eq!(server_id_typed.as_ref().unwrap().id(), "typed-id");
+
+        // URL encoded
+        let encoded = urlencoding::encode("TestEntity/with space");
+        let result_encoded = ServerIDFor::<TestEntity>::from_param(&encoded);
+        assert!(result_encoded.is_ok());
+        let server_id_encoded = result_encoded.unwrap();
+        assert_eq!(server_id_encoded.as_ref().unwrap().id(), "with space");
+    }
+
+    #[test]
+    fn test_server_id_for_from_form_field() {
+        use rocket::form::FromFormField;
+        use rocket::form::ValueField;
+
+        // Simple ID
+        let field = ValueField {
+            name: rocket::form::name::NameView::new("id"),
+            value: "form-id",
+        };
+
+        let result = ServerIDFor::<TestEntity>::from_value(field);
+        assert!(result.is_ok());
+        let server_id = result.unwrap();
+        assert_eq!(server_id.as_ref().unwrap().id(), "form-id");
+
+        // Wrong type
+        let field_wrong = ValueField {
+            name: rocket::form::name::NameView::new("id"),
+            value: "WrongType/123",
+        };
+
+        let result_wrong = ServerIDFor::<TestEntity>::from_value(field_wrong);
+        assert!(result_wrong.is_err());
     }
 }

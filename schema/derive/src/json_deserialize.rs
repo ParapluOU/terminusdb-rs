@@ -83,7 +83,7 @@ fn implement_instance_from_json_for_struct(
     };
 
     let field_deserializers =
-        generate_field_deserializers(fields, struct_name, &expected_type_name)?;
+        generate_field_deserializers(fields, struct_name, &expected_type_name, opts)?;
 
     let expanded = quote! {
         impl terminusdb_schema::json::InstanceFromJson for #struct_name {
@@ -428,6 +428,7 @@ fn generate_field_deserializers(
     fields: &FieldsNamed,
     struct_name: &Ident,
     expected_type_name: &str,
+    opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
     let mut deserializers: Vec<TokenStream> = Vec::new();
 
@@ -439,26 +440,50 @@ fn generate_field_deserializers(
         let field_opts = TDBFieldOpts::from_field(field)?;
         let json_key_name = field_opts.name.unwrap_or_else(|| field_ident.to_string());
 
+        // Check if this field is the id_field
+        let is_id_field = opts.id_field.as_ref().map(|id_field| id_field == &field_ident.to_string()).unwrap_or(false);
+
         // Use property_from_maybe_json for all fields, letting the trait implementation
         // handle the differences between Option and non-Option types
-        let deserializer = quote_spanned! {field.span()=>
-            // let err = concat!("Failed to deserialize field '{}' for type '{}'", #json_key_name, #expected_type_name);
+        let deserializer = if is_id_field {
+            // Special handling for id_field - use the extracted @id value
+            quote_spanned! {field.span()=>
+                // For id_field, create a Value::String from the extracted @id
+                let json_value = id.as_ref().map(|id_str| Value::String(id_str.clone()));
 
-            let json_value = json_map.remove(#json_key_name);
+                // Use property_from_maybe_json for the id field
+                let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name>>::property_from_maybe_json(
+                    json_value.clone()
+                )
+                .context("generate_field_deserializers() - id_field");
+                ;
 
-            // Use property_from_maybe_json for all fields
-            let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name>>::property_from_maybe_json(
-                json_value.clone()
-            )
-            // .context(&err)?;
-            .context("generate_field_deserializers()");
-            ;
+                if let Err(ref e) = _prop {
+                    ::tracing::error!("failed to deserialize id_field '{}' of type {}: {}. payload: {:#?}", #json_key_name, stringify!(#field_ty), e, json_value);
+                }
 
-            if let Err(ref e) = _prop {
-                ::tracing::error!("failed to deserialize field '{}' of type {}: {}. payload: {:#?}", #json_key_name, stringify!(#field_ty), e, json_value);
+                _properties.insert(#json_key_name.to_string(), _prop?);
             }
+        } else {
+            quote_spanned! {field.span()=>
+                // let err = concat!("Failed to deserialize field '{}' for type '{}'", #json_key_name, #expected_type_name);
 
-            _properties.insert(#json_key_name.to_string(), _prop?);
+                let json_value = json_map.remove(#json_key_name);
+
+                // Use property_from_maybe_json for all fields
+                let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name>>::property_from_maybe_json(
+                    json_value.clone()
+                )
+                // .context(&err)?;
+                .context("generate_field_deserializers()");
+                ;
+
+                if let Err(ref e) = _prop {
+                    ::tracing::error!("failed to deserialize field '{}' of type {}: {}. payload: {:#?}", #json_key_name, stringify!(#field_ty), e, json_value);
+                }
+
+                _properties.insert(#json_key_name.to_string(), _prop?);
+            }
         };
 
         deserializers.push(deserializer);

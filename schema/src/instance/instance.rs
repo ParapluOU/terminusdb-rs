@@ -303,15 +303,17 @@ impl Instance {
 
         match self.schema.key() {
             Some(Key::Random) => Some(Uuid::new_v4().to_string()),
-            Some(Key::Hash(_)) => {
-                todo!()
+            Some(Key::Hash(fields)) => {
+                // For hash keys with specific fields, ID is server-generated based on a hash of specified field values
+                None
             }
             Some(Key::Lexical(_)) => {
                 // For lexical keys, ID is server-generated based on key fields
                 None
             }
             Some(Key::ValueHash) => {
-                todo!()
+                // For value_hash keys, ID is server-generated based on a hash of all field values
+                None
             }
             _ => None,
         }

@@ -22,7 +22,7 @@ use {
     std::{collections::HashMap, fmt::Debug, time::Instant},
     tap::{Tap, TapFallible},
     terminusdb_schema::GraphType,
-    terminusdb_schema::{EntityIDFor, Instance, Key, ToJson, ToTDBInstance, ToTDBInstances},
+    terminusdb_schema::{EntityIDFor, Instance, Key, ToJson, ToTDBInstance, ToTDBInstances, FromTDBInstance, InstanceFromJson},
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
 };
@@ -195,6 +195,85 @@ impl super::client::TerminusDBHttpClient {
         Ok((result, commit_id))
     }
 
+    /// Inserts an instance into TerminusDB and retrieves the full model with server-generated IDs populated.
+    ///
+    /// This method is particularly useful for models with server-generated IDs (lexical or value_hash key strategies).
+    /// It performs an insert followed by a retrieval to return the complete model with all fields populated,
+    /// including any server-generated ID in the `id_field`.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel`, `ToTDBInstance`, `FromTDBInstance`, and `InstanceFromJson`
+    ///
+    /// # Arguments
+    /// * `model` - The strongly-typed model instance to insert
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A tuple of (model, commit_id) where:
+    /// - model: The fully populated model with server-generated ID field set
+    /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added this instance
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
+    /// struct User {
+    ///     id: ServerIDFor<Self>,
+    ///     email: String,
+    ///     name: String,
+    /// }
+    ///
+    /// let user = User {
+    ///     id: ServerIDFor::new(),
+    ///     email: "alice@example.com".to_string(),
+    ///     name: "Alice".to_string(),
+    /// };
+    /// 
+    /// let (saved_user, commit_id) = client.insert_instance_and_retrieve(&user, args).await?;
+    /// // saved_user.id will now contain the server-generated ID
+    /// assert!(saved_user.id.is_some());
+    /// ```
+    #[instrument(
+        name = "terminus.instance.insert_and_retrieve",
+        skip(self, model, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            entity_type = %I::schema_name()
+        ),
+        err
+    )]
+    pub async fn insert_instance_and_retrieve<I>(
+        &self,
+        model: &I,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<(I, String)>
+    where
+        I: TerminusDBModel + ToTDBInstance + FromTDBInstance + InstanceFromJson,
+    {
+        // First, insert the instance and get the result with commit ID
+        let (result, commit_id) = self.insert_instance_with_commit_id(model, args.clone()).await?;
+        
+        // Extract the root ID from the result
+        let id = match &result.root_result {
+            TDBInsertInstanceResult::Inserted(id) | TDBInsertInstanceResult::AlreadyExists(id) => {
+                // Extract just the ID part (after the type prefix)
+                id.split('/').last()
+                    .ok_or_else(|| anyhow!("Invalid ID format: {}", id))?
+            }
+        };
+
+        // Create a default deserializer
+        let mut deserializer = DefaultTDBDeserializer;
+        
+        // Retrieve the full instance with server-generated ID populated
+        let retrieved_model = self.get_instance::<I>(id, &args.spec, &mut deserializer)
+            .await
+            .context("Failed to retrieve instance after insertion")?;
+        
+        Ok((retrieved_model, commit_id))
+    }
+
     /// Inserts multiple instances into TerminusDB and returns the results along with the commit ID.
     ///
     /// This is the plural variant of `insert_instance_with_commit_id` for bulk operations.
@@ -247,6 +326,120 @@ impl super::client::TerminusDBHttpClient {
             .ok_or_else(|| anyhow!("TerminusDB-Data-Version header not found or invalid format"))?;
 
         Ok((result, commit_id))
+    }
+
+    /// Inserts multiple instances into TerminusDB and retrieves the full models with server-generated IDs populated.
+    ///
+    /// This is the plural variant of `insert_instance_and_retrieve` for bulk operations.
+    /// It performs bulk insert followed by bulk retrieval to return complete models with all fields populated,
+    /// including any server-generated IDs in the `id_field`.
+    ///
+    /// # Type Parameters
+    /// * `I` - A type that implements `TerminusDBModel`, `ToTDBInstance`, `FromTDBInstance`, `InstanceFromJson`, and `Clone`
+    ///
+    /// # Arguments
+    /// * `models` - Vector of strongly-typed model instances to insert
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A tuple of (models, commit_id) where:
+    /// - models: Vector of fully populated models with server-generated ID fields set
+    /// - commit_id: The commit ID (e.g., "ValidCommit/...") that added these instances
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(Clone, TerminusDBModel, Serialize, Deserialize)]
+    /// #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
+    /// struct User {
+    ///     id: ServerIDFor<Self>,
+    ///     email: String,
+    ///     name: String,
+    /// }
+    ///
+    /// let users = vec![
+    ///     User {
+    ///         id: ServerIDFor::new(),
+    ///         email: "alice@example.com".to_string(),
+    ///         name: "Alice".to_string(),
+    ///     },
+    ///     User {
+    ///         id: ServerIDFor::new(),
+    ///         email: "bob@example.com".to_string(),
+    ///         name: "Bob".to_string(),
+    ///     },
+    /// ];
+    /// 
+    /// let (saved_users, commit_id) = client.insert_instances_and_retrieve(users, args).await?;
+    /// // All saved_users will have their id fields populated
+    /// for user in &saved_users {
+    ///     assert!(user.id.is_some());
+    /// }
+    /// ```
+    #[instrument(
+        name = "terminus.instance.insert_multiple_and_retrieve",
+        skip(self, models, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            count = models.len()
+        ),
+        err
+    )]
+    pub async fn insert_instances_and_retrieve<I>(
+        &self,
+        models: Vec<I>,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<(Vec<I>, String)>
+    where
+        I: TerminusDBModel + ToTDBInstance + FromTDBInstance + InstanceFromJson + Clone + 'static,
+    {
+        // First, insert the instances and get the results with commit ID
+        let (result, commit_id) = self.insert_instances_with_commit_id(models.clone(), args.clone()).await?;
+        
+        // Extract all IDs from the result
+        let mut all_ids: Vec<String> = Vec::new();
+        for (id_with_type, insert_result) in result.iter() {
+            match insert_result {
+                TDBInsertInstanceResult::Inserted(_) | TDBInsertInstanceResult::AlreadyExists(_) => {
+                    // Extract just the ID part (after the type prefix)
+                    if let Some(id) = id_with_type.split('/').last() {
+                        all_ids.push(id.to_string());
+                    }
+                }
+            }
+        }
+        
+        // Retrieve all instances in a batch
+        let mut deserializer = DefaultTDBDeserializer;
+        let mut retrieved_map = std::collections::HashMap::new();
+        
+        for id in all_ids {
+            match self.get_instance::<I>(&id, &args.spec, &mut deserializer).await {
+                Ok(model) => {
+                    retrieved_map.insert(id, model);
+                }
+                Err(e) => {
+                    // Log but continue - some IDs might be for different types
+                    debug!("Failed to retrieve instance {}: {}", id, e);
+                }
+            }
+        }
+        
+        // Since we can't guarantee order from TerminusDB, and we can't reliably match
+        // instances by content (especially for lexical keys where the ID is derived from fields),
+        // we'll just return all retrieved instances that match the expected type
+        let retrieved_models: Vec<I> = retrieved_map.into_values().collect();
+        
+        // Verify we got the expected number of results
+        if retrieved_models.len() != models.len() {
+            return Err(anyhow!(
+                "Expected {} instances but retrieved {}",
+                models.len(),
+                retrieved_models.len()
+            ));
+        }
+        
+        Ok((retrieved_models, commit_id))
     }
 
     /// Creates a new instance in the database using POST.
