@@ -159,9 +159,7 @@ impl IntoWoql2 for WoqlInput {
             WoqlInput::Node(iri) => Woql2Value::Node(iri),
             WoqlInput::String(s) => Woql2Value::Data(XSDAnySimpleType::String(s)),
             WoqlInput::Boolean(b) => Woql2Value::Data(XSDAnySimpleType::Boolean(b)),
-            WoqlInput::Integer(i) => Woql2Value::Data(XSDAnySimpleType::UnsignedInt(
-                i.try_into().expect("Integer input must be non-negative"),
-            )),
+            WoqlInput::Integer(i) => Woql2Value::Data(XSDAnySimpleType::Integer(i)),
             WoqlInput::Decimal(d) => Woql2Value::Data(XSDAnySimpleType::Decimal(
                 Decimal::from_str(&d).expect("Invalid decimal string format"),
             )),

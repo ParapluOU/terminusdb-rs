@@ -149,7 +149,7 @@ fn test_triple_with_integer_literal() {
             assert!(matches!(&t.subject, NodeValue::Node(iri) if iri == "doc:Item"));
             assert!(matches!(&t.predicate, NodeValue::Node(iri) if iri == "prop:count"));
             assert!(
-                matches!(&t.object, Woql2Value::Data(XSDAnySimpleType::UnsignedInt(val)) if *val == 42usize)
+                matches!(&t.object, Woql2Value::Data(XSDAnySimpleType::Integer(val)) if *val == 42i64)
             );
         }
         _ => panic!("Expected Triple query"),
@@ -1012,7 +1012,7 @@ fn test_add_triple() {
             assert!(matches!(add_q.subject, NodeValue::Node(n) if n == "doc:subj"));
             assert!(matches!(add_q.predicate, NodeValue::Node(n) if n == "prop:pred"));
             assert!(
-                matches!(add_q.object, Woql2Value::Data(XSDAnySimpleType::UnsignedInt(i)) if i == 123)
+                matches!(add_q.object, Woql2Value::Data(XSDAnySimpleType::Integer(i)) if i == 123)
             );
             assert_eq!(add_q.graph, GraphType::Instance);
         }

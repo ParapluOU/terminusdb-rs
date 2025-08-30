@@ -28,7 +28,7 @@ pub struct LexicalKeyServerModel {
 pub struct ValueHashServerModel {
     pub id: ServerIDFor<Self>,
     pub content: String,
-    pub timestamp: i64,
+    pub timestamp: i32,  // Changed from i64 to i32 for JSON compatibility
 }
 
 mod tests {
@@ -93,7 +93,7 @@ mod tests {
         let model = ValueHashServerModel {
             id: ServerIDFor::new(),
             content: "Some content".to_string(),
-            timestamp: 1234567890,
+            timestamp: 1234567,
         };
         
         let json = serde_json::to_value(&model).unwrap();

@@ -1,4 +1,4 @@
-use crate::{json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, ToTDBSchema, DATETIME, DECIMAL, TIME, URI};
+use crate::{json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, ToTDBSchema, DATETIME, DECIMAL, INTEGER, TIME, UNSIGNED_INT, URI};
 use chrono::Utc;
 use decimal_rs::Decimal;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,7 @@ pub enum XSDAnySimpleType {
     Time(chrono::NaiveTime),
     // DateTime(chrono::DateTime<Tz>)
     UnsignedInt(usize),
+    Integer(i64),
 }
 
 // Helper function to get a consistent numeric representation of the variant for ordering
@@ -51,6 +52,7 @@ fn variant_order(v: &XSDAnySimpleType) -> u8 {
         XSDAnySimpleType::Date(_) => 7,
         XSDAnySimpleType::Time(_) => 8,
         XSDAnySimpleType::UnsignedInt(_) => 9,
+        XSDAnySimpleType::Integer(_) => 10,
     }
 }
 
@@ -79,6 +81,7 @@ impl PartialOrd for XSDAnySimpleType {
             (Self::Date(l), Self::Date(r)) => l.partial_cmp(r),
             (Self::Time(l), Self::Time(r)) => l.partial_cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.partial_cmp(r),
+            (Self::Integer(l), Self::Integer(r)) => l.partial_cmp(r),
             // This case should be unreachable because we check variant order first
             _ => unreachable!("Variant order mismatch after equality check"),
         }
@@ -107,6 +110,7 @@ impl Ord for XSDAnySimpleType {
             (Self::Date(l), Self::Date(r)) => l.cmp(r),
             (Self::Time(l), Self::Time(r)) => l.cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.cmp(r),
+            (Self::Integer(l), Self::Integer(r)) => l.cmp(r),
             // This case should be unreachable because we check variant order first
             _ => unreachable!("Variant order mismatch after equality check"),
         }
@@ -126,6 +130,7 @@ impl PartialEq for XSDAnySimpleType {
             (Self::Date(l0), Self::Date(r0)) => l0 == r0,
             (Self::Time(l0), Self::Time(r0)) => l0 == r0,
             (Self::UnsignedInt(l0), Self::UnsignedInt(r0)) => l0 == r0,
+            (Self::Integer(l0), Self::Integer(r0)) => l0 == r0,
             _ => false,
         }
     }
@@ -147,6 +152,7 @@ impl Hash for XSDAnySimpleType {
             XSDAnySimpleType::Date(d) => d.hash(state),
             XSDAnySimpleType::Time(t) => t.hash(state),
             XSDAnySimpleType::UnsignedInt(i) => i.hash(state),
+            XSDAnySimpleType::Integer(i) => i.hash(state),
         }
     }
 }
@@ -283,9 +289,14 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
                     "@value": t.format("%H:%M:%S%.f").to_string()
                 })
             )),
-            XSDAnySimpleType::UnsignedInt(i) => InstanceProperty::Primitive(PrimitiveValue::Number(
-                serde_json::Number::from_u128(i as u128).expect("parse usize to serde_json Number")
-            )),
+            XSDAnySimpleType::UnsignedInt(i) => InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
+                    "@type": UNSIGNED_INT,
+                    "@value": i
+                }))),
+            XSDAnySimpleType::Integer(i) => InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
+                    "@type": INTEGER,
+                    "@value": i
+                }))),
         }
     }
 }

@@ -459,6 +459,90 @@ impl super::client::TerminusDBHttpClient {
             .await
     }
 
+    /// List instances of a specific type with field-value filter conditions.
+    ///
+    /// This method provides server-side filtering by translating the filter conditions
+    /// into WOQL triple patterns, which is much more efficient than client-side filtering.
+    ///
+    /// # Type Parameters
+    /// * `T` - The TerminusDB model type to query
+    /// * `I` - Iterator type for filters
+    /// * `K` - Field name type (anything that converts to String)
+    /// * `V` - Value type (anything implementing IntoDataValue)
+    ///
+    /// # Arguments
+    /// * `spec` - Database and branch specification
+    /// * `limit` - Maximum number of results to return
+    /// * `offset` - Number of results to skip
+    /// * `filters` - Iterator of (field_name, value) pairs for filtering
+    ///
+    /// # Returns
+    /// A vector of instances matching all filter conditions
+    ///
+    /// # Example
+    /// ```rust
+    /// use terminusdb_client::prelude::*;
+    /// 
+    /// // Filter with various data types
+    /// let active_adults = client.list_instances_where::<Person>(
+    ///     &spec,
+    ///     Some(10),  // limit
+    ///     None,      // offset
+    ///     vec![
+    ///         ("status", "active"),      // String
+    ///         ("age", 25),               // Integer
+    ///         ("verified", true),        // Boolean
+    ///     ],
+    /// ).await?;
+    /// 
+    /// // Or use data! macro for explicit types
+    /// let recent_users = client.list_instances_where::<User>(
+    ///     &spec,
+    ///     None,
+    ///     None,
+    ///     vec![
+    ///         ("created_at", datetime!("2024-01-01T00:00:00Z")),
+    ///         ("role", "admin"),
+    ///     ],
+    /// ).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.query.list_instances_where",
+        skip(self, filters),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            limit = limit,
+            offset = offset,
+            filter_count = tracing::field::Empty
+        ),
+        err
+    )]
+    pub async fn list_instances_where<T, I, K, V>(
+        &self,
+        spec: &BranchSpec,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        filters: I,
+    ) -> anyhow::Result<Vec<T>>
+    where
+        T: TerminusDBModel + InstanceFromJson,
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: terminusdb_woql2::prelude::IntoDataValue,
+    {
+        use crate::query::FilteredListModels;
+        
+        let query = FilteredListModels::<T>::new(filters);
+        let filter_count = query.filters.len();
+        
+        // Record the filter count in the trace
+        tracing::Span::current().record("filter_count", filter_count);
+        
+        self.query_instances(spec, limit, offset, query).await
+    }
+
     /// Count the total number of instances of a specific type in the database
     #[instrument(
         name = "terminus.query.count_instances",

@@ -53,6 +53,8 @@ pub mod prelude {
         DeleteTriple, DeletedLink, DeletedTriple, Link, Triple,
     };
     pub use super::value::{DataValue, DictionaryTemplate, FieldValuePair, NodeValue, Value};
+    // Export the IntoDataValue trait for ergonomic API usage
+    pub use super::macros::IntoDataValue;
 
     // Re-export macros
     pub use crate::{

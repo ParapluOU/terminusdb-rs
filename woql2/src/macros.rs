@@ -1029,13 +1029,13 @@ mod conversion {
 
     impl IntoXsdType for i32 {
         fn into_xsd_type(self) -> XSDAnySimpleType {
-            XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self))
+            XSDAnySimpleType::Integer(self as i64)
         }
     }
 
     impl IntoXsdType for i64 {
         fn into_xsd_type(self) -> XSDAnySimpleType {
-            XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self))
+            XSDAnySimpleType::Integer(self)
         }
     }
 
@@ -1094,13 +1094,13 @@ mod conversion {
 
     impl IntoValue for i32 {
         fn into_value(self) -> Value {
-            Value::Data(XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self)))
+            Value::Data(XSDAnySimpleType::Integer(self as i64))
         }
     }
 
     impl IntoValue for i64 {
         fn into_value(self) -> Value {
-            Value::Data(XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self)))
+            Value::Data(XSDAnySimpleType::Integer(self))
         }
     }
 
@@ -1216,7 +1216,7 @@ mod conversion {
 
     impl IntoDataValue for i32 {
         fn into_data_value(self) -> DataValue {
-            DataValue::Data(XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self)))
+            DataValue::Data(XSDAnySimpleType::Integer(self as i64))
         }
     }
 
@@ -1234,7 +1234,7 @@ mod conversion {
 
     impl IntoDataValue for i64 {
         fn into_data_value(self) -> DataValue {
-            DataValue::Data(XSDAnySimpleType::Decimal(decimal_rs::Decimal::from(self)))
+            DataValue::Data(XSDAnySimpleType::Integer(self))
         }
     }
 

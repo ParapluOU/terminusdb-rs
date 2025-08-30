@@ -109,7 +109,7 @@ pub trait InstanceQueryable {
         let v_id = vars!("Subject");
         let v_doc = vars!("Doc");
 
-        WoqlBuilder::new()
+        let query = WoqlBuilder::new()
             // the triple was neccessary instead of the IsA
             .isa2::<Self::Model>(
                 &v_id,
@@ -133,28 +133,116 @@ pub trait InstanceQueryable {
                 None => q,
                 Some(l) => q.limit(l as u64),
             })
-            .finalize()
+            .finalize();
+        
+        query
     }
 }
 
-/// default model litsing query that uses the instance query but adds no extra conditions
-pub struct ListModels<T> {
-    _ty: PhantomData<T>,
-}
+/// Default model listing query - equivalent to FilteredListModels with no filters
+pub type ListModels<T> = FilteredListModels<T>;
 
-impl<T> Default for ListModels<T> {
+impl<T> Default for FilteredListModels<T> {
     fn default() -> Self {
         Self {
-            _ty: Default::default(),
+            filters: Vec::new(),
+            _ty: PhantomData,
         }
     }
 }
 
-impl<T: TerminusDBModel + InstanceFromJson> InstanceQueryable for ListModels<T> {
+/// Model listing query with field-value filter conditions
+pub struct FilteredListModels<T> {
+    pub(crate) filters: Vec<(String, DataValue)>,
+    _ty: PhantomData<T>,
+}
+
+impl<T> FilteredListModels<T> {
+    /// Create a new filtered list query with the given field-value pairs
+    pub fn new<I, K, V>(filters: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: terminusdb_woql2::prelude::IntoDataValue,
+    {
+        Self {
+            filters: filters
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into_data_value()))
+                .collect(),
+            _ty: PhantomData,
+        }
+    }
+    
+    /// Create an empty filtered list query (lists all instances)
+    pub fn empty() -> Self {
+        Self::default()
+    }
+    
+    /// Get the number of filters
+    pub fn filter_count(&self) -> usize {
+        self.filters.len()
+    }
+}
+
+impl<T: TerminusDBModel + InstanceFromJson> InstanceQueryable for FilteredListModels<T> {
     type Model = T;
 
     fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder {
-        builder
+        use terminusdb_woql_builder::prelude::WoqlInput;
+        
+        // Add a triple pattern for each filter condition
+        self.filters.iter().fold(builder, |builder, (field, value)| {
+            // Convert DataValue to WoqlInput which implements IntoWoql2
+            let woql_value = match value {
+                DataValue::Variable(v) => WoqlInput::Variable(Var::new(v)),
+                DataValue::Data(d) => {
+                    use terminusdb_schema::XSDAnySimpleType;
+                    match d {
+                        XSDAnySimpleType::String(s) => WoqlInput::String(s.clone()),
+                        XSDAnySimpleType::Boolean(b) => WoqlInput::Boolean(*b),
+                        XSDAnySimpleType::Decimal(d) => {
+                            // For integer values stored as decimals, keep them as decimals
+                            // TerminusDB might expect exact type matching
+                            WoqlInput::Decimal(d.to_string())
+                        }
+                        XSDAnySimpleType::UnsignedInt(u) => WoqlInput::Integer(*u as i64),
+                        XSDAnySimpleType::Integer(i) => WoqlInput::Integer(*i),
+                        XSDAnySimpleType::Float(f) => {
+                            // Convert float to decimal string for WOQL
+                            WoqlInput::Decimal(f.to_string())
+                        }
+                        XSDAnySimpleType::DateTime(dt) => {
+                            // Convert datetime to ISO 8601 string
+                            WoqlInput::DateTime(dt.to_rfc3339())
+                        }
+                        XSDAnySimpleType::Date(d) => {
+                            // Convert date to ISO 8601 string
+                            WoqlInput::Date(d.to_string())
+                        }
+                        XSDAnySimpleType::Time(t) => {
+                            // Convert time to ISO 8601 string
+                            WoqlInput::Time(t.to_string())
+                        }
+                        XSDAnySimpleType::URI(uri) => {
+                            // URIs are represented as nodes
+                            WoqlInput::Node(uri.clone())
+                        }
+                        XSDAnySimpleType::HexBinary(hex) => {
+                            // Store hex binary as string
+                            WoqlInput::String(hex.clone())
+                        }
+                    }
+                },
+                DataValue::List(_) => {
+                    panic!("List values are not supported in filters")
+                }
+            };
+            
+            // Properties need to be prefixed with @schema: for property lookups
+            let qualified_field = format!("@schema:{}", field);
+            builder.triple(subject.clone(), qualified_field.as_str(), woql_value)
+        })
     }
 }
 
