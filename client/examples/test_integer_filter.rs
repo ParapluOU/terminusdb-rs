@@ -2,7 +2,6 @@ use terminusdb_client::{BranchSpec, TerminusDBHttpClient, DocumentInsertArgs};
 use terminusdb_schema_derive::TerminusDBModel;
 use terminusdb_schema::ToTDBInstance;
 use serde::{Serialize, Deserialize};
-use std::io::Read;
 
 #[derive(TerminusDBModel, Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct TestItem {
@@ -50,8 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nFiltering for value = 100...");
     let result: Vec<TestItem> = client.list_instances_where(
         &spec,
-        None,
-        None,
+        None,  // offset
+        None,  // limit
         vec![("value", 100)],
     ).await?;
     

@@ -41,8 +41,8 @@ mod tests {
         // Test: Filter by age (integer)
         let age_25: Vec<Person> = client.list_instances_where(
             &spec,
-            None,  // limit
             None,  // offset
+            None,  // limit
             vec![("age", 25)],  // filters
         ).await.unwrap();
         
@@ -54,8 +54,8 @@ mod tests {
         // Test: Filter by different age
         let age_30: Vec<Person> = client.list_instances_where(
             &spec,
-            None,
-            None,
+            None,  // offset
+            None,  // limit
             vec![("age", 30)],
         ).await.unwrap();
         
@@ -65,8 +65,8 @@ mod tests {
         // Test: Multiple filters
         let alice_25: Vec<Person> = client.list_instances_where(
             &spec,
-            None,
-            None,
+            None,  // offset
+            None,  // limit
             vec![
                 ("name", "Alice"),
                 ("age", 25),

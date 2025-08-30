@@ -81,8 +81,8 @@ mod tests {
         // Test 4: With pagination
         let limited: Vec<Product> = client.list_instances_where(
             &spec,
-            Some(2),  // limit
             None,     // offset
+            Some(2),  // limit
             vec![("category", "Electronics")],
         ).await.expect("Failed to query with limit");
         

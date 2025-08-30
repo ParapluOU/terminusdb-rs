@@ -472,8 +472,8 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Arguments
     /// * `spec` - Database and branch specification
-    /// * `limit` - Maximum number of results to return
     /// * `offset` - Number of results to skip
+    /// * `limit` - Maximum number of results to return
     /// * `filters` - Iterator of (field_name, value) pairs for filtering
     ///
     /// # Returns
@@ -486,8 +486,8 @@ impl super::client::TerminusDBHttpClient {
     /// // Filter with various data types
     /// let active_adults = client.list_instances_where::<Person>(
     ///     &spec,
-    ///     Some(10),  // limit
     ///     None,      // offset
+    ///     Some(10),  // limit
     ///     vec![
     ///         ("status", "active"),      // String
     ///         ("age", 25),               // Integer
@@ -522,8 +522,8 @@ impl super::client::TerminusDBHttpClient {
     pub async fn list_instances_where<T, I, K, V>(
         &self,
         spec: &BranchSpec,
-        limit: Option<usize>,
         offset: Option<usize>,
+        limit: Option<usize>,
         filters: I,
     ) -> anyhow::Result<Vec<T>>
     where
