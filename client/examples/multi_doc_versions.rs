@@ -32,15 +32,15 @@ async fn main() -> anyhow::Result<()> {
     let queries = vec![
         (
             "doc123",
-            vec!["commit_abc".to_string(), "commit_def".to_string()],
+            vec!["commit_abc".into(), "commit_def".into()],
         ),
-        ("doc456", vec!["commit_ghi".to_string()]),
+        ("doc456", vec!["commit_ghi".into()]),
         (
             "doc789",
             vec![
-                "commit_jkl".to_string(),
-                "commit_mno".to_string(),
-                "commit_pqr".to_string(),
+                "commit_jkl".into(),
+                "commit_mno".into(),
+                "commit_pqr".into(),
             ],
         ),
     ];
@@ -109,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
         let revisions = versions
             .into_iter()
             .map(|(doc, commit_id)| RevisionInfo {
-                commit_id,
+                commit_id: commit_id.to_string(),
                 version: doc.version,
                 title: doc.title,
                 author: doc.author,

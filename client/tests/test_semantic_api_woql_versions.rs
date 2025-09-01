@@ -246,7 +246,7 @@ async fn test_direct_rest_api_time_travel() -> anyhow::Result<()> {
 
     // Try to retrieve it directly with commit ref
     let mut commit_spec = spec.clone();
-    commit_spec.ref_commit = Some(commit_id.clone());
+    commit_spec.ref_commit = Some(commit_id.clone().into());
 
     match client
         .get_instance::<VersionTestModel>(
