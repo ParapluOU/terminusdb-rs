@@ -1,7 +1,7 @@
 //! Instance version retrieval implementation
 
 use {
-    crate::{spec::BranchSpec, TDBInstanceDeserializer, WOQLResult},
+    crate::{spec::BranchSpec, CommitId, TDBInstanceDeserializer, WOQLResult},
     ::tracing::{debug, instrument, warn},
     anyhow::{anyhow, Context},
     std::collections::HashMap,
@@ -63,9 +63,9 @@ impl super::client::TerminusDBHttpClient {
         &self,
         instance_id: &str,
         spec: &BranchSpec,
-        commit_ids: Vec<String>,
+        commit_ids: Vec<CommitId>,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
-    ) -> anyhow::Result<Vec<(T, String)>> {
+    ) -> anyhow::Result<Vec<(T, CommitId)>> {
         debug!(
             "Attempting WOQL-based instance version retrieval for {} with {} specific commits",
             instance_id,
@@ -88,7 +88,7 @@ impl super::client::TerminusDBHttpClient {
             let collection = format!("{}/{}/local/commit/{}", self.org, spec.db, &commit_id);
 
             // Create a unique variable for this commit's document
-            let doc_var = vars!(format!("Doc_{}", commit_id.replace('/', "_")));
+            let doc_var = vars!(format!("Doc_{}", commit_id.as_str().replace('/', "_")));
             commit_map.insert(doc_var.to_string(), commit_id.clone());
 
             let query = WoqlBuilder::new()
@@ -210,7 +210,7 @@ impl super::client::TerminusDBHttpClient {
         instance_id: &str,
         spec: &BranchSpec,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
-    ) -> anyhow::Result<Vec<(T, String)>> {
+    ) -> anyhow::Result<Vec<(T, CommitId)>> {
         debug!("Listing all versions for instance {}", instance_id);
 
         // First get the commit history
@@ -224,7 +224,7 @@ impl super::client::TerminusDBHttpClient {
         debug!("Found {} commits in history", history.len());
 
         // Extract commit IDs from history
-        let commit_ids: Vec<String> = history.into_iter().map(|entry| entry.identifier).collect();
+        let commit_ids: Vec<CommitId> = history.into_iter().map(|entry| entry.identifier).collect();
 
         // Use get_instance_versions with the full list of commit IDs
         self.get_instance_versions(instance_id, spec, commit_ids, deserializer)
@@ -282,10 +282,10 @@ impl super::client::TerminusDBHttpClient {
     #[pseudonym::alias(get_instances_versions)]
     pub async fn get_multiple_instance_versions<T: TerminusDBModel>(
         &self,
-        queries: Vec<(&str, Vec<String>)>,
+        queries: Vec<(&str, Vec<CommitId>)>,
         spec: &BranchSpec,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
-    ) -> anyhow::Result<HashMap<String, Vec<(T, String)>>> {
+    ) -> anyhow::Result<HashMap<String, Vec<(T, CommitId)>>> {
         debug!(
             "Attempting multi-document WOQL version retrieval for {} documents",
             queries.len()
@@ -297,7 +297,7 @@ impl super::client::TerminusDBHttpClient {
 
         // Build individual queries for each document×commit combination
         let mut all_queries = Vec::new();
-        let mut var_map: HashMap<String, (String, String)> = HashMap::new();
+        let mut var_map: HashMap<String, (String, CommitId)> = HashMap::new();
 
         for (instance_id, commit_ids) in queries {
             if commit_ids.is_empty() {
@@ -312,7 +312,7 @@ impl super::client::TerminusDBHttpClient {
 
                 // Create unique variables for this document×commit combination
                 let safe_instance_id = instance_id.replace('/', "_").replace('-', "_");
-                let safe_commit_id = commit_id.replace('/', "_").replace('-', "_");
+                let safe_commit_id = commit_id.as_str().replace('/', "_").replace('-', "_");
                 let doc_var = vars!(format!("Doc_{}_{}", safe_instance_id, safe_commit_id));
 
                 // Track which document and commit this variable represents
@@ -357,7 +357,7 @@ impl super::client::TerminusDBHttpClient {
                 debug!("WOQL query returned {} bindings", result.bindings.len());
 
                 // Process results and group by document ID
-                let mut results: HashMap<String, Vec<(T, String)>> = HashMap::new();
+                let mut results: HashMap<String, Vec<(T, CommitId)>> = HashMap::new();
 
                 for binding in result.bindings {
                     // Find which doc variable has data
@@ -445,7 +445,7 @@ impl super::client::TerminusDBHttpClient {
         instance_ids: Vec<&str>,
         spec: &BranchSpec,
         deserializer: &mut impl TDBInstanceDeserializer<T>,
-    ) -> anyhow::Result<HashMap<String, Vec<(T, String)>>> {
+    ) -> anyhow::Result<HashMap<String, Vec<(T, CommitId)>>> {
         debug!("Listing all versions for {} instances", instance_ids.len());
 
         if instance_ids.is_empty() {
@@ -453,7 +453,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Get history for each instance and build queries structure
-        let mut queries: Vec<(&str, Vec<String>)> = Vec::new();
+        let mut queries: Vec<(&str, Vec<CommitId>)> = Vec::new();
 
         for instance_id in &instance_ids {
             // Get the commit history for this instance
@@ -462,7 +462,7 @@ impl super::client::TerminusDBHttpClient {
                 .await?;
 
             if !history.is_empty() {
-                let commit_ids: Vec<String> =
+                let commit_ids: Vec<CommitId> =
                     history.into_iter().map(|entry| entry.identifier).collect();
 
                 queries.push((instance_id, commit_ids));
