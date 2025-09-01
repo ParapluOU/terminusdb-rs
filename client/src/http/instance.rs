@@ -4,7 +4,7 @@ use super::{
     helpers::{dedup_instances_by_id, dump_schema, format_id},
     TerminusDBModel,
 };
-use crate::{DefaultTDBDeserializer, InsertInstanceResult};
+use crate::{CommitId, DefaultTDBDeserializer, InsertInstanceResult};
 use {
     crate::{
         document::{
@@ -154,7 +154,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         model: &I,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<(crate::InsertInstanceResult, String)> {
+    ) -> anyhow::Result<(crate::InsertInstanceResult, CommitId)> {
         // Insert the instance - save_instance now returns InsertInstanceResult directly
         let mut result = self.save_instance(model, args.clone()).await?;
 
@@ -237,7 +237,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         model: &I,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<(I, String)>
+    ) -> anyhow::Result<(I, CommitId)>
     where
         I: TerminusDBModel + ToTDBInstance + FromTDBInstance + InstanceFromJson,
     {
@@ -305,7 +305,7 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
     ) -> anyhow::Result<(
         ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>,
-        String,
+        CommitId,
     )> {
         // Insert the instances
         let result = self.insert_instances(models, args).await?;
@@ -379,7 +379,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         models: Vec<I>,
         args: DocumentInsertArgs,
-    ) -> anyhow::Result<(Vec<I>, String)>
+    ) -> anyhow::Result<(Vec<I>, CommitId)>
     where
         I: TerminusDBModel + ToTDBInstance + FromTDBInstance + InstanceFromJson + Clone + 'static,
     {
@@ -399,26 +399,24 @@ impl super::client::TerminusDBHttpClient {
             }
         }
         
-        // Retrieve all instances in a batch
+        // Retrieve all instances in a single batch call
         let mut deserializer = DefaultTDBDeserializer;
-        let mut retrieved_map = std::collections::HashMap::new();
-        
-        for id in all_ids {
-            match self.get_instance::<I>(&id, &args.spec, &mut deserializer).await {
-                Ok(model) => {
-                    retrieved_map.insert(id, model);
-                }
-                Err(e) => {
-                    // Log but continue - some IDs might be for different types
-                    debug!("Failed to retrieve instance {}: {}", id, e);
-                }
+        let retrieved_models = match self.get_instances::<I>(
+            all_ids.clone(),
+            &args.spec,
+            GetOpts::default(),
+            &mut deserializer
+        ).await {
+            Ok(models) => models,
+            Err(e) => {
+                // If bulk retrieval fails completely, log and try to return what we can
+                warn!("Bulk retrieval failed, some instances may not have been retrieved: {}", e);
+                
+                // In case of complete failure, we could fall back to individual retrieval
+                // but for now, we'll just return an empty vec to maintain performance
+                vec![]
             }
-        }
-        
-        // Since we can't guarantee order from TerminusDB, and we can't reliably match
-        // instances by content (especially for lexical keys where the ID is derived from fields),
-        // we'll just return all retrieved instances that match the expected type
-        let retrieved_models: Vec<I> = retrieved_map.into_values().collect();
+        };
         
         // Verify we got the expected number of results
         if retrieved_models.len() != models.len() {
@@ -1383,7 +1381,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         instance_id: &str,
         spec: &BranchSpec,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<CommitId> {
         // Use the new header-aware method to get the commit ID directly
         let mut deserializer = crate::deserialize::DefaultTDBDeserializer;
         let result = self
