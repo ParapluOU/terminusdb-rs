@@ -4,11 +4,11 @@
 use reqwest::Client;
 
 use {
-    crate::{Info, TerminusDBAdapterError, debug::{DebugConfig, OperationLog, QueryLogger}},
+    crate::{Info, TerminusDBAdapterError, debug::{DebugConfig, OperationLog, QueryLogger, QueryLogEntry, OperationFilter}},
     ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
-    std::{fmt::Debug, sync::{Arc, Mutex, RwLock}, collections::HashSet},
+    std::{fmt::Debug, sync::{Arc, Mutex, RwLock}, collections::HashSet, time::Duration},
     terminusdb_schema::{ToTDBInstance, ToJson},
     url::Url,
 };
@@ -342,6 +342,32 @@ impl TerminusDBHttpClient {
             }
         }
         Ok(())
+    }
+
+    /// Get slow queries from the query log
+    /// 
+    /// # Arguments
+    /// 
+    /// * `threshold` - Duration threshold for slow operations (default: 1 second)
+    /// * `filter` - Filter by operation type (default: All)
+    /// * `limit` - Maximum number of entries to return (default: unlimited)
+    /// 
+    /// # Returns
+    /// 
+    /// A vector of log entries sorted by duration (slowest first), or an error if query logging is not enabled
+    pub async fn get_slow_queries(
+        &self,
+        threshold: Option<Duration>,
+        filter: Option<OperationFilter>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<QueryLogEntry>> {
+        if let Ok(logger_guard) = self.query_logger.read() {
+            if let Some(logger) = logger_guard.as_ref() {
+                return logger.get_slow_entries(threshold, filter, limit).await;
+            }
+        }
+        
+        anyhow::bail!("Query logging is not enabled. Call enable_query_log() first.")
     }
 }
 

@@ -4,10 +4,22 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::fs::{OpenOptions, File};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, AsyncBufReadExt, BufReader};
 use tracing::{debug, error, warn};
+
+/// Filter options for operation types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationFilter {
+    /// Include all operations
+    All,
+    /// Include only query operations
+    QueriesOnly,
+    /// Include only non-query operations
+    OperationsOnly,
+}
 
 /// Entry format for the query log file
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +179,84 @@ impl QueryLogger {
     pub fn path(&self) -> &Path {
         &self.file_path
     }
+
+    /// Retrieve slow entries from the log file
+    /// 
+    /// # Arguments
+    /// 
+    /// * `threshold` - Duration threshold for slow operations (default: 1 second)
+    /// * `filter` - Filter by operation type (default: All)
+    /// * `limit` - Maximum number of entries to return (default: unlimited)
+    /// 
+    /// # Returns
+    /// 
+    /// A vector of log entries sorted by duration (slowest first)
+    pub async fn get_slow_entries(
+        &self,
+        threshold: Option<Duration>,
+        filter: Option<OperationFilter>,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<QueryLogEntry>> {
+        let threshold_ms = threshold
+            .unwrap_or(Duration::from_secs(1))
+            .as_millis() as u64;
+        
+        let filter = filter.unwrap_or(OperationFilter::All);
+        
+        // Open the log file for reading
+        let file = tokio::fs::File::open(&self.file_path).await?;
+        let mut reader = BufReader::new(file);
+        
+        let mut entries = Vec::new();
+        let mut line = String::new();
+        
+        // Read entries line by line
+        loop {
+            line.clear();
+            let bytes_read = reader.read_line(&mut line).await?;
+            if bytes_read == 0 {
+                break; // EOF
+            }
+            
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            
+            // Parse the JSON entry
+            match serde_json::from_str::<QueryLogEntry>(trimmed) {
+                Ok(entry) => {
+                    // Check duration threshold
+                    if entry.duration_ms >= threshold_ms {
+                        // Apply operation filter
+                        let include = match filter {
+                            OperationFilter::All => true,
+                            OperationFilter::QueriesOnly => entry.operation_type == "query",
+                            OperationFilter::OperationsOnly => entry.operation_type != "query",
+                        };
+                        
+                        if include {
+                            entries.push(entry);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse log entry: {}", e);
+                    continue;
+                }
+            }
+        }
+        
+        // Sort by duration (slowest first)
+        entries.sort_by(|a, b| b.duration_ms.cmp(&a.duration_ms));
+        
+        // Apply limit if specified
+        if let Some(limit) = limit {
+            entries.truncate(limit);
+        }
+        
+        Ok(entries)
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +335,114 @@ mod tests {
             .collect();
         
         assert!(dir_entries.len() >= 2); // Original + rotated
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_slow_entries() -> anyhow::Result<()> {
+        let temp_dir = tempdir()?;
+        let log_path = temp_dir.path().join("slow_test.log");
+        
+        let logger = QueryLogger::new(&log_path).await?;
+
+        // Create entries with varying durations
+        let entries = vec![
+            QueryLogEntry {
+                timestamp: Utc::now(),
+                operation_type: "query".to_string(),
+                database: Some("test_db".to_string()),
+                branch: Some("main".to_string()),
+                endpoint: "/api/db/test_db/query".to_string(),
+                details: serde_json::json!({"query": "fast"}),
+                success: true,
+                result_count: Some(10),
+                duration_ms: 50, // Fast query
+                error: None,
+            },
+            QueryLogEntry {
+                timestamp: Utc::now(),
+                operation_type: "query".to_string(),
+                database: Some("test_db".to_string()),
+                branch: Some("main".to_string()),
+                endpoint: "/api/db/test_db/query".to_string(),
+                details: serde_json::json!({"query": "slow"}),
+                success: true,
+                result_count: Some(1000),
+                duration_ms: 2500, // Slow query
+                error: None,
+            },
+            QueryLogEntry {
+                timestamp: Utc::now(),
+                operation_type: "insert".to_string(),
+                database: Some("test_db".to_string()),
+                branch: Some("main".to_string()),
+                endpoint: "/api/db/test_db/instance".to_string(),
+                details: serde_json::json!({"entity_type": "Person"}),
+                success: true,
+                result_count: Some(1),
+                duration_ms: 1500, // Slow insert
+                error: None,
+            },
+            QueryLogEntry {
+                timestamp: Utc::now(),
+                operation_type: "query".to_string(),
+                database: Some("test_db".to_string()),
+                branch: Some("main".to_string()),
+                endpoint: "/api/db/test_db/query".to_string(),
+                details: serde_json::json!({"query": "medium"}),
+                success: true,
+                result_count: Some(100),
+                duration_ms: 800, // Just under 1 second
+                error: None,
+            },
+        ];
+
+        // Log all entries
+        for entry in &entries {
+            logger.log(entry.clone()).await;
+        }
+
+        // Test 1: Get all slow entries with default threshold (1 second)
+        let slow_entries = logger.get_slow_entries(None, None, None).await?;
+        assert_eq!(slow_entries.len(), 2); // Should get the 2500ms and 1500ms entries
+        assert_eq!(slow_entries[0].duration_ms, 2500); // Slowest first
+        assert_eq!(slow_entries[1].duration_ms, 1500);
+
+        // Test 2: Get slow entries with custom threshold (500ms)
+        let slow_entries = logger.get_slow_entries(
+            Some(Duration::from_millis(500)),
+            None,
+            None,
+        ).await?;
+        assert_eq!(slow_entries.len(), 3); // Should get 2500ms, 1500ms, and 800ms
+
+        // Test 3: Filter for queries only
+        let slow_queries = logger.get_slow_entries(
+            Some(Duration::from_millis(500)),
+            Some(OperationFilter::QueriesOnly),
+            None,
+        ).await?;
+        assert_eq!(slow_queries.len(), 2); // Should get only the slow queries
+        assert!(slow_queries.iter().all(|e| e.operation_type == "query"));
+
+        // Test 4: Filter for operations only (non-queries)
+        let slow_ops = logger.get_slow_entries(
+            Some(Duration::from_millis(500)),
+            Some(OperationFilter::OperationsOnly),
+            None,
+        ).await?;
+        assert_eq!(slow_ops.len(), 1); // Should get only the insert
+        assert_eq!(slow_ops[0].operation_type, "insert");
+
+        // Test 5: Apply limit
+        let limited = logger.get_slow_entries(
+            Some(Duration::from_millis(1)),
+            None,
+            Some(1),
+        ).await?;
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].duration_ms, 2500); // Should get the slowest one
 
         Ok(())
     }

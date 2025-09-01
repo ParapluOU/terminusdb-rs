@@ -8,7 +8,7 @@ pub mod operation_log;
 pub mod query_log;
 
 pub use operation_log::{OperationEntry, OperationLog, OperationType};
-pub use query_log::{QueryLogger, QueryLogEntry};
+pub use query_log::{QueryLogger, QueryLogEntry, OperationFilter};
 
 use std::path::Path;
 
