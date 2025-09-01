@@ -86,7 +86,7 @@ impl super::client::TerminusDBHttpClient {
         match res {
             ApiResponse::Success(r) => {
                 assert!(!response_has_error_prop, "{}", err);
-                Ok(ResponseWithHeaders::new(r, terminusdb_data_version))
+                Ok(ResponseWithHeaders::new_with_string(r, terminusdb_data_version))
             }
             ApiResponse::Error(err) => return Err(err.into()),
         }

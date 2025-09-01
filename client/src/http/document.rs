@@ -414,7 +414,7 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         if model.is_empty() {
             debug!("All documents were filtered out or no documents to insert");
-            return Ok(ResponseWithHeaders::new(HashMap::new(), None));
+            return Ok(ResponseWithHeaders::without_headers(HashMap::new()));
         }
 
         self.ensure_database(&args.spec.db)
@@ -481,7 +481,7 @@ impl super::client::TerminusDBHttpClient {
         // If all documents were filtered out, return empty result
         if to_jsoned.is_empty() {
             debug!("All documents were filtered out or no documents to insert");
-            return Ok(ResponseWithHeaders::new(HashMap::new(), None));
+            return Ok(ResponseWithHeaders::without_headers(HashMap::new()));
         }
 
         //eprintln!("inserting document(s): {:#?}", &to_jsoned);
