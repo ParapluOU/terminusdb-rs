@@ -1,4 +1,4 @@
-use crate::{BranchSpec, TerminusDBAdapterError};
+use crate::{BranchSpec, CommitId, TerminusDBAdapterError};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,12 +19,19 @@ use crate::*;
 #[derive(Debug, Clone)]
 pub struct ResponseWithHeaders<T> {
     data: T,
-    pub commit_id: Option<String>,
+    pub commit_id: Option<CommitId>,
 }
 
 impl<T> ResponseWithHeaders<T> {
-    pub fn new(data: T, commit_id: Option<String>) -> Self {
+    pub fn new(data: T, commit_id: Option<CommitId>) -> Self {
         Self { data, commit_id }
+    }
+
+    pub fn new_with_string(data: T, commit_id: Option<String>) -> Self {
+        Self { 
+            data, 
+            commit_id: commit_id.map(CommitId::from)
+        }
     }
 
     pub fn without_headers(data: T) -> Self {
@@ -48,10 +55,10 @@ impl<T> ResponseWithHeaders<T> {
 
     /// Extract the commit ID from the TerminusDB-Data-Version header
     /// Format is typically "branch:COMMIT_ID", this returns just the COMMIT_ID part
-    pub fn extract_commit_id(&self) -> Option<String> {
-        self.commit_id.as_ref().and_then(|header_value| {
+    pub fn extract_commit_id(&self) -> Option<CommitId> {
+        self.commit_id.as_ref().and_then(|commit_id| {
             // Split on ':' and take the last part (the actual commit ID)
-            header_value.split(':').last().map(|s| s.to_string())
+            commit_id.as_str().split(':').last().map(CommitId::from)
         })
     }
 }

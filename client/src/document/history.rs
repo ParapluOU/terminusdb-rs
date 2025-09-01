@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use crate::CommitId;
 
 /// Parameters for querying document history
 #[derive(Debug, Clone, Serialize, Default)]
@@ -55,11 +56,20 @@ pub struct CommitHistoryEntry {
     /// The user who made the commit
     pub author: String,
     /// The commit identifier
-    pub identifier: String,
+    #[serde(deserialize_with = "deserialize_commit_id")]
+    pub identifier: CommitId,
     /// The commit message
     pub message: String,
     /// When the commit was made (Unix timestamp as float)
     pub timestamp: f64,
+}
+
+fn deserialize_commit_id<'de, D>(deserializer: D) -> Result<CommitId, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    Ok(CommitId::from(s))
 }
 
 impl CommitHistoryEntry {

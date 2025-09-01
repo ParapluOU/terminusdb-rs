@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::CommitId;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BranchSpec {
@@ -7,7 +8,28 @@ pub struct BranchSpec {
     /// branch for versioning product data
     pub branch: Option<String>,
     /// commit reference for time-travel queries (commit ID)
-    pub ref_commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_commit_id", serialize_with = "serialize_commit_id")]
+    pub ref_commit: Option<CommitId>,
+}
+
+fn deserialize_commit_id<'de, D>(deserializer: D) -> Result<Option<CommitId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt.map(CommitId::from))
+}
+
+fn serialize_commit_id<S>(commit_id: &Option<CommitId>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match commit_id {
+        Some(id) => serializer.serialize_some(id.as_str()),
+        None => serializer.serialize_none(),
+    }
 }
 
 impl<AsStr: AsRef<str>> From<AsStr> for BranchSpec {
@@ -46,7 +68,7 @@ impl BranchSpec {
     }
 
     /// Create a BranchSpec pointing to a specific commit for time-travel queries
-    pub fn with_commit(db: impl Into<String>, commit_id: impl Into<String>) -> Self {
+    pub fn with_commit(db: impl Into<String>, commit_id: impl Into<CommitId>) -> Self {
         Self {
             db: db.into(),
             branch: None,
@@ -55,7 +77,7 @@ impl BranchSpec {
     }
 
     /// Set the commit reference for time-travel functionality
-    pub fn ref_commit(mut self, commit_id: impl Into<String>) -> Self {
+    pub fn ref_commit(mut self, commit_id: impl Into<CommitId>) -> Self {
         self.ref_commit = Some(commit_id.into());
         self
     }
@@ -66,7 +88,7 @@ impl BranchSpec {
     }
 
     /// Get the commit ID if this is a commit reference
-    pub fn commit_id(&self) -> Option<&str> {
-        self.ref_commit.as_deref()
+    pub fn commit_id(&self) -> Option<&CommitId> {
+        self.ref_commit.as_ref()
     }
 }
