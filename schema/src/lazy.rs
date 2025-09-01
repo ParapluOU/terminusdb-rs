@@ -6,13 +6,14 @@ use crate::{
     ToTDBSchema, URI,
 };
 use anyhow::{anyhow, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer, Serializer};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::convert::TryInto;
 
 /// Lazy loading container for TerminusDB instances
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct TdbLazy<T: TerminusDBModel> {
     id: Option<EntityIDFor<T>>,
     data: Option<Box<T>>,
@@ -100,6 +101,50 @@ impl<T: TerminusDBModel> From<T> for TdbLazy<T> {
 impl<T: TerminusDBModel> From<EntityIDFor<T>> for TdbLazy<T> {
     fn from(id: EntityIDFor<T>) -> Self {
         Self::new(Some(id), None)
+    }
+}
+
+impl<T: TerminusDBModel + Serialize> Serialize for TdbLazy<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if self.is_loaded() {
+            // When data is loaded, serialize it transparently
+            self.data.as_ref().unwrap().serialize(serializer)
+        } else {
+            // When only ID is present, serialize the ID
+            match &self.id {
+                Some(id) => id.to_string().serialize(serializer),
+                None => serializer.serialize_none()
+            }
+        }
+    }
+}
+
+impl<'de, T: TerminusDBModel + DeserializeOwned> Deserialize<'de> for TdbLazy<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // First, deserialize to a generic JSON value
+        let value = Value::deserialize(deserializer)?;
+        
+        match value {
+            // If it's a string, treat it as an ID
+            Value::String(id_str) => {
+                EntityIDFor::<T>::new(&id_str)
+                    .map(|id| Self::new(Some(id), None))
+                    .map_err(serde::de::Error::custom)
+            }
+            // Otherwise, try to deserialize it as the full data type
+            _ => {
+                let data: T = serde_json::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Self::new_data(data)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
     }
 }
 

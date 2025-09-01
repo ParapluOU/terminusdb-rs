@@ -11,7 +11,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 struct MockClient;
 impl Client for MockClient {
     fn get_instance(&self, id: &str) -> Result<Instance, anyhow::Error> {
-        if id == "activity1" {
+        if id == "Activity/activity1" {
             let mut properties = BTreeMap::new();
             properties.insert(
                 "name".to_string(),
@@ -34,7 +34,7 @@ impl Client for MockClient {
                     unfoldable: false,
                     properties: vec![],
                 },
-                id: Some("activity1".to_string()),
+                id: Some("Activity/activity1".to_string()),
                 capture: false,
                 ref_props: false,
                 properties,
@@ -83,7 +83,7 @@ fn test_deserialize_reference() {
 
     let mut axiom_lazy = axiom_lazy_result.unwrap();
     assert_eq!(axiom_lazy.name, "Test Axiom");
-    assert_eq!(axiom_lazy.activity.id().to_string(), "activity1");
+    assert_eq!(axiom_lazy.activity.id().to_string(), "Activity/activity1");
 
     // Test loading the reference
     let client = MockClient;
@@ -260,5 +260,37 @@ fn test_client_deserializer() {
 
     let axiom_lazy: AxiomWithLazy = axiom_lazy_result.unwrap();
     assert_eq!(axiom_lazy.name, "Test Axiom");
-    assert_eq!(axiom_lazy.activity.id().to_string(), "activity1");
+    assert_eq!(axiom_lazy.activity.id().to_string(), "Activity/activity1");
+}
+
+#[test]
+fn test_tdblazy_transparent_serialization() {
+    // Test 1: Serialize TdbLazy with data - should serialize as the data transparently
+    let activity = Activity {
+        name: "Coding".to_string(),
+        description: "Writing code".to_string(),
+    };
+    let lazy_with_data = TdbLazy::from(activity.clone());
+    
+    let serialized = serde_json::to_string(&lazy_with_data).unwrap();
+    // Should serialize as the activity directly, not as a wrapper
+    let expected = serde_json::to_string(&activity).unwrap();
+    assert_eq!(serialized, expected);
+    
+    // Should deserialize back to a TdbLazy with data
+    let deserialized: TdbLazy<Activity> = serde_json::from_str(&serialized).unwrap();
+    assert!(deserialized.is_loaded());
+    assert_eq!(deserialized.get_expect().name, "Coding");
+    assert_eq!(deserialized.get_expect().description, "Writing code");
+    
+    // Test 2: Serialize TdbLazy with only ID - should serialize as just the ID string
+    let lazy_with_id = TdbLazy::<Activity>::new_id("activity123").unwrap();
+    let serialized_id = serde_json::to_string(&lazy_with_id).unwrap();
+    // EntityIDFor prepends the type name, so it becomes "Activity/activity123"
+    assert_eq!(serialized_id, r#""Activity/activity123""#);
+    
+    // Should deserialize back to a TdbLazy with ID only
+    let deserialized_id: TdbLazy<Activity> = serde_json::from_str(&serialized_id).unwrap();
+    assert!(!deserialized_id.is_loaded());
+    assert_eq!(deserialized_id.id().to_string(), "Activity/activity123");
 }
