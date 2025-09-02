@@ -264,6 +264,26 @@ pub struct ReplaceDocumentTool {
     pub connection: Option<ConnectionConfig>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "delete_classes",
+    description = "Delete schema classes (tables) from TerminusDB by removing all their schema triples. WARNING: This permanently deletes the class definitions from the schema!"
+)]
+pub struct DeleteClassesTool {
+    /// List of class names to delete (e.g., ["AwsDBPublication", "AwsDBPublicationMap"])
+    pub class_names: Vec<String>,
+    /// Database name
+    pub database: String,
+    /// Branch name (defaults to "main" if not specified)
+    pub branch: Option<String>,
+    /// Commit message (defaults to "delete classes")
+    pub message: Option<String>,
+    /// Author name (defaults to "system")
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
 pub struct TerminusDBMcpHandler {
     saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
 }
@@ -886,6 +906,180 @@ impl TerminusDBMcpHandler {
         
         Ok(response)
     }
+
+    async fn handle_delete_classes(&self, request: DeleteClassesTool) -> Result<serde_json::Value> {
+        info!("Deleting classes: {:?}", request.class_names);
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Create branch spec
+        let branch_spec = BranchSpec::with_branch(
+            &request.database,
+            &request.branch.unwrap_or_else(|| "main".to_string())
+        );
+        
+        // For each class, we need to delete all its schema triples
+        // This includes the class definition itself and all its properties
+        let mut deleted_classes = Vec::new();
+        let mut errors = Vec::new();
+        
+        for class_name in &request.class_names {
+            // Build a WOQL query to delete all triples where the subject is the class
+            // or where the domain is the class (for properties)
+            let class_uri = format!("@schema:{}", class_name);
+            
+            // Create a JSON-LD query to delete all schema triples for this class
+            let delete_query = json!({
+                "@type": "And",
+                "and": [
+                    // Delete the class definition itself
+                    {
+                        "@type": "DeleteTriple",
+                        "subject": {
+                            "@type": "NodeValue",
+                            "node": &class_uri
+                        },
+                        "predicate": {
+                            "@type": "NodeValue",
+                            "variable": "Predicate1"
+                        },
+                        "object": {
+                            "@type": "Value",
+                            "variable": "Object1"
+                        },
+                        "graph": "schema"
+                    },
+                    // Delete all properties that have this class as domain
+                    {
+                        "@type": "DeleteTriple",
+                        "subject": {
+                            "@type": "NodeValue",
+                            "variable": "Property"
+                        },
+                        "predicate": {
+                            "@type": "NodeValue",
+                            "node": "rdfs:domain"
+                        },
+                        "object": {
+                            "@type": "Value",
+                            "node": &class_uri
+                        },
+                        "graph": "schema"
+                    },
+                    // Delete all other triples related to those properties
+                    {
+                        "@type": "DeleteTriple",
+                        "subject": {
+                            "@type": "NodeValue",
+                            "variable": "Property"
+                        },
+                        "predicate": {
+                            "@type": "NodeValue",
+                            "variable": "Predicate2"
+                        },
+                        "object": {
+                            "@type": "Value",
+                            "variable": "Object2"
+                        },
+                        "graph": "schema"
+                    }
+                ]
+            });
+            
+            // First, find all the triples to delete
+            let find_query = json!({
+                "@type": "And",
+                "and": [
+                    // Find class triples
+                    {
+                        "@type": "Triple",
+                        "subject": {
+                            "@type": "NodeValue",
+                            "node": &class_uri
+                        },
+                        "predicate": {
+                            "@type": "NodeValue",
+                            "variable": "Predicate1"
+                        },
+                        "object": {
+                            "@type": "Value",
+                            "variable": "Object1"
+                        },
+                        "graph": "schema"
+                    },
+                    // Find properties with this class as domain
+                    {
+                        "@type": "Triple",
+                        "subject": {
+                            "@type": "NodeValue",
+                            "variable": "Property"
+                        },
+                        "predicate": {
+                            "@type": "NodeValue",
+                            "node": "rdfs:domain"
+                        },
+                        "object": {
+                            "@type": "Value",
+                            "node": &class_uri
+                        },
+                        "graph": "schema"
+                    },
+                    // Find all triples for those properties
+                    {
+                        "@type": "Triple",
+                        "subject": {
+                            "@type": "NodeValue",
+                            "variable": "Property"
+                        },
+                        "predicate": {
+                            "@type": "NodeValue",
+                            "variable": "Predicate2"
+                        },
+                        "object": {
+                            "@type": "Value",
+                            "variable": "Object2"
+                        },
+                        "graph": "schema"
+                    }
+                ]
+            });
+            
+            // Execute the deletion query
+            match client.query_string(Some(branch_spec.clone()), &serde_json::to_string(&delete_query)?).await {
+                Ok(_) => {
+                    deleted_classes.push(class_name.clone());
+                    info!("Successfully deleted class: {}", class_name);
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to delete class {}: {}", class_name, e);
+                    error!("{}", error_msg);
+                    errors.push(error_msg);
+                }
+            }
+        }
+        
+        let response = if errors.is_empty() {
+            serde_json::json!({
+                "status": "success",
+                "message": format!("Successfully deleted {} classes", deleted_classes.len()),
+                "deleted_classes": deleted_classes,
+                "database": request.database,
+                "branch": request.branch.unwrap_or_else(|| "main".to_string())
+            })
+        } else {
+            serde_json::json!({
+                "status": "partial_success",
+                "message": format!("Deleted {} classes, {} failed", deleted_classes.len(), errors.len()),
+                "deleted_classes": deleted_classes,
+                "errors": errors,
+                "database": request.database,
+                "branch": request.branch.unwrap_or_else(|| "main".to_string())
+            })
+        };
+        
+        Ok(response)
+    }
 }
 
 #[async_trait]
@@ -905,6 +1099,7 @@ impl ServerHandler for TerminusDBMcpHandler {
                 ResetDatabaseTool::tool(),
                 GetDocumentTool::tool(),
                 QueryLogTool::tool(),
+                DeleteClassesTool::tool(),
                 // Temporarily disabled due to serde_json::Value schema issues
                 // InsertDocumentTool::tool(),
                 // InsertDocumentsTool::tool(),
@@ -1196,6 +1391,31 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.handle_replace_document(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == DeleteClassesTool::tool_name() => {
+                let tool_request: DeleteClassesTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_delete_classes(tool_request).await {
                     Ok(result) => {
                         let text_content = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());

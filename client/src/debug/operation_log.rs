@@ -65,7 +65,6 @@ pub struct OperationEntry {
     /// Additional context (e.g., query type)
     pub context: Option<String>,
     /// The WOQL query (for query operations)
-    #[serde(skip)]
     pub query: Option<Query>,
 }
 
