@@ -67,6 +67,24 @@ macro_rules! node_value {
     };
 }
 
+/// Create a schema type name URI
+/// 
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let person_type = typename!(Person); // Creates "@schema:Person"
+/// let custom_type = typename!("CustomModel"); // Creates "@schema:CustomModel"
+/// ```
+#[macro_export]
+macro_rules! typename {
+    ($type:ident) => {
+        concat!("@schema:", stringify!($type))
+    };
+    ($type:expr) => {
+        format!("@schema:{}", $type)
+    };
+}
+
 /// Create a Data value with automatic type conversion
 /// 
 /// # Examples
@@ -454,6 +472,7 @@ macro_rules! if_then_else {
 /// # use terminusdb_woql2::*;
 /// let q = type!(var!(x), "Person"); // equivalent to triple!(var!(x), "rdf:type", "Person")
 /// let q2 = type!(var!(x), var!(type)); // with variable type
+/// let q3 = type!(var!(x), typename!(Person)); // using typename! macro: triple!(var!(x), "rdf:type", "@schema:Person")
 /// ```
 #[macro_export]
 macro_rules! type_ {
@@ -468,6 +487,7 @@ macro_rules! type_ {
 /// ```
 /// # use terminusdb_woql2::*;
 /// let q = isa!(var!(x), "Person"); // checks if x is of type Person
+/// let q2 = isa!(var!(x), typename!(Person)); // using typename! macro to check against "@schema:Person"
 /// ```
 #[macro_export]
 macro_rules! isa {
@@ -532,6 +552,20 @@ macro_rules! count_into {
             query: Box::new($query),
             count: $crate::macros::into_data_value($count_var),
         })
+    };
+}
+
+/// Alias for count_into! macro
+/// 
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = count!(triple!(var!(x), "rdf:type", "Person"), var!(count));
+/// ```
+#[macro_export]
+macro_rules! count {
+    ($query:expr, $count_var:expr) => {
+        count_into!($query, $count_var)
     };
 }
 
