@@ -472,10 +472,16 @@ macro_rules! if_then_else {
 /// # use terminusdb_woql2::*;
 /// let q = type!(var!(x), "Person"); // equivalent to triple!(var!(x), "rdf:type", "Person")
 /// let q2 = type!(var!(x), var!(type)); // with variable type
-/// let q3 = type!(var!(x), typename!(Person)); // using typename! macro: triple!(var!(x), "rdf:type", "@schema:Person")
+/// let q3 = type!(var!(x), Person); // identifier automatically wrapped: triple!(var!(x), "rdf:type", "@schema:Person")
+/// let q4 = type!(var!(x), typename!(Person)); // explicit typename! usage
 /// ```
 #[macro_export]
 macro_rules! type_ {
+    // Pattern for identifiers - automatically wrap with typename!
+    ($subject:expr, $type:ident) => {
+        triple!($subject, "rdf:type", typename!($type))
+    };
+    // Pattern for expressions - use as-is
     ($subject:expr, $type:expr) => {
         triple!($subject, "rdf:type", $type)
     };
@@ -487,10 +493,19 @@ macro_rules! type_ {
 /// ```
 /// # use terminusdb_woql2::*;
 /// let q = isa!(var!(x), "Person"); // checks if x is of type Person
-/// let q2 = isa!(var!(x), typename!(Person)); // using typename! macro to check against "@schema:Person"
+/// let q2 = isa!(var!(x), Person); // identifier automatically wrapped to check against "@schema:Person"
+/// let q3 = isa!(var!(x), typename!(Person)); // explicit typename! usage
 /// ```
 #[macro_export]
 macro_rules! isa {
+    // Pattern for identifiers - automatically wrap with typename!
+    ($element:expr, $type:ident) => {
+        $crate::query::Query::IsA($crate::compare::IsA {
+            element: $crate::macros::into_node_value($element),
+            type_of: $crate::macros::into_node_value(typename!($type)),
+        })
+    };
+    // Pattern for expressions - use as-is
     ($element:expr, $type:expr) => {
         $crate::query::Query::IsA($crate::compare::IsA {
             element: $crate::macros::into_node_value($element),
