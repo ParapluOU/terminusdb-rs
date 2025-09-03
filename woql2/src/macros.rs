@@ -1,10 +1,10 @@
 //! Macros for simplified WOQL query construction
-//! 
+//!
 //! These macros provide a more ergonomic way to construct WOQL queries
 //! as an alternative to the woql-builder approach.
 
 /// Create a Variable value
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -22,7 +22,7 @@ macro_rules! var {
 }
 
 /// Create a NodeValue Variable
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -39,7 +39,7 @@ macro_rules! node_var {
 }
 
 /// Create a Node value
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -54,7 +54,7 @@ macro_rules! node {
 }
 
 /// Create a NodeValue Node
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -68,7 +68,7 @@ macro_rules! node_value {
 }
 
 /// Create a schema type name URI
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -78,7 +78,7 @@ macro_rules! node_value {
 #[macro_export]
 macro_rules! typename {
     ($type:ident) => {
-        concat!("@schema:", stringify!($type))
+        format!("@schema:{}", stringify!($type))
     };
     ($type:expr) => {
         format!("@schema:{}", $type)
@@ -86,7 +86,7 @@ macro_rules! typename {
 }
 
 /// Create a Data value with automatic type conversion
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -102,7 +102,7 @@ macro_rules! data {
 }
 
 /// Create a DateTime value
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -115,13 +115,13 @@ macro_rules! datetime {
         $crate::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(
             chrono::DateTime::parse_from_rfc3339($value)
                 .expect("Invalid datetime format, expected RFC3339 (e.g., '2024-01-01T00:00:00Z')")
-                .with_timezone(&chrono::Utc)
+                .with_timezone(&chrono::Utc),
         ))
     };
 }
 
 /// Create a List value
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -136,7 +136,7 @@ macro_rules! list {
 }
 
 /// Create a Triple query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -164,7 +164,7 @@ macro_rules! triple {
 }
 
 /// Create an And query with multiple sub-queries
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -183,7 +183,7 @@ macro_rules! and {
 }
 
 /// Create an Or query with multiple sub-queries
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -202,7 +202,7 @@ macro_rules! or {
 }
 
 /// Create a Not query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -212,13 +212,13 @@ macro_rules! or {
 macro_rules! not {
     ($query:expr) => {
         $crate::query::Query::Not($crate::query::Not {
-            query: Box::new($query)
+            query: Box::new($query),
         })
     };
 }
 
 /// Create a Select query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -244,7 +244,7 @@ macro_rules! select {
 }
 
 /// Create an Equals comparison
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -261,7 +261,7 @@ macro_rules! eq {
 }
 
 /// Create a Greater comparison
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -278,7 +278,7 @@ macro_rules! greater {
 }
 
 /// Create a Less comparison
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -295,7 +295,7 @@ macro_rules! less {
 }
 
 /// Create a Path query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -324,7 +324,7 @@ macro_rules! path {
 }
 
 /// Create a Limit query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -341,7 +341,7 @@ macro_rules! limit {
 }
 
 /// Create an Eval query for arithmetic expressions
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -360,7 +360,7 @@ macro_rules! eval {
 }
 
 /// Create a ReadDocument query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -377,7 +377,7 @@ macro_rules! read_doc {
 }
 
 /// Create an InsertDocument query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -401,7 +401,7 @@ macro_rules! insert_doc {
 }
 
 /// Create an UpdateDocument query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -425,7 +425,7 @@ macro_rules! update_doc {
 }
 
 /// Create a DeleteDocument query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -441,7 +441,7 @@ macro_rules! delete_doc {
 }
 
 /// Create an If-Then-Else query
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -466,7 +466,7 @@ macro_rules! if_then_else {
 // These provide convenient shortcuts for common WOQL patterns
 
 /// Shortcut for creating rdf:type triples
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -482,7 +482,7 @@ macro_rules! type_ {
 }
 
 /// Shortcut for isa type checking
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -500,7 +500,7 @@ macro_rules! isa {
 }
 
 /// Shortcut for optional queries
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -516,7 +516,7 @@ macro_rules! optional {
 }
 
 /// Shortcut for distinct with all variables from a select
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -539,7 +539,7 @@ macro_rules! distinct_vars {
 }
 
 /// Shortcut for count queries
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -556,7 +556,7 @@ macro_rules! count_into {
 }
 
 /// Alias for count_into! macro
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -570,7 +570,7 @@ macro_rules! count {
 }
 
 /// Shortcut for typecast operations
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -588,7 +588,7 @@ macro_rules! cast {
 }
 
 /// Shortcut for sum operations on lists
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -605,7 +605,7 @@ macro_rules! sum {
 }
 
 /// Shortcut for concatenating strings
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -622,7 +622,7 @@ macro_rules! concat {
 }
 
 /// Shortcut for member checking
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -639,7 +639,7 @@ macro_rules! member {
 }
 
 /// Shortcut for immediately queries (commit after each solution)
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -655,7 +655,7 @@ macro_rules! immediately {
 }
 
 /// Shortcut for link triples (object references)
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -682,7 +682,7 @@ macro_rules! link {
 }
 
 /// Shortcut for data triples (literal values)
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -709,7 +709,7 @@ macro_rules! data_triple {
 }
 
 /// Shortcut for regex matching
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -735,7 +735,7 @@ macro_rules! regex {
 }
 
 /// Shortcut for trim operations
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -752,7 +752,7 @@ macro_rules! trim {
 }
 
 /// True query constant
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -766,7 +766,7 @@ macro_rules! true_ {
 }
 
 /// String operation that checks if a string starts with a pattern
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -781,7 +781,7 @@ macro_rules! starts_with {
 }
 
 /// String operation that checks if a string ends with a pattern
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -796,7 +796,7 @@ macro_rules! ends_with {
 }
 
 /// String operation that checks if a string contains a pattern
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -811,7 +811,7 @@ macro_rules! contains {
 }
 
 /// Get today's date in ISO 8601 format
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -821,12 +821,14 @@ macro_rules! contains {
 #[macro_export]
 macro_rules! today {
     () => {
-        $crate::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(chrono::Utc::now()))
+        $crate::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(
+            chrono::Utc::now(),
+        ))
     };
 }
 
 /// Check if a date is after another date
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -841,7 +843,7 @@ macro_rules! after {
 }
 
 /// Check if a date is before another date
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -856,7 +858,7 @@ macro_rules! before {
 }
 
 /// Check if a date is between two dates (inclusive)
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -866,15 +868,12 @@ macro_rules! before {
 #[macro_export]
 macro_rules! in_between {
     ($date:expr, $start:expr, $end:expr) => {
-        and!(
-            compare!(($date) >= ($start)),
-            compare!(($date) <= ($end))
-        )
+        and!(compare!(($date) >= ($start)), compare!(($date) <= ($end)))
     };
 }
 
 /// Check if today's date is between two dates (inclusive)
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -889,7 +888,7 @@ macro_rules! today_in_between {
 }
 
 /// Compare macro using Rust comparison operators
-/// 
+///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
@@ -914,7 +913,7 @@ macro_rules! compare {
     ($left:ident > $right:ident) => {
         greater!($left, $right)
     };
-    
+
     // Less than
     (($left:expr) < ($right:expr)) => {
         less!($left, $right)
@@ -928,7 +927,7 @@ macro_rules! compare {
     ($left:ident < $right:ident) => {
         less!($left, $right)
     };
-    
+
     // Equals
     (($left:expr) == ($right:expr)) => {
         eq!($left, $right)
@@ -942,7 +941,7 @@ macro_rules! compare {
     ($left:ident == $right:ident) => {
         eq!($left, $right)
     };
-    
+
     // Greater than or equal
     (($left:expr) >= ($right:expr)) => {{
         let left_val = $left;
@@ -967,12 +966,9 @@ macro_rules! compare {
         )
     }};
     ($left:ident >= $right:ident) => {
-        or!(
-            greater!($left.clone(), $right.clone()),
-            eq!($left, $right)
-        )
+        or!(greater!($left.clone(), $right.clone()), eq!($left, $right))
     };
-    
+
     // Less than or equal
     (($left:expr) <= ($right:expr)) => {{
         let left_val = $left;
@@ -997,12 +993,9 @@ macro_rules! compare {
         )
     }};
     ($left:ident <= $right:ident) => {
-        or!(
-            less!($left.clone(), $right.clone()),
-            eq!($left, $right)
-        )
+        or!(less!($left.clone(), $right.clone()), eq!($left, $right))
     };
-    
+
     // Not equals
     (($left:expr) != ($right:expr)) => {
         not!(eq!($left, $right))
@@ -1022,8 +1015,8 @@ macro_rules! compare {
 pub use self::conversion::*;
 
 mod conversion {
-    use crate::value::{Value, NodeValue, DataValue, ListOrVariable};
     use crate::expression::ArithmeticValue;
+    use crate::value::{DataValue, ListOrVariable, NodeValue, Value};
     use terminusdb_schema::XSDAnySimpleType;
 
     /// Convert various types into XSDAnySimpleType
@@ -1228,9 +1221,10 @@ mod conversion {
                 Value::Data(d) => DataValue::Data(d),
                 Value::List(items) => {
                     // Convert Value list to DataValue list
-                    let data_items: Vec<DataValue> = items.into_iter().map(|v| v.into_data_value()).collect();
+                    let data_items: Vec<DataValue> =
+                        items.into_iter().map(|v| v.into_data_value()).collect();
                     DataValue::List(data_items)
-                },
+                }
                 _ => panic!("Cannot convert node/dictionary Value to DataValue"),
             }
         }
