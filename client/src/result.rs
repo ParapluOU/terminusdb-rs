@@ -1,4 +1,4 @@
-use crate::{BranchSpec, CommitId, TerminusDBAdapterError};
+use crate::{BranchSpec, CommitId, TerminusDBAdapterError, err::TypedErrorResponse};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

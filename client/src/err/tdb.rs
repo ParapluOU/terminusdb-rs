@@ -29,6 +29,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:UnresolvableAbsoluteDescriptor")]
     UnresolvableAbsoluteDescriptor(UnresolvableAbsoluteDescriptorError),
 
+    #[serde(rename = "api:WOQLSyntaxError")]
+    ApiWOQLSyntaxError(ApiWOQLSyntaxError),
+
     Other(Value),
 
     #[default]
@@ -41,6 +44,7 @@ impl Display for ApiResponseError {
             ApiResponseError::SchemaCheckFail(error) => Display::fmt(error, f),
             ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
             ApiResponseError::UnresolvableAbsoluteDescriptor(error) => Display::fmt(error, f),
+            ApiResponseError::ApiWOQLSyntaxError(error) => write!(f, "WOQL syntax error: {}", error.error_term),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -239,6 +243,12 @@ pub struct WOQLSyntaxError {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct ApiWOQLSyntaxError {
+    #[serde(rename = "api:error_term")]
+    pub error_term: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DocumentNotFoundError {
     #[serde(rename = "api:document_id")]
     pub document_id: String,
@@ -391,6 +401,58 @@ fn test_deserialize_unresolvable_absolute_descriptor_error() {
                 );
             } else {
                 panic!("Expected UnresolvableAbsoluteDescriptor error");
+            }
+        }
+        _ => panic!("Expected WoqlError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+
+#[test]
+fn test_deserialize_api_woql_syntax_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:WoqlErrorResponse",
+        "api:error": {
+            "@type": "api:WOQLSyntaxError",
+            "api:error_term": "unresolvable_prefix(rdf,type)",
+        },
+        "api:message": "Unknown syntax error in WOQL: \"unresolvable_prefix(rdf,type)\"",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::WoqlError(err) => {
+            assert_eq!(
+                err.api_message,
+                "Unknown syntax error in WOQL: \"unresolvable_prefix(rdf,type)\""
+            );
+            // Check status
+            match err.api_status {
+                TerminusAPIStatus::Failure => {} // expected
+                _ => panic!("Expected Failure status"),
+            }
+
+            if let Some(ApiResponseError::ApiWOQLSyntaxError(syntax_err)) = err.api_error {
+                assert_eq!(syntax_err.error_term, "unresolvable_prefix(rdf,type)");
+            } else {
+                panic!("Expected ApiWOQLSyntaxError error");
             }
         }
         _ => panic!("Expected WoqlError variant"),
