@@ -171,6 +171,71 @@ impl TerminusDBHttpClient {
         client.ensure_database(db).await
     }
 
+    /// Creates a TerminusDB client from environment variables.
+    ///
+    /// Reads the following environment variables:
+    /// - `TERMINUSDB_HOST`: The TerminusDB server URL (default: "http://localhost:6363")
+    /// - `TERMINUSDB_USER`: Username for authentication (default: "admin")
+    /// - `TERMINUSDB_PASS`: Password for authentication (default: "root")
+    /// - `TERMINUSDB_ORG`: Organization name (default: "admin")
+    /// - `TERMINUSDB_DB`: Optional database name to ensure exists
+    /// - `TERMINUSDB_BRANCH`: Optional branch name (default: "main")
+    ///
+    /// # Returns
+    /// A configured client instance
+    ///
+    /// # Example
+    /// ```bash
+    /// export TERMINUSDB_HOST="https://cloud.terminusdb.com"
+    /// export TERMINUSDB_USER="my_user"
+    /// export TERMINUSDB_PASS="my_password"
+    /// export TERMINUSDB_ORG="my_org"
+    /// export TERMINUSDB_DB="my_database"
+    /// export TERMINUSDB_BRANCH="develop"
+    /// ```
+    ///
+    /// ```rust
+    /// let client = TerminusDBHttpClient::from_env().await?;
+    /// ```
+    #[instrument(name = "terminus.client.from_env", err)]
+    pub async fn from_env() -> anyhow::Result<Self> {
+        use std::env;
+        
+        let endpoint = env::var("TERMINUSDB_HOST")
+            .unwrap_or_else(|_| "http://localhost:6363".to_string());
+        let user = env::var("TERMINUSDB_USER")
+            .unwrap_or_else(|_| "admin".to_string());
+        let password = env::var("TERMINUSDB_PASS")
+            .unwrap_or_else(|_| "root".to_string());
+        let org = env::var("TERMINUSDB_ORG")
+            .unwrap_or_else(|_| "admin".to_string());
+        
+        let endpoint_url = Url::parse(&endpoint)
+            .context(format!("Invalid TERMINUSDB_HOST URL: {}", endpoint))?;
+        
+        debug!("Creating client from environment variables: endpoint={}, user={}, org={}", 
+               endpoint, user, org);
+        
+        let client = Self::new(endpoint_url, &user, &password, &org).await?;
+        
+        // If TERMINUSDB_DB is set, ensure the database exists
+        if let Ok(db) = env::var("TERMINUSDB_DB") {
+            debug!("Ensuring database '{}' exists", db);
+            let mut client = client.ensure_database(&db).await?;
+            
+            // If TERMINUSDB_BRANCH is set, check it out (note: this would require adding branch support)
+            if let Ok(branch) = env::var("TERMINUSDB_BRANCH") {
+                debug!("Branch '{}' specified via TERMINUSDB_BRANCH", branch);
+                // TODO: Add branch checkout functionality if needed
+                // For now, just log it
+            }
+            
+            return Ok(client);
+        }
+        
+        Ok(client)
+    }
+
     /// Returns a clone of the last executed WOQL query for debugging purposes.
     ///
     /// This method provides access to the most recently executed query, which can be
@@ -401,6 +466,23 @@ impl TerminusDBHttpClient {
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),
             ensured_databases: Arc::new(Mutex::new(HashSet::new())),
         })
+    }
+
+    /// Creates a TerminusDB client from environment variables (WASM version).
+    ///
+    /// Note: In WASM environments, environment variables might not be available
+    /// in the same way as native environments. This implementation uses the same
+    /// defaults as the native version.
+    pub async fn from_env() -> anyhow::Result<Self> {
+        // In WASM, we might not have access to std::env
+        // You might need to use a different mechanism to get configuration
+        // For now, we'll use the same defaults
+        let endpoint = Url::parse("http://localhost:6363")?;
+        let user = "admin";
+        let pass = "root";
+        let org = "admin";
+        
+        Self::new(endpoint, user, pass, org).await
     }
 
     // Implement other methods as needed for WASM
