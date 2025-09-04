@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 // Implement ToSchemaClass for Uuid
 impl ToSchemaClass for Uuid {
-    fn to_class() -> &'static str {
-        STRING
+    fn to_class() -> String {
+        STRING.to_string()
     }
 }
 

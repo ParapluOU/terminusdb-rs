@@ -39,7 +39,13 @@ pub fn derive_instance_from_json_impl(input: DeriveInput) -> Result<TokenStream,
     match &input.data {
         Data::Struct(data_struct) => {
             // Handle struct implementation
-            implement_instance_from_json_for_struct(type_name, data_struct, &opts)
+            implement_instance_from_json_for_struct(
+                type_name, 
+                data_struct, 
+                &opts,
+                #[cfg(feature = "generic-derive")]
+                &input.generics,
+            )
         }
         Data::Enum(data_enum) => {
             // Determine if this is a simple enum or a tagged union
@@ -66,11 +72,32 @@ fn implement_instance_from_json_for_struct(
     struct_name: &Ident,
     data_struct: &syn::DataStruct,
     opts: &TDBModelOpts,
+    #[cfg(feature = "generic-derive")]
+    generics: &syn::Generics,
 ) -> Result<TokenStream, syn::Error> {
-    let expected_type_name = opts
-        .class_name
-        .clone()
-        .unwrap_or_else(|| struct_name.to_string());
+    // Extract generic parameters
+    #[cfg(feature = "generic-derive")]
+    let (impl_generics, ty_generics, where_clause) = {
+        if !generics.params.is_empty() {
+            let (syn_impl_generics, syn_ty_generics, syn_where_clause) = generics.split_for_impl();
+            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, syn_where_clause.cloned())
+        } else {
+            (quote!{}, quote!{}, None)
+        }
+    };
+    
+    #[cfg(not(feature = "generic-derive"))]
+    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None);
+    // For generics, we need to use the schema name which includes generic parameters
+    let expected_type_name_expr = if cfg!(feature = "generic-derive") && !generics.params.is_empty() {
+        quote! { <#struct_name #ty_generics as terminusdb_schema::ToTDBSchema>::schema_name() }
+    } else {
+        let static_name = opts
+            .class_name
+            .clone()
+            .unwrap_or_else(|| struct_name.to_string());
+        quote! { #static_name }
+    };
 
     let fields = match &data_struct.fields {
         Fields::Named(fields) => fields,
@@ -83,10 +110,10 @@ fn implement_instance_from_json_for_struct(
     };
 
     let field_deserializers =
-        generate_field_deserializers(fields, struct_name, &expected_type_name, opts)?;
+        generate_field_deserializers(fields, struct_name, opts, &ty_generics)?;
 
     let expanded = quote! {
-        impl terminusdb_schema::json::InstanceFromJson for #struct_name {
+        impl #impl_generics terminusdb_schema::json::InstanceFromJson for #struct_name #ty_generics #where_clause {
             #[allow(unused_variables)] // json_map might be unused if struct has no fields
             fn instance_from_json(json: serde_json::Value) -> anyhow::Result<terminusdb_schema::Instance> {
                 use terminusdb_schema::{Instance, InstanceProperty, ToTDBInstance, Schema, ToTDBSchema};
@@ -112,7 +139,7 @@ fn implement_instance_from_json_for_struct(
                     .and_then(|v| v.as_str().map(String::from))
                     .ok_or_else(|| anyhow!("Missing or invalid '@type' field in JSON instance"))?;
 
-                let expected_type_name = #expected_type_name;
+                let expected_type_name = #expected_type_name_expr;
                 if type_name != expected_type_name {
                      return Err(anyhow!("Mismatched '@type': expected '{}', found '{}'", expected_type_name, type_name));
                 }
@@ -123,7 +150,7 @@ fn implement_instance_from_json_for_struct(
 
                 Result::Ok(Instance {
                     id,
-                    schema: <#struct_name as ToTDBSchema>::to_schema(),
+                    schema: <#struct_name #ty_generics as ToTDBSchema>::to_schema(),
                     capture: false,
                     ref_props: false,
                     properties: _properties, // Use filled properties map
@@ -141,10 +168,6 @@ fn implement_instance_from_json_for_simple_enum(
     data_enum: &DataEnum,
     opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
-    let expected_type_name = opts
-        .class_name
-        .clone()
-        .unwrap_or_else(|| enum_name.to_string());
 
     let variant_matchers = data_enum
         .variants
@@ -197,7 +220,7 @@ fn implement_instance_from_json_for_simple_enum(
                     .and_then(|v| v.as_str().map(String::from))
                     .ok_or_else(|| anyhow!("Missing or invalid '@type' field in JSON instance"))?;
 
-                let expected_type_name = #expected_type_name;
+                let expected_type_name = <#enum_name as terminusdb_schema::ToTDBSchema>::schema_name();
                 if type_name != expected_type_name {
                     return Err(anyhow!("Mismatched '@type': expected '{}', found '{}'", expected_type_name, type_name));
                 }
@@ -219,10 +242,6 @@ fn implement_instance_from_json_for_tagged_enum(
     data_enum: &DataEnum,
     opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
-    let expected_type_name = opts
-        .class_name
-        .clone()
-        .unwrap_or_else(|| enum_name.to_string());
 
     let variant_matchers = data_enum.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
@@ -407,7 +426,7 @@ fn implement_instance_from_json_for_tagged_enum(
                     .and_then(|v| v.as_str().map(String::from))
                     .ok_or_else(|| anyhow!("Missing or invalid '@type' field in JSON instance"))?;
 
-                let expected_type_name = #expected_type_name;
+                let expected_type_name = <#enum_name as terminusdb_schema::ToTDBSchema>::schema_name();
                 if type_name != expected_type_name {
                     return Err(anyhow!("Mismatched '@type': expected '{}', found '{}'", expected_type_name, type_name));
                 }
@@ -415,7 +434,7 @@ fn implement_instance_from_json_for_tagged_enum(
                 // Check each variant
                 #(#variant_matchers)*
 
-                Err(anyhow!("No valid enum variant found in JSON for tagged union {}", #expected_type_name))
+                Err(anyhow!("No valid enum variant found in JSON for tagged union {}", <#enum_name as terminusdb_schema::ToTDBSchema>::schema_name()))
             }
         }
     };
@@ -427,8 +446,8 @@ fn implement_instance_from_json_for_tagged_enum(
 fn generate_field_deserializers(
     fields: &FieldsNamed,
     struct_name: &Ident,
-    expected_type_name: &str,
     opts: &TDBModelOpts,
+    ty_generics: &proc_macro2::TokenStream,
 ) -> Result<TokenStream, syn::Error> {
     let mut deserializers: Vec<TokenStream> = Vec::new();
 
@@ -452,7 +471,7 @@ fn generate_field_deserializers(
                 let json_value = id.as_ref().map(|id_str| Value::String(id_str.clone()));
 
                 // Use property_from_maybe_json for the id field
-                let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name>>::property_from_maybe_json(
+                let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name #ty_generics>>::property_from_maybe_json(
                     json_value.clone()
                 )
                 .context("generate_field_deserializers() - id_field");
@@ -471,7 +490,7 @@ fn generate_field_deserializers(
                 let json_value = json_map.remove(#json_key_name);
 
                 // Use property_from_maybe_json for all fields
-                let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name>>::property_from_maybe_json(
+                let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name #ty_generics>>::property_from_maybe_json(
                     json_value.clone()
                 )
                 // .context(&err)?;

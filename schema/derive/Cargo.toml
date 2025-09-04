@@ -37,3 +37,7 @@ tap = "1.0.1"
 path = "src/lib.rs"
 #crate-type = ["cdylib"]
 proc-macro = true
+
+[features]
+# Experimental support for generic types in derive macro
+generic-derive = []

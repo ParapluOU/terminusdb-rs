@@ -85,8 +85,8 @@ impl ToTDBInstance for HashMapStringEntry {
 }
 
 impl ToSchemaClass for HashMap<String, String> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 

@@ -26,8 +26,8 @@ impl<K, T: ToTDBSchema> ToTDBSchema for BTreeMap<K, T> {
 
 // Implement ToSchemaClass for BTreeMap<String, Value>
 impl ToSchemaClass for BTreeMap<String, Value> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -39,8 +39,8 @@ impl ToMaybeTDBSchema for BTreeMap<String, Value> {}
 
 // Implement ToSchemaClass for BTreeMap<String, String>
 impl ToSchemaClass for BTreeMap<String, String> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -218,8 +218,8 @@ impl FromInstanceProperty for BTreeMap<String, String> {
 
 // Specific implementations for BTreeMap<EntityIDFor<T>, String>
 impl<T: ToTDBSchema> ToSchemaClass for BTreeMap<EntityIDFor<T>, String> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -228,8 +228,8 @@ impl<T: ToTDBSchema> ToMaybeTDBSchema for BTreeMap<EntityIDFor<T>, String> {}
 
 // Specific implementations for BTreeMap<EntityIDFor<T>, serde_json::Value>
 impl<T: ToTDBSchema> ToSchemaClass for BTreeMap<EntityIDFor<T>, serde_json::Value> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -358,8 +358,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
 // BTreeMap<EntityIDFor<T>, i32>
 
 impl<T: ToTDBSchema> ToSchemaClass for BTreeMap<EntityIDFor<T>, i32> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -422,8 +422,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for BTreeMap<Entit
 // BTreeMap<EntityIDFor<T>, bool>
 
 impl<T: ToTDBSchema> ToSchemaClass for BTreeMap<EntityIDFor<T>, bool> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -486,8 +486,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for BTreeMap<Entit
 // BTreeMap<EntityIDFor<T>, DateTime<Utc>>
 
 impl<T: ToTDBSchema> ToSchemaClass for BTreeMap<EntityIDFor<T>, DateTime<Utc>> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -557,8 +557,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
 // BTreeMap<EntityIDFor<T>, NaiveTime>
 
 impl<T: ToTDBSchema> ToSchemaClass for BTreeMap<EntityIDFor<T>, NaiveTime> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -651,8 +651,8 @@ impl<
             + for<'de> serde::Deserialize<'de>,
     > ToSchemaClass for BTreeMap<EntityIDFor<T>, V>
 {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 

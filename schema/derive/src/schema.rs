@@ -3,12 +3,14 @@ use crate::prelude::*;
 /// Generate the ToTDBSchema trait implementation with a specific schema type
 pub fn generate_totdbschema_impl(
     struct_name: &syn::Ident,
-    class_name: &str,
+    class_name_expr: proc_macro2::TokenStream,
     opts: &TDBModelOpts,
     properties_or_values: proc_macro2::TokenStream,
     schema_type_param: proc_macro2::TokenStream,
     to_schema_tree_impl: proc_macro2::TokenStream,
+    generics: (&proc_macro2::TokenStream, &proc_macro2::TokenStream, &Option<syn::WhereClause>),
 ) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics;
     // Generate the base implementation
     let base = if let Some(base) = &opts.base {
         quote! { Some(#base.to_string()) }
@@ -123,11 +125,11 @@ pub fn generate_totdbschema_impl(
 
     // Use the existing schema type instead of creating a custom one
     quote! {
-        impl terminusdb_schema::ToTDBSchema for #struct_name {
+        impl #impl_generics terminusdb_schema::ToTDBSchema for #struct_name #ty_generics #where_clause {
             type Type = terminusdb_schema::#schema_type_param;
 
             fn id() -> Option<String> {
-                Some(#class_name.to_string())
+                Some(#class_name_expr.to_string())
             }
 
             fn base() -> Option<String> {
@@ -166,11 +168,6 @@ pub fn generate_totdbschema_impl(
             #to_schema_tree_impl
         }
 
-        // Implement ToSchemaClass for this struct so it can be used in other structs
-        impl terminusdb_schema::ToSchemaClass for #struct_name {
-            fn to_class() -> &'static str {
-                #class_name
-            }
-        }
+        // ToSchemaClass is implemented separately in struct.rs with proper generics
     }
 }

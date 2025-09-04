@@ -149,7 +149,7 @@ impl<'de, T: TerminusDBModel + DeserializeOwned> Deserialize<'de> for TdbLazy<T>
 }
 
 impl<T: TerminusDBModel + ToSchemaClass> ToSchemaClass for TdbLazy<T> {
-    fn to_class() -> &'static str {
+    fn to_class() -> String {
         T::to_class()
     }
 }

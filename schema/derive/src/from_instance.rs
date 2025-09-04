@@ -25,7 +25,12 @@ pub(crate) fn derive_from_terminusdb_instance(
             match &data_struct.fields {
                 Fields::Named(fields_named) => {
                     // Generate implementation for struct with named fields
-                    implement_from_instance_for_struct(struct_name, data_struct)
+                    implement_from_instance_for_struct(
+                        struct_name, 
+                        data_struct,
+                        #[cfg(feature = "generic-derive")]
+                        &input.generics,
+                    )
                 }
                 _ => {
                     return Err(syn::Error::new(
@@ -76,7 +81,22 @@ fn detect_enum_type(data_enum: &DataEnum) -> EnumType {
 fn implement_from_instance_for_struct(
     struct_name: &syn::Ident,
     data_struct: &DataStruct,
+    #[cfg(feature = "generic-derive")]
+    generics: &syn::Generics,
 ) -> proc_macro2::TokenStream {
+    // Extract generic parameters
+    #[cfg(feature = "generic-derive")]
+    let (impl_generics, ty_generics, where_clause) = {
+        if !generics.params.is_empty() {
+            let (syn_impl_generics, syn_ty_generics, syn_where_clause) = generics.split_for_impl();
+            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, syn_where_clause.cloned())
+        } else {
+            (quote!{}, quote!{}, None)
+        }
+    };
+    
+    #[cfg(not(feature = "generic-derive"))]
+    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None);
     // Process named fields
     let (fields_code, field_names) = match &data_struct.fields {
         Fields::Named(fields_named) => {
@@ -93,13 +113,13 @@ fn implement_from_instance_for_struct(
 
     // Generate the implementation
     quote! {
-        impl terminusdb_schema::FromTDBInstance for #struct_name {
+        impl #impl_generics terminusdb_schema::FromTDBInstance for #struct_name #ty_generics #where_clause {
             fn from_instance(instance: &terminusdb_schema::Instance) -> Result<Self, anyhow::Error> {
                 use anyhow::*;
 
                 // Check that the schema type matches
                 if !instance.is_of_type::<Self>() {
-                    return Err(anyhow::anyhow!("Instance type mismatch, expected {}", stringify!(#struct_name)));
+                    return Err(anyhow::anyhow!("Instance type mismatch, expected {}", <Self as terminusdb_schema::ToTDBSchema>::schema_name()));
                 }
 
                 #fields_code
@@ -121,7 +141,7 @@ fn implement_from_instance_for_struct(
                     }
                 }
 
-                Err(anyhow::anyhow!("No instance with type {} found in tree", stringify!(#struct_name)))
+                Err(anyhow::anyhow!("No instance with type {} found in tree", <Self as terminusdb_schema::ToTDBSchema>::schema_name()))
             }
         }
     }
@@ -164,7 +184,7 @@ fn process_named_fields_for_deserialization<'a>(
         quote! {
             let #field_ident = <#field_ty as terminusdb_schema::FromInstanceProperty>::from_maybe_property(
                 &instance.get_property(#property_name).cloned()
-            ).with_context(|| format!("Failed to deserialize field '{}' for struct '{}'", #property_name, stringify!(#struct_name)))?;
+            ).with_context(|| format!("Failed to deserialize field '{}' for struct '{}'", #property_name, <Self as terminusdb_schema::ToTDBSchema>::schema_name()))?;
         }
     }).collect::<Vec<_>>();
 
@@ -251,13 +271,13 @@ fn implement_from_instance_for_simple_enum(
             fn from_instance(instance: &terminusdb_schema::Instance) -> Result<Self, anyhow::Error> {
                 // Check that the schema is an Enum and matches the expected type
                 match &instance.schema {
-                    terminusdb_schema::Schema::Enum { id, .. } if id == stringify!(#enum_name) => {
+                    terminusdb_schema::Schema::Enum { id, .. } if id == <Self as terminusdb_schema::ToTDBSchema>::schema_name() => {
                         // Check which variant is present
                         #(#variant_matchers)*
 
-                        Err(anyhow::anyhow!("No matching variant found for enum {}", stringify!(#enum_name)))
+                        Err(anyhow::anyhow!("No matching variant found for enum {}", <Self as terminusdb_schema::ToTDBSchema>::schema_name()))
                     },
-                    _ => Err(anyhow::anyhow!("Instance is not an enum or type does not match, expected {}", stringify!(#enum_name))),
+                    _ => Err(anyhow::anyhow!("Instance is not an enum or type does not match, expected {}", <Self as terminusdb_schema::ToTDBSchema>::schema_name())),
                 }
             }
 
@@ -269,13 +289,13 @@ fn implement_from_instance_for_simple_enum(
                 // Find the root instance with the matching type
                 for instance in instances {
                     if let terminusdb_schema::Schema::Enum { id, .. } = &instance.schema {
-                        if id == stringify!(#enum_name) {
+                        if id == <Self as terminusdb_schema::ToTDBSchema>::schema_name() {
                             return Self::from_instance(instance);
                         }
                     }
                 }
 
-                Err(anyhow::anyhow!("No instance with type {} found in tree", stringify!(#enum_name)))
+                Err(anyhow::anyhow!("No instance with type {} found in tree", <Self as terminusdb_schema::ToTDBSchema>::schema_name()))
             }
         }
     }
@@ -413,13 +433,13 @@ fn implement_from_instance_for_tagged_enum(
             fn from_instance(instance: &terminusdb_schema::Instance) -> Result<Self, anyhow::Error> {
                 // Check that the schema is a TaggedUnion and matches the expected type
                 match &instance.schema {
-                    terminusdb_schema::Schema::TaggedUnion { id, .. } if id == stringify!(#enum_name) => {
+                    terminusdb_schema::Schema::TaggedUnion { id, .. } if id == <Self as terminusdb_schema::ToTDBSchema>::schema_name() => {
                         // Check each variant
                         #(#variant_matchers)*
 
-                        Err(anyhow::anyhow!("No matching variant found for tagged union {}", stringify!(#enum_name)))
+                        Err(anyhow::anyhow!("No matching variant found for tagged union {}", <Self as terminusdb_schema::ToTDBSchema>::schema_name()))
                     },
-                    _ => Err(anyhow::anyhow!("Instance is not a tagged union or type does not match, expected {}", stringify!(#enum_name))),
+                    _ => Err(anyhow::anyhow!("Instance is not a tagged union or type does not match, expected {}", <Self as terminusdb_schema::ToTDBSchema>::schema_name())),
                 }
             }
 
@@ -431,13 +451,13 @@ fn implement_from_instance_for_tagged_enum(
                 // Find the root instance with the matching type
                 for instance in instances {
                     if let terminusdb_schema::Schema::TaggedUnion { id, .. } = &instance.schema {
-                        if id == stringify!(#enum_name) {
+                        if id == <Self as terminusdb_schema::ToTDBSchema>::schema_name() {
                             return Self::from_instance(instance);
                         }
                     }
                 }
 
-                Err(anyhow::anyhow!("No instance with type {} found in tree", stringify!(#enum_name)))
+                Err(anyhow::anyhow!("No instance with type {} found in tree", <Self as terminusdb_schema::ToTDBSchema>::schema_name()))
             }
         }
     }

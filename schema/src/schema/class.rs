@@ -1,7 +1,7 @@
 /// when the object is a primitive, this method is called
 /// to determine to built-in schema type
 pub trait ToSchemaClass {
-    fn to_class() -> &'static str;
+    fn to_class() -> String;
 }
 
 // impl<T: ToTDBSchema> ToSchemaClass for PhantomData<T> {

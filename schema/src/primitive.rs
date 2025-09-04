@@ -148,8 +148,8 @@ macro_rules! to_schema_class {
     ($typ:ty: $cls:ident) => {
 
         impl ToSchemaClass for $typ {
-            fn to_class() -> &'static str {
-                $cls
+            fn to_class() -> String {
+                $cls.to_string()
             }
         }
 
@@ -197,19 +197,19 @@ to_schema_class!({
 });
 
 impl<T: ToSchemaClass> ToSchemaClass for Vec<T> {
-    fn to_class() -> &'static str {
+    fn to_class() -> String {
         T::to_class()
     }
 }
 
 impl<T: ToSchemaClass> ToSchemaClass for Box<T> {
-    fn to_class() -> &'static str {
+    fn to_class() -> String {
         T::to_class()
     }
 }
 
 // impl<T: ToSchemaClass> ToSchemaClass for PhantomData<T> {
-//     fn to_class() -> &'static str {
+//     fn to_class() -> String {
 //         T::to_class()
 //     }
 // }
