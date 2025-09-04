@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Use type families to construct optionality or collections of values. Type families are List, Set, Array, and Optional.
-#[derive(Eq, PartialEq, Debug, Clone, Copy, Hash, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Clone, Copy, Hash, Serialize, Deserialize)]
 pub enum TypeFamily {
     /// Use List to specify an ordered collection, with multiplicity, of values of a class or datatype.
     /// Code: An example of type family List

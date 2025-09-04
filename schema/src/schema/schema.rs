@@ -5,11 +5,12 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeSet, HashSet};
+use std::cmp::Ordering;
 use std::fs::File;
 use std::io::Write;
 
 // todo: the derived serialize and deserialize do not comply with the TerminusDB schema and are only used for RPC calls!
-#[derive(Eq, PartialEq, Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Eq, Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum Schema {
     Class {
         id: ID,
@@ -856,6 +857,26 @@ pub trait ToTDBSchema {
 impl<T: ToTDBSchema> From<T> for Schema {
     fn from(to: T) -> Self {
         T::to_schema()
+    }
+}
+
+impl PartialOrd for Schema {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Schema {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare by schema name (ID) which should be unique
+        self.class_name() == other.class_name()
+    }
+}
+
+impl Ord for Schema {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Simply compare by schema name (ID) which should be unique
+        self.class_name().cmp(other.class_name())
     }
 }
 

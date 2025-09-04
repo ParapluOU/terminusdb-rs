@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Use Cardinality to specify an unordered set of values of a class or datatype in which the property has a limited number of elements as specified by the cardinality constraint properties.
-#[derive(Eq, PartialEq, Debug, Clone, Copy, Hash, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Clone, Copy, Hash, Serialize, Deserialize)]
 pub enum SetCardinality {
     /// @cardinality
     /// When specified, the number of elements for the given property must be exactly the cardinality specified. This is equivalent to specifying both @min_cardinality and @max_cardinality as the same cardinality.
