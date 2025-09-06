@@ -41,7 +41,7 @@ mod tests {
             assert_eq!(keywords_prop.class, "xsd:string");
             assert_eq!(
                 keywords_prop.r#type,
-                Some(terminusdb_schema::TypeFamily::List)
+                Some(terminusdb_schema::TypeFamily::Array(1))
             );
         } else {
             panic!("Expected Schema::Class");

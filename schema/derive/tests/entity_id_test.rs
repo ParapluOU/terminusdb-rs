@@ -1,12 +1,12 @@
-use terminusdb_schema::{EntityIDFor, ToTDBSchema, ToTDBInstance, Key};
+use terminusdb_schema::{EntityIDFor, ServerIDFor, ToTDBSchema, ToTDBInstance, Key};
 use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
-// Test model with EntityIDFor and hash key
+// Test model with ServerIDFor and hash key (required for non-random keys)
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email", id_field = "id")]
 pub struct UserWithEntityID {
-    pub id: EntityIDFor<Self>,
+    pub id: ServerIDFor<Self>,
     pub email: String,
     pub name: String,
 }
@@ -31,16 +31,16 @@ fn test_entity_id_with_hash_key() {
         _ => panic!("Expected Hash key"),
     }
     
-    // Create instance with empty EntityIDFor (for non-random keys)
+    // Create instance with new ServerIDFor (for non-random keys)
     let user = UserWithEntityID {
-        id: EntityIDFor::default(),
+        id: ServerIDFor::new(),
         email: "test@example.com".to_string(),
         name: "Test User".to_string(),
     };
     
     let instance = user.to_instance(None);
-    // The ID should be extracted from the EntityIDFor field
-    assert!(instance.id.is_some());
+    // For ServerIDFor with non-random keys, the ID is not set until server assigns it
+    assert!(instance.id.is_none());
 }
 
 #[test]
@@ -61,9 +61,9 @@ fn test_entity_id_with_random_key() {
 
 #[test]
 fn test_entity_id_serialization() {
-    // Test that EntityIDFor properly converts via ToInstanceProperty
+    // Test that ServerIDFor properly converts via ToInstanceProperty
     let user = UserWithEntityID {
-        id: EntityIDFor::new("test-id").unwrap(),
+        id: ServerIDFor::new(),
         email: "test@example.com".to_string(),
         name: "Test".to_string(),
     };

@@ -27,6 +27,10 @@ pub struct TDBModelOpts {
     #[darling(default)]
     pub(crate) unfoldable: Option<bool>,
 
+    /// Whether this is a subdocument
+    #[darling(default)]
+    pub(crate) subdocument: Option<bool>,
+
     /// List of class names this inherits from
     #[darling(default)]
     pub(crate) inherits: Option<String>,

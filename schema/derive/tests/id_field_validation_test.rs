@@ -1,12 +1,12 @@
-use terminusdb_schema::{ToTDBSchema, ToTDBInstance, Key};
+use terminusdb_schema::{ToTDBSchema, ToTDBInstance, Key, ServerIDFor};
 use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
-// Valid: Option<String> with lexical key
+// Valid: ServerIDFor with lexical key
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "name", id_field = "id")]
 pub struct ValidLexicalWithOption {
-    pub id: Option<String>,
+    pub id: ServerIDFor<Self>,
     pub name: String,
     pub age: i32,
 }
@@ -41,7 +41,7 @@ fn test_valid_option_with_lexical_key() {
     }
     
     let instance = ValidLexicalWithOption {
-        id: None,
+        id: ServerIDFor::new(),
         name: "Test".to_string(),
         age: 30,
     };
@@ -81,32 +81,32 @@ fn test_valid_no_id_field() {
 // The following are now valid (previously would fail compilation):
 // The runtime validation in HttpClient will ensure these don't have IDs set for non-Random keys
 
-// Valid: String with lexical key (runtime validation enforced)
+// Valid: ServerIDFor with lexical key (compile-time validation enforced)
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "name", id_field = "id")]
 pub struct LexicalWithString {
-    pub id: String, // Now allowed, but runtime will panic if ID is set
+    pub id: ServerIDFor<Self>,
     pub name: String,
 }
 
-// Valid: EntityIDFor with hash key
+// Valid: ServerIDFor with hash key
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email", id_field = "id")]
 pub struct HashWithEntityIDFor {
-    pub id: terminusdb_schema::EntityIDFor<Self>,
+    pub id: terminusdb_schema::ServerIDFor<Self>,
     pub email: String,
 }
 
 #[test]
 fn test_string_id_with_lexical_key_compiles() {
-    // This now compiles, but runtime validation will prevent setting an ID
+    // ServerIDFor ensures compile-time validation
     let instance = LexicalWithString {
-        id: String::new(), // Empty string for unset ID
+        id: ServerIDFor::new(),
         name: "Test".to_string(),
     };
     
-    // The to_instance method will extract the ID properly
+    // The to_instance method will handle the ServerIDFor properly
     let tdb_instance = instance.to_instance(None);
-    // For a String field with empty value, the schema class prefix is added
-    assert_eq!(tdb_instance.id, Some("LexicalWithString/".to_string()));
+    // For ServerIDFor, the ID is None until the server assigns it
+    assert_eq!(tdb_instance.id, None);
 }

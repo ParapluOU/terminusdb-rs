@@ -21,8 +21,8 @@ pub fn is_option_type(ty: &syn::Type) -> bool {
 /// Check if a type is ServerIDFor<T>
 pub fn is_server_id_for_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(typepath) = ty {
-        if typepath.path.segments.len() == 1 {
-            let segment = &typepath.path.segments[0];
+        // Check last segment (handles both ServerIDFor and terminusdb_schema::ServerIDFor)
+        if let Some(segment) = typepath.path.segments.last() {
             return segment.ident == "ServerIDFor";
         }
     }

@@ -10,13 +10,14 @@ use rust_mcp_sdk::{
     McpServer, StdioTransport, TransportOptions,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient, GetOpts, DocumentInsertArgs};
 use terminusdb_client::debug::QueryLogEntry;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use tracing_subscriber;
 use url::Url;
 
@@ -381,7 +382,7 @@ impl TerminusDBMcpHandler {
             let branch_spec = match &config.commit_ref {
                 Some(commit_id) => {
                     // Time-travel query to specific commit
-                    BranchSpec::with_commit(database, commit_id)
+                    BranchSpec::with_commit(database, commit_id.as_str())
                 }
                 None => {
                     // Regular query on branch
@@ -454,7 +455,7 @@ impl TerminusDBMcpHandler {
         let branch_spec = match &config.commit_ref {
             Some(commit_id) => {
                 // Time-travel query to specific commit
-                BranchSpec::with_commit(&request.database, commit_id)
+                BranchSpec::with_commit(&request.database, commit_id.as_str())
             }
             None => {
                 // Regular query on branch
@@ -541,7 +542,7 @@ impl TerminusDBMcpHandler {
         
         let db = config.database.unwrap();
         let branch_spec = match &config.commit_ref {
-            Some(commit_id) => BranchSpec::with_commit(&db, commit_id),
+            Some(commit_id) => BranchSpec::with_commit(&db, commit_id.as_str()),
             None => BranchSpec::with_branch(&db, &config.branch)
         };
 
@@ -755,7 +756,7 @@ impl TerminusDBMcpHandler {
         
         // Add commit ID if available
         if let Some(commit_id) = result.extract_commit_id() {
-            response["commit_id"] = serde_json::Value::String(commit_id);
+            response["commit_id"] = serde_json::Value::String(commit_id.to_string());
         }
         
         Ok(response)
@@ -839,7 +840,7 @@ impl TerminusDBMcpHandler {
         
         // Add commit ID if available
         if let Some(commit_id) = result.extract_commit_id() {
-            response["commit_id"] = serde_json::Value::String(commit_id);
+            response["commit_id"] = serde_json::Value::String(commit_id.to_string());
         }
         
         Ok(response)
@@ -901,7 +902,7 @@ impl TerminusDBMcpHandler {
         
         // Add commit ID if available
         if let Some(commit_id) = result.extract_commit_id() {
-            response["commit_id"] = serde_json::Value::String(commit_id);
+            response["commit_id"] = serde_json::Value::String(commit_id.to_string());
         }
         
         Ok(response)
@@ -914,9 +915,10 @@ impl TerminusDBMcpHandler {
         let client = Self::create_client(&config).await?;
         
         // Create branch spec
+        let branch_name = request.branch.as_deref().unwrap_or("main");
         let branch_spec = BranchSpec::with_branch(
             &request.database,
-            &request.branch.unwrap_or_else(|| "main".to_string())
+            branch_name
         );
         
         // For each class, we need to delete all its schema triples
@@ -988,7 +990,7 @@ impl TerminusDBMcpHandler {
             });
             
             // First, find all the triples to delete
-            let find_query = json!({
+            let _find_query = json!({
                 "@type": "And",
                 "and": [
                     // Find class triples
@@ -1046,7 +1048,7 @@ impl TerminusDBMcpHandler {
             });
             
             // Execute the deletion query
-            match client.query_string(Some(branch_spec.clone()), &serde_json::to_string(&delete_query)?).await {
+            match client.query_string::<serde_json::Value>(Some(branch_spec.clone()), &serde_json::to_string(&delete_query)?).await {
                 Ok(_) => {
                     deleted_classes.push(class_name.clone());
                     info!("Successfully deleted class: {}", class_name);
@@ -1074,7 +1076,7 @@ impl TerminusDBMcpHandler {
                 "deleted_classes": deleted_classes,
                 "errors": errors,
                 "database": request.database,
-                "branch": request.branch.unwrap_or_else(|| "main".to_string())
+                "branch": branch_name
             })
         };
         

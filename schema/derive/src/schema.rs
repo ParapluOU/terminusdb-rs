@@ -68,6 +68,13 @@ pub fn generate_totdbschema_impl(
     // Default unfoldable to false to match the test expectations
     let unfoldable = opts.unfoldable.unwrap_or(false);
 
+    // Handle subdocument attribute
+    let subdocument = if let Some(subdocument) = opts.subdocument {
+        quote! { Some(#subdocument) }
+    } else {
+        quote! { None }
+    };
+
     // Use provided doc attribute or extract from doc comments
     let documentation = if let Some(doc) = &opts.doc {
         quote! {
@@ -138,9 +145,8 @@ pub fn generate_totdbschema_impl(
                 #key
             }
 
-            // todo: allow configuring subdocument
             fn subdocument() -> Option<bool> {
-                None
+                #subdocument
             }
 
             fn abstractdocument() -> Option<bool> {

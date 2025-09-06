@@ -309,6 +309,7 @@ fn generate_virtual_structs(
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
                         unfoldable: None,
+                        subdocument: None,
                         inherits: None,
                         doc: None,
                         original_input: None,
@@ -371,6 +372,7 @@ fn generate_virtual_structs(
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
                         unfoldable: None,
+                        subdocument: None,
                         inherits: None,
                         doc: None,
                         original_input: None,
@@ -420,6 +422,7 @@ fn generate_virtual_structs(
                     key: Some("value_hash".to_string()), // Use ValueHash as default for virtual structs
                     abstract_class: None,
                     unfoldable: None,
+                    subdocument: None,
                     inherits: None,
                     doc: Some(format!(
                         "Virtual struct for {} enum variant {}",
