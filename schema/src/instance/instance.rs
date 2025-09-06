@@ -51,7 +51,8 @@ pub trait ToTDBInstances: Send {
         for instance in &mut instances {
             instance.flatten(for_transaction);
         }
-        instances
+        // Filter out subdocuments - they should remain nested within their parent instances
+        instances.into_iter().filter(|inst| !inst.schema.is_subdocument()).collect()
     }
 
     /// make into trait object so that we can add different model types to a Vec

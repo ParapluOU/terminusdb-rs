@@ -101,19 +101,8 @@ impl InstanceProperty {
         match self {
             InstanceProperty::Relation(rel) => {
                 if let RelationValue::One(inst) = rel {
-                    if let Some(id) = inst.id.clone() {
-                        removed.push(inst.clone());
-                        *rel = RelationValue::ExternalReference(id);
-
-                        if for_transaction {
-                            rel.make_tx_ref();
-                        }
-                    }
-                }
-            }
-            InstanceProperty::Relations(rels) => {
-                for rel in rels.iter_mut() {
-                    if let RelationValue::One(inst) = rel {
+                    // Skip flattening if this is a subdocument
+                    if !inst.schema.is_subdocument() {
                         if let Some(id) = inst.id.clone() {
                             removed.push(inst.clone());
                             *rel = RelationValue::ExternalReference(id);
@@ -121,6 +110,33 @@ impl InstanceProperty {
                             if for_transaction {
                                 rel.make_tx_ref();
                             }
+                        }
+                    } else {
+                        // For subdocuments, still flatten any nested regular documents
+                        let mut subdoc_inst = inst.clone();
+                        removed.extend(subdoc_inst.flatten(for_transaction));
+                        *rel = RelationValue::One(subdoc_inst);
+                    }
+                }
+            }
+            InstanceProperty::Relations(rels) => {
+                for rel in rels.iter_mut() {
+                    if let RelationValue::One(inst) = rel {
+                        // Skip flattening if this is a subdocument
+                        if !inst.schema.is_subdocument() {
+                            if let Some(id) = inst.id.clone() {
+                                removed.push(inst.clone());
+                                *rel = RelationValue::ExternalReference(id);
+
+                                if for_transaction {
+                                    rel.make_tx_ref();
+                                }
+                            }
+                        } else {
+                            // For subdocuments, still flatten any nested regular documents
+                            let mut subdoc_inst = inst.clone();
+                            removed.extend(subdoc_inst.flatten(for_transaction));
+                            *rel = RelationValue::One(subdoc_inst);
                         }
                     }
                 }

@@ -454,6 +454,13 @@ impl Schema {
         matches!(self, Schema::TaggedUnion { .. })
     }
 
+    pub fn is_subdocument(&self) -> bool {
+        match self {
+            Schema::Class { subdocument, .. } => *subdocument,
+            _ => false,
+        }
+    }
+
     pub fn is_key_random(&self) -> bool {
         match self {
             Schema::Class { key, .. } => key == &Key::Random,

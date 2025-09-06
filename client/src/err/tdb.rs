@@ -32,6 +32,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:WOQLSyntaxError")]
     ApiWOQLSyntaxError(ApiWOQLSyntaxError),
 
+    #[serde(rename = "api:InsertedSubdocumentAsDocument")]
+    InsertedSubdocumentAsDocument(InsertedSubdocumentAsDocumentError),
+
     Other(Value),
 
     #[default]
@@ -45,6 +48,7 @@ impl Display for ApiResponseError {
             ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
             ApiResponseError::UnresolvableAbsoluteDescriptor(error) => Display::fmt(error, f),
             ApiResponseError::ApiWOQLSyntaxError(error) => write!(f, "WOQL syntax error: {}", error.error_term),
+            ApiResponseError::InsertedSubdocumentAsDocument(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -288,6 +292,18 @@ impl Display for DocumentIdAlreadyExistsError {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct InsertedSubdocumentAsDocumentError {
+    #[serde(rename = "api:document")]
+    pub document: Value,
+}
+
+impl Display for InsertedSubdocumentAsDocumentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Attempted to insert a subdocument as a top-level document")
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct UnresolvableAbsoluteDescriptorError {
     #[serde(rename = "api:absolute_descriptor")]
     pub absolute_descriptor: String,
@@ -456,6 +472,54 @@ fn test_deserialize_api_woql_syntax_error() {
             }
         }
         _ => panic!("Expected WoqlError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_inserted_subdocument_as_document_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:InsertDocumentErrorResponse",
+        "api:error": {
+            "@type": "api:InsertedSubdocumentAsDocument",
+            "api:document": {
+                "@type": "IdAndTitle",
+                "id": "/document/a0bdd8c0-25a8-48b6-b8b9-bebba4cc3fc6",
+                "title": null,
+            },
+        },
+        "api:message": "Attempted to insert a subdocument as a top-level document",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::InsertDocumentError(err) => {
+            if let Some(ApiResponseError::InsertedSubdocumentAsDocument(subdoc_err)) = err.api_error {
+                // Check that the document field was properly deserialized
+                assert_eq!(subdoc_err.document["@type"], "IdAndTitle");
+                assert_eq!(subdoc_err.document["id"], "/document/a0bdd8c0-25a8-48b6-b8b9-bebba4cc3fc6");
+                assert_eq!(subdoc_err.document["title"], Value::Null);
+            } else {
+                panic!("Expected InsertedSubdocumentAsDocument error");
+            }
+        }
+        _ => panic!("Expected InsertDocumentError variant"),
     }
 
     // Test deserialization into ApiResponse
