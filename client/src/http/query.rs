@@ -12,7 +12,7 @@ use {
     serde_json::{json, Value},
     std::{collections::HashMap, fmt::Debug, time::Instant},
     terminusdb_schema::{ToJson, ToTDBInstance, ToTDBSchema},
-    terminusdb_woql2::prelude::Query as Woql2Query,
+    terminusdb_woql2::{prelude::Query as Woql2Query, dsl::ToDSL},
     terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
 };
 
@@ -47,7 +47,8 @@ impl super::client::TerminusDBHttpClient {
         skip(self, query),
         fields(
             db = db.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
-            branch = ?db.as_ref().and_then(|s| s.branch.as_ref())
+            branch = ?db.as_ref().and_then(|s| s.branch.as_ref()),
+            query_dsl = %query.to_dsl()
         ),
         err
     )]
