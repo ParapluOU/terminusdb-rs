@@ -52,7 +52,10 @@ pub trait ToTDBInstances: Send {
             instance.flatten(for_transaction);
         }
         // Filter out subdocuments - they should remain nested within their parent instances
-        instances.into_iter().filter(|inst| !inst.schema.is_subdocument()).collect()
+        instances
+            .into_iter()
+            .filter(|inst| !inst.schema.is_subdocument())
+            .collect()
     }
 
     /// make into trait object so that we can add different model types to a Vec
@@ -252,9 +255,19 @@ impl Instance {
     /// make sure the schema class prefix is set when key type is random
     pub fn set_random_key_prefix(&mut self) {
         let class = self.schema.class_name();
+        // if self.schema.is_key_random()
+        //     && let Some(id) = self.id.as_ref()
+        //     && !id.starts_with(class)
+        // {
+        //     self.id = Some(format!("{}/{}", class, self.id.as_ref().unwrap()));
+        // }
+
         if self.schema.is_key_random()
-            && let Some(id) = self.id.as_ref()
-            && !id.starts_with(class)
+            && self
+                .id
+                .as_ref()
+                .map(|i| !i.starts_with(class))
+                .unwrap_or_default()
         {
             self.id = Some(format!("{}/{}", class, self.id.as_ref().unwrap()));
         }

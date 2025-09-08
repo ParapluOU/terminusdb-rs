@@ -6,8 +6,8 @@ publish = false
 targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]
-serde = { workspace=true }
-serde_json = {workspace = true}
+serde = { workspace = true }
+serde_json = { workspace = true }
 itertools = "0.10.3"
 tempfile = "3"
 #filepath = "*"
@@ -21,12 +21,12 @@ exec_time = "0.1.4"
 #zip = "0.6.2"
 rayon = "1.5.3"
 #isahc = { version = "1.7.2", features = ["json"]  }
-glob = { version = "0.3.0"}
+glob = { version = "0.3.0" }
 hashable = "0.0.0"
 # our local libs
 enum_variant_macros = "0.3.0"
 pseudonym.workspace = true
-anyhow = { workspace=true }
+anyhow = { workspace = true }
 typestate = { version = "0.1.0", path = "../typestate" }
 uuid = { version = "1.4", features = ["v4", "serde"] }
 tap = "1.0.1"
