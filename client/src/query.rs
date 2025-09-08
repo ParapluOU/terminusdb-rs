@@ -94,10 +94,6 @@ pub trait InstanceQueryable {
             )
             // generate the implementation-specific query
             .pipe(|q| self.build(v_id.clone(), q))
-            // important: this seems to HAVE to come after the triple
-            .read_document(v_id.clone(), v_doc.clone())
-            // .isa(v_id.clone(), node(T::schema_name())) // this didnt work
-            .select(vec![v_doc.clone()])
             .count(v_count)
             .finalize();
 
@@ -134,7 +130,7 @@ pub trait InstanceQueryable {
                 Some(l) => q.limit(l as u64),
             })
             .finalize();
-        
+
         query
     }
 }
@@ -173,12 +169,12 @@ impl<T> FilteredListModels<T> {
             _ty: PhantomData,
         }
     }
-    
+
     /// Create an empty filtered list query (lists all instances)
     pub fn empty() -> Self {
         Self::default()
     }
-    
+
     /// Get the number of filters
     pub fn filter_count(&self) -> usize {
         self.filters.len()
@@ -190,59 +186,61 @@ impl<T: TerminusDBModel + InstanceFromJson> InstanceQueryable for FilteredListMo
 
     fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder {
         use terminusdb_woql_builder::prelude::WoqlInput;
-        
+
         // Add a triple pattern for each filter condition
-        self.filters.iter().fold(builder, |builder, (field, value)| {
-            // Convert DataValue to WoqlInput which implements IntoWoql2
-            let woql_value = match value {
-                DataValue::Variable(v) => WoqlInput::Variable(Var::new(v)),
-                DataValue::Data(d) => {
-                    use terminusdb_schema::XSDAnySimpleType;
-                    match d {
-                        XSDAnySimpleType::String(s) => WoqlInput::String(s.clone()),
-                        XSDAnySimpleType::Boolean(b) => WoqlInput::Boolean(*b),
-                        XSDAnySimpleType::Decimal(d) => {
-                            // For integer values stored as decimals, keep them as decimals
-                            // TerminusDB might expect exact type matching
-                            WoqlInput::Decimal(d.to_string())
-                        }
-                        XSDAnySimpleType::UnsignedInt(u) => WoqlInput::Integer(*u as i64),
-                        XSDAnySimpleType::Integer(i) => WoqlInput::Integer(*i),
-                        XSDAnySimpleType::Float(f) => {
-                            // Convert float to decimal string for WOQL
-                            WoqlInput::Decimal(f.to_string())
-                        }
-                        XSDAnySimpleType::DateTime(dt) => {
-                            // Convert datetime to ISO 8601 string
-                            WoqlInput::DateTime(dt.to_rfc3339())
-                        }
-                        XSDAnySimpleType::Date(d) => {
-                            // Convert date to ISO 8601 string
-                            WoqlInput::Date(d.to_string())
-                        }
-                        XSDAnySimpleType::Time(t) => {
-                            // Convert time to ISO 8601 string
-                            WoqlInput::Time(t.to_string())
-                        }
-                        XSDAnySimpleType::URI(uri) => {
-                            // URIs are represented as nodes
-                            WoqlInput::Node(uri.clone())
-                        }
-                        XSDAnySimpleType::HexBinary(hex) => {
-                            // Store hex binary as string
-                            WoqlInput::String(hex.clone())
+        self.filters
+            .iter()
+            .fold(builder, |builder, (field, value)| {
+                // Convert DataValue to WoqlInput which implements IntoWoql2
+                let woql_value = match value {
+                    DataValue::Variable(v) => WoqlInput::Variable(Var::new(v)),
+                    DataValue::Data(d) => {
+                        use terminusdb_schema::XSDAnySimpleType;
+                        match d {
+                            XSDAnySimpleType::String(s) => WoqlInput::String(s.clone()),
+                            XSDAnySimpleType::Boolean(b) => WoqlInput::Boolean(*b),
+                            XSDAnySimpleType::Decimal(d) => {
+                                // For integer values stored as decimals, keep them as decimals
+                                // TerminusDB might expect exact type matching
+                                WoqlInput::Decimal(d.to_string())
+                            }
+                            XSDAnySimpleType::UnsignedInt(u) => WoqlInput::Integer(*u as i64),
+                            XSDAnySimpleType::Integer(i) => WoqlInput::Integer(*i),
+                            XSDAnySimpleType::Float(f) => {
+                                // Convert float to decimal string for WOQL
+                                WoqlInput::Decimal(f.to_string())
+                            }
+                            XSDAnySimpleType::DateTime(dt) => {
+                                // Convert datetime to ISO 8601 string
+                                WoqlInput::DateTime(dt.to_rfc3339())
+                            }
+                            XSDAnySimpleType::Date(d) => {
+                                // Convert date to ISO 8601 string
+                                WoqlInput::Date(d.to_string())
+                            }
+                            XSDAnySimpleType::Time(t) => {
+                                // Convert time to ISO 8601 string
+                                WoqlInput::Time(t.to_string())
+                            }
+                            XSDAnySimpleType::URI(uri) => {
+                                // URIs are represented as nodes
+                                WoqlInput::Node(uri.clone())
+                            }
+                            XSDAnySimpleType::HexBinary(hex) => {
+                                // Store hex binary as string
+                                WoqlInput::String(hex.clone())
+                            }
                         }
                     }
-                },
-                DataValue::List(_) => {
-                    panic!("List values are not supported in filters")
-                }
-            };
-            
-            // Properties need to be prefixed with @schema: for property lookups
-            let qualified_field = format!("@schema:{}", field);
-            builder.triple(subject.clone(), qualified_field.as_str(), woql_value)
-        })
+                    DataValue::List(_) => {
+                        panic!("List values are not supported in filters")
+                    }
+                };
+
+                // Properties need to be prefixed with @schema: for property lookups
+                let qualified_field = format!("@schema:{}", field);
+                builder.triple(subject.clone(), qualified_field.as_str(), woql_value)
+            })
     }
 }
 
@@ -277,7 +275,7 @@ pub enum QueryType {
 ///
 /// impl RawQueryable for AgeQuery {
 ///     type Result = PersonAge;
-///     
+///
 ///     fn query(&self) -> Query {
 ///         WoqlBuilder::new()
 ///             .triple(vars!("Person"), "name", vars!("Name"))
@@ -285,7 +283,7 @@ pub enum QueryType {
 ///             .select(vec![vars!("Name"), vars!("Age")])
 ///             .finalize()
 ///     }
-///     
+///
 ///     fn extract_result(&self, binding: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
 ///         Ok(PersonAge {
 ///             name: serde_json::from_value(binding.get("Name").unwrap().clone())?,
@@ -332,13 +330,13 @@ pub trait RawQueryable {
     }
 
     /// Build a count query for this queryable
-    /// 
+    ///
     /// The default implementation first removes any pagination (Limit/Start) operations,
-    /// then checks if the query is already a Count query. If it is, returns it as-is. 
+    /// then checks if the query is already a Count query. If it is, returns it as-is.
     /// Otherwise, wraps the query in a Count operation.
     fn query_count(&self) -> Query {
         let query = self.query().unwrap_pagination();
-        
+
         // Check if the query is already a Count
         match query {
             Query::Count(_) => query,
