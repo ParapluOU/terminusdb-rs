@@ -89,11 +89,12 @@ impl<'a> UrlBuilder<'a> {
     }
 
     /// Add document retrieval query parameters for single document
-    pub fn document_get_params(mut self, id: &str, unfold: bool, as_list: bool) -> Self {
+    pub fn document_get_params(mut self, id: &str, unfold: bool, as_list: bool, minimized: bool) -> Self {
         self.query_params.extend([
             ("id".to_string(), id.to_string()),
             ("unfold".to_string(), unfold.to_string()),
             ("as_list".to_string(), as_list.to_string()),
+            ("minimized".to_string(), minimized.to_string()),
         ]);
         self
     }
@@ -109,6 +110,8 @@ impl<'a> UrlBuilder<'a> {
             .push(("as_list".to_string(), "true".to_string()));
         self.query_params
             .push(("unfold".to_string(), opts.unfold.to_string()));
+        self.query_params
+            .push(("minimized".to_string(), opts.minimized.to_string()));
 
         // Add the ids as a JSON array
         if !ids.is_empty() {

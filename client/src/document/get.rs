@@ -10,6 +10,8 @@ pub struct GetOpts {
     pub count: Option<usize>,
     /// Filter documents by type (e.g., "Person")
     pub type_filter: Option<String>,
+    /// Minimize the output (defaults to true for efficient data transfer)
+    pub minimized: bool,
 }
 
 impl Default for GetOpts {
@@ -20,6 +22,7 @@ impl Default for GetOpts {
             skip: None,
             count: None,
             type_filter: None,
+            minimized: true,
         }
     }
 }
@@ -75,6 +78,12 @@ impl GetOpts {
     /// Set as_list for chaining
     pub fn with_as_list(mut self, as_list: bool) -> Self {
         self.as_list = as_list;
+        self
+    }
+
+    /// Set minimized for chaining
+    pub fn with_minimized(mut self, minimized: bool) -> Self {
+        self.minimized = minimized;
         self
     }
 }

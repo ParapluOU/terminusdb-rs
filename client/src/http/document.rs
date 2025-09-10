@@ -209,7 +209,7 @@ impl super::client::TerminusDBHttpClient {
             .build_url()
             .endpoint("document")
             .database(spec)
-            .document_get_params(id, opts.unfold, opts.as_list)
+            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized)
             .build();
 
         debug!("retrieving document at {}...", &uri);
@@ -281,7 +281,7 @@ impl super::client::TerminusDBHttpClient {
             .build_url()
             .endpoint("document")
             .database(spec)
-            .document_get_params(id, opts.unfold, opts.as_list)
+            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized)
             .build();
 
         debug!("retrieving document at {}...", &uri);
@@ -349,7 +349,7 @@ impl super::client::TerminusDBHttpClient {
             .build_url()
             .endpoint("document")
             .database(spec)
-            .document_get_params(id, opts.unfold, opts.as_list)
+            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized)
             .build();
 
         debug!("retrieving document at {}...", &uri);
@@ -1016,6 +1016,7 @@ impl super::client::TerminusDBHttpClient {
             }
             query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
             query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
+            query_doc.insert("minimized".to_string(), serde_json::Value::Bool(opts.minimized));
 
             if let Some(skip) = opts.skip {
                 query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
@@ -1140,6 +1141,7 @@ impl super::client::TerminusDBHttpClient {
             }
             query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
             query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
+            query_doc.insert("minimized".to_string(), serde_json::Value::Bool(opts.minimized));
 
             if let Some(skip) = opts.skip {
                 query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));

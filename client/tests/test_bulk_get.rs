@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod tests {
-    use terminusdb_client::{BranchSpec, GetOpts, TerminusDBHttpClient};
+    use terminusdb_client::GetOpts;
 
     #[test]
     fn test_get_opts_builder_pattern() {
@@ -48,6 +48,27 @@ mod tests {
         assert_eq!(opts.type_filter, None);
         assert_eq!(opts.unfold, false);
         assert_eq!(opts.as_list, false);
+        assert_eq!(opts.minimized, true);
+    }
+
+    #[test]
+    fn test_get_opts_minimized_default() {
+        // Unit test to verify GetOpts default for minimized
+        let opts = GetOpts::default();
+        assert!(opts.minimized, "GetOpts should default to minimized=true");
+    }
+
+    #[test]
+    fn test_get_opts_minimized_builder() {
+        // Test the builder pattern for minimized
+        let opts = GetOpts::default()
+            .with_minimized(false)
+            .with_unfold(true)
+            .with_count(10);
+        
+        assert!(!opts.minimized, "minimized should be false");
+        assert!(opts.unfold, "unfold should be true");
+        assert_eq!(opts.count, Some(10), "count should be 10");
     }
 
     // Note: The following would be integration tests that require a running TerminusDB instance
