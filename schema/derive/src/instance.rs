@@ -278,7 +278,7 @@ pub fn process_tagged_enum_for_instance(
                                 terminusdb_schema::RelationValue::One(
                                     terminusdb_schema::Instance {
                                         schema: terminusdb_schema::Schema::Class {
-                                            id: format!("{}_{}", Self::schema_name(), #renamed_variant),
+                                            id: format!("{}{}", stringify!(#enum_name), stringify!(#variant_ident)),
                                             base: None,
                                             key: terminusdb_schema::Key::ValueHash,
                                             documentation: None,

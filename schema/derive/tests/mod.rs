@@ -14,4 +14,5 @@ mod special_types_test;
 mod struct_test;
 mod tdblazy_test;
 mod unfoldable_subdocument_test;
+mod variant_naming_test;
 mod vec_string_test;

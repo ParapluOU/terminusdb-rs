@@ -27,6 +27,7 @@ pub fn implement_for_tagged_enum(
         crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
         other => other,
     };
+    
 
     // Process enum variants to generate properties
     let variant_properties = process_enum_variants(data_enum, enum_name, rename_strategy);
