@@ -584,6 +584,23 @@ macro_rules! count {
     };
 }
 
+/// Create a Start query for pagination
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = start!(10, triple!(var!(x), "rdf:type", "Person"));
+/// ```
+#[macro_export]
+macro_rules! start {
+    ($start:expr, $query:expr) => {
+        $crate::query::Query::Start($crate::misc::Start {
+            start: $start as u64,
+            query: Box::new($query),
+        })
+    };
+}
+
 /// Shortcut for typecast operations
 ///
 /// # Examples
@@ -1025,6 +1042,933 @@ macro_rules! compare {
         not!(eq!($left, $right))
     };
 }
+
+// ===== ADDITIONAL MACROS FOR MISSING WOQL2 STRUCTS =====
+
+/// Create a LexicalKey query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = lexical_key!(data!("doc:"), list![data!("Person"), data!("123")], var!(uri));
+/// ```
+#[macro_export]
+macro_rules! lexical_key {
+    ($base:expr, $key_list:expr, $uri:expr) => {
+        $crate::query::Query::LexicalKey($crate::misc::LexicalKey {
+            base: $crate::macros::into_data_value($base),
+            key_list: $key_list.into_iter().map(|v| $crate::macros::into_data_value(v)).collect(),
+            uri: $crate::macros::into_node_value($uri),
+        })
+    };
+}
+
+/// Create a HashKey query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = hash_key!(data!("doc:"), list![data!("User"), data!("john@example.com")], var!(uri));
+/// ```
+#[macro_export]
+macro_rules! hash_key {
+    ($base:expr, $key_list:expr, $uri:expr) => {
+        $crate::query::Query::HashKey($crate::misc::HashKey {
+            base: $crate::macros::into_data_value($base),
+            key_list: $key_list.into_iter().map(|v| $crate::macros::into_data_value(v)).collect(),
+            uri: $crate::macros::into_node_value($uri),
+        })
+    };
+}
+
+/// Create a RandomKey query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = random_key!(data!("doc:"), var!(uri));
+/// ```
+#[macro_export]
+macro_rules! random_key {
+    ($base:expr, $uri:expr) => {
+        $crate::query::Query::RandomKey($crate::misc::RandomKey {
+            base: $crate::macros::into_data_value($base),
+            uri: $crate::macros::into_node_value($uri),
+        })
+    };
+}
+
+/// Create a Size query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = size!("db:mydb", var!(size));
+/// ```
+#[macro_export]
+macro_rules! size {
+    ($resource:expr, $size:expr) => {
+        $crate::query::Query::Size($crate::misc::Size {
+            resource: $resource.to_string(),
+            size: $crate::macros::into_data_value($size),
+        })
+    };
+}
+
+/// Create a TripleCount query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = triple_count!("db:mydb", var!(count));
+/// ```
+#[macro_export]
+macro_rules! triple_count {
+    ($resource:expr, $count:expr) => {
+        $crate::query::Query::TripleCount($crate::misc::TripleCount {
+            resource: $resource.to_string(),
+            count: $crate::macros::into_data_value($count),
+        })
+    };
+}
+
+/// Create a Lower query for lowercase conversion
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = lower!(var!(name), var!(lower_name));
+/// ```
+#[macro_export]
+macro_rules! lower {
+    ($mixed:expr, $lower:expr) => {
+        $crate::query::Query::Lower($crate::string::Lower {
+            mixed: $crate::macros::into_data_value($mixed),
+            lower: $crate::macros::into_data_value($lower),
+        })
+    };
+}
+
+/// Create an Upper query for uppercase conversion
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = upper!(var!(name), var!(upper_name));
+/// ```
+#[macro_export]
+macro_rules! upper {
+    ($mixed:expr, $upper:expr) => {
+        $crate::query::Query::Upper($crate::string::Upper {
+            mixed: $crate::macros::into_data_value($mixed),
+            upper: $crate::macros::into_data_value($upper),
+        })
+    };
+}
+
+/// Create a Pad query for string padding
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = pad!(var!(text), data!("*"), data!(10), var!(padded));
+/// ```
+#[macro_export]
+macro_rules! pad {
+    ($string:expr, $char:expr, $times:expr, $result:expr) => {
+        $crate::query::Query::Pad($crate::string::Pad {
+            string: $crate::macros::into_data_value($string),
+            char: $crate::macros::into_data_value($char),
+            times: $crate::macros::into_data_value($times),
+            result_string: $crate::macros::into_data_value($result),
+        })
+    };
+}
+
+/// Create a Split query for string splitting
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = split!(var!(text), data!(","), var!(parts));
+/// ```
+#[macro_export]
+macro_rules! split {
+    ($string:expr, $pattern:expr, $list:expr) => {
+        $crate::query::Query::Split($crate::string::Split {
+            string: $crate::macros::into_data_value($string),
+            pattern: $crate::macros::into_data_value($pattern),
+            list: $crate::macros::into_data_value($list),
+        })
+    };
+}
+
+/// Create a Join query for joining strings
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = join!(var!(parts), data!(", "), var!(result));
+/// ```
+#[macro_export]
+macro_rules! join {
+    ($list:expr, $separator:expr, $result:expr) => {
+        $crate::query::Query::Join($crate::string::Join {
+            list: $crate::macros::into_list_or_variable($list),
+            separator: $crate::macros::into_data_value($separator),
+            result_string: $crate::macros::into_data_value($result),
+        })
+    };
+}
+
+/// Create a Substring query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = substring!(var!(text), data!(0), data!(5), data!(0), var!(sub));
+/// ```
+#[macro_export]
+macro_rules! substring {
+    ($string:expr, $before:expr, $length:expr, $after:expr, $substring:expr) => {
+        $crate::query::Query::Substring($crate::string::Substring {
+            string: $crate::macros::into_data_value($string),
+            before: $crate::macros::into_data_value($before),
+            length: $crate::macros::into_data_value($length),
+            after: $crate::macros::into_data_value($after),
+            substring: $crate::macros::into_data_value($substring),
+        })
+    };
+}
+
+/// Create a Like query for pattern matching
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = like!(var!(text), data!("%pattern%"), var!(similarity));
+/// ```
+#[macro_export]
+macro_rules! like {
+    ($string:expr, $pattern:expr, $similarity:expr) => {
+        $crate::query::Query::Like($crate::string::Like {
+            left: $crate::macros::into_data_value($string),
+            right: $crate::macros::into_data_value($pattern),
+            similarity: $crate::macros::into_data_value($similarity),
+        })
+    };
+}
+
+/// Create a Plus arithmetic expression
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = plus!(var!(x), var!(y), var!(sum));
+/// ```
+#[macro_export]
+macro_rules! plus {
+    ($left:expr, $right:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Plus($crate::expression::Plus {
+                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
+                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create a Minus arithmetic expression
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = minus!(var!(x), var!(y), var!(difference));
+/// ```
+#[macro_export]
+macro_rules! minus {
+    ($left:expr, $right:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Minus($crate::expression::Minus {
+                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
+                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create a Times arithmetic expression
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = times!(var!(x), var!(y), var!(product));
+/// ```
+#[macro_export]
+macro_rules! times {
+    ($left:expr, $right:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Times($crate::expression::Times {
+                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
+                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create a Divide arithmetic expression
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = divide!(var!(x), var!(y), var!(quotient));
+/// ```
+#[macro_export]
+macro_rules! divide {
+    ($left:expr, $right:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Divide($crate::expression::Divide {
+                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
+                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create a Div arithmetic expression (integer division)
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = div!(var!(x), var!(y), var!(quotient));
+/// ```
+#[macro_export]
+macro_rules! div {
+    ($left:expr, $right:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Div($crate::expression::Div {
+                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
+                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create an Exp arithmetic expression (exponentiation)
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = exp!(var!(base), var!(exponent), var!(result));
+/// ```
+#[macro_export]
+macro_rules! exp {
+    ($left:expr, $right:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Exp($crate::expression::Exp {
+                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
+                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create a Floor arithmetic expression
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = floor!(var!(x), var!(floored));
+/// ```
+#[macro_export]
+macro_rules! floor {
+    ($argument:expr, $result:expr) => {
+        eval!(
+            $crate::expression::ArithmeticExpression::Floor($crate::expression::Floor {
+                argument: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($argument))),
+            }),
+            $result
+        )
+    };
+}
+
+/// Create a Length query for getting list length
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = length!(var!(list), var!(len));
+/// ```
+#[macro_export]
+macro_rules! length {
+    ($list:expr, $length:expr) => {
+        $crate::query::Query::Length($crate::collection::Length {
+            list: $crate::macros::into_data_value($list),
+            length: $crate::macros::into_data_value($length),
+        })
+    };
+}
+
+/// Create a Dot query for accessing document fields
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = dot!(var!(doc), data!("field"), var!(value));
+/// ```
+#[macro_export]
+macro_rules! dot {
+    ($document:expr, $field:expr, $value:expr) => {
+        $crate::query::Query::Dot($crate::collection::Dot {
+            document: $crate::macros::into_data_value($document),
+            field: $crate::macros::into_data_value($field),
+            value: $crate::macros::into_data_value($value),
+        })
+    };
+}
+
+/// Create a Subsumption query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = subsumption!(var!(child), var!(parent));
+/// ```
+#[macro_export]
+macro_rules! subsumption {
+    ($child:expr, $parent:expr) => {
+        $crate::query::Query::Subsumption($crate::compare::Subsumption {
+            child: $crate::macros::into_node_value($child),
+            parent: $crate::macros::into_node_value($parent),
+        })
+    };
+}
+
+/// Create a TypeOf query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = typeof!(var!(element), var!(type));
+/// ```
+#[macro_export]
+macro_rules! typeof_ {
+    ($element:expr, $type:expr) => {
+        $crate::query::Query::TypeOf($crate::compare::TypeOf {
+            value: $crate::macros::into_value($element),
+            type_uri: $crate::macros::into_node_value($type),
+        })
+    };
+}
+
+/// Create a Using query for resource specification
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = using!("db:mydb", triple!(var!(x), "rdf:type", "Person"));
+/// ```
+#[macro_export]
+macro_rules! using {
+    ($collection:expr, $query:expr) => {
+        $crate::query::Query::Using($crate::control::Using {
+            collection: $collection.to_string(),
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create a From query for graph source specification
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = from!("db:mydb/graph", triple!(var!(x), "rdf:type", "Person"));
+/// ```
+#[macro_export]
+macro_rules! from {
+    ($graph:expr, $query:expr) => {
+        $crate::query::Query::From($crate::control::From {
+            graph: $graph.to_string(),
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create an Into query for graph target specification
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = into!("db:mydb/graph", insert_doc!(var!(doc)));
+/// ```
+#[macro_export]
+macro_rules! into {
+    ($graph:expr, $query:expr) => {
+        $crate::query::Query::Into($crate::control::Into {
+            graph: $graph.to_string(),
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create a Pin query for variable pinning
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = pin!(triple!(var!(x), "name", var!(name)));
+/// ```
+#[macro_export]
+macro_rules! pin {
+    ($query:expr) => {
+        $crate::query::Query::Pin($crate::control::Pin {
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create a Once query for once-only execution
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = once!(triple!(var!(x), "rdf:type", "Person"));
+/// ```
+#[macro_export]
+macro_rules! once {
+    ($query:expr) => {
+        $crate::query::Query::Once($crate::control::Once {
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create an AddTriple query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = add_triple!(node_var!(x), node_value!("name"), var!(name));
+/// ```
+#[macro_export]
+macro_rules! add_triple {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::AddTriple($crate::triple::AddTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::AddTriple($crate::triple::AddTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create an AddedTriple query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = added_triple!(node_var!(x), node_value!("name"), var!(name));
+/// ```
+#[macro_export]
+macro_rules! added_triple {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::AddedTriple($crate::triple::AddedTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::AddedTriple($crate::triple::AddedTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create a DeleteTriple query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = delete_triple!(node_var!(x), node_value!("name"), var!(name));
+/// ```
+#[macro_export]
+macro_rules! delete_triple {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::DeleteTriple($crate::triple::DeleteTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::DeleteTriple($crate::triple::DeleteTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create a DeletedTriple query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = deleted_triple!(node_var!(x), node_value!("name"), var!(name));
+/// ```
+#[macro_export]
+macro_rules! deleted_triple {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::DeletedTriple($crate::triple::DeletedTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::DeletedTriple($crate::triple::DeletedTriple {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create an AddLink query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = add_link!(node_var!(x), node_value!("friend"), node_var!(y));
+/// ```
+#[macro_export]
+macro_rules! add_link {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::AddLink($crate::triple::AddLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::AddLink($crate::triple::AddLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create an AddedLink query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = added_link!(node_var!(x), node_value!("friend"), node_var!(y));
+/// ```
+#[macro_export]
+macro_rules! added_link {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::AddedLink($crate::triple::AddedLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::AddedLink($crate::triple::AddedLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create an AddData query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = add_data!(node_var!(x), node_value!("age"), data!(25));
+/// ```
+#[macro_export]
+macro_rules! add_data {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::AddData($crate::triple::AddData {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_data_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::AddData($crate::triple::AddData {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_data_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create an AddedData query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = added_data!(node_var!(x), node_value!("age"), data!(25));
+/// ```
+#[macro_export]
+macro_rules! added_data {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::AddedData($crate::triple::AddedData {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_data_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::AddedData($crate::triple::AddedData {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_data_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create a DeleteLink query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = delete_link!(node_var!(x), node_value!("friend"), node_var!(y));
+/// ```
+#[macro_export]
+macro_rules! delete_link {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::DeleteLink($crate::triple::DeleteLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::DeleteLink($crate::triple::DeleteLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create a DeletedLink query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = deleted_link!(node_var!(x), node_value!("friend"), node_var!(y));
+/// ```
+#[macro_export]
+macro_rules! deleted_link {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        $crate::query::Query::DeletedLink($crate::triple::DeletedLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: terminusdb_schema::GraphType::Instance,
+        })
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        $crate::query::Query::DeletedLink($crate::triple::DeletedLink {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_node_value($object),
+            graph: $graph,
+        })
+    };
+}
+
+/// Create a NamedQuery
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = named_query!("find_persons", triple!(var!(x), "rdf:type", "Person"));
+/// ```
+#[macro_export]
+macro_rules! named_query {
+    ($name:expr, $query:expr) => {
+        $crate::query::NamedQuery {
+            name: $name.to_string(),
+            query: Box::new($query),
+        }
+    };
+}
+
+/// Create a NamedParametricQuery
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = named_parametric_query!("find_by_type", ["type"], triple!(var!(x), "rdf:type", var!(type)));
+/// ```
+#[macro_export]
+macro_rules! named_parametric_query {
+    ($name:expr, [$($param:expr),* $(,)?], $query:expr) => {
+        $crate::query::NamedParametricQuery {
+            name: $name.to_string(),
+            parameters: vec![$($param.to_string()),*],
+            query: Box::new($query),
+        }
+    };
+}
+
+/// Create a Call query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = call!("find_persons", triple!(var!(x), "rdf:type", "Person"));
+/// let q2 = call!("find_by_type", [var!(type)], triple!(var!(x), "rdf:type", var!(type)));
+/// ```
+#[macro_export]
+macro_rules! call {
+    ($name:expr, $query:expr) => {
+        $crate::query::Call {
+            name: $name.to_string(),
+            arguments: vec![],
+            query: $query,
+        }
+    };
+    ($name:expr, [$($arg:expr),* $(,)?], $query:expr) => {
+        $crate::query::Call {
+            name: $name.to_string(),
+            arguments: vec![$($crate::macros::into_value($arg)),*],
+            query: $query,
+        }
+    };
+}
+
+/// Create an OrderBy query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// use terminusdb_woql2::order::{Order, OrderTemplate};
+/// let q = order_by!(
+///     [OrderTemplate { variable: "name".to_string(), order: Order::Asc }],
+///     triple!(var!(x), "name", var!(name))
+/// );
+/// ```
+#[macro_export]
+macro_rules! order_by {
+    ([$($template:expr),* $(,)?], $query:expr) => {
+        $crate::query::Query::OrderBy($crate::order::OrderBy {
+            ordering: vec![$($template),*],
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create a GroupBy query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = group_by!(var!(group), ["type"], var!(groups), triple!(var!(x), "rdf:type", var!(type)));
+/// ```
+#[macro_export]
+macro_rules! group_by {
+    ($template:expr, [$($var:expr),* $(,)?], $grouped:expr, $query:expr) => {
+        $crate::query::Query::GroupBy($crate::order::GroupBy {
+            template: $crate::macros::into_value($template),
+            group_by: vec![$($var.to_string()),*],
+            grouped_value: $crate::macros::into_value($grouped),
+            query: Box::new($query),
+        })
+    };
+}
+
+/// Create a Get query
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// use terminusdb_woql2::get::{Column, QueryResource};
+/// let resource = QueryResource { ... };
+/// let q = get!([Column { ... }], resource, var!(response));
+/// ```
+#[macro_export]
+macro_rules! get {
+    ([$($column:expr),* $(,)?], $resource:expr, $response:expr) => {
+        $crate::query::Query::Get($crate::get::Get {
+            columns: vec![$($column),*],
+            resource: $resource,
+            response: $crate::macros::into_node_value($response),
+        })
+    };
+}
+
+/// Create a dictionary Value
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let dict = dictionary!{
+///     "name" => var!(name),
+///     "age" => data!(25)
+/// };
+/// ```
+#[macro_export]
+macro_rules! dictionary {
+    ($($key:expr => $value:expr),* $(,)?) => {
+        $crate::value::Value::Dictionary($crate::value::DictionaryTemplate {
+            data: {
+                let mut set = std::collections::BTreeSet::new();
+                $(
+                    set.insert($crate::value::FieldValuePair {
+                        field: $key.to_string(),
+                        value: $crate::macros::into_value($value),
+                    });
+                )*
+                set
+            }
+        })
+    };
+}
+
 
 // Helper functions for conversion
 pub use self::conversion::*;
