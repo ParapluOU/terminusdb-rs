@@ -1,6 +1,6 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, TerminusDBModel,
+    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Property, Schema, TerminusDBModel,
     ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, TypeFamily, STRING, URI,
 };
 use anyhow::{anyhow, bail};
@@ -51,11 +51,21 @@ impl<T: ToTDBSchema> ToTDBSchema for EntityIDFor<T> {
     }
 }
 
-// impl<T: ToTDBSchema + ToSchemaClass> ToSchemaClass for EntityIDFor<T> {
-//     fn to_class() -> &'static str {
-//         T::to_class()
-//     }
-// }
+impl<T: ToTDBSchema + ToSchemaClass> ToSchemaClass for EntityIDFor<T> {
+    fn to_class() -> String {
+        T::to_class()
+    }
+}
+
+// EntityIDFor is a primitive type that serializes to a string
+impl<T: ToTDBSchema> Primitive for EntityIDFor<T> {}
+
+// Convert EntityIDFor to PrimitiveValue
+impl<T: ToTDBSchema> From<EntityIDFor<T>> for PrimitiveValue {
+    fn from(id: EntityIDFor<T>) -> Self {
+        PrimitiveValue::String(id.to_string())
+    }
+}
 
 impl<T: ToTDBSchema> EntityIDFor<T> {
     pub fn random() -> Self {
@@ -330,7 +340,7 @@ impl<T: ToTDBSchema> Deref for EntityIDFor<T> {
     }
 }
 
-impl<T: ToTDBSchema, Parent> ToSchemaProperty<Parent> for EntityIDFor<T> {
+impl<T: ToTDBSchema + ToSchemaClass, Parent> ToSchemaProperty<Parent> for EntityIDFor<T> {
     fn to_property(prop_name: &str) -> Property {
         Property {
             name: prop_name.to_string(),

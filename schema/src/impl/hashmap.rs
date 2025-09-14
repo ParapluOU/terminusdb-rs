@@ -29,8 +29,8 @@ impl<K, T: ToTDBSchema> ToTDBSchema for HashMap<K, T> {
 
 // Implement ToSchemaClass for HashMap<String, Value>
 impl ToSchemaClass for HashMap<String, Value> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -183,8 +183,8 @@ impl FromInstanceProperty for HashMap<String, String> {
 
 // Specific implementations for HashMap<EntityIDFor<T>, String>
 impl<T: ToTDBSchema> ToSchemaClass for HashMap<EntityIDFor<T>, String> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -193,8 +193,8 @@ impl<T: ToTDBSchema> ToMaybeTDBSchema for HashMap<EntityIDFor<T>, String> {}
 
 // Specific implementations for HashMap<EntityIDFor<T>, serde_json::Value>
 impl<T: ToTDBSchema> ToSchemaClass for HashMap<EntityIDFor<T>, serde_json::Value> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -323,8 +323,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
 // HashMap<EntityIDFor<T>, i32>
 
 impl<T: ToTDBSchema> ToSchemaClass for HashMap<EntityIDFor<T>, i32> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -387,8 +387,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for HashMap<Entity
 // HashMap<EntityIDFor<T>, bool>
 
 impl<T: ToTDBSchema> ToSchemaClass for HashMap<EntityIDFor<T>, bool> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -451,8 +451,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for HashMap<Entity
 // HashMap<EntityIDFor<T>, DateTime<Utc>>
 
 impl<T: ToTDBSchema> ToSchemaClass for HashMap<EntityIDFor<T>, DateTime<Utc>> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -520,8 +520,8 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
 // HashMap<EntityIDFor<T>, NaiveTime>
 
 impl<T: ToTDBSchema> ToSchemaClass for HashMap<EntityIDFor<T>, NaiveTime> {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 
@@ -614,8 +614,8 @@ impl<
             + for<'de> serde::Deserialize<'de>,
     > ToSchemaClass for HashMap<EntityIDFor<T>, V>
 {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }
 

@@ -57,16 +57,90 @@ pub fn implement_for_struct(
     opts: &TDBModelOpts,
 ) -> proc_macro2::TokenStream {
     let struct_name = &input.ident;
-    let class_name = opts
-        .class_name
-        .clone()
-        .unwrap_or_else(|| struct_name.to_string());
+    
+    // Generate class name that includes generic parameters
+    let class_name = if let Some(explicit_class) = &opts.class_name {
+        explicit_class.clone()
+    } else {
+        struct_name.to_string()
+    };
+    
+    // For generics, we need to generate a dynamic class name
+    #[cfg(feature = "generic-derive")]
+    let class_name_expr = if !input.generics.params.is_empty() {
+        // Generate a format string that includes generic types
+        let mut format_str = class_name.clone();
+        format_str.push('<');
+        let generic_types: Vec<_> = input.generics.params.iter().map(|param| {
+            match param {
+                syn::GenericParam::Type(type_param) => {
+                    let ident = &type_param.ident;
+                    quote! { <#ident as terminusdb_schema::ToSchemaClass>::to_class() }
+                }
+                _ => quote! { "?" } // Lifetime or const generics not supported
+            }
+        }).collect();
+        
+        if generic_types.is_empty() {
+            quote! { #class_name }
+        } else {
+            quote! {
+                {
+                    let mut class_name = String::from(#class_name);
+                    class_name.push('<');
+                    let mut first = true;
+                    #(
+                        if !first { class_name.push_str(", "); }
+                        class_name.push_str(&#generic_types);
+                        first = false;
+                    )*
+                    class_name.push('>');
+                    class_name
+                }
+            }
+        }
+    } else {
+        quote! { #class_name }
+    };
+    
+    #[cfg(not(feature = "generic-derive"))]
+    let class_name_expr = quote! { #class_name };
+
+    // Handle generics if feature is enabled
+    #[cfg(feature = "generic-derive")]
+    let (impl_generics, ty_generics, where_clause) = {
+        let (syn_impl_generics, syn_ty_generics, base_where_clause) = input.generics.split_for_impl();
+        
+        // Only collect bounds if we have generic parameters
+        if !input.generics.params.is_empty() {
+            if let Fields::Named(fields_named) = &data_struct.fields {
+                let type_param_bounds = crate::bounds::collect_type_param_bounds(
+                    fields_named,
+                    &input.generics,
+                    struct_name,
+                );
+                let new_predicates = crate::bounds::build_where_predicates(&type_param_bounds);
+                let combined_where = crate::bounds::combine_where_clauses(
+                    base_where_clause,
+                    new_predicates,
+                );
+                (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, combined_where)
+            } else {
+                (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, base_where_clause.cloned())
+            }
+        } else {
+            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, base_where_clause.cloned())
+        }
+    };
+    
+    #[cfg(not(feature = "generic-derive"))]
+    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None);
 
     // Generate the implementation for ToSchemaClass trait
     let schema_class_impl = quote! {
-        impl terminusdb_schema::ToSchemaClass for #struct_name {
-            fn to_class() -> &'static str {
-                #struct_name
+        impl #impl_generics terminusdb_schema::ToSchemaClass for #struct_name #ty_generics #where_clause {
+            fn to_class() -> String {
+                #class_name_expr.to_string()
             }
         }
     };
@@ -78,7 +152,7 @@ pub fn implement_for_struct(
             if let Err(e) = validate_id_field_type(fields_named, opts) {
                 return e.to_compile_error();
             }
-            process_named_fields(fields_named, struct_name)
+            process_named_fields(fields_named, struct_name, &ty_generics)
         }
         _ => {
             return syn::Error::new(
@@ -170,11 +244,15 @@ pub fn implement_for_struct(
     // Generate the implementation for schema
     let schema_impl = generate_totdbschema_impl(
         struct_name,
-        &class_name,
+        class_name_expr.clone(),
         opts,
         properties,
         quote! { SchemaTypeClass },
         to_schema_tree_impl,
+        #[cfg(feature = "generic-derive")]
+        (&impl_generics, &ty_generics, &where_clause),
+        #[cfg(not(feature = "generic-derive"))]
+        (&quote!{}, &quote!{}, &None),
     );
 
     // Generate the body code for the to_instance method for structs
@@ -201,6 +279,10 @@ pub fn implement_for_struct(
         struct_name,
         instance_body_code, // Pass the generated body code
         opts.clone(),       // No longer pass None here
+        #[cfg(feature = "generic-derive")]
+        (&impl_generics, &ty_generics, &where_clause),
+        #[cfg(not(feature = "generic-derive"))]
+        (&quote!{}, &quote!{}, &None),
     );
 
     // Combine both implementations
@@ -209,7 +291,7 @@ pub fn implement_for_struct(
 
         #instance_impl
 
-        // #schema_class_impl
+        #schema_class_impl
     }
 }
 
@@ -217,6 +299,7 @@ pub fn implement_for_struct(
 pub fn process_named_fields(
     fields_named: &FieldsNamed,
     struct_name: &syn::Ident,
+    ty_generics: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let fields = fields_named
         .named
@@ -253,7 +336,7 @@ pub fn process_named_fields(
                 //     class: <#field_ty as terminusdb_schema::ToSchemaClass>::to_class().to_string(),
                 // }
 
-                <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name>>::to_property(#property_name).tap_mut(|prop| {
+                <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_property(#property_name).tap_mut(|prop| {
                     #classoverride
                 })
             };

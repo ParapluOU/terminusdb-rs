@@ -44,7 +44,7 @@ impl FromInstanceProperty for serde_json::Value {
 }
 
 impl ToSchemaClass for serde_json::Value {
-    fn to_class() -> &'static str {
-        JSON
+    fn to_class() -> String {
+        JSON.to_string()
     }
 }

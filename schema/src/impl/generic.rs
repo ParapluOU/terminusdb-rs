@@ -67,11 +67,13 @@ impl<T: ToSchemaPropertyName + ToSchemaPropertyJsonValue> ToJson for T {
     }
 }
 
+// Generic implementation for primitive types that implement ToSchemaClass
+// This uses the 'default' keyword to allow more specific implementations to override
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for T {
     default fn to_property(prop_name: &str) -> Property {
         Property {
             name: prop_name.to_string(),
-            class: T::to_class().to_string(),
+            class: T::to_class(),
             r#type: None,
         }
     }

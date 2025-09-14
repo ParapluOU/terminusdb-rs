@@ -1,5 +1,5 @@
 use crate::{
-    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue,
+    json::InstancePropertyFromJson, EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue,
     Property, RelationValue, Schema, TdbLazy, ToInstanceProperty, ToSchemaClass, ToSchemaProperty,
     ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
@@ -443,3 +443,27 @@ impl FromInstanceProperty for Vec<u8> {
         }
     }
 }
+
+// Special implementation for Vec<EntityIDFor<T>>
+impl<T: ToTDBSchema> FromInstanceProperty for Vec<EntityIDFor<T>> {
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitives(arr) => {
+                let mut targets = Vec::with_capacity(arr.len());
+                for primitive in arr {
+                    match primitive {
+                        PrimitiveValue::String(s) => {
+                            targets.push(EntityIDFor::new(s)?);
+                        }
+                        _ => {
+                            bail!("Expected PrimitiveValue::String for EntityIDFor, got: {:#?}", primitive)
+                        }
+                    }
+                }
+                Ok(targets)
+            }
+            _ => bail!("Expected InstanceProperty::Primitives for Vec<EntityIDFor<T>>"),
+        }
+    }
+}
+

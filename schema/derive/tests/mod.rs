@@ -16,3 +16,27 @@ mod tdblazy_test;
 mod unfoldable_subdocument_test;
 mod variant_naming_test;
 mod vec_string_test;
+
+#[cfg(feature = "generic-derive")]
+mod generic_test;
+
+#[cfg(feature = "generic-derive")]
+mod generic_with_model_test;
+
+#[cfg(feature = "generic-derive")]
+mod simple_generic_test;
+
+#[cfg(feature = "generic-derive")]
+mod demo_generic_test;
+
+#[cfg(feature = "generic-derive")]
+mod generic_works_test;
+
+#[cfg(feature = "generic-derive")]
+mod generic_syntax_test;
+
+#[cfg(feature = "generic-derive")]
+mod generic_basic_test;
+
+#[cfg(not(feature = "generic-derive"))]
+mod generic_error_test;

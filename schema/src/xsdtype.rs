@@ -169,8 +169,8 @@ macro_rules! xsd {
 impl Primitive for XSDAnySimpleType {}
 
 impl ToSchemaClass for XSDAnySimpleType {
-    fn to_class() -> &'static str {
-        "xsd:anySimpleType"
+    fn to_class() -> String {
+        "xsd:anySimpleType".to_string()
     }
 }
 

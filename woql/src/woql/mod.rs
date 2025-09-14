@@ -394,8 +394,8 @@ macro_rules! newtype {
         }
 
         impl ToSchemaClass for $name {
-            fn to_class() -> &'static str {
-                terminusdb_schema::$class
+            fn to_class() -> String {
+                terminusdb_schema::$class.to_string()
             }
         }
 

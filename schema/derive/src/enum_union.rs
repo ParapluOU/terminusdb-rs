@@ -102,11 +102,12 @@ pub fn implement_for_tagged_enum(
     // Generate the schema implementation
     let schema_impl = generate_totdbschema_impl(
         enum_name,
-        &class_name,
+        quote! { #class_name },
         opts,
         variant_properties,
         quote! { SchemaTypeTaggedUnion },
         to_schema_tree_impl,
+        (&quote!{}, &quote!{}, &None), // No generics for enums currently
     );
 
     // Generate the body code for the to_instance method based on whether the enum is abstract
@@ -144,6 +145,7 @@ pub fn implement_for_tagged_enum(
         enum_name,
         instance_body_code, // Pass the generated body code
         opts.clone(),       // No longer pass Some(data_enum) here
+        (&quote!{}, &quote!{}, &None), // No generics for enums currently
     );
 
     // Extract the TokenStream from the second element of each tuple in virtual_structs
@@ -152,8 +154,8 @@ pub fn implement_for_tagged_enum(
     // Generate the implementation for ToSchemaClass trait
     let schema_class_impl = quote! {
         impl terminusdb_schema::ToSchemaClass for #enum_name {
-            fn to_class() -> &'static str {
-                #enum_name
+            fn to_class() -> String {
+                #enum_name.to_string()
             }
         }
     };
@@ -164,7 +166,7 @@ pub fn implement_for_tagged_enum(
 
         #instance_impl
 
-        // #schema_class_impl
+        #schema_class_impl
 
         // Include virtual structs for complex variants
         #(#virtual_struct_impls)*
@@ -303,7 +305,7 @@ fn generate_virtual_structs(
                 // Generate the schema implementation
                 let schema_impl = generate_totdbschema_impl(
                     &variant_struct_ident,
-                    &variant_struct_name,
+                    quote! { #variant_struct_name },
                     &TDBModelOpts {
                         class_name: Some(variant_struct_name.to_string()),
                         base: None,
@@ -339,6 +341,7 @@ fn generate_virtual_structs(
                             todo!("recursively add subschemas for enum virtual struct" )
                         }
                     },
+                    (&quote!{}, &quote!{}, &None), // No generics for virtual structs
                 );
 
                 // Generate the instance implementation
@@ -381,6 +384,7 @@ fn generate_virtual_structs(
                         rename_all: None,
                         key_fields: None,
                     },
+                    (&quote!{}, &quote!{}, &None), // No generics for virtual structs
                 );
 
                 // Combine the struct definition and implementations
@@ -449,7 +453,7 @@ fn generate_virtual_structs(
                     .filter_map(|field| field.ident.as_ref().map(|ident| ident.clone()))
                     .collect::<Vec<_>>();
 
-                let properties_token = process_named_fields(&dummy_fields, &variant_struct_ident);
+                let properties_token = process_named_fields(&dummy_fields, &variant_struct_ident, &quote!{});
 
                 // Generate to_schema_tree implementation for the virtual struct
                 let field_types = fields
@@ -510,11 +514,12 @@ fn generate_virtual_structs(
                 // Generate ToTDBSchema implementation for the virtual struct
                 let schema_impl = generate_totdbschema_impl(
                     &variant_struct_ident,
-                    &variant_struct_name,
+                    quote! { #variant_struct_name },
                     &variant_opts,
                     properties_token,
                     quote! { SchemaTypeClass },
                     to_schema_tree_impl,
+                    (&quote!{}, &quote!{}, &None), // No generics for virtual structs
                 );
 
                 // Generate field conversions for ToTDBInstance

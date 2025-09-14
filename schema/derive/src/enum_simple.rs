@@ -74,11 +74,12 @@ pub fn implement_for_simple_enum(
     // Generate the schema implementation with an Enum type
     let schema_impl = generate_totdbschema_impl(
         enum_name,
-        &class_name,
+        quote! { #class_name },
         opts,
         values_impl,
         quote! { SchemaTypeEnum },
         to_schema_tree_impl,
+        (&quote!{}, &quote!{}, &None), // No generics for enums currently
     );
 
     // Generate the body code for the to_instance method for simple enums
@@ -110,13 +111,14 @@ pub fn implement_for_simple_enum(
         enum_name,
         instance_body_code, // Pass the generated body code
         opts.clone(),       // No longer pass Some(data_enum) here
+        (&quote!{}, &quote!{}, &None), // No generics for enums currently
     );
 
     // Generate the implementation for ToSchemaClass trait
     let schema_class_impl = quote! {
         impl terminusdb_schema::ToSchemaClass for #enum_name {
-            fn to_class() -> &'static str {
-                #enum_name
+            fn to_class() -> String {
+                #enum_name.to_string()
             }
         }
     };
@@ -127,7 +129,7 @@ pub fn implement_for_simple_enum(
 
         #instance_impl
 
-        // #schema_class_impl
+        #schema_class_impl
     }
 }
 

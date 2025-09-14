@@ -11,8 +11,10 @@ pub fn generate_totdbinstance_impl(
     instance_body_code: proc_macro2::TokenStream, // Renamed from fields_code
     // struct/enum level derive arguments
     args: TDBModelOpts,
-    // Removed data_enum_opt argument
+    // Generic parameters
+    generics: (&proc_macro2::TokenStream, &proc_macro2::TokenStream, &Option<syn::WhereClause>),
 ) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics;
     // Generate the optid expression based on whether an id_field is configured
     let optid = match args.id_field.as_ref() {
         None => {
@@ -47,7 +49,7 @@ pub fn generate_totdbinstance_impl(
 
     // This now simply wraps the provided instance_body_code within the impl
     quote! {
-        impl terminusdb_schema::ToTDBInstance for #type_name {
+        impl #impl_generics terminusdb_schema::ToTDBInstance for #type_name #ty_generics #where_clause {
             fn to_instance(&self, id: Option<String>) -> terminusdb_schema::Instance {
                 // Get schema info needed by some body implementations
                 let schema = <Self as terminusdb_schema::ToTDBSchema>::to_schema();
@@ -60,7 +62,7 @@ pub fn generate_totdbinstance_impl(
         }
 
         // Use the helper function from the traits module
-        impl terminusdb_schema::ToTDBInstances for #type_name {
+        impl #impl_generics terminusdb_schema::ToTDBInstances for #type_name #ty_generics #where_clause {
             fn to_instance_tree(&self) -> Vec<terminusdb_schema::Instance> {
                 let instance = self.to_instance(None);
                 terminusdb_schema::build_instance_tree(&instance)

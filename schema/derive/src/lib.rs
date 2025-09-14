@@ -9,6 +9,9 @@ mod json_deserialize;
 mod prelude;
 mod schema;
 mod r#struct;
+mod generics;
+#[cfg(feature = "generic-derive")]
+mod bounds;
 
 use crate::enum_simple::implement_for_simple_enum;
 use crate::enum_union::implement_for_tagged_enum;
@@ -173,6 +176,11 @@ pub fn derive_terminusdb_model(input: TokenStream) -> TokenStream {
 
     // Store the original input for doc extraction
     opts.original_input = Some(input.clone());
+
+    // Check for generic parameters
+    if let Err(err) = generics::check_generics(&input) {
+        return err.to_compile_error().into();
+    }
 
     // Generate implementation based on whether this is a struct or enum
     let expanded = match &input.data {

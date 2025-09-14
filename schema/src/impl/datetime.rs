@@ -9,8 +9,8 @@ use serde_json::Value;
 
 // Implement ToSchemaClass for DateTime<Utc>
 impl ToSchemaClass for DateTime<Utc> {
-    fn to_class() -> &'static str {
-        DATETIME
+    fn to_class() -> String {
+        DATETIME.to_string()
     }
 }
 
@@ -79,8 +79,8 @@ impl<Parent> InstancePropertyFromJson<Parent> for DateTime<Utc> {
 
 // Implement ToSchemaClass for NaiveTime
 impl ToSchemaClass for NaiveTime {
-    fn to_class() -> &'static str {
-        TIME
+    fn to_class() -> String {
+        TIME.to_string()
     }
 }
 

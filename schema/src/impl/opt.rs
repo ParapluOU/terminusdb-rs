@@ -69,7 +69,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<T> {
     }
 }
 
-impl<Parent, T: ToTDBSchema> ToSchemaProperty<Parent> for Option<EntityIDFor<T>> {
+impl<Parent, T: ToTDBSchema + ToSchemaClass> ToSchemaProperty<Parent> for Option<EntityIDFor<T>> {
     fn to_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
@@ -102,7 +102,7 @@ impl<Parent, T: ToTDBSchema> ToSchemaProperty<Parent> for Option<EntityIDFor<T>>
 // }
 
 impl<T: ToSchemaClass> ToSchemaClass for Option<T> {
-    fn to_class() -> &'static str {
+    fn to_class() -> String {
         T::to_class()
     }
 }
