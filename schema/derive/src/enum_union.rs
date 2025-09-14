@@ -155,7 +155,7 @@ pub fn implement_for_tagged_enum(
     let schema_class_impl = quote! {
         impl terminusdb_schema::ToSchemaClass for #enum_name {
             fn to_class() -> String {
-                #enum_name.to_string()
+                stringify!(#enum_name).to_string()
             }
         }
     };

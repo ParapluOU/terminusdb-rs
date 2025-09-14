@@ -87,16 +87,29 @@ fn implement_instance_from_json_for_struct(
     };
     
     #[cfg(not(feature = "generic-derive"))]
-    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None);
+    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None::<syn::WhereClause>);
     // For generics, we need to use the schema name which includes generic parameters
-    let expected_type_name_expr = if cfg!(feature = "generic-derive") && !generics.params.is_empty() {
-        quote! { <#struct_name #ty_generics as terminusdb_schema::ToTDBSchema>::schema_name() }
-    } else {
-        let static_name = opts
-            .class_name
-            .clone()
-            .unwrap_or_else(|| struct_name.to_string());
-        quote! { #static_name }
+    let expected_type_name_expr = {
+        #[cfg(feature = "generic-derive")]
+        {
+            if !generics.params.is_empty() {
+                quote! { <#struct_name #ty_generics as terminusdb_schema::ToTDBSchema>::schema_name() }
+            } else {
+                let static_name = opts
+                    .class_name
+                    .clone()
+                    .unwrap_or_else(|| struct_name.to_string());
+                quote! { #static_name }
+            }
+        }
+        #[cfg(not(feature = "generic-derive"))]
+        {
+            let static_name = opts
+                .class_name
+                .clone()
+                .unwrap_or_else(|| struct_name.to_string());
+            quote! { #static_name }
+        }
     };
 
     let fields = match &data_struct.fields {

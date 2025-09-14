@@ -134,7 +134,7 @@ pub fn implement_for_struct(
     };
     
     #[cfg(not(feature = "generic-derive"))]
-    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None);
+    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None::<syn::WhereClause>);
 
     // Generate the implementation for ToSchemaClass trait
     let schema_class_impl = quote! {
