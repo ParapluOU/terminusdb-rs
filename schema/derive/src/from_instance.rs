@@ -118,8 +118,9 @@ fn implement_from_instance_for_struct(
                 use anyhow::*;
 
                 // Check that the schema type matches
-                if !instance.is_of_type::<Self>() {
-                    return Err(anyhow::anyhow!("Instance type mismatch, expected {}", <Self as terminusdb_schema::ToTDBSchema>::schema_name()));
+                let expected_schema_name = <Self as terminusdb_schema::ToTDBSchema>::schema_name();
+                if instance.schema.class_name() != &expected_schema_name {
+                    return Err(anyhow::anyhow!("Instance type mismatch, expected {}, got {}", expected_schema_name, instance.schema.class_name()));
                 }
 
                 #fields_code
@@ -135,8 +136,9 @@ fn implement_from_instance_for_struct(
                 }
 
                 // Find the root instance with the matching type
+                let expected_schema_name = <Self as terminusdb_schema::ToTDBSchema>::schema_name();
                 for instance in instances {
-                    if instance.is_of_type::<Self>() {
+                    if instance.schema.class_name() == &expected_schema_name {
                         return Self::from_instance(instance);
                     }
                 }

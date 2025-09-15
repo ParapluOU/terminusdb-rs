@@ -1,7 +1,25 @@
-use crate::{FromTDBInstance, PrimitiveValue, ToTDBInstance, ToTDBSchema};
+use crate::{
+    FromInstanceProperty, FromTDBInstance, PrimitiveValue, ToInstanceProperty, ToMaybeTDBSchema,
+    ToSchemaProperty, ToTDBInstance, ToTDBSchema,
+};
 
 /// marker trait
 pub trait Primitive: Into<PrimitiveValue> {}
+
+/// Trait alias that combines all the required bounds for generic field types in TerminusDB models
+/// This ensures that generic parameters can work with both primitive types and model types
+pub trait TerminusDBField<Parent> = std::fmt::Debug
+    + Clone
+    + Send
+    + serde::Serialize
+    + serde::de::DeserializeOwned
+    + ToSchemaProperty<Parent>
+    + ToInstanceProperty<Parent>
+    + FromInstanceProperty
+    + ToMaybeTDBSchema
+    + crate::json::InstancePropertyFromJson<Parent>;
+
+// impl<T: PrimitiveMarker> PrimitiveMarker for Box<T> {}
 
 /// Marker trait for compile-time primitive detection in derive macros
 /// Types implementing Primitive automatically get this marker

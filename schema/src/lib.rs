@@ -5,6 +5,7 @@
 #![feature(let_chains)]
 #![feature(negative_impls, with_negative_coherence)]
 #![feature(auto_traits)]
+#![feature(trait_alias)]
 #![allow(warnings)]
 
 // pub use error::*;

@@ -3,6 +3,7 @@
 // This test demonstrates that generic derive works with EntityIDFor<T>
 // as requested by the user: "ideally i want Model<T> {other: EntityIDFor<T>}"
 
+use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema::{EntityIDFor, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
@@ -21,9 +22,12 @@ struct Company {
 
 // Generic model with EntityIDFor<T> field
 #[derive(Debug, Clone, TerminusDBModel)]
-struct Employment<T> {
+struct Employment<T>
+where
+    T: ToTDBSchema + terminusdb_schema::ToSchemaClass + Send,
+{
     id: String,
-    employee_ref: EntityIDFor<T>,  // This is what the user wanted
+    employee_ref: EntityIDFor<T>, // This is what the user wanted
     position: String,
 }
 
@@ -35,20 +39,22 @@ fn test_generic_model_with_entity_id_for() {
         employee_ref: EntityIDFor::new("person-123").unwrap(),
         position: "Software Engineer".to_string(),
     };
-    
+
     // Verify we can get the schema - this proves the derive macro works
     let schema = <Employment<Person> as ToTDBSchema>::to_schema();
-    assert_eq!(schema.class_name(), "Employment");
-    
+    assert_eq!(schema.class_name(), "Employment<Person>");
+
     // The same generic struct works with Company type
     let company_employment = Employment::<Company> {
         id: "emp-002".to_string(),
         employee_ref: EntityIDFor::new("company-456").unwrap(),
         position: "Contractor".to_string(),
     };
-    
+
     let company_schema = <Employment<Company> as ToTDBSchema>::to_schema();
-    assert_eq!(company_schema.class_name(), "Employment");
-    
-    println!("✅ Generic derive macro successfully generates code for Model<T> {{ EntityIDFor<T> }}");
+    assert_eq!(company_schema.class_name(), "Employment<Company>");
+
+    println!(
+        "✅ Generic derive macro successfully generates code for Model<T> {{ EntityIDFor<T> }}"
+    );
 }

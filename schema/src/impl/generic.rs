@@ -1,3 +1,4 @@
+use crate::Primitive;
 use crate::{
     json::ToJson, Instance, InstanceProperty, PrimitiveValue, Property, RelationValue, Schema,
     ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, ToSchemaProperty,
@@ -5,7 +6,6 @@ use crate::{
 };
 use serde_json::{Map, Value};
 use std::collections::HashSet;
-
 impl<T> ToMaybeTDBSchema for T {
     default fn to_schema() -> Option<Schema> {
         None
@@ -67,7 +67,7 @@ impl<T: ToSchemaPropertyName + ToSchemaPropertyJsonValue> ToJson for T {
     }
 }
 
-// Generic implementation for primitive types that implement ToSchemaClass
+// Generic implementation for  types that implement ToSchemaClass
 // This uses the 'default' keyword to allow more specific implementations to override
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for T {
     default fn to_property(prop_name: &str) -> Property {

@@ -20,7 +20,7 @@ fn validate_id_field_type(
                     format!("id_field '{}' not found in struct", id_field_name),
                 )
             })?;
-        
+
         // Check if the key strategy is non-Random
         let key_strategy = opts.key.as_ref().map(|s| s.as_str());
         let is_non_random_key = match key_strategy {
@@ -33,7 +33,7 @@ fn validate_id_field_type(
                 ));
             }
         };
-        
+
         // For non-Random keys, enforce that id_field is ServerIDFor<T>
         if is_non_random_key && !is_server_id_for_type(&field.ty) {
             return Err(syn::Error::new(
@@ -57,30 +57,42 @@ pub fn implement_for_struct(
     opts: &TDBModelOpts,
 ) -> proc_macro2::TokenStream {
     let struct_name = &input.ident;
-    
+
     // Generate class name that includes generic parameters
     let class_name = if let Some(explicit_class) = &opts.class_name {
         explicit_class.clone()
     } else {
         struct_name.to_string()
     };
-    
+
     // For generics, we need to generate a dynamic class name
     #[cfg(feature = "generic-derive")]
     let class_name_expr = if !input.generics.params.is_empty() {
         // Generate a format string that includes generic types
         let mut format_str = class_name.clone();
         format_str.push('<');
-        let generic_types: Vec<_> = input.generics.params.iter().map(|param| {
-            match param {
-                syn::GenericParam::Type(type_param) => {
-                    let ident = &type_param.ident;
-                    quote! { <#ident as terminusdb_schema::ToSchemaClass>::to_class() }
+        let generic_types: Vec<_> = input
+            .generics
+            .params
+            .iter()
+            .map(|param| {
+                match param {
+                    syn::GenericParam::Type(type_param) => {
+                        let ident = &type_param.ident;
+                        quote! {
+                            {
+                                // Inline prettify function
+                                let full_name = std::any::type_name::<#ident>();
+                                // Take only the last component after ::
+                                full_name.rsplit("::").next().unwrap_or(full_name).to_string()
+                            }
+                        }
+                    }
+                    _ => quote! { "?" }, // Lifetime or const generics not supported
                 }
-                _ => quote! { "?" } // Lifetime or const generics not supported
-            }
-        }).collect();
-        
+            })
+            .collect();
+
         if generic_types.is_empty() {
             quote! { #class_name }
         } else {
@@ -102,15 +114,16 @@ pub fn implement_for_struct(
     } else {
         quote! { #class_name }
     };
-    
+
     #[cfg(not(feature = "generic-derive"))]
     let class_name_expr = quote! { #class_name };
 
     // Handle generics if feature is enabled
     #[cfg(feature = "generic-derive")]
     let (impl_generics, ty_generics, where_clause) = {
-        let (syn_impl_generics, syn_ty_generics, base_where_clause) = input.generics.split_for_impl();
-        
+        let (syn_impl_generics, syn_ty_generics, base_where_clause) =
+            input.generics.split_for_impl();
+
         // Only collect bounds if we have generic parameters
         if !input.generics.params.is_empty() {
             if let Fields::Named(fields_named) = &data_struct.fields {
@@ -120,21 +133,32 @@ pub fn implement_for_struct(
                     struct_name,
                 );
                 let new_predicates = crate::bounds::build_where_predicates(&type_param_bounds);
-                let combined_where = crate::bounds::combine_where_clauses(
-                    base_where_clause,
-                    new_predicates,
-                );
-                (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, combined_where)
+                let combined_where =
+                    crate::bounds::combine_where_clauses(base_where_clause, new_predicates);
+                (
+                    quote! { #syn_impl_generics },
+                    quote! { #syn_ty_generics },
+                    combined_where,
+                )
             } else {
-                (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, base_where_clause.cloned())
+                (
+                    quote! { #syn_impl_generics },
+                    quote! { #syn_ty_generics },
+                    base_where_clause.cloned(),
+                )
             }
         } else {
-            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, base_where_clause.cloned())
+            (
+                quote! { #syn_impl_generics },
+                quote! { #syn_ty_generics },
+                base_where_clause.cloned(),
+            )
         }
     };
-    
+
     #[cfg(not(feature = "generic-derive"))]
-    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None::<syn::WhereClause>);
+    let (impl_generics, ty_generics, where_clause) =
+        (quote! {}, quote! {}, None::<syn::WhereClause>);
 
     // Generate the implementation for ToSchemaClass trait
     let schema_class_impl = quote! {
@@ -252,7 +276,7 @@ pub fn implement_for_struct(
         #[cfg(feature = "generic-derive")]
         (&impl_generics, &ty_generics, &where_clause),
         #[cfg(not(feature = "generic-derive"))]
-        (&quote!{}, &quote!{}, &None),
+        (&quote! {}, &quote! {}, &None),
     );
 
     // Generate the body code for the to_instance method for structs
@@ -282,7 +306,7 @@ pub fn implement_for_struct(
         #[cfg(feature = "generic-derive")]
         (&impl_generics, &ty_generics, &where_clause),
         #[cfg(not(feature = "generic-derive"))]
-        (&quote!{}, &quote!{}, &None),
+        (&quote! {}, &quote! {}, &None),
     );
 
     // Combine both implementations
@@ -309,7 +333,7 @@ pub fn process_named_fields(
             let field_ty = &field.ty;
             let field_opts = TDBFieldOpts::from_field(field).unwrap();
             let property_name = field_opts.name.unwrap_or_else(|| field_name.to_string());
-            
+
             // Extract subdocument value before quote
             // todo: adjust SchemaProperty to be able to encode subdocument requirements on the property level
             let subdocument = field_opts.subdocument;
@@ -340,7 +364,7 @@ pub fn process_named_fields(
                     #classoverride
                 })
             };
-            
+
             property
         })
         .collect::<Vec<_>>();

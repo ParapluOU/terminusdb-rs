@@ -1,34 +1,69 @@
 #![cfg(feature = "generic-derive")]
 
-// This test shows that generic derive works, even if the test framework has limitations
-
+use serde::{Deserialize, Serialize};
+use terminusdb_schema::{TerminusDBField, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
-// A concrete type
-#[derive(Debug, Clone, TerminusDBModel)]
+// Define concrete TerminusDBModel types
+#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
 struct User {
     id: String,
     name: String,
+    email: String,
 }
 
-// A generic type - this COMPILES, proving generic support works!
+#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+struct Article {
+    id: String,
+    title: String,
+    content: String,
+}
+
+// A generic wrapper that works with TerminusDBModel types
 #[derive(Debug, Clone, TerminusDBModel)]
-struct Wrapper<T> {
+struct Wrapper<T>
+where
+    T: TerminusDBField<Wrapper<T>>,
+{
     id: String,
     content: T,
+    created_at: String,
 }
 
-#[test] 
-fn generic_derive_accepts_generic_syntax() {
-    // The fact that this file compiles proves that:
-    // 1. The derive macro accepts generic parameters
-    // 2. It generates implementations with proper trait bounds
-    
-    // We can't easily test runtime behavior because:
-    // - ToSchemaClass returns &'static str (can't encode generics)
-    // - Many traits aren't implemented for primitive types
-    // - The test infrastructure has limitations
-    
-    // But the key achievement is that generic syntax is supported!
-    println!("✅ Generic types in #[derive(TerminusDBModel)] are supported!");
+#[test]
+fn generic_wrapper_with_models() {
+    // Create a wrapper containing a User
+    let user_wrapper = Wrapper::<User> {
+        id: "wrapper-1".to_string(),
+        content: User {
+            id: "user-1".to_string(),
+            name: "Alice".to_string(),
+            email: "alice@example.com".to_string(),
+        },
+        created_at: "2024-01-01".to_string(),
+    };
+
+    // Verify we can get the schema
+    let user_schema = <Wrapper<User> as ToTDBSchema>::to_schema();
+    assert_eq!(user_schema.class_name(), "Wrapper<User>");
+
+    // Create a wrapper containing an Article
+    let article_wrapper = Wrapper::<Article> {
+        id: "wrapper-2".to_string(),
+        content: Article {
+            id: "article-1".to_string(),
+            title: "Generic Types in Rust".to_string(),
+            content: "An introduction to generics...".to_string(),
+        },
+        created_at: "2024-01-02".to_string(),
+    };
+
+    let article_schema = <Wrapper<Article> as ToTDBSchema>::to_schema();
+    assert_eq!(article_schema.class_name(), "Wrapper<Article>");
+
+    // Verify we can convert to instances
+    let _user_instance = user_wrapper.to_instance(None);
+    let _article_instance = article_wrapper.to_instance(None);
+
+    println!("✅ Generic Wrapper<T> successfully works with TerminusDBModel types!");
 }

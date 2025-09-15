@@ -1,7 +1,8 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Property, Schema, TerminusDBModel,
-    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, TypeFamily, STRING, URI,
+    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Property, Schema,
+    TerminusDBModel, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBSchema, TypeFamily,
+    STRING, URI,
 };
 use anyhow::{anyhow, bail};
 use rocket::form::{self, FromFormField, ValueField};

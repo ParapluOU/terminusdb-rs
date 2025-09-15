@@ -10,6 +10,7 @@ mod prelude;
 mod schema;
 mod r#struct;
 mod generics;
+mod type_name;
 #[cfg(feature = "generic-derive")]
 mod bounds;
 

@@ -1,9 +1,9 @@
 // Example demonstrating how to use EntityIDFor<T> with Rocket forms
 
 use rocket::form::Form;
-use rocket::{post, launch, routes};
-use terminusdb_schema::{ToTDBSchema, Schema};
-use terminusdb_schema::id::EntityIDFor;
+use rocket::{get, launch, post, routes, FromForm};
+use terminusdb_schema::EntityIDFor;
+use terminusdb_schema::{Schema, ToTDBSchema};
 
 // Define a sample entity type
 #[derive(Clone, Debug)]
@@ -15,7 +15,7 @@ impl ToTDBSchema for User {
     }
 
     fn to_schema_tree() -> Vec<Schema> {
-        vec![]  // Simplified for example
+        vec![] // Simplified for example
     }
 }
 
@@ -34,7 +34,7 @@ fn update_user(form: Form<UserUpdateForm>) -> String {
     format!(
         "Updating user: {} (ID: {}) with name: {} and email: {}",
         user_form.user_id.typed(),
-        user_form.user_id.id(), 
+        user_form.user_id.id(),
         user_form.name,
         user_form.email
     )
@@ -52,17 +52,16 @@ fn get_user(user_id: EntityIDFor<User>) -> String {
 
 #[launch]
 fn rocket() -> _ {
-    rocket::build()
-        .mount("/", routes![update_user, get_user])
+    rocket::build().mount("/", routes![update_user, get_user])
 }
 
 // Example form submissions that would work:
-// 
+//
 // 1. Simple ID:
 // user_id=123&name=John&email=john@example.com
-// 
+//
 // 2. Typed ID:
 // user_id=User/123&name=John&email=john@example.com
-// 
+//
 // 3. Full IRI:
 // user_id=terminusdb://data#User/123&name=John&email=john@example.com
