@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use syn::{
     GenericArgument, GenericParam, Generics, Ident, PathArguments, Type, TypePath, WherePredicate,
 };
+#[cfg(feature = "generic-derive")]
+use quote::quote;
 
 /// Analyzes field types and collects required trait bounds for generic parameters
 #[cfg(feature = "generic-derive")]
@@ -15,6 +17,15 @@ pub fn collect_type_param_bounds(
     struct_name: &Ident,
 ) -> HashMap<Ident, Vec<String>> {
     let mut bounds = HashMap::new();
+    
+    // Check existing where clause for already-defined bounds
+    let existing_model_params = check_existing_model_bounds(generics);
+    let existing_field_params = check_existing_field_bounds(generics, struct_name);
+    let existing_schema_class_params = check_existing_schema_class_bounds(generics);
+    
+    // Track which generic params are used in special contexts
+    let mut model_params = HashSet::new();  // Params that need TerminusDBModel
+    let mut entity_params = HashSet::new(); // Params that need ToTDBSchema + ToSchemaClass
 
     // Collect generic parameter names
     let generic_params: HashSet<Ident> = generics
@@ -41,72 +52,104 @@ pub fn collect_type_param_bounds(
         format!("{}<{}>", struct_name, generic_names.join(", "))
     };
 
-    // Analyze each field - only checking top-level types
+    // First pass: identify special usage contexts
     for field in &fields.named {
-        if let Some(_field_name) = &field.ident {
-            analyze_type_for_bounds(
+        if let Some(_) = &field.ident {
+            identify_special_contexts(
                 &field.ty,
                 &generic_params,
-                &struct_name_with_generics,
-                &mut bounds,
+                &mut model_params,
+                &mut entity_params,
             );
+        }
+    }
+
+    // Second pass: assign bounds to each generic parameter based on its usage
+    for param in &generic_params {
+        let param_bounds = bounds.entry(param.clone()).or_insert_with(Vec::new);
+        
+        // Determine bounds based on special usage contexts
+        if model_params.contains(param) {
+            // Used in TdbLazy<T> - needs TerminusDBModel + ToSchemaClass
+            if !existing_model_params.contains(param) {
+                param_bounds.push("terminusdb_schema::TerminusDBModel".to_string());
+            }
+            // TdbLazy always needs ToSchemaClass too
+            if !existing_schema_class_params.contains(param) {
+                param_bounds.push("terminusdb_schema::ToSchemaClass".to_string());
+            }
+        } else if entity_params.contains(param) {
+            // Used in EntityIDFor<T> - needs entity-specific bounds
+            param_bounds.push("terminusdb_schema::ToTDBSchema".to_string());
+            param_bounds.push("terminusdb_schema::ToSchemaClass".to_string());
+        } else if !existing_field_params.contains(param) && !existing_model_params.contains(param) {
+            // Regular field usage - needs TerminusDBField
+            // But we need to check if it's actually used as a field
+            let mut used_as_field = false;
+            for field in &fields.named {
+                if let Some(_) = &field.ident {
+                    if is_generic_param_used_as_field(&field.ty, param) {
+                        used_as_field = true;
+                        break;
+                    }
+                }
+            }
+            
+            if used_as_field {
+                let bound = format!(
+                    "terminusdb_schema::TerminusDBField<{}>",
+                    struct_name_with_generics
+                );
+                param_bounds.push(bound);
+            }
         }
     }
 
     bounds
 }
 
-/// Analyzes a type to determine if it's a generic parameter that needs bounds
+/// Checks if a generic parameter is used directly as a field type
 #[cfg(feature = "generic-derive")]
-fn analyze_type_for_bounds(
-    ty: &Type,
-    generic_params: &HashSet<Ident>,
-    struct_name_with_generics: &str,
-    bounds: &mut HashMap<Ident, Vec<String>>,
-) {
-    // Only check top-level types - no recursion needed
+fn is_generic_param_used_as_field(ty: &Type, param: &Ident) -> bool {
     if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(ident) = path.get_ident() {
-            // Check if this is a generic parameter
-            if generic_params.contains(ident) {
-                let param_bounds = bounds.entry(ident.clone()).or_insert_with(Vec::new);
-                
-                // Add the single trait alias bound that combines all requirements
-                let bound = format!(
-                    "terminusdb_schema::TerminusDBField<{}>",
-                    struct_name_with_generics
-                );
-                
-                if !param_bounds.contains(&bound) {
-                    param_bounds.push(bound);
-                }
+        // Skip special container types
+        if let Some(last_segment) = path.segments.last() {
+            if last_segment.ident == "EntityIDFor" || last_segment.ident == "TdbLazy" {
+                return false;
             }
         }
         
-        // Special case: Check if this is EntityIDFor<T> where T is a generic parameter
+        // Check if this is the parameter itself
+        if let Some(ident) = path.get_ident() {
+            return ident == param;
+        }
+    }
+    false
+}
+
+/// Identifies generic parameters used in special contexts (TdbLazy, EntityIDFor)
+#[cfg(feature = "generic-derive")]
+fn identify_special_contexts(
+    ty: &Type,
+    generic_params: &HashSet<Ident>,
+    model_params: &mut HashSet<Ident>,
+    entity_params: &mut HashSet<Ident>,
+) {
+    if let Type::Path(TypePath { path, .. }) = ty {
         if let Some(last_segment) = path.segments.last() {
-            let is_entity_id_for = last_segment.ident == "EntityIDFor" || 
-                (path.segments.len() > 1 && last_segment.ident == "EntityIDFor");
+            let is_entity_id_for = last_segment.ident == "EntityIDFor";
+            let is_tdb_lazy = last_segment.ident == "TdbLazy";
                 
-            if is_entity_id_for {
+            if is_entity_id_for || is_tdb_lazy {
                 if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
                     for arg in &args.args {
                         if let GenericArgument::Type(Type::Path(TypePath { path: inner_path, .. })) = arg {
                             if let Some(ident) = inner_path.get_ident() {
                                 if generic_params.contains(ident) {
-                                    let param_bounds = bounds
-                                        .entry(ident.clone())
-                                        .or_insert_with(Vec::new);
-                                    // EntityIDFor<T> requires ToTDBSchema on T for the struct definition
-                                    // and ToSchemaClass for the ToSchemaProperty implementation
-                                    let bounds = vec![
-                                        "terminusdb_schema::ToTDBSchema".to_string(),
-                                        "terminusdb_schema::ToSchemaClass".to_string(),
-                                    ];
-                                    for bound in bounds {
-                                        if !param_bounds.contains(&bound) {
-                                            param_bounds.push(bound);
-                                        }
+                                    if is_entity_id_for {
+                                        entity_params.insert(ident.clone());
+                                    } else if is_tdb_lazy {
+                                        model_params.insert(ident.clone());
                                     }
                                 }
                             }
@@ -117,6 +160,7 @@ fn analyze_type_for_bounds(
         }
     }
 }
+
 
 /// Builds where clause predicates from collected bounds
 #[cfg(feature = "generic-derive")]
@@ -168,4 +212,88 @@ pub fn combine_where_clauses(
             where #(#combined_predicates),*
         })
     }
+}
+
+/// Check which generic parameters already have TerminusDBModel bounds
+#[cfg(feature = "generic-derive")]
+fn check_existing_model_bounds(generics: &Generics) -> HashSet<Ident> {
+    let mut params = HashSet::new();
+    
+    if let Some(where_clause) = &generics.where_clause {
+        for predicate in &where_clause.predicates {
+            if let WherePredicate::Type(type_predicate) = predicate {
+                if let Type::Path(TypePath { path, .. }) = &type_predicate.bounded_ty {
+                    if let Some(ident) = path.get_ident() {
+                        // Check if any bound contains TerminusDBModel
+                        for bound in &type_predicate.bounds {
+                            if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                                let path_str = quote!(#trait_bound).to_string();
+                                if path_str.contains("TerminusDBModel") {
+                                    params.insert(ident.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    params
+}
+
+/// Check which generic parameters already have ToSchemaClass bounds
+#[cfg(feature = "generic-derive")]
+fn check_existing_schema_class_bounds(generics: &Generics) -> HashSet<Ident> {
+    let mut params = HashSet::new();
+    
+    if let Some(where_clause) = &generics.where_clause {
+        for predicate in &where_clause.predicates {
+            if let WherePredicate::Type(type_predicate) = predicate {
+                if let Type::Path(TypePath { path, .. }) = &type_predicate.bounded_ty {
+                    if let Some(ident) = path.get_ident() {
+                        // Check if any bound contains ToSchemaClass
+                        for bound in &type_predicate.bounds {
+                            if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                                let path_str = quote!(#trait_bound).to_string();
+                                if path_str.contains("ToSchemaClass") {
+                                    params.insert(ident.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    params
+}
+
+/// Check which generic parameters already have TerminusDBField bounds
+#[cfg(feature = "generic-derive")]
+fn check_existing_field_bounds(generics: &Generics, struct_name: &Ident) -> HashSet<Ident> {
+    let mut params = HashSet::new();
+    
+    if let Some(where_clause) = &generics.where_clause {
+        for predicate in &where_clause.predicates {
+            if let WherePredicate::Type(type_predicate) = predicate {
+                if let Type::Path(TypePath { path, .. }) = &type_predicate.bounded_ty {
+                    if let Some(ident) = path.get_ident() {
+                        // Check if any bound contains TerminusDBField
+                        for bound in &type_predicate.bounds {
+                            if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                                let path_str = quote!(#trait_bound).to_string();
+                                if path_str.contains("TerminusDBField") {
+                                    params.insert(ident.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    params
 }

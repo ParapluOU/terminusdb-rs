@@ -1,7 +1,6 @@
 #![cfg(feature = "generic-derive")]
 
-use serde::{Deserialize, Serialize};
-use terminusdb_schema::{FromTDBInstance, TerminusDBField, ToJson, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema::{FromTDBInstance, TdbLazy, TerminusDBField, TerminusDBModel as TerminusDBModelTrait, ToJson, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Test 1: Simple generic struct with one type parameter
@@ -58,7 +57,47 @@ where
     formatted: String,
 }
 
-// Test 6: Generic enum - commented out as derive macros have limitations with generic enums
+// Define concrete model types for testing with TdbLazy
+#[derive(Debug, Clone, TerminusDBModel)]
+struct Product {
+    id: String,
+    name: String,
+    price: f64,
+}
+
+#[derive(Debug, Clone, TerminusDBModel)]
+struct Category {
+    id: String,
+    name: String,
+    parent: Option<String>,
+}
+
+// Test 6: Generic struct with TdbLazy field using generic parameter
+// When T is used in TdbLazy<T>, T must implement TerminusDBModel
+#[derive(Debug, Clone, TerminusDBModel)]
+struct LazyContainer<T>
+where
+    T: TerminusDBModelTrait,
+{
+    id: String,
+    lazy_value: TdbLazy<T>,
+    description: String,
+}
+
+// Test 7: Mixed usage - T as regular field and U in TdbLazy
+// This demonstrates different bound requirements for different usage patterns
+#[derive(Debug, Clone, TerminusDBModel)]
+struct MixedUsage<T, U>
+where
+    T: TerminusDBField<MixedUsage<T, U>>,
+    U: TerminusDBModelTrait,
+{
+    id: String,
+    regular_field: T,        // T used as regular field - needs TerminusDBField
+    lazy_field: TdbLazy<U>,  // U used in TdbLazy - needs TerminusDBModel
+}
+
+// Test 8: Generic enum - commented out as derive macros have limitations with generic enums
 // #[derive(Debug, Clone, TerminusDBModel)]
 // enum MyResult<T, E>
 // where
@@ -185,5 +224,81 @@ mod tests {
 
         assert_eq!(recovered.id, original.id);
         assert_eq!(recovered.value, original.value);
+    }
+
+    #[test]
+    fn test_lazy_container_with_generics() {
+        // Test with Product as the generic type parameter
+        let product = Product {
+            id: "prod-1".to_string(),
+            name: "Widget".to_string(),
+            price: 19.99,
+        };
+        
+        let lazy_container = LazyContainer::<Product> {
+            id: "lazy-1".to_string(),
+            lazy_value: TdbLazy::from(product),
+            description: "A lazy container with Product type".to_string(),
+        };
+
+        // Verify schema generation works
+        let schema = <LazyContainer<Product> as ToTDBSchema>::to_schema();
+        assert_eq!(schema.class_name(), "LazyContainer<Product>");
+
+        // Convert to instance
+        let instance = lazy_container.to_instance(None);
+        assert!(instance.has_property("id"));
+        assert!(instance.has_property("lazy_value"));
+        assert!(instance.has_property("description"));
+
+        // Test with Category as the generic type parameter
+        let category = Category {
+            id: "cat-1".to_string(),
+            name: "Electronics".to_string(),
+            parent: None,
+        };
+        
+        let lazy_category = LazyContainer::<Category> {
+            id: "lazy-2".to_string(),
+            lazy_value: TdbLazy::from(category),
+            description: "A lazy container with Category type".to_string(),
+        };
+
+        let category_schema = <LazyContainer<Category> as ToTDBSchema>::to_schema();
+        assert_eq!(category_schema.class_name(), "LazyContainer<Category>");
+
+        // Test round trip
+        let category_instance = lazy_category.to_instance(None);
+        let json = category_instance.to_json();
+        let recovered = LazyContainer::<Category>::from_json(json).unwrap();
+        
+        assert_eq!(recovered.id, lazy_category.id);
+        assert_eq!(recovered.description, lazy_category.description);
+        // Note: TdbLazy values may not be directly comparable after round trip
+        // as they may be in Reference state
+    }
+
+    #[test]
+    fn test_mixed_generic_usage() {
+        // Test MixedUsage with String as regular field and Product in TdbLazy
+        let product = Product {
+            id: "prod-1".to_string(),
+            name: "Widget".to_string(),
+            price: 19.99,
+        };
+        
+        let mixed = MixedUsage::<String, Product> {
+            id: "mixed-1".to_string(),
+            regular_field: "Hello".to_string(),
+            lazy_field: TdbLazy::from(product),
+        };
+
+        let schema = <MixedUsage<String, Product> as ToTDBSchema>::to_schema();
+        assert_eq!(schema.class_name(), "MixedUsage<String, Product>");
+
+        let instance = mixed.to_instance(None);
+        assert!(instance.has_property("id"));
+        assert!(instance.has_property("regular_field"));
+        assert!(instance.has_property("lazy_field"));
     }
 }

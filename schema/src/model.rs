@@ -1,7 +1,7 @@
-use crate::{EntityIDFor, FromTDBInstance, InstanceFromJson, ToTDBInstance};
+use crate::{EntityIDFor, FromTDBInstance, InstanceFromJson, ToTDBInstance, ToSchemaClass};
 
 pub trait TerminusDBModel:
-    ToTDBInstance + FromTDBInstance + InstanceFromJson + std::fmt::Debug
+    ToTDBInstance + FromTDBInstance + InstanceFromJson + ToSchemaClass + Clone + std::fmt::Debug
 {
     fn instance_id(&self) -> Option<EntityIDFor<Self>> {
         match self.to_instance(None).gen_id() {
@@ -12,6 +12,6 @@ pub trait TerminusDBModel:
 }
 
 impl<T> TerminusDBModel for T where
-    T: ToTDBInstance + FromTDBInstance + InstanceFromJson + std::fmt::Debug
+    T: ToTDBInstance + FromTDBInstance + InstanceFromJson + ToSchemaClass + Clone + std::fmt::Debug
 {
 }

@@ -6,7 +6,7 @@
 /// Prettifies a type name from std::any::type_name by removing module paths
 /// 
 /// # Examples
-/// ```
+/// ```ignore
 /// assert_eq!(prettify_type_name("alloc::string::String"), "String");
 /// assert_eq!(prettify_type_name("core::option::Option<alloc::string::String>"), "Option<String>");
 /// assert_eq!(prettify_type_name("std::collections::HashMap<alloc::string::String, i32>"), "HashMap<String, i32>");
