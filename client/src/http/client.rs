@@ -8,7 +8,7 @@ use {
     ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
-    std::{fmt::Debug, sync::{Arc, Mutex, RwLock}, collections::HashSet, time::Duration},
+    std::{env, fmt::Debug, sync::{Arc, Mutex, RwLock}, collections::HashSet, time::Duration},
     terminusdb_schema::{ToTDBInstance, ToJson},
     url::Url,
 };
@@ -45,6 +45,11 @@ impl TerminusDBHttpClient {
     /// This is a convenience constructor that connects to `http://localhost:6363`
     /// using default admin credentials. Ideal for development and testing.
     ///
+    /// The password is determined by checking environment variables in order:
+    /// 1. `TERMINUSDB_ADMIN_PASS` - for Docker image compatibility
+    /// 2. `TERMINUSDB_PASS` - existing convention
+    /// 3. Falls back to "root" if neither is set
+    ///
     /// # Returns
     /// A client instance connected to the local TerminusDB server
     ///
@@ -62,10 +67,15 @@ impl TerminusDBHttpClient {
     /// ```
     #[instrument(name = "terminus.client.local_node")]
     pub async fn local_node() -> Self {
+        // Check for password in environment variables
+        let password = env::var("TERMINUSDB_ADMIN_PASS")
+            .or_else(|_| env::var("TERMINUSDB_PASS"))
+            .unwrap_or_else(|_| "root".to_string());
+        
         Self::new(
             Url::parse("http://localhost:6363").unwrap(),
             "admin",
-            "root",
+            &password,
             "admin",
         )
         .await

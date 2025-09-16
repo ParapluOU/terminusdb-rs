@@ -57,7 +57,11 @@ fn default_user() -> String {
 }
 
 fn default_password() -> String {
-    env::var("TERMINUSDB_PASS").unwrap_or_else(|_| "root".to_string())
+    // Check TERMINUSDB_ADMIN_PASS first (Docker image compatibility),
+    // then fall back to TERMINUSDB_PASS, then to "root"
+    env::var("TERMINUSDB_ADMIN_PASS")
+        .or_else(|_| env::var("TERMINUSDB_PASS"))
+        .unwrap_or_else(|_| "root".to_string())
 }
 
 fn default_branch() -> String {
