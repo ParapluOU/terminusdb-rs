@@ -6,6 +6,7 @@
 //! ## Module Organization
 //!
 //! - `client`: Core client struct and constructors
+//! - `branch`: Branch management operations (squash, reset, rebase)
 //! - `database`: Database administration operations
 //! - `schema`: Schema-related operations
 //! - `document`: Untyped document CRUD operations
@@ -17,6 +18,7 @@
 //! - `helpers`: Helper functions
 
 // Public modules
+pub mod branch;
 pub mod client;
 pub mod database;
 pub mod document;

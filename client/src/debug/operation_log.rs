@@ -20,6 +20,7 @@ pub enum OperationType {
     UpdateSchema,
     GetDocument,
     GetInstance,
+    Squash,
     Other(String),
 }
 
@@ -36,6 +37,7 @@ impl std::fmt::Display for OperationType {
             OperationType::UpdateSchema => write!(f, "update_schema"),
             OperationType::GetDocument => write!(f, "get_document"),
             OperationType::GetInstance => write!(f, "get_instance"),
+            OperationType::Squash => write!(f, "squash"),
             OperationType::Other(s) => write!(f, "{}", s),
         }
     }

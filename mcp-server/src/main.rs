@@ -289,6 +289,36 @@ pub struct DeleteClassesTool {
     pub connection: Option<ConnectionConfig>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "squash",
+    description = "Squash commit history into a single commit. Creates a new unattached commit containing the squashed data. This commit can be queried directly, or be assigned to a particular branch using the reset endpoint."
+)]
+pub struct SquashTool {
+    /// Path for a commit or branch (e.g., "admin/mydb/local/branch/main" or "admin/mydb/local/commit/abc123")
+    pub path: String,
+    /// The author of the squash operation
+    pub author: String,
+    /// Commit message describing the squash
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "reset",
+    description = "Reset branch to a specific commit. This will set the branch HEAD to the submitted commit."
+)]
+pub struct ResetTool {
+    /// Path to the branch to reset (e.g., "admin/mydb/local/branch/main")
+    pub branch_path: String,
+    /// Path to a specific commit or to a branch (e.g., "admin/mydb/local/commit/abc123")
+    pub commit_descriptor: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
 pub struct TerminusDBMcpHandler {
     saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
 }
@@ -1086,6 +1116,56 @@ impl TerminusDBMcpHandler {
         
         Ok(response)
     }
+
+    async fn handle_squash(&self, request: SquashTool) -> Result<serde_json::Value> {
+        info!("Squashing commits for path: {}", request.path);
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Execute the squash operation
+        match client.squash(&request.path, &request.author, &request.message).await {
+            Ok(response) => {
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "path": request.path,
+                    "new_commit": response.commit,
+                    "old_commit": response.old_commit,
+                    "api_status": format!("{:?}", response.status),
+                    "message": format!("Successfully squashed commits. New commit: {}", response.commit)
+                }))
+            }
+            Err(e) => {
+                error!("Failed to squash commits: {}", e);
+                Err(anyhow::anyhow!("Failed to squash commits: {}", e))
+            }
+        }
+    }
+
+    async fn handle_reset(&self, request: ResetTool) -> Result<serde_json::Value> {
+        info!("Resetting branch {} to {}", request.branch_path, request.commit_descriptor);
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Execute the reset operation
+        match client.reset(&request.branch_path, &request.commit_descriptor).await {
+            Ok(response) => {
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "branch_path": request.branch_path,
+                    "commit_descriptor": request.commit_descriptor,
+                    "api_response": response,
+                    "message": format!("Successfully reset branch {} to {}", 
+                        request.branch_path, request.commit_descriptor)
+                }))
+            }
+            Err(e) => {
+                error!("Failed to reset branch: {}", e);
+                Err(anyhow::anyhow!("Failed to reset branch: {}", e))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1106,6 +1186,8 @@ impl ServerHandler for TerminusDBMcpHandler {
                 GetDocumentTool::tool(),
                 QueryLogTool::tool(),
                 DeleteClassesTool::tool(),
+                SquashTool::tool(),
+                ResetTool::tool(),
                 // Temporarily disabled due to serde_json::Value schema issues
                 // InsertDocumentTool::tool(),
                 // InsertDocumentsTool::tool(),
@@ -1422,6 +1504,56 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.handle_delete_classes(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == SquashTool::tool_name() => {
+                let tool_request: SquashTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_squash(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == ResetTool::tool_name() => {
+                let tool_request: ResetTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_reset(tool_request).await {
                     Ok(result) => {
                         let text_content = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());

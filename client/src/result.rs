@@ -14,6 +14,26 @@ use terminusdb_woql_builder::prelude::vars;
 use crate::TerminusDBAdapterError::Serde;
 use crate::*;
 
+/// Response from the squash endpoint
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SquashResponse {
+    #[serde(rename = "@type")]
+    pub r#type: String,
+    #[serde(rename = "api:commit")]
+    pub commit: String,
+    #[serde(rename = "api:old_commit")]
+    pub old_commit: String,
+    #[serde(rename = "api:status")]
+    pub status: TerminusAPIStatus,
+}
+
+/// Commit information for operations that require author and message
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CommitInfo {
+    pub author: String,
+    pub message: String,
+}
+
 /// Transparent wrapper that includes both the response data and relevant HTTP headers
 /// Implements Deref so it can be used as a drop-in replacement for the wrapped type
 #[derive(Debug, Clone)]

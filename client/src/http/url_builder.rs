@@ -204,6 +204,12 @@ impl<'a> UrlBuilder<'a> {
         self
     }
 
+    /// Add a generic path segment (for endpoints like squash, reset, etc.)
+    pub fn add_path(mut self, path: &str) -> Self {
+        self.parts.push(path.to_string());
+        self
+    }
+
     /// Build the final URL string
     pub fn build(self) -> String {
         let mut url = format!("{}/{}", self.endpoint, self.parts.join("/"));
