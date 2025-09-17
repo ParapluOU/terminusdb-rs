@@ -544,6 +544,77 @@ impl super::client::TerminusDBHttpClient {
         self.query_instances(spec, limit, offset, query).await
     }
 
+    /// Count instances of a specific type with field-value filter conditions.
+    ///
+    /// This method provides server-side filtering by counting instances that match
+    /// all specified filter conditions. It's more efficient than retrieving instances
+    /// and counting them client-side.
+    ///
+    /// # Type Parameters
+    /// * `T` - The TerminusDB model type to query
+    /// * `I` - Iterator type for filters
+    /// * `K` - Field name type (anything that converts to String)
+    /// * `V` - Value type (anything implementing IntoDataValue)
+    ///
+    /// # Arguments
+    /// * `spec` - Database and branch specification
+    /// * `filters` - Iterator of (field_name, value) pairs for filtering
+    ///
+    /// # Returns
+    /// The count of instances matching all filter conditions
+    ///
+    /// # Example
+    /// ```rust
+    /// use terminusdb_client::prelude::*;
+    /// 
+    /// // Count active users
+    /// let active_count = client.count_instances_where::<User>(
+    ///     &spec,
+    ///     vec![("status", "active")],
+    /// ).await?;
+    /// 
+    /// // Count with multiple filters
+    /// let verified_adults = client.count_instances_where::<Person>(
+    ///     &spec,
+    ///     vec![
+    ///         ("age", 25),
+    ///         ("verified", true),
+    ///     ],
+    /// ).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.query.count_instances_where",
+        skip(self, filters),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch,
+            entity_type = %T::schema_name(),
+            filter_count = tracing::field::Empty
+        ),
+        err
+    )]
+    pub async fn count_instances_where<T, I, K, V>(
+        &self,
+        spec: &BranchSpec,
+        filters: I,
+    ) -> anyhow::Result<usize>
+    where
+        T: TerminusDBModel + InstanceFromJson,
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: terminusdb_woql2::prelude::IntoDataValue,
+    {
+        use crate::query::FilteredListModels;
+        
+        let query = FilteredListModels::<T>::new(filters);
+        let filter_count = query.filters.len();
+        
+        // Record the filter count in the trace
+        tracing::Span::current().record("filter_count", filter_count);
+        
+        self.query_instances_count(spec, query).await
+    }
+
     /// Count the total number of instances of a specific type in the database
     #[instrument(
         name = "terminus.query.count_instances",

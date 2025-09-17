@@ -414,4 +414,231 @@ impl super::client::TerminusDBHttpClient {
             .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
         Ok(cache.iter().cloned().collect())
     }
+
+    /// Updates database metadata (label and comment).
+    ///
+    /// # Arguments
+    /// * `db` - Database name
+    /// * `label` - New label for the database
+    /// * `comment` - New comment for the database
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.update_database(
+    ///     "mydb",
+    ///     Some("My Updated Database"),
+    ///     Some("Updated description")
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.database.update",
+        skip(self),
+        fields(
+            db = %db,
+            label = ?label,
+            comment = ?comment
+        ),
+        err
+    )]
+    pub async fn update_database(
+        &self,
+        db: &str,
+        label: Option<&str>,
+        comment: Option<&str>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self.build_url().endpoint("db").simple_database(db).build();
+
+        debug!("PUT {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("update_database".to_string()),
+            format!("/api/db/{}", db)
+        ).with_context(Some(db.to_string()), None);
+
+        let mut body = json!({});
+        if let Some(l) = label {
+            body["label"] = json!(l);
+        }
+        if let Some(c) = comment {
+            body["comment"] = json!(c);
+        }
+
+        let res = self
+            .http
+            .put(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("failed to update database")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("update database operation failed with status {}", status);
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("update database failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+        
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully updated database in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
+
+    /// Optimizes a database by removing unreachable data.
+    ///
+    /// # Arguments
+    /// * `path` - Path to optimize (e.g., "admin/mydb/_meta" or "admin/mydb/local/branch/main")
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.optimize("admin/mydb/_meta").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.database.optimize",
+        skip(self),
+        fields(
+            path = %path
+        ),
+        err
+    )]
+    pub async fn optimize(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self.build_url().endpoint("optimize").add_path(path).build();
+
+        debug!("POST {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("optimize".to_string()),
+            format!("/api/optimize/{}", path)
+        ).with_context(None, None);
+
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to optimize database")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("optimize operation failed with status {}", status);
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("optimize failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+        
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully optimized database in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
+
+    /// Gets the list of prefixes for a database.
+    ///
+    /// # Arguments
+    /// * `path` - Path to get prefixes for (e.g., "admin/mydb/local/branch/main")
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let prefixes = client.get_prefixes("admin/mydb/local/branch/main").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.database.prefixes",
+        skip(self),
+        fields(
+            path = %path
+        ),
+        err
+    )]
+    pub async fn get_prefixes(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self.build_url().endpoint("prefixes").add_path(path).build();
+
+        debug!("GET {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("get_prefixes".to_string()),
+            format!("/api/prefixes/{}", path)
+        ).with_context(None, None);
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to get prefixes")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("get prefixes operation failed with status {}", status);
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("get prefixes failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+        
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully retrieved prefixes in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
 }

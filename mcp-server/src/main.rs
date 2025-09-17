@@ -319,6 +319,18 @@ pub struct ResetTool {
     pub connection: Option<ConnectionConfig>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "optimize",
+    description = "Optimize a database by removing unreachable data. This can significantly reduce database size and improve performance."
+)]
+pub struct OptimizeTool {
+    /// Path to optimize (e.g., "admin/mydb/_meta" or "admin/mydb/local/branch/main")
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
 pub struct TerminusDBMcpHandler {
     saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
 }
@@ -1166,6 +1178,29 @@ impl TerminusDBMcpHandler {
             }
         }
     }
+
+    async fn handle_optimize(&self, request: OptimizeTool) -> Result<serde_json::Value> {
+        info!("Optimizing database at path: {}", request.path);
+        
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+        
+        // Execute the optimize operation
+        match client.optimize(&request.path).await {
+            Ok(response) => {
+                Ok(serde_json::json!({
+                    "status": "success",
+                    "path": request.path,
+                    "api_response": response,
+                    "message": format!("Successfully optimized database at path: {}", request.path)
+                }))
+            }
+            Err(e) => {
+                error!("Failed to optimize database: {}", e);
+                Err(anyhow::anyhow!("Failed to optimize database: {}", e))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -1188,6 +1223,7 @@ impl ServerHandler for TerminusDBMcpHandler {
                 DeleteClassesTool::tool(),
                 SquashTool::tool(),
                 ResetTool::tool(),
+                OptimizeTool::tool(),
                 // Temporarily disabled due to serde_json::Value schema issues
                 // InsertDocumentTool::tool(),
                 // InsertDocumentsTool::tool(),
@@ -1554,6 +1590,31 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.handle_reset(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == OptimizeTool::tool_name() => {
+                let tool_request: OptimizeTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_optimize(tool_request).await {
                     Ok(result) => {
                         let text_content = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());

@@ -3,7 +3,7 @@
 use crate::{CommitId, TDBInsertInstanceResult};
 use std::collections::HashMap;
 use std::ops::Deref;
-use terminusdb_schema::{EntityIDFor, ToTDBSchema};
+use terminusdb_schema::{EntityIDFor, TdbIRI, ToTDBSchema};
 
 /// Result of inserting an instance with sub-entities
 #[derive(Debug, Clone)]
@@ -76,6 +76,18 @@ impl InsertInstanceResult {
     /// Get the root ID as a typed EntityIDFor<T>
     pub fn root_ref<T: ToTDBSchema>(&self) -> anyhow::Result<EntityIDFor<T>> {
         EntityIDFor::new(&self.root_id)
+    }
+    
+    /// Get the parsed IRI for the root instance
+    pub fn get_root_iri(&self) -> anyhow::Result<TdbIRI> {
+        TdbIRI::parse(&self.root_id)
+    }
+    
+    /// Extract the type name and ID from the root instance
+    /// Returns (type_name, id)
+    pub fn root_ref_parts(&self) -> anyhow::Result<(String, String)> {
+        let iri = self.get_root_iri()?;
+        Ok((iri.type_name().to_string(), iri.id().to_string()))
     }
 }
 

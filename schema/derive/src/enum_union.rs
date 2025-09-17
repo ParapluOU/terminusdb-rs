@@ -292,10 +292,22 @@ fn generate_virtual_structs(
                     .map(|i| format_ident!("_{}", i))
                     .collect::<Vec<_>>();
 
+                // Generate tdb attributes for the virtual struct based on parent options
+                let tdb_attrs = if parent_opts.subdocument.unwrap_or(false) {
+                    quote! {
+                        #[tdb(subdocument = true, key = "value_hash")]
+                    }
+                } else {
+                    quote! {
+                        #[tdb(key = "value_hash")]
+                    }
+                };
+
                 // Generate the struct definition
                 let struct_def = quote! {
                     /// Generated virtual struct for enum variant
                     #[derive(Debug, Clone, terminusdb_schema_derive::TerminusDBModel, terminusdb_schema_derive::FromTDBInstance)]
+                    #tdb_attrs
                     #[allow(non_camel_case_types)]
                     struct #variant_struct_ident {
                         #(#field_defs),*
@@ -312,7 +324,7 @@ fn generate_virtual_structs(
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
                         unfoldable: None,
-                        subdocument: None,
+                        subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
                         original_input: None,
@@ -376,7 +388,7 @@ fn generate_virtual_structs(
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
                         unfoldable: None,
-                        subdocument: None,
+                        subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
                         original_input: None,
@@ -410,10 +422,22 @@ fn generate_virtual_structs(
                     }
                 });
 
+                // Generate tdb attributes for the virtual struct based on parent options
+                let tdb_attrs = if parent_opts.subdocument.unwrap_or(false) {
+                    quote! {
+                        #[tdb(subdocument = true, key = "value_hash")]
+                    }
+                } else {
+                    quote! {
+                        #[tdb(key = "value_hash")]
+                    }
+                };
+
                 // Generate the struct definition
                 let struct_def = quote! {
                     /// Generated virtual struct for enum variant
                     #[derive(Debug, Clone, terminusdb_schema_derive::TerminusDBModel, terminusdb_schema_derive::FromTDBInstance)]
+                    #tdb_attrs
                     #[allow(non_camel_case_types)]
                     struct #variant_struct_ident {
                         #(#field_defs),*
@@ -427,7 +451,7 @@ fn generate_virtual_structs(
                     key: Some("value_hash".to_string()), // Use ValueHash as default for virtual structs
                     abstract_class: None,
                     unfoldable: None,
-                    subdocument: None,
+                    subdocument: parent_opts.subdocument,
                     inherits: None,
                     doc: Some(format!(
                         "Virtual struct for {} enum variant {}",

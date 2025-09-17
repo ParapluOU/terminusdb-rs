@@ -1,3 +1,4 @@
+use crate::iri::TdbIRI;
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Property, Schema,
@@ -21,10 +22,8 @@ use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct EntityIDFor<T: ToTDBSchema> {
-    /// base IRI
-    base: Option<String>,
-    /// ID with the type name. not very purist, but then we can nicely deref to something valuable
-    typed_id: String,
+    /// The parsed IRI
+    iri: TdbIRI,
     /// allows strong typing
     _ty: PhantomData<T>,
 }
@@ -74,235 +73,64 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
     }
 
     pub fn new(iri_or_id: &str) -> anyhow::Result<Self> {
-        // if its a pure ID
-        Ok(if !iri_or_id.contains("/") {
-            Self {
-                base: None,
-                typed_id: format!("{}/{}", T::schema_name(), iri_or_id),
-                _ty: Default::default(),
-            }
+        // If it's a pure ID (no slashes), create a typed path
+        let full_iri = if !iri_or_id.contains('/') {
+            format!("{}/{}", T::schema_name(), iri_or_id)
+        } else {
+            iri_or_id.to_string()
+        };
+        
+        // Parse the IRI
+        let iri = TdbIRI::parse(&full_iri)?;
+        
+        // Validate that the type name matches
+        if iri.type_name() != T::schema_name() {
+            return Err(anyhow!(
+                "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
+                T::schema_name(),
+                iri.type_name(),
+                iri_or_id
+            ));
         }
-        // IRI: e.g., terminusdb://data#TestEntity/91011 or terminusdb:///data/TestEntity/91011
-        else if iri_or_id.contains("://") {
-            // Check if it's fragment-based (contains #) or path-based
-            if iri_or_id.contains('#') {
-                // Fragment-based IRI: terminusdb://data#TestEntity/91011
-                let parts: Vec<&str> = iri_or_id.split('#').collect();
-                if parts.len() != 2 {
-                    return Err(anyhow!("Invalid IRI format: missing '#': '{}'", iri_or_id));
-                }
-                let base = parts[0];
-                let typed_id_part = parts[1];
-
-                let typed_parts: Vec<&str> = typed_id_part.split('/').collect();
-                
-                // Handle simple Type/ID format
-                if typed_parts.len() == 2 {
-                    let type_name = typed_parts[0];
-                    let id = typed_parts[1];
-
-                    // Validate type name
-                    if type_name != T::schema_name() {
-                        return Err(anyhow!(
-                            "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
-                            T::schema_name(),
-                            type_name,
-                            iri_or_id
-                        ));
-                    }
-
-                    Self {
-                        base: Some(base.to_string()),
-                        typed_id: typed_id_part.to_string(),
-                        _ty: Default::default(),
-                    }
-                }
-                // Handle subdocument paths in fragment-based IRIs
-                else if typed_parts.len() > 2 {
-                    // Example: terminusdb://data#ReviewSession/123/review_assignments/ReviewSessionAssignment/456
-                    // typed_id_part: ReviewSession/123/review_assignments/ReviewSessionAssignment/456
-                    
-                    // Find the last Type/ID pair
-                    let final_type_idx = typed_parts.len() - 2;
-                    let final_type = typed_parts[final_type_idx];
-                    
-                    // Validate that the final type matches T
-                    if final_type != T::schema_name() {
-                        return Err(anyhow!(
-                            "Mismatched type in IRI subdocument path: expected '{}', found '{}' in '{}'",
-                            T::schema_name(),
-                            final_type,
-                            iri_or_id
-                        ));
-                    }
-                    
-                    Self {
-                        base: Some(base.to_string()),
-                        typed_id: typed_id_part.to_string(),
-                        _ty: Default::default(),
-                    }
-                } else {
-                    return Err(anyhow!(
-                        "Invalid IRI format: missing '/' after '#': '{}'",
-                        iri_or_id
-                    ));
-                }
-            } else {
-                // Path-based IRI: terminusdb:///data/TestEntity/91011 or subdocument paths
-                // Split by / and look for the type name and ID in the path
-                let path_parts: Vec<&str> = iri_or_id.split('/').collect();
-
-                // Find the type name and ID - they should be the last two components
-                if path_parts.len() < 2 {
-                    return Err(anyhow!(
-                        "Invalid path-based IRI format: not enough path components in '{}'",
-                        iri_or_id
-                    ));
-                }
-
-                // Get the last two path components (should be Type/ID)
-                let final_type = path_parts[path_parts.len() - 2];
-                let final_id = path_parts[path_parts.len() - 1];
-
-                // Validate type name
-                if final_type != T::schema_name() {
-                    return Err(anyhow!(
-                        "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
-                        T::schema_name(),
-                        final_type,
-                        iri_or_id
-                    ));
-                }
-
-                // Find where the typed path starts (could be simple Type/ID or subdocument path)
-                // We need to find the start of the document path portion
-                // Look for a pattern that could be a Type/ID sequence
-                let mut typed_path_start = None;
-                for i in 0..path_parts.len()-1 {
-                    // Check if this could be the start of a Type/ID pattern
-                    // A Type typically starts with uppercase and doesn't look like a protocol/path component
-                    if !path_parts[i].is_empty() 
-                        && !path_parts[i].contains(':') 
-                        && path_parts[i].chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
-                        // Found potential start of typed path
-                        typed_path_start = Some(i);
-                        break;
-                    }
-                }
-                
-                if let Some(start_idx) = typed_path_start {
-                    // Extract the typed path portion
-                    let typed_path = path_parts[start_idx..].join("/");
-                    
-                    // Extract base by finding where typed path starts in the original IRI
-                    let base_end = iri_or_id.find(&typed_path)
-                        .ok_or_else(|| anyhow!("Failed to extract base from IRI: '{}'", iri_or_id))?;
-                    let mut base = &iri_or_id[..base_end];
-                    
-                    // Remove trailing slash from base for compatibility
-                    if base.ends_with('/') && base.len() > 1 {
-                        base = &base[..base.len()-1];
-                    }
-                    
-                    Self {
-                        base: Some(base.to_string()),
-                        typed_id: typed_path,
-                        _ty: Default::default(),
-                    }
-                } else {
-                    return Err(anyhow!(
-                        "Could not find document path in IRI: '{}'",
-                        iri_or_id
-                    ));
-                }
-            }
-        }
-        // type/id or subdocument path: e.g., TestEntity/5678 or Parent/123/property/SubDoc/456
-        else {
-            let parts: Vec<&str> = iri_or_id.split('/').collect();
-            
-            // Check if it's a simple Type/ID format
-            if parts.len() == 2 {
-                let type_name = parts[0];
-                let id = parts[1];
-
-                // Validate type name
-                if type_name != T::schema_name() {
-                    return Err(anyhow!(
-                        "Mismatched type in typed ID: expected '{}', found '{}' in '{}'",
-                        T::schema_name(),
-                        type_name,
-                        iri_or_id
-                    ));
-                }
-
-                Self {
-                    base: None,
-                    typed_id: iri_or_id.to_string(),
-                    _ty: Default::default(),
-                }
-            }
-            // Handle subdocument paths: Parent/id/property/SubDoc/id
-            else if parts.len() > 2 {
-                // For subdocument paths, we expect an even number of parts (alternating Type/ID pairs)
-                // with property names in between
-                // Example: ReviewSession/123/review_assignments/ReviewSessionAssignment/456
-                // Parts: [ReviewSession, 123, review_assignments, ReviewSessionAssignment, 456]
-                
-                // Find the last Type/ID pair
-                let final_type_idx = parts.len() - 2;
-                let final_id_idx = parts.len() - 1;
-                
-                if final_type_idx < 0 {
-                    return Err(anyhow!("Invalid subdocument path format: '{}'", iri_or_id));
-                }
-                
-                let final_type = parts[final_type_idx];
-                let final_id = parts[final_id_idx];
-                
-                // Validate that the final type matches T
-                if final_type != T::schema_name() {
-                    return Err(anyhow!(
-                        "Mismatched type in subdocument path: expected '{}', found '{}' in '{}'",
-                        T::schema_name(),
-                        final_type,
-                        iri_or_id
-                    ));
-                }
-                
-                // TODO: In the future, we should validate that the intermediate segments
-                // correspond to valid subdocument properties in the schema.
-                // For now, we accept the path if the final type matches.
-                
-                Self {
-                    base: None,
-                    typed_id: iri_or_id.to_string(),
-                    _ty: Default::default(),
-                }
-            } else {
-                return Err(anyhow!("Invalid typed ID format: '{}'", iri_or_id));
-            }
+        
+        Ok(Self {
+            iri,
+            _ty: Default::default(),
         })
     }
 
-    // todo: stronger typing than string
-    /// name with terminusdb://data#MyType/1234
+    /// Get the full IRI string
     pub fn iri(&self) -> String {
-        todo!()
+        self.iri.to_string()
+    }
+    
+    /// Get the parsed IRI object
+    pub fn get_iri(&self) -> &TdbIRI {
+        &self.iri
+    }
+    
+    /// Get the base URI if present
+    pub fn get_base_uri(&self) -> Option<&str> {
+        self.iri.base_uri()
+    }
+    
+    /// Get the type name
+    pub fn get_type_name(&self) -> &str {
+        self.iri.type_name()
     }
 
     /// return just the identifier part (the final ID in the path)
     pub fn id(&self) -> &str {
-        self.typed_id.split("/").last().unwrap()
+        self.iri.id()
     }
 
     /// return MyType/1234 format
-    pub fn typed(&self) -> &String {
-        &self.typed_id
+    pub fn typed(&self) -> &str {
+        self.iri.typed_path()
     }
 
     pub fn to_string(&self) -> String {
-        self.typed_id.clone()
+        self.iri.typed_path().to_string()
     }
 
     pub fn remap<X: ToTDBSchema>(self) -> EntityIDFor<X> {
@@ -312,7 +140,7 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
 
 impl<T: ToTDBSchema> PartialEq<str> for EntityIDFor<T> {
     fn eq(&self, other: &str) -> bool {
-        self.typed_id == other
+        self.iri.typed_path() == other
     }
 }
 
@@ -324,14 +152,13 @@ impl<T: ToTDBSchema> Default for EntityIDFor<T> {
 
 impl<T: ToTDBSchema> Hash for EntityIDFor<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.base.hash(state);
-        self.typed_id.hash(state);
+        self.iri.to_string().hash(state);
     }
 }
 
 impl<T: ToTDBSchema> PartialEq<EntityIDFor<T>> for EntityIDFor<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.typed_id == other.typed_id && self.base == other.base
+        self.iri == other.iri
     }
 }
 
@@ -345,11 +172,7 @@ impl<T: ToTDBSchema> PartialOrd for EntityIDFor<T> {
 
 impl<T: ToTDBSchema> Ord for EntityIDFor<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // First compare by typed_id, then by base if needed
-        match self.typed_id.cmp(&other.typed_id) {
-            std::cmp::Ordering::Equal => self.base.cmp(&other.base),
-            other => other,
-        }
+        self.iri.to_string().cmp(&other.iri.to_string())
     }
 }
 
@@ -425,15 +248,14 @@ impl<'de, T: ToTDBSchema> Deserialize<'de> for EntityIDFor<T> {
 impl<T: ToTDBSchema> Clone for EntityIDFor<T> {
     fn clone(&self) -> Self {
         Self {
-            base: self.base.clone(),
-            typed_id: self.typed_id.clone(),
+            iri: self.iri.clone(),
             _ty: Default::default(),
         }
     }
 }
 
 impl<T: ToTDBSchema> Deref for EntityIDFor<T> {
-    type Target = String;
+    type Target = str;
 
     fn deref(&self) -> &Self::Target {
         self.typed()
@@ -792,7 +614,7 @@ mod tests {
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("1234").unwrap();
         assert_eq!(entity_id.id(), "1234");
         assert_eq!(entity_id.typed(), "TestEntity/1234");
-        assert_eq!(entity_id.base, None);
+        assert_eq!(entity_id.get_base_uri(), None);
     }
 
     #[test]
@@ -800,7 +622,7 @@ mod tests {
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("TestEntity/5678").unwrap();
         assert_eq!(entity_id.id(), "5678");
         assert_eq!(entity_id.typed(), "TestEntity/5678");
-        assert_eq!(entity_id.base, None);
+        assert_eq!(entity_id.get_base_uri(), None);
     }
 
     // Test case for IRI
@@ -811,7 +633,7 @@ mod tests {
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new(iri).unwrap();
         // Add assertions here once IRI parsing is implemented
         assert_eq!(entity_id.id(), "91011");
-        assert_eq!(entity_id.base, Some("terminusdb://data".to_string()));
+        assert_eq!(entity_id.get_base_uri(), Some("terminusdb://data"));
         assert_eq!(entity_id.typed(), "TestEntity/91011"); // typed() should ignore base
     }
 
@@ -834,7 +656,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Mismatched type in typed ID"));
+            .contains("Mismatched type in IRI"));
     }
 
     #[test]
@@ -846,7 +668,7 @@ mod tests {
             entity_id.typed(),
             "TestEntity/7aec78a3-9749-457e-a113-273df5edf156"
         );
-        assert_eq!(entity_id.base, Some("terminusdb:///data".to_string()));
+        assert_eq!(entity_id.get_base_uri(), Some("terminusdb:///data"));
     }
 
     #[test]
@@ -1160,7 +982,7 @@ mod tests {
         let entity_id: EntityIDFor<ReviewSessionAssignment> = EntityIDFor::new(path).unwrap();
         assert_eq!(entity_id.id(), "IQ79UxtoVR6W0ASI");
         assert_eq!(entity_id.typed(), path);
-        assert_eq!(entity_id.base, None);
+        assert_eq!(entity_id.get_base_uri(), None);
     }
 
     #[test]
@@ -1170,7 +992,7 @@ mod tests {
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new(path).unwrap();
         assert_eq!(entity_id.id(), "789");
         assert_eq!(entity_id.typed(), path);
-        assert_eq!(entity_id.base, None);
+        assert_eq!(entity_id.get_base_uri(), None);
     }
 
     #[test]
@@ -1182,7 +1004,7 @@ mod tests {
         assert!(result
             .unwrap_err()
             .to_string()
-            .contains("Mismatched type in subdocument path"));
+            .contains("Mismatched type in IRI"));
     }
 
     #[test]
@@ -1215,7 +1037,7 @@ mod tests {
         let entity_id: EntityIDFor<SubDoc> = EntityIDFor::new(iri).unwrap();
         assert_eq!(entity_id.id(), "456");
         assert_eq!(entity_id.typed(), "Parent/123/prop/SubDoc/456");
-        assert_eq!(entity_id.base, Some("terminusdb://data".to_string()));
+        assert_eq!(entity_id.get_base_uri(), Some("terminusdb://data"));
     }
 
     #[test]
@@ -1224,6 +1046,6 @@ mod tests {
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new(iri).unwrap();
         assert_eq!(entity_id.id(), "789");
         assert_eq!(entity_id.typed(), "ReviewSession/123/assignments/TestEntity/789");
-        assert_eq!(entity_id.base, Some("terminusdb:///data".to_string()));
+        assert_eq!(entity_id.get_base_uri(), Some("terminusdb:///data"));
     }
 }

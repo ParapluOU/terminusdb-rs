@@ -248,4 +248,250 @@ impl super::client::TerminusDBHttpClient {
 
         Ok(response)
     }
+
+    /// Creates a new branch from an existing branch or commit.
+    ///
+    /// # Arguments
+    /// * `branch_path` - Path where the new branch will be created (e.g., "admin/mydb/local/branch/feature")
+    /// * `origin` - Source branch or commit to branch from (e.g., "admin/mydb/local/branch/main")
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.create_branch(
+    ///     "admin/mydb/local/branch/feature",
+    ///     "admin/mydb/local/branch/main"
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.branch.create",
+        skip(self),
+        fields(
+            branch_path = %branch_path,
+            origin = %origin
+        ),
+        err
+    )]
+    pub async fn create_branch(
+        &self,
+        branch_path: &str,
+        origin: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self.build_url().endpoint("branch").add_path(branch_path).build();
+
+        debug!("POST {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("create_branch".to_string()),
+            format!("/api/branch/{}", branch_path)
+        ).with_context(None, None);
+
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .body(
+                json!({
+                    "origin": origin
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .context("failed to create branch")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("create branch operation failed with status {}", status);
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("create branch failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+        
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully created branch in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
+
+    /// Deletes a branch.
+    ///
+    /// # Arguments
+    /// * `branch_path` - Path to the branch to delete (e.g., "admin/mydb/local/branch/feature")
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.delete_branch("admin/mydb/local/branch/feature").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.branch.delete",
+        skip(self),
+        fields(
+            branch_path = %branch_path
+        ),
+        err
+    )]
+    pub async fn delete_branch(
+        &self,
+        branch_path: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self.build_url().endpoint("branch").add_path(branch_path).build();
+
+        debug!("DELETE {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("delete_branch".to_string()),
+            format!("/api/branch/{}", branch_path)
+        ).with_context(None, None);
+
+        let res = self
+            .http
+            .delete(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to delete branch")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("delete branch operation failed with status {}", status);
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("delete branch failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+        
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully deleted branch in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
+
+    /// Rebases commits from one branch onto another.
+    ///
+    /// This finds the most recent common commit between the source and target branches,
+    /// then reapplies commits from the source followed by commits from the target branch.
+    ///
+    /// # Arguments
+    /// * `branch_path` - Target branch path (e.g., "admin/mydb/local/branch/feature")
+    /// * `rebase_source` - Source branch/commit to rebase from (e.g., "admin/mydb/local/branch/main")
+    /// * `author` - Author of the rebase operation
+    /// * `message` - Commit message for the rebase
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.rebase(
+    ///     "admin/mydb/local/branch/feature",
+    ///     "admin/mydb/local/branch/main", 
+    ///     "admin",
+    ///     "Rebase feature onto main"
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.branch.rebase",
+        skip(self),
+        fields(
+            branch_path = %branch_path,
+            rebase_source = %rebase_source,
+            author = %author,
+            message = %message
+        ),
+        err
+    )]
+    pub async fn rebase(
+        &self,
+        branch_path: &str,
+        rebase_source: &str,
+        author: &str,
+        message: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self.build_url().endpoint("rebase").add_path(branch_path).build();
+
+        debug!("POST {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("rebase".to_string()),
+            format!("/api/rebase/{}", branch_path)
+        ).with_context(None, None);
+
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .body(
+                json!({
+                    "rebase_from": rebase_source,
+                    "author": author,
+                    "message": message
+                })
+                .to_string(),
+            )
+            .send()
+            .await
+            .context("failed to rebase branch")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("rebase operation failed with status {}", status);
+            
+            let error_text = res.text().await?;
+            let error_msg = format!("rebase failed: {:#?}", error_text);
+            
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+        
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully rebased branch in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
 }
