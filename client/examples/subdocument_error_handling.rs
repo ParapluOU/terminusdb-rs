@@ -26,7 +26,7 @@ fn main() {
             
             // Now check which specific error type it is
             match typed_err {
-                TypedErrorResponse::InsertDocumentError(err_response) => {
+                TypedErrorResponse::InsertDocumentError { error: err_response, .. } => {
                     println!("Error message: {}", err_response.api_message);
                     
                     if let Some(ApiResponseError::InsertedSubdocumentAsDocument(subdoc_err)) = err_response.api_error {

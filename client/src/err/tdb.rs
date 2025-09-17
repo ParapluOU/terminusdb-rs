@@ -69,19 +69,89 @@ impl Display for ApiResponseError {
 impl Error for ApiResponseError {}
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(tag = "@type")]
+#[serde(untagged)]
 pub enum TypedErrorResponse {
-    #[serde(rename = "api:GetDocumentErrorResponse")]
-    DocumentError(ErrorResponse),
+    // Try typed errors first - these must have @type field that matches
+    DocumentError {
+        #[serde(rename = "@type")]
+        #[serde(deserialize_with = "expect_document_error_type")]
+        error_type: String,
+        #[serde(flatten)]
+        error: ErrorResponse,
+    },
+    ReplaceDocumentError {
+        #[serde(rename = "@type")]
+        #[serde(deserialize_with = "expect_replace_document_error_type")]
+        error_type: String,
+        #[serde(flatten)]
+        error: ErrorResponse,
+    },
+    WoqlError {
+        #[serde(rename = "@type")]
+        #[serde(deserialize_with = "expect_woql_error_type")]
+        error_type: String,
+        #[serde(flatten)]
+        error: ErrorResponse,
+    },
+    InsertDocumentError {
+        #[serde(rename = "@type")]
+        #[serde(deserialize_with = "expect_insert_document_error_type")]
+        error_type: String,
+        #[serde(flatten)]
+        error: ErrorResponse,
+    },
+    
+    // Fallback to generic error (no @type field)
+    GenericError(ErrorResponse),
+}
 
-    #[serde(rename = "api:ReplaceDocumentErrorResponse")]
-    ReplaceDocumentError(ErrorResponse),
+// Helper functions to validate the @type field
+fn expect_document_error_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "api:GetDocumentErrorResponse" {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom("not a document error"))
+    }
+}
 
-    #[serde(rename = "api:WoqlErrorResponse")]
-    WoqlError(ErrorResponse),
+fn expect_replace_document_error_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "api:ReplaceDocumentErrorResponse" {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom("not a replace document error"))
+    }
+}
 
-    #[serde(rename = "api:InsertDocumentErrorResponse")]
-    InsertDocumentError(ErrorResponse),
+fn expect_woql_error_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "api:WoqlErrorResponse" {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom("not a woql error"))
+    }
+}
+
+fn expect_insert_document_error_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "api:InsertDocumentErrorResponse" {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom("not an insert document error"))
+    }
 }
 
 impl Error for TypedErrorResponse {}
@@ -89,16 +159,19 @@ impl Error for TypedErrorResponse {}
 impl Display for TypedErrorResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            TypedErrorResponse::DocumentError(e) => {
-                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            TypedErrorResponse::DocumentError { error, .. } => {
+                write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
-            TypedErrorResponse::ReplaceDocumentError(e) => {
-                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            TypedErrorResponse::ReplaceDocumentError { error, .. } => {
+                write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
-            TypedErrorResponse::WoqlError(e) => {
-                write!(f, "{}\n\nDetailed error: {:#?}", e, e)
+            TypedErrorResponse::WoqlError { error, .. } => {
+                write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
-            TypedErrorResponse::InsertDocumentError(e) => {
+            TypedErrorResponse::InsertDocumentError { error, .. } => {
+                write!(f, "{}\n\nDetailed error: {:#?}", error, error)
+            }
+            TypedErrorResponse::GenericError(e) => {
                 write!(f, "{}\n\nDetailed error: {:#?}", e, e)
             }
         }
@@ -342,7 +415,7 @@ fn test_deserialize_document_id_already_exists_error() {
     let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
 
     match response {
-        TypedErrorResponse::InsertDocumentError(err) => {
+        TypedErrorResponse::InsertDocumentError { error: err, .. } => {
             assert_eq!(err.api_message, "Tried to insert a new document with id 'terminusdb:///data/WorkflowInstance/689e4fcd-0100-4f82-a7fd-389066361d5f', but an object with that id already exists");
             // Check status by matching instead of equality
             match err.api_status {
@@ -397,7 +470,7 @@ fn test_deserialize_unresolvable_absolute_descriptor_error() {
     let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
 
     match response {
-        TypedErrorResponse::WoqlError(err) => {
+        TypedErrorResponse::WoqlError { error: err, .. } => {
             assert_eq!(
                 err.api_message,
                 "The following descriptor could not be resolved to a resource: 'admin/test/local/branch/main'"
@@ -454,7 +527,7 @@ fn test_deserialize_api_woql_syntax_error() {
     let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
 
     match response {
-        TypedErrorResponse::WoqlError(err) => {
+        TypedErrorResponse::WoqlError { error: err, .. } => {
             assert_eq!(
                 err.api_message,
                 "Unknown syntax error in WOQL: \"unresolvable_prefix(rdf,type)\""
@@ -509,7 +582,7 @@ fn test_deserialize_inserted_subdocument_as_document_error() {
     let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
 
     match response {
-        TypedErrorResponse::InsertDocumentError(err) => {
+        TypedErrorResponse::InsertDocumentError { error: err, .. } => {
             if let Some(ApiResponseError::InsertedSubdocumentAsDocument(subdoc_err)) = err.api_error {
                 // Check that the document field was properly deserialized
                 assert_eq!(subdoc_err.document["@type"], "IdAndTitle");
@@ -533,5 +606,42 @@ fn test_deserialize_inserted_subdocument_as_document_error() {
         ApiResponse::Success(_) => {
             panic!("Expected error response, got success");
         }
+    }
+}
+
+#[test]
+fn test_deserialize_generic_error() {
+    // Test the new generic error case from the user's error message
+    let json = json!({
+        "api:message": "Unexpected failure in request handler",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::GenericError(err) => {
+            assert_eq!(err.api_message, "Unexpected failure in request handler");
+            // Check status
+            match err.api_status {
+                TerminusAPIStatus::Failure => {} // expected
+                _ => panic!("Expected Failure status"),
+            }
+            // Generic error should not have api_error field
+            assert!(err.api_error.is_none());
+        }
+        _ => panic!("Expected GenericError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+    
+    match api_response {
+        ApiResponse::Error(TypedErrorResponse::GenericError(err)) => {
+            assert_eq!(err.api_message, "Unexpected failure in request handler");
+        }
+        _ => panic!("Expected error response with GenericError variant"),
     }
 }

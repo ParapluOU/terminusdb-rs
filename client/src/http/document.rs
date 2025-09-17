@@ -381,7 +381,7 @@ impl super::client::TerminusDBHttpClient {
                 // Check if the error is DocumentNotFound
                 if let Some(err_response) = err.downcast_ref::<TypedErrorResponse>() {
                     match err_response {
-                        TypedErrorResponse::DocumentError(err) if matches!(err.api_status, TerminusAPIStatus::NotFound) => {
+                        TypedErrorResponse::DocumentError { error: err, .. } if matches!(err.api_status, TerminusAPIStatus::NotFound) => {
                             debug!("Document #{} not found (from error response)", id);
                             return Ok(None);
                         }

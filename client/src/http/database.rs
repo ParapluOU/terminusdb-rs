@@ -1,7 +1,10 @@
 //! Database administration operations
 
 use {
-    crate::{Database, TerminusDBAdapterError, debug::{OperationEntry, OperationType, QueryLogEntry}},
+    crate::{
+        debug::{OperationEntry, OperationType, QueryLogEntry},
+        Database, TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde_json::json,
@@ -38,7 +41,9 @@ impl super::client::TerminusDBHttpClient {
     pub async fn ensure_database(&self, db: &str) -> anyhow::Result<Self> {
         // Check cache first
         {
-            let cache = self.ensured_databases.lock()
+            let cache = self
+                .ensured_databases
+                .lock()
                 .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
             if cache.contains(db) {
                 debug!("Database {} already ensured (cached)", db);
@@ -52,10 +57,9 @@ impl super::client::TerminusDBHttpClient {
         debug!("post uri: {}", &uri);
 
         // Create operation entry
-        let mut operation = OperationEntry::new(
-            OperationType::CreateDatabase,
-            format!("/api/db/{}", db)
-        ).with_context(Some(db.to_string()), None);
+        let mut operation =
+            OperationEntry::new(OperationType::CreateDatabase, format!("/api/db/{}", db))
+                .with_context(Some(db.to_string()), None);
 
         // todo: author should probably be node name
         let res = self
@@ -82,15 +86,19 @@ impl super::client::TerminusDBHttpClient {
         // todo: use parse_response()
         if ![200, 400].contains(&status) {
             error!("could not ensure database");
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("request failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation.clone());
-            
+
             // Log to query log if enabled
-            let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+            let logger_opt = self
+                .query_logger
+                .read()
+                .ok()
+                .and_then(|guard| guard.clone());
             if let Some(logger) = logger_opt {
                 let log_entry = QueryLogEntry {
                     timestamp: chrono::Utc::now(),
@@ -116,13 +124,22 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Success (200) or already exists (400)
-        let context = if status == 400 { "already exists" } else { "created" };
-        operation = operation.success(None, duration_ms)
+        let context = if status == 400 {
+            "already exists"
+        } else {
+            "created"
+        };
+        operation = operation
+            .success(None, duration_ms)
             .with_additional_context(context.to_string());
         self.operation_log.push(operation);
-        
+
         // Log to query log if enabled
-        let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+        let logger_opt = self
+            .query_logger
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
         if let Some(logger) = logger_opt {
             let log_entry = QueryLogEntry {
                 timestamp: chrono::Utc::now(),
@@ -148,7 +165,9 @@ impl super::client::TerminusDBHttpClient {
 
         // Add to cache on success
         {
-            let mut cache = self.ensured_databases.lock()
+            let mut cache = self
+                .ensured_databases
+                .lock()
                 .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
             cache.insert(db.to_string());
         }
@@ -184,6 +203,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
+    #[pseudonym::alias(drop_database)]
     pub async fn delete_database(&self, db: &str) -> anyhow::Result<Self> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("db").simple_database(db).build();
@@ -191,12 +211,12 @@ impl super::client::TerminusDBHttpClient {
         debug!("deleting database {}", db);
 
         // Create operation entry
-        let mut operation = OperationEntry::new(
-            OperationType::DeleteDatabase,
-            format!("/api/db/{}", db)
-        ).with_context(Some(db.to_string()), None);
+        let mut operation =
+            OperationEntry::new(OperationType::DeleteDatabase, format!("/api/db/{}", db))
+                .with_context(Some(db.to_string()), None);
 
-        let result = self.http
+        let result = self
+            .http
             .delete(uri)
             .basic_auth(&self.user, Some(&self.pass))
             .send()
@@ -209,16 +229,22 @@ impl super::client::TerminusDBHttpClient {
             Ok(_) => {
                 operation = operation.success(None, duration_ms);
                 self.operation_log.push(operation);
-                
+
                 // Remove from cache on successful deletion
                 {
-                    let mut cache = self.ensured_databases.lock()
+                    let mut cache = self
+                        .ensured_databases
+                        .lock()
                         .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
                     cache.remove(db);
                 }
-                
+
                 // Log to query log if enabled
-                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                let logger_opt = self
+                    .query_logger
+                    .read()
+                    .ok()
+                    .and_then(|guard| guard.clone());
                 if let Some(logger) = logger_opt {
                     let log_entry = QueryLogEntry {
                         timestamp: chrono::Utc::now(),
@@ -234,15 +260,19 @@ impl super::client::TerminusDBHttpClient {
                     };
                     let _ = logger.log(log_entry).await;
                 }
-                
+
                 Ok(self.clone())
             }
             Err(e) => {
                 operation = operation.failure(e.to_string(), duration_ms);
                 self.operation_log.push(operation);
-                
+
                 // Log to query log if enabled
-                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                let logger_opt = self
+                    .query_logger
+                    .read()
+                    .ok()
+                    .and_then(|guard| guard.clone());
                 if let Some(logger) = logger_opt {
                     let log_entry = QueryLogEntry {
                         timestamp: chrono::Utc::now(),
@@ -258,7 +288,7 @@ impl super::client::TerminusDBHttpClient {
                     };
                     let _ = logger.log(log_entry).await;
                 }
-                
+
                 Err(e)
             }
         }
@@ -286,6 +316,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
+
     pub async fn reset_database(&self, db: &str) -> anyhow::Result<Self> {
         debug!("resetting database {}", db);
 
@@ -328,16 +359,20 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn list_databases(&self, branches: bool, verbose: bool) -> anyhow::Result<Vec<Database>> {
+    pub async fn list_databases(
+        &self,
+        branches: bool,
+        verbose: bool,
+    ) -> anyhow::Result<Vec<Database>> {
         let uri = self
             .build_url()
             .endpoint("db")
             .query("branches", &branches.to_string())
             .query("verbose", &verbose.to_string())
             .build();
-        
+
         debug!("Listing databases with URI: {}", &uri);
-        
+
         let res = self
             .http
             .get(uri.clone())
@@ -345,13 +380,15 @@ impl super::client::TerminusDBHttpClient {
             .send()
             .await
             .context(format!("Failed to list databases from {}", &uri))?;
-        
+
         debug!("Received response from TerminusDB, parsing database list...");
-        
+
         // The /db endpoint returns a direct array, not wrapped in ApiResponse
-        let databases: Vec<Database> = res.json().await
+        let databases: Vec<Database> = res
+            .json()
+            .await
             .context("Failed to parse database list response")?;
-        
+
         Ok(databases)
     }
 
@@ -391,7 +428,9 @@ impl super::client::TerminusDBHttpClient {
     /// client.clear_database_cache()?;
     /// ```
     pub fn clear_database_cache(&self) -> anyhow::Result<()> {
-        let mut cache = self.ensured_databases.lock()
+        let mut cache = self
+            .ensured_databases
+            .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
         cache.clear();
         debug!("Cleared ensured databases cache");
@@ -410,7 +449,9 @@ impl super::client::TerminusDBHttpClient {
     /// println!("Cached databases: {:?}", cached);
     /// ```
     pub fn get_cached_databases(&self) -> anyhow::Result<Vec<String>> {
-        let cache = self.ensured_databases.lock()
+        let cache = self
+            .ensured_databases
+            .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock database cache"))?;
         Ok(cache.iter().cloned().collect())
     }
@@ -458,8 +499,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("update_database".to_string()),
-            format!("/api/db/{}", db)
-        ).with_context(Some(db.to_string()), None);
+            format!("/api/db/{}", db),
+        )
+        .with_context(Some(db.to_string()), None);
 
         let mut body = json!({});
         if let Some(l) = label {
@@ -484,22 +526,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("update database operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("update database failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully updated database in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully updated database in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -526,10 +571,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn optimize(
-        &self,
-        path: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn optimize(&self, path: &str) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("optimize").add_path(path).build();
 
@@ -537,8 +579,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("optimize".to_string()),
-            format!("/api/optimize/{}", path)
-        ).with_context(None, None);
+            format!("/api/optimize/{}", path),
+        )
+        .with_context(None, None);
 
         let res = self
             .http
@@ -553,22 +596,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("optimize operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("optimize failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully optimized database in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully optimized database in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -595,10 +641,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn get_prefixes(
-        &self,
-        path: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn get_prefixes(&self, path: &str) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("prefixes").add_path(path).build();
 
@@ -606,8 +649,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("get_prefixes".to_string()),
-            format!("/api/prefixes/{}", path)
-        ).with_context(None, None);
+            format!("/api/prefixes/{}", path),
+        )
+        .with_context(None, None);
 
         let res = self
             .http
@@ -622,22 +666,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("get prefixes operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("get prefixes failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully retrieved prefixes in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully retrieved prefixes in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
