@@ -295,7 +295,7 @@ fn generate_virtual_structs(
                 // Generate tdb attributes for the virtual struct based on parent options
                 let tdb_attrs = if parent_opts.subdocument.unwrap_or(false) {
                     quote! {
-                        #[tdb(subdocument = true, key = "value_hash")]
+                        #[tdb(subdocument = true, unfoldable = true, key = "value_hash")]
                     }
                 } else {
                     quote! {
@@ -323,7 +323,7 @@ fn generate_virtual_structs(
                         base: None,
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
-                        unfoldable: None,
+                        unfoldable: parent_opts.subdocument,
                         subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
@@ -387,7 +387,7 @@ fn generate_virtual_structs(
                         base: None,
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
-                        unfoldable: None,
+                        unfoldable: parent_opts.subdocument,
                         subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
@@ -425,7 +425,7 @@ fn generate_virtual_structs(
                 // Generate tdb attributes for the virtual struct based on parent options
                 let tdb_attrs = if parent_opts.subdocument.unwrap_or(false) {
                     quote! {
-                        #[tdb(subdocument = true, key = "value_hash")]
+                        #[tdb(subdocument = true, unfoldable = true, key = "value_hash")]
                     }
                 } else {
                     quote! {
@@ -450,7 +450,7 @@ fn generate_virtual_structs(
                     base: parent_opts.base.clone(),
                     key: Some("value_hash".to_string()), // Use ValueHash as default for virtual structs
                     abstract_class: None,
-                    unfoldable: None,
+                    unfoldable: parent_opts.subdocument,
                     subdocument: parent_opts.subdocument,
                     inherits: None,
                     doc: Some(format!(
