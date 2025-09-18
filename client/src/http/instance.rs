@@ -101,7 +101,10 @@ impl super::client::TerminusDBHttpClient {
             .to_instance_tree_flatten(true)
             .into_iter()
             .map(|mut i| {
-                i.set_random_key_prefix();
+                // Only set IDs for non-subdocuments
+                if !i.schema.is_subdocument() {
+                    i.set_random_key_prefix();
+                }
                 i.capture = true;
                 i
             })

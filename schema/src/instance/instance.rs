@@ -254,6 +254,11 @@ impl Instance {
 
     /// make sure the schema class prefix is set when key type is random
     pub fn set_random_key_prefix(&mut self) {
+        // Don't set IDs for subdocuments
+        if self.schema.is_subdocument() {
+            return;
+        }
+        
         let class = self.schema.class_name();
         // if self.schema.is_key_random()
         //     && let Some(id) = self.id.as_ref()
@@ -343,6 +348,29 @@ impl Instance {
 
     pub fn is_of_type<T: ToTDBInstance>(&self) -> bool {
         self.schema.is_of_type::<T>()
+    }
+
+    /// Checks if this instance should remain embedded (not be flattened to a reference).
+    /// This includes regular subdocuments and TaggedUnions containing subdocument variants.
+    pub fn should_remain_embedded(&self) -> bool {
+        // Check if this instance is a subdocument
+        if self.schema.is_subdocument() {
+            return true;
+        }
+        
+        // For TaggedUnions, check if the active variant is a subdocument
+        if self.schema.is_tagged_union() {
+            // TaggedUnions have exactly one property containing the active variant
+            for (_, prop) in &self.properties {
+                if let InstanceProperty::Relation(RelationValue::One(variant_inst)) = prop {
+                    if variant_inst.schema.is_subdocument() {
+                        return true;
+                    }
+                }
+            }
+        }
+        
+        false
     }
 
     /// Flattens all nested relations to references by extracting their IDs.

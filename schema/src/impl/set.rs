@@ -19,6 +19,20 @@ impl<T: ToTDBSchema> ToTDBSchema for HashSet<T> {
     }
 }
 
+impl<T: ToTDBSchema> ToTDBSchema for BTreeSet<T> {
+    fn to_schema() -> Schema {
+        T::to_schema()
+    }
+
+    fn to_schema_tree() -> Vec<Schema> {
+        T::to_schema_tree()
+    }
+
+    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+        T::to_schema_tree_mut(collection);
+    }
+}
+
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for HashSet<T> {
     fn to_property(name: &str) -> Property {
         Property {
@@ -44,15 +58,48 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for BTreeSet<T> {
 // Implement ToInstanceProperty for Vec<T> where T implements ToTDBInstance
 impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Hash, S> ToInstanceProperty<S> for HashSet<T> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        // Check if T is a subdocument type
+        let is_subdocument = T::to_schema().is_subdocument();
+        
         InstanceProperty::Relations(
             self.into_iter()
-                .map(|item| RelationValue::One(item.to_instance(None)))
+                .map(|item| {
+                    let mut instance = item.to_instance(None);
+                    // If this is a subdocument, we need to ensure it stays embedded
+                    // The flatten process will check is_subdocument() and skip flattening
+                    RelationValue::One(instance)
+                })
                 .collect(),
         )
     }
 }
 
 impl<T: Primitive+ToInstanceProperty<S>, S> ToInstanceProperty<S> for HashSet<T> {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
+    }
+}
+
+// Implement ToInstanceProperty for BTreeSet<T> where T implements ToTDBInstance
+impl<T: Ord + ToTDBInstance, S> ToInstanceProperty<S> for BTreeSet<T> {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        // Check if T is a subdocument type
+        let is_subdocument = T::to_schema().is_subdocument();
+        
+        InstanceProperty::Relations(
+            self.into_iter()
+                .map(|item| {
+                    let mut instance = item.to_instance(None);
+                    // If this is a subdocument, we need to ensure it stays embedded
+                    // The flatten process will check is_subdocument() and skip flattening
+                    RelationValue::One(instance)
+                })
+                .collect(),
+        )
+    }
+}
+
+impl<T: Primitive + Ord, S> ToInstanceProperty<S> for BTreeSet<T> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
     }

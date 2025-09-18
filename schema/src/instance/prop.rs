@@ -101,8 +101,8 @@ impl InstanceProperty {
         match self {
             InstanceProperty::Relation(rel) => {
                 if let RelationValue::One(inst) = rel {
-                    // Skip flattening if this is a subdocument
-                    if !inst.schema.is_subdocument() {
+                    // Skip flattening if this instance should remain embedded
+                    if !inst.should_remain_embedded() {
                         if let Some(id) = inst.id.clone() {
                             removed.push(inst.clone());
                             *rel = RelationValue::ExternalReference(id);
@@ -112,7 +112,7 @@ impl InstanceProperty {
                             }
                         }
                     } else {
-                        // For subdocuments, still flatten any nested regular documents
+                        // For instances that should remain embedded, still flatten any nested regular documents
                         let mut subdoc_inst = inst.clone();
                         removed.extend(subdoc_inst.flatten(for_transaction));
                         *rel = RelationValue::One(subdoc_inst);
@@ -122,8 +122,8 @@ impl InstanceProperty {
             InstanceProperty::Relations(rels) => {
                 for rel in rels.iter_mut() {
                     if let RelationValue::One(inst) = rel {
-                        // Skip flattening if this is a subdocument
-                        if !inst.schema.is_subdocument() {
+                        // Skip flattening if this instance should remain embedded
+                        if !inst.should_remain_embedded() {
                             if let Some(id) = inst.id.clone() {
                                 removed.push(inst.clone());
                                 *rel = RelationValue::ExternalReference(id);
@@ -133,7 +133,7 @@ impl InstanceProperty {
                                 }
                             }
                         } else {
-                            // For subdocuments, still flatten any nested regular documents
+                            // For instances that should remain embedded, still flatten any nested regular documents
                             let mut subdoc_inst = inst.clone();
                             removed.extend(subdoc_inst.flatten(for_transaction));
                             *rel = RelationValue::One(subdoc_inst);

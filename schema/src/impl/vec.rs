@@ -23,9 +23,17 @@ impl<T: ToTDBSchema> ToTDBSchema for Vec<T> {
 // Implement ToInstanceProperty for Vec<T> where T implements ToTDBInstance
 impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Vec<T> {
     default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        // Check if T is a subdocument type
+        let is_subdocument = T::to_schema().is_subdocument();
+        
         InstanceProperty::Relations(
             self.into_iter()
-                .map(|item| RelationValue::One(item.to_instance(None)))
+                .map(|item| {
+                    let mut instance = item.to_instance(None);
+                    // If this is a subdocument, we need to ensure it stays embedded
+                    // The flatten process will check is_subdocument() and skip flattening
+                    RelationValue::One(instance)
+                })
                 .collect(),
         )
     }

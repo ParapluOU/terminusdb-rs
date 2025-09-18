@@ -398,12 +398,12 @@ impl<T: Into<Instance>> From<Vec<T>> for InstanceProperty {
 // }
 
 // todo: make generic over IntoIterator?
-impl<Parent, T: ToInstanceProperty<Self>> ToInstanceProperty<Parent> for BTreeSet<T> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
-        InstanceProperty::Any(
-            self.into_iter()
-                .map(|t| ToInstanceProperty::to_property(t, field_name, parent))
-                .collect(),
-        )
-    }
-}
+// impl<Parent, T: ToInstanceProperty<Self>> ToInstanceProperty<Parent> for BTreeSet<T> {
+//     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+//         InstanceProperty::Any(
+//             self.into_iter()
+//                 .map(|t| ToInstanceProperty::to_property(t, field_name, parent))
+//                 .collect(),
+//         )
+//     }
+// }
