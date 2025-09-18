@@ -487,6 +487,21 @@ macro_rules! type_ {
     };
 }
 
+/// Shortcut for creating @schema:id triples
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = id!(var!(doc), var!(doc_id)); // equivalent to triple!(var!(doc), "@schema:id", var!(doc_id))
+/// let q2 = id!(var!(user), data!("user123")); // with literal ID value
+/// ```
+#[macro_export]
+macro_rules! id {
+    ($subject:expr, $value:expr) => {
+        triple!($subject, "@schema:id", $value)
+    };
+}
+
 /// Shortcut for isa type checking
 ///
 /// # Examples
@@ -1832,7 +1847,7 @@ macro_rules! named_query {
     ($name:expr, $query:expr) => {
         $crate::query::NamedQuery {
             name: $name.to_string(),
-            query: Box::new($query),
+            query: $query,
         }
     };
 }
@@ -1850,7 +1865,7 @@ macro_rules! named_parametric_query {
         $crate::query::NamedParametricQuery {
             name: $name.to_string(),
             parameters: vec![$($param.to_string()),*],
-            query: Box::new($query),
+            query: $query,
         }
     };
 }
@@ -1860,24 +1875,22 @@ macro_rules! named_parametric_query {
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
-/// let q = call!("find_persons", triple!(var!(x), "rdf:type", "Person"));
-/// let q2 = call!("find_by_type", [var!(type)], triple!(var!(x), "rdf:type", var!(type)));
+/// let q = call!("find_persons");
+/// let q2 = call!("find_by_type", ["Person"]);
 /// ```
 #[macro_export]
 macro_rules! call {
-    ($name:expr, $query:expr) => {
-        $crate::query::Call {
+    ($name:expr) => {
+        $crate::query::Query::Call($crate::query::Call {
             name: $name.to_string(),
             arguments: vec![],
-            query: $query,
-        }
+        })
     };
-    ($name:expr, [$($arg:expr),* $(,)?], $query:expr) => {
-        $crate::query::Call {
+    ($name:expr, [$($arg:expr),* $(,)?]) => {
+        $crate::query::Query::Call($crate::query::Call {
             name: $name.to_string(),
             arguments: vec![$($crate::macros::into_value($arg)),*],
-            query: $query,
-        }
+        })
     };
 }
 

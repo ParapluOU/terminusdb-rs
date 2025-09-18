@@ -182,6 +182,28 @@ fn test_shortcut_macros() {
         _ => panic!("Expected Triple query"),
     }
     
+    // Test id! macro
+    let id_query = id!(var!(doc), var!(doc_id));
+    match id_query {
+        Query::Triple(t) => {
+            assert!(matches!(t.predicate, NodeValue::Node(ref s) if s == "@schema:id"));
+            assert!(matches!(t.subject, NodeValue::Variable(ref s) if s == "doc"));
+            assert!(matches!(t.object, Value::Variable(ref s) if s == "doc_id"));
+        }
+        _ => panic!("Expected Triple query for id!"),
+    }
+    
+    // Test id! macro with literal value
+    let id_literal_query = id!(var!(user), data!("user123"));
+    match id_literal_query {
+        Query::Triple(t) => {
+            assert!(matches!(t.predicate, NodeValue::Node(ref s) if s == "@schema:id"));
+            assert!(matches!(t.subject, NodeValue::Variable(ref s) if s == "user"));
+            assert!(matches!(t.object, Value::Data(_)));
+        }
+        _ => panic!("Expected Triple query for id! with literal"),
+    }
+    
     // Test isa! macro
     let isa_query = isa!(var!(x), "Person");
     assert!(matches!(isa_query, Query::IsA(_)));
@@ -239,6 +261,7 @@ fn test_complex_query_with_shortcuts() {
     // Complex query using shortcut macros
     let query = select!([person, name, friends], and!(
         type_!(var!(person), "Person"),
+        id!(var!(person), var!(person_id)),
         triple!(var!(person), "name", var!(name)),
         optional!(triple!(var!(person), "email", var!(email))),
         count_into!(
@@ -252,7 +275,7 @@ fn test_complex_query_with_shortcuts() {
         Query::Select(s) => {
             assert_eq!(s.variables.len(), 3);
             match &*s.query {
-                Query::And(a) => assert_eq!(a.and.len(), 4),
+                Query::And(a) => assert_eq!(a.and.len(), 5),
                 _ => panic!("Expected And query"),
             }
         }

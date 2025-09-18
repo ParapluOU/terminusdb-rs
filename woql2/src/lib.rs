@@ -63,7 +63,7 @@ pub mod prelude {
         path, limit, eval, read_doc, insert_doc, update_doc, delete_doc,
         if_then_else,
         // Shortcut macros
-        type_, isa, optional, distinct_vars, count_into, cast,
+        type_, id, isa, optional, distinct_vars, count_into, cast,
         sum, concat, member, immediately, link, data_triple,
         regex, trim, true_, compare,
         // String operation macros
