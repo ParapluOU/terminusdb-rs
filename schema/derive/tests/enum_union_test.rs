@@ -267,6 +267,7 @@ mod tests {
             documentation,
             r#abstract,
             key: _,
+            subdocument: _,
             unfoldable: _,
         } = schema
         {
@@ -304,6 +305,7 @@ mod tests {
             documentation,
             r#abstract,
             key: _,
+            subdocument: _,
             unfoldable: _,
         } = tagged_enum_schema
         {

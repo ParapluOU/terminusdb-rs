@@ -399,6 +399,14 @@ pub enum Schema {
         /// Use @documentation to add documentation to the class and the property fields or values of the class.
         documentation: Option<ClassDocumentation>,
 
+        /// The @subdocument key is present with the value [] or it is not present.
+        /// A class designated as a sub-document is considered to be completely owned by its containing document.
+        /// It is not possible to directly update or delete a subdocument,
+        /// but it must be done through the containing document.
+        /// Currently, subdocuments must have a key that is Random or ValueHash (this restriction may be relaxed in the future.)
+        /// should be settable by derive attribute
+        subdocument: bool,
+
         // all user-defined mutually-exclusive properties
         properties: Vec<Property>,
 
@@ -457,6 +465,7 @@ impl Schema {
     pub fn is_subdocument(&self) -> bool {
         match self {
             Schema::Class { subdocument, .. } => *subdocument,
+            Schema::TaggedUnion { subdocument, .. } => *subdocument,
             _ => false,
         }
     }
@@ -606,24 +615,28 @@ impl ToJson for Schema {
                 base,
                 key,
                 documentation,
+                subdocument,
                 properties,
                 unfoldable,
                 r#abstract,
             } => {
                 map.insert("@type".to_string(), "TaggedUnion".to_string().into());
                 map.insert("@id".to_string(), id.clone().into());
-                if *unfoldable {
-                    map.insert("@unfoldable".to_string(), Value::Array(vec![]));
-                }
                 if let Some(base2) = base {
                     map.insert("@base".to_string(), base2.clone().into());
                 }
                 map.insert("@key".to_string(), key.to_map().into());
-                if let Some(doc) = documentation {
-                    map.insert("@documentation".to_string(), doc.to_map().into());
+                if *subdocument {
+                    map.insert("@subdocument".to_string(), Value::Array(vec![]));
                 }
                 if *r#abstract {
                     map.insert("@abstract".to_string(), Value::Array(vec![]));
+                }
+                if *unfoldable {
+                    map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if let Some(doc) = documentation {
+                    map.insert("@documentation".to_string(), doc.to_map().into());
                 }
                 for prop in properties {
                     map.append(&mut prop.to_map());
@@ -748,6 +761,7 @@ pub trait ToTDBSchema {
                 base: Self::base(),
                 key: Self::key(),
                 documentation: Self::documentation(),
+                subdocument: Self::subdocument().unwrap_or_default(),
                 properties: Self::properties().unwrap_or_default(),
                 unfoldable: Self::unfoldable(),
                 r#abstract: Self::abstractdocument().unwrap_or_default(),
@@ -946,6 +960,7 @@ fn test_schema_taggedunion_json() {
         key: Key::ValueHash,
         r#abstract: false,
         documentation: None,
+        subdocument: false,
         properties: vec![
             Property {
                 name: "leaf".to_string(),

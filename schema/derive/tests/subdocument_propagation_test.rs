@@ -82,11 +82,14 @@ mod tests {
     fn test_all_variant_structs_inherit_subdocument() {
         let schemas = <SubdocumentTaggedUnion as ToTDBSchema>::to_schema_tree();
         
-        // Check that the main TaggedUnion is present
-        let _union_schema = schemas
+        // Check that the main TaggedUnion is present and marked as subdocument
+        let union_schema = schemas
             .iter()
             .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == "SubdocumentTaggedUnion"))
             .expect("Should find SubdocumentTaggedUnion schema");
+        
+        // Verify the TaggedUnion itself is marked as subdocument
+        assert!(union_schema.is_subdocument(), "TaggedUnion itself should be marked as subdocument");
 
         // All generated variant classes should be subdocuments
         for schema in &schemas {
