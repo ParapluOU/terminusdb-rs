@@ -1,5 +1,6 @@
 use crate::*;
 use std::collections::BTreeMap;
+use crate::instance::build_instance_tree;
 
 #[test]
 fn test_subdocument_tagged_union_flatten() {
@@ -244,4 +245,43 @@ fn test_subdocument_tagged_union_flatten() {
     }
     
     println!("\n✓ Fix verified: TaggedUnions with subdocument variants now remain embedded correctly!");
+
+    // Test 6: Verify to_instance_tree_flatten filters out TaggedUnions with subdocument variants
+    println!("\n=== Test 6: Verifying to_instance_tree_flatten filtering ===");
+    
+    // Create a simple ToTDBInstances implementation for our document
+    struct DocumentWrapper(Instance);
+    
+    impl ToTDBInstances for DocumentWrapper {
+        fn to_instance_tree(&self) -> Vec<Instance> {
+            build_instance_tree(&self.0)
+        }
+    }
+    
+    let wrapper = DocumentWrapper(document_instance.clone());
+    
+    // Get the flattened instance tree
+    let flattened_tree = wrapper.to_instance_tree_flatten(true);
+    
+    println!("Flattened instance tree count: {}", flattened_tree.len());
+    for (i, inst) in flattened_tree.iter().enumerate() {
+        println!("  Instance {}: {} (should_remain_embedded: {})", 
+                 i + 1, 
+                 inst.schema.class_name(),
+                 inst.should_remain_embedded());
+    }
+    
+    // The flattened tree should only contain the Document instance
+    // TaggedUnions with subdocument variants should be filtered out
+    assert_eq!(flattened_tree.len(), 1, "Only the Document instance should remain");
+    assert_eq!(flattened_tree[0].schema.class_name(), "Document", "The single instance should be the Document");
+    
+    // Verify that the Annotation (TaggedUnion with subdocument variant) was filtered out
+    assert!(!flattened_tree.iter().any(|i| i.schema.class_name() == "Annotation"), 
+            "TaggedUnion with subdocument variant should be filtered out");
+    
+    println!("✓ SUCCESS: to_instance_tree_flatten correctly filters out TaggedUnions with subdocument variants!");
+    
+    // This is the key fix that ensures insert_instances won't try to insert
+    // TaggedUnions with subdocument variants as separate documents
 }

@@ -51,10 +51,11 @@ pub trait ToTDBInstances: Send {
         for instance in &mut instances {
             instance.flatten(for_transaction);
         }
-        // Filter out subdocuments - they should remain nested within their parent instances
+        // Filter out subdocuments and TaggedUnions with subdocument variants
+        // - they should remain nested within their parent instances
         instances
             .into_iter()
-            .filter(|inst| !inst.schema.is_subdocument())
+            .filter(|inst| !inst.should_remain_embedded())
             .collect()
     }
 
