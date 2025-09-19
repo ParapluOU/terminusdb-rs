@@ -17,6 +17,14 @@ pub trait InstanceQueryable {
     /// this can also be an ad-hoc deserializable type and is not neccessarily a TerminusDB model
     type Model: TerminusDBModel + InstanceFromJson;
 
+    /// The variable name used to bind the read document
+    const READ_DOCUMENT_BINDING: &'static str = "Doc";
+
+    /// Returns a Var for the document binding
+    fn doc_var() -> Var {
+        vars!(Self::READ_DOCUMENT_BINDING)
+    }
+
     /// running the query with an adapter
     async fn apply(
         &self,
@@ -28,7 +36,7 @@ pub trait InstanceQueryable {
         let query = self.query(limit, offset);
 
         let v_id = vars!("Subject");
-        let v_doc = vars!("Doc");
+        let v_doc = Self::doc_var();
 
         let res = client
             .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
@@ -79,7 +87,6 @@ pub trait InstanceQueryable {
 
     fn query_count(&self) -> Query {
         let v_id = vars!("Subject");
-        let v_doc = vars!("Doc");
         let v_count = vars!("Count");
 
         let query = WoqlBuilder::new()
@@ -103,7 +110,7 @@ pub trait InstanceQueryable {
     /// returning the query as a WOQL Query enum
     fn query(&self, limit: Option<usize>, offset: Option<usize>) -> Query {
         let v_id = vars!("Subject");
-        let v_doc = vars!("Doc");
+        let v_doc = Self::doc_var();
 
         let query = WoqlBuilder::new()
             // the triple was neccessary instead of the IsA
