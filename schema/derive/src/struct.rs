@@ -372,9 +372,11 @@ pub fn process_named_fields(
                 //     class: <#field_ty as terminusdb_schema::ToSchemaClass>::to_class().to_string(),
                 // }
 
-                <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_property(#property_name).tap_mut(|prop| {
+                {
+                    let mut prop = <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_property(#property_name);
                     #classoverride
-                })
+                    prop
+                }
             };
 
             property

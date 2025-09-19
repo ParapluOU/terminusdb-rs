@@ -119,18 +119,35 @@ pub fn collect_type_param_bounds(
 /// Checks if a generic parameter is used directly as a field type
 #[cfg(feature = "generic-derive")]
 fn is_generic_param_used_as_field(ty: &Type, param: &Ident) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        // Skip special container types
-        if let Some(last_segment) = path.segments.last() {
-            if last_segment.ident == "EntityIDFor" || last_segment.ident == "TdbLazy" {
-                return false;
+    match ty {
+        Type::Path(TypePath { path, .. }) => {
+            // Skip special container types
+            if let Some(last_segment) = path.segments.last() {
+                if last_segment.ident == "EntityIDFor" || last_segment.ident == "TdbLazy" || last_segment.ident == "PhantomData" {
+                    return false;
+                }
+                
+                // For other container types (Option, Vec, etc), check inside
+                if last_segment.ident == "Option" || last_segment.ident == "Vec" {
+                    if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                        for arg in &args.args {
+                            if let GenericArgument::Type(inner_ty) = arg {
+                                if is_generic_param_used_as_field(inner_ty, param) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                }
+            }
+            
+            // Check if this is the parameter itself
+            if let Some(ident) = path.get_ident() {
+                return ident == param;
             }
         }
-        
-        // Check if this is the parameter itself
-        if let Some(ident) = path.get_ident() {
-            return ident == param;
-        }
+        _ => {}
     }
     false
 }

@@ -107,8 +107,6 @@ pub fn generate_totdbschema_impl(
     } else {
         quote! {
             fn properties() -> Option<Vec<terminusdb_schema::Property>> {
-                use tap::prelude::*;
-
                 #properties_or_values
             }
         }
