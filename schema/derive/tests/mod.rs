@@ -38,5 +38,8 @@ mod generic_syntax_test;
 #[cfg(feature = "generic-derive")]
 mod generic_basic_test;
 
+#[cfg(feature = "generic-derive")]
+mod phantom_data_test;
+
 #[cfg(not(feature = "generic-derive"))]
 mod generic_error_test;

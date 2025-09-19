@@ -125,6 +125,19 @@ where
     }
 }
 
+// PhantomData type
+impl<T, Parent> InstancePropertyFromJson<Parent> for PhantomData<T> {
+    fn property_from_json(json: Value) -> Result<InstanceProperty> {
+        // PhantomData always returns Unit regardless of input
+        Ok(InstanceProperty::Primitive(PrimitiveValue::Unit))
+    }
+    
+    fn property_from_maybe_json(json: Option<Value>) -> Result<InstanceProperty> {
+        // PhantomData always returns Unit regardless of input
+        Ok(InstanceProperty::Primitive(PrimitiveValue::Unit))
+    }
+}
+
 // Vec type
 impl<T, Parent> InstancePropertyFromJson<Parent> for Vec<T>
 where

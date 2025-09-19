@@ -204,6 +204,10 @@ pub fn implement_for_struct(
         Fields::Named(fields_named) => fields_named
             .named
             .iter()
+            .filter(|field| {
+                // Skip PhantomData fields - they don't contribute to schema tree
+                !crate::prelude::is_phantom_data_type(&field.ty)
+            })
             .map(|field| {
                 let field_ty = &field.ty;
                 field_ty
@@ -217,6 +221,10 @@ pub fn implement_for_struct(
         Fields::Named(fields_named) => fields_named
             .named
             .iter()
+            .filter(|field| {
+                // Skip PhantomData fields
+                !crate::prelude::is_phantom_data_type(&field.ty)
+            })
             .filter_map(|field| field.ident.as_ref().map(|ident| ident.clone()))
             .collect::<Vec<_>>(),
         _ => Vec::new(),
@@ -328,6 +336,10 @@ pub fn process_named_fields(
     let fields = fields_named
         .named
         .iter()
+        .filter(|field| {
+            // Skip PhantomData fields - they're zero-sized and shouldn't appear in schema
+            !crate::prelude::is_phantom_data_type(&field.ty)
+        })
         .map(|field| {
             let field_name = field.ident.as_ref().unwrap();
             let field_ty = &field.ty;

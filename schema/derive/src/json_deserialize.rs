@@ -465,6 +465,11 @@ fn generate_field_deserializers(
     let mut deserializers: Vec<TokenStream> = Vec::new();
 
     for field in &fields.named {
+        // Skip PhantomData fields - they don't need JSON deserialization
+        if crate::prelude::is_phantom_data_type(&field.ty) {
+            continue;
+        }
+        
         let field_ident = field.ident.as_ref().ok_or_else(|| {
             syn::Error::new_spanned(field, "InstanceFromJson requires named fields")
         })?;

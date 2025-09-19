@@ -28,3 +28,14 @@ pub fn is_server_id_for_type(ty: &syn::Type) -> bool {
     }
     false
 }
+
+/// Check if a type is PhantomData<T>
+pub fn is_phantom_data_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(typepath) = ty {
+        // Check last segment (handles both PhantomData and std::marker::PhantomData)
+        if let Some(segment) = typepath.path.segments.last() {
+            return segment.ident == "PhantomData";
+        }
+    }
+    false
+}

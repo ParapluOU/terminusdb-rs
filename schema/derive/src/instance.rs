@@ -47,6 +47,36 @@ pub fn generate_totdbinstance_impl(
         }
     };
 
+    // Create a where clause that includes both the original where clause and Send bound
+    let instances_where_clause = {
+        #[cfg(feature = "generic-derive")]
+        {
+            let mut predicates = Vec::new();
+            
+            // Add Send bound for Self
+            predicates.push(quote! { Self: Send });
+            
+            // Add existing where clause predicates if any
+            if let Some(ref wc) = where_clause {
+                let existing_predicates = wc.predicates.iter()
+                    .map(|p| quote! { #p })
+                    .collect::<Vec<_>>();
+                predicates.extend(existing_predicates);
+            }
+            
+            if predicates.is_empty() {
+                quote! {}
+            } else {
+                quote! { where #(#predicates),* }
+            }
+        }
+        
+        #[cfg(not(feature = "generic-derive"))]
+        {
+            quote! { where Self: Send }
+        }
+    };
+    
     // This now simply wraps the provided instance_body_code within the impl
     quote! {
         impl #impl_generics terminusdb_schema::ToTDBInstance for #type_name #ty_generics #where_clause {
@@ -62,7 +92,7 @@ pub fn generate_totdbinstance_impl(
         }
 
         // Use the helper function from the traits module
-        impl #impl_generics terminusdb_schema::ToTDBInstances for #type_name #ty_generics #where_clause {
+        impl #impl_generics terminusdb_schema::ToTDBInstances for #type_name #ty_generics #instances_where_clause {
             fn to_instance_tree(&self) -> Vec<terminusdb_schema::Instance> {
                 let instance = self.to_instance(None);
                 terminusdb_schema::build_instance_tree(&instance)
@@ -80,6 +110,10 @@ pub fn process_fields_for_instance(
     let field_conversions = fields_named
         .named
         .iter()
+        .filter(|field| {
+            // Skip PhantomData fields - they're zero-sized and don't need instance conversion
+            !crate::prelude::is_phantom_data_type(&field.ty)
+        })
         .map(|field| {
             let field_name = field.ident.as_ref().unwrap();
             let field_ty = &field.ty;

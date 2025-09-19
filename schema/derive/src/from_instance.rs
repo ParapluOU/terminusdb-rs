@@ -154,7 +154,8 @@ fn process_named_fields_for_deserialization<'a>(
     fields_named: &'a FieldsNamed,
     struct_name: &syn::Ident,
 ) -> (proc_macro2::TokenStream, Vec<&'a syn::Ident>) {
-    let field_names = fields_named
+    // Get all field names (including PhantomData)
+    let all_field_names = fields_named
         .named
         .iter()
         .map(|field| {
@@ -165,28 +166,37 @@ fn process_named_fields_for_deserialization<'a>(
         })
         .collect::<Vec<_>>();
 
-    let field_parsers = fields_named.named.iter().map(|field| {
-        let field_ident = field.ident.as_ref().expect("Named fields should have an identifier");
-        let field_name_str = field_ident.to_string();
+    // Generate parsers only for non-PhantomData fields
+    let field_parsers = fields_named.named.iter().filter_map(|field| {
+        if crate::prelude::is_phantom_data_type(&field.ty) {
+            // Generate PhantomData field initialization
+            let field_ident = field.ident.as_ref().expect("Named fields should have an identifier");
+            Some(quote! {
+                let #field_ident = ::std::marker::PhantomData;
+            })
+        } else {
+            let field_ident = field.ident.as_ref().expect("Named fields should have an identifier");
+            let field_name_str = field_ident.to_string();
 
-        // Parse field options using darling
+            // Parse field options using darling
         let field_opts = match TDBFieldOpts::from_field(field) {
             Result::Ok(opts) => opts,
-            Result::Err(err) => {
-                return syn::Error::new(field.span(), err.to_string()).to_compile_error();
-            }
-        };
+                Result::Err(err) => {
+                    return Some(syn::Error::new(field.span(), err.to_string()).to_compile_error());
+                }
+            };
 
-        // Use custom name if provided
-        let property_name = field_opts.name.unwrap_or_else(|| field_name_str.clone());
-        let field_ty = &field.ty;
+            // Use custom name if provided
+            let property_name = field_opts.name.unwrap_or_else(|| field_name_str.clone());
+            let field_ty = &field.ty;
 
-        // ALWAYS use from_maybe_property, passing the Option<&InstanceProperty> directly.
-        // The trait implementation for T or Option<T> will handle missing/null/present cases.
-        quote! {
-            let #field_ident = <#field_ty as terminusdb_schema::FromInstanceProperty>::from_maybe_property(
-                &instance.get_property(#property_name).cloned()
-            ).with_context(|| format!("Failed to deserialize field '{}' for struct '{}'", #property_name, <Self as terminusdb_schema::ToTDBSchema>::schema_name()))?;
+            // ALWAYS use from_maybe_property, passing the Option<&InstanceProperty> directly.
+            // The trait implementation for T or Option<T> will handle missing/null/present cases.
+            Some(quote! {
+                let #field_ident = <#field_ty as terminusdb_schema::FromInstanceProperty>::from_maybe_property(
+                    &instance.get_property(#property_name).cloned()
+                ).with_context(|| format!("Failed to deserialize field '{}' for struct '{}'", #property_name, <Self as terminusdb_schema::ToTDBSchema>::schema_name()))?;
+            })
         }
     }).collect::<Vec<_>>();
 
@@ -194,7 +204,7 @@ fn process_named_fields_for_deserialization<'a>(
         #(#field_parsers)*
     };
 
-    (field_parsers_token, field_names)
+    (field_parsers_token, all_field_names)
 }
 
 /// Check if a type is an Option<T>

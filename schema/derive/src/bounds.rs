@@ -55,6 +55,10 @@ pub fn collect_type_param_bounds(
     // First pass: identify special usage contexts
     for field in &fields.named {
         if let Some(_) = &field.ident {
+            // Skip PhantomData fields entirely
+            if crate::prelude::is_phantom_data_type(&field.ty) {
+                continue;
+            }
             identify_special_contexts(
                 &field.ty,
                 &generic_params,
@@ -88,6 +92,10 @@ pub fn collect_type_param_bounds(
             let mut used_as_field = false;
             for field in &fields.named {
                 if let Some(_) = &field.ident {
+                    // Skip PhantomData fields - they don't need bounds on their type parameters
+                    if crate::prelude::is_phantom_data_type(&field.ty) {
+                        continue;
+                    }
                     if is_generic_param_used_as_field(&field.ty, param) {
                         used_as_field = true;
                         break;
