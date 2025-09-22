@@ -51,6 +51,11 @@ fn test_subdocument_tagged_union_flatten() {
         schema: Schema::TaggedUnion {
             id: "Annotation".to_string(),
             base: None,
+            key: crate::schema::Key::Random,
+            r#abstract: false,
+            documentation: None,
+            subdocument: false,
+            unfoldable: false,
             properties: vec![
                 Property {
                     name: "comment".to_string(),
@@ -63,10 +68,6 @@ fn test_subdocument_tagged_union_flatten() {
                     class: "AnnotationHighlight".to_string(),
                 },
             ],
-            key: Key::ValueHash,
-            unfoldable: false,
-            documentation: None,
-            r#abstract: false,
         },
         id: Some("Annotation/123".to_string()),
         capture: false,
