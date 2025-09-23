@@ -680,7 +680,7 @@ macro_rules! member {
     ($member:expr, $list:expr) => {
         $crate::query::Query::Member($crate::collection::Member {
             member: $crate::macros::into_data_value($member),
-            list: $crate::macros::into_list_or_variable($list),
+            list: $crate::macros::into_data_value($list),
         })
     };
 }
@@ -2279,6 +2279,31 @@ mod conversion {
     impl IntoListOrVariable for Value {
         fn into_list_or_variable(self) -> ListOrVariable {
             self.into_data_value().into_list_or_variable()
+        }
+    }
+    
+    impl<T> IntoListOrVariable for Vec<T> 
+    where 
+        T: IntoDataValue
+    {
+        fn into_list_or_variable(self) -> ListOrVariable {
+            let data_values: Vec<DataValue> = self.into_iter()
+                .map(|item| item.into_data_value())
+                .collect();
+            ListOrVariable::List(data_values)
+        }
+    }
+    
+    // Also implement IntoDataValue for Vec<T> to support member! macro
+    impl<T> IntoDataValue for Vec<T>
+    where
+        T: IntoDataValue
+    {
+        fn into_data_value(self) -> DataValue {
+            let data_values: Vec<DataValue> = self.into_iter()
+                .map(|item| item.into_data_value())
+                .collect();
+            DataValue::List(data_values)
         }
     }
 }
