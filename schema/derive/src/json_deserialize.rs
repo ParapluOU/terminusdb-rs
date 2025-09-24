@@ -219,9 +219,28 @@ fn implement_instance_from_json_for_simple_enum(
                 use anyhow::{Context, anyhow, Result};
                 use std::collections::BTreeMap;
 
+                // Handle both object format ({"@type": "Status", "active": null}) and string format ("active")
                 let mut json_map = match json {
+                    Value::String(variant_name) => {
+                        // Direct string deserialization for standalone enums
+                        let variant_lower = variant_name.to_lowercase();
+                        let mut properties = std::collections::BTreeMap::new();
+                        properties.insert(
+                            variant_lower.clone(),
+                            terminusdb_schema::InstanceProperty::Primitive(
+                                terminusdb_schema::PrimitiveValue::Unit
+                            )
+                        );
+                        return Result::Ok(terminusdb_schema::Instance {
+                            id: None,
+                            schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
+                            capture: false,
+                            ref_props: false,
+                            properties,
+                        });
+                    },
                     Value::Object(map) => map,
-                    _ => return Err(anyhow!("Expected a JSON object for enum deserialization, found {:?}", json)),
+                    _ => return Err(anyhow!("Expected a JSON object or string for enum deserialization, found {:?}", json)),
                 };
 
                 // Extract @id

@@ -210,7 +210,14 @@ where
         // so we wouldn thave this conditional inside the generic
         if T::to_schema().is_enum() {
             return if let Value::String(enum_variant) = json {
-                let enm: T = serde_json::from_str(&format!("\"{}\"", &enum_variant))?;
+                // Convert lowercase enum variant to proper case for serde deserialization
+                // TerminusDB stores enum values as lowercase, but serde expects exact variant names
+                let variant_proper_case = enum_variant
+                    .chars()
+                    .enumerate()
+                    .map(|(i, c)| if i == 0 { c.to_uppercase().collect::<String>() } else { c.to_string() })
+                    .collect::<String>();
+                let enm: T = serde_json::from_str(&format!("\"{}\"", &variant_proper_case))?;
                 // Ok(InstanceProperty::Primitive(PrimitiveValue::String(enum_variant)))
                 Ok(InstanceProperty::Relation(RelationValue::One(
                     enm.to_instance(None),
