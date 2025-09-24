@@ -45,17 +45,13 @@ pub struct NamedParametricQuery {
 }
 
 // todo: define key type as lexical on the 'name' field
-// todo: encode the 'query' field as the 'inherits' prop
 /// A call of a named parametric query. Variables will be passed to the named query and bound according to the results. Named queries can be (mutually) recursive.
 #[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
-
 pub struct Call {
     /// The name of the NamedParametricQuery to be retrieved.
     pub name: String,
     /// The arguments to use when binding formal parameters of the parametric query.
     pub arguments: Vec<self::Value>,
-    /// the 'Call' should inherit from Query
-    pub query: Query,
 }
 
 // Represents the abstract class "Query"
@@ -128,6 +124,7 @@ pub enum Query {
     RandomKey(RandomKey),
     Size(Size),
     TripleCount(TripleCount),
+    Call(Call),
 }
 
 impl Query {

@@ -6,6 +6,8 @@ use syn::spanned::Spanned;
 use syn::{self, Data, DataEnum, DataStruct, Fields, FieldsNamed, Visibility};
 
 use crate::args::TDBFieldOpts;
+#[cfg(feature = "generic-derive")]
+use crate::bounds;
 use anyhow::*;
 
 /// Enum type for different kinds of enums
@@ -88,8 +90,25 @@ fn implement_from_instance_for_struct(
     #[cfg(feature = "generic-derive")]
     let (impl_generics, ty_generics, where_clause) = {
         if !generics.params.is_empty() {
-            let (syn_impl_generics, syn_ty_generics, syn_where_clause) = generics.split_for_impl();
-            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, syn_where_clause.cloned())
+            // Collect bounds specific to FromTDBInstance
+            let fields_named = match &data_struct.fields {
+                syn::Fields::Named(fields) => fields,
+                _ => panic!("Only named fields supported"),
+            };
+            let bounds = crate::bounds::collect_bounds_for_impl(
+                fields_named,
+                generics,
+                struct_name,
+                crate::bounds::TraitImplType::FromTDBInstance,
+            );
+            let predicates = crate::bounds::build_where_predicates(&bounds);
+            let where_clause = crate::bounds::combine_where_clauses(
+                generics.where_clause.as_ref(),
+                predicates,
+            );
+            
+            let (syn_impl_generics, syn_ty_generics, _) = generics.split_for_impl();
+            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, where_clause)
         } else {
             (quote!{}, quote!{}, None)
         }

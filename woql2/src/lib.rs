@@ -25,6 +25,7 @@ pub mod triple;
 pub mod value;
 pub mod dsl;
 pub mod macros;
+pub mod query_dsl;
 
 pub mod prelude {
     // Re-export core types
@@ -58,18 +59,20 @@ pub mod prelude {
 
     // Re-export macros
     pub use crate::{
-        var, node_var, node, node_value, data, list,
-        triple, and, or, not, select, eq, greater, less,
+        var, node_var, node, node_value, data, list, typename,
+        triple, t, and, or, not, select, eq, equals, greater, less,
         path, limit, eval, read_doc, insert_doc, update_doc, delete_doc,
         if_then_else,
         // Shortcut macros
-        type_, id, isa, optional, distinct_vars, count_into, cast,
+        type_, id, isa, optional, opt, option, distinct_vars, count_into, cast,
         sum, concat, member, immediately, link, data_triple,
         regex, trim, true_, compare,
         // String operation macros
         starts_with, ends_with, contains,
         // Date/time macros
-        today, after, before, in_between, today_in_between
+        today, after, before, in_between, today_in_between,
+        // Query DSL macros
+        query, v, prop, schema_type
     };
 
     // Potentially re-export common traits if needed

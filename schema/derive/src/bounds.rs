@@ -9,6 +9,16 @@ use syn::{
 #[cfg(feature = "generic-derive")]
 use quote::quote;
 
+/// Trait implementation types that require different bounds
+#[cfg(feature = "generic-derive")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TraitImplType {
+    ToTDBSchema,
+    ToTDBInstance,
+    FromTDBInstance,
+    InstanceFromJson,
+}
+
 /// Analyzes field types and collects required trait bounds for generic parameters
 #[cfg(feature = "generic-derive")]
 pub fn collect_type_param_bounds(
@@ -114,6 +124,177 @@ pub fn collect_type_param_bounds(
     }
 
     bounds
+}
+
+/// Collects trait bounds for a specific trait implementation
+#[cfg(feature = "generic-derive")]
+pub fn collect_bounds_for_impl(
+    fields: &syn::FieldsNamed,
+    generics: &Generics,
+    struct_name: &Ident,
+    trait_impl: TraitImplType,
+) -> HashMap<Ident, Vec<String>> {
+    let mut bounds = HashMap::new();
+    
+    // Collect generic parameter names
+    let generic_params: HashSet<Ident> = generics
+        .params
+        .iter()
+        .filter_map(|param| match param {
+            GenericParam::Type(type_param) => Some(type_param.ident.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Build the struct name with generic parameters
+    let struct_name_with_generics = if generic_params.is_empty() {
+        struct_name.to_string()
+    } else {
+        let generic_names: Vec<String> = generics
+            .params
+            .iter()
+            .filter_map(|param| match param {
+                GenericParam::Type(type_param) => Some(type_param.ident.to_string()),
+                _ => None,
+            })
+            .collect();
+        format!("{}<{}>", struct_name, generic_names.join(", "))
+    };
+
+    // Track which parameters are used in which contexts
+    let mut field_params = HashSet::new();
+    let mut model_params = HashSet::new();
+    let mut entity_params = HashSet::new();
+
+    // Analyze field usage
+    for field in &fields.named {
+        if let Some(_) = &field.ident {
+            // Skip PhantomData fields
+            if crate::prelude::is_phantom_data_type(&field.ty) {
+                continue;
+            }
+            
+            // Check how the type is used
+            analyze_type_usage(
+                &field.ty,
+                &generic_params,
+                &mut field_params,
+                &mut model_params,
+                &mut entity_params,
+            );
+        }
+    }
+
+    // Add bounds based on the trait we're implementing
+    for param in &generic_params {
+        if field_params.contains(param) || model_params.contains(param) || entity_params.contains(param) {
+            let param_bounds = bounds.entry(param.clone()).or_insert_with(Vec::new);
+            
+            match trait_impl {
+                TraitImplType::ToTDBSchema => {
+                    if field_params.contains(param) {
+                        param_bounds.push(format!("terminusdb_schema::ToSchemaProperty<{}>", struct_name_with_generics));
+                        param_bounds.push("terminusdb_schema::ToMaybeTDBSchema".to_string());
+                    }
+                    if model_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::ToTDBSchema".to_string());
+                        param_bounds.push("terminusdb_schema::ToSchemaClass".to_string());
+                    }
+                    if entity_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::ToTDBSchema".to_string());
+                        param_bounds.push("terminusdb_schema::ToSchemaClass".to_string());
+                    }
+                }
+                TraitImplType::ToTDBInstance => {
+                    if field_params.contains(param) {
+                        param_bounds.push(format!("terminusdb_schema::ToInstanceProperty<{}>", struct_name_with_generics));
+                    }
+                    if model_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::ToTDBInstance".to_string());
+                    }
+                    if entity_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::ToSchemaClass".to_string());
+                    }
+                }
+                TraitImplType::FromTDBInstance => {
+                    if field_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::FromInstanceProperty".to_string());
+                    }
+                    if model_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::FromTDBInstance".to_string());
+                    }
+                }
+                TraitImplType::InstanceFromJson => {
+                    if field_params.contains(param) {
+                        param_bounds.push(format!("terminusdb_schema::json::InstancePropertyFromJson<{}>", struct_name_with_generics));
+                    }
+                    if model_params.contains(param) {
+                        param_bounds.push("terminusdb_schema::json::InstanceFromJson".to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    bounds
+}
+
+/// Analyzes how a type uses generic parameters
+#[cfg(feature = "generic-derive")]
+fn analyze_type_usage(
+    ty: &Type,
+    generic_params: &HashSet<Ident>,
+    field_params: &mut HashSet<Ident>,
+    model_params: &mut HashSet<Ident>,
+    entity_params: &mut HashSet<Ident>,
+) {
+    match ty {
+        Type::Path(TypePath { path, .. }) => {
+            if let Some(last_segment) = path.segments.last() {
+                // Check for special types
+                if last_segment.ident == "TdbLazy" {
+                    if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                        for arg in &args.args {
+                            if let GenericArgument::Type(Type::Path(TypePath { path: inner_path, .. })) = arg {
+                                if let Some(ident) = inner_path.get_ident() {
+                                    if generic_params.contains(ident) {
+                                        model_params.insert(ident.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if last_segment.ident == "EntityIDFor" {
+                    if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                        for arg in &args.args {
+                            if let GenericArgument::Type(Type::Path(TypePath { path: inner_path, .. })) = arg {
+                                if let Some(ident) = inner_path.get_ident() {
+                                    if generic_params.contains(ident) {
+                                        entity_params.insert(ident.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if last_segment.ident == "Option" || last_segment.ident == "Vec" {
+                    // Recursively analyze container contents
+                    if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
+                        for arg in &args.args {
+                            if let GenericArgument::Type(inner_ty) = arg {
+                                analyze_type_usage(inner_ty, generic_params, field_params, model_params, entity_params);
+                            }
+                        }
+                    }
+                } else if let Some(ident) = path.get_ident() {
+                    // Direct usage of generic parameter
+                    if generic_params.contains(ident) {
+                        field_params.insert(ident.clone());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Checks if a generic parameter is used directly as a field type

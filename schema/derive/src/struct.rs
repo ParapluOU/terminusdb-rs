@@ -1,6 +1,8 @@
 use crate::instance::{generate_totdbinstance_impl, process_fields_for_instance};
 use crate::prelude::*;
 use crate::schema::generate_totdbschema_impl;
+#[cfg(feature = "generic-derive")]
+use std::collections::HashMap;
 
 /// Validate that id_field exists when specified and has the correct type for the key strategy
 fn validate_id_field_type(
@@ -118,53 +120,99 @@ pub fn implement_for_struct(
     #[cfg(not(feature = "generic-derive"))]
     let class_name_expr = quote! { #class_name };
 
-    // Handle generics if feature is enabled
+    // Extract base generics for all impls
+    let (base_impl_generics, base_ty_generics, base_where_clause) = input.generics.split_for_impl();
+    
+    // Generate bounds for each trait implementation if generics are enabled
     #[cfg(feature = "generic-derive")]
-    let (impl_generics, ty_generics, where_clause) = {
-        let (syn_impl_generics, syn_ty_generics, base_where_clause) =
-            input.generics.split_for_impl();
-
-        // Only collect bounds if we have generic parameters
-        if !input.generics.params.is_empty() {
-            if let Fields::Named(fields_named) = &data_struct.fields {
-                let type_param_bounds = crate::bounds::collect_type_param_bounds(
+    let bounds_for_traits = if !input.generics.params.is_empty() {
+        if let Fields::Named(fields_named) = &data_struct.fields {
+            let mut trait_bounds = HashMap::new();
+            
+            // Collect bounds for each trait
+            trait_bounds.insert(
+                crate::bounds::TraitImplType::ToTDBSchema,
+                crate::bounds::collect_bounds_for_impl(
                     fields_named,
                     &input.generics,
                     struct_name,
-                );
-                let new_predicates = crate::bounds::build_where_predicates(&type_param_bounds);
-                let combined_where =
-                    crate::bounds::combine_where_clauses(base_where_clause, new_predicates);
-                (
-                    quote! { #syn_impl_generics },
-                    quote! { #syn_ty_generics },
-                    combined_where,
+                    crate::bounds::TraitImplType::ToTDBSchema,
                 )
-            } else {
-                (
-                    quote! { #syn_impl_generics },
-                    quote! { #syn_ty_generics },
-                    base_where_clause.cloned(),
+            );
+            trait_bounds.insert(
+                crate::bounds::TraitImplType::ToTDBInstance,
+                crate::bounds::collect_bounds_for_impl(
+                    fields_named,
+                    &input.generics,
+                    struct_name,
+                    crate::bounds::TraitImplType::ToTDBInstance,
                 )
-            }
+            );
+            trait_bounds.insert(
+                crate::bounds::TraitImplType::FromTDBInstance,
+                crate::bounds::collect_bounds_for_impl(
+                    fields_named,
+                    &input.generics,
+                    struct_name,
+                    crate::bounds::TraitImplType::FromTDBInstance,
+                )
+            );
+            trait_bounds.insert(
+                crate::bounds::TraitImplType::InstanceFromJson,
+                crate::bounds::collect_bounds_for_impl(
+                    fields_named,
+                    &input.generics,
+                    struct_name,
+                    crate::bounds::TraitImplType::InstanceFromJson,
+                )
+            );
+            
+            Some(trait_bounds)
         } else {
-            (
-                quote! { #syn_impl_generics },
-                quote! { #syn_ty_generics },
-                base_where_clause.cloned(),
-            )
+            None
         }
+    } else {
+        None
     };
+    
+    #[cfg(not(feature = "generic-derive"))]
+    let bounds_for_traits: Option<std::collections::HashMap<String, std::collections::HashMap<syn::Ident, Vec<String>>>> = None;
 
+    // For non-generic code, use empty generics
     #[cfg(not(feature = "generic-derive"))]
     let (impl_generics, ty_generics, where_clause) =
         (quote! {}, quote! {}, None::<syn::WhereClause>);
+    
+    // For generic code, we'll use specific bounds for each impl
+    #[cfg(feature = "generic-derive")]
+    let (impl_generics, ty_generics, _) = (
+        quote! { #base_impl_generics },
+        quote! { #base_ty_generics },
+        base_where_clause.cloned(),
+    );
 
     // Generate the implementation for ToSchemaClass trait
-    let schema_class_impl = quote! {
-        impl #impl_generics terminusdb_schema::ToSchemaClass for #struct_name #ty_generics #where_clause {
-            fn to_class() -> String {
-                #class_name_expr.to_string()
+    let schema_class_impl = {
+        #[cfg(feature = "generic-derive")]
+        let where_clause = if let Some(ref bounds_map) = bounds_for_traits {
+            if let Some(bounds) = bounds_map.get(&crate::bounds::TraitImplType::ToTDBSchema) {
+                let predicates = crate::bounds::build_where_predicates(bounds);
+                crate::bounds::combine_where_clauses(base_where_clause, predicates)
+            } else {
+                base_where_clause.cloned()
+            }
+        } else {
+            base_where_clause.cloned()
+        };
+        
+        #[cfg(not(feature = "generic-derive"))]
+        let where_clause: Option<syn::WhereClause> = None;
+        
+        quote! {
+            impl #impl_generics terminusdb_schema::ToSchemaClass for #struct_name #ty_generics #where_clause {
+                fn to_class() -> String {
+                    #class_name_expr.to_string()
+                }
             }
         }
     };
@@ -274,18 +322,35 @@ pub fn implement_for_struct(
     };
 
     // Generate the implementation for schema
-    let schema_impl = generate_totdbschema_impl(
-        struct_name,
-        class_name_expr.clone(),
-        opts,
-        properties,
-        quote! { SchemaTypeClass },
-        to_schema_tree_impl,
+    let schema_impl = {
         #[cfg(feature = "generic-derive")]
-        (&impl_generics, &ty_generics, &where_clause),
+        let schema_where_clause = if let Some(ref bounds_map) = bounds_for_traits {
+            if let Some(bounds) = bounds_map.get(&crate::bounds::TraitImplType::ToTDBSchema) {
+                let predicates = crate::bounds::build_where_predicates(bounds);
+                crate::bounds::combine_where_clauses(base_where_clause, predicates)
+            } else {
+                base_where_clause.cloned()
+            }
+        } else {
+            base_where_clause.cloned()
+        };
+        
         #[cfg(not(feature = "generic-derive"))]
-        (&quote! {}, &quote! {}, &None),
-    );
+        let schema_where_clause: Option<syn::WhereClause> = None;
+        
+        generate_totdbschema_impl(
+            struct_name,
+            class_name_expr.clone(),
+            opts,
+            properties,
+            quote! { SchemaTypeClass },
+            to_schema_tree_impl,
+            #[cfg(feature = "generic-derive")]
+            (&impl_generics, &ty_generics, &schema_where_clause),
+            #[cfg(not(feature = "generic-derive"))]
+            (&quote! {}, &quote! {}, &None),
+        )
+    };
 
     // Generate the body code for the to_instance method for structs
     let properties_code = process_fields_for_instance(fields_named, struct_name);
@@ -307,15 +372,32 @@ pub fn implement_for_struct(
     };
 
     // Generate the implementation for instance using the simplified wrapper
-    let instance_impl = generate_totdbinstance_impl(
-        struct_name,
-        instance_body_code, // Pass the generated body code
-        opts.clone(),       // No longer pass None here
+    let instance_impl = {
         #[cfg(feature = "generic-derive")]
-        (&impl_generics, &ty_generics, &where_clause),
+        let instance_where_clause = if let Some(ref bounds_map) = bounds_for_traits {
+            if let Some(bounds) = bounds_map.get(&crate::bounds::TraitImplType::ToTDBInstance) {
+                let predicates = crate::bounds::build_where_predicates(bounds);
+                crate::bounds::combine_where_clauses(base_where_clause, predicates)
+            } else {
+                base_where_clause.cloned()
+            }
+        } else {
+            base_where_clause.cloned()
+        };
+        
         #[cfg(not(feature = "generic-derive"))]
-        (&quote! {}, &quote! {}, &None),
-    );
+        let instance_where_clause: Option<syn::WhereClause> = None;
+        
+        generate_totdbinstance_impl(
+            struct_name,
+            instance_body_code, // Pass the generated body code
+            opts.clone(),       // No longer pass None here
+            #[cfg(feature = "generic-derive")]
+            (&impl_generics, &ty_generics, &instance_where_clause),
+            #[cfg(not(feature = "generic-derive"))]
+            (&quote! {}, &quote! {}, &None),
+        )
+    };
 
     // Combine both implementations
     quote! {

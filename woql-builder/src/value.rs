@@ -3,24 +3,24 @@ use terminusdb_woql2::value::Value as Woql2Value;
 // Import XSDAnySimpleType for literals
 use terminusdb_schema::XSDAnySimpleType;
 // NodeValue and DataValue are specific enums used elsewhere
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use decimal_rs::Decimal; // Import the Decimal type
 use std::str::FromStr;
-use terminusdb_woql2::prelude::{DataValue, NodeValue}; // Import FromStr for Decimal parsing
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc}; // Import chrono types for datetime support
+use terminusdb_woql2::prelude::{DataValue, NodeValue}; // Import FromStr for Decimal parsing // Import chrono types for datetime support
 
 /// Represents an input value for WOQL builder functions.
 /// This allows functions to accept variables, IRIs (as strings), or literals easily.
 #[derive(Debug, Clone)]
 pub enum WoqlInput {
     Variable(Var),
-    Node(String),   // Represents an IRI Node
-    String(String), // Represents a Data Literal (string)
-    Boolean(bool),  // Represents a Data Literal (boolean)
-    Integer(i64),   // Represents a Data Literal (integer)
-    Decimal(String), // Represents a Data Literal (decimal, stored as string)
-    DateTime(String), // Represents a Data Literal (datetime, ISO 8601 format)
-    Date(String),    // Represents a Data Literal (date, ISO 8601 format)
-    Time(String),    // Represents a Data Literal (time, ISO 8601 format)
+    Node(String),         // Represents an IRI Node
+    String(String),       // Represents a Data Literal (string)
+    Boolean(bool),        // Represents a Data Literal (boolean)
+    Integer(i64),         // Represents a Data Literal (integer)
+    Decimal(String),      // Represents a Data Literal (decimal, stored as string)
+    DateTime(String),     // Represents a Data Literal (datetime, ISO 8601 format)
+    Date(String),         // Represents a Data Literal (date, ISO 8601 format)
+    Time(String),         // Represents a Data Literal (time, ISO 8601 format)
     List(Vec<WoqlInput>), // Represents a list of values
 }
 
@@ -181,7 +181,10 @@ impl IntoWoql2 for WoqlInput {
                 Woql2Value::Data(XSDAnySimpleType::Time(time))
             }
             WoqlInput::List(items) => Woql2Value::List(
-                items.into_iter().map(|item| item.into_woql2_value()).collect()
+                items
+                    .into_iter()
+                    .map(|item| item.into_woql2_value())
+                    .collect(),
             ),
         }
     }
@@ -228,7 +231,10 @@ impl IntoWoql2 for WoqlInput {
                 DataValue::Data(XSDAnySimpleType::Time(time))
             }
             WoqlInput::List(items) => DataValue::List(
-                items.into_iter().map(|item| item.into_woql2_data_value()).collect()
+                items
+                    .into_iter()
+                    .map(|item| item.into_woql2_data_value())
+                    .collect(),
             ),
             _ => panic!(
                 "Attempted to convert a Node IRI input ({:?}) into a DataValue",
@@ -257,7 +263,7 @@ pub fn node(s: impl Into<String>) -> WoqlInput {
 
 /// Helper function to create a list literal.
 /// Accepts an iterator of items that can be converted into WoqlInput.
-pub fn list<I, T>(items: I) -> WoqlInput 
+pub fn list<I, T>(items: I) -> WoqlInput
 where
     I: IntoIterator<Item = T>,
     T: Into<WoqlInput>,
@@ -311,11 +317,11 @@ where
     fn into_woql2_value(self) -> Woql2Value {
         WoqlInput::from(self).into_woql2_value()
     }
-    
+
     fn into_woql2_node_value(self) -> NodeValue {
         WoqlInput::from(self).into_woql2_node_value()
     }
-    
+
     fn into_woql2_data_value(self) -> DataValue {
         WoqlInput::from(self).into_woql2_data_value()
     }
@@ -383,16 +389,5 @@ impl IntoWoql2 for isize {
     }
     fn into_woql2_value(self) -> Woql2Value {
         Woql2Value::Data(XSDAnySimpleType::Decimal(Decimal::from(self)))
-    }
-}
-
-#[cfg(test)]
-mod value_tests {
-    use super::*; // Import items from the parent module (value.rs)
-    use crate::vars; // Import the macro from the crate root
-
-    #[test]
-    fn test_vars_macro() {
-        // ... existing test code ...
     }
 }

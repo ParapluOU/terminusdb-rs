@@ -163,6 +163,24 @@ macro_rules! triple {
     };
 }
 
+/// Alias for triple! macro
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let t = t!(var!(x), "rdf:type", "Person");
+/// let t2 = t!(node_var!(x), node_value!("name"), var!(name));
+/// ```
+#[macro_export]
+macro_rules! t {
+    ($subject:expr, $predicate:expr, $object:expr) => {
+        triple!($subject, $predicate, $object)
+    };
+    ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
+        triple!($subject, $predicate, $object, $graph)
+    };
+}
+
 /// Create an And query with multiple sub-queries
 ///
 /// # Examples
@@ -257,6 +275,20 @@ macro_rules! eq {
             left: $crate::macros::into_value($left),
             right: $crate::macros::into_value($right),
         })
+    };
+}
+
+/// Alias for eq! macro
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = equals!(var!(x), data!(42));
+/// ```
+#[macro_export]
+macro_rules! equals {
+    ($left:expr, $right:expr) => {
+        eq!($left, $right)
     };
 }
 
@@ -542,6 +574,34 @@ macro_rules! optional {
         $crate::query::Query::WoqlOptional($crate::control::WoqlOptional {
             query: Box::new($query),
         })
+    };
+}
+
+/// Alias for optional! macro
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = opt!(triple!(var!(x), "email", var!(email)));
+/// ```
+#[macro_export]
+macro_rules! opt {
+    ($query:expr) => {
+        optional!($query)
+    };
+}
+
+/// Alias for optional! macro
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = option!(triple!(var!(x), "email", var!(email)));
+/// ```
+#[macro_export]
+macro_rules! option {
+    ($query:expr) => {
+        optional!($query)
     };
 }
 
