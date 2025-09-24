@@ -34,44 +34,44 @@ struct AwsDBCommittee {
 }
 
 fn main() {
-    // Replicate the original query structure using the DSL
-    let query_dsl = limit!(10, query!{{
+    // Replicate the original query structure using the new flat syntax
+    let query_dsl = query!{{
         select [SessionId, PublicationId, OwnerFirstName, OwnerLastName, 
-                PublicationTitle, CommitteeId, CommitteeName, CommitteeDescription] {
+                PublicationTitle, CommitteeId, CommitteeName, CommitteeDescription];
+        limit 10;
+        
+        // Main query body matching the JSON-LD structure
+        AwsDBReviewSession {
+            id = v!(SessionId),
+            owner = v!(Owner),
+            title = v!(SessionTitle),
+            publication_id = v!(Publication)
+        }
+        
+        AwsDBPublication {
+            id = v!(PublicationId),
+            title = v!(PublicationTitle)
+        }
+        
+        // Need to manually add the id matching since the DSL creates separate variables
+        triple!(v!(Publication), "@schema:id", v!(PublicationId)),
+        
+        AwsDBUser {
+            id = v!(Owner),
+            first_name = v!(OwnerFirstName),
+            last_name = v!(OwnerLastName)
+        }
+        
+        optional {
+            triple!(v!(Publication), field!(AwsDBPublication:committee), v!(Committee)),
             
-            // Main query body matching the JSON-LD structure
-            AwsDBReviewSession {
-                id = v!(SessionId),
-                owner = v!(Owner),
-                title = v!(SessionTitle),
-                publication_id = v!(Publication)
-            }
-            
-            AwsDBPublication {
-                id = v!(PublicationId),
-                title = v!(PublicationTitle)
-            }
-            
-            // Need to manually add the id matching since the DSL creates separate variables
-            triple!(v!(Publication), "@schema:id", v!(PublicationId)),
-            
-            AwsDBUser {
-                id = v!(Owner),
-                first_name = v!(OwnerFirstName),
-                last_name = v!(OwnerLastName)
-            }
-            
-            optional {
-                triple!(v!(Publication), field!(AwsDBPublication:committee), v!(Committee)),
-                
-                AwsDBCommittee {
-                    id = v!(CommitteeId),
-                    name = v!(CommitteeName),
-                    description = v!(CommitteeDescription)
-                }
+            AwsDBCommittee {
+                id = v!(CommitteeId),
+                name = v!(CommitteeName),
+                description = v!(CommitteeDescription)
             }
         }
-    }});
+    }};
     
     println!("Generated DSL Query:");
     println!("{}\n", query_dsl.to_dsl());
@@ -84,11 +84,13 @@ fn main() {
     println!("4. ✓ All property triples matching the original");
     println!("5. ✓ Optional block for committee information");
     
-    println!("\nKey differences from JSON-LD:");
-    println!("- Type names use '@schema:TypeName' format vs 'TypeName' in DSL output");
-    println!("- The DSL generates cleaner variable names (no @ prefix needed)");
+    println!("\nKey benefits of the flat DSL syntax:");
+    println!("- Select and limit as simple statements (SQL-like)");
+    println!("- Type names automatically get @schema: prefix");
     println!("- Property names are type-checked at compile time");
-    println!("- Some manual linking may be needed (like Publication id matching)");
+    println!("- Optional blocks for conditional data");
+    println!("- Much more concise than JSON-LD");
+    println!("- Modifiers can be in any order or omitted");
     
-    println!("\nThe DSL successfully generates an equivalent query!");
+    println!("\nThe flat syntax DSL successfully replicates your JSON-LD query!");
 }

@@ -288,14 +288,49 @@
 /// ```
 #[macro_export]
 macro_rules! query {
-    // Select query with variables and body
+    // Old nested select syntax for backward compatibility
     ({ select [$($var:ident),* $(,)?] { $($body:tt)* } }) => {
         select!([$($var),*], query!{{ $($body)* }})
     };
     
-    // Main query body processing with braces
+    // Main entry point - parse modifiers first
     ({ $($body:tt)* }) => {
-        query!(@parse_body [] $($body)*)
+        query!(@parse_modifiers [] [] $($body)*)
+    };
+    
+    // Parse modifiers - found select statement
+    (@parse_modifiers [$($select_vars:ident)*] [$($limit_val:expr)?] select [$($var:ident),* $(,)?] ; $($rest:tt)*) => {
+        query!(@parse_modifiers [$($var)*] [$($limit_val)?] $($rest)*)
+    };
+    
+    // Parse modifiers - found limit statement
+    (@parse_modifiers [$($select_vars:ident)*] [] limit $limit:expr ; $($rest:tt)*) => {
+        query!(@parse_modifiers [$($select_vars)*] [$limit] $($rest)*)
+    };
+    
+    // Parse modifiers - done, now process body and apply modifiers
+    (@parse_modifiers [$($select_vars:ident)*] [$($limit_val:expr)?] $($body:tt)*) => {
+        query!(@apply_modifiers [$($select_vars)*] [$($limit_val)?] query!(@parse_body [] $($body)*))
+    };
+    
+    // Apply modifiers - both select and limit
+    (@apply_modifiers [$($select_vars:ident)+] [$limit_val:expr] $query:expr) => {
+        limit!($limit_val, select!([$($select_vars),*], $query))
+    };
+    
+    // Apply modifiers - only select
+    (@apply_modifiers [$($select_vars:ident)+] [] $query:expr) => {
+        select!([$($select_vars),*], $query)
+    };
+    
+    // Apply modifiers - only limit
+    (@apply_modifiers [] [$limit_val:expr] $query:expr) => {
+        limit!($limit_val, $query)
+    };
+    
+    // Apply modifiers - neither
+    (@apply_modifiers [] [] $query:expr) => {
+        $query
     };
     
     // Parse body - accumulate expressions
@@ -547,6 +582,141 @@ mod tests {
                 }
             }
             _ => panic!("Expected And query"),
+        }
+    }
+    
+    #[test] 
+    fn test_flat_syntax_select_and_limit() {
+        // Test model
+        #[allow(dead_code)]
+        struct TestModel {
+            id: String,
+            name: String,
+            value: i32,
+        }
+        
+        let result = query!{{
+            select [Name, Value];
+            limit 5;
+            
+            TestModel {
+                id = v!(TestId),
+                name = v!(Name),
+                value = v!(Value)
+            }
+        }};
+        
+        // Should be Limit(Select(And(...)))
+        match result {
+            Query::Limit(limit) => {
+                assert_eq!(limit.limit, 5);
+                match &*limit.query {
+                    Query::Select(select) => {
+                        assert_eq!(select.variables, vec!["Name", "Value"]);
+                        assert!(matches!(&*select.query, Query::And(_)));
+                    }
+                    _ => panic!("Expected Select inside Limit"),
+                }
+            }
+            _ => panic!("Expected Limit query"),
+        }
+    }
+    
+    #[test]
+    fn test_flat_syntax_select_only() {
+        #[allow(dead_code)]
+        struct TestModel {
+            name: String,
+        }
+        
+        let result = query!{{
+            select [Name];
+            
+            TestModel {
+                name = v!(Name)
+            }
+        }};
+        
+        // Should be Select(And(...))
+        match result {
+            Query::Select(select) => {
+                assert_eq!(select.variables, vec!["Name"]);
+            }
+            _ => panic!("Expected Select query"),
+        }
+    }
+    
+    #[test]
+    fn test_flat_syntax_limit_only() {
+        #[allow(dead_code)]
+        struct TestModel {
+            name: String,
+        }
+        
+        let result = query!{{
+            limit 10;
+            
+            TestModel {
+                name = v!(Name)
+            }
+        }};
+        
+        // Should be Limit(And(...))
+        match result {
+            Query::Limit(limit) => {
+                assert_eq!(limit.limit, 10);
+                assert!(matches!(&*limit.query, Query::And(_)));
+            }
+            _ => panic!("Expected Limit query"),
+        }
+    }
+    
+    #[test]
+    fn test_flat_syntax_plain_query() {
+        #[allow(dead_code)]
+        struct TestModel {
+            name: String,
+        }
+        
+        let result = query!{{
+            TestModel {
+                name = v!(Name)
+            }
+        }};
+        
+        // Should be just And(...)
+        assert!(matches!(result, Query::And(_)));
+    }
+    
+    #[test]
+    fn test_flat_syntax_reverse_order() {
+        #[allow(dead_code)]
+        struct TestModel {
+            name: String,
+        }
+        
+        // Limit first, then select
+        let result = query!{{
+            limit 3;
+            select [Name];
+            
+            TestModel {
+                name = v!(Name)
+            }
+        }};
+        
+        // Should still be Limit(Select(And(...)))
+        match result {
+            Query::Limit(limit) => {
+                assert_eq!(limit.limit, 3);
+                match &*limit.query {
+                    Query::Select(select) => {
+                        assert_eq!(select.variables, vec!["Name"]);
+                    }
+                    _ => panic!("Expected Select inside Limit"),
+                }
+            }
+            _ => panic!("Expected Limit query"),
         }
     }
 }
