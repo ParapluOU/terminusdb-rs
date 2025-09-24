@@ -21,6 +21,7 @@ serde_json = {workspace = true}
 anyhow = { workspace=true }
 
 terminusdb-schema = { path = ".." }
+terminusdb-relation-derive = { path = "../../relation/derive", optional = true }
 
 # for macro
 tracing = { workspace = true }
@@ -33,6 +34,9 @@ chrono.workspace = true
 uuid.workspace = true
 # tap = "1.0.1" # No longer needed - removed tap_mut usage
 
+[dev-dependencies]
+terminusdb-woql2 = { path = "../../woql2" }
+
 [lib]
 path = "src/lib.rs"
 #crate-type = ["cdylib"]
@@ -41,3 +45,5 @@ proc-macro = true
 [features]
 # Experimental support for generic types in derive macro
 generic-derive = []
+# Enable relation trait generation
+relations = ["terminusdb-relation-derive"]

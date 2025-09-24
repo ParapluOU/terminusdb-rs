@@ -44,6 +44,8 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 terminusdb-schema-derive = { path = "derive" }
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-relation = { path = "../relation" }
 reqwest = "0.11"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

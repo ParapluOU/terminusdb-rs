@@ -9,6 +9,8 @@ members = [
     "typestate",
     "woql-dsl",
     "mcp-server",
+    "relation",
+    "relation/derive",
 ]
 
 [workspace.dependencies]

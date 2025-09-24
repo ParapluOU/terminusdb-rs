@@ -938,6 +938,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "heck"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2536,6 +2542,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminusdb-relation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "terminusdb-schema",
+ "terminusdb-schema-derive",
+ "terminusdb-woql2",
+ "tracing",
+]
+
+[[package]]
+name = "terminusdb-relation-derive"
+version = "0.1.0"
+dependencies = [
+ "darling 0.20.11",
+ "heck 0.4.1",
+ "proc-macro2 1.0.95",
+ "quote 1.0.40",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "terminusdb-schema"
 version = "0.1.0"
 dependencies = [
@@ -2561,7 +2591,9 @@ dependencies = [
  "sha2",
  "tap",
  "tempfile",
+ "terminusdb-relation",
  "terminusdb-schema-derive",
+ "terminusdb-woql2",
  "tokio 1.45.1",
  "tokio-test",
  "tracing",
@@ -2577,7 +2609,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "darling 0.20.11",
- "heck",
+ "heck 0.3.3",
  "itertools",
  "multihash",
  "proc-macro2 1.0.95",
@@ -2587,7 +2619,9 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.104",
+ "terminusdb-relation-derive",
  "terminusdb-schema",
+ "terminusdb-woql2",
  "tracing",
  "tracing-subscriber",
  "uuid",

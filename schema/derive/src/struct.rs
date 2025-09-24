@@ -399,13 +399,28 @@ pub fn implement_for_struct(
         )
     };
 
-    // Combine both implementations
+    // Generate RelationTo implementations only if relations feature is enabled
+    #[cfg(feature = "relations")]
+    let relation_impls = terminusdb_relation_derive::generate_relation_impls(
+        struct_name,
+        fields_named,
+        &impl_generics,
+        &ty_generics,
+        &base_where_clause.cloned(),
+    );
+    
+    #[cfg(not(feature = "relations"))]
+    let relation_impls = quote! {};
+
+    // Combine all implementations
     quote! {
         #schema_impl
 
         #instance_impl
 
         #schema_class_impl
+        
+        #relation_impls
     }
 }
 
