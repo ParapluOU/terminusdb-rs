@@ -80,11 +80,11 @@ fn test_basic_deserialization() {
 
 #[test]
 fn test_simple_enum_deserialization() {
-    // Test Red variant
+    // Test Red variant (using lowercase as per TerminusDB spec)
     let json_red = json!({
         "@id": "Color/1",
         "@type": "Color",
-        "Red": null
+        "red": null
     });
 
     let instance_red =
@@ -92,15 +92,15 @@ fn test_simple_enum_deserialization() {
 
     // Verify the instance properly captures the Red variant
     assert_eq!(instance_red.id, Some("Color/1".to_string()));
-    assert!(instance_red.properties.contains_key("Red"));
-    assert!(!instance_red.properties.contains_key("Green"));
-    assert!(!instance_red.properties.contains_key("Blue"));
+    assert!(instance_red.properties.contains_key("red"));
+    assert!(!instance_red.properties.contains_key("green"));
+    assert!(!instance_red.properties.contains_key("blue"));
 
-    // Test Green variant
+    // Test Green variant (using lowercase as per TerminusDB spec)
     let json_green = json!({
         "@id": "Color/2",
         "@type": "Color",
-        "Green": null
+        "green": null
     });
 
     let instance_green =
@@ -108,9 +108,9 @@ fn test_simple_enum_deserialization() {
 
     // Verify the instance properly captures the Green variant
     assert_eq!(instance_green.id, Some("Color/2".to_string()));
-    assert!(!instance_green.properties.contains_key("Red"));
-    assert!(instance_green.properties.contains_key("Green"));
-    assert!(!instance_green.properties.contains_key("Blue"));
+    assert!(!instance_green.properties.contains_key("red"));
+    assert!(instance_green.properties.contains_key("green"));
+    assert!(!instance_green.properties.contains_key("blue"));
 }
 
 #[test]
@@ -177,6 +177,39 @@ fn test_tagged_union_enum_deserialization() {
     // Verify the instance properly captures the Complex variant
     assert_eq!(instance_complex.id, Some("TaggedValue/5".to_string()));
     assert!(instance_complex.properties.contains_key("complex"));
+}
+
+#[test]
+fn test_simple_enum_lowercase_deserialization() {
+    // Test that lowercase enum values work (following TerminusDB spec)
+    let json_lowercase = json!({
+        "@id": "Color/3",
+        "@type": "Color",
+        "yellow": null  // lowercase instead of "Yellow"
+    });
+
+    let instance_lowercase = Color::instance_from_json(json_lowercase)
+        .expect("Failed to deserialize lowercase enum variant");
+
+    // Verify the instance properly captures the Yellow variant
+    assert_eq!(instance_lowercase.id, Some("Color/3".to_string()));
+    assert!(instance_lowercase.properties.contains_key("yellow"));
+    assert!(!instance_lowercase.properties.contains_key("Red"));
+    assert!(!instance_lowercase.properties.contains_key("Green"));
+    assert!(!instance_lowercase.properties.contains_key("Blue"));
+
+    // Test another variant
+    let json_green_lower = json!({
+        "@id": "Color/4", 
+        "@type": "Color",
+        "green": null  // lowercase
+    });
+
+    let instance_green_lower = Color::instance_from_json(json_green_lower)
+        .expect("Failed to deserialize lowercase green variant");
+
+    assert_eq!(instance_green_lower.id, Some("Color/4".to_string()));
+    assert!(instance_green_lower.properties.contains_key("green"));
 }
 
 #[test]

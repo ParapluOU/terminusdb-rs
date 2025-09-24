@@ -187,7 +187,7 @@ fn implement_instance_from_json_for_simple_enum(
         .iter()
         .map(|variant| {
             let variant_ident = &variant.ident;
-            let variant_name_str = variant_ident.to_string();
+            let variant_name_str = variant_ident.to_string().to_lowercase();
 
             quote! {
                 if json_map.contains_key(#variant_name_str) {
