@@ -12,6 +12,7 @@
 //! 2. **Variable shorthand** - Use `v!(name)` instead of `var!("name")`
 //! 3. **Natural comparisons** - Write comparisons inline with query logic
 //! 4. **Select syntax** - Cleaner syntax for select queries
+//! 5. **Type-checked properties** - Property names are verified at compile-time against model structs
 //!
 //! # Basic Example
 //!
@@ -27,16 +28,18 @@
 //!     greater!(var!("age"), data!(18))
 //! );
 //!
-//! // Query DSL syntax
-//! let dsl = query!{
+//! // Query DSL syntax (with type-checked properties)
+//! let dsl = query!{{
 //!     Person {
 //!         id = data!("person123"),
 //!         name = v!(name),
 //!         age = v!(age)
 //!     }
 //!     greater!(v!(age), data!(18))
-//! };
+//! }};
 //! ```
+//! 
+//! Note: The model struct `Person` must be in scope for property name verification.
 //!
 //! # Syntax Reference
 //!
@@ -160,12 +163,31 @@
 //! 3. All expressions are collected and wrapped in an `and!` query
 //! 4. Select queries are handled specially to preserve the variable list
 //!
+//! # Type-Checked Properties
+//!
+//! When a model struct is in scope, the query DSL automatically verifies property names
+//! at compile-time using the `field!` macro internally. This prevents runtime errors from:
+//! - Typos in property names
+//! - Properties that don't exist on the model
+//! - Schema changes that break queries
+//!
+//! ```ignore
+//! struct Person { name: String, age: i32 }
+//! 
+//! // This compiles successfully
+//! query!{{ Person { name = v!(n) } }}
+//! 
+//! // This would fail at compile-time:
+//! // query!{{ Person { nam = v!(n) } }}
+//! // Error: no field `nam` on type `Person`
+//! ```
+//!
 //! # Limitations
 //!
-//! - Type names must be valid Rust identifiers
-//! - Property names must be valid Rust identifiers
+//! - Type names must be valid Rust identifiers and correspond to structs in scope
+//! - Property names must be valid Rust identifiers and exist on the model struct
 //! - Values must be valid Rust expressions
-//! - The macro requires braces `{}` around the query body
+//! - The macro requires double braces `{{}}` around the query body
 //!
 //! # Performance
 //!
@@ -251,8 +273,8 @@
 #[macro_export]
 macro_rules! query {
     // Select query with variables and body
-    (select [$($var:ident),* $(,)?] { $($body:tt)* }) => {
-        select!([$($var),*], query!{ $($body)* })
+    ({ select [$($var:ident),* $(,)?] { $($body:tt)* } }) => {
+        select!([$($var),*], query!{{ $($body)* }})
     };
     
     // Main query body processing with braces
@@ -296,7 +318,7 @@ macro_rules! query {
     };
     
     (@parse_field $type:ident, $field:ident, $value:expr) => {
-        triple!(var!(stringify!($type)), stringify!($field), $value)
+        triple!(var!(stringify!($type)), field!($type:$field), $value)
     };
 }
 
@@ -370,6 +392,14 @@ macro_rules! schema_type {
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
+    
+    // Test model for type-checked queries
+    #[allow(dead_code)]
+    struct Person {
+        id: String,
+        name: String,
+        age: i32,
+    }
     
     #[test]
     fn test_simple_query_dsl() {

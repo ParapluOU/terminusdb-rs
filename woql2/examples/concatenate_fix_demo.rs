@@ -1,5 +1,5 @@
 use terminusdb_woql2::string::Concatenate;
-use terminusdb_woql2::value::DataValue;
+use terminusdb_woql2::value::{DataValue, ListOrVariable};
 use terminusdb_schema::XSDAnySimpleType;
 use serde_json;
 
@@ -8,7 +8,7 @@ fn main() {
     
     // Create a Concatenate query with a list
     let concat = Concatenate {
-        list: DataValue::List(vec![
+        list: ListOrVariable::List(vec![
             DataValue::Data(XSDAnySimpleType::String("AwsDBPublication/".to_string())),
             DataValue::Variable("PubId".to_string()),
         ]),

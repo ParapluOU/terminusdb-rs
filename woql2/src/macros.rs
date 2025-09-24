@@ -32,7 +32,20 @@
 /// 
 /// // Use in queries
 /// let q = triple!(var!(x), field!(Person:name), var!(n));
+/// 
+/// // Automatically used by query DSL for type checking
+/// let dsl_query = query!{{
+///     Person {
+///         name = v!(name),  // Internally uses field!(Person:name)
+///         age = v!(age)     // Internally uses field!(Person:age)
+///     }
+/// }};
 /// ```
+/// 
+/// The field! macro will fail to compile if:
+/// - The model type doesn't exist
+/// - The field doesn't exist on the model
+/// - The model is not in scope
 #[macro_export]
 macro_rules! field {
     // Simple case: Type:field
