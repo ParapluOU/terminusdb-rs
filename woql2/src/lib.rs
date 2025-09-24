@@ -72,7 +72,9 @@ pub mod prelude {
         // Date/time macros
         today, after, before, in_between, today_in_between,
         // Query DSL macros
-        query, v, prop, schema_type
+        query, v, prop, schema_type,
+        // Type-safe field access
+        field
     };
 
     // Potentially re-export common traits if needed

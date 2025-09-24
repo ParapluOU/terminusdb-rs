@@ -11,6 +11,47 @@
 /// let x = var!(x); // Creates Value::Variable("x".to_string())
 /// let person = var!("Person"); // Creates Value::Variable("Person".to_string())
 /// ```
+/// Create a type-checked property name from a model field
+///
+/// This macro provides compile-time verification that a field exists on a model,
+/// preventing runtime errors from typos or incorrect field names.
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// # use terminusdb_schema_derive::TerminusDBModel;
+/// #[derive(TerminusDBModel)]
+/// struct Person {
+///     name: String,
+///     age: i32,
+/// }
+/// 
+/// // Compile-time checked property access
+/// let prop_name = field!(Person:name); // Returns "name"
+/// let prop_age = field!(Person:age);   // Returns "age"
+/// 
+/// // Use in queries
+/// let q = triple!(var!(x), field!(Person:name), var!(n));
+/// ```
+#[macro_export]
+macro_rules! field {
+    // Simple case: Type:field
+    ($model:ident : $field:ident) => {{
+        // Compile-time field existence check
+        // This const block is evaluated at compile time and produces no runtime code
+        const _: () = {
+            // Define a function that attempts to access the field
+            // This will fail to compile if the field doesn't exist on the model
+            fn _check_field_exists(m: &$model) {
+                let _ = &m.$field;
+            }
+        };
+        
+        // After verification passes, return the field name as a string
+        stringify!($field)
+    }};
+}
+
 #[macro_export]
 macro_rules! var {
     ($name:ident) => {
