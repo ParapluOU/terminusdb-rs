@@ -16,6 +16,14 @@ struct ReviewSession {
     id: String,
     publication_id: String,
     date_range: String,
+    title: String,
+}
+
+#[allow(dead_code)]
+struct Publication {
+    id: String, 
+    title: String,
+    committee: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -51,6 +59,12 @@ struct Document {
 #[allow(dead_code)]
 struct Chunk {
     id: String,
+}
+
+#[allow(dead_code)]
+struct Committee {
+    id: String,
+    name: String,
 }
 
 #[test]
@@ -398,5 +412,52 @@ fn test_v_macro() {
     match var2 {
         Value::Variable(s) => assert_eq!(s, "age"),
         _ => panic!("Expected Variable"),
+    }
+}
+
+#[test]
+fn test_optional_blocks_in_query() {
+    let query_with_optional = query!{{
+        ReviewSession {
+            id = v!(SessionId),
+            title = v!(Title),
+            publication_id = v!(PubId)
+        }
+        
+        optional {
+            // Optional publication details
+            Publication {
+                id = v!(PubId),
+                title = v!(PubTitle)
+            }
+            
+            optional {
+                // Even more optional - committee info
+                triple!(v!(Publication), field!(Publication:committee), v!(CommitteeId)),
+                Committee {
+                    id = v!(CommitteeId),
+                    name = v!(CommitteeName)
+                }
+            }
+        }
+    }};
+    
+    // Verify structure
+    match query_with_optional {
+        Query::And(ref and) => {
+            // Should have ReviewSession type + fields + optional block
+            let optional_count = and.and.iter().filter(|q| {
+                matches!(q, Query::WoqlOptional(_))
+            }).count();
+            assert_eq!(optional_count, 1);
+            
+            // Check DSL output contains nested optionals
+            let dsl = query_with_optional.to_dsl();
+            assert!(dsl.contains("opt("));
+            assert!(dsl.contains("ReviewSession"));
+            assert!(dsl.contains("Publication"));
+            assert!(dsl.contains("Committee"));
+        }
+        _ => panic!("Expected And query"),
     }
 }

@@ -13,6 +13,7 @@
 //! 3. **Natural comparisons** - Write comparisons inline with query logic
 //! 4. **Select syntax** - Cleaner syntax for select queries
 //! 5. **Type-checked properties** - Property names are verified at compile-time against model structs
+//! 6. **Optional blocks** - Express optional sections and fields naturally
 //!
 //! # Basic Example
 //!
@@ -48,14 +49,14 @@
 //! Type blocks automatically generate type declarations and property triples:
 //!
 //! ```ignore
-//! query!{
+//! query!{{
 //!     TypeName {
 //!         property1 = value1,
 //!         property2 = value2,
 //!         // Special handling for 'id' property
 //!         id = data!("some-id")  // Uses id! macro instead of triple!
 //!     }
-//! }
+//! }}
 //! ```
 //!
 //! This expands to:
@@ -81,11 +82,26 @@
 //! Select queries have a special syntax:
 //!
 //! ```ignore
-//! query!{
+//! query!{{
 //!     select [var1, var2, var3] {
 //!         // Query body here
 //!     }
-//! }
+//! }}
+//! ```
+//!
+//! ## Optional Blocks
+//!
+//! Optional sections can be expressed at the query level:
+//!
+//! ```ignore
+//! query!{{
+//!     Person { name = v!(name) }
+//!     
+//!     optional {
+//!         // This entire section is optional
+//!         Address { street = v!(street) }
+//!     }
+//! }}
 //! ```
 //!
 //! ## Combining with Standard Macros
@@ -93,7 +109,7 @@
 //! The query DSL is designed to work seamlessly with standard WOQL macros:
 //!
 //! ```ignore
-//! query!{
+//! query!{{
 //!     Person {
 //!         id = v!(PersonId),
 //!         age = v!(Age)
@@ -103,7 +119,7 @@
 //!     less!(v!(Age), data!(65)),
 //!     optional!(triple!(v!(Person), "email", v!(Email))),
 //!     read_doc!(v!(Person), v!(PersonDoc))
-//! }
+//! }}
 //! ```
 //!
 //! # Complex Example
@@ -111,7 +127,7 @@
 //! Here's a more complex example showing multiple types and relationships:
 //!
 //! ```ignore
-//! let query = query!{
+//! let query = query!{{
 //!     select [AnnotationDoc] {
 //!         // Define ReviewSession and its properties
 //!         ReviewSession {
@@ -150,7 +166,7 @@
 //!         // Read the full annotation document
 //!         read_doc!(v!(Annotation), v!(AnnotationDoc))
 //!     }
-//! };
+//! }};
 //! ```
 //!
 //! # How It Works
@@ -232,19 +248,19 @@
 ///
 /// ## Simple Query
 /// ```ignore
-/// query!{
+/// query!{{
 ///     Person {
 ///         id = data!("person123"),
 ///         name = v!(name),
 ///         age = v!(age)
 ///     }
 ///     greater!(v!(age), data!(18))
-/// }
+/// }}
 /// ```
 ///
 /// ## Select Query
 /// ```ignore
-/// query!{
+/// query!{{
 ///     select [name, age] {
 ///         Person {
 ///             id = v!(PersonId),
@@ -253,12 +269,12 @@
 ///         }
 ///         greater!(v!(age), data!(21))
 ///     }
-/// }
+/// }}
 /// ```
 ///
 /// ## Multiple Types
 /// ```ignore
-/// query!{
+/// query!{{
 ///     Author {
 ///         id = v!(AuthorId),
 ///         name = v!(AuthorName)
@@ -268,7 +284,7 @@
 ///         title = v!(BookTitle),
 ///         author = v!(AuthorId)  // Reference to Author
 ///     }
-/// }
+/// }}
 /// ```
 #[macro_export]
 macro_rules! query {
@@ -287,11 +303,19 @@ macro_rules! query {
         and!($($acc),*)
     };
     
-    // Parse type block
+    // Parse optional block at query level
+    (@parse_body [$($acc:expr),*] optional { $($opt_body:tt)* } $($rest:tt)*) => {
+        query!(@parse_body [
+            $($acc,)*
+            optional!(query!{{ $($opt_body)* }})
+        ] $($rest)*)
+    };
+    
+    // Parse type block - simplified approach
     (@parse_body [$($acc:expr),*] $type:ident { $($field:ident = $value:expr),* $(,)? } $($rest:tt)*) => {
         query!(@parse_body [
             $($acc,)*
-            type_!(var!(stringify!($type)), stringify!($type)),
+            type_!(var!($type), $type),
             $(query!(@parse_field $type, $field, $value)),*
         ] $($rest)*)
     };
@@ -314,11 +338,11 @@ macro_rules! query {
     
     // Parse field assignment for type blocks
     (@parse_field $type:ident, id, $value:expr) => {
-        id!(var!(stringify!($type)), $value)
+        id!(var!($type), $value)
     };
     
     (@parse_field $type:ident, $field:ident, $value:expr) => {
-        triple!(var!(stringify!($type)), field!($type:$field), $value)
+        triple!(var!($type), field!($type:$field), $value)
     };
 }
 
@@ -328,25 +352,25 @@ macro_rules! query {
 ///
 /// # Examples
 /// ```ignore
-/// v!(name)       // Equivalent to var!("name")
-/// v!(PersonId)   // Equivalent to var!("PersonId")
-/// v!(StartDate)  // Equivalent to var!("StartDate")
+/// v!(name)       // Equivalent to var!(name)
+/// v!(PersonId)   // Equivalent to var!(PersonId)
+/// v!(StartDate)  // Equivalent to var!(StartDate)
 /// ```
 ///
 /// # Usage in Queries
 /// ```ignore
-/// query!{
+/// query!{{
 ///     Person {
 ///         name = v!(PersonName),
 ///         age = v!(PersonAge)
 ///     }
 ///     greater!(v!(PersonAge), data!(18))
-/// }
+/// }}
 /// ```
 #[macro_export]
 macro_rules! v {
     ($var:ident) => {
-        var!(stringify!($var))
+        var!($var)
     };
 }
 
@@ -423,6 +447,106 @@ mod tests {
         match var {
             Value::Variable(s) => assert_eq!(s, "PersonId"),
             _ => panic!("Expected Variable"),
+        }
+    }
+    
+    #[test]
+    fn test_optional_block_query() {
+        // Test model for optional fields
+        #[allow(dead_code)]
+        struct Document {
+            id: String,
+            title: String,
+            author: Option<String>,
+            published_date: Option<String>,
+        }
+        
+        let result = query!{{
+            Document {
+                id = v!(DocId),
+                title = v!(Title)
+            }
+            optional {
+                triple!(v!(Document), field!(Document:author), v!(Author)),
+                triple!(v!(Document), field!(Document:published_date), v!(PublishedDate))
+            }
+        }};
+        
+        // Should be And(type, id, title, Optional(And(author, published_date)))
+        match result {
+            Query::And(ref and) => {
+                assert_eq!(and.and.len(), 4); // type, id, title, optional
+                
+                // Check that the last element is an optional
+                assert!(matches!(&and.and[3], Query::WoqlOptional(_)));
+                
+                // Check the contents of the optional
+                if let Query::WoqlOptional(opt) = &and.and[3] {
+                    assert!(matches!(&*opt.query, Query::And(_)));
+                }
+            }
+            _ => panic!("Expected And query"),
+        }
+    }
+    
+    #[test]
+    fn test_nested_optional_blocks() {
+        // Test model
+        #[allow(dead_code)]
+        struct Company {
+            id: String,
+            name: String,
+            address: Option<String>,
+        }
+        
+        #[allow(dead_code)]
+        struct Address {
+            id: String,
+            street: String,
+            city: String,
+            postal_code: Option<String>,
+        }
+        
+        let result = query!{{
+            Company {
+                id = v!(CompanyId),
+                name = v!(CompanyName)
+            }
+            
+            optional {
+                triple!(v!(Company), field!(Company:address), v!(Address)),
+                Address {
+                    id = v!(Address),
+                    street = v!(Street),
+                    city = v!(City)
+                }
+                optional {
+                    triple!(v!(Address), field!(Address:postal_code), v!(PostalCode))
+                }
+            }
+        }};
+        
+        // Verify nested optional structure
+        match result {
+            Query::And(ref and) => {
+                // Should have type, id, name, and optional block
+                assert_eq!(and.and.len(), 4);
+                
+                // Last should be optional
+                if let Query::WoqlOptional(outer_opt) = &and.and[3] {
+                    // The outer optional should contain an And
+                    if let Query::And(inner_and) = &*outer_opt.query {
+                        // Should have link triple, Address type block fields, and inner optional
+                        let last_idx = inner_and.and.len() - 1;
+                        assert!(matches!(&inner_and.and[last_idx], Query::WoqlOptional(_)));
+                    } else {
+                        panic!("Expected And inside outer optional");
+                    }
+                } else {
+                    panic!("Expected WoqlOptional as last element");
+                }
+            }
+            _ => panic!("Expected And query"),
         }
     }
 }
