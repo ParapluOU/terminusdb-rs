@@ -299,6 +299,9 @@ macro_rules! not {
 ///     triple!(var!(x), "name", var!(name))
 /// ));
 /// ```
+///
+/// Note: While `select!([var!(x)], ..)` is supported for compatibility,
+/// it's recommended to use `select!([x], ..)` directly for clarity.
 #[macro_export]
 macro_rules! select {
     ([$($var:ident),+ $(,)?], $query:expr) => {
@@ -309,7 +312,7 @@ macro_rules! select {
     };
     ([$($var:expr),+ $(,)?], $query:expr) => {
         $crate::query::Query::Select($crate::control::Select {
-            variables: vec![$($var.to_string()),+],
+            variables: vec![$($crate::macros::IntoSelectArg::into_select_arg($var)),+],
             query: Box::new($query),
         })
     };
@@ -2418,6 +2421,41 @@ mod conversion {
                 .map(|item| item.into_data_value())
                 .collect();
             DataValue::List(data_values)
+        }
+    }
+    
+    // Trait for converting to select! arguments
+    pub trait IntoSelectArg {
+        fn into_select_arg(self) -> String;
+    }
+    
+    impl IntoSelectArg for String {
+        fn into_select_arg(self) -> String {
+            self
+        }
+    }
+    
+    impl IntoSelectArg for &str {
+        fn into_select_arg(self) -> String {
+            self.to_string()
+        }
+    }
+    
+    impl IntoSelectArg for Value {
+        fn into_select_arg(self) -> String {
+            match self {
+                Value::Variable(var) => var,
+                _ => panic!("Only Value::Variable can be used as a select argument. Use variable names directly: select!([x, y], ..) instead of select!([var!(x), var!(y)], ..)"),
+            }
+        }
+    }
+    
+    impl IntoSelectArg for &Value {
+        fn into_select_arg(self) -> String {
+            match self {
+                Value::Variable(var) => var.clone(),
+                _ => panic!("Only Value::Variable can be used as a select argument. Use variable names directly: select!([x, y], ..) instead of select!([var!(x), var!(y)], ..)"),
+            }
         }
     }
 }
