@@ -1175,6 +1175,61 @@ macro_rules! compare {
     };
 }
 
+/// Helper macro to parse node patterns (M, m:M, M.field, m:M.field)
+/// Returns a tuple of (builder_expr, Option<field_name>)
+#[macro_export]
+#[doc(hidden)]
+macro_rules! parse_node_pattern {
+    // Pattern: m:M.field
+    ($var:ident : $node:ident . $field:ident) => {
+        (
+            $crate::path_builder::PathStart::new()
+                .variable::<$node>(stringify!($var)),
+            Some(stringify!($field))
+        )
+    };
+    
+    // Pattern: M.field
+    ($node:ident . $field:ident) => {
+        (
+            $crate::path_builder::PathStart::new()
+                .node::<$node>(),
+            Some(stringify!($field))
+        )
+    };
+    
+    // Pattern: m:M
+    ($var:ident : $node:ident) => {
+        (
+            $crate::path_builder::PathStart::new()
+                .variable::<$node>(stringify!($var)),
+            None
+        )
+    };
+    
+    // Pattern: M
+    ($node:ident) => {
+        (
+            $crate::path_builder::PathStart::new()
+                .node::<$node>(),
+            None
+        )
+    };
+}
+
+/// Helper macro to parse direction tokens (>, <)
+/// Returns a PathDirection enum variant
+#[macro_export]
+#[doc(hidden)]
+macro_rules! parse_direction {
+    (>) => {
+        $crate::path_builder::PathDirection::Forward
+    };
+    (<) => {
+        $crate::path_builder::PathDirection::Backward
+    };
+}
+
 // ===== ADDITIONAL MACROS FOR MISSING WOQL2 STRUCTS =====
 
 /// Create a LexicalKey query
@@ -2017,16 +2072,44 @@ macro_rules! call {
 /// ```
 /// # use terminusdb_woql2::*;
 /// use terminusdb_woql2::order::{Order, OrderTemplate};
-/// let q = order_by!(
+/// 
+/// // Original syntax with OrderTemplate
+/// let q1 = order_by!(
 ///     [OrderTemplate { variable: "name".to_string(), order: Order::Asc }],
+///     triple!(var!(x), "name", var!(name))
+/// );
+/// 
+/// // Tuple syntax with variables
+/// let q2 = order_by!(
+///     [(var!(name), Order::Asc), (var!(age), Order::Desc)],
+///     triple!(var!(x), "name", var!(name))
+/// );
+/// 
+/// // Tuple syntax with string literals
+/// let q3 = order_by!(
+///     [("name", Order::Asc), ("age", Order::Desc)],
+///     triple!(var!(x), "name", var!(name))
+/// );
+/// 
+/// // Arrow syntax
+/// let q4 = order_by!(
+///     [name => Order::Asc, age => Order::Desc],
 ///     triple!(var!(x), "name", var!(name))
 /// );
 /// ```
 #[macro_export]
 macro_rules! order_by {
+    // Arrow syntax: [var => Order, ...]
+    ([$($var:ident => $order:expr),* $(,)?], $query:expr) => {
+        $crate::query::Query::OrderBy($crate::order::OrderBy {
+            ordering: vec![$($crate::macros::IntoOrderTemplate::into_order_template((stringify!($var).to_string(), $order))),*],
+            query: Box::new($query),
+        })
+    };
+    // General syntax (tuples, OrderTemplate, etc.)
     ([$($template:expr),* $(,)?], $query:expr) => {
         $crate::query::Query::OrderBy($crate::order::OrderBy {
-            ordering: vec![$($template),*],
+            ordering: vec![$($crate::macros::IntoOrderTemplate::into_order_template($template)),*],
             query: Box::new($query),
         })
     };
@@ -2456,6 +2539,271 @@ mod conversion {
                 Value::Variable(var) => var.clone(),
                 _ => panic!("Only Value::Variable can be used as a select argument. Use variable names directly: select!([x, y], ..) instead of select!([var!(x), var!(y)], ..)"),
             }
+        }
+    }
+}
+
+/// High-level relation path traversal macro (Builder-based)
+///
+/// The `from_path!` macro enables intuitive relation traversal syntax using a state-machine
+/// builder pattern with truly unlimited chain support through recursion.
+///
+/// # Syntax Support
+/// ```rust
+/// # use terminusdb_woql2::from_path;
+/// // Unlimited length chains:
+/// let query = from_path!(User > Post > Comment > Like > ...);
+/// 
+/// // Mixed directions:
+/// let query = from_path!(User > Post < Comment > Like);
+/// 
+/// // Custom variables:
+/// let query = from_path!(u:User > p:Post > c:Comment);
+/// 
+/// // Field access:
+/// let query = from_path!(User.posts > Post.comments > Comment);
+/// ```
+///
+/// # Implementation Notes  
+/// - Uses truly recursive macro patterns for unlimited chains
+/// - Supports all relation types and custom variables
+/// - Zero-cost abstraction - compiles to efficient WOQL
+/// - Type-safe through builder pattern state machine
+/// - Uses > for forward relations and < for backward relations
+#[macro_export]
+macro_rules! from_path {
+    // === SINGLE NODE CASES (Terminal) ===
+    // Just a type
+    ($node:ident) => {
+        $crate::path_builder::PathStart::new().node::<$node>().finalize()
+    };
+    
+    // Custom variable
+    ($var:ident : $node:ident) => {
+        $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)).finalize()
+    };
+    
+    // === STARTING PATTERNS - Parse first node and delegate ===
+    // NOTE: More specific patterns must come first to avoid greedy matching
+    
+    // Start with var:node.field > target (field implies direction)
+    ($var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
+    };
+    
+    // Start with node.field > target (field implies direction)  
+    ($node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $crate::path_builder::PathStart::new().node::<$node>().field(stringify!($field)), $($rest)+)
+    };
+    
+    // Start with custom variable
+    ($var:ident : $node:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)), $dir $($rest)+)
+    };
+    
+    // Start with simple node (must be last - most general)
+    ($node:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $crate::path_builder::PathStart::new().node::<$node>(), $dir $($rest)+)
+    };
+    
+    // === CHAIN BUILDING - Recursive patterns ===
+    // NOTE: More specific patterns must come before less specific ones
+    
+    // Terminal: > var:Node.field
+    (@chain $builder:expr, > $var:ident : $node:ident . $field:ident) => {
+        $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)).finalize()
+    };
+    
+    // Terminal: < var:Node.field
+    (@chain $builder:expr, < $var:ident : $node:ident . $field:ident) => {
+        $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)).finalize()
+    };
+    
+    // Terminal: > Node.field (terminal - no more tokens)
+    (@chain $builder:expr, > $node:ident . $field:ident) => {
+        $builder.forward().node::<$node>().finalize()
+    };
+    
+    // Terminal: < Node.field (terminal - no more tokens)
+    (@chain $builder:expr, < $node:ident . $field:ident) => {
+        $builder.backward().node::<$node>().finalize()
+    };
+    
+    // Terminal: > var:Node
+    (@chain $builder:expr, > $var:ident : $node:ident) => {
+        $builder.forward().variable::<$node>(stringify!($var)).finalize()
+    };
+    
+    // Terminal: < var:Node
+    (@chain $builder:expr, < $var:ident : $node:ident) => {
+        $builder.backward().variable::<$node>(stringify!($var)).finalize()
+    };
+    
+    // Terminal: > Node
+    (@chain $builder:expr, > $node:ident) => {
+        $builder.forward().node::<$node>().finalize()
+    };
+    
+    // Terminal: < Node
+    (@chain $builder:expr, < $node:ident) => {
+        $builder.backward().node::<$node>().finalize()
+    };
+    
+    // Continue: > var:Node.field then more
+    (@chain $builder:expr, > $var:ident : $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)), $dir $($rest)+)
+    };
+    
+    // Continue: < var:Node.field then more
+    (@chain $builder:expr, < $var:ident : $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)), $dir $($rest)+)
+    };
+    
+    // Continue: > Node.field then more
+    (@chain $builder:expr, > $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.forward().node::<$node>().field(stringify!($field)), $dir $($rest)+)
+    };
+    
+    // Continue: < Node.field then more
+    (@chain $builder:expr, < $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.backward().node::<$node>().field(stringify!($field)), $dir $($rest)+)
+    };
+    
+    // Continue: > var:Node then more
+    (@chain $builder:expr, > $var:ident : $node:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.forward().variable::<$node>(stringify!($var)), $dir $($rest)+)
+    };
+    
+    // Continue: < var:Node then more
+    (@chain $builder:expr, < $var:ident : $node:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.backward().variable::<$node>(stringify!($var)), $dir $($rest)+)
+    };
+    
+    // Continue: > Node.field > (field in middle of chain)
+    (@chain $builder:expr, > $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $builder.forward().node::<$node>().field(stringify!($field)), $($rest)+)
+    };
+    
+    // Continue: < Node.field > (field in middle of chain)
+    (@chain $builder:expr, < $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $builder.backward().node::<$node>().field(stringify!($field)), $($rest)+)
+    };
+    
+    // Continue: > var:Node.field > (field in middle of chain)
+    (@chain $builder:expr, > $var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
+    };
+    
+    // Continue: < var:Node.field > (field in middle of chain)
+    (@chain $builder:expr, < $var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
+    };
+    
+    // Continue: > Node then more
+    (@chain $builder:expr, > $node:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.forward().node::<$node>(), $dir $($rest)+)
+    };
+    
+    // Continue: < Node then more
+    (@chain $builder:expr, < $node:ident $dir:tt $($rest:tt)+) => {
+        from_path!(@chain $builder.backward().node::<$node>(), $dir $($rest)+)
+    };
+    
+    // === FIELD CHAIN BUILDING - For paths that started with or contain fields ===
+    // Fields already have implicit forward direction, so no > or < prefix
+    
+    // Terminal: field -> Node
+    (@chain_field $builder:expr, $node:ident) => {
+        $builder.node::<$node>().finalize()
+    };
+    
+    // Terminal: field -> var:Node
+    (@chain_field $builder:expr, $var:ident : $node:ident) => {
+        $builder.variable::<$node>(stringify!($var)).finalize()
+    };
+    
+    // Continue: field -> Node > more
+    (@chain_field $builder:expr, $node:ident > $($rest:tt)+) => {
+        from_path!(@chain $builder.node::<$node>(), > $($rest)+)
+    };
+    
+    // Continue: field -> Node < more
+    (@chain_field $builder:expr, $node:ident < $($rest:tt)+) => {
+        from_path!(@chain $builder.node::<$node>(), < $($rest)+)
+    };
+    
+    // Continue: field -> var:Node > more
+    (@chain_field $builder:expr, $var:ident : $node:ident > $($rest:tt)+) => {
+        from_path!(@chain $builder.variable::<$node>(stringify!($var)), > $($rest)+)
+    };
+    
+    // Continue: field -> var:Node < more
+    (@chain_field $builder:expr, $var:ident : $node:ident < $($rest:tt)+) => {
+        from_path!(@chain $builder.variable::<$node>(stringify!($var)), < $($rest)+)
+    };
+    
+    // Continue: field -> Node.field > more
+    (@chain_field $builder:expr, $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $builder.node::<$node>().field(stringify!($field)), $($rest)+)
+    };
+    
+    // Continue: field -> var:Node.field > more
+    (@chain_field $builder:expr, $var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
+        from_path!(@chain_field $builder.variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
+    };
+}
+
+// Trait for converting to order_by! arguments
+pub trait IntoOrderTemplate {
+    fn into_order_template(self) -> crate::order::OrderTemplate;
+}
+
+impl IntoOrderTemplate for crate::order::OrderTemplate {
+    fn into_order_template(self) -> crate::order::OrderTemplate {
+        self
+    }
+}
+
+impl IntoOrderTemplate for (crate::value::Value, crate::order::Order) {
+    fn into_order_template(self) -> crate::order::OrderTemplate {
+        let variable = match self.0 {
+            crate::value::Value::Variable(var) => var,
+            _ => panic!("Only Value::Variable can be used in order_by!. Got: {:?}", self.0),
+        };
+        crate::order::OrderTemplate {
+            variable,
+            order: self.1,
+        }
+    }
+}
+
+impl IntoOrderTemplate for (&crate::value::Value, crate::order::Order) {
+    fn into_order_template(self) -> crate::order::OrderTemplate {
+        let variable = match self.0 {
+            crate::value::Value::Variable(var) => var.clone(),
+            _ => panic!("Only Value::Variable can be used in order_by!. Got: {:?}", self.0),
+        };
+        crate::order::OrderTemplate {
+            variable,
+            order: self.1,
+        }
+    }
+}
+
+impl IntoOrderTemplate for (&str, crate::order::Order) {
+    fn into_order_template(self) -> crate::order::OrderTemplate {
+        crate::order::OrderTemplate {
+            variable: self.0.to_string(),
+            order: self.1,
+        }
+    }
+}
+
+impl IntoOrderTemplate for (String, crate::order::Order) {
+    fn into_order_template(self) -> crate::order::OrderTemplate {
+        crate::order::OrderTemplate {
+            variable: self.0,
+            order: self.1,
         }
     }
 }

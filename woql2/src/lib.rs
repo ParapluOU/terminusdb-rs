@@ -25,7 +25,10 @@ pub mod triple;
 pub mod value;
 pub mod dsl;
 pub mod macros;
+// pub mod macros_refactored;
+// pub mod macros_refactored2;
 pub mod query_dsl;
+pub mod path_builder;
 
 pub mod prelude {
     // Re-export core types
@@ -55,7 +58,7 @@ pub mod prelude {
     };
     pub use super::value::{DataValue, DictionaryTemplate, FieldValuePair, NodeValue, Value};
     // Export the IntoDataValue trait for ergonomic API usage
-    pub use super::macros::IntoDataValue;
+    pub use super::macros::{IntoDataValue, IntoOrderTemplate};
 
     // Re-export macros
     pub use crate::{
@@ -74,7 +77,9 @@ pub mod prelude {
         // Query DSL macros
         query, v, prop, schema_type,
         // Type-safe field access
-        field
+        field,
+        // High-level relation traversal
+        from_path
     };
 
     // Potentially re-export common traits if needed
