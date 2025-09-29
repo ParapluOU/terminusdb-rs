@@ -36,6 +36,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 terminusdb-woql2 = { path = "../../woql2" }
+terminusdb-relation = { path = "../../relation" }
 
 [lib]
 path = "src/lib.rs"

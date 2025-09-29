@@ -48,14 +48,14 @@ impl Client for MockClient {
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
 struct Activity {
     name: String,
-    description: String,
+    description: String
 }
 
 // Define a simple struct without derivations to avoid ToInstanceProperty errors
 #[derive(Debug, PartialEq, Clone, TerminusDBModel, FromTDBInstance)]
 struct AxiomWithLazy {
     name: String,
-    activity: TdbLazy<Activity>,
+    activity: TdbLazy<Activity>
 }
 
 #[test]

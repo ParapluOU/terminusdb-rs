@@ -2619,6 +2619,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.104",
+ "terminusdb-relation",
  "terminusdb-relation-derive",
  "terminusdb-schema",
  "terminusdb-woql2",

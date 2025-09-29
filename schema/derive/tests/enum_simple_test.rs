@@ -27,7 +27,7 @@ pub enum Status {
 
 #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
 pub struct Comment {
-    status: Status,
+    status: Status
 }
 
 // #[cfg(test)]
