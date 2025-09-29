@@ -2651,22 +2651,22 @@ macro_rules! from_path {
     
     // Continue: > var:Node.field then more
     (@chain $builder:expr, > $var:ident : $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
-        from_path!(@chain $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)), $dir $($rest)+)
+        from_path!(@chain_field $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
     
     // Continue: < var:Node.field then more
     (@chain $builder:expr, < $var:ident : $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
-        from_path!(@chain $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)), $dir $($rest)+)
+        from_path!(@chain_field $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
     
     // Continue: > Node.field then more
     (@chain $builder:expr, > $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
-        from_path!(@chain $builder.forward().node::<$node>().field(stringify!($field)), $dir $($rest)+)
+        from_path!(@chain_field $builder.forward().node::<$node>().field(stringify!($field)), $($rest)+)
     };
     
     // Continue: < Node.field then more
     (@chain $builder:expr, < $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
-        from_path!(@chain $builder.backward().node::<$node>().field(stringify!($field)), $dir $($rest)+)
+        from_path!(@chain_field $builder.backward().node::<$node>().field(stringify!($field)), $($rest)+)
     };
     
     // Continue: > var:Node then more

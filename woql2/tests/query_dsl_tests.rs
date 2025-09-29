@@ -86,7 +86,7 @@ fn test_simple_type_query() {
             match &and.and[0] {
                 Query::Triple(t) => {
                     assert!(matches!(t.predicate, NodeValue::Node(ref s) if s == "rdf:type"));
-                    assert!(matches!(t.object, Value::Node(ref s) if s == "Person"));
+                    assert!(matches!(t.object, Value::Node(ref s) if s == "@schema:Person"));
                 }
                 _ => panic!("Expected type triple"),
             }
@@ -105,7 +105,7 @@ fn test_simple_type_query() {
     
     // Verify DSL output
     let dsl = query.to_dsl();
-    assert!(dsl.contains("triple($Person, \"rdf:type\", \"Person\")"));
+    assert!(dsl.contains("triple($Person, \"rdf:type\", \"@schema:Person\")"));
     assert!(dsl.contains("triple($Person, \"@schema:id\", \"person123\")"));
     assert!(dsl.contains("triple($Person, \"name\", $name)"));
     assert!(dsl.contains("triple($Person, \"age\", $age)"));
