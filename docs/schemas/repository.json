@@ -1,0 +1,69 @@
+{ "@type" : "@context",
+  "@documentation" : {
+      "@title" : "Repo schema",
+      "@description" : "This is the Repo schema. It is a specification for repository metadata management.",
+      "@authors" : ["Gavin Mendel-Gleason", "Matthijs van Otterdijk"]
+  },
+  "@metadata" : { "schema_version" : "v1.0.1" },
+  "@base" : "terminusdb://repository/data/",
+  "@schema" : "http://terminusdb.com/schema/repository#",
+  "layer" : "http://terminusdb.com/schema/layer#",
+  "layer_data" : "terminusdb://layer/data/",
+  "xsd" : "http://www.w3.org/2001/XMLSchema#"}
+
+{ "@id" : "layer:Layer",
+  "@type" : "Class",
+  "@documentation" : {
+      "@comment" : "A layer object which has the identifier used in storage.",
+      "@properties" : { "layer:identifier" : "The layer identifier." }
+  },
+  "@base" : "layer_data:Layer_",
+  "@key" : { "@type" : "ValueHash" },
+  "layer:identifier" : "xsd:string" }
+
+{ "@id" : "Repository",
+  "@type" : "Class",
+  "@documentation" : {
+      "@comment" : "A repository.",
+      "@properties" : { "head" : "The current most recent layer of the repository.",
+                        "name" : "The name of the repository."}
+  },
+  "head" : { "@type": "Optional",
+             "@class": "layer:Layer"},
+  "name" : "xsd:string" }
+
+{ "@id" : "Local",
+  "@type" : "Class",
+  "@documentation" : {
+      "@comment" : "A local repository."
+  },
+  "@inherits" : "Repository",
+  "@key" : { "@type" : "Lexical",
+             "@fields" : [ "name" ] } }
+
+{ "@id" : "RemotePath",
+  "@type" : "Class",
+  "@subdocument" : [],
+  "@key" : { "@type" : "Lexical",
+             "@fields" : ["organization","database"] },
+  "@documentation" : {
+      "@comment" : "A remote repository path (sharing local storage).",
+      "@properties" : { "database" : "The database name of the remote repository.",
+                        "organization" : "The organization for this remote."
+                      }
+  },
+  "database" : "xsd:string",
+  "organization" : "xsd:string"
+}
+
+{ "@id" : "Remote",
+  "@type" : "Class",
+  "@documentation" : {
+      "@comment" : "A remote repository.",
+      "@properties" : { "remote_url" : "The url of the remote repository." }
+  },
+  "@inherits" : "Repository",
+  "@oneOf" : { "remote_url" : "xsd:string",
+               "remote_path" : "RemotePath" },
+  "@key" : { "@type" : "Lexical",
+             "@fields" : [ "name" ] } }
