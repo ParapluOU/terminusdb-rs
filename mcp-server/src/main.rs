@@ -331,6 +331,22 @@ pub struct OptimizeTool {
     pub connection: Option<ConnectionConfig>,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "get_graphql_schema",
+    description = "Download the GraphQL schema for a database using introspection. The schema is saved to a file (default: ./schema.json)."
+)]
+pub struct GetGraphQLSchemaTool {
+    /// Database name to introspect
+    pub database: String,
+    /// Branch name (defaults to "main" if not specified)
+    pub branch: Option<String>,
+    /// Output file path (defaults to "./schema.json")
+    pub output_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
 pub struct TerminusDBMcpHandler {
     saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
 }
@@ -1181,10 +1197,10 @@ impl TerminusDBMcpHandler {
 
     async fn handle_optimize(&self, request: OptimizeTool) -> Result<serde_json::Value> {
         info!("Optimizing database at path: {}", request.path);
-        
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Execute the optimize operation
         match client.optimize(&request.path).await {
             Ok(response) => {
@@ -1200,6 +1216,46 @@ impl TerminusDBMcpHandler {
                 Err(anyhow::anyhow!("Failed to optimize database: {}", e))
             }
         }
+    }
+
+    async fn handle_get_graphql_schema(&self, request: GetGraphQLSchemaTool) -> Result<serde_json::Value> {
+        info!("Retrieving GraphQL schema for database: {}", request.database);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        // Use the branch from request or default to "main"
+        let branch = request.branch.as_deref();
+
+        // Introspect the GraphQL schema
+        let schema = client.introspect_schema(&request.database, branch).await?;
+
+        // Determine output path
+        let output_path = request.output_path.unwrap_or_else(|| "./schema.json".to_string());
+
+        // Convert schema to pretty JSON string
+        let schema_json = serde_json::to_string_pretty(&schema)?;
+
+        // Write to file
+        tokio::fs::write(&output_path, &schema_json).await
+            .map_err(|e| anyhow::anyhow!("Failed to write schema to file: {}", e))?;
+
+        // Get file size for reporting
+        let file_size = schema_json.len();
+
+        // Create a preview of the schema (first 500 chars)
+        let preview_len = schema_json.len().min(500);
+        let preview = &schema_json[..preview_len];
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "database": request.database,
+            "branch": branch.unwrap_or("main"),
+            "output_path": output_path,
+            "file_size_bytes": file_size,
+            "preview": preview,
+            "message": format!("GraphQL schema downloaded successfully to: {}", output_path)
+        }))
     }
 }
 
@@ -1224,6 +1280,7 @@ impl ServerHandler for TerminusDBMcpHandler {
                 SquashTool::tool(),
                 ResetTool::tool(),
                 OptimizeTool::tool(),
+                GetGraphQLSchemaTool::tool(),
                 // Temporarily disabled due to serde_json::Value schema issues
                 // InsertDocumentTool::tool(),
                 // InsertDocumentsTool::tool(),
@@ -1615,6 +1672,31 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.handle_optimize(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == GetGraphQLSchemaTool::tool_name() => {
+                let tool_request: GetGraphQLSchemaTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_get_graphql_schema(tool_request).await {
                     Ok(result) => {
                         let text_content = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());

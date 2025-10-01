@@ -285,7 +285,7 @@ impl TerminusDBHttpClient {
     /// Build the GraphQL endpoint URL for a database
     fn build_graphql_url(&self, database: &str, branch: &str) -> String {
         format!(
-            "{}/api/graphql/{}/{}/local/branch/{}",
+            "{}/graphql/{}/{}/local/branch/{}",
             self.endpoint.as_str().trim_end_matches('/'),
             self.org,
             database,
