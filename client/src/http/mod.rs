@@ -22,6 +22,7 @@
 //! - `url_builder`: URL construction utilities
 //! - `user`: User management operations
 //! - `helpers`: Helper functions
+//! - `graphql`: GraphQL query execution and introspection
 
 // Public modules
 pub mod branch;
@@ -30,6 +31,7 @@ pub mod collaboration;
 pub mod database;
 pub mod diff;
 pub mod document;
+pub mod graphql;
 pub mod helpers;
 pub mod insert_result;
 pub mod instance;
@@ -47,6 +49,7 @@ pub mod versions;
 // Re-export main types and traits
 pub use client::TerminusDBHttpClient;
 pub use document::DeleteOpts;
+pub use graphql::{GraphQLRequest, GraphQLResponse, GraphQLError};
 pub use helpers::{
     dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema,
     format_id,
