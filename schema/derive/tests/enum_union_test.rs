@@ -338,4 +338,90 @@ mod tests {
         }
         // Note: virtual struct may not always be generated depending on implementation
     }
+
+    #[test]
+    fn test_enum_with_separate_model_variants() {
+        // Test case for enums where all variants are separate structs that derive TerminusDBModel
+        // This mimics the user's ActivityEvent use case
+
+        // Define separate model structs
+        #[derive(
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+        )]
+        struct EventUserLogin {
+            user_id: String,
+            timestamp: String,
+        }
+
+        #[derive(
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+        )]
+        struct EventUserLogout {
+            user_id: String,
+            timestamp: String,
+        }
+
+        #[derive(
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+        )]
+        struct EventPublicationCreated {
+            publication_id: String,
+            title: String,
+        }
+
+        // Define enum that wraps these separate models
+        #[derive(
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+        )]
+        enum ActivityEvent {
+            UserLogin(EventUserLogin),
+            UserLogout(EventUserLogout),
+            PublicationCreated(EventPublicationCreated),
+        }
+
+        // Get the schema tree
+        let schema_tree = <ActivityEvent as ToTDBSchema>::to_schema_tree();
+
+        // Debug output
+        dbg!(&schema_tree);
+
+        // Should include:
+        // 1. ActivityEvent TaggedUnion
+        // 2. EventUserLogin Class
+        // 3. EventUserLogout Class
+        // 4. EventPublicationCreated Class
+        assert_eq!(
+            schema_tree.len(),
+            4,
+            "Schema tree should include ActivityEvent and all 3 variant models"
+        );
+
+        // Verify ActivityEvent schema exists
+        assert!(
+            schema_tree
+                .iter()
+                .any(|s| s.id() == "ActivityEvent" && s.is_tagged_union()),
+            "ActivityEvent TaggedUnion schema should be present"
+        );
+
+        // Verify EventUserLogin schema exists
+        assert!(
+            schema_tree.iter().any(|s| s.id() == "EventUserLogin"),
+            "EventUserLogin schema should be included in schema tree"
+        );
+
+        // Verify EventUserLogout schema exists
+        assert!(
+            schema_tree.iter().any(|s| s.id() == "EventUserLogout"),
+            "EventUserLogout schema should be included in schema tree"
+        );
+
+        // Verify EventPublicationCreated schema exists
+        assert!(
+            schema_tree
+                .iter()
+                .any(|s| s.id() == "EventPublicationCreated"),
+            "EventPublicationCreated schema should be included in schema tree"
+        );
+    }
 }

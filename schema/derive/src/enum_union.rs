@@ -46,8 +46,22 @@ pub fn implement_for_tagged_enum(
             .join(", ")
     );
 
+    // Extract single-field variant types for schema tree inclusion
+    // These are newtype variants that wrap other models (e.g., UserLogin(ActivityEventUserLogin))
+    let single_field_variant_types = data_enum.variants.iter()
+        .filter_map(|variant| {
+            match &variant.fields {
+                Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
+                    let field = fields.unnamed.first().unwrap();
+                    Some(&field.ty)
+                }
+                _ => None
+            }
+        })
+        .collect::<Vec<_>>();
+
     // Generate to_schema_tree implementation that includes virtual struct schemas
-    let to_schema_tree_impl = if virtual_structs.is_empty() {
+    let to_schema_tree_impl = if virtual_structs.is_empty() && single_field_variant_types.is_empty() {
         // If there are no complex variants, just return the main schema
         quote! {
             fn to_schema_tree() -> Vec<terminusdb_schema::Schema> {
@@ -68,12 +82,20 @@ pub fn implement_for_tagged_enum(
         // Collect variant struct schema names for inclusion in the schema tree
         let variant_struct_names = virtual_structs.iter().map(|(struct_name, _)| {
             let struct_name_ident = format_ident!("{}", struct_name);
-            quote! { 
+            quote! {
                 for variant_schema in <#struct_name_ident as terminusdb_schema::ToTDBSchema>::to_schema_tree() {
                     if !collection.iter().any(|s| s.class_name() == variant_schema.class_name()) {
                         collection.insert(variant_schema);
                     }
                 }
+            }
+        }).collect::<Vec<_>>();
+
+        // Generate code to include schemas from single-field variant types
+        // Using ToMaybeTDBSchema to handle both model types and primitive types
+        let single_field_type_schemas = single_field_variant_types.iter().map(|field_ty| {
+            quote! {
+                <#field_ty as terminusdb_schema::ToMaybeTDBSchema>::to_schema_tree_mut(collection);
             }
         }).collect::<Vec<_>>();
 
@@ -92,8 +114,11 @@ pub fn implement_for_tagged_enum(
                 if !collection.iter().any(|s| s.class_name() == &class_name) {
                     collection.insert(schema);
 
-                    // Include schemas for all complex variants
+                    // Include schemas for all complex variants (multi-field or named field variants)
                     #(#variant_struct_names)*
+
+                    // Include schemas for single-field variant types (newtype wrappers)
+                    #(#single_field_type_schemas)*
                 }
             }
         }
