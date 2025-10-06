@@ -73,30 +73,80 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
     }
 
     pub fn new(iri_or_id: &str) -> anyhow::Result<Self> {
-        // If it's a pure ID (no slashes), create a typed path
-        let full_iri = if !iri_or_id.contains('/') {
-            format!("{}/{}", T::schema_name(), iri_or_id)
+        // Get the schema tree and extract the first schema (the main type's schema)
+        // We use to_schema_tree() instead of to_schema() because some test types
+        // only implement to_schema_tree() and calling to_schema() would panic
+        let schema_tree = T::to_schema_tree();
+
+        // Check if we have a schema and if it's a TaggedUnion
+        let is_tagged_union = schema_tree.first().map(|s| s.is_tagged_union()).unwrap_or(false);
+
+        // Special handling for TaggedUnion types
+        if is_tagged_union {
+            let schema = schema_tree.first().unwrap(); // Safe because we just checked
+            // For TaggedUnions, we require the full typed path with variant type prefix
+            // Don't auto-prefix since the ID must point to a specific variant instance
+            if !iri_or_id.contains('/') {
+                return Err(anyhow!(
+                    "TaggedUnion '{}' requires a full typed path with variant type prefix (e.g., 'VariantType/id'), got: '{}'",
+                    T::schema_name(),
+                    iri_or_id
+                ));
+            }
+
+            // Parse the IRI
+            let iri = TdbIRI::parse(iri_or_id)?;
+
+            // Get the variant class names from the schema properties
+            let variant_classes: Vec<String> = if let Schema::TaggedUnion { properties, .. } = schema {
+                properties.iter().map(|p| p.class.clone()).collect()
+            } else {
+                vec![]
+            };
+
+            // Validate that the type name is one of the variant types
+            let type_name = iri.type_name();
+            if !variant_classes.iter().any(|v| v == type_name) {
+                return Err(anyhow!(
+                    "Invalid variant type for TaggedUnion '{}': expected one of [{}], found '{}' in '{}'",
+                    T::schema_name(),
+                    variant_classes.join(", "),
+                    type_name,
+                    iri_or_id
+                ));
+            }
+
+            Ok(Self {
+                iri,
+                _ty: Default::default(),
+            })
         } else {
-            iri_or_id.to_string()
-        };
-        
-        // Parse the IRI
-        let iri = TdbIRI::parse(&full_iri)?;
-        
-        // Validate that the type name matches
-        if iri.type_name() != T::schema_name() {
-            return Err(anyhow!(
-                "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
-                T::schema_name(),
-                iri.type_name(),
-                iri_or_id
-            ));
+            // Regular type handling (non-TaggedUnion)
+            // If it's a pure ID (no slashes), create a typed path
+            let full_iri = if !iri_or_id.contains('/') {
+                format!("{}/{}", T::schema_name(), iri_or_id)
+            } else {
+                iri_or_id.to_string()
+            };
+
+            // Parse the IRI
+            let iri = TdbIRI::parse(&full_iri)?;
+
+            // Validate that the type name matches
+            if iri.type_name() != T::schema_name() {
+                return Err(anyhow!(
+                    "Mismatched type in IRI: expected '{}', found '{}' in '{}'",
+                    T::schema_name(),
+                    iri.type_name(),
+                    iri_or_id
+                ));
+            }
+
+            Ok(Self {
+                iri,
+                _ty: Default::default(),
+            })
         }
-        
-        Ok(Self {
-            iri,
-            _ty: Default::default(),
-        })
     }
 
     /// Get the full IRI string
@@ -1047,5 +1097,99 @@ mod tests {
         assert_eq!(entity_id.id(), "789");
         assert_eq!(entity_id.typed(), "ReviewSession/123/assignments/TestEntity/789");
         assert_eq!(entity_id.get_base_uri(), Some("terminusdb:///data"));
+    }
+
+    // Define a TaggedUnion for testing
+    #[derive(Clone, Debug)]
+    enum TestTaggedUnion {
+        VariantA(String),
+        VariantB(i32),
+    }
+
+    impl ToTDBSchema for TestTaggedUnion {
+        type Type = crate::SchemaTypeTaggedUnion;
+
+        fn schema_name() -> String {
+            "TestTaggedUnion".to_string()
+        }
+
+        fn to_schema_tree() -> Vec<Schema> {
+            vec![Schema::TaggedUnion {
+                id: "TestTaggedUnion".to_string(),
+                base: None,
+                key: crate::Key::Random,
+                documentation: None,
+                subdocument: false,
+                r#abstract: false,
+                unfoldable: false,
+                properties: vec![
+                    crate::Property {
+                        name: "variant_a".to_string(),
+                        class: "TestTaggedUnionVariantA".to_string(),
+                        r#type: None,
+                    },
+                    crate::Property {
+                        name: "variant_b".to_string(),
+                        class: "TestTaggedUnionVariantB".to_string(),
+                        r#type: None,
+                    },
+                ],
+            }]
+        }
+    }
+
+    #[test]
+    fn test_tagged_union_rejects_unprefixed_id() {
+        let result = EntityIDFor::<TestTaggedUnion>::new("123");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("TaggedUnion"));
+        assert!(err_msg.contains("requires a full typed path"));
+    }
+
+    #[test]
+    fn test_tagged_union_accepts_valid_variant_id() {
+        let result = EntityIDFor::<TestTaggedUnion>::new("TestTaggedUnionVariantA/123");
+        assert!(result.is_ok());
+        let entity_id = result.unwrap();
+        assert_eq!(entity_id.id(), "123");
+        assert_eq!(entity_id.get_type_name(), "TestTaggedUnionVariantA");
+    }
+
+    #[test]
+    fn test_tagged_union_accepts_other_valid_variant_id() {
+        let result = EntityIDFor::<TestTaggedUnion>::new("TestTaggedUnionVariantB/456");
+        assert!(result.is_ok());
+        let entity_id = result.unwrap();
+        assert_eq!(entity_id.id(), "456");
+        assert_eq!(entity_id.get_type_name(), "TestTaggedUnionVariantB");
+    }
+
+    #[test]
+    fn test_tagged_union_rejects_union_type_itself() {
+        let result = EntityIDFor::<TestTaggedUnion>::new("TestTaggedUnion/123");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid variant type"));
+        assert!(err_msg.contains("TestTaggedUnionVariantA"));
+        assert!(err_msg.contains("TestTaggedUnionVariantB"));
+    }
+
+    #[test]
+    fn test_tagged_union_rejects_invalid_variant_type() {
+        let result = EntityIDFor::<TestTaggedUnion>::new("InvalidVariant/123");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid variant type"));
+    }
+
+    #[test]
+    fn test_tagged_union_with_iri() {
+        let result = EntityIDFor::<TestTaggedUnion>::new("terminusdb://data#TestTaggedUnionVariantA/789");
+        assert!(result.is_ok());
+        let entity_id = result.unwrap();
+        assert_eq!(entity_id.id(), "789");
+        assert_eq!(entity_id.get_type_name(), "TestTaggedUnionVariantA");
+        assert_eq!(entity_id.get_base_uri(), Some("terminusdb://data"));
     }
 }
