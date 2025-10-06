@@ -78,7 +78,7 @@ pub enum WoqlValue {
     /// A dictionary.
     Dictionary(DictionaryTemplate),
     /// A list of datavalues
-    List(Vec<Self>),
+    List(Vec<WoqlValue>),
     /// A URI representing a resource.
     Node(String),
     /// A variable.

@@ -204,7 +204,7 @@ impl TerminusDBHttpClient {
     ) -> Result<GraphQLResponse<T>, TerminusDBAdapterError> {
         let branch = branch.unwrap_or("main");
         let url = self.build_graphql_url(database, branch);
-        
+
         let response = self
             .http
             .post(url)
@@ -225,7 +225,10 @@ impl TerminusDBHttpClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Failed to get error text".to_string());
-            Err(TerminusDBAdapterError::Other(format!("GraphQL server error: {}", error_text)))
+            Err(TerminusDBAdapterError::Other(format!(
+                "GraphQL server error: {}",
+                error_text
+            )))
         }
     }
 
@@ -239,7 +242,8 @@ impl TerminusDBHttpClient {
         branch: Option<&str>,
         request: GraphQLRequest,
     ) -> Result<Value, TerminusDBAdapterError> {
-        self.execute_graphql::<Value>(database, branch, request).await
+        self.execute_graphql::<Value>(database, branch, request)
+            .await
             .map(|response| {
                 serde_json::json!({
                     "data": response.data,
@@ -257,6 +261,7 @@ impl TerminusDBHttpClient {
     ///
     /// # Returns
     /// The introspection query result containing the full schema
+    #[pseudonym::alias(get_graphql_schema)]
     pub async fn introspect_schema(
         &self,
         database: &str,
@@ -268,18 +273,22 @@ impl TerminusDBHttpClient {
             operation_name: Some("IntrospectionQuery".to_string()),
         };
 
-        let response = self.execute_graphql::<Value>(database, branch, request).await?;
-        
+        let response = self
+            .execute_graphql::<Value>(database, branch, request)
+            .await?;
+
         if let Some(errors) = response.errors {
             if !errors.is_empty() {
-                return Err(TerminusDBAdapterError::Other(
-                    format!("GraphQL errors: {:?}", errors)
-                ));
+                return Err(TerminusDBAdapterError::Other(format!(
+                    "GraphQL errors: {:?}",
+                    errors
+                )));
             }
         }
-        
-        response.data
-            .ok_or_else(|| TerminusDBAdapterError::Other("No data in introspection response".to_string()))
+
+        response.data.ok_or_else(|| {
+            TerminusDBAdapterError::Other("No data in introspection response".to_string())
+        })
     }
 
     /// Build the GraphQL endpoint URL for a database

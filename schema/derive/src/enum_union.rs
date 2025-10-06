@@ -8,6 +8,28 @@ use crate::schema::generate_totdbschema_impl;
 use tracing::trace;
 use quote::format_ident;
 
+/// Check if a type is a known primitive that shouldn't get TaggedUnionVariant
+/// This is a heuristic based on type name matching to filter out standard library primitives
+fn is_known_primitive(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let name = segment.ident.to_string();
+            matches!(
+                name.as_str(),
+                "String" | "str" | "i8" | "i16" | "i32" | "i64" | "i128"
+                | "u8" | "u16" | "u32" | "u64" | "u128"
+                | "f32" | "f64" | "bool" | "char" | "usize" | "isize"
+                // Also filter XSDAnySimpleType and other TerminusDB primitives
+                | "XSDAnySimpleType" | "DateTime" | "NaiveTime" | "Uuid"
+            )
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
 /// Process a tagged union enum (with variants carrying values) to generate a TerminusDB TaggedUnion
 pub fn implement_for_tagged_enum(
     input: &DeriveInput,
@@ -48,12 +70,19 @@ pub fn implement_for_tagged_enum(
 
     // Extract single-field variant types for schema tree inclusion
     // These are newtype variants that wrap other models (e.g., UserLogin(ActivityEventUserLogin))
+    // We filter out known primitives to avoid coherence conflicts
     let single_field_variant_types = data_enum.variants.iter()
         .filter_map(|variant| {
             match &variant.fields {
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                     let field = fields.unnamed.first().unwrap();
-                    Some(&field.ty)
+                    let ty = &field.ty;
+                    // Only include if it's not a known primitive
+                    if !is_known_primitive(ty) {
+                        Some(ty)
+                    } else {
+                        None
+                    }
                 }
                 _ => None
             }
@@ -185,6 +214,30 @@ pub fn implement_for_tagged_enum(
         }
     };
 
+    // Generate TaggedUnion marker trait implementation for the enum
+    let tagged_union_impl = quote! {
+        impl terminusdb_schema::TaggedUnion for #enum_name {}
+    };
+
+    // Generate TaggedUnionVariant marker trait implementations
+    // For virtual structs (multi-field variants)
+    let variant_marker_impls = virtual_structs.iter().map(|(struct_name, _)| {
+        let struct_name_ident = format_ident!("{}", struct_name);
+        quote! {
+            impl terminusdb_schema::TaggedUnionVariant<#enum_name> for #struct_name_ident {}
+        }
+    });
+
+    // For single-field wrapped types (filtered to exclude known primitives)
+    // Note: We use a heuristic (type name matching) to filter out primitives like String, i32, etc.
+    // This avoids coherence conflicts when the same primitive appears in multiple TaggedUnions.
+    // Model types (custom structs) will get the trait implementation.
+    let single_field_marker_impls = single_field_variant_types.iter().map(|field_ty| {
+        quote! {
+            impl terminusdb_schema::TaggedUnionVariant<#enum_name> for #field_ty {}
+        }
+    });
+
     // Combine all the implementations
     quote! {
         #schema_impl
@@ -193,8 +246,16 @@ pub fn implement_for_tagged_enum(
 
         #schema_class_impl
 
+        #tagged_union_impl
+
         // Include virtual structs for complex variants
         #(#virtual_struct_impls)*
+
+        // Include TaggedUnionVariant marker implementations for virtual structs
+        #(#variant_marker_impls)*
+
+        // Include TaggedUnionVariant marker implementations for single-field model types
+        #(#single_field_marker_impls)*
     }
 }
 
