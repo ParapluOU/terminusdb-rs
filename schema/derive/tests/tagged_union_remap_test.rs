@@ -1,9 +1,9 @@
-use terminusdb_schema::{EntityIDFor, Schema, TaggedUnion, ToTDBInstance, ToTDBSchema};
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+use terminusdb_schema::{EntityIDFor, Schema, TaggedUnion, TerminusDBModel, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel as TerminusDBModelDerive};
 use serde::{Deserialize, Serialize};
 
 /// Test TaggedUnion with multi-field variants that generate virtual structs
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance)]
 #[allow(dead_code)]
 pub enum PaymentMethod {
     CreditCard { card_number: String, cvv: String },
@@ -12,14 +12,16 @@ pub enum PaymentMethod {
 }
 
 /// A model type that will be wrapped by a TaggedUnion variant
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance, Serialize, Deserialize)]
+#[tdb(id_field = "id")]
 pub struct UserLoginEvent {
+    pub id: Option<String>,
     pub user_id: String,
     pub timestamp: String,
 }
 
 /// Test TaggedUnion with single-field wrapped model types
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub enum ActivityEvent {
     UserLogin(UserLoginEvent),
@@ -103,4 +105,35 @@ fn test_tagged_union_schema_has_variant_classes() {
     } else {
         panic!("Expected TaggedUnion schema");
     }
+}
+
+#[test]
+fn test_tagged_union_instance_id_type_is_union_not_variant() {
+    // Test that the RETURN TYPE of instance_id() on a TaggedUnion enum instance
+    // is EntityIDFor<TheEnum>, not EntityIDFor<VariantType>.
+    //
+    // This test verifies compile-time type safety through function signatures.
+
+    // This function signature proves at compile-time that instance_id()
+    // returns EntityIDFor<ActivityEvent> (the union type), not EntityIDFor<UserLoginEvent>
+    fn verify_type_is_union_not_variant(
+        activity: ActivityEvent,
+    ) -> Option<EntityIDFor<ActivityEvent>> {
+        // If this compiled with any other return type, compilation would fail
+        activity.instance_id()
+    }
+
+    // Compile-time verification: this function only compiles if the types are correct
+    fn verify_remap_works_for_variant_to_union(
+        variant_id: EntityIDFor<UserLoginEvent>,
+    ) -> EntityIDFor<ActivityEvent> {
+        // This only compiles if UserLoginEvent implements TaggedUnionVariant<ActivityEvent>
+        variant_id.remap()
+    }
+
+    // The key proof is in the function signatures above.
+    // They demonstrate at compile-time that:
+    // 1. ActivityEvent.instance_id() returns Option<EntityIDFor<ActivityEvent>>
+    // 2. EntityIDFor<UserLoginEvent>.remap() can produce EntityIDFor<ActivityEvent>
+    // 3. UserLoginEvent implements TaggedUnionVariant<ActivityEvent>
 }

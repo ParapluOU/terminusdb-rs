@@ -259,7 +259,7 @@ impl Instance {
         if self.schema.is_subdocument() {
             return;
         }
-        
+
         let class = self.schema.class_name();
         // if self.schema.is_key_random()
         //     && let Some(id) = self.id.as_ref()
@@ -287,6 +287,11 @@ impl Instance {
         self.schema.is_enum()
     }
 
+    pub fn is_tagged_union(&self) -> bool {
+        self.schema.is_tagged_union()
+    }
+
+    // todo: fix name as that actually returns the property name, NOT the value
     pub fn enum_value(&self) -> Option<String> {
         for prop in self.properties.keys() {
             return prop.clone().into();
@@ -319,6 +324,22 @@ impl Instance {
     pub fn gen_id(&self) -> Option<String> {
         if self.has_id() {
             return self.id.clone();
+        }
+
+        // TaggedUnion themselves cant have unique ID's
+        if self.is_tagged_union() {
+            // TaggedUnions have exactly one property containing the active variant
+            for (_, prop) in &self.properties {
+                if let InstanceProperty::Relation(RelationValue::One(variant_inst)) = prop {
+                    // todo: use helper
+                    let gid = variant_inst.gen_id()?;
+                    return Some(if !gid.contains("/") {
+                        (format!("{}/{}", self.schema.class_name(), gid))
+                    } else {
+                        gid
+                    });
+                }
+            }
         }
 
         match self.schema.key() {
@@ -358,7 +379,7 @@ impl Instance {
         if self.schema.is_subdocument() {
             return true;
         }
-        
+
         // For TaggedUnions, check if the active variant is a subdocument
         if self.schema.is_tagged_union() {
             // TaggedUnions have exactly one property containing the active variant
@@ -370,7 +391,7 @@ impl Instance {
                 }
             }
         }
-        
+
         false
     }
 

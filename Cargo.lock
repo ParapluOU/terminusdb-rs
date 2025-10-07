@@ -2507,6 +2507,7 @@ dependencies = [
  "subprocess",
  "tap",
  "tempfile",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "terminusdb-woql-builder",
