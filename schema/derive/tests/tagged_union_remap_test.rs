@@ -137,3 +137,89 @@ fn test_tagged_union_instance_id_type_is_union_not_variant() {
     // 2. EntityIDFor<UserLoginEvent>.remap() can produce EntityIDFor<ActivityEvent>
     // 3. UserLoginEvent implements TaggedUnionVariant<ActivityEvent>
 }
+
+#[test]
+fn test_tagged_union_delegates_id_from_variant() {
+    // Test that when a TaggedUnion variant has an ID, the TaggedUnion instance
+    // delegates to that ID rather than generating its own.
+    // This is because TaggedUnions don't exist as separate entities in TerminusDB.
+
+    // Create a UserLoginEvent with an explicit ID
+    let login_event = UserLoginEvent {
+        id: Some("UserLoginEvent/login-123".to_string()),
+        user_id: "user-456".to_string(),
+        timestamp: "2024-01-01T00:00:00Z".to_string(),
+    };
+
+    // Wrap it in the TaggedUnion
+    let activity = ActivityEvent::UserLogin(login_event);
+
+    // Test 1: Check the Instance level
+    let instance = activity.to_instance(None);
+    assert_eq!(
+        instance.id,
+        Some("UserLoginEvent/login-123".to_string()),
+        "TaggedUnion Instance should delegate to variant's ID"
+    );
+
+    // Test 2: Check the instance_id() method returns EntityIDFor<ActivityEvent>
+    // with the variant's ID value
+    let entity_id = activity.instance_id().expect("Should have an ID");
+    assert_eq!(
+        entity_id.iri(),
+        "UserLoginEvent/login-123",
+        "instance_id() should return the variant's ID"
+    );
+
+    // Test 3: Verify the type is correct (EntityIDFor<ActivityEvent>, not UserLoginEvent)
+    // This is verified at compile-time by the type system, but we can check the IRI format
+    // The entity_id has type EntityIDFor<ActivityEvent>, which the compiler enforces
+    fn assert_type_is_activity_event(_: EntityIDFor<ActivityEvent>) {}
+    assert_type_is_activity_event(entity_id);
+}
+
+#[test]
+fn test_tagged_union_no_id_when_variant_has_no_id() {
+    // Test that when a TaggedUnion variant has no ID, the TaggedUnion instance
+    // also has no ID (rather than generating one).
+
+    // Create a UserLoginEvent without an ID
+    let login_event = UserLoginEvent {
+        id: None,
+        user_id: "user-456".to_string(),
+        timestamp: "2024-01-01T00:00:00Z".to_string(),
+    };
+
+    // Wrap it in the TaggedUnion
+    let activity = ActivityEvent::UserLogin(login_event);
+
+    // Convert to Instance
+    let instance = activity.to_instance(None);
+
+    // The Instance should have no ID
+    assert_eq!(
+        instance.id,
+        None,
+        "TaggedUnion should have no ID when variant has no ID"
+    );
+}
+
+#[test]
+fn test_tagged_union_struct_variant_no_id() {
+    // Test that struct variants (which become virtual structs) don't provide IDs
+    // unless they have an id_field configured
+
+    let activity = ActivityEvent::SystemShutdown {
+        reason: "maintenance".to_string(),
+    };
+
+    // Convert to Instance
+    let instance = activity.to_instance(None);
+
+    // Struct variants without id_field should not have an ID
+    assert_eq!(
+        instance.id,
+        None,
+        "Struct variant without id_field should have no ID"
+    );
+}

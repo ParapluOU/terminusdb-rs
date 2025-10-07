@@ -73,17 +73,10 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
     }
 
     pub fn new(iri_or_id: &str) -> anyhow::Result<Self> {
-        // Get the schema tree and extract the first schema (the main type's schema)
-        // We use to_schema_tree() instead of to_schema() because some test types
-        // only implement to_schema_tree() and calling to_schema() would panic
-        let schema_tree = T::to_schema_tree();
-
-        // Check if we have a schema and if it's a TaggedUnion
-        let is_tagged_union = schema_tree.first().map(|s| s.is_tagged_union()).unwrap_or(false);
+        let schema = T::to_schema();
 
         // Special handling for TaggedUnion types
-        if is_tagged_union {
-            let schema = schema_tree.first().unwrap(); // Safe because we just checked
+        if schema.is_tagged_union() {
             // For TaggedUnions, we require the full typed path with variant type prefix
             // Don't auto-prefix since the ID must point to a specific variant instance
             if !iri_or_id.contains('/') {
@@ -98,11 +91,12 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
             let iri = TdbIRI::parse(iri_or_id)?;
 
             // Get the variant class names from the schema properties
-            let variant_classes: Vec<String> = if let Schema::TaggedUnion { properties, .. } = schema {
-                properties.iter().map(|p| p.class.clone()).collect()
-            } else {
-                vec![]
-            };
+            let variant_classes: Vec<String> =
+                if let Schema::TaggedUnion { properties, .. } = schema {
+                    properties.iter().map(|p| p.class.clone()).collect()
+                } else {
+                    vec![]
+                };
 
             // Validate that the type name is one of the variant types
             let type_name = iri.type_name();
@@ -153,17 +147,17 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
     pub fn iri(&self) -> String {
         self.iri.to_string()
     }
-    
+
     /// Get the parsed IRI object
     pub fn get_iri(&self) -> &TdbIRI {
         &self.iri
     }
-    
+
     /// Get the base URI if present
     pub fn get_base_uri(&self) -> Option<&str> {
         self.iri.base_uri()
     }
-    
+
     /// Get the type name
     pub fn get_type_name(&self) -> &str {
         self.iri.type_name()
@@ -654,33 +648,14 @@ impl<'r, T: ToTDBSchema + Send> FromFormField<'r> for ServerIDFor<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate as terminusdb_schema;
     use crate::*;
     use terminusdb_schema_derive::TerminusDBModel;
 
     // Define a dummy struct for testing
-    #[derive(Clone, Debug, Default)]
+    #[derive(Clone, Debug, Default, TerminusDBModel)]
     struct TestEntity {
         nothing: String,
-    }
-
-    impl ToTDBSchema for TestEntity {
-        fn schema_name() -> String {
-            "TestEntity".to_string()
-        }
-
-        fn to_schema_tree() -> Vec<Schema> {
-            vec![Schema::Class {
-                id: Self::schema_name(),
-                base: None,
-                key: crate::Key::Random,
-                documentation: None,
-                subdocument: false,
-                r#abstract: false,
-                inherits: vec![],
-                unfoldable: false,
-                properties: vec![],
-            }]
-        }
     }
 
     #[test]
@@ -1027,28 +1002,13 @@ mod tests {
 
     #[test]
     fn test_parse_subdocument_path() {
+        use crate as terminusdb_schema;
+
         // Define a subdocument type for testing
-        #[derive(Clone, Debug)]
-        struct ReviewSessionAssignment;
-        
-        impl ToTDBSchema for ReviewSessionAssignment {
-            fn schema_name() -> String {
-                "ReviewSessionAssignment".to_string()
-            }
-            
-            fn to_schema_tree() -> Vec<Schema> {
-                vec![Schema::Class {
-                    id: Self::schema_name(),
-                    base: None,
-                    key: crate::Key::Random,
-                    documentation: None,
-                    subdocument: true,
-                    r#abstract: false,
-                    inherits: vec![],
-                    unfoldable: false,
-                    properties: vec![],
-                }]
-            }
+        #[derive(Clone, Debug, TerminusDBModel)]
+        #[tdb(subdocument)]
+        struct ReviewSessionAssignment {
+            _dummy: String,
         }
 
         // Test simple subdocument path
@@ -1083,28 +1043,13 @@ mod tests {
 
     #[test]
     fn test_parse_subdocument_iri_fragment() {
+        use crate as terminusdb_schema;
+
         // Define the subdoc type
-        #[derive(Clone, Debug)]
-        struct SubDoc;
-        
-        impl ToTDBSchema for SubDoc {
-            fn schema_name() -> String {
-                "SubDoc".to_string()
-            }
-            
-            fn to_schema_tree() -> Vec<Schema> {
-                vec![Schema::Class {
-                    id: Self::schema_name(),
-                    base: None,
-                    key: crate::Key::Random,
-                    documentation: None,
-                    subdocument: true,
-                    r#abstract: false,
-                    inherits: vec![],
-                    unfoldable: false,
-                    properties: vec![],
-                }]
-            }
+        #[derive(Clone, Debug, TerminusDBModel)]
+        #[tdb(subdocument)]
+        struct SubDoc {
+            _dummy: String,
         }
 
         let iri = "terminusdb://data#Parent/123/prop/SubDoc/456";
@@ -1119,47 +1064,18 @@ mod tests {
         let iri = "terminusdb:///data/ReviewSession/123/assignments/TestEntity/789";
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new(iri).unwrap();
         assert_eq!(entity_id.id(), "789");
-        assert_eq!(entity_id.typed(), "ReviewSession/123/assignments/TestEntity/789");
+        assert_eq!(
+            entity_id.typed(),
+            "ReviewSession/123/assignments/TestEntity/789"
+        );
         assert_eq!(entity_id.get_base_uri(), Some("terminusdb:///data"));
     }
 
     // Define a TaggedUnion for testing
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     enum TestTaggedUnion {
-        VariantA(String),
-        VariantB(i32),
-    }
-
-    impl ToTDBSchema for TestTaggedUnion {
-        type Type = crate::SchemaTypeTaggedUnion;
-
-        fn schema_name() -> String {
-            "TestTaggedUnion".to_string()
-        }
-
-        fn to_schema_tree() -> Vec<Schema> {
-            vec![Schema::TaggedUnion {
-                id: "TestTaggedUnion".to_string(),
-                base: None,
-                key: crate::Key::Random,
-                documentation: None,
-                subdocument: false,
-                r#abstract: false,
-                unfoldable: false,
-                properties: vec![
-                    crate::Property {
-                        name: "variant_a".to_string(),
-                        class: "TestTaggedUnionVariantA".to_string(),
-                        r#type: None,
-                    },
-                    crate::Property {
-                        name: "variant_b".to_string(),
-                        class: "TestTaggedUnionVariantB".to_string(),
-                        r#type: None,
-                    },
-                ],
-            }]
-        }
+        VariantA { value: String },
+        VariantB { count: i32 },
     }
 
     #[test]
@@ -1209,7 +1125,8 @@ mod tests {
 
     #[test]
     fn test_tagged_union_with_iri() {
-        let result = EntityIDFor::<TestTaggedUnion>::new("terminusdb://data#TestTaggedUnionVariantA/789");
+        let result =
+            EntityIDFor::<TestTaggedUnion>::new("terminusdb://data#TestTaggedUnionVariantA/789");
         assert!(result.is_ok());
         let entity_id = result.unwrap();
         assert_eq!(entity_id.id(), "789");
@@ -1217,65 +1134,20 @@ mod tests {
         assert_eq!(entity_id.get_base_uri(), Some("terminusdb://data"));
     }
 
-    // Define a variant type for remap testing
-    #[derive(Clone, Debug)]
-    struct TestTaggedUnionVariantA {
-        value: String,
-    }
-
-    impl ToTDBSchema for TestTaggedUnionVariantA {
-        fn schema_name() -> String {
-            "TestTaggedUnionVariantA".to_string()
-        }
-
-        fn to_schema_tree() -> Vec<Schema> {
-            vec![Schema::Class {
-                id: Self::schema_name(),
-                base: None,
-                key: crate::Key::Random,
-                documentation: None,
-                subdocument: false,
-                r#abstract: false,
-                inherits: vec![],
-                unfoldable: false,
-                properties: vec![],
-            }]
-        }
-    }
-
-    // Implement TaggedUnion marker trait for TestTaggedUnion
-    impl crate::TaggedUnion for TestTaggedUnion {}
-
-    // Implement TaggedUnionVariant marker trait
-    impl crate::TaggedUnionVariant<TestTaggedUnion> for TestTaggedUnionVariantA {}
+    // TestTaggedUnionVariantA and TestTaggedUnionVariantB are now auto-generated by the derive macro
+    // TaggedUnion and TaggedUnionVariant marker traits are now auto-implemented by the derive macro
 
     #[test]
     fn test_remap_regular_types() {
+        use crate as terminusdb_schema;
+
         // Test that regular type remapping still works (backward compatibility)
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("TestEntity/123").unwrap();
 
         // Define another regular type
-        #[derive(Clone, Debug)]
-        struct OtherEntity;
-
-        impl ToTDBSchema for OtherEntity {
-            fn schema_name() -> String {
-                "OtherEntity".to_string()
-            }
-
-            fn to_schema_tree() -> Vec<Schema> {
-                vec![Schema::Class {
-                    id: Self::schema_name(),
-                    base: None,
-                    key: crate::Key::Random,
-                    documentation: None,
-                    subdocument: false,
-                    r#abstract: false,
-                    inherits: vec![],
-                    unfoldable: false,
-                    properties: vec![],
-                }]
-            }
+        #[derive(Clone, Debug, TerminusDBModel)]
+        struct OtherEntity {
+            _dummy: String,
         }
 
         // Remap to another type - should use just the ID

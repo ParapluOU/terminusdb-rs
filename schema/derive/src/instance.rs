@@ -13,35 +13,41 @@ pub fn generate_totdbinstance_impl(
     args: TDBModelOpts,
     // Generic parameters
     generics: (&proc_macro2::TokenStream, &proc_macro2::TokenStream, &Option<syn::WhereClause>),
+    // Optional custom ID extraction code (for TaggedUnions)
+    custom_optid: Option<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics;
-    // Generate the optid expression based on whether an id_field is configured
-    let optid = match args.id_field.as_ref() {
-        None => {
-            quote! {None::<String>}
-        }
-        Some(field_name) => {
-            let ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
-            
-            // Convert the id field to Option<String> using ToInstanceProperty
-            // This works for any type that implements ToInstanceProperty
-            quote! {
-                match <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
-                    self.#ident.clone(), 
-                    "id", 
-                    &schema
-                ) {
-                    terminusdb_schema::InstanceProperty::Primitive(
-                        terminusdb_schema::PrimitiveValue::String(s)
-                    ) => Some(s),
-                    terminusdb_schema::InstanceProperty::Primitive(
-                        terminusdb_schema::PrimitiveValue::Null
-                    ) => None,
-                    // Handle EntityIDFor case - it produces a Relation
-                    terminusdb_schema::InstanceProperty::Relation(
-                        terminusdb_schema::RelationValue::ExternalReference(id)
-                    ) => Some(id),
-                    _ => None
+    // Generate the optid expression based on whether custom code is provided or an id_field is configured
+    let optid = if let Some(custom_code) = custom_optid {
+        custom_code
+    } else {
+        match args.id_field.as_ref() {
+            None => {
+                quote! {None::<String>}
+            }
+            Some(field_name) => {
+                let ident = syn::Ident::new(field_name, proc_macro2::Span::call_site());
+
+                // Convert the id field to Option<String> using ToInstanceProperty
+                // This works for any type that implements ToInstanceProperty
+                quote! {
+                    match <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
+                        self.#ident.clone(),
+                        "id",
+                        &schema
+                    ) {
+                        terminusdb_schema::InstanceProperty::Primitive(
+                            terminusdb_schema::PrimitiveValue::String(s)
+                        ) => Some(s),
+                        terminusdb_schema::InstanceProperty::Primitive(
+                            terminusdb_schema::PrimitiveValue::Null
+                        ) => None,
+                        // Handle EntityIDFor case - it produces a Relation
+                        terminusdb_schema::InstanceProperty::Relation(
+                            terminusdb_schema::RelationValue::ExternalReference(id)
+                        ) => Some(id),
+                        _ => None
+                    }
                 }
             }
         }

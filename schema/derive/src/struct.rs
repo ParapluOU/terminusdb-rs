@@ -396,6 +396,7 @@ pub fn implement_for_struct(
             (&impl_generics, &ty_generics, &instance_where_clause),
             #[cfg(not(feature = "generic-derive"))]
             (&quote! {}, &quote! {}, &None),
+            None, // No custom ID extraction for structs
         )
     };
 

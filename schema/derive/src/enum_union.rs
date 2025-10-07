@@ -183,9 +183,36 @@ pub fn implement_for_tagged_enum(
             // Populate properties based on the enum variant
             #properties_code
 
-            // Construct the final Instance (optid_val is provided by the wrapper)
+            // For TaggedUnions, extract ID from the active variant's property
+            // TaggedUnions don't exist as separate entities - they delegate to their variants
+            let variant_id = properties.values().find_map(|prop| {
+                match prop {
+                    terminusdb_schema::InstanceProperty::Relation(rel_value) => {
+                        match rel_value {
+                            terminusdb_schema::RelationValue::One(instance) => {
+                                instance.id.clone()
+                            },
+                            _ => None
+                        }
+                    },
+                    _ => None
+                }
+            });
+
+            // Construct the final Instance
+            // Priority: explicit id param (formatted) > variant's id (already formatted) > id_field extraction (needs formatting)
+            let final_id = if let Some(explicit_id) = id {
+                Some(schema.format_id(&explicit_id))
+            } else if let Some(delegated_id) = variant_id {
+                // Variant ID is already formatted, use as-is
+                Some(delegated_id)
+            } else {
+                // ID field value needs formatting
+                optid_val.map(|v| schema.format_id(&v))
+            };
+
             terminusdb_schema::Instance {
-                id: id.or( optid_val ).map(|v| schema.format_id(&v)),
+                id: final_id,
                 capture: false,
                 ref_props: true,
                 schema,
@@ -195,11 +222,13 @@ pub fn implement_for_tagged_enum(
     };
 
     // Generate the ToTDBInstance implementation using the simplified wrapper
+    // TaggedUnion ID extraction is handled at runtime in the Instance code
     let instance_impl = generate_totdbinstance_impl(
         enum_name,
         instance_body_code, // Pass the generated body code
         opts.clone(),       // No longer pass Some(data_enum) here
         (&quote!{}, &quote!{}, &None), // No generics for enums currently
+        None, // No custom ID extraction - handled at Instance level for TaggedUnions
     );
 
     // Extract the TokenStream from the second element of each tuple in virtual_structs
@@ -483,6 +512,7 @@ fn generate_virtual_structs(
                         key_fields: None,
                     },
                     (&quote!{}, &quote!{}, &None), // No generics for virtual structs
+                    None, // No custom ID extraction for virtual structs
                 );
 
                 // Combine the struct definition and implementations

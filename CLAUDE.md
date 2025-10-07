@@ -135,3 +135,4 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 ## Model Serialization and Trait Implementation Notes
 
 - If serializing TerminusDB models (structs/enums deriving TerminusDBModel) have issues with how they are serialized, then DONT try to fix it with a custom Serialize, Deserialize impl, as these are not used by our implementation. If the struct is supposed to be a "model", it should be converteable to an Instance, so derive TerminusDBModel. If the layout of it has to change use the tdb() proc-macro attributes defined in the schema/derive. If structs represent pritimitive values, they need implementations of ToInstanceProperty instead so that they are convertable to field values without representing a model.
+- tests should NOT manually implement ToTDBSchema. if there are import conflicts because the derive hardcodes terminusdb_schema, create a crate alias like 'use crate as terminusdb_schema'

@@ -112,6 +112,7 @@ pub fn implement_for_simple_enum(
         instance_body_code, // Pass the generated body code
         opts.clone(),       // No longer pass Some(data_enum) here
         (&quote!{}, &quote!{}, &None), // No generics for enums currently
+        None, // No custom ID extraction for simple enums
     );
 
     // Generate the implementation for ToSchemaClass trait

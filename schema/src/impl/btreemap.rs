@@ -779,24 +779,16 @@ impl<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate as terminusdb_schema;
     use crate::Property;
     use crate::ToSchemaProperty;
     use chrono::{DateTime, NaiveTime, TimeZone, Utc};
+    use terminusdb_schema_derive::TerminusDBModel;
 
     // Test struct for EntityIDFor testing
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     struct TestEntity {
         name: String,
-    }
-
-    impl ToTDBSchema for TestEntity {
-        fn schema_name() -> String {
-            "TestEntity".to_string()
-        }
-
-        fn to_schema_tree() -> Vec<crate::Schema> {
-            vec![]
-        }
     }
 
     #[test]
