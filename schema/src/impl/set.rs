@@ -1,5 +1,5 @@
 use crate::json::InstancePropertyFromJson;
-use crate::{FromInstanceProperty, FromTDBInstance, InstanceProperty, Primitive, Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBSchema, TypeFamily};
+use crate::{FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily};
 use anyhow::anyhow;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
@@ -397,5 +397,25 @@ where
             }
             _ => Err(anyhow::anyhow!("Expected JSON array for BTreeSet")),
         }
+    }
+}
+
+// === ToTDBInstances implementations ===
+
+impl<I: ToTDBInstance> ToTDBInstances for HashSet<I> {
+    fn to_instance_tree(&self) -> Vec<Instance> {
+        self.iter()
+            .map(|v| v.to_instance_tree())
+            .flatten()
+            .collect()
+    }
+}
+
+impl<I: ToTDBInstance> ToTDBInstances for BTreeSet<I> {
+    fn to_instance_tree(&self) -> Vec<Instance> {
+        self.iter()
+            .map(|v| v.to_instance_tree())
+            .flatten()
+            .collect()
     }
 }
