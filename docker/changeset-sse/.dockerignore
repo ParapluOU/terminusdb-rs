@@ -1,0 +1,7 @@
+# Ignore everything except what we need
+**/*
+
+# Include only required files
+!plugins/changeset-sse.pl
+!docker/changeset-sse/entrypoint.sh
+!docker/changeset-sse/Dockerfile

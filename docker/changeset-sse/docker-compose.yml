@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  terminusdb:
+    build:
+      context: ../..
+      dockerfile: docker/changeset-sse/Dockerfile
+    container_name: terminusdb-changeset-sse
+    hostname: terminusdb-server
+    ports:
+      - "6363:6363"
+    environment:
+      - TERMINUSDB_SERVER_PORT=6363
+      - TERMINUSDB_ADMIN_PASS=root
+    volumes:
+      - terminusdb_storage:/app/terminusdb/storage
+    restart: unless-stopped
+    networks:
+      - terminusdb
+
+networks:
+  terminusdb:
+    name: terminusdb-network
+
+volumes:
+  terminusdb_storage:
+    name: terminusdb_storage_changeset_sse
