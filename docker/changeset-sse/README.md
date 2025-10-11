@@ -8,16 +8,16 @@ The changeset-sse plugin enables Server-Sent Events (SSE) streaming of database 
 
 ## Architecture
 
-The setup uses a custom entrypoint script that:
-1. Creates the `/app/terminusdb/storage/plugins` directory
-2. Copies the `changeset-sse.pl` plugin from the image to the mounted storage volume
-3. Initializes TerminusDB storage if needed
-4. Starts the TerminusDB server
+The setup uses TerminusDB's built-in `TERMINUSDB_PLUGINS_PATH` environment variable to load plugins from a custom location:
+1. The plugin is bundled in the Docker image at `/opt/terminusdb-plugins/changeset-sse.pl`
+2. `TERMINUSDB_PLUGINS_PATH` is set to `/opt/terminusdb-plugins`
+3. TerminusDB automatically loads all plugins from this directory at startup
 
 This approach ensures:
-- The storage volume can be mounted externally
-- The plugin is automatically injected at boot time
-- No manual plugin installation is required
+- Simple configuration using built-in TerminusDB features
+- No custom entrypoint script needed
+- The plugin is always available regardless of volume mounts
+- Storage volumes can be mounted independently
 
 ## Quick Start
 
@@ -60,6 +60,7 @@ docker run -d \
 - `TERMINUSDB_SERVER_PORT`: Server port (default: 6363)
 - `TERMINUSDB_ADMIN_PASS`: Admin password (default: root)
 - `TERMINUSDB_ADMIN_PASS_FILE`: Path to file containing admin password (alternative to `TERMINUSDB_ADMIN_PASS`)
+- `TERMINUSDB_PLUGINS_PATH`: Plugin directory (set to `/opt/terminusdb-plugins` in Dockerfile)
 
 ### Volumes
 
@@ -135,10 +136,10 @@ eventSource.addEventListener('changeset', (event) => {
 
 ### Plugin Not Loading
 
-Check if the plugin was copied correctly:
+Check if the plugin is present in the image:
 
 ```bash
-docker exec terminusdb-changeset-sse ls -la /app/terminusdb/storage/plugins/
+docker exec terminusdb-changeset-sse ls -la /opt/terminusdb-plugins/
 ```
 
 ### View Server Logs
@@ -149,21 +150,20 @@ docker compose logs -f terminusdb
 
 ### Check Plugin Initialization
 
-Look for these log messages in the container output:
-- `Installing changeset-sse plugin...`
-- `Plugin installed to /app/terminusdb/storage/plugins/changeset-sse.pl`
+Look for SSE plugin log messages in the container output:
 - `SSE Plugin: Client connecting`
+- `SSE Plugin: Broadcast changeset ...`
 
 ## Files
 
-- `Dockerfile`: Multi-stage build that bundles the plugin
-- `entrypoint.sh`: Custom entrypoint that injects the plugin at runtime
+- `Dockerfile`: Bundles the plugin and sets `TERMINUSDB_PLUGINS_PATH`
 - `docker-compose.yml`: Orchestration for easy deployment
 - `../../plugins/changeset-sse.pl`: The actual plugin source code
+- `.dockerignore`: Optimizes build by only including necessary files
 
 ## Notes
 
-- The plugin file is bundled in the Docker image at `/opt/terminusdb-plugins/changeset-sse.pl`
-- At runtime, it's copied to `/app/terminusdb/storage/plugins/changeset-sse.pl`
-- This allows the storage volume to be mounted while still ensuring the plugin is present
-- The plugin is automatically loaded by TerminusDB when it starts
+- The plugin is bundled in the Docker image at `/opt/terminusdb-plugins/changeset-sse.pl`
+- TerminusDB's `TERMINUSDB_PLUGINS_PATH` environment variable is set to `/opt/terminusdb-plugins`
+- The plugin is automatically loaded by TerminusDB at startup
+- Storage volumes can be mounted at `/app/terminusdb/storage` independently of the plugin
