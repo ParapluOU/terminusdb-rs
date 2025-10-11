@@ -8,15 +8,17 @@ The changeset-sse plugin enables Server-Sent Events (SSE) streaming of database 
 
 ## Architecture
 
-The setup uses TerminusDB's built-in `TERMINUSDB_PLUGINS_PATH` environment variable to load plugins from a custom location:
+The setup uses a minimal entrypoint script that defers plugin loading until after store initialization:
+
 1. The plugin is bundled in the Docker image at `/opt/terminusdb-plugins/changeset-sse.pl`
-2. `TERMINUSDB_PLUGINS_PATH` is set to `/opt/terminusdb-plugins`
-3. TerminusDB automatically loads all plugins from this directory at startup
+2. The entrypoint script runs standard TerminusDB store initialization WITHOUT plugins loaded
+3. After initialization, `TERMINUSDB_PLUGINS_PATH` is set to `/opt/terminusdb-plugins`
+4. The server starts and loads plugins at that point
 
 This approach ensures:
-- Simple configuration using built-in TerminusDB features
-- No custom entrypoint script needed
-- The plugin is always available regardless of volume mounts
+- Plugins are NOT loaded during store initialization (which can fail if the store doesn't exist yet)
+- Uses TerminusDB's built-in `TERMINUSDB_PLUGINS_PATH` mechanism for plugin loading
+- Minimal custom code - just defers when the env var is set
 - Storage volumes can be mounted independently
 
 ## Quick Start
@@ -60,7 +62,7 @@ docker run -d \
 - `TERMINUSDB_SERVER_PORT`: Server port (default: 6363)
 - `TERMINUSDB_ADMIN_PASS`: Admin password (default: root)
 - `TERMINUSDB_ADMIN_PASS_FILE`: Path to file containing admin password (alternative to `TERMINUSDB_ADMIN_PASS`)
-- `TERMINUSDB_PLUGINS_PATH`: Plugin directory (set to `/opt/terminusdb-plugins` in Dockerfile)
+- `TERMINUSDB_PLUGINS_PATH`: Plugin directory (set to `/opt/terminusdb-plugins` by entrypoint before serving)
 
 ### Volumes
 
@@ -156,7 +158,8 @@ Look for SSE plugin log messages in the container output:
 
 ## Files
 
-- `Dockerfile`: Bundles the plugin and sets `TERMINUSDB_PLUGINS_PATH`
+- `Dockerfile`: Bundles the plugin and custom entrypoint
+- `entrypoint.sh`: Minimal script that sets `TERMINUSDB_PLUGINS_PATH` only before serving
 - `docker-compose.yml`: Orchestration for easy deployment
 - `../../plugins/changeset-sse.pl`: The actual plugin source code
 - `.dockerignore`: Optimizes build by only including necessary files
@@ -164,6 +167,6 @@ Look for SSE plugin log messages in the container output:
 ## Notes
 
 - The plugin is bundled in the Docker image at `/opt/terminusdb-plugins/changeset-sse.pl`
-- TerminusDB's `TERMINUSDB_PLUGINS_PATH` environment variable is set to `/opt/terminusdb-plugins`
-- The plugin is automatically loaded by TerminusDB at startup
+- The entrypoint script sets `TERMINUSDB_PLUGINS_PATH=/opt/terminusdb-plugins` only right before starting the server
+- This ensures plugins are loaded after store initialization completes
 - Storage volumes can be mounted at `/app/terminusdb/storage` independently of the plugin

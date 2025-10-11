@@ -4,3 +4,4 @@
 # Include only required files
 !plugins/changeset-sse.pl
 !docker/changeset-sse/Dockerfile
+!docker/changeset-sse/entrypoint.sh
