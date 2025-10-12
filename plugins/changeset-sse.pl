@@ -10,7 +10,7 @@
 :- use_module(core(transaction)).
 :- use_module(core(util)).
 :- use_module(core(query)).
-:- use_module(core(account/capabilities)).
+:- use_module(core(account)).
 
 %% Register SSE route
 :- catch(
