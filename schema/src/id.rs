@@ -212,6 +212,30 @@ impl<T: ToTDBSchema> PartialEq<str> for EntityIDFor<T> {
     }
 }
 
+impl<T: ToTDBSchema> PartialEq<&str> for EntityIDFor<T> {
+    fn eq(&self, other: &&str) -> bool {
+        self.typed() == *other
+    }
+}
+
+impl<T: ToTDBSchema> PartialEq<String> for EntityIDFor<T> {
+    fn eq(&self, other: &String) -> bool {
+        self.typed() == other.as_str()
+    }
+}
+
+impl<T: ToTDBSchema> PartialEq<EntityIDFor<T>> for String {
+    fn eq(&self, other: &EntityIDFor<T>) -> bool {
+        self.as_str() == other.typed()
+    }
+}
+
+impl<T: ToTDBSchema> PartialEq<EntityIDFor<T>> for &str {
+    fn eq(&self, other: &EntityIDFor<T>) -> bool {
+        *self == other.typed()
+    }
+}
+
 impl<T: ToTDBSchema> Default for EntityIDFor<T> {
     fn default() -> Self {
         Self::random()
@@ -1190,5 +1214,25 @@ mod tests {
         assert_eq!(union_id.id(), "789");
         assert_eq!(union_id.get_type_name(), "TestTaggedUnionVariantA");
         assert_eq!(union_id.get_base_uri(), Some("terminusdb://data"));
+    }
+
+    #[test]
+    fn test_partial_eq_with_string_and_str() {
+        let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("1234").unwrap();
+
+        // Test comparison with &str
+        assert_eq!(entity_id, "TestEntity/1234");
+        assert_eq!("TestEntity/1234", entity_id);
+
+        // Test comparison with String
+        let owned_string = String::from("TestEntity/1234");
+        assert_eq!(entity_id, owned_string);
+        assert_eq!(owned_string, entity_id);
+
+        // Test inequality
+        assert_ne!(entity_id, "TestEntity/5678");
+        assert_ne!("TestEntity/5678", entity_id);
+        assert_ne!(entity_id, String::from("TestEntity/5678"));
+        assert_ne!(String::from("TestEntity/5678"), entity_id);
     }
 }
