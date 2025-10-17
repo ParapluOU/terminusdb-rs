@@ -444,6 +444,59 @@ impl TerminusDBHttpClient {
         
         anyhow::bail!("Query logging is not enabled. Call enable_query_log() first.")
     }
+
+    // ===== Change Listener =====
+
+    /// Create a new ChangeListener for monitoring real-time database changes via SSE
+    ///
+    /// The ChangeListener connects to TerminusDB's SSE changeset stream and dispatches
+    /// typed callbacks when documents are added, updated, or deleted.
+    ///
+    /// # Arguments
+    /// * `spec` - Branch specification indicating which database and branch to monitor
+    ///
+    /// # Returns
+    /// A new ChangeListener instance that can be configured with typed callbacks
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use terminusdb_client::*;
+    ///
+    /// #[derive(TerminusDBModel, FromTDBInstance, InstanceFromJson)]
+    /// struct User {
+    ///     name: String,
+    ///     email: String,
+    /// }
+    ///
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let spec = BranchSpec::new("mydb", Some("main"));
+    ///
+    /// let listener = client.change_listener(spec);
+    ///
+    /// // Register callbacks
+    /// listener
+    ///     .on_added::<User>(|user| {
+    ///         println!("User added: {} - {}", user.name, user.email);
+    ///     })
+    ///     .on_deleted::<User>(|iri| {
+    ///         println!("User deleted: {}", iri);
+    ///     });
+    ///
+    /// // Start listening
+    /// let handle = Arc::new(listener).start().await?;
+    /// handle.await?;
+    /// ```
+    #[instrument(
+        name = "terminus.client.change_listener",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch
+        )
+    )]
+    pub fn change_listener(&self, spec: crate::spec::BranchSpec) -> super::change_listener::ChangeListener {
+        super::change_listener::ChangeListener::new(self.clone(), spec)
+    }
 }
 
 // Manual Debug implementation

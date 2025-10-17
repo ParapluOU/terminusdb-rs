@@ -23,9 +23,13 @@
 //! - `user`: User management operations
 //! - `helpers`: Helper functions
 //! - `graphql`: GraphQL query execution and introspection
+//! - `changeset`: SSE changeset event types and streaming
+//! - `change_listener`: Type-safe change listener API
 
 // Public modules
 pub mod branch;
+pub mod change_listener;
+pub mod changeset;
 pub mod client;
 pub mod collaboration;
 pub mod database;
@@ -47,6 +51,8 @@ pub mod user;
 pub mod versions;
 
 // Re-export main types and traits
+pub use change_listener::ChangeListener;
+pub use changeset::{ChangesetEvent, ChangesetCommitInfo, DocumentChange, MetadataInfo};
 pub use client::TerminusDBHttpClient;
 pub use document::DeleteOpts;
 pub use graphql::{GraphQLRequest, GraphQLResponse, GraphQLError};
