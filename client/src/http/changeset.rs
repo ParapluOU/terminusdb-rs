@@ -108,7 +108,10 @@ impl SseConnection {
     ) -> anyhow::Result<impl futures_util::Stream<Item = Result<ChangesetEvent, anyhow::Error>>> {
         let url = format!("{}changesets/stream", self.endpoint);
 
-        debug!("Connecting to TerminusDB SSE endpoint: {}", url);
+        debug!(
+            "SSE connection request: GET {} (user: {}, auth: basic, accept: text/event-stream)",
+            url, self.user
+        );
 
         let response = self
             .client
@@ -119,14 +122,40 @@ impl SseConnection {
             .await
             .context("Failed to connect to SSE endpoint")?;
 
-        if !response.status().is_success() {
+        let status = response.status();
+
+        if !status.is_success() {
+            // Log detailed error information
+            error!(
+                "SSE connection failed: {} {} - Status: {} {}",
+                "GET", url, status.as_u16(), status.canonical_reason().unwrap_or("Unknown")
+            );
+
+            // Log response headers
+            debug!("Response headers:");
+            for (name, value) in response.headers() {
+                if let Ok(val_str) = value.to_str() {
+                    debug!("  {}: {}", name, val_str);
+                }
+            }
+
+            // Try to read response body for error details
+            let body = response.text().await.unwrap_or_else(|_| "(failed to read body)".to_string());
+            if !body.is_empty() {
+                error!("Response body: {}", body);
+            }
+
             return Err(anyhow!(
-                "SSE connection failed with status: {}",
-                response.status()
+                "SSE connection failed with status: {} - Response: {}",
+                status,
+                if body.is_empty() { "(empty body)" } else { &body }
             ));
         }
 
-        debug!("Successfully connected to TerminusDB SSE stream");
+        debug!(
+            "Successfully connected to TerminusDB SSE stream (status: {})",
+            status
+        );
 
         Ok(Self::parse_stream(response))
     }
