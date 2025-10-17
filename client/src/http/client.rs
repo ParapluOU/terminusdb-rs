@@ -35,6 +35,9 @@ pub struct TerminusDBHttpClient {
     pub(crate) debug_config: Arc<RwLock<DebugConfig>>,
     /// Cache of ensured databases to avoid repeated ensure_database calls
     pub(crate) ensured_databases: Arc<Mutex<HashSet<String>>>,
+    /// Centralized SSE manager for change listeners (lazily initialized)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sse_manager: Arc<RwLock<Option<Arc<super::sse_manager::SseManager>>>>,
 }
 
 // Wrap the entire impl block with a conditional compilation attribute
@@ -156,6 +159,7 @@ impl TerminusDBHttpClient {
             query_logger: Arc::new(RwLock::new(None)),
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),
             ensured_databases: Arc::new(Mutex::new(HashSet::new())),
+            sse_manager: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -452,6 +456,9 @@ impl TerminusDBHttpClient {
     /// The ChangeListener connects to TerminusDB's SSE changeset stream and dispatches
     /// typed callbacks when documents are added, updated, or deleted.
     ///
+    /// All listeners for the same client share a single SSE connection, which is
+    /// automatically managed and routes events based on the resource path.
+    ///
     /// # Arguments
     /// * `spec` - Branch specification indicating which database and branch to monitor
     ///
@@ -471,9 +478,9 @@ impl TerminusDBHttpClient {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// let spec = BranchSpec::new("mydb", Some("main"));
     ///
-    /// let listener = client.change_listener(spec);
+    /// let listener = client.change_listener(spec)?;
     ///
-    /// // Register callbacks
+    /// // Register callbacks - listener automatically receives events in background
     /// listener
     ///     .on_added::<User>(|user| {
     ///         println!("User added: {} - {}", user.name, user.email);
@@ -482,9 +489,8 @@ impl TerminusDBHttpClient {
     ///         println!("User deleted: {}", iri);
     ///     });
     ///
-    /// // Start listening
-    /// let handle = Arc::new(listener).start().await?;
-    /// handle.await?;
+    /// // Listener is active and will receive events
+    /// // Keep listener in scope to continue receiving events
     /// ```
     #[instrument(
         name = "terminus.client.change_listener",
@@ -494,8 +500,27 @@ impl TerminusDBHttpClient {
             branch = ?spec.branch
         )
     )]
-    pub fn change_listener(&self, spec: crate::spec::BranchSpec) -> super::change_listener::ChangeListener {
-        super::change_listener::ChangeListener::new(self.clone(), spec)
+    pub fn change_listener(&self, spec: crate::spec::BranchSpec) -> anyhow::Result<super::change_listener::ChangeListener> {
+        // Get or create the SSE manager
+        let manager = {
+            let mut manager_lock = self.sse_manager.write().unwrap();
+
+            if manager_lock.is_none() {
+                debug!("Initializing SSE manager for client");
+                let manager = Arc::new(super::sse_manager::SseManager::new(
+                    self.endpoint.to_string(),
+                    self.user.clone(),
+                    self.pass.clone(),
+                ));
+                *manager_lock = Some(manager.clone());
+                manager
+            } else {
+                manager_lock.as_ref().unwrap().clone()
+            }
+        };
+
+        // Create the listener with the shared SSE manager
+        super::change_listener::ChangeListener::new(self.clone(), spec, manager)
     }
 }
 

@@ -50,6 +50,10 @@ pub mod url_builder;
 pub mod user;
 pub mod versions;
 
+// Internal modules
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod sse_manager;
+
 // Re-export main types and traits
 pub use change_listener::ChangeListener;
 pub use changeset::{ChangesetEvent, ChangesetCommitInfo, DocumentChange, MetadataInfo};

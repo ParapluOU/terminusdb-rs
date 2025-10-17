@@ -3,19 +3,17 @@
 //! This module provides a type-safe API for listening to TerminusDB changeset events
 //! and dispatching them to registered callbacks based on document type.
 
-use super::{changeset::*, client::TerminusDBHttpClient};
+use super::{changeset::*, client::TerminusDBHttpClient, sse_manager::SseManager};
 use crate::{spec::BranchSpec, DefaultTDBDeserializer};
 use anyhow::Context;
-use futures_util::StreamExt;
 use serde_json::Value;
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Weak},
 };
 use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TdbIRI, TerminusDBModel};
-use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Type-safe change listener for TerminusDB changeset events
 ///
@@ -49,21 +47,19 @@ use tracing::{debug, error, info, warn};
 ///         println!("User deleted: {}", iri);
 ///     });
 ///
-/// // Start listening in background
-/// let handle = Arc::new(listener).start().await?;
-///
-/// // Wait for listener or do other work
-/// handle.await?;
+/// // Listener is automatically registered with the SSE manager
+/// // and will receive events in the background
 /// ```
 #[derive(Clone)]
 pub struct ChangeListener {
     inner: Arc<ChangeListenerInner>,
 }
 
-struct ChangeListenerInner {
+pub(crate) struct ChangeListenerInner {
     client: TerminusDBHttpClient,
     spec: BranchSpec,
     handlers: RwLock<HandlerRegistry>,
+    sse_manager: Arc<SseManager>,
 }
 
 /// Registry of all registered handlers organized by type
@@ -235,14 +231,23 @@ where
 
 impl ChangeListener {
     /// Create a new ChangeListener for the specified database and branch
-    pub fn new(client: TerminusDBHttpClient, spec: BranchSpec) -> Self {
-        Self {
-            inner: Arc::new(ChangeListenerInner {
-                client,
-                spec,
-                handlers: RwLock::new(HandlerRegistry::default()),
-            }),
-        }
+    pub(crate) fn new(
+        client: TerminusDBHttpClient,
+        spec: BranchSpec,
+        sse_manager: Arc<SseManager>,
+    ) -> anyhow::Result<Self> {
+        let inner = Arc::new(ChangeListenerInner {
+            client,
+            spec,
+            handlers: RwLock::new(HandlerRegistry::default()),
+            sse_manager: sse_manager.clone(),
+        });
+
+        // Register with the SSE manager
+        let resource_path = inner.resource_path();
+        sse_manager.register_listener(resource_path, Arc::downgrade(&inner))?;
+
+        Ok(Self { inner })
     }
 
     /// Register a callback for when a document ID is added (does not fetch the document)
@@ -393,87 +398,30 @@ impl ChangeListener {
         self
     }
 
-    /// Start listening to the SSE stream and dispatch events to registered handlers
-    ///
-    /// This method spawns a background task that:
-    /// 1. Connects to the TerminusDB SSE endpoint
-    /// 2. Parses changeset events
-    /// 3. Dispatches to registered type-specific handlers
-    /// 4. Automatically reconnects on disconnect
-    ///
-    /// Returns a JoinHandle that can be awaited to keep the listener running.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// let listener = Arc::new(client.change_listener(spec));
-    /// listener.on_added::<User>(|user| println!("New user: {}", user.name));
-    ///
-    /// let handle = listener.start().await?;
-    /// // Listener runs in background
-    ///
-    /// // Optionally wait for it
-    /// handle.await?;
-    /// ```
-    pub async fn start(self: Arc<Self>) -> anyhow::Result<JoinHandle<()>> {
-        let listener = self.clone();
 
-        let handle = tokio::spawn(async move {
-            loop {
-                match listener.run_listener_loop().await {
-                    Ok(()) => {
-                        warn!("SSE connection closed, reconnecting in 5 seconds...");
-                    }
-                    Err(e) => {
-                        error!("SSE connection error: {}, reconnecting in 5 seconds...", e);
-                    }
-                }
+}
 
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        });
+// ===== ChangeListenerInner Implementation =====
 
-        Ok(handle)
+impl ChangeListenerInner {
+    /// Construct the resource path for this listener based on its BranchSpec
+    ///
+    /// Format: "{account}/{database}/local/branch/{branch}"
+    /// Example: "admin/mydb/local/branch/main"
+    pub(crate) fn resource_path(&self) -> String {
+        let branch = self.spec.branch.as_deref().unwrap_or("main");
+        format!(
+            "{}/{}/local/branch/{}",
+            self.client.org,
+            self.spec.db,
+            branch
+        )
     }
 
-    /// Internal method that runs a single listener loop iteration
-    async fn run_listener_loop(&self) -> anyhow::Result<()> {
-        // Create SSE connection
-        let connection = SseConnection::new(
-            self.inner.client.endpoint.to_string(),
-            self.inner.client.user.clone(),
-            self.inner.client.pass.clone(),
-        );
-
-        info!("Connecting to TerminusDB changeset stream...");
-        let stream = connection.connect().await?;
-        let mut stream = Box::pin(stream);
-        info!("Successfully connected to changeset stream");
-
-        // Process events from the stream
-        while let Some(event_result) = stream.next().await {
-            match event_result {
-                Ok(event) => {
-                    self.handle_changeset_event(event).await;
-                }
-                Err(e) => {
-                    error!("Error processing changeset event: {}", e);
-                    // Continue processing other events
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle a single changeset event by dispatching to registered handlers
-    async fn handle_changeset_event(&self, event: ChangesetEvent) {
-        debug!(
-            "Received changeset event - Commit: {}, Branch: {}, Changes: {}",
-            event.commit.id,
-            event.branch,
-            event.changes.len()
-        );
-
+    /// Dispatch a changeset event to this listener's registered handlers
+    ///
+    /// This is called by the SseManager when an event matches this listener's resource path
+    pub(crate) async fn dispatch_event(&self, event: ChangesetEvent) -> anyhow::Result<()> {
         // Process each document change
         for change in event.changes {
             // Parse the document ID to get type information
@@ -499,11 +447,13 @@ impl ChangeListener {
                 self.dispatch_changed(&type_name, iri, changed_fields).await;
             }
         }
+
+        Ok(())
     }
 
     /// Dispatch to on_added_id and on_added handlers
     async fn dispatch_added(&self, type_name: &str, iri: TdbIRI) {
-        let registry = self.inner.handlers.read().unwrap();
+        let registry = self.handlers.read().unwrap();
 
         // Dispatch to on_added_id handlers
         if let Some(handlers) = registry.added_id_handlers.get(type_name) {
@@ -515,18 +465,14 @@ impl ChangeListener {
         // Dispatch to on_added handlers (these will fetch the document)
         if let Some(handlers) = registry.added_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(
-                    iri.clone(),
-                    self.inner.client.clone(),
-                    self.inner.spec.clone(),
-                );
+                handler.handle(iri.clone(), self.client.clone(), self.spec.clone());
             }
         }
     }
 
     /// Dispatch to on_deleted handlers
     async fn dispatch_deleted(&self, type_name: &str, iri: TdbIRI) {
-        let registry = self.inner.handlers.read().unwrap();
+        let registry = self.handlers.read().unwrap();
 
         if let Some(handlers) = registry.deleted_handlers.get(type_name) {
             for handler in handlers {
@@ -542,7 +488,7 @@ impl ChangeListener {
         iri: TdbIRI,
         changed_fields: HashMap<String, Value>,
     ) {
-        let registry = self.inner.handlers.read().unwrap();
+        let registry = self.handlers.read().unwrap();
 
         // Dispatch to on_changeset handlers
         if let Some(handlers) = registry.changeset_handlers.get(type_name) {
@@ -557,8 +503,8 @@ impl ChangeListener {
                 handler.handle(
                     iri.clone(),
                     changed_fields.clone(),
-                    self.inner.client.clone(),
-                    self.inner.spec.clone(),
+                    self.client.clone(),
+                    self.spec.clone(),
                 );
             }
         }
