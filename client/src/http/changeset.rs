@@ -106,7 +106,8 @@ impl SseConnection {
     pub async fn connect(
         &self,
     ) -> anyhow::Result<impl futures_util::Stream<Item = Result<ChangesetEvent, anyhow::Error>>> {
-        let url = format!("{}changesets/stream", self.endpoint);
+        // Ensure proper path joining - strip trailing slash from endpoint, then add our path
+        let url = format!("{}/changesets/stream", self.endpoint.trim_end_matches('/'));
 
         debug!(
             "SSE connection request: GET {} (user: {}, auth: basic, accept: text/event-stream)",
