@@ -106,7 +106,7 @@ impl SseConnection {
     pub async fn connect(
         &self,
     ) -> anyhow::Result<impl futures_util::Stream<Item = Result<ChangesetEvent, anyhow::Error>>> {
-        let url = format!("{}api/changesets/stream", self.endpoint);
+        let url = format!("{}changesets/stream", self.endpoint);
 
         debug!("Connecting to TerminusDB SSE endpoint: {}", url);
 
