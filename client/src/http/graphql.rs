@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::{TerminusDBAdapterError, TerminusDBHttpClient};
+use std::time::Instant;
 
 /// A GraphQL request following the standard GraphQL over HTTP specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,8 +203,22 @@ impl TerminusDBHttpClient {
         branch: Option<&str>,
         request: GraphQLRequest,
     ) -> Result<GraphQLResponse<T>, TerminusDBAdapterError> {
+        use crate::debug::{OperationEntry, OperationType, QueryLogEntry};
+
+        let start_time = Instant::now();
         let branch = branch.unwrap_or("main");
         let url = self.build_graphql_url(database, branch);
+
+        // Create operation entry with the GraphQL query stored in context
+        let mut operation = OperationEntry::new(
+            OperationType::GraphQL,
+            format!("/graphql/{}/{}/local/branch/{}", self.org, database, branch)
+        )
+        .with_context(
+            Some(database.to_string()),
+            Some(branch.to_string())
+        )
+        .with_additional_context(request.query.clone());
 
         let response = self
             .http
@@ -215,7 +230,9 @@ impl TerminusDBHttpClient {
             .await
             .map_err(|e| TerminusDBAdapterError::HTTP(e))?;
 
-        if response.status().is_success() {
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+
+        let result = if response.status().is_success() {
             response
                 .json::<GraphQLResponse<T>>()
                 .await
@@ -229,13 +246,77 @@ impl TerminusDBHttpClient {
                 "GraphQL server error: {}",
                 error_text
             )))
+        };
+
+        // Update operation entry based on result
+        match &result {
+            Ok(res) => {
+                // Try to count results if data is present
+                let result_count = res.data.as_ref().map(|_| 1);
+                operation = operation.success(result_count, duration_ms);
+
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "graphql".to_string(),
+                        database: Some(database.to_string()),
+                        branch: Some(branch.to_string()),
+                        endpoint: operation.endpoint.clone(),
+                        details: serde_json::json!({
+                            "query": request.query,
+                            "variables": request.variables,
+                            "operation_name": request.operation_name
+                        }),
+                        success: true,
+                        result_count,
+                        duration_ms,
+                        error: None,
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+            Err(e) => {
+                operation = operation.failure(e.to_string(), duration_ms);
+
+                // Log to query log if enabled
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "graphql".to_string(),
+                        database: Some(database.to_string()),
+                        branch: Some(branch.to_string()),
+                        endpoint: operation.endpoint.clone(),
+                        details: serde_json::json!({
+                            "query": request.query,
+                            "variables": request.variables,
+                            "operation_name": request.operation_name
+                        }),
+                        success: false,
+                        result_count: None,
+                        duration_ms,
+                        error: Some(e.to_string()),
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
         }
+
+        // Add to operation log
+        self.operation_log.push(operation);
+
+        result
     }
 
     /// Execute a GraphQL query and return the raw JSON response
     ///
     /// This is useful when you don't want to deserialize the response
     /// or need maximum flexibility in handling the response.
+    ///
+    /// Note: This method automatically tracks query duration and logs to the operation log
+    /// via the underlying `execute_graphql` call.
     pub async fn execute_graphql_raw(
         &self,
         database: &str,

@@ -11,6 +11,8 @@ use terminusdb_woql2::prelude::Query;
 #[serde(rename_all = "snake_case")]
 pub enum OperationType {
     Query,
+    #[serde(rename = "graphql")]
+    GraphQL,
     Insert,
     Update,
     Delete,
@@ -28,6 +30,7 @@ impl std::fmt::Display for OperationType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OperationType::Query => write!(f, "query"),
+            OperationType::GraphQL => write!(f, "graphql"),
             OperationType::Insert => write!(f, "insert"),
             OperationType::Update => write!(f, "update"),
             OperationType::Delete => write!(f, "delete"),
