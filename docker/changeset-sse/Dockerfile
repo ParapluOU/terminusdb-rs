@@ -1,4 +1,5 @@
-FROM terminusdb/terminusdb-server
+# dashboard app is broken in 11.1.17
+FROM terminusdb/terminusdb-server:v11.1.14
 
 # Copy the changeset-sse plugin into the image
 COPY plugins/changeset-sse.pl /opt/terminusdb-plugins/changeset-sse.pl
