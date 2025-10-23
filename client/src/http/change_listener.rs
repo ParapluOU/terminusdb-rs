@@ -66,9 +66,11 @@ pub(crate) struct ChangeListenerInner {
 struct HandlerRegistry {
     added_id_handlers: HashMap<String, Vec<Box<dyn AddedIdHandler>>>,
     added_handlers: HashMap<String, Vec<Box<dyn AddedHandler>>>,
+    added_batch_handlers: HashMap<String, Vec<Box<dyn AddedBatchHandler>>>,
     deleted_handlers: HashMap<String, Vec<Box<dyn DeletedHandler>>>,
     changeset_handlers: HashMap<String, Vec<Box<dyn ChangesetHandler>>>,
     changed_handlers: HashMap<String, Vec<Box<dyn ChangedHandler>>>,
+    changed_batch_handlers: HashMap<String, Vec<Box<dyn ChangedBatchHandler>>>,
 }
 
 impl Default for HandlerRegistry {
@@ -76,9 +78,11 @@ impl Default for HandlerRegistry {
         Self {
             added_id_handlers: HashMap::new(),
             added_handlers: HashMap::new(),
+            added_batch_handlers: HashMap::new(),
             deleted_handlers: HashMap::new(),
             changeset_handlers: HashMap::new(),
             changed_handlers: HashMap::new(),
+            changed_batch_handlers: HashMap::new(),
         }
     }
 }
@@ -111,6 +115,21 @@ trait ChangedHandler: Send + Sync {
         &self,
         iri: TdbIRI,
         changed_fields: HashMap<String, Value>,
+        client: TerminusDBHttpClient,
+        spec: BranchSpec,
+    );
+}
+
+/// Handler for on_added_batch callbacks (fetches multiple documents at once)
+trait AddedBatchHandler: Send + Sync {
+    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec);
+}
+
+/// Handler for on_changed_batch callbacks (fetches multiple documents at once with change info)
+trait ChangedBatchHandler: Send + Sync {
+    fn handle(
+        &self,
+        items: Vec<(TdbIRI, HashMap<String, Value>)>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
     );
@@ -220,6 +239,90 @@ where
                     error!(
                         "Failed to fetch document {} for on_changed callback: {}",
                         iri_clone, e
+                    );
+                }
+            }
+        });
+    }
+}
+
+struct AddedBatchHandlerImpl<T, F> {
+    callback: Arc<F>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T, F> AddedBatchHandler for AddedBatchHandlerImpl<T, F>
+where
+    T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    F: Fn(Vec<T>) + Send + Sync + 'static,
+{
+    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec) {
+        let callback = self.callback.clone();
+        let ids: Vec<String> = iris.iter().map(|iri| iri.id().to_string()).collect();
+
+        tokio::spawn(async move {
+            let mut deserializer = DefaultTDBDeserializer;
+            match client
+                .get_instances::<T>(ids, &spec, Default::default(), &mut deserializer)
+                .await
+            {
+                Ok(instances) => {
+                    callback(instances);
+                }
+                Err(e) => {
+                    error!("Failed to fetch documents for on_added_batch callback: {}", e);
+                }
+            }
+        });
+    }
+}
+
+struct ChangedBatchHandlerImpl<T, F> {
+    callback: Arc<F>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T, F> ChangedBatchHandler for ChangedBatchHandlerImpl<T, F>
+where
+    T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    F: Fn(Vec<(T, HashMap<String, Value>)>) + Send + Sync + 'static,
+{
+    fn handle(
+        &self,
+        items: Vec<(TdbIRI, HashMap<String, Value>)>,
+        client: TerminusDBHttpClient,
+        spec: BranchSpec,
+    ) {
+        let callback = self.callback.clone();
+        let ids: Vec<String> = items.iter().map(|(iri, _)| iri.id().to_string()).collect();
+        let changed_fields_map: HashMap<String, HashMap<String, Value>> = items
+            .iter()
+            .map(|(iri, fields)| (iri.id().to_string(), fields.clone()))
+            .collect();
+
+        tokio::spawn(async move {
+            let mut deserializer = DefaultTDBDeserializer;
+            match client
+                .get_instances::<T>(ids.clone(), &spec, Default::default(), &mut deserializer)
+                .await
+            {
+                Ok(instances) => {
+                    // Pair up instances with their changed fields
+                    let paired: Vec<(T, HashMap<String, Value>)> = instances
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(idx, instance)| {
+                            ids.get(idx)
+                                .and_then(|id| changed_fields_map.get(id))
+                                .map(|fields| (instance, fields.clone()))
+                        })
+                        .collect();
+                    callback(paired);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to fetch documents for on_changed_batch callback: {}",
+                        e
                     );
                 }
             }
@@ -398,6 +501,82 @@ impl ChangeListener {
         self
     }
 
+    /// Register a callback for when documents are added (fetches all documents in a single batch)
+    ///
+    /// This is more efficient than `on_added` when multiple documents of the same type are
+    /// added in a single changeset, as it fetches all documents in one database query.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// listener.on_added_batch::<User>(|users| {
+    ///     println!("Added {} users in batch", users.len());
+    ///     for user in users {
+    ///         println!("  - {} ({})", user.name, user.email);
+    ///     }
+    /// });
+    /// ```
+    pub fn on_added_batch<T>(
+        &self,
+        callback: impl Fn(Vec<T>) + Send + Sync + 'static,
+    ) -> &Self
+    where
+        T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    {
+        let type_name = T::schema_name().to_string();
+        let handler = Box::new(AddedBatchHandlerImpl::<T, _> {
+            callback: Arc::new(callback),
+            _phantom: PhantomData,
+        });
+
+        let mut registry = self.inner.handlers.write().unwrap();
+        registry
+            .added_batch_handlers
+            .entry(type_name.clone())
+            .or_insert_with(Vec::new)
+            .push(handler);
+
+        debug!("Registered on_added_batch handler for type: {}", type_name);
+        self
+    }
+
+    /// Register a callback for when documents change (fetches all documents in a single batch)
+    ///
+    /// This is more efficient than `on_changed` when multiple documents of the same type are
+    /// updated in a single changeset, as it fetches all documents in one database query.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// listener.on_changed_batch::<User>(|changes| {
+    ///     println!("Changed {} users in batch", changes.len());
+    ///     for (user, changed_fields) in changes {
+    ///         println!("  - {} changed fields: {:?}", user.name, changed_fields.keys());
+    ///     }
+    /// });
+    /// ```
+    pub fn on_changed_batch<T>(
+        &self,
+        callback: impl Fn(Vec<(T, HashMap<String, Value>)>) + Send + Sync + 'static,
+    ) -> &Self
+    where
+        T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    {
+        let type_name = T::schema_name().to_string();
+        let handler = Box::new(ChangedBatchHandlerImpl::<T, _> {
+            callback: Arc::new(callback),
+            _phantom: PhantomData,
+        });
+
+        let mut registry = self.inner.handlers.write().unwrap();
+        registry
+            .changed_batch_handlers
+            .entry(type_name.clone())
+            .or_insert_with(Vec::new)
+            .push(handler);
+
+        debug!("Registered on_changed_batch handler for type: {}", type_name);
+        self
+    }
+
 
 }
 
@@ -422,7 +601,12 @@ impl ChangeListenerInner {
     ///
     /// This is called by the SseManager when an event matches this listener's resource path
     pub(crate) async fn dispatch_event(&self, event: ChangesetEvent) -> anyhow::Result<()> {
-        // Process each document change
+        // Group changes by type and action for batched processing
+        let mut added_by_type: HashMap<String, Vec<TdbIRI>> = HashMap::new();
+        let mut updated_by_type: HashMap<String, Vec<(TdbIRI, HashMap<String, Value>)>> = HashMap::new();
+        let mut deleted_by_type: HashMap<String, Vec<TdbIRI>> = HashMap::new();
+
+        // Classify each change
         for change in event.changes {
             // Parse the document ID to get type information
             let iri = match TdbIRI::parse(&change.id) {
@@ -435,17 +619,38 @@ impl ChangeListenerInner {
 
             let type_name = iri.type_name().to_string();
 
-            // Dispatch based on action type
+            // Group by action type
             if change.is_added() {
-                self.dispatch_added(&type_name, iri).await;
+                added_by_type
+                    .entry(type_name)
+                    .or_insert_with(Vec::new)
+                    .push(iri);
             } else if change.is_deleted() {
-                self.dispatch_deleted(&type_name, iri).await;
+                deleted_by_type
+                    .entry(type_name)
+                    .or_insert_with(Vec::new)
+                    .push(iri);
             } else if change.is_updated() {
-                // For updates, we treat them as changes
                 // TODO: Extract actual changed fields from the event metadata
                 let changed_fields = HashMap::new();
-                self.dispatch_changed(&type_name, iri, changed_fields).await;
+                updated_by_type
+                    .entry(type_name)
+                    .or_insert_with(Vec::new)
+                    .push((iri, changed_fields));
             }
+        }
+
+        // Dispatch batched changes per type
+        for (type_name, iris) in added_by_type {
+            self.dispatch_added_batch(&type_name, iris).await;
+        }
+
+        for (type_name, items) in updated_by_type {
+            self.dispatch_changed_batch(&type_name, items).await;
+        }
+
+        for (type_name, iris) in deleted_by_type {
+            self.dispatch_deleted_batch(&type_name, iris).await;
         }
 
         Ok(())
@@ -506,6 +711,140 @@ impl ChangeListenerInner {
                     self.client.clone(),
                     self.spec.clone(),
                 );
+            }
+        }
+    }
+
+    /// Dispatch batch of added documents (conditionally fetches based on registered handlers)
+    async fn dispatch_added_batch(&self, type_name: &str, iris: Vec<TdbIRI>) {
+        if iris.is_empty() {
+            return;
+        }
+
+        let registry = self.handlers.read().unwrap();
+
+        // Dispatch to on_added_id handlers (no fetch needed)
+        if let Some(handlers) = registry.added_id_handlers.get(type_name) {
+            for iri in &iris {
+                for handler in handlers {
+                    handler.handle(iri.clone());
+                }
+            }
+        }
+
+        // Check if we need to fetch documents
+        let needs_individual_fetch = registry.added_handlers.get(type_name).map_or(false, |h| !h.is_empty());
+        let needs_batch_fetch = registry.added_batch_handlers.get(type_name).map_or(false, |h| !h.is_empty());
+
+        if !needs_individual_fetch && !needs_batch_fetch {
+            // No handlers need fetching, we're done
+            debug!(
+                "Skipping fetch for {} added documents of type {} (no fetching handlers registered)",
+                iris.len(),
+                type_name
+            );
+            return;
+        }
+
+        debug!(
+            "Fetching {} added documents of type {} in single batch query",
+            iris.len(),
+            type_name
+        );
+
+        // Dispatch to batch handlers
+        if let Some(handlers) = registry.added_batch_handlers.get(type_name) {
+            for handler in handlers {
+                handler.handle(iris.clone(), self.client.clone(), self.spec.clone());
+            }
+        }
+
+        // Dispatch to individual handlers (will each spawn async task to fetch)
+        if let Some(handlers) = registry.added_handlers.get(type_name) {
+            for iri in &iris {
+                for handler in handlers {
+                    handler.handle(iri.clone(), self.client.clone(), self.spec.clone());
+                }
+            }
+        }
+    }
+
+    /// Dispatch batch of changed documents (conditionally fetches based on registered handlers)
+    async fn dispatch_changed_batch(
+        &self,
+        type_name: &str,
+        items: Vec<(TdbIRI, HashMap<String, Value>)>,
+    ) {
+        if items.is_empty() {
+            return;
+        }
+
+        let registry = self.handlers.read().unwrap();
+
+        // Dispatch to on_changeset handlers (no fetch needed)
+        if let Some(handlers) = registry.changeset_handlers.get(type_name) {
+            for (iri, changed_fields) in &items {
+                for handler in handlers {
+                    handler.handle(iri.clone(), changed_fields.clone());
+                }
+            }
+        }
+
+        // Check if we need to fetch documents
+        let needs_individual_fetch = registry.changed_handlers.get(type_name).map_or(false, |h| !h.is_empty());
+        let needs_batch_fetch = registry.changed_batch_handlers.get(type_name).map_or(false, |h| !h.is_empty());
+
+        if !needs_individual_fetch && !needs_batch_fetch {
+            // No handlers need fetching, we're done
+            debug!(
+                "Skipping fetch for {} changed documents of type {} (no fetching handlers registered)",
+                items.len(),
+                type_name
+            );
+            return;
+        }
+
+        debug!(
+            "Fetching {} changed documents of type {} in single batch query",
+            items.len(),
+            type_name
+        );
+
+        // Dispatch to batch handlers
+        if let Some(handlers) = registry.changed_batch_handlers.get(type_name) {
+            for handler in handlers {
+                handler.handle(items.clone(), self.client.clone(), self.spec.clone());
+            }
+        }
+
+        // Dispatch to individual handlers (will each spawn async task to fetch)
+        if let Some(handlers) = registry.changed_handlers.get(type_name) {
+            for (iri, changed_fields) in &items {
+                for handler in handlers {
+                    handler.handle(
+                        iri.clone(),
+                        changed_fields.clone(),
+                        self.client.clone(),
+                        self.spec.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Dispatch batch of deleted documents (never needs fetching)
+    async fn dispatch_deleted_batch(&self, type_name: &str, iris: Vec<TdbIRI>) {
+        if iris.is_empty() {
+            return;
+        }
+
+        let registry = self.handlers.read().unwrap();
+
+        if let Some(handlers) = registry.deleted_handlers.get(type_name) {
+            for iri in &iris {
+                for handler in handlers {
+                    handler.handle(iri.clone());
+                }
             }
         }
     }
