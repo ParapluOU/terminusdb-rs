@@ -4,11 +4,12 @@ members = [
     "client",
     "schema",
     "schema/derive",
-    "woql-builder", 
+    "woql-builder",
     "woql2",
     "typestate",
     "woql-dsl",
     "mcp-server",
+    "cli",
     "relation",
     "relation/derive",
 ]

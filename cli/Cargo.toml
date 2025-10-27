@@ -1,0 +1,33 @@
+[package]
+name = "terminusdb-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CLI tool for TerminusDB operations"
+repository.workspace = true
+keywords = ["terminusdb", "cli", "database", "changestream"]
+categories = ["command-line-utilities", "database"]
+
+[[bin]]
+name = "tdb"
+path = "src/main.rs"
+
+[dependencies]
+terminusdb-client = { path = "../client" }
+clap = { version = "4.5", features = ["derive", "env"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+# Use reqwest 0.12 to match reqwest-eventsource 0.6
+reqwest = { version = "0.12", features = ["json"] }
+reqwest-eventsource = "0.6"
+colored = "2.1"
+supports-color = "3.0"
+atty = "0.2"
