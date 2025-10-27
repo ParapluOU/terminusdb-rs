@@ -90,7 +90,8 @@ impl SseConnection {
     /// Create a new SSE connection
     pub fn new(endpoint: String, user: String, pass: String) -> Self {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout for long-lived connections
+            .connect_timeout(std::time::Duration::from_secs(30)) // Only timeout for establishing connection
+            // No read timeout - SSE streams are indefinite, server sends heartbeats every 30s
             .build()
             .expect("Failed to create HTTP client");
 
