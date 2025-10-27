@@ -38,6 +38,12 @@ pub struct TerminusDBHttpClient {
     /// Centralized SSE manager for change listeners (lazily initialized)
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) sse_manager: Arc<RwLock<Option<Arc<super::sse_manager::SseManager>>>>,
+    /// Rate limiter for read operations (GET requests)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) read_rate_limiter: Option<Arc<governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>,
+    /// Rate limiter for write operations (POST/PUT/DELETE requests)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) write_rate_limiter: Option<Arc<governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>,
 }
 
 // Wrap the entire impl block with a conditional compilation attribute
@@ -147,10 +153,10 @@ impl TerminusDBHttpClient {
 
         endpoint.path_segments_mut().expect(&err).push("api");
 
-        Ok(Self {
+        let mut client = Self {
             user: user.to_string(),
             pass: pass.to_string(),
-            endpoint,
+            endpoint: endpoint.clone(),
             http: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
@@ -160,7 +166,17 @@ impl TerminusDBHttpClient {
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),
             ensured_databases: Arc::new(Mutex::new(HashSet::new())),
             sse_manager: Arc::new(RwLock::new(None)),
-        })
+            read_rate_limiter: None,
+            write_rate_limiter: None,
+        };
+
+        // Apply rate limiting from environment variables if present
+        if let Some(config) = super::rate_limiter::RateLimitConfig::from_env() {
+            debug!("Applying rate limits from environment variables");
+            client = client.with_rate_limit(config);
+        }
+
+        Ok(client)
     }
 
     #[instrument(
@@ -325,6 +341,9 @@ impl TerminusDBHttpClient {
             &uri
         );
 
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
+
         let res = self
             .http
             .get(uri.clone())
@@ -346,6 +365,92 @@ impl TerminusDBHttpClient {
     )]
     pub async fn is_running(&self) -> bool {
         self.info().await.is_ok()
+    }
+
+    /// Returns the SSE changeset stream endpoint URL
+    ///
+    /// This constructs the full URL for the TerminusDB Server-Sent Events (SSE)
+    /// changeset stream endpoint. The URL includes the `/api` prefix that is
+    /// automatically added by the client constructor.
+    ///
+    /// # Returns
+    /// The full URL for the SSE changeset stream endpoint
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let client = TerminusDBHttpClient::new(
+    ///     Url::parse("http://localhost:6363").unwrap(),
+    ///     "admin",
+    ///     "root",
+    ///     "admin"
+    /// ).await?;
+    ///
+    /// let sse_url = client.get_sse_url();
+    /// // Returns: "http://localhost:6363/api/changesets/stream"
+    /// ```
+    pub fn get_sse_url(&self) -> String {
+        format!("{}/changesets/stream", self.endpoint.to_string().trim_end_matches('/'))
+    }
+
+    // ===== Rate Limiting Methods =====
+
+    /// Configure rate limiting for this client
+    ///
+    /// Rate limiters are keyed per host, so multiple clients connecting to the same
+    /// host will share the same rate limiters, ensuring coordinated rate limiting.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Rate limit configuration specifying requests per second for reads and writes
+    ///
+    /// # Returns
+    ///
+    /// Self for method chaining
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use terminusdb_client::http::RateLimitConfig;
+    ///
+    /// let client = TerminusDBHttpClient::new(url, "admin", "root", "admin")
+    ///     .await?
+    ///     .with_rate_limit(RateLimitConfig {
+    ///         read_requests_per_second: Some(10),
+    ///         write_requests_per_second: Some(5),
+    ///     });
+    /// ```
+    pub fn with_rate_limit(mut self, config: super::rate_limiter::RateLimitConfig) -> Self {
+        let host = self.endpoint.host_str().unwrap_or("localhost");
+        let (read, write) = super::rate_limiter::get_or_create_rate_limiters(host, &config);
+        self.read_rate_limiter = read;
+        self.write_rate_limiter = write;
+        debug!(
+            "Rate limiting configured for host {}: read={:?}, write={:?}",
+            host,
+            config.read_requests_per_second,
+            config.write_requests_per_second
+        );
+        self
+    }
+
+    /// Wait for read rate limit before making a GET request
+    ///
+    /// This is called internally before GET requests. If rate limiting is not
+    /// configured, this method returns immediately.
+    async fn wait_for_read_rate_limit(&self) {
+        if let Some(limiter) = &self.read_rate_limiter {
+            limiter.until_ready().await;
+        }
+    }
+
+    /// Wait for write rate limit before making a POST/PUT/DELETE request
+    ///
+    /// This is called internally before POST, PUT, and DELETE requests. If rate
+    /// limiting is not configured, this method returns immediately.
+    async fn wait_for_write_rate_limit(&self) {
+        if let Some(limiter) = &self.write_rate_limiter {
+            limiter.until_ready().await;
+        }
     }
 
     // ===== Debug/Logging Methods =====

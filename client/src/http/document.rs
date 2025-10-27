@@ -510,6 +510,9 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("POST {} to URI {}", &ty, &uri);
 
+                // Apply rate limiting for write operations
+                self.wait_for_write_rate_limit().await;
+
                 let mut request = self.http
                     .post(uri)
                     .basic_auth(&self.user, Some(&self.pass))
@@ -545,6 +548,9 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("PUT {} to URI {} (create=false)", &ty, &uri);
 
+                // Apply rate limiting for write operations
+                self.wait_for_write_rate_limit().await;
+
                 let mut request = self.http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
@@ -566,6 +572,9 @@ impl super::client::TerminusDBHttpClient {
                     .build();
 
                 debug!("PUT {} to URI {} (create=true)", &ty, &uri);
+
+                // Apply rate limiting for write operations
+                self.wait_for_write_rate_limit().await;
 
                 let mut request = self.http
                     .put(uri)

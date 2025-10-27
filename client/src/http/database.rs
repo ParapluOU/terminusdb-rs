@@ -61,6 +61,9 @@ impl super::client::TerminusDBHttpClient {
             OperationEntry::new(OperationType::CreateDatabase, format!("/api/db/{}", db))
                 .with_context(Some(db.to_string()), None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         // todo: author should probably be node name
         let res = self
             .http
@@ -214,6 +217,9 @@ impl super::client::TerminusDBHttpClient {
         let mut operation =
             OperationEntry::new(OperationType::DeleteDatabase, format!("/api/db/{}", db))
                 .with_context(Some(db.to_string()), None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let result = self
             .http
@@ -373,6 +379,9 @@ impl super::client::TerminusDBHttpClient {
 
         debug!("Listing databases with URI: {}", &uri);
 
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
+
         let res = self
             .http
             .get(uri.clone())
@@ -511,6 +520,9 @@ impl super::client::TerminusDBHttpClient {
             body["comment"] = json!(c);
         }
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .put(uri)
@@ -583,6 +595,9 @@ impl super::client::TerminusDBHttpClient {
         )
         .with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -652,6 +667,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/prefixes/{}", path),
         )
         .with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
