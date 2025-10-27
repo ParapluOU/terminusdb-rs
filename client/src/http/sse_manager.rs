@@ -4,11 +4,14 @@
 //! changeset events to registered listeners based on their resource paths.
 
 use super::change_listener::ChangeListenerInner;
-use super::changeset::{ChangesetEvent, SseConnection};
+use super::changeset::ChangesetEvent;
 use anyhow::{anyhow, Context};
 use futures_util::stream::StreamExt;
+use reqwest::Client;
+use reqwest_eventsource::{Event, EventSource};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Weak};
+use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -78,17 +81,7 @@ impl SseManager {
         // Start new background task
         let manager = self.inner.clone();
         let handle = tokio::spawn(async move {
-            loop {
-                match manager.run_sse_loop().await {
-                    Ok(()) => {
-                        warn!("SSE connection closed, reconnecting in 5 seconds...");
-                    }
-                    Err(e) => {
-                        error!("SSE connection error: {}, reconnecting in 5 seconds...", e);
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
+            manager.run_sse_loop_with_retry().await;
         });
 
         *handle_lock = Some(handle);
@@ -112,30 +105,82 @@ impl SseManager {
 }
 
 impl SseManagerInner {
-    /// Main SSE processing loop
+    /// Main SSE processing loop with automatic retry
+    async fn run_sse_loop_with_retry(&self) {
+        loop {
+            match self.run_sse_loop().await {
+                Ok(()) => {
+                    warn!("SSE connection closed, reconnecting in 5 seconds...");
+                }
+                Err(e) => {
+                    error!("SSE connection error: {}, reconnecting in 5 seconds...", e);
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
+
+    /// Main SSE processing loop using reqwest-eventsource
     async fn run_sse_loop(&self) -> anyhow::Result<()> {
-        let connection = SseConnection::new(
-            self.endpoint.clone(),
-            self.user.clone(),
-            self.pass.clone(),
+        // Ensure proper path joining - strip trailing slash from endpoint, then add our path
+        let url = format!("{}/changesets/stream", self.endpoint.trim_end_matches('/'));
+
+        debug!(
+            "SSE connection request: GET {} (user: {}, auth: basic)",
+            url, self.user
         );
 
-        let stream = connection.connect().await?;
-        let mut stream = Box::pin(stream);
+        // Build HTTP client with appropriate timeout
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        // Create authenticated request
+        let request = client
+            .get(&url)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Accept", "text/event-stream");
+
+        // Create EventSource from the request
+        let mut event_source = EventSource::new(request)
+            .map_err(|e| anyhow!("Failed to create EventSource: {}", e))?;
 
         info!("SSE connection established, processing events...");
 
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(event) => {
-                    self.route_event(event).await;
+        // Process events from the stream
+        while let Some(event_result) = event_source.next().await {
+            match event_result {
+                Ok(Event::Open) => {
+                    info!("SSE connection opened successfully");
+                }
+                Ok(Event::Message(message)) => {
+                    // Only process changeset events
+                    if message.event == "changeset" {
+                        match serde_json::from_str::<ChangesetEvent>(&message.data) {
+                            Ok(changeset_event) => {
+                                self.route_event(changeset_event).await;
+                            }
+                            Err(e) => {
+                                warn!("Failed to parse changeset event: {}", e);
+                                debug!("Raw event data: {}", message.data);
+                            }
+                        }
+                    } else if message.event.is_empty() {
+                        // Unnamed events are likely heartbeats or comments
+                        debug!("Received SSE comment/heartbeat");
+                    }
                 }
                 Err(e) => {
                     error!("Error processing SSE event: {}", e);
+                    // EventSource will attempt to reconnect automatically
+                    // We break here to trigger our outer retry loop
+                    return Err(anyhow!("SSE stream error: {}", e));
                 }
             }
         }
 
+        info!("SSE stream ended");
         Ok(())
     }
 
