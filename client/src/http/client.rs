@@ -437,7 +437,7 @@ impl TerminusDBHttpClient {
     ///
     /// This is called internally before GET requests. If rate limiting is not
     /// configured, this method returns immediately.
-    async fn wait_for_read_rate_limit(&self) {
+    pub(crate) async fn wait_for_read_rate_limit(&self) {
         if let Some(limiter) = &self.read_rate_limiter {
             limiter.until_ready().await;
         }
@@ -447,7 +447,7 @@ impl TerminusDBHttpClient {
     ///
     /// This is called internally before POST, PUT, and DELETE requests. If rate
     /// limiting is not configured, this method returns immediately.
-    async fn wait_for_write_rate_limit(&self) {
+    pub(crate) async fn wait_for_write_rate_limit(&self) {
         if let Some(limiter) = &self.write_rate_limiter {
             limiter.until_ready().await;
         }

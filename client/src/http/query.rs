@@ -166,6 +166,9 @@ impl super::client::TerminusDBHttpClient {
 
         trace!("payload: {}", &json_string);
 
+        // Apply rate limiting for read operations (WOQL queries are typically reads)
+        self.wait_for_read_rate_limit().await;
+
         let res = self
             .http
             .post(uri.clone())
@@ -336,6 +339,9 @@ impl super::client::TerminusDBHttpClient {
         let json = serde_json::to_string(&json).unwrap();
 
         trace!("payload: {}", &json);
+
+        // Apply rate limiting for read operations (WOQL queries are typically reads)
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
