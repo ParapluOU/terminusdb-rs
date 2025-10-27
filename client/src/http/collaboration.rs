@@ -64,6 +64,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/fetch/{}", path)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -157,6 +160,9 @@ impl super::client::TerminusDBHttpClient {
         if let Some(branch) = remote_branch {
             body["remote_branch"] = json!(branch);
         }
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http
@@ -257,6 +263,9 @@ impl super::client::TerminusDBHttpClient {
             body["remote_branch"] = json!(branch);
         }
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -355,6 +364,9 @@ impl super::client::TerminusDBHttpClient {
             label: label.map(String::from),
             comment: comment.map(String::from),
         };
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http

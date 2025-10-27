@@ -104,6 +104,9 @@ impl super::client::TerminusDBHttpClient {
             password: password.to_string(),
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -174,6 +177,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("get_user".to_string()),
             format!("/api/user/{}", user_id)
         ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
@@ -263,6 +269,9 @@ impl super::client::TerminusDBHttpClient {
             password: password.map(String::from),
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .put(uri)
@@ -334,6 +343,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/user/{}", user_id)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .delete(uri)
@@ -393,6 +405,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("list_users".to_string()),
             "/api/user".to_string()
         ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http

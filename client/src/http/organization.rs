@@ -105,6 +105,9 @@ impl super::client::TerminusDBHttpClient {
             description: description.map(String::from),
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -175,6 +178,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("get_organization".to_string()),
             format!("/api/organization/{}", org_id)
         ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
@@ -260,6 +266,9 @@ impl super::client::TerminusDBHttpClient {
             description: description.map(String::from),
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .put(uri)
@@ -331,6 +340,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/organization/{}", org_id)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .delete(uri)
@@ -390,6 +402,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("list_organizations".to_string()),
             "/api/organization".to_string()
         ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
@@ -479,6 +494,9 @@ impl super::client::TerminusDBHttpClient {
             "role": role
         });
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -560,6 +578,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("remove_organization_member".to_string()),
             format!("/api/organization/{}/member/{}", org_id, user_id)
         ).with_context(None, None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http

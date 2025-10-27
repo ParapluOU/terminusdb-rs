@@ -72,6 +72,9 @@ impl super::client::TerminusDBHttpClient {
             message: message.to_string(),
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -209,6 +212,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/reset/{}", branch_path)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -291,6 +297,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/branch/{}", branch_path)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -366,6 +375,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("delete_branch".to_string()),
             format!("/api/branch/{}", branch_path)
         ).with_context(None, None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http
@@ -452,6 +464,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("rebase".to_string()),
             format!("/api/rebase/{}", branch_path)
         ).with_context(None, None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http

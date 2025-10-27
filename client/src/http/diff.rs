@@ -84,6 +84,9 @@ impl super::client::TerminusDBHttpClient {
             body["document_id"] = json!(doc_id);
         }
 
+        // Apply rate limiting for read operations (diff is conceptually a read)
+        self.wait_for_read_rate_limit().await;
+
         let res = self
             .http
             .post(uri_builder.build())
@@ -181,6 +184,9 @@ impl super::client::TerminusDBHttpClient {
             message: message.to_string(),
             patch: patch.to_vec(),
         };
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http

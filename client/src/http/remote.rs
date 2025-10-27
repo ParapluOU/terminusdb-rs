@@ -69,6 +69,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/remote/{}", path)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -145,6 +148,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/remote/{}", path)
         ).with_context(None, None);
 
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
+
         let res = self
             .http
             .get(uri)
@@ -219,6 +225,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("update_remote".to_string()),
             format!("/api/remote/{}", path)
         ).with_context(None, None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http
@@ -295,6 +304,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("delete_remote".to_string()),
             format!("/api/remote/{}", path)
         ).with_context(None, None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http

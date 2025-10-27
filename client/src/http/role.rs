@@ -110,6 +110,9 @@ impl super::client::TerminusDBHttpClient {
             permissions,
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -180,6 +183,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("get_role".to_string()),
             format!("/api/role/{}", role_id)
         ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
@@ -264,6 +270,9 @@ impl super::client::TerminusDBHttpClient {
             permissions,
         };
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .put(uri)
@@ -335,6 +344,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/role/{}", role_id)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .delete(uri)
@@ -394,6 +406,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("list_roles".to_string()),
             "/api/role".to_string()
         ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        self.wait_for_read_rate_limit().await;
 
         let res = self
             .http
@@ -472,6 +487,9 @@ impl super::client::TerminusDBHttpClient {
             format!("/api/user/{}/role/{}", user_id, role_id)
         ).with_context(None, None);
 
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
+
         let res = self
             .http
             .post(uri)
@@ -548,6 +566,9 @@ impl super::client::TerminusDBHttpClient {
             OperationType::Other("revoke_role".to_string()),
             format!("/api/user/{}/role/{}", user_id, role_id)
         ).with_context(None, None);
+
+        // Apply rate limiting for write operations
+        self.wait_for_write_rate_limit().await;
 
         let res = self
             .http
