@@ -4,7 +4,7 @@
 //! and dispatching them to registered callbacks based on document type.
 
 use super::{changeset::*, client::TerminusDBHttpClient, sse_manager::SseManager};
-use crate::{spec::BranchSpec, DefaultTDBDeserializer};
+use crate::{document::GetOpts, spec::BranchSpec, DefaultTDBDeserializer};
 use anyhow::Context;
 use serde_json::Value;
 use std::{
@@ -96,7 +96,7 @@ trait AddedIdHandler: Send + Sync {
 
 /// Handler for on_added callbacks (fetches full document)
 trait AddedHandler: Send + Sync {
-    fn handle(&self, iri: TdbIRI, client: TerminusDBHttpClient, spec: BranchSpec);
+    fn handle(&self, iri: TdbIRI, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts);
 }
 
 /// Handler for on_deleted callbacks (ID only)
@@ -117,12 +117,13 @@ trait ChangedHandler: Send + Sync {
         changed_fields: HashMap<String, Value>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
+        opts: &GetOpts,
     );
 }
 
 /// Handler for on_added_batch callbacks (fetches multiple documents at once)
 trait AddedBatchHandler: Send + Sync {
-    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec);
+    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts);
 }
 
 /// Handler for on_changed_batch callbacks (fetches multiple documents at once with change info)
@@ -132,6 +133,7 @@ trait ChangedBatchHandler: Send + Sync {
         items: Vec<(TdbIRI, HashMap<String, Value>)>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
+        opts: &GetOpts,
     );
 }
 
@@ -152,6 +154,7 @@ where
 
 struct AddedHandlerImpl<T, F> {
     callback: Arc<F>,
+    opts: GetOpts,
     _phantom: PhantomData<T>,
 }
 
@@ -160,14 +163,15 @@ where
     T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
     F: Fn(T) + Send + Sync + 'static,
 {
-    fn handle(&self, iri: TdbIRI, client: TerminusDBHttpClient, spec: BranchSpec) {
+    fn handle(&self, iri: TdbIRI, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts) {
         let callback = self.callback.clone();
         let id = iri.id().to_string();
         let iri_clone = iri.clone();
+        let opts = self.opts.clone();
 
         tokio::spawn(async move {
             let mut deserializer = DefaultTDBDeserializer;
-            match client.get_instance::<T>(&id, &spec, &mut deserializer).await {
+            match client.get_instance_with_opts::<T>(&id, &spec, opts, &mut deserializer).await {
                 Ok(instance) => {
                     callback(instance);
                 }
@@ -210,6 +214,7 @@ where
 
 struct ChangedHandlerImpl<T, F> {
     callback: Arc<F>,
+    opts: GetOpts,
     _phantom: PhantomData<T>,
 }
 
@@ -224,14 +229,16 @@ where
         changed_fields: HashMap<String, Value>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
+        opts: &GetOpts,
     ) {
         let callback = self.callback.clone();
         let id = iri.id().to_string();
         let iri_clone = iri.clone();
+        let opts = self.opts.clone();
 
         tokio::spawn(async move {
             let mut deserializer = DefaultTDBDeserializer;
-            match client.get_instance::<T>(&id, &spec, &mut deserializer).await {
+            match client.get_instance_with_opts::<T>(&id, &spec, opts, &mut deserializer).await {
                 Ok(instance) => {
                     callback(instance, changed_fields);
                 }
@@ -248,6 +255,7 @@ where
 
 struct AddedBatchHandlerImpl<T, F> {
     callback: Arc<F>,
+    opts: GetOpts,
     _phantom: PhantomData<T>,
 }
 
@@ -256,14 +264,15 @@ where
     T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
     F: Fn(Vec<T>) + Send + Sync + 'static,
 {
-    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec) {
+    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts) {
         let callback = self.callback.clone();
         let ids: Vec<String> = iris.iter().map(|iri| iri.id().to_string()).collect();
+        let opts = self.opts.clone();
 
         tokio::spawn(async move {
             let mut deserializer = DefaultTDBDeserializer;
             match client
-                .get_instances::<T>(ids, &spec, Default::default(), &mut deserializer)
+                .get_instances::<T>(ids, &spec, opts, &mut deserializer)
                 .await
             {
                 Ok(instances) => {
@@ -279,6 +288,7 @@ where
 
 struct ChangedBatchHandlerImpl<T, F> {
     callback: Arc<F>,
+    opts: GetOpts,
     _phantom: PhantomData<T>,
 }
 
@@ -292,6 +302,7 @@ where
         items: Vec<(TdbIRI, HashMap<String, Value>)>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
+        opts: &GetOpts,
     ) {
         let callback = self.callback.clone();
         let ids: Vec<String> = items.iter().map(|(iri, _)| iri.id().to_string()).collect();
@@ -299,11 +310,12 @@ where
             .iter()
             .map(|(iri, fields)| (iri.id().to_string(), fields.clone()))
             .collect();
+        let opts = self.opts.clone();
 
         tokio::spawn(async move {
             let mut deserializer = DefaultTDBDeserializer;
             match client
-                .get_instances::<T>(ids.clone(), &spec, Default::default(), &mut deserializer)
+                .get_instances::<T>(ids.clone(), &spec, opts, &mut deserializer)
                 .await
             {
                 Ok(instances) => {
@@ -397,6 +409,7 @@ impl ChangeListener {
         let type_name = T::schema_name().to_string();
         let handler = Box::new(AddedHandlerImpl::<T, _> {
             callback: Arc::new(callback),
+            opts: GetOpts::default(),
             _phantom: PhantomData,
         });
 
@@ -487,6 +500,7 @@ impl ChangeListener {
         let type_name = T::schema_name().to_string();
         let handler = Box::new(ChangedHandlerImpl::<T, _> {
             callback: Arc::new(callback),
+            opts: GetOpts::default(),
             _phantom: PhantomData,
         });
 
@@ -525,6 +539,7 @@ impl ChangeListener {
         let type_name = T::schema_name().to_string();
         let handler = Box::new(AddedBatchHandlerImpl::<T, _> {
             callback: Arc::new(callback),
+            opts: GetOpts::default(),
             _phantom: PhantomData,
         });
 
@@ -563,6 +578,7 @@ impl ChangeListener {
         let type_name = T::schema_name().to_string();
         let handler = Box::new(ChangedBatchHandlerImpl::<T, _> {
             callback: Arc::new(callback),
+            opts: GetOpts::default(),
             _phantom: PhantomData,
         });
 
@@ -577,6 +593,159 @@ impl ChangeListener {
         self
     }
 
+    /// Register a callback for when a document is added with custom GetOpts (fetches the full document)
+    ///
+    /// This variant allows you to control document fetching behavior (e.g., unfold linked documents).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// listener.on_added_with_opts::<User>(opts, |user| {
+    ///     println!("User added with unfolded fields: {} - {}", user.name, user.email);
+    /// });
+    /// ```
+    pub fn on_added_with_opts<T>(
+        &self,
+        opts: GetOpts,
+        callback: impl Fn(T) + Send + Sync + 'static,
+    ) -> &Self
+    where
+        T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    {
+        let type_name = T::schema_name().to_string();
+        let handler = Box::new(AddedHandlerImpl::<T, _> {
+            callback: Arc::new(callback),
+            opts,
+            _phantom: PhantomData,
+        });
+
+        let mut registry = self.inner.handlers.write().unwrap();
+        registry
+            .added_handlers
+            .entry(type_name.clone())
+            .or_insert_with(Vec::new)
+            .push(handler);
+
+        debug!("Registered on_added_with_opts handler for type: {}", type_name);
+        self
+    }
+
+    /// Register a callback for when a document changes with custom GetOpts (fetches document + changed fields)
+    ///
+    /// This variant allows you to control document fetching behavior (e.g., unfold linked documents).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// listener.on_changed_with_opts::<User>(opts, |user, changed_fields| {
+    ///     println!("User {} changed (unfolded): {:?}", user.name, changed_fields);
+    /// });
+    /// ```
+    pub fn on_changed_with_opts<T>(
+        &self,
+        opts: GetOpts,
+        callback: impl Fn(T, HashMap<String, Value>) + Send + Sync + 'static,
+    ) -> &Self
+    where
+        T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    {
+        let type_name = T::schema_name().to_string();
+        let handler = Box::new(ChangedHandlerImpl::<T, _> {
+            callback: Arc::new(callback),
+            opts,
+            _phantom: PhantomData,
+        });
+
+        let mut registry = self.inner.handlers.write().unwrap();
+        registry
+            .changed_handlers
+            .entry(type_name.clone())
+            .or_insert_with(Vec::new)
+            .push(handler);
+
+        debug!("Registered on_changed_with_opts handler for type: {}", type_name);
+        self
+    }
+
+    /// Register a callback for when documents are added with custom GetOpts (fetches in a single batch)
+    ///
+    /// This variant allows you to control document fetching behavior (e.g., unfold linked documents).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// listener.on_added_batch_with_opts::<User>(opts, |users| {
+    ///     println!("Added {} users in batch (unfolded)", users.len());
+    ///     for user in users {
+    ///         println!("  - {} ({})", user.name, user.email);
+    ///     }
+    /// });
+    /// ```
+    pub fn on_added_batch_with_opts<T>(
+        &self,
+        opts: GetOpts,
+        callback: impl Fn(Vec<T>) + Send + Sync + 'static,
+    ) -> &Self
+    where
+        T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    {
+        let type_name = T::schema_name().to_string();
+        let handler = Box::new(AddedBatchHandlerImpl::<T, _> {
+            callback: Arc::new(callback),
+            opts,
+            _phantom: PhantomData,
+        });
+
+        let mut registry = self.inner.handlers.write().unwrap();
+        registry
+            .added_batch_handlers
+            .entry(type_name.clone())
+            .or_insert_with(Vec::new)
+            .push(handler);
+
+        debug!("Registered on_added_batch_with_opts handler for type: {}", type_name);
+        self
+    }
+
+    /// Register a callback for when documents change with custom GetOpts (fetches in a single batch)
+    ///
+    /// This variant allows you to control document fetching behavior (e.g., unfold linked documents).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let opts = GetOpts::default().with_unfold(true);
+    /// listener.on_changed_batch_with_opts::<User>(opts, |changes| {
+    ///     println!("Changed {} users in batch (unfolded)", changes.len());
+    ///     for (user, changed_fields) in changes {
+    ///         println!("  - {} changed fields: {:?}", user.name, changed_fields.keys());
+    ///     }
+    /// });
+    /// ```
+    pub fn on_changed_batch_with_opts<T>(
+        &self,
+        opts: GetOpts,
+        callback: impl Fn(Vec<(T, HashMap<String, Value>)>) + Send + Sync + 'static,
+    ) -> &Self
+    where
+        T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
+    {
+        let type_name = T::schema_name().to_string();
+        let handler = Box::new(ChangedBatchHandlerImpl::<T, _> {
+            callback: Arc::new(callback),
+            opts,
+            _phantom: PhantomData,
+        });
+
+        let mut registry = self.inner.handlers.write().unwrap();
+        registry
+            .changed_batch_handlers
+            .entry(type_name.clone())
+            .or_insert_with(Vec::new)
+            .push(handler);
+
+        debug!("Registered on_changed_batch_with_opts handler for type: {}", type_name);
+        self
+    }
 
 }
 
@@ -670,7 +839,7 @@ impl ChangeListenerInner {
         // Dispatch to on_added handlers (these will fetch the document)
         if let Some(handlers) = registry.added_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(iri.clone(), self.client.clone(), self.spec.clone());
+                handler.handle(iri.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
             }
         }
     }
@@ -710,6 +879,7 @@ impl ChangeListenerInner {
                     changed_fields.clone(),
                     self.client.clone(),
                     self.spec.clone(),
+                    &GetOpts::default(),
                 );
             }
         }
@@ -755,7 +925,7 @@ impl ChangeListenerInner {
         // Dispatch to batch handlers
         if let Some(handlers) = registry.added_batch_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(iris.clone(), self.client.clone(), self.spec.clone());
+                handler.handle(iris.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
             }
         }
 
@@ -763,7 +933,7 @@ impl ChangeListenerInner {
         if let Some(handlers) = registry.added_handlers.get(type_name) {
             for iri in &iris {
                 for handler in handlers {
-                    handler.handle(iri.clone(), self.client.clone(), self.spec.clone());
+                    handler.handle(iri.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
                 }
             }
         }
@@ -813,7 +983,7 @@ impl ChangeListenerInner {
         // Dispatch to batch handlers
         if let Some(handlers) = registry.changed_batch_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(items.clone(), self.client.clone(), self.spec.clone());
+                handler.handle(items.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
             }
         }
 
@@ -826,6 +996,7 @@ impl ChangeListenerInner {
                         changed_fields.clone(),
                         self.client.clone(),
                         self.spec.clone(),
+                        &GetOpts::default(),
                     );
                 }
             }
