@@ -39,11 +39,14 @@ plugins:post_commit_hook(Validation_Objects, Meta_Data) :-
 
     resolve_absolute_string_descriptor(Resource, (Validation_Object.descriptor)),
 
-    % Detect document changes using terminus_store layer inspection
+    % Detect document changes using terminus_store layer inspection with timeout
     (   Validation_Object.instance_objects = [Instance_Object|_],
         Layer = Instance_Object.read
     ->  catch(
-            detect_document_changes(Layer, Changes, Added_Count, Deleted_Count, Updated_Count),
+            call_with_time_limit(
+                5.0,  % 5 second timeout for change detection
+                detect_document_changes(Layer, Changes, Added_Count, Deleted_Count, Updated_Count)
+            ),
             Error,
             (json_log_error_formatted("SSE Plugin: Error detecting changes: ~q", [Error]),
              Changes = [], Added_Count = 0, Deleted_Count = 0, Updated_Count = 0)
@@ -146,42 +149,84 @@ detect_document_changes(Layer, Limited_Changes, Added_Count, Deleted_Count, Upda
     json_log_info_formatted("SSE Plugin: Detected ~w changes (~w added, ~w deleted, ~w updated)",
                           [Changes_Count, Added_Count, Deleted_Count, Updated_Count]).
 
-%% SSE Handler
+%% SSE Handler with permission caching
 changeset_sse_handler(get, _Request, System_DB, Auth) :-
     json_log_info_formatted("SSE Plugin: Client connecting", []),
 
-    format('Status: 200~n'),
-    format('Content-Type: text/event-stream~n'),
-    format('Cache-Control: no-cache~n'),
-    format('Connection: keep-alive~n'),
-    format('Transfer-Encoding: chunked~n~n'),
-    flush_output,
+    catch((
+        format('Status: 200~n'),
+        format('Content-Type: text/event-stream~n'),
+        format('Cache-Control: no-cache~n'),
+        format('Connection: keep-alive~n'),
+        format('Transfer-Encoding: chunked~n~n'),
+        flush_output,
 
-    format(': connected~n~n'),
-    flush_output,
+        format(': connected~n~n'),
+        flush_output
+    ), Connect_Error, (
+        json_log_error_formatted("SSE Plugin: Connection setup failed: ~q", [Connect_Error]),
+        fail
+    )),
 
     current_output(Out),
 
     gensym(sse_listener_, Listener_Id),
-    % Pass System_DB and Auth to the callback for permission checking
-    listen(Listener_Id, changeset(Payload), sse_send_event_if_authorized(Out, System_DB, Auth, Payload)),
+
+    % Create permission cache as a global for this connection
+    nb_setval(Listener_Id, _{cache: [], last_check: 0}),
+
+    % Pass System_DB and Auth to the callback for permission checking with cache
+    listen(Listener_Id, changeset(Payload), sse_send_event_if_authorized(Out, System_DB, Auth, Listener_Id, Payload)),
 
     json_log_info_formatted("SSE Plugin: Client ~q connected", [Listener_Id]),
 
     catch(
-        sse_keep_alive_loop(Listener_Id),
+        sse_keep_alive_loop(Listener_Id, Out),
         E,
         json_log_info_formatted("SSE Plugin: Client ~q disconnected: ~q", [Listener_Id, E])
     ),
 
     unlisten(Listener_Id),
+    nb_delete(Listener_Id),
     json_log_info_formatted("SSE Plugin: Client ~q cleaned up", [Listener_Id]).
 
-%% Send SSE event only if user has access to the database
-sse_send_event_if_authorized(Out, System_DB, Auth, Payload) :-
+%% Send SSE event only if user has access to the database (with caching)
+sse_send_event_if_authorized(Out, System_DB, Auth, Listener_Id, Payload) :-
     Resource = (Payload.resource),
-    (   has_changeset_access(System_DB, Auth, Resource)
-    ->  % User has access - send event
+    get_time(Now),
+
+    % Check cache (refresh every 60 seconds) - handle non-existent cache gracefully
+    (   catch(nb_getval(Listener_Id, Cache_Data), _, fail),
+        Cache_Data.cache = Cached_Resources,
+        Cache_Data.last_check = Last_Check,
+        Now - Last_Check < 60,
+        memberchk(Resource, Cached_Resources)
+    ->  Has_Access = true,
+        json_log_info_formatted("SSE Plugin: Cache hit for ~q", [Resource])
+    ;   (   has_changeset_access(System_DB, Auth, Resource)
+        ->  Has_Access = true,
+            % Update cache only if listener exists
+            catch(
+                (nb_getval(Listener_Id, Old_Cache)
+                ->  Old_Resources = Old_Cache.cache,
+                    (   memberchk(Resource, Old_Resources)
+                    ->  New_Resources = Old_Resources
+                    ;   New_Resources = [Resource|Old_Resources]
+                    ),
+                    nb_setval(Listener_Id, _{cache: New_Resources, last_check: Now})
+                ;   nb_setval(Listener_Id, _{cache: [Resource], last_check: Now})
+                ),
+                _,
+                true  % Silently ignore cache update failures
+            ),
+            json_log_info_formatted("SSE Plugin: Access granted and cached for ~q", [Resource])
+        ;   Has_Access = false,
+            json_log_info_formatted("SSE Plugin: Access denied for ~q", [Resource])
+        )
+    ),
+
+    (   Has_Access = true
+    ->  % User has access - send event with error handling
         catch(
             (
                 format(Out, 'event: changeset~n', []),
@@ -190,25 +235,43 @@ sse_send_event_if_authorized(Out, System_DB, Auth, Payload) :-
                 flush_output(Out),
                 json_log_info_formatted("SSE Plugin: Sent changeset event for ~q", [Resource])
             ),
-            E,
-            json_log_error_formatted("SSE Plugin: Send error ~q", [E])
+            Send_Error,
+            (
+                json_log_error_formatted("SSE Plugin: Send error ~q - connection likely dead", [Send_Error]),
+                throw(Send_Error) % Propagate to cleanup connection
+            )
         )
     ;   % User doesn't have access - skip silently
         json_log_info_formatted("SSE Plugin: Skipped changeset for ~q (no access)", [Resource])
     ).
 
-%% Keep-alive loop
-sse_keep_alive_loop(Listener_Id) :-
+%% Keep-alive loop with connection liveness detection
+sse_keep_alive_loop(Listener_Id, Out) :-
     get_time(Start),
-    sse_loop_inner(Listener_Id, Start).
+    sse_loop_inner(Listener_Id, Out, Start).
 
-sse_loop_inner(Listener_Id, Last_Heartbeat) :-
-    sleep(10),
+sse_loop_inner(Listener_Id, Out, Last_Heartbeat) :-
+    sleep(5),  % Check every 5 seconds
     get_time(Now),
-    (   Now - Last_Heartbeat > 30
-    ->  format(': heartbeat~n~n'),
-        flush_output,
-        New_Heartbeat = Now
+
+    % Send heartbeat every 15 seconds (reduced from 30)
+    (   Now - Last_Heartbeat > 15
+    ->  catch(
+            (
+                % Test if stream is still writable
+                format(Out, ': heartbeat~n~n', []),
+                flush_output(Out),
+                json_log_info_formatted("SSE Plugin: Heartbeat sent for ~q", [Listener_Id]),
+                New_Heartbeat = Now
+            ),
+            Heartbeat_Error,
+            (
+                json_log_error_formatted("SSE Plugin: Heartbeat failed for ~q: ~q", [Listener_Id, Heartbeat_Error]),
+                throw(connection_dead(Heartbeat_Error))
+            )
+        )
     ;   New_Heartbeat = Last_Heartbeat
     ),
-    sse_loop_inner(Listener_Id, New_Heartbeat).
+
+    % Continue loop
+    sse_loop_inner(Listener_Id, Out, New_Heartbeat).
