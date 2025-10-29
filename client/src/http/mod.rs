@@ -54,9 +54,9 @@ pub mod versions;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod sse_manager;
 
-// Rate limiting (conditionally compiled for non-WASM)
+// Concurrency limiting (conditionally compiled for non-WASM)
 #[cfg(not(target_arch = "wasm32"))]
-pub mod rate_limiter;
+pub mod concurrency_limiter;
 
 // Re-export main types and traits
 pub use change_listener::ChangeListener;
@@ -71,7 +71,7 @@ pub use helpers::{
 pub use insert_result::InsertInstanceResult;
 pub use organization::{Organization, OrganizationMember};
 #[cfg(not(target_arch = "wasm32"))]
-pub use rate_limiter::RateLimitConfig;
+pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use remote::{RemoteConfig, RemoteInfo};
 pub use role::{Role, Permission};
 pub use terminusdb_schema::TerminusDBModel;

@@ -38,12 +38,12 @@ pub struct TerminusDBHttpClient {
     /// Centralized SSE manager for change listeners (lazily initialized)
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) sse_manager: Arc<RwLock<Option<Arc<super::sse_manager::SseManager>>>>,
-    /// Rate limiter for read operations (GET requests)
+    /// Semaphore for limiting concurrent read operations (GET requests)
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) read_rate_limiter: Option<Arc<governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>,
-    /// Rate limiter for write operations (POST/PUT/DELETE requests)
+    pub(crate) read_semaphore: Option<Arc<tokio::sync::Semaphore>>,
+    /// Semaphore for limiting concurrent write operations (POST/PUT/DELETE requests)
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) write_rate_limiter: Option<Arc<governor::RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>>,
+    pub(crate) write_semaphore: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 // Wrap the entire impl block with a conditional compilation attribute
@@ -166,14 +166,14 @@ impl TerminusDBHttpClient {
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),
             ensured_databases: Arc::new(Mutex::new(HashSet::new())),
             sse_manager: Arc::new(RwLock::new(None)),
-            read_rate_limiter: None,
-            write_rate_limiter: None,
+            read_semaphore: None,
+            write_semaphore: None,
         };
 
-        // Apply rate limiting from environment variables if present
-        if let Some(config) = super::rate_limiter::RateLimitConfig::from_env() {
-            debug!("Applying rate limits from environment variables");
-            client = client.with_rate_limit(config);
+        // Apply concurrency limiting from environment variables if present
+        if let Some(config) = super::concurrency_limiter::ConcurrencyLimitConfig::from_env() {
+            debug!("Applying concurrency limits from environment variables");
+            client = client.with_concurrency_limit(config);
         }
 
         Ok(client)
@@ -341,8 +341,8 @@ impl TerminusDBHttpClient {
             &uri
         );
 
-        // Apply rate limiting for read operations
-        self.wait_for_read_rate_limit().await;
+        // Acquire concurrency permit for read operations
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http
@@ -392,16 +392,16 @@ impl TerminusDBHttpClient {
         format!("{}/changesets/stream", self.endpoint.to_string().trim_end_matches('/'))
     }
 
-    // ===== Rate Limiting Methods =====
+    // ===== Concurrency Limiting Methods =====
 
-    /// Configure rate limiting for this client
+    /// Configure concurrency limiting for this client
     ///
-    /// Rate limiters are keyed per host, so multiple clients connecting to the same
-    /// host will share the same rate limiters, ensuring coordinated rate limiting.
+    /// Semaphores are keyed per host, so multiple clients connecting to the same
+    /// host will share the same semaphores, ensuring coordinated concurrency control.
     ///
     /// # Arguments
     ///
-    /// * `config` - Rate limit configuration specifying requests per second for reads and writes
+    /// * `config` - Concurrency limit configuration specifying max concurrent operations for reads and writes
     ///
     /// # Returns
     ///
@@ -410,46 +410,56 @@ impl TerminusDBHttpClient {
     /// # Example
     ///
     /// ```rust,ignore
-    /// use terminusdb_client::http::RateLimitConfig;
+    /// use terminusdb_client::http::ConcurrencyLimitConfig;
     ///
     /// let client = TerminusDBHttpClient::new(url, "admin", "root", "admin")
     ///     .await?
-    ///     .with_rate_limit(RateLimitConfig {
-    ///         read_requests_per_second: Some(10),
-    ///         write_requests_per_second: Some(5),
+    ///     .with_concurrency_limit(ConcurrencyLimitConfig {
+    ///         max_concurrent_reads: Some(10),
+    ///         max_concurrent_writes: Some(5),
     ///     });
     /// ```
-    pub fn with_rate_limit(mut self, config: super::rate_limiter::RateLimitConfig) -> Self {
+    pub fn with_concurrency_limit(mut self, config: super::concurrency_limiter::ConcurrencyLimitConfig) -> Self {
         let host = self.endpoint.host_str().unwrap_or("localhost");
-        let (read, write) = super::rate_limiter::get_or_create_rate_limiters(host, &config);
-        self.read_rate_limiter = read;
-        self.write_rate_limiter = write;
+        let (read, write) = super::concurrency_limiter::get_or_create_semaphores(host, &config);
+        self.read_semaphore = read;
+        self.write_semaphore = write;
         debug!(
-            "Rate limiting configured for host {}: read={:?}, write={:?}",
+            "Concurrency limiting configured for host {}: read={:?}, write={:?}",
             host,
-            config.read_requests_per_second,
-            config.write_requests_per_second
+            config.max_concurrent_reads,
+            config.max_concurrent_writes
         );
         self
     }
 
-    /// Wait for read rate limit before making a GET request
+    /// Acquire a permit for a read operation
     ///
-    /// This is called internally before GET requests. If rate limiting is not
-    /// configured, this method returns immediately.
-    pub(crate) async fn wait_for_read_rate_limit(&self) {
-        if let Some(limiter) = &self.read_rate_limiter {
-            limiter.until_ready().await;
+    /// This is called internally before GET requests. If concurrency limiting is not
+    /// configured, this method returns None.
+    ///
+    /// The returned permit (if any) should be held for the duration of the operation.
+    /// When the permit is dropped, the semaphore slot is released automatically.
+    pub(crate) async fn acquire_read_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        if let Some(semaphore) = &self.read_semaphore {
+            Some(semaphore.acquire().await.expect("Semaphore should not be closed"))
+        } else {
+            None
         }
     }
 
-    /// Wait for write rate limit before making a POST/PUT/DELETE request
+    /// Acquire a permit for a write operation
     ///
-    /// This is called internally before POST, PUT, and DELETE requests. If rate
-    /// limiting is not configured, this method returns immediately.
-    pub(crate) async fn wait_for_write_rate_limit(&self) {
-        if let Some(limiter) = &self.write_rate_limiter {
-            limiter.until_ready().await;
+    /// This is called internally before POST, PUT, and DELETE requests. If concurrency
+    /// limiting is not configured, this method returns None.
+    ///
+    /// The returned permit (if any) should be held for the duration of the operation.
+    /// When the permit is dropped, the semaphore slot is released automatically.
+    pub(crate) async fn acquire_write_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        if let Some(semaphore) = &self.write_semaphore {
+            Some(semaphore.acquire().await.expect("Semaphore should not be closed"))
+        } else {
+            None
         }
     }
 

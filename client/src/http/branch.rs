@@ -73,7 +73,7 @@ impl super::client::TerminusDBHttpClient {
         };
 
         // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http
@@ -213,7 +213,7 @@ impl super::client::TerminusDBHttpClient {
         ).with_context(None, None);
 
         // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http
@@ -298,7 +298,7 @@ impl super::client::TerminusDBHttpClient {
         ).with_context(None, None);
 
         // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http
@@ -377,7 +377,7 @@ impl super::client::TerminusDBHttpClient {
         ).with_context(None, None);
 
         // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http
@@ -466,7 +466,7 @@ impl super::client::TerminusDBHttpClient {
         ).with_context(None, None);
 
         // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http

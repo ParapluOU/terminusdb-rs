@@ -166,8 +166,8 @@ impl super::client::TerminusDBHttpClient {
 
         trace!("payload: {}", &json_string);
 
-        // Apply rate limiting for read operations (WOQL queries are typically reads)
-        self.wait_for_read_rate_limit().await;
+        // Acquire concurrency permit for read operations (WOQL queries are typically reads)
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http
@@ -340,8 +340,8 @@ impl super::client::TerminusDBHttpClient {
 
         trace!("payload: {}", &json);
 
-        // Apply rate limiting for read operations (WOQL queries are typically reads)
-        self.wait_for_read_rate_limit().await;
+        // Acquire concurrency permit for read operations (WOQL queries are typically reads)
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http

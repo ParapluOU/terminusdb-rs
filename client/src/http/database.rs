@@ -61,8 +61,8 @@ impl super::client::TerminusDBHttpClient {
             OperationEntry::new(OperationType::CreateDatabase, format!("/api/db/{}", db))
                 .with_context(Some(db.to_string()), None);
 
-        // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        // Acquire concurrency permit for write operations
+        let _permit = self.acquire_write_permit().await;
 
         // todo: author should probably be node name
         let res = self
@@ -218,8 +218,8 @@ impl super::client::TerminusDBHttpClient {
             OperationEntry::new(OperationType::DeleteDatabase, format!("/api/db/{}", db))
                 .with_context(Some(db.to_string()), None);
 
-        // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        // Acquire concurrency permit for write operations
+        let _permit = self.acquire_write_permit().await;
 
         let result = self
             .http
@@ -379,8 +379,8 @@ impl super::client::TerminusDBHttpClient {
 
         debug!("Listing databases with URI: {}", &uri);
 
-        // Apply rate limiting for read operations
-        self.wait_for_read_rate_limit().await;
+        // Acquire concurrency permit for read operations
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http
@@ -520,8 +520,8 @@ impl super::client::TerminusDBHttpClient {
             body["comment"] = json!(c);
         }
 
-        // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        // Acquire concurrency permit for write operations
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http
@@ -595,8 +595,8 @@ impl super::client::TerminusDBHttpClient {
         )
         .with_context(None, None);
 
-        // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        // Acquire concurrency permit for write operations
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http
@@ -668,8 +668,8 @@ impl super::client::TerminusDBHttpClient {
         )
         .with_context(None, None);
 
-        // Apply rate limiting for read operations
-        self.wait_for_read_rate_limit().await;
+        // Acquire concurrency permit for read operations
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http

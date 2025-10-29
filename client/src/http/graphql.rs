@@ -220,8 +220,8 @@ impl TerminusDBHttpClient {
         )
         .with_additional_context(request.query.clone());
 
-        // Apply rate limiting for read operations (GraphQL queries are typically reads)
-        self.wait_for_read_rate_limit().await;
+        // Acquire concurrency permit for read operations (GraphQL queries are typically reads)
+        let _permit = self.acquire_read_permit().await;
 
         let response = self
             .http

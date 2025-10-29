@@ -85,7 +85,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Apply rate limiting for read operations (diff is conceptually a read)
-        self.wait_for_read_rate_limit().await;
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http
@@ -186,7 +186,7 @@ impl super::client::TerminusDBHttpClient {
         };
 
         // Apply rate limiting for write operations
-        self.wait_for_write_rate_limit().await;
+        let _permit = self.acquire_write_permit().await;
 
         let res = self
             .http

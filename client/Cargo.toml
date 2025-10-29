@@ -46,8 +46,7 @@ reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 reqwest-eventsource = "0.6"
 tempfile = "3"
 subprocess = "0.2.9"
-# Rate limiting dependencies
-governor = "0.6"
+# Concurrency limiting dependencies
 dashmap = "5.5"
 once_cell = "1.19"
 

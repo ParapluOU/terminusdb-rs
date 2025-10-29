@@ -510,8 +510,8 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("POST {} to URI {}", &ty, &uri);
 
-                // Apply rate limiting for write operations
-                self.wait_for_write_rate_limit().await;
+                // Acquire concurrency permit for write operations
+                let _permit = self.acquire_write_permit().await;
 
                 let mut request = self.http
                     .post(uri)
@@ -548,8 +548,8 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("PUT {} to URI {} (create=false)", &ty, &uri);
 
-                // Apply rate limiting for write operations
-                self.wait_for_write_rate_limit().await;
+                // Acquire concurrency permit for write operations
+                let _permit = self.acquire_write_permit().await;
 
                 let mut request = self.http
                     .put(uri)
@@ -573,8 +573,8 @@ impl super::client::TerminusDBHttpClient {
 
                 debug!("PUT {} to URI {} (create=true)", &ty, &uri);
 
-                // Apply rate limiting for write operations
-                self.wait_for_write_rate_limit().await;
+                // Acquire concurrency permit for write operations
+                let _permit = self.acquire_write_permit().await;
 
                 let mut request = self.http
                     .put(uri)
