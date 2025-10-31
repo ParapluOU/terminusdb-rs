@@ -347,6 +347,136 @@ pub struct GetGraphQLSchemaTool {
     pub connection: Option<ConnectionConfig>,
 }
 
+/// Clone a remote repository to create a new local database
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "clone",
+    description = "Clone a remote repository to create a new local database"
+)]
+pub struct CloneTool {
+    /// Organization to create the database in
+    pub organization: String,
+    /// Name for the new database
+    pub database: String,
+    /// URL of the remote repository to clone
+    pub remote_url: String,
+    /// Optional label for the database
+    pub label: Option<String>,
+    /// Optional comment for the database
+    pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Fetch changes from a remote repository
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "fetch",
+    description = "Fetch changes from a remote repository into the local database"
+)]
+pub struct FetchTool {
+    /// Path to fetch into (e.g., "admin/mydb/local/_commits")
+    pub path: String,
+    /// URL of the remote repository
+    pub remote_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Push changes to a remote repository
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "push",
+    description = "Push changes from the local database to a remote repository"
+)]
+pub struct PushTool {
+    /// Path to push from (e.g., "admin/mydb/local/branch/main")
+    pub path: String,
+    /// URL of the remote repository
+    pub remote_url: String,
+    /// Optional remote branch name (defaults to same as local)
+    pub remote_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Pull changes from a remote repository (fetch + merge)
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "pull",
+    description = "Pull changes from a remote repository and merge them into the local database"
+)]
+pub struct PullTool {
+    /// Path to pull into (e.g., "admin/mydb/local/branch/main")
+    pub path: String,
+    /// URL of the remote repository
+    pub remote_url: String,
+    /// Optional remote branch name
+    pub remote_branch: Option<String>,
+    /// Author for the merge commit
+    pub author: String,
+    /// Message for the merge commit
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Add a new remote repository
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "add_remote",
+    description = "Add a new remote repository to a database"
+)]
+pub struct AddRemoteTool {
+    /// Path where the remote will be added (e.g., "admin/mydb/remote/origin")
+    pub path: String,
+    /// URL of the remote repository
+    pub remote_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Get information about a remote repository
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "get_remote",
+    description = "Get information about a remote repository"
+)]
+pub struct GetRemoteTool {
+    /// Path to the remote (e.g., "admin/mydb/remote/origin")
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Update a remote repository URL
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "update_remote",
+    description = "Update the URL of an existing remote repository"
+)]
+pub struct UpdateRemoteTool {
+    /// Path to the remote (e.g., "admin/mydb/remote/origin")
+    pub path: String,
+    /// New URL for the remote repository
+    pub remote_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
+/// Delete a remote repository
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "delete_remote",
+    description = "Delete a remote repository from a database"
+)]
+pub struct DeleteRemoteTool {
+    /// Path to the remote to delete (e.g., "admin/mydb/remote/origin")
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionConfig>,
+}
+
 pub struct TerminusDBMcpHandler {
     saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
 }
@@ -1257,6 +1387,161 @@ impl TerminusDBMcpHandler {
             "message": format!("GraphQL schema downloaded successfully to: {}", output_path)
         }))
     }
+
+    async fn handle_clone(&self, request: CloneTool) -> Result<serde_json::Value> {
+        info!("Cloning repository: {} to {}/{}", request.remote_url, request.organization, request.database);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.clone_repository(
+            &request.organization,
+            &request.database,
+            &request.remote_url,
+            request.label.as_deref(),
+            request.comment.as_deref(),
+        ).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "organization": request.organization,
+            "database": request.database,
+            "remote_url": request.remote_url,
+            "result": result,
+            "message": format!("Successfully cloned repository to {}/{}", request.organization, request.database)
+        }))
+    }
+
+    async fn handle_fetch(&self, request: FetchTool) -> Result<serde_json::Value> {
+        info!("Fetching from remote: {} into path: {}", request.remote_url, request.path);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.fetch(&request.path, &request.remote_url).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "remote_url": request.remote_url,
+            "result": result,
+            "message": format!("Successfully fetched from remote into {}", request.path)
+        }))
+    }
+
+    async fn handle_push(&self, request: PushTool) -> Result<serde_json::Value> {
+        info!("Pushing from path: {} to remote: {}", request.path, request.remote_url);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.push(
+            &request.path,
+            &request.remote_url,
+            request.remote_branch.as_deref(),
+        ).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "remote_url": request.remote_url,
+            "remote_branch": request.remote_branch,
+            "result": result,
+            "message": format!("Successfully pushed from {} to remote", request.path)
+        }))
+    }
+
+    async fn handle_pull(&self, request: PullTool) -> Result<serde_json::Value> {
+        info!("Pulling into path: {} from remote: {}", request.path, request.remote_url);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.pull(
+            &request.path,
+            &request.remote_url,
+            request.remote_branch.as_deref(),
+            &request.author,
+            &request.message,
+        ).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "remote_url": request.remote_url,
+            "remote_branch": request.remote_branch,
+            "author": request.author,
+            "commit_message": request.message,
+            "result": result,
+            "message": format!("Successfully pulled from remote into {}", request.path)
+        }))
+    }
+
+    async fn handle_add_remote(&self, request: AddRemoteTool) -> Result<serde_json::Value> {
+        info!("Adding remote at path: {} with URL: {}", request.path, request.remote_url);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.add_remote(&request.path, &request.remote_url).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "remote_url": request.remote_url,
+            "result": result,
+            "message": format!("Successfully added remote at {}", request.path)
+        }))
+    }
+
+    async fn handle_get_remote(&self, request: GetRemoteTool) -> Result<serde_json::Value> {
+        info!("Getting remote information for path: {}", request.path);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.get_remote(&request.path).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "remote_info": result,
+            "message": format!("Successfully retrieved remote information for {}", request.path)
+        }))
+    }
+
+    async fn handle_update_remote(&self, request: UpdateRemoteTool) -> Result<serde_json::Value> {
+        info!("Updating remote at path: {} with new URL: {}", request.path, request.remote_url);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.update_remote(&request.path, &request.remote_url).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "remote_url": request.remote_url,
+            "result": result,
+            "message": format!("Successfully updated remote at {}", request.path)
+        }))
+    }
+
+    async fn handle_delete_remote(&self, request: DeleteRemoteTool) -> Result<serde_json::Value> {
+        info!("Deleting remote at path: {}", request.path);
+
+        let config = self.get_connection_config(request.connection).await;
+        let client = Self::create_client(&config).await?;
+
+        let result = client.delete_remote(&request.path).await?;
+
+        Ok(serde_json::json!({
+            "status": "success",
+            "path": request.path,
+            "result": result,
+            "message": format!("Successfully deleted remote at {}", request.path)
+        }))
+    }
 }
 
 #[async_trait]
@@ -1281,6 +1566,16 @@ impl ServerHandler for TerminusDBMcpHandler {
                 ResetTool::tool(),
                 OptimizeTool::tool(),
                 GetGraphQLSchemaTool::tool(),
+                // Collaboration operations
+                CloneTool::tool(),
+                FetchTool::tool(),
+                PushTool::tool(),
+                PullTool::tool(),
+                // Remote management operations
+                AddRemoteTool::tool(),
+                GetRemoteTool::tool(),
+                UpdateRemoteTool::tool(),
+                DeleteRemoteTool::tool(),
                 // Temporarily disabled due to serde_json::Value schema issues
                 // InsertDocumentTool::tool(),
                 // InsertDocumentsTool::tool(),
@@ -1697,6 +1992,206 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.handle_get_graphql_schema(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == CloneTool::tool_name() => {
+                let tool_request: CloneTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_clone(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == FetchTool::tool_name() => {
+                let tool_request: FetchTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_fetch(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == PushTool::tool_name() => {
+                let tool_request: PushTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_push(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == PullTool::tool_name() => {
+                let tool_request: PullTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_pull(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == AddRemoteTool::tool_name() => {
+                let tool_request: AddRemoteTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_add_remote(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == GetRemoteTool::tool_name() => {
+                let tool_request: GetRemoteTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_get_remote(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == UpdateRemoteTool::tool_name() => {
+                let tool_request: UpdateRemoteTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_update_remote(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == DeleteRemoteTool::tool_name() => {
+                let tool_request: DeleteRemoteTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_delete_remote(tool_request).await {
                     Ok(result) => {
                         let text_content = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());

@@ -4,12 +4,21 @@
 use reqwest::Client;
 
 use {
-    crate::{Info, TerminusDBAdapterError, debug::{DebugConfig, OperationLog, QueryLogger, QueryLogEntry, OperationFilter}},
+    crate::{
+        debug::{DebugConfig, OperationFilter, OperationLog, QueryLogEntry, QueryLogger},
+        Info, TerminusDBAdapterError,
+    },
     ::tracing::{debug, instrument},
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize, Serialize},
-    std::{env, fmt::Debug, sync::{Arc, Mutex, RwLock}, collections::HashSet, time::Duration},
-    terminusdb_schema::{ToTDBInstance, ToJson},
+    std::{
+        collections::HashSet,
+        env,
+        fmt::Debug,
+        sync::{Arc, Mutex, RwLock},
+        time::Duration,
+    },
+    terminusdb_schema::{ToJson, ToTDBInstance},
     url::Url,
 };
 
@@ -80,7 +89,7 @@ impl TerminusDBHttpClient {
         let password = env::var("TERMINUSDB_ADMIN_PASS")
             .or_else(|_| env::var("TERMINUSDB_PASS"))
             .unwrap_or_else(|_| "root".to_string());
-        
+
         Self::new(
             Url::parse("http://localhost:6363").unwrap(),
             "admin",
@@ -121,7 +130,7 @@ impl TerminusDBHttpClient {
     /// # Arguments
     /// * `endpoint` - The TerminusDB server endpoint URL (will have "/api" appended)
     /// * `user` - Username for authentication
-    /// * `pass` - Password for authentication  
+    /// * `pass` - Password for authentication
     /// * `org` - Organization name
     ///
     /// # Returns
@@ -153,12 +162,17 @@ impl TerminusDBHttpClient {
 
         endpoint.path_segments_mut().expect(&err).push("api");
 
+        let default_timeout = env::var("TERMINUSDB_DEFAULT_REQUEST_TIMEOUT")
+            .unwrap_or("60".to_string())
+            .parse::<u64>()
+            .unwrap();
+
         let mut client = Self {
             user: user.to_string(),
             pass: pass.to_string(),
             endpoint: endpoint.clone(),
             http: Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(default_timeout))
                 .build()?,
             org: org.to_string(),
             operation_log: OperationLog::default(),
@@ -230,39 +244,38 @@ impl TerminusDBHttpClient {
     #[instrument(name = "terminus.client.from_env", err)]
     pub async fn from_env() -> anyhow::Result<Self> {
         use std::env;
-        
-        let endpoint = env::var("TERMINUSDB_HOST")
-            .unwrap_or_else(|_| "http://localhost:6363".to_string());
-        let user = env::var("TERMINUSDB_USER")
-            .unwrap_or_else(|_| "admin".to_string());
-        let password = env::var("TERMINUSDB_PASS")
-            .unwrap_or_else(|_| "root".to_string());
-        let org = env::var("TERMINUSDB_ORG")
-            .unwrap_or_else(|_| "admin".to_string());
-        
-        let endpoint_url = Url::parse(&endpoint)
-            .context(format!("Invalid TERMINUSDB_HOST URL: {}", endpoint))?;
-        
-        debug!("Creating client from environment variables: endpoint={}, user={}, org={}", 
-               endpoint, user, org);
-        
+
+        let endpoint =
+            env::var("TERMINUSDB_HOST").unwrap_or_else(|_| "http://localhost:6363".to_string());
+        let user = env::var("TERMINUSDB_USER").unwrap_or_else(|_| "admin".to_string());
+        let password = env::var("TERMINUSDB_PASS").unwrap_or_else(|_| "root".to_string());
+        let org = env::var("TERMINUSDB_ORG").unwrap_or_else(|_| "admin".to_string());
+
+        let endpoint_url =
+            Url::parse(&endpoint).context(format!("Invalid TERMINUSDB_HOST URL: {}", endpoint))?;
+
+        debug!(
+            "Creating client from environment variables: endpoint={}, user={}, org={}",
+            endpoint, user, org
+        );
+
         let client = Self::new(endpoint_url, &user, &password, &org).await?;
-        
+
         // If TERMINUSDB_DB is set, ensure the database exists
         if let Ok(db) = env::var("TERMINUSDB_DB") {
             debug!("Ensuring database '{}' exists", db);
             let mut client = client.ensure_database(&db).await?;
-            
+
             // If TERMINUSDB_BRANCH is set, check it out (note: this would require adding branch support)
             if let Ok(branch) = env::var("TERMINUSDB_BRANCH") {
                 debug!("Branch '{}' specified via TERMINUSDB_BRANCH", branch);
                 // TODO: Add branch checkout functionality if needed
                 // For now, just log it
             }
-            
+
             return Ok(client);
         }
-        
+
         Ok(client)
     }
 
@@ -277,11 +290,11 @@ impl TerminusDBHttpClient {
     /// # Example
     /// ```ignore
     /// let client = TerminusDBHttpClient::local_node().await;
-    /// 
+    ///
     /// // Execute a query
     /// let query = Query::select().triple("v:Subject", "rdf:type", "owl:Class");
     /// client.query(Some(spec), query).await?;
-    /// 
+    ///
     /// // Retrieve the last executed query
     /// if let Some(last_query) = client.last_query() {
     ///     println!("Last query: {:?}", last_query);
@@ -302,21 +315,21 @@ impl TerminusDBHttpClient {
     /// # Example
     /// ```ignore
     /// let client = TerminusDBHttpClient::local_node().await;
-    /// 
+    ///
     /// // Execute a query
     /// let query = Query::select().triple("v:Subject", "rdf:type", "owl:Class");
     /// client.query(Some(spec), query).await?;
-    /// 
+    ///
     /// // Retrieve the last executed query as JSON
     /// if let Some(last_query_json) = client.last_query_json() {
     ///     println!("Last query JSON: {}", serde_json::to_string_pretty(&last_query_json).unwrap());
     /// }
     /// ```
     pub fn last_query_json(&self) -> Option<serde_json::Value> {
-        use terminusdb_schema::{ToTDBInstance, ToJson};
-        self.last_query().map(|query| query.to_instance(None).to_json())
+        use terminusdb_schema::{ToJson, ToTDBInstance};
+        self.last_query()
+            .map(|query| query.to_instance(None).to_json())
     }
-
 
     /// Centralized URL builder for TerminusDB API endpoints.
     /// Handles all URL construction patterns and eliminates duplication.
@@ -389,7 +402,10 @@ impl TerminusDBHttpClient {
     /// // Returns: "http://localhost:6363/api/changesets/stream"
     /// ```
     pub fn get_sse_url(&self) -> String {
-        format!("{}/changesets/stream", self.endpoint.to_string().trim_end_matches('/'))
+        format!(
+            "{}/changesets/stream",
+            self.endpoint.to_string().trim_end_matches('/')
+        )
     }
 
     // ===== Concurrency Limiting Methods =====
@@ -419,16 +435,17 @@ impl TerminusDBHttpClient {
     ///         max_concurrent_writes: Some(5),
     ///     });
     /// ```
-    pub fn with_concurrency_limit(mut self, config: super::concurrency_limiter::ConcurrencyLimitConfig) -> Self {
+    pub fn with_concurrency_limit(
+        mut self,
+        config: super::concurrency_limiter::ConcurrencyLimitConfig,
+    ) -> Self {
         let host = self.endpoint.host_str().unwrap_or("localhost");
         let (read, write) = super::concurrency_limiter::get_or_create_semaphores(host, &config);
         self.read_semaphore = read;
         self.write_semaphore = write;
         debug!(
             "Concurrency limiting configured for host {}: read={:?}, write={:?}",
-            host,
-            config.max_concurrent_reads,
-            config.max_concurrent_writes
+            host, config.max_concurrent_reads, config.max_concurrent_writes
         );
         self
     }
@@ -442,7 +459,12 @@ impl TerminusDBHttpClient {
     /// When the permit is dropped, the semaphore slot is released automatically.
     pub(crate) async fn acquire_read_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
         if let Some(semaphore) = &self.read_semaphore {
-            Some(semaphore.acquire().await.expect("Semaphore should not be closed"))
+            Some(
+                semaphore
+                    .acquire()
+                    .await
+                    .expect("Semaphore should not be closed"),
+            )
         } else {
             None
         }
@@ -457,7 +479,12 @@ impl TerminusDBHttpClient {
     /// When the permit is dropped, the semaphore slot is released automatically.
     pub(crate) async fn acquire_write_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
         if let Some(semaphore) = &self.write_semaphore {
-            Some(semaphore.acquire().await.expect("Semaphore should not be closed"))
+            Some(
+                semaphore
+                    .acquire()
+                    .await
+                    .expect("Semaphore should not be closed"),
+            )
         } else {
             None
         }
@@ -492,16 +519,16 @@ impl TerminusDBHttpClient {
     /// Enable query logging to a file
     pub async fn enable_query_log<P: AsRef<std::path::Path>>(&self, path: P) -> anyhow::Result<()> {
         let logger = QueryLogger::new(path.as_ref()).await?;
-        
+
         if let Ok(mut logger_guard) = self.query_logger.write() {
             *logger_guard = Some(logger);
         }
-        
+
         if let Ok(mut config) = self.debug_config.write() {
             config.query_log_path = Some(path.as_ref().to_string_lossy().into_owned());
             config.enabled = true;
         }
-        
+
         debug!("Query logging enabled");
         Ok(())
     }
@@ -511,11 +538,11 @@ impl TerminusDBHttpClient {
         if let Ok(mut logger_guard) = self.query_logger.write() {
             *logger_guard = None;
         }
-        
+
         if let Ok(mut config) = self.debug_config.write() {
             config.query_log_path = None;
         }
-        
+
         debug!("Query logging disabled");
     }
 
@@ -539,15 +566,15 @@ impl TerminusDBHttpClient {
     }
 
     /// Get slow queries from the query log
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `threshold` - Duration threshold for slow operations (default: 1 second)
     /// * `filter` - Filter by operation type (default: All)
     /// * `limit` - Maximum number of entries to return (default: unlimited)
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A vector of log entries sorted by duration (slowest first), or an error if query logging is not enabled
     pub async fn get_slow_queries(
         &self,
@@ -560,7 +587,7 @@ impl TerminusDBHttpClient {
                 return logger.get_slow_entries(threshold, filter, limit).await;
             }
         }
-        
+
         anyhow::bail!("Query logging is not enabled. Call enable_query_log() first.")
     }
 
@@ -615,7 +642,10 @@ impl TerminusDBHttpClient {
             branch = ?spec.branch
         )
     )]
-    pub fn change_listener(&self, spec: crate::spec::BranchSpec) -> anyhow::Result<super::change_listener::ChangeListener> {
+    pub fn change_listener(
+        &self,
+        spec: crate::spec::BranchSpec,
+    ) -> anyhow::Result<super::change_listener::ChangeListener> {
         // Get or create the SSE manager
         let manager = {
             let mut manager_lock = self.sse_manager.write().unwrap();
@@ -647,8 +677,18 @@ impl std::fmt::Debug for TerminusDBHttpClient {
             .field("user", &self.user)
             .field("org", &self.org)
             .field("operation_log_size", &self.operation_log.len())
-            .field("query_log_enabled", &self.query_logger.read().map(|g| g.is_some()).unwrap_or(false))
-            .field("ensured_databases_count", &self.ensured_databases.lock().map(|g| g.len()).unwrap_or(0))
+            .field(
+                "query_log_enabled",
+                &self
+                    .query_logger
+                    .read()
+                    .map(|g| g.is_some())
+                    .unwrap_or(false),
+            )
+            .field(
+                "ensured_databases_count",
+                &self.ensured_databases.lock().map(|g| g.len()).unwrap_or(0),
+            )
             .finish()
     }
 }
@@ -684,7 +724,7 @@ impl TerminusDBHttpClient {
         let user = "admin";
         let pass = "root";
         let org = "admin";
-        
+
         Self::new(endpoint, user, pass, org).await
     }
 
