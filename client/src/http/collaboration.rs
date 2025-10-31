@@ -20,6 +20,15 @@ pub struct CloneRequest {
     pub comment: Option<String>,
 }
 
+/// Encodes username and password as Basic Auth header value
+/// Returns a string in the format: "Basic <base64(username:password)>"
+fn encode_basic_auth(username: &str, password: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let credentials = format!("{}:{}", username, password);
+    let encoded = STANDARD.encode(credentials.as_bytes());
+    format!("Basic {}", encoded)
+}
+
 /// Collaboration operations for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
     /// Fetches changes from a remote repository.
@@ -27,25 +36,35 @@ impl super::client::TerminusDBHttpClient {
     /// # Arguments
     /// * `path` - Path to fetch into (e.g., "admin/mydb/local/_commits")
     /// * `remote_url` - URL of the remote repository
+    /// * `remote_auth` - Optional (username, password) tuple for authenticating to the remote repository
     ///
     /// # Example
     /// ```rust,no_run
     /// # use terminusdb_client::*;
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
+    /// // Public repository
     /// client.fetch(
     ///     "admin/mydb/local/_commits",
-    ///     "https://github.com/user/repo.git"
+    ///     "https://github.com/user/repo.git",
+    ///     None
+    /// ).await?;
+    /// // Private repository with authentication
+    /// client.fetch(
+    ///     "admin/mydb/local/_commits",
+    ///     "https://github.com/user/private-repo.git",
+    ///     Some(("username", "token"))
     /// ).await?;
     /// # Ok(())
     /// # }
     /// ```
     #[instrument(
         name = "terminus.collaboration.fetch",
-        skip(self),
+        skip(self, remote_auth),
         fields(
             path = %path,
-            remote_url = %remote_url
+            remote_url = %remote_url,
+            has_auth = remote_auth.is_some()
         ),
         err
     )]
@@ -53,6 +72,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         path: &str,
         remote_url: &str,
+        remote_auth: Option<(&str, &str)>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("fetch").add_path(path).build();
@@ -67,11 +87,19 @@ impl super::client::TerminusDBHttpClient {
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        // Add AUTHORIZATION_REMOTE header if credentials are provided
+        if let Some((username, password)) = remote_auth {
+            let auth_header = encode_basic_auth(username, password);
+            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+        }
+
+        let res = request
             .body(
                 json!({
                     "remote": remote_url
@@ -113,6 +141,7 @@ impl super::client::TerminusDBHttpClient {
     /// * `path` - Path to push from (e.g., "admin/mydb/local/branch/main")
     /// * `remote_url` - URL of the remote repository
     /// * `remote_branch` - Optional remote branch name (defaults to same as local)
+    /// * `remote_auth` - Optional (username, password) tuple for authenticating to the remote repository
     ///
     /// # Example
     /// ```rust,no_run
@@ -122,18 +151,20 @@ impl super::client::TerminusDBHttpClient {
     /// client.push(
     ///     "admin/mydb/local/branch/main",
     ///     "https://github.com/user/repo.git",
-    ///     Some("main")
+    ///     Some("main"),
+    ///     Some(("username", "token"))
     /// ).await?;
     /// # Ok(())
     /// # }
     /// ```
     #[instrument(
         name = "terminus.collaboration.push",
-        skip(self),
+        skip(self, remote_auth),
         fields(
             path = %path,
             remote_url = %remote_url,
-            remote_branch = ?remote_branch
+            remote_branch = ?remote_branch,
+            has_auth = remote_auth.is_some()
         ),
         err
     )]
@@ -142,6 +173,7 @@ impl super::client::TerminusDBHttpClient {
         path: &str,
         remote_url: &str,
         remote_branch: Option<&str>,
+        remote_auth: Option<(&str, &str)>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("push").add_path(path).build();
@@ -164,11 +196,19 @@ impl super::client::TerminusDBHttpClient {
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        // Add AUTHORIZATION_REMOTE header if credentials are provided
+        if let Some((username, password)) = remote_auth {
+            let auth_header = encode_basic_auth(username, password);
+            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+        }
+
+        let res = request
             .body(body.to_string())
             .send()
             .await
@@ -207,6 +247,7 @@ impl super::client::TerminusDBHttpClient {
     /// * `remote_branch` - Optional remote branch name
     /// * `author` - Author for the merge commit
     /// * `message` - Message for the merge commit
+    /// * `remote_auth` - Optional (username, password) tuple for authenticating to the remote repository
     ///
     /// # Example
     /// ```rust,no_run
@@ -218,20 +259,22 @@ impl super::client::TerminusDBHttpClient {
     ///     "https://github.com/user/repo.git",
     ///     Some("main"),
     ///     "admin",
-    ///     "Pull from origin"
+    ///     "Pull from origin",
+    ///     Some(("username", "token"))
     /// ).await?;
     /// # Ok(())
     /// # }
     /// ```
     #[instrument(
         name = "terminus.collaboration.pull",
-        skip(self),
+        skip(self, remote_auth),
         fields(
             path = %path,
             remote_url = %remote_url,
             remote_branch = ?remote_branch,
             author = %author,
-            message = %message
+            message = %message,
+            has_auth = remote_auth.is_some()
         ),
         err
     )]
@@ -242,6 +285,7 @@ impl super::client::TerminusDBHttpClient {
         remote_branch: Option<&str>,
         author: &str,
         message: &str,
+        remote_auth: Option<(&str, &str)>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("pull").add_path(path).build();
@@ -266,11 +310,19 @@ impl super::client::TerminusDBHttpClient {
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        // Add AUTHORIZATION_REMOTE header if credentials are provided
+        if let Some((username, password)) = remote_auth {
+            let auth_header = encode_basic_auth(username, password);
+            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+        }
+
+        let res = request
             .body(body.to_string())
             .send()
             .await
@@ -309,6 +361,7 @@ impl super::client::TerminusDBHttpClient {
     /// * `remote_url` - URL of the remote repository to clone
     /// * `label` - Optional label for the database
     /// * `comment` - Optional comment for the database
+    /// * `remote_auth` - Optional (username, password) tuple for authenticating to the remote repository
     ///
     /// # Example
     /// ```rust,no_run
@@ -320,20 +373,22 @@ impl super::client::TerminusDBHttpClient {
     ///     "my-clone",
     ///     "https://github.com/user/repo.git",
     ///     Some("My Cloned DB"),
-    ///     Some("Cloned from GitHub")
+    ///     Some("Cloned from GitHub"),
+    ///     Some(("username", "token"))
     /// ).await?;
     /// # Ok(())
     /// # }
     /// ```
     #[instrument(
         name = "terminus.collaboration.clone",
-        skip(self),
+        skip(self, remote_auth),
         fields(
             organization = %organization,
             database = %database,
             remote_url = %remote_url,
             label = ?label,
-            comment = ?comment
+            comment = ?comment,
+            has_auth = remote_auth.is_some()
         ),
         err
     )]
@@ -344,6 +399,7 @@ impl super::client::TerminusDBHttpClient {
         remote_url: &str,
         label: Option<&str>,
         comment: Option<&str>,
+        remote_auth: Option<(&str, &str)>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url()
@@ -368,11 +424,19 @@ impl super::client::TerminusDBHttpClient {
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json");
+
+        // Add AUTHORIZATION_REMOTE header if credentials are provided
+        if let Some((username, password)) = remote_auth {
+            let auth_header = encode_basic_auth(username, password);
+            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+        }
+
+        let res = request
             .json(&clone_req)
             .send()
             .await

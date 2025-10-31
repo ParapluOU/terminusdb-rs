@@ -364,6 +364,10 @@ pub struct CloneTool {
     pub label: Option<String>,
     /// Optional comment for the database
     pub comment: Option<String>,
+    /// Optional username for authenticating to the remote repository
+    pub remote_username: Option<String>,
+    /// Optional password or token for authenticating to the remote repository
+    pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
@@ -379,6 +383,10 @@ pub struct FetchTool {
     pub path: String,
     /// URL of the remote repository
     pub remote_url: String,
+    /// Optional username for authenticating to the remote repository
+    pub remote_username: Option<String>,
+    /// Optional password or token for authenticating to the remote repository
+    pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
@@ -396,6 +404,10 @@ pub struct PushTool {
     pub remote_url: String,
     /// Optional remote branch name (defaults to same as local)
     pub remote_branch: Option<String>,
+    /// Optional username for authenticating to the remote repository
+    pub remote_username: Option<String>,
+    /// Optional password or token for authenticating to the remote repository
+    pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
@@ -417,6 +429,10 @@ pub struct PullTool {
     pub author: String,
     /// Message for the merge commit
     pub message: String,
+    /// Optional username for authenticating to the remote repository
+    pub remote_username: Option<String>,
+    /// Optional password or token for authenticating to the remote repository
+    pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
@@ -1394,12 +1410,19 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
+        // Prepare remote authentication if provided
+        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+            (Some(username), Some(password)) => Some((username, password)),
+            _ => None,
+        };
+
         let result = client.clone_repository(
             &request.organization,
             &request.database,
             &request.remote_url,
             request.label.as_deref(),
             request.comment.as_deref(),
+            remote_auth,
         ).await?;
 
         Ok(serde_json::json!({
@@ -1418,7 +1441,13 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
-        let result = client.fetch(&request.path, &request.remote_url).await?;
+        // Prepare remote authentication if provided
+        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+            (Some(username), Some(password)) => Some((username, password)),
+            _ => None,
+        };
+
+        let result = client.fetch(&request.path, &request.remote_url, remote_auth).await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1435,10 +1464,17 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
+        // Prepare remote authentication if provided
+        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+            (Some(username), Some(password)) => Some((username, password)),
+            _ => None,
+        };
+
         let result = client.push(
             &request.path,
             &request.remote_url,
             request.remote_branch.as_deref(),
+            remote_auth,
         ).await?;
 
         Ok(serde_json::json!({
@@ -1457,12 +1493,19 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
+        // Prepare remote authentication if provided
+        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+            (Some(username), Some(password)) => Some((username, password)),
+            _ => None,
+        };
+
         let result = client.pull(
             &request.path,
             &request.remote_url,
             request.remote_branch.as_deref(),
             &request.author,
             &request.message,
+            remote_auth,
         ).await?;
 
         Ok(serde_json::json!({
