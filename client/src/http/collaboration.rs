@@ -34,8 +34,9 @@ impl super::client::TerminusDBHttpClient {
     /// Fetches changes from a remote repository.
     ///
     /// # Arguments
-    /// * `path` - Path to fetch into (e.g., "admin/mydb/local/_commits")
-    /// * `remote_url` - URL of the remote repository
+    /// * `path` - Path to fetch into (e.g., "admin/mydb/local/branch/main")
+    /// * `remote` - Name of the remote repository (e.g., "origin")
+    /// * `remote_branch` - Optional remote branch name (defaults to "main")
     /// * `remote_auth` - Optional (username, password) tuple for authenticating to the remote repository
     ///
     /// # Example
@@ -45,14 +46,16 @@ impl super::client::TerminusDBHttpClient {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// // Public repository
     /// client.fetch(
-    ///     "admin/mydb/local/_commits",
-    ///     "https://github.com/user/repo.git",
+    ///     "admin/mydb/local/branch/main",
+    ///     "origin",
+    ///     Some("main"),
     ///     None
     /// ).await?;
     /// // Private repository with authentication
     /// client.fetch(
-    ///     "admin/mydb/local/_commits",
-    ///     "https://github.com/user/private-repo.git",
+    ///     "admin/mydb/local/branch/main",
+    ///     "origin",
+    ///     Some("main"),
     ///     Some(("username", "token"))
     /// ).await?;
     /// # Ok(())
@@ -63,7 +66,8 @@ impl super::client::TerminusDBHttpClient {
         skip(self, remote_auth),
         fields(
             path = %path,
-            remote_url = %remote_url,
+            remote = %remote,
+            remote_branch = ?remote_branch,
             has_auth = remote_auth.is_some()
         ),
         err
@@ -71,7 +75,8 @@ impl super::client::TerminusDBHttpClient {
     pub async fn fetch(
         &self,
         path: &str,
-        remote_url: &str,
+        remote: &str,
+        remote_branch: Option<&str>,
         remote_auth: Option<(&str, &str)>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
@@ -99,13 +104,13 @@ impl super::client::TerminusDBHttpClient {
             request = request.header("AUTHORIZATION_REMOTE", auth_header);
         }
 
+        let mut body = json!({
+            "remote": remote,
+            "remote_branch": remote_branch.unwrap_or("main")
+        });
+
         let res = request
-            .body(
-                json!({
-                    "remote": remote_url
-                })
-                .to_string(),
-            )
+            .body(body.to_string())
             .send()
             .await
             .context("failed to fetch from remote")?;

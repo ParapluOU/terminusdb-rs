@@ -379,10 +379,12 @@ pub struct CloneTool {
     description = "Fetch changes from a remote repository into the local database"
 )]
 pub struct FetchTool {
-    /// Path to fetch into (e.g., "admin/mydb/local/_commits")
+    /// Path to fetch into (e.g., "admin/mydb/local/branch/main")
     pub path: String,
-    /// URL of the remote repository
+    /// Name of the remote repository (e.g., "origin")
     pub remote_url: String,
+    /// Optional remote branch name (defaults to "main" if not specified)
+    pub remote_branch: Option<String>,
     /// Optional username for authenticating to the remote repository
     pub remote_username: Option<String>,
     /// Optional password or token for authenticating to the remote repository
@@ -441,12 +443,12 @@ pub struct PullTool {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[mcp_tool(
     name = "add_remote",
-    description = "Add a new remote repository to a database"
+    description = "Add a new remote repository to a database. The remote name is specified in the path (e.g., 'admin/mydb/remote/origin'). For full API details, see terminusdb-rs/docs/openapi.yaml or https://github.com/terminusdb/terminusdb/blob/main/docs/openapi.yaml"
 )]
 pub struct AddRemoteTool {
-    /// Path where the remote will be added (e.g., "admin/mydb/remote/origin")
+    /// Path where the remote will be added. Format: org/db/remote/remote_name (e.g., "admin/mydb/remote/origin"). The last segment of the path becomes the remote name.
     pub path: String,
-    /// URL of the remote repository
+    /// URL of the remote repository (e.g., "https://github.com/user/repo.git")
     pub remote_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
@@ -1447,12 +1449,18 @@ impl TerminusDBMcpHandler {
             _ => None,
         };
 
-        let result = client.fetch(&request.path, &request.remote_url, remote_auth).await?;
+        let result = client.fetch(
+            &request.path,
+            &request.remote_url,
+            request.remote_branch.as_deref(),
+            remote_auth
+        ).await?;
 
         Ok(serde_json::json!({
             "status": "success",
             "path": request.path,
             "remote_url": request.remote_url,
+            "remote_branch": request.remote_branch.as_deref().unwrap_or("main"),
             "result": result,
             "message": format!("Successfully fetched from remote into {}", request.path)
         }))
@@ -1520,13 +1528,31 @@ impl TerminusDBMcpHandler {
         }))
     }
 
+    /// Helper to extract database path and remote name from MCP path format
+    /// Expects path like "org/db/remote/remote_name" and returns ("org/db", "remote_name")
+    fn split_remote_path(path: &str) -> Result<(&str, &str)> {
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() < 4 || parts[parts.len() - 2] != "remote" {
+            return Err(anyhow::anyhow!(
+                "Invalid remote path format. Expected 'org/db/remote/remote_name', got '{}'",
+                path
+            ));
+        }
+
+        let remote_name = parts[parts.len() - 1];
+        let db_path = parts[..parts.len() - 2].join("/");
+
+        Ok((Box::leak(db_path.into_boxed_str()), remote_name))
+    }
+
     async fn handle_add_remote(&self, request: AddRemoteTool) -> Result<serde_json::Value> {
         info!("Adding remote at path: {} with URL: {}", request.path, request.remote_url);
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
-        let result = client.add_remote(&request.path, &request.remote_url).await?;
+        let (db_path, remote_name) = Self::split_remote_path(&request.path)?;
+        let result = client.add_remote(db_path, remote_name, &request.remote_url).await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1543,7 +1569,8 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
-        let result = client.get_remote(&request.path).await?;
+        let (db_path, remote_name) = Self::split_remote_path(&request.path)?;
+        let result = client.get_remote(db_path, remote_name).await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1559,7 +1586,8 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
-        let result = client.update_remote(&request.path, &request.remote_url).await?;
+        let (db_path, remote_name) = Self::split_remote_path(&request.path)?;
+        let result = client.update_remote(db_path, remote_name, &request.remote_url).await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1576,7 +1604,8 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
-        let result = client.delete_remote(&request.path).await?;
+        let (db_path, remote_name) = Self::split_remote_path(&request.path)?;
+        let result = client.delete_remote(db_path, remote_name).await?;
 
         Ok(serde_json::json!({
             "status": "success",

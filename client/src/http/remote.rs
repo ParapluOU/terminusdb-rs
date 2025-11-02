@@ -30,8 +30,9 @@ impl super::client::TerminusDBHttpClient {
     /// Adds a new remote repository.
     ///
     /// # Arguments
-    /// * `path` - Path where the remote will be added (e.g., "admin/mydb/remote/origin")
-    /// * `remote_url` - URL of the remote repository
+    /// * `path` - Path to the database (format: org/database, e.g., "admin/mydb")
+    /// * `remote_name` - Name for the remote (e.g., "origin")
+    /// * `remote_location` - URL/location of the remote repository
     ///
     /// # Example
     /// ```rust,no_run
@@ -39,7 +40,8 @@ impl super::client::TerminusDBHttpClient {
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// client.add_remote(
-    ///     "admin/mydb/remote/origin",
+    ///     "admin/mydb",
+    ///     "origin",
     ///     "https://github.com/user/repo.git"
     /// ).await?;
     /// # Ok(())
@@ -50,14 +52,16 @@ impl super::client::TerminusDBHttpClient {
         skip(self),
         fields(
             path = %path,
-            remote_url = %remote_url
+            remote_name = %remote_name,
+            remote_location = %remote_location
         ),
         err
     )]
     pub async fn add_remote(
         &self,
         path: &str,
-        remote_url: &str,
+        remote_name: &str,
+        remote_location: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("remote").add_path(path).build();
@@ -79,7 +83,8 @@ impl super::client::TerminusDBHttpClient {
             .header("Content-Type", "application/json")
             .body(
                 json!({
-                    "remote_url": remote_url
+                    "remote_name": remote_name,
+                    "remote_location": remote_location
                 })
                 .to_string(),
             )
@@ -115,14 +120,15 @@ impl super::client::TerminusDBHttpClient {
     /// Gets information about a remote repository.
     ///
     /// # Arguments
-    /// * `path` - Path to the remote (e.g., "admin/mydb/remote/origin")
+    /// * `path` - Path to the database (format: org/database, e.g., "admin/mydb")
+    /// * `remote_name` - Name of the remote (e.g., "origin")
     ///
     /// # Example
     /// ```rust,no_run
     /// # use terminusdb_client::*;
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
-    /// let info = client.get_remote("admin/mydb/remote/origin").await?;
+    /// let info = client.get_remote("admin/mydb", "origin").await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -130,22 +136,28 @@ impl super::client::TerminusDBHttpClient {
         name = "terminus.remote.get",
         skip(self),
         fields(
-            path = %path
+            path = %path,
+            remote_name = %remote_name
         ),
         err
     )]
     pub async fn get_remote(
         &self,
         path: &str,
+        remote_name: &str,
     ) -> anyhow::Result<RemoteInfo> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("remote").add_path(path).build();
+        let uri = self.build_url()
+            .endpoint("remote")
+            .add_path(path)
+            .query("remote_name", remote_name)
+            .build();
 
         debug!("GET {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("get_remote".to_string()),
-            format!("/api/remote/{}", path)
+            format!("/api/remote/{}?remote_name={}", path, remote_name)
         ).with_context(None, None);
 
         // Apply rate limiting for read operations
@@ -184,11 +196,12 @@ impl super::client::TerminusDBHttpClient {
         Ok(response)
     }
 
-    /// Updates a remote repository URL.
+    /// Updates a remote repository location.
     ///
     /// # Arguments
-    /// * `path` - Path to the remote (e.g., "admin/mydb/remote/origin")
-    /// * `remote_url` - New URL for the remote repository
+    /// * `path` - Path to the database (format: org/database, e.g., "admin/mydb")
+    /// * `remote_name` - Name of the remote (e.g., "origin")
+    /// * `remote_location` - New URL/location for the remote repository
     ///
     /// # Example
     /// ```rust,no_run
@@ -196,7 +209,8 @@ impl super::client::TerminusDBHttpClient {
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// client.update_remote(
-    ///     "admin/mydb/remote/origin",
+    ///     "admin/mydb",
+    ///     "origin",
     ///     "https://github.com/user/new-repo.git"
     /// ).await?;
     /// # Ok(())
@@ -207,14 +221,16 @@ impl super::client::TerminusDBHttpClient {
         skip(self),
         fields(
             path = %path,
-            remote_url = %remote_url
+            remote_name = %remote_name,
+            remote_location = %remote_location
         ),
         err
     )]
     pub async fn update_remote(
         &self,
         path: &str,
-        remote_url: &str,
+        remote_name: &str,
+        remote_location: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("remote").add_path(path).build();
@@ -236,7 +252,8 @@ impl super::client::TerminusDBHttpClient {
             .header("Content-Type", "application/json")
             .body(
                 json!({
-                    "remote_url": remote_url
+                    "remote_name": remote_name,
+                    "remote_location": remote_location
                 })
                 .to_string(),
             )
@@ -269,17 +286,94 @@ impl super::client::TerminusDBHttpClient {
         Ok(response)
     }
 
-    /// Deletes a remote repository.
+    /// Lists all remote repositories for a database.
     ///
     /// # Arguments
-    /// * `path` - Path to the remote to delete (e.g., "admin/mydb/remote/origin")
+    /// * `path` - Path to the database (format: org/database, e.g., "admin/mydb")
     ///
     /// # Example
     /// ```rust,no_run
     /// # use terminusdb_client::*;
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
-    /// client.delete_remote("admin/mydb/remote/origin").await?;
+    /// let remotes = client.list_remotes("admin/mydb").await?;
+    /// for remote in remotes {
+    ///     println!("{}: {}", remote.name, remote.remote_url);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.remote.list",
+        skip(self),
+        fields(path = %path),
+        err
+    )]
+    pub async fn list_remotes(
+        &self,
+        path: &str,
+    ) -> anyhow::Result<Vec<RemoteInfo>> {
+        let start_time = Instant::now();
+        let uri = self.build_url()
+            .endpoint("remote")
+            .add_path(path)
+            .build();
+
+        debug!("GET {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("list_remotes".to_string()),
+            format!("/api/remote/{}", path)
+        ).with_context(None, None);
+
+        // Apply rate limiting for read operations
+        let _permit = self.acquire_read_permit().await;
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to list remotes")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("list remotes operation failed with status {}", status);
+
+            let error_text = res.text().await?;
+            let error_msg = format!("list remotes failed: {:#?}", error_text);
+
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<Vec<RemoteInfo>>(res).await?;
+
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!("Successfully listed remotes in {:?}", start_time.elapsed());
+
+        Ok(response)
+    }
+
+    /// Deletes a remote repository.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the database (format: org/database, e.g., "admin/mydb")
+    /// * `remote_name` - Name of the remote to delete (e.g., "origin")
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.delete_remote("admin/mydb", "origin").await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -287,22 +381,28 @@ impl super::client::TerminusDBHttpClient {
         name = "terminus.remote.delete",
         skip(self),
         fields(
-            path = %path
+            path = %path,
+            remote_name = %remote_name
         ),
         err
     )]
     pub async fn delete_remote(
         &self,
         path: &str,
+        remote_name: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("remote").add_path(path).build();
+        let uri = self.build_url()
+            .endpoint("remote")
+            .add_path(path)
+            .query("remote_name", remote_name)
+            .build();
 
         debug!("DELETE {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("delete_remote".to_string()),
-            format!("/api/remote/{}", path)
+            format!("/api/remote/{}?remote_name={}", path, remote_name)
         ).with_context(None, None);
 
         // Apply rate limiting for write operations
@@ -321,18 +421,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("delete remote operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("delete remote failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
