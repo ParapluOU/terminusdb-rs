@@ -461,7 +461,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for Vec<EntityIDFor<T>> {
                 for primitive in arr {
                     match primitive {
                         PrimitiveValue::String(s) => {
-                            targets.push(EntityIDFor::new(s)?);
+                            targets.push(EntityIDFor::new_unchecked(s)?);
                         }
                         _ => {
                             bail!("Expected PrimitiveValue::String for EntityIDFor, got: {:#?}", primitive)

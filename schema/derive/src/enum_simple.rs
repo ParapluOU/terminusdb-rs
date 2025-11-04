@@ -124,6 +124,11 @@ pub fn implement_for_simple_enum(
         }
     };
 
+    // Generate Class marker trait implementation
+    let class_marker_impl = quote! {
+        impl terminusdb_schema::Class for #enum_name {}
+    };
+
     // Combine both implementations
     quote! {
         #schema_impl
@@ -131,6 +136,8 @@ pub fn implement_for_simple_enum(
         #instance_impl
 
         #schema_class_impl
+
+        #class_marker_impl
     }
 }
 

@@ -75,7 +75,7 @@ impl InsertInstanceResult {
 
     /// Get the root ID as a typed EntityIDFor<T>
     pub fn root_ref<T: ToTDBSchema>(&self) -> anyhow::Result<EntityIDFor<T>> {
-        EntityIDFor::new(&self.root_id)
+        EntityIDFor::new_unchecked(&self.root_id)
     }
     
     /// Get the parsed IRI for the root instance

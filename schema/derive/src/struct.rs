@@ -413,6 +413,11 @@ pub fn implement_for_struct(
     #[cfg(not(feature = "relations"))]
     let relation_impls = quote! {};
 
+    // Generate Class marker trait implementation
+    let class_marker_impl = quote! {
+        impl #impl_generics terminusdb_schema::Class for #struct_name #ty_generics #where_clause {}
+    };
+
     // Combine all implementations
     quote! {
         #schema_impl
@@ -420,7 +425,9 @@ pub fn implement_for_struct(
         #instance_impl
 
         #schema_class_impl
-        
+
+        #class_marker_impl
+
         #relation_impls
     }
 }

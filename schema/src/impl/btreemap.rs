@@ -298,7 +298,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for BTreeMap<EntityIDFor<T>, String> {
             let mut result = BTreeMap::new();
 
             for (key_str, value) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
                 let value_str = value.as_str().ok_or(anyhow!(
                     "Expected string value for key '{}', got {:?}",
@@ -323,7 +323,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for BTreeMap<EntityIDFor<T>, serde_jso
             let mut result = BTreeMap::new();
 
             for (key_str, value) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
                 result.insert(entity_id, value.clone());
             }
@@ -395,7 +395,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for BTreeMap<EntityIDFor<T>, i32> {
             let mut result = BTreeMap::new();
 
             for (key_str, value) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
                 let value_i32 = value.as_i64().ok_or(anyhow!(
                     "Expected integer value for key '{}', got {:?}",
@@ -459,7 +459,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for BTreeMap<EntityIDFor<T>, bool> {
             let mut result = BTreeMap::new();
 
             for (key_str, value) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
                 let value_bool = value.as_bool().ok_or(anyhow!(
                     "Expected boolean value for key '{}', got {:?}",
@@ -525,7 +525,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for BTreeMap<EntityIDFor<T>, DateTime<
             let mut result = BTreeMap::new();
 
             for (key_str, value) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
                 let value_str = value.as_str().ok_or(anyhow!(
                     "Expected string value for key '{}', got {:?}",
@@ -597,7 +597,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for BTreeMap<EntityIDFor<T>, NaiveTime
             let mut result = BTreeMap::new();
 
             for (key_str, value) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
                 let value_str = value.as_str().ok_or(anyhow!(
                     "Expected string value for key '{}', got {:?}",
@@ -742,7 +742,7 @@ impl<
             let mut result = BTreeMap::new();
 
             for (key_str, value_json) in map.iter() {
-                let entity_id = EntityIDFor::<T>::new(key_str)
+                let entity_id = EntityIDFor::<T>::new_unchecked(key_str)
                     .map_err(|e| anyhow!("Invalid EntityIDFor key '{}': {}", key_str, e))?;
 
                 // Deserialize the JSON value to the struct type V

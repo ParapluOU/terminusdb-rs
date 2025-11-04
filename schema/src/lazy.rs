@@ -29,14 +29,14 @@ impl<T: TerminusDBModel> TdbLazy<T> {
 
     pub fn new_id(id: &str) -> anyhow::Result<Self> {
         Ok(Self {
-            id: Some(EntityIDFor::new(&id)?),
+            id: Some(EntityIDFor::new_unchecked(&id)?),
             data: None,
         })
     }
 
     pub fn new_id_unchecked(id: &str) -> Self {
         Self {
-            id: Some(EntityIDFor::new(&id).unwrap()),
+            id: Some(EntityIDFor::new_unchecked(&id).unwrap()),
             data: None,
         }
     }
@@ -133,7 +133,7 @@ impl<'de, T: TerminusDBModel + DeserializeOwned> Deserialize<'de> for TdbLazy<T>
         match value {
             // If it's a string, treat it as an ID
             Value::String(id_str) => {
-                EntityIDFor::<T>::new(&id_str)
+                EntityIDFor::<T>::new_unchecked(&id_str)
                     .map(|id| Self::new(Some(id), None))
                     .map_err(serde::de::Error::custom)
             }

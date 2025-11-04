@@ -122,7 +122,7 @@ impl super::client::TerminusDBHttpClient {
         // Find the actual root ID in the results using EntityIDFor validation
         let actual_root_id = res
             .keys()
-            .find(|k| EntityIDFor::<I>::new(k).is_ok())
+            .find(|k| EntityIDFor::<I>::new_unchecked(k).is_ok())
             .cloned()
             .ok_or_else(|| anyhow!("Could not find root instance ID in operation results; instead:{:?}", res.keys().collect::<Vec<_>>()))?;
 
