@@ -67,6 +67,44 @@ impl<T: ToTDBSchema> From<EntityIDFor<T>> for PrimitiveValue {
     }
 }
 
+/// Helper function to check if a type name is a valid variant for a TaggedUnion,
+/// including recursively checking nested TaggedUnions.
+///
+/// # Arguments
+/// * `schema` - The TaggedUnion schema to check against
+/// * `type_name` - The type name from the IRI (e.g., "InnerVariantA")
+///
+/// # Returns
+/// `true` if the type_name is a valid variant (directly or nested), `false` otherwise
+fn is_valid_tagged_union_variant<T: ToTDBSchema>(schema: &Schema, type_name: &str) -> bool {
+    // Get direct variant classes from this TaggedUnion
+    let variant_classes: Vec<String> = if let Schema::TaggedUnion { properties, .. } = schema {
+        properties.iter().map(|p| p.class.clone()).collect()
+    } else {
+        return false; // Not a TaggedUnion
+    };
+
+    // Check if it's a direct variant
+    if variant_classes.iter().any(|v| v == type_name) {
+        return true;
+    }
+
+    // Check nested TaggedUnions recursively
+    for variant_class in &variant_classes {
+        // Look up the schema for this variant
+        if let Some(variant_schema) = T::find_schema_by_name(variant_class) {
+            // If this variant is itself a TaggedUnion, recursively check it
+            if variant_schema.is_tagged_union() {
+                if is_valid_tagged_union_variant::<T>(&variant_schema, type_name) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 impl<T: ToTDBSchema> EntityIDFor<T> {
     pub fn random() -> Self {
         Self::new(&Uuid::new_v4().to_string()).unwrap()
@@ -90,19 +128,19 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
             // Parse the IRI
             let iri = TdbIRI::parse(iri_or_id)?;
 
-            // Get the variant class names from the schema properties
-            let variant_classes: Vec<String> =
-                if let Schema::TaggedUnion { properties, .. } = schema {
-                    properties.iter().map(|p| p.class.clone()).collect()
-                } else {
-                    vec![]
-                };
-
-            // Validate that the type name is one of the variant types
+            // Validate that the type name is a valid variant (including nested variants)
             let type_name = iri.type_name();
-            if !variant_classes.iter().any(|v| v == type_name) {
+            if !is_valid_tagged_union_variant::<T>(&schema, type_name) {
+                // Get direct variant names for error message
+                let variant_classes: Vec<String> =
+                    if let Schema::TaggedUnion { properties, .. } = &schema {
+                        properties.iter().map(|p| p.class.clone()).collect()
+                    } else {
+                        vec![]
+                    };
+
                 return Err(anyhow!(
-                    "Invalid variant type for TaggedUnion '{}': expected one of [{}], found '{}' in '{}'",
+                    "Invalid variant type for TaggedUnion '{}': expected one of [{}] or their nested variants, found '{}' in '{}'",
                     T::schema_name(),
                     variant_classes.join(", "),
                     type_name,
@@ -674,6 +712,7 @@ mod tests {
     use super::*;
     use crate as terminusdb_schema;
     use crate::*;
+    use serde::{Deserialize, Serialize};
     use terminusdb_schema_derive::TerminusDBModel;
 
     // Define a dummy struct for testing
@@ -1234,5 +1273,166 @@ mod tests {
         assert_ne!("TestEntity/5678", entity_id);
         assert_ne!(entity_id, String::from("TestEntity/5678"));
         assert_ne!(String::from("TestEntity/5678"), entity_id);
+    }
+
+    // ========== Nested TaggedUnion Tests ==========
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    struct InnerVariantA {
+        value_a: String,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    struct InnerVariantB {
+        value_b: String,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    enum InnerUnion {
+        A(InnerVariantA),
+        B(InnerVariantB),
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    struct OuterVariantC {
+        value_c: String,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    enum OuterUnion {
+        Inner(InnerUnion),
+        C(OuterVariantC),
+    }
+
+    #[test]
+    fn test_nested_tagged_union_direct_variant() {
+        // Test that direct variants still work
+        let entity_id: EntityIDFor<OuterUnion> =
+            EntityIDFor::new("OuterVariantC/test-id").unwrap();
+        assert_eq!(entity_id.id(), "test-id");
+        assert_eq!(entity_id.typed(), "OuterVariantC/test-id");
+    }
+
+    #[test]
+    fn test_nested_tagged_union_inner_variant_a() {
+        // Test that nested variant A is accepted
+        let entity_id: EntityIDFor<OuterUnion> =
+            EntityIDFor::new("InnerVariantA/test-id-a").unwrap();
+        assert_eq!(entity_id.id(), "test-id-a");
+        assert_eq!(entity_id.typed(), "InnerVariantA/test-id-a");
+    }
+
+    #[test]
+    fn test_nested_tagged_union_inner_variant_b() {
+        // Test that nested variant B is accepted
+        let entity_id: EntityIDFor<OuterUnion> =
+            EntityIDFor::new("InnerVariantB/test-id-b").unwrap();
+        assert_eq!(entity_id.id(), "test-id-b");
+        assert_eq!(entity_id.typed(), "InnerVariantB/test-id-b");
+    }
+
+    #[test]
+    fn test_nested_tagged_union_with_iri() {
+        // Test nested variants work with full IRIs
+        let iri = "terminusdb:///data/InnerVariantA/abc-123";
+        let entity_id: EntityIDFor<OuterUnion> = EntityIDFor::new(iri).unwrap();
+        assert_eq!(entity_id.id(), "abc-123");
+        assert_eq!(entity_id.typed(), "InnerVariantA/abc-123");
+        assert_eq!(entity_id.get_base_uri(), Some("terminusdb:///data"));
+    }
+
+    #[test]
+    fn test_nested_tagged_union_remap() {
+        // Test that remapping works with nested unions
+        let inner_iri = "terminusdb:///data/InnerVariantA/remap-test";
+
+        // Create as InnerUnion
+        let inner_id: EntityIDFor<InnerUnion> = EntityIDFor::new(inner_iri).unwrap();
+        assert_eq!(inner_id.id(), "remap-test");
+
+        // Remap to OuterUnion should work
+        let outer_id: EntityIDFor<OuterUnion> = inner_id.remap();
+        assert_eq!(outer_id.id(), "remap-test");
+        assert_eq!(outer_id.typed(), "InnerVariantA/remap-test");
+    }
+
+    #[test]
+    fn test_nested_tagged_union_invalid_variant() {
+        // Test that truly invalid variants are still rejected
+        let result: Result<EntityIDFor<OuterUnion>, _> =
+            EntityIDFor::new("CompletelyInvalidType/test-id");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid variant type"));
+        assert!(err_msg.contains("CompletelyInvalidType"));
+    }
+
+    #[test]
+    fn test_nested_tagged_union_unprefixed_rejected() {
+        // TaggedUnions should still require typed paths
+        let result: Result<EntityIDFor<OuterUnion>, _> = EntityIDFor::new("just-an-id");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("requires a full typed path"));
+    }
+
+    // Test with three levels of nesting
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    struct DeepVariantX {
+        value_x: String,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    struct DeepVariantY {
+        value_y: String,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    enum DeepInnerUnion {
+        X(DeepVariantX),
+        Y(DeepVariantY),
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    enum DeepMiddleUnion {
+        Deep(DeepInnerUnion),
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    enum DeepOuterUnion {
+        Middle(DeepMiddleUnion),
+    }
+
+    #[test]
+    fn test_three_level_nested_tagged_union() {
+        // Test that three levels of nesting works
+        let entity_id: EntityIDFor<DeepOuterUnion> =
+            EntityIDFor::new("DeepVariantX/deep-test").unwrap();
+        assert_eq!(entity_id.id(), "deep-test");
+        assert_eq!(entity_id.typed(), "DeepVariantX/deep-test");
+
+        // Also test the other variant
+        let entity_id_y: EntityIDFor<DeepOuterUnion> =
+            EntityIDFor::new("DeepVariantY/deep-test-y").unwrap();
+        assert_eq!(entity_id_y.id(), "deep-test-y");
+        assert_eq!(entity_id_y.typed(), "DeepVariantY/deep-test-y");
+    }
+
+    #[test]
+    fn test_three_level_nested_remap() {
+        // Test remapping across three levels
+        let iri = "terminusdb:///data/DeepVariantX/triple-remap";
+
+        // Start from innermost
+        let inner_id: EntityIDFor<DeepInnerUnion> = EntityIDFor::new(iri).unwrap();
+
+        // Remap to middle
+        let middle_id: EntityIDFor<DeepMiddleUnion> = inner_id.remap();
+        assert_eq!(middle_id.id(), "triple-remap");
+
+        // Remap to outer
+        let outer_id: EntityIDFor<DeepOuterUnion> = middle_id.remap();
+        assert_eq!(outer_id.id(), "triple-remap");
+        assert_eq!(outer_id.typed(), "DeepVariantX/triple-remap");
     }
 }
