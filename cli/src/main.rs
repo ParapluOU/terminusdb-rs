@@ -1,3 +1,4 @@
+mod auth;
 mod formatter;
 
 use anyhow::{anyhow, Context, Result};
@@ -18,6 +19,10 @@ use url::Url;
 #[command(about = "TerminusDB CLI - Command line interface for TerminusDB operations", long_about = None)]
 #[command(version)]
 struct Cli {
+    /// Profile name to use for credentials (uses active profile if not specified)
+    #[arg(long, global = true)]
+    profile: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -260,6 +265,76 @@ enum Commands {
         meta: bool,
     },
 
+    /// Squash commit history into a single commit
+    Squash {
+        /// TerminusDB server URL
+        #[arg(long, env = "TERMINUSDB_HOST", default_value = "http://localhost:6363")]
+        host: String,
+
+        /// Username for authentication
+        #[arg(long, env = "TERMINUSDB_USER", default_value = "admin")]
+        user: String,
+
+        /// Password for authentication
+        #[arg(long, env = "TERMINUSDB_PASS", default_value = "root")]
+        password: String,
+
+        /// Organization name
+        #[arg(long, env = "TERMINUSDB_ORG")]
+        org: String,
+
+        /// Database name
+        #[arg(long, env = "TERMINUSDB_DB")]
+        database: String,
+
+        /// Branch name
+        #[arg(long, env = "TERMINUSDB_BRANCH", default_value = "main")]
+        branch: String,
+
+        /// Commit author
+        #[arg(long, default_value = "admin")]
+        author: String,
+
+        /// Commit message
+        #[arg(long, default_value = "Squash commits")]
+        message: String,
+    },
+
+    /// Squash commit history and immediately apply it to the branch
+    SquashAndReset {
+        /// TerminusDB server URL
+        #[arg(long, env = "TERMINUSDB_HOST", default_value = "http://localhost:6363")]
+        host: String,
+
+        /// Username for authentication
+        #[arg(long, env = "TERMINUSDB_USER", default_value = "admin")]
+        user: String,
+
+        /// Password for authentication
+        #[arg(long, env = "TERMINUSDB_PASS", default_value = "root")]
+        password: String,
+
+        /// Organization name
+        #[arg(long, env = "TERMINUSDB_ORG")]
+        org: String,
+
+        /// Database name
+        #[arg(long, env = "TERMINUSDB_DB")]
+        database: String,
+
+        /// Branch name
+        #[arg(long, env = "TERMINUSDB_BRANCH", default_value = "main")]
+        branch: String,
+
+        /// Commit author
+        #[arg(long, default_value = "admin")]
+        author: String,
+
+        /// Commit message
+        #[arg(long, default_value = "Squash commits")]
+        message: String,
+    },
+
     /// Deploy a database from source to target (reverse branch cloning)
     Deploy {
         /// Source TerminusDB server URL
@@ -323,6 +398,26 @@ enum Commands {
     Database {
         #[command(subcommand)]
         command: DatabaseCommands,
+    },
+
+    /// Login and store credentials for a profile
+    Login {
+        /// Profile name (default: "default")
+        #[arg(long, default_value = "default")]
+        profile: String,
+    },
+
+    /// Logout and remove stored credentials
+    Logout {
+        /// Profile name (default: active profile)
+        #[arg(long)]
+        profile: Option<String>,
+    },
+
+    /// Manage profiles
+    Profile {
+        #[command(subcommand)]
+        command: ProfileCommands,
     },
 }
 
@@ -457,6 +552,34 @@ enum DatabaseCommands {
         /// Limit number of commits to show
         #[arg(long, default_value = "10")]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProfileCommands {
+    /// List all profiles
+    List,
+
+    /// Set the active profile
+    Set {
+        /// Profile name to make active
+        name: String,
+    },
+
+    /// Show profile configuration
+    Show {
+        /// Profile name (default: active profile)
+        name: Option<String>,
+    },
+
+    /// Delete a profile
+    Delete {
+        /// Profile name to delete
+        name: String,
+
+        /// Force deletion without confirmation
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -870,6 +993,46 @@ async fn run_optimize(
     };
 
     let result = client.optimize(&path).await?;
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn run_squash(
+    host: String,
+    user: String,
+    password: String,
+    org: String,
+    database: String,
+    branch: String,
+    author: String,
+    message: String,
+) -> Result<()> {
+    let parsed_url = Url::parse(&host)?;
+    let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
+
+    let path = format!("{}/{}/local/branch/{}", org, database, branch);
+    let result = client.squash(&path, &author, &message).await?;
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+async fn run_squash_and_reset(
+    host: String,
+    user: String,
+    password: String,
+    org: String,
+    database: String,
+    branch: String,
+    author: String,
+    message: String,
+) -> Result<()> {
+    let parsed_url = Url::parse(&host)?;
+    let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
+
+    let path = format!("{}/{}/local/branch/{}", org, database, branch);
+    let result = client.squash_and_reset(&path, &author, &message).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -1465,6 +1628,26 @@ async fn main() -> Result<()> {
             branch,
             meta,
         } => run_optimize(host, user, password, org, database, branch, meta).await,
+        Commands::Squash {
+            host,
+            user,
+            password,
+            org,
+            database,
+            branch,
+            author,
+            message,
+        } => run_squash(host, user, password, org, database, branch, author, message).await,
+        Commands::SquashAndReset {
+            host,
+            user,
+            password,
+            org,
+            database,
+            branch,
+            author,
+            message,
+        } => run_squash_and_reset(host, user, password, org, database, branch, author, message).await,
         Commands::Deploy {
             source_host,
             source_user,
@@ -1540,5 +1723,321 @@ async fn main() -> Result<()> {
                 limit,
             } => run_database_log(host, user, password, org, database, limit).await,
         },
+        Commands::Login { profile } => run_login(&profile).await,
+        Commands::Logout { profile } => run_logout(profile.as_deref()).await,
+        Commands::Profile { command } => match command {
+            ProfileCommands::List => run_profile_list().await,
+            ProfileCommands::Set { name } => run_profile_set(&name).await,
+            ProfileCommands::Show { name } => run_profile_show(name.as_deref()).await,
+            ProfileCommands::Delete { name, force } => run_profile_delete(&name, force).await,
+        },
+    }
+}
+
+// Profile and authentication management functions
+
+async fn run_login(profile_name: &str) -> Result<()> {
+    use std::io::{self, Write};
+
+    println!("Logging in to profile: {}", profile_name);
+    println!();
+
+    // Prompt for connection details
+    print!("TerminusDB Host (default: http://localhost:6363): ");
+    io::stdout().flush()?;
+    let mut host = String::new();
+    io::stdin().read_line(&mut host)?;
+    let host = host.trim();
+    let host = if host.is_empty() {
+        "http://localhost:6363".to_string()
+    } else {
+        host.to_string()
+    };
+
+    print!("Username (default: admin): ");
+    io::stdout().flush()?;
+    let mut user = String::new();
+    io::stdin().read_line(&mut user)?;
+    let user = user.trim();
+    let user = if user.is_empty() {
+        "admin".to_string()
+    } else {
+        user.to_string()
+    };
+
+    let password = rpassword::prompt_password("Password: ")?;
+
+    print!("Organization (default: admin): ");
+    io::stdout().flush()?;
+    let mut org = String::new();
+    io::stdin().read_line(&mut org)?;
+    let org = org.trim();
+    let org = if org.is_empty() {
+        "admin".to_string()
+    } else {
+        org.to_string()
+    };
+
+    print!("Default Database (optional, press Enter to skip): ");
+    io::stdout().flush()?;
+    let mut database = String::new();
+    io::stdin().read_line(&mut database)?;
+    let database = database.trim();
+    let database = if database.is_empty() {
+        None
+    } else {
+        Some(database.to_string())
+    };
+
+    print!("Default Branch (optional, press Enter to skip): ");
+    io::stdout().flush()?;
+    let mut branch = String::new();
+    io::stdin().read_line(&mut branch)?;
+    let branch = branch.trim();
+    let branch = if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    };
+
+    // Create profile
+    let profile = auth::Profile::new(host, user, org, database, branch);
+
+    // Save profile with password
+    auth::save_profile_with_password(profile_name, &profile, &password)?;
+
+    // Set as active profile
+    let mut config = auth::load_config()?;
+    config.set_active(profile_name.to_string());
+    auth::save_config(&config)?;
+
+    println!();
+    println!("Successfully logged in and set '{}' as active profile", profile_name);
+    println!("Credentials saved to system keyring");
+
+    Ok(())
+}
+
+async fn run_logout(profile_name: Option<&str>) -> Result<()> {
+    let config = auth::load_config()?;
+
+    let profile_to_logout = match profile_name {
+        Some(name) => name.to_string(),
+        None => config.settings.active_profile.clone(),
+    };
+
+    // Delete the profile
+    auth::delete_profile(&profile_to_logout)?;
+
+    println!("Successfully logged out from profile '{}'", profile_to_logout);
+    println!("Credentials removed from system keyring");
+
+    Ok(())
+}
+
+async fn run_profile_list() -> Result<()> {
+    let config = auth::load_config()?;
+
+    if config.profiles.is_empty() {
+        println!("No profiles configured. Use 'tdb login' to create one.");
+        return Ok(());
+    }
+
+    println!("Available profiles:");
+    println!();
+
+    let mut profile_names: Vec<_> = config.profiles.keys().collect();
+    profile_names.sort();
+
+    for name in profile_names {
+        let profile = &config.profiles[name];
+        let is_active = name == &config.settings.active_profile;
+        let marker = if is_active { "*" } else { " " };
+
+        println!("{} {} ({}@{} / org: {})",
+            marker,
+            name,
+            profile.user,
+            profile.host,
+            profile.org
+        );
+
+        if let Some(ref db) = profile.database {
+            println!("    default database: {}", db);
+        }
+        if let Some(ref branch) = profile.branch {
+            println!("    default branch: {}", branch);
+        }
+    }
+
+    println!();
+    println!("* = active profile");
+
+    Ok(())
+}
+
+async fn run_profile_set(name: &str) -> Result<()> {
+    let mut config = auth::load_config()?;
+
+    // Verify profile exists
+    if !config.profiles.contains_key(name) {
+        anyhow::bail!("Profile '{}' not found. Use 'tdb profile list' to see available profiles.", name);
+    }
+
+    config.set_active(name.to_string());
+    auth::save_config(&config)?;
+
+    println!("Set '{}' as active profile", name);
+
+    Ok(())
+}
+
+async fn run_profile_show(name: Option<&str>) -> Result<()> {
+    let config = auth::load_config()?;
+
+    let profile_name = match name {
+        Some(n) => n,
+        None => &config.settings.active_profile,
+    };
+
+    let profile = config.get_profile(profile_name)
+        .with_context(|| format!("Profile '{}' not found", profile_name))?;
+
+    println!("Profile: {}", profile_name);
+    println!("  Host: {}", profile.host);
+    println!("  User: {}", profile.user);
+    println!("  Organization: {}", profile.org);
+
+    if let Some(ref db) = profile.database {
+        println!("  Default Database: {}", db);
+    }
+    if let Some(ref branch) = profile.branch {
+        println!("  Default Branch: {}", branch);
+    }
+
+    println!();
+    println!("Password is stored securely in system keyring");
+
+    Ok(())
+}
+
+async fn run_profile_delete(name: &str, force: bool) -> Result<()> {
+    use std::io::{self, Write};
+
+    let config = auth::load_config()?;
+
+    // Check if profile exists
+    if !config.profiles.contains_key(name) {
+        anyhow::bail!("Profile '{}' not found", name);
+    }
+
+    // Check if it's the active profile
+    if name == config.settings.active_profile {
+        println!("Warning: '{}' is currently the active profile", name);
+    }
+
+    // Confirm deletion unless --force
+    if !force {
+        print!("Are you sure you want to delete profile '{}'? (y/N): ", name);
+        io::stdout().flush()?;
+        let mut response = String::new();
+        io::stdin().read_line(&mut response)?;
+
+        if !response.trim().eq_ignore_ascii_case("y") {
+            println!("Deletion cancelled");
+            return Ok(());
+        }
+    }
+
+    auth::delete_profile(name)?;
+
+    println!("Profile '{}' deleted", name);
+
+    Ok(())
+}
+
+/// Helper function to resolve credentials from multiple sources
+/// Priority: CLI args > Environment variables > Active profile > Error
+fn resolve_credentials(
+    cli_host: Option<String>,
+    cli_user: Option<String>,
+    cli_password: Option<String>,
+    cli_org: Option<String>,
+    cli_database: Option<String>,
+    cli_branch: Option<String>,
+    profile_name: Option<String>,
+) -> Result<auth::ResolvedCredentials> {
+    // If profile is specified, load from that profile
+    if let Some(profile) = profile_name {
+        let mut creds = auth::get_profile_credentials(&profile)?;
+
+        // CLI args override profile values
+        if let Some(h) = cli_host {
+            creds.host = h;
+        }
+        if let Some(u) = cli_user {
+            creds.user = u;
+        }
+        if let Some(p) = cli_password {
+            creds.password = p;
+        }
+        if let Some(o) = cli_org {
+            creds.org = o;
+        }
+        if let Some(db) = cli_database {
+            creds.database = Some(db);
+        }
+        if let Some(br) = cli_branch {
+            creds.branch = Some(br);
+        }
+
+        return Ok(creds);
+    }
+
+    // Try to load from active profile if no explicit credentials provided
+    if cli_host.is_none() || cli_user.is_none() || cli_password.is_none() || cli_org.is_none() {
+        if let Ok(mut creds) = auth::get_active_credentials() {
+            // CLI args override profile values
+            if let Some(h) = cli_host {
+                creds.host = h;
+            }
+            if let Some(u) = cli_user {
+                creds.user = u;
+            }
+            if let Some(p) = cli_password {
+                creds.password = p;
+            }
+            if let Some(o) = cli_org {
+                creds.org = o;
+            }
+            if let Some(db) = cli_database {
+                creds.database = Some(db);
+            }
+            if let Some(br) = cli_branch {
+                creds.branch = Some(br);
+            }
+
+            return Ok(creds);
+        }
+    }
+
+    // Fall back to CLI args only (must have all required fields)
+    match (cli_host, cli_user, cli_password, cli_org) {
+        (Some(host), Some(user), Some(password), Some(org)) => {
+            Ok(auth::ResolvedCredentials {
+                host,
+                user,
+                password,
+                org,
+                database: cli_database,
+                branch: cli_branch,
+            })
+        }
+        _ => {
+            anyhow::bail!(
+                "Missing required credentials. Please provide --host, --user, --password, and --org, \
+                or use 'tdb login' to save credentials in a profile."
+            )
+        }
     }
 }

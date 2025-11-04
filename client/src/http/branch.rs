@@ -80,6 +80,7 @@ impl super::client::TerminusDBHttpClient {
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
             .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(3600))  // 1 hour default for squash operations
             .body(
                 json!({
                     "commit_info": commit_info
@@ -160,6 +161,73 @@ impl super::client::TerminusDBHttpClient {
         debug!("New commit: {}, Old commit: {}", response.commit, response.old_commit);
 
         Ok(response)
+    }
+
+    /// Squashes a branch's commit history and immediately resets the branch to the new squashed commit.
+    ///
+    /// This is a convenience method that combines squash and reset operations in a single call.
+    /// It first squashes the branch history into a single commit, then automatically resets
+    /// the branch to point to that new commit.
+    ///
+    /// # Arguments
+    /// * `path` - Path to the branch (e.g., "admin/mydb/local/branch/main")
+    /// * `author` - Author name for the squash commit
+    /// * `message` - Commit message for the squash
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.squash_and_reset(
+    ///     "admin/mydb/local/branch/main",
+    ///     "admin",
+    ///     "Squash all commits into one"
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.branch.squash_and_reset",
+        skip(self),
+        fields(
+            path = %path,
+            author = %author,
+            message = %message
+        ),
+        err
+    )]
+    pub async fn squash_and_reset(
+        &self,
+        path: &str,
+        author: &str,
+        message: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+
+        debug!("Starting squash and reset for {}", path);
+
+        // Step 1: Squash the branch
+        let squash_result = self.squash(path, author, message).await
+            .context("failed to squash branch")?;
+
+        // Step 2: Extract the new commit ID
+        let new_commit = &squash_result.commit;
+
+        debug!("Squash created commit: {}", new_commit);
+
+        // Step 3: Reset the branch to the new commit
+        let reset_result = self.reset(path, &new_commit).await
+            .context("failed to reset branch to squashed commit")?;
+
+        debug!("Successfully squashed and reset branch in {:?}", start_time.elapsed());
+
+        // Return a combined result
+        Ok(json!({
+            "squash": squash_result,
+            "reset": reset_result,
+            "status": "Success"
+        }))
     }
 
     /// Resets a branch to a specific commit.

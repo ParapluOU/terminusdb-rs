@@ -31,3 +31,7 @@ reqwest-eventsource = "0.6"
 colored = "2.1"
 supports-color = "3.0"
 atty = "0.2"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+directories = "5"
+toml = "0.8"
+rpassword = "7"
