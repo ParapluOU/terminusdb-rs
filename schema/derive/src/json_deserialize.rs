@@ -275,6 +275,66 @@ fn implement_instance_from_json_for_tagged_enum(
     opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
 
+    // Build a list of type checks for variant-to-union deserialization
+    // We only generate type checks for variants where the inner type is likely a custom struct type
+    // (not a primitive like String, i32, bool, or standard types)
+    let variant_type_checks = data_enum.variants.iter().filter_map(|variant| {
+        let variant_ident = &variant.ident;
+        let variant_name_str = variant_ident.to_string();
+        let variant_name_lower = variant_name_str.to_lowercase();
+
+        // Only handle single-field variants (newtype variants with a named type)
+        if let Fields::Unnamed(fields) = &variant.fields {
+            if fields.unnamed.len() == 1 {
+                let field_ty = &fields.unnamed[0].ty;
+
+                // Check if this is likely a custom type (not a primitive or standard type)
+                // We do this by checking if the type is a simple Path (not Option, Vec, etc.)
+                // and doesn't start with a known primitive prefix
+                let is_likely_custom_type = if let syn::Type::Path(type_path) = field_ty {
+                    if let Some(segment) = type_path.path.segments.last() {
+                        let type_name = segment.ident.to_string();
+                        // Skip known primitives and standard types
+                        !matches!(
+                            type_name.as_str(),
+                            "String" | "str" | "bool" | "i8" | "i16" | "i32" | "i64" | "i128" |
+                            "u8" | "u16" | "u32" | "u64" | "u128" | "f32" | "f64" | "usize" | "isize" |
+                            "Option" | "Vec" | "Box" | "Rc" | "Arc" | "XSDAnySimpleType"
+                        )
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if is_likely_custom_type {
+                    return Some(quote! {
+                        // Check if @type matches this variant's inner type
+                        if type_name == <#field_ty as terminusdb_schema::ToSchemaClass>::to_class() {
+                            // The entire JSON object is the variant's value
+                            // We need to re-insert @type and @id since they were removed
+                            let mut variant_value_map = json_map.clone();
+                            variant_value_map.insert("@type".to_string(), Value::String(type_name.clone()));
+                            if let Some(ref id_val) = id {
+                                variant_value_map.insert("@id".to_string(), Value::String(id_val.clone()));
+                            }
+
+                            // Wrap the variant value in the union property
+                            json_map.clear();
+                            json_map.insert(#variant_name_lower.to_string(), Value::Object(variant_value_map));
+
+                            // Update type_name to match the union type
+                            type_name = expected_type_name.clone();
+                            is_variant_remapped = true;
+                        }
+                    });
+                }
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+
     let variant_matchers = data_enum.variants.iter().map(|variant| {
         let variant_ident = &variant.ident;
         let variant_name_str = variant_ident.to_string();
@@ -454,11 +514,17 @@ fn implement_instance_from_json_for_tagged_enum(
                     .and_then(|v| v.as_str().map(String::from));
 
                 // Extract and verify @type
-                let type_name = json_map.remove("@type")
+                let mut type_name = json_map.remove("@type")
                     .and_then(|v| v.as_str().map(String::from))
                     .ok_or_else(|| anyhow!("Missing or invalid '@type' field in JSON instance"))?;
 
                 let expected_type_name = <#enum_name as terminusdb_schema::ToTDBSchema>::schema_name();
+                let mut is_variant_remapped = false;
+
+                // Check if @type matches any variant's inner type (variant-to-union deserialization)
+                #(#variant_type_checks)*
+
+                // Verify @type matches the union type (either originally or after remapping)
                 if type_name != expected_type_name {
                     return Err(anyhow!("Mismatched '@type': expected '{}', found '{}'", expected_type_name, type_name));
                 }

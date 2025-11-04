@@ -252,6 +252,60 @@ fn test_enum_deserialization_errors() {
 }
 
 #[test]
+fn test_variant_type_to_union_deserialization() {
+    // Test deserializing a variant type's Instance into the union type
+    // This simulates fetching a Comment from the database and deserializing it as Annotation
+
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+    struct Comment {
+        text: String,
+        author: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+    struct Proposal {
+        title: String,
+        votes: i32,
+    }
+
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+    enum Annotation {
+        CommentType(Comment),
+        ProposalType(Proposal),
+    }
+
+    // Create JSON-LD for a Comment as it would be returned from the database
+    // This has @type: "Comment" (the variant type), not "Annotation" (the union type)
+    let comment_json = json!({
+        "@id": "Comment/1",
+        "@type": "Comment",
+        "text": "This is a comment",
+        "author": "Alice"
+    });
+
+    // Now try to deserialize it as an Annotation (the union type)
+    // This should work because CommentType is a variant of Annotation
+    let annotation_instance = Annotation::instance_from_json(comment_json)
+        .expect("Failed to deserialize Comment as Annotation");
+
+    // The instance should recognize this as a CommentType variant (lowercase)
+    assert!(annotation_instance.properties.contains_key("commenttype"));
+
+    // Test with Proposal too
+    let proposal_json = json!({
+        "@id": "Proposal/2",
+        "@type": "Proposal",
+        "title": "Improve docs",
+        "votes": 42
+    });
+
+    let annotation_instance2 = Annotation::instance_from_json(proposal_json)
+        .expect("Failed to deserialize Proposal as Annotation");
+
+    assert!(annotation_instance2.properties.contains_key("proposaltype"));
+}
+
+#[test]
 fn test_error_cases() {
     // Test missing required field
     let json_missing_name = json!({
