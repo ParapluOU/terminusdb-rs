@@ -110,6 +110,7 @@ impl super::client::TerminusDBHttpClient {
         });
 
         let res = request
+            .timeout(std::time::Duration::from_secs(900))  // 15 min default for incremental operations
             .body(body.to_string())
             .send()
             .await
@@ -214,6 +215,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         let res = request
+            .timeout(std::time::Duration::from_secs(900))  // 15 min default for incremental operations
             .body(body.to_string())
             .send()
             .await
@@ -328,6 +330,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         let res = request
+            .timeout(std::time::Duration::from_secs(900))  // 15 min default for incremental operations
             .body(body.to_string())
             .send()
             .await
@@ -442,6 +445,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         let res = request
+            .timeout(std::time::Duration::from_secs(3600))  // 1 hour default for full database clone
             .json(&clone_req)
             .send()
             .await
