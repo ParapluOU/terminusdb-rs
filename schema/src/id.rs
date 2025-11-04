@@ -110,6 +110,15 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
         Self::new(&Uuid::new_v4().to_string()).unwrap()
     }
 
+    /// Internal constructor that bypasses type validation.
+    /// Used for remapping where we want to preserve the IRI structure but change the type parameter.
+    fn from_iri_unchecked(iri: TdbIRI) -> Self {
+        Self {
+            iri,
+            _ty: PhantomData,
+        }
+    }
+
     pub fn new(iri_or_id: &str) -> anyhow::Result<Self> {
         let schema = T::to_schema();
 
@@ -229,18 +238,31 @@ pub trait EntityIDRemap<To: ToTDBSchema> {
     fn remap(self) -> EntityIDFor<To>;
 }
 
-// Default implementation: regular types remap using just the ID segment
+// Default implementation: intelligently remap based on whether the ID contains variant/type information
 impl<T: ToTDBSchema, To: ToTDBSchema> EntityIDRemap<To> for EntityIDFor<T> {
     default fn remap(self) -> EntityIDFor<To> {
-        EntityIDFor::new(self.id()).unwrap()
+        let type_name = self.get_type_name();
+        let source_schema = T::to_schema();
+        let source_type_name = source_schema.class_name().as_str();
+
+        // If the type name in the IRI doesn't match the source type T, it means we have
+        // a variant/different type embedded (e.g., EntityIDFor<Union> containing "VariantType/id")
+        // In this case, preserve the full IRI structure to maintain that type information
+        if type_name != source_type_name {
+            EntityIDFor::from_iri_unchecked(self.iri)
+        } else {
+            // Normal case: the IRI matches the source type, so just extract the ID
+            // and let it be re-prefixed with the target type name
+            EntityIDFor::new(self.id()).unwrap()
+        }
     }
 }
 
 // Specialized implementation: variant→union remapping preserves full typed path and base URI
 impl<T: TaggedUnionVariant<U>, U: TaggedUnion> EntityIDRemap<U> for EntityIDFor<T> {
     fn remap(self) -> EntityIDFor<U> {
-        // Use the full IRI string to preserve base URI if present
-        EntityIDFor::new(&self.iri()).unwrap()
+        // Preserve the full IRI structure (base URI + variant type + ID)
+        EntityIDFor::from_iri_unchecked(self.iri)
     }
 }
 
@@ -1253,6 +1275,85 @@ mod tests {
         assert_eq!(union_id.id(), "789");
         assert_eq!(union_id.get_type_name(), "TestTaggedUnionVariantA");
         assert_eq!(union_id.get_base_uri(), Some("terminusdb://data"));
+    }
+
+    #[test]
+    fn test_remap_union_to_regular_type_preserves_variant() {
+        use crate as terminusdb_schema;
+
+        // Create a TaggedUnion ID that contains a variant type
+        let union_id: EntityIDFor<TestTaggedUnion> =
+            EntityIDFor::new("TestTaggedUnionVariantA/789").unwrap();
+
+        assert_eq!(union_id.typed(), "TestTaggedUnionVariantA/789");
+        assert_eq!(union_id.id(), "789");
+        assert_eq!(union_id.get_type_name(), "TestTaggedUnionVariantA");
+
+        // Define another regular type
+        #[derive(Clone, Debug, TerminusDBModel)]
+        struct TargetType {
+            _dummy: String,
+        }
+
+        // Remap to another type - should preserve the full variant path
+        let remapped: EntityIDFor<TargetType> = union_id.remap();
+
+        // Should preserve the full variant path, not just the ID
+        assert_eq!(remapped.typed(), "TestTaggedUnionVariantA/789");
+        assert_eq!(remapped.id(), "789");
+        assert_eq!(remapped.get_type_name(), "TestTaggedUnionVariantA");
+    }
+
+    #[test]
+    fn test_remap_union_with_base_uri_to_regular_type() {
+        use crate as terminusdb_schema;
+
+        // Create a TaggedUnion ID with base URI
+        let union_id: EntityIDFor<TestTaggedUnion> =
+            EntityIDFor::new("terminusdb://data#TestTaggedUnionVariantB/456").unwrap();
+
+        assert_eq!(union_id.get_base_uri(), Some("terminusdb://data"));
+        assert_eq!(union_id.get_type_name(), "TestTaggedUnionVariantB");
+
+        #[derive(Clone, Debug, TerminusDBModel)]
+        struct AnotherType {
+            _dummy: String,
+        }
+
+        // Remap to another type
+        let remapped: EntityIDFor<AnotherType> = union_id.remap();
+
+        // Should preserve base URI and variant type
+        assert_eq!(
+            remapped.iri(),
+            "terminusdb://data#TestTaggedUnionVariantB/456"
+        );
+        assert_eq!(remapped.get_base_uri(), Some("terminusdb://data"));
+        assert_eq!(remapped.get_type_name(), "TestTaggedUnionVariantB");
+        assert_eq!(remapped.id(), "456");
+    }
+
+    #[test]
+    fn test_remap_union_to_union_preserves_variant() {
+        use crate as terminusdb_schema;
+
+        // Create a union with a variant type embedded
+        let union1_id: EntityIDFor<TestTaggedUnion> =
+            EntityIDFor::new("TestTaggedUnionVariantA/999").unwrap();
+
+        #[derive(Clone, Debug, TerminusDBModel)]
+        enum AnotherUnion {
+            X { x: String },
+            Y { y: String },
+        }
+
+        // Remap to a different union type
+        let union2_id: EntityIDFor<AnotherUnion> = union1_id.remap();
+
+        // Should preserve the original variant type from the first union
+        assert_eq!(union2_id.typed(), "TestTaggedUnionVariantA/999");
+        assert_eq!(union2_id.get_type_name(), "TestTaggedUnionVariantA");
+        assert_eq!(union2_id.id(), "999");
     }
 
     #[test]
