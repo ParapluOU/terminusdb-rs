@@ -16,7 +16,7 @@ use terminusdb_woql2::prelude::*;
 use terminusdb_schema::{Primitive, PrimitiveValue, ToSchemaClass, ToMaybeTDBSchema, FromInstanceProperty, InstanceProperty, ToInstanceProperty, Schema, STRING};
 use terminusdb_schema::json::InstancePropertyFromJson;
 
-pub use {deserialize::*, document::*, err::*, info::*, r#trait::*, result::*, spec::*};
+pub use {deserialize::*, document::*, err::*, info::*, r#trait::*, result::*, spec::*, versioned_id::*};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::*;
@@ -35,6 +35,7 @@ mod query;
 pub mod result;
 mod spec;
 mod r#trait;
+pub mod versioned_id;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod debug;
 pub use query::*;
