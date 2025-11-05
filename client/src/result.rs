@@ -10,6 +10,8 @@ use std::fmt::{Debug, Formatter};
 use std::iter::FilterMap;
 use std::slice::Iter;
 use terminusdb_woql_builder::prelude::vars;
+use terminusdb_schema::{EntityIDFor, ToTDBSchema};
+use anyhow::anyhow;
 
 use crate::TerminusDBAdapterError::Serde;
 use crate::*;
@@ -106,6 +108,47 @@ impl<T> AsRef<T> for ResponseWithHeaders<T> {
 impl<T> AsMut<T> for ResponseWithHeaders<T> {
     fn as_mut(&mut self) -> &mut T {
         &mut self.data
+    }
+}
+
+// Implementation for the specific HashMap result type
+impl ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>> {
+    /// Filter and convert IDs of type T to versioned entity references.
+    ///
+    /// Only extracts IDs that successfully parse as `EntityIDFor<T>`.
+    /// Since a single insert operation can contain multiple document types,
+    /// this acts as a filter to extract only IDs matching the specified type T.
+    ///
+    /// Requires a commit ID to be present in the response headers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = client.insert_documents(instances, args).await?;
+    ///
+    /// // Extract only Person IDs as versioned references
+    /// let person_refs: Vec<VersionedEntityIDFor<Person>> =
+    ///     result.into_versioned_refs()?;
+    ///
+    /// // IDs of other types (e.g., Company) are filtered out
+    /// ```
+    pub fn into_versioned_refs<T: ToTDBSchema>(
+        self,
+    ) -> anyhow::Result<Vec<VersionedEntityIDFor<T>>> {
+        let commit_id = self.extract_commit_id()
+            .ok_or_else(|| anyhow!("No commit ID in response headers"))?;
+
+        // Filter: only include IDs that parse successfully as EntityIDFor<T>
+        let refs: Vec<_> = self.data
+            .into_iter()
+            .filter_map(|(id_str, _result)| {
+                EntityIDFor::<T>::new_unchecked(&id_str)
+                    .ok()
+                    .map(|entity_id| VersionedEntityIDFor::new(entity_id, commit_id.clone()))
+            })
+            .collect();
+
+        Ok(refs)
     }
 }
 
@@ -273,9 +316,71 @@ pub trait IWOQLQueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use terminusdb_schema_derive::TerminusDBModel;
+
     #[test]
     fn test_woql_response_typed_var() {
         let res: WOQLResult = serde_json::from_str(FILEHASH_RESULT_FIXTURE).unwrap();
+    }
+
+    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    struct Person {
+        name: String,
+    }
+
+    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    struct Company {
+        name: String,
+    }
+
+    #[test]
+    fn test_into_versioned_refs_filters_by_type() {
+        let mut results = HashMap::new();
+        results.insert(
+            "Person/123".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/123".to_string()),
+        );
+        results.insert(
+            "Company/456".to_string(),
+            TDBInsertInstanceResult::Inserted("Company/456".to_string()),
+        );
+        results.insert(
+            "Person/789".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/789".to_string()),
+        );
+
+        let response = ResponseWithHeaders::new(results, Some(CommitId::new("branch:abc123")));
+
+        // Extract only Person refs
+        let person_refs: Vec<VersionedEntityIDFor<Person>> = response.clone().into_versioned_refs().unwrap();
+        assert_eq!(person_refs.len(), 2); // Person/123 and Person/789
+
+        // Extract only Company refs
+        let company_refs: Vec<VersionedEntityIDFor<Company>> = response.into_versioned_refs().unwrap();
+        assert_eq!(company_refs.len(), 1); // Company/456
+    }
+
+    #[test]
+    fn test_into_versioned_refs_missing_commit_id() {
+        let mut results = HashMap::new();
+        results.insert(
+            "Person/123".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/123".to_string()),
+        );
+
+        let response = ResponseWithHeaders::without_headers(results);
+
+        let err = response.into_versioned_refs::<Person>().unwrap_err();
+        assert!(err.to_string().contains("No commit ID"));
+    }
+
+    #[test]
+    fn test_into_versioned_refs_empty_results() {
+        let results = HashMap::new();
+        let response = ResponseWithHeaders::new(results, Some(CommitId::new("branch:abc123")));
+
+        let refs: Vec<VersionedEntityIDFor<Person>> = response.into_versioned_refs().unwrap();
+        assert_eq!(refs.len(), 0);
     }
 }
 

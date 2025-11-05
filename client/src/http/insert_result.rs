@@ -1,9 +1,10 @@
 //! Structured results for instance insertion operations
 
-use crate::{CommitId, TDBInsertInstanceResult};
+use crate::{CommitId, TDBInsertInstanceResult, VersionedEntityIDFor};
 use std::collections::HashMap;
 use std::ops::Deref;
 use terminusdb_schema::{EntityIDFor, TdbIRI, ToTDBSchema};
+use anyhow::anyhow;
 
 /// Result of inserting an instance with sub-entities
 #[derive(Debug, Clone)]
@@ -89,6 +90,65 @@ impl InsertInstanceResult {
         let iri = self.get_root_iri()?;
         Ok((iri.type_name().to_string(), iri.id().to_string()))
     }
+
+    /// Get the root entity as a versioned reference.
+    ///
+    /// Combines the root entity ID with the commit ID from the response.
+    /// Requires a commit ID to be present in the result.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = client.insert_instance_with_commit_id(&person, args).await?;
+    /// let versioned_ref: VersionedEntityIDFor<Person> = result.0.root_versioned_ref()?;
+    ///
+    /// println!("Person {} at commit {}", versioned_ref.id, versioned_ref.version);
+    /// ```
+    pub fn root_versioned_ref<T: ToTDBSchema>(&self) -> anyhow::Result<VersionedEntityIDFor<T>> {
+        let commit_id = self.extract_commit_id()
+            .ok_or_else(|| anyhow!("No commit ID in insert result"))?;
+
+        let entity_id = self.root_ref::<T>()?;
+        Ok(VersionedEntityIDFor::new(entity_id, commit_id))
+    }
+
+    /// Get all entities (root + sub-entities) as versioned references, filtered by type T.
+    ///
+    /// Only includes entities whose IDs successfully parse as `EntityIDFor<T>`.
+    /// Since sub-entities may be of different types, this filters to only include type T.
+    /// Requires a commit ID to be present in the result.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = client.insert_instance_with_commit_id(&company, args).await?;
+    ///
+    /// // Get all Person entities (might be employees as sub-entities)
+    /// let person_refs: Vec<VersionedEntityIDFor<Person>> = result.0.all_versioned_refs()?;
+    ///
+    /// // Get all Company entities (just the root in this case)
+    /// let company_refs: Vec<VersionedEntityIDFor<Company>> = result.0.all_versioned_refs()?;
+    /// ```
+    pub fn all_versioned_refs<T: ToTDBSchema>(&self) -> anyhow::Result<Vec<VersionedEntityIDFor<T>>> {
+        let commit_id = self.extract_commit_id()
+            .ok_or_else(|| anyhow!("No commit ID in insert result"))?;
+
+        let mut refs = Vec::new();
+
+        // Try to add root if it's type T
+        if let Ok(root_id) = EntityIDFor::<T>::new_unchecked(&self.root_id) {
+            refs.push(VersionedEntityIDFor::new(root_id, commit_id.clone()));
+        }
+
+        // Filter sub-entities to only type T
+        for (id_str, _result) in &self.sub_entities {
+            if let Ok(entity_id) = EntityIDFor::<T>::new_unchecked(id_str) {
+                refs.push(VersionedEntityIDFor::new(entity_id, commit_id.clone()));
+            }
+        }
+
+        Ok(refs)
+    }
 }
 
 impl Deref for InsertInstanceResult {
@@ -102,5 +162,97 @@ impl Deref for InsertInstanceResult {
 impl AsRef<str> for InsertInstanceResult {
     fn as_ref(&self) -> &str {
         &self.root_id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminusdb_schema::*;
+    use terminusdb_schema_derive::TerminusDBModel;
+
+    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    struct Person {
+        name: String,
+    }
+
+    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    struct Company {
+        name: String,
+    }
+
+    #[test]
+    fn test_root_versioned_ref_success() {
+        let mut results = HashMap::new();
+        results.insert(
+            "Person/123".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/123".to_string()),
+        );
+
+        let mut result = InsertInstanceResult::new(results, "Person/123".to_string()).unwrap();
+        result.commit_id = Some(CommitId::new("branch:abc123"));
+
+        let versioned_ref: VersionedEntityIDFor<Person> = result.root_versioned_ref().unwrap();
+
+        assert_eq!(versioned_ref.id.typed(), "Person/123");
+        assert_eq!(versioned_ref.version.as_str(), "abc123");
+    }
+
+    #[test]
+    fn test_root_versioned_ref_missing_commit_id() {
+        let mut results = HashMap::new();
+        results.insert(
+            "Person/123".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/123".to_string()),
+        );
+
+        let result = InsertInstanceResult::new(results, "Person/123".to_string()).unwrap();
+        // No commit_id set
+
+        let err = result.root_versioned_ref::<Person>().unwrap_err();
+        assert!(err.to_string().contains("No commit ID"));
+    }
+
+    #[test]
+    fn test_all_versioned_refs_filters_by_type() {
+        let mut results = HashMap::new();
+        results.insert(
+            "Person/123".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/123".to_string()),
+        );
+        results.insert(
+            "Company/456".to_string(),
+            TDBInsertInstanceResult::Inserted("Company/456".to_string()),
+        );
+        results.insert(
+            "Person/789".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/789".to_string()),
+        );
+
+        let mut result = InsertInstanceResult::new(results, "Person/123".to_string()).unwrap();
+        result.commit_id = Some(CommitId::new("branch:abc123"));
+
+        // Get only Person refs
+        let person_refs: Vec<VersionedEntityIDFor<Person>> = result.all_versioned_refs().unwrap();
+        assert_eq!(person_refs.len(), 2); // Person/123 and Person/789
+
+        // Get only Company refs
+        let company_refs: Vec<VersionedEntityIDFor<Company>> = result.all_versioned_refs().unwrap();
+        assert_eq!(company_refs.len(), 1); // Company/456
+    }
+
+    #[test]
+    fn test_all_versioned_refs_missing_commit_id() {
+        let mut results = HashMap::new();
+        results.insert(
+            "Person/123".to_string(),
+            TDBInsertInstanceResult::Inserted("Person/123".to_string()),
+        );
+
+        let result = InsertInstanceResult::new(results, "Person/123".to_string()).unwrap();
+        // No commit_id set
+
+        let err = result.all_versioned_refs::<Person>().unwrap_err();
+        assert!(err.to_string().contains("No commit ID"));
     }
 }
