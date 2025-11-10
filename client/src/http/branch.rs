@@ -80,7 +80,7 @@ impl super::client::TerminusDBHttpClient {
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
             .header("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(3600))  // 1 hour default for squash operations
+            .timeout(std::time::Duration::from_secs(28800))  // 8 hour default for squash operations
             .body(
                 json!({
                     "commit_info": commit_info

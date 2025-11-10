@@ -24,6 +24,24 @@ use {
 
 use super::url_builder::UrlBuilder;
 
+/// Check if SSE (Server-Sent Events) is enabled via environment variable.
+///
+/// SSE is disabled by default and must be explicitly enabled by setting
+/// the TERMINUSDB_SSE environment variable to "true", "1", "yes", or "on".
+#[cfg(not(target_arch = "wasm32"))]
+fn is_sse_enabled() -> bool {
+    env::var("TERMINUSDB_SSE")
+        .ok()
+        .and_then(|v| {
+            let v = v.to_lowercase();
+            match v.as_str() {
+                "true" | "1" | "yes" | "on" => Some(true),
+                _ => None,
+            }
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Clone)]
 pub struct TerminusDBHttpClient {
     pub endpoint: Url,
@@ -634,6 +652,9 @@ impl TerminusDBHttpClient {
     /// // Listener is active and will receive events
     /// // Keep listener in scope to continue receiving events
     /// ```
+    ///
+    /// # Note
+    /// SSE is disabled by default. Set `TERMINUSDB_SSE=true` to enable real-time updates.
     #[instrument(
         name = "terminus.client.change_listener",
         skip(self),
@@ -643,6 +664,34 @@ impl TerminusDBHttpClient {
         )
     )]
     pub fn change_listener(
+        &self,
+        spec: crate::spec::BranchSpec,
+    ) -> anyhow::Result<super::change_listener::ChangeListener> {
+        // Check if SSE is enabled via environment variable
+        if !is_sse_enabled() {
+            debug!("SSE is disabled. Set TERMINUSDB_SSE=true to enable.");
+            return Ok(super::change_listener::ChangeListener::disabled(
+                self.clone(),
+                spec,
+            ));
+        }
+
+        self.change_listener_internal(spec)
+    }
+
+    /// Internal change_listener that bypasses the SSE enabled check.
+    ///
+    /// This is used by the CLI changestream command to always work regardless
+    /// of the TERMINUSDB_SSE environment variable.
+    #[instrument(
+        name = "terminus.client.change_listener_internal",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch
+        )
+    )]
+    pub(crate) fn change_listener_internal(
         &self,
         spec: crate::spec::BranchSpec,
     ) -> anyhow::Result<super::change_listener::ChangeListener> {

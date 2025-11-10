@@ -59,7 +59,9 @@ pub(crate) struct ChangeListenerInner {
     client: TerminusDBHttpClient,
     spec: BranchSpec,
     handlers: RwLock<HandlerRegistry>,
-    sse_manager: Arc<SseManager>,
+    sse_manager: Option<Arc<SseManager>>,
+    /// If true, this listener is disabled and won't register with SSE manager
+    disabled: bool,
 }
 
 /// Registry of all registered handlers organized by type
@@ -355,7 +357,8 @@ impl ChangeListener {
             client,
             spec,
             handlers: RwLock::new(HandlerRegistry::default()),
-            sse_manager: sse_manager.clone(),
+            sse_manager: Some(sse_manager.clone()),
+            disabled: false,
         });
 
         // Register with the SSE manager
@@ -363,6 +366,29 @@ impl ChangeListener {
         sse_manager.register_listener(resource_path, Arc::downgrade(&inner))?;
 
         Ok(Self { inner })
+    }
+
+    /// Create a disabled ChangeListener that does nothing.
+    ///
+    /// This is used when SSE is disabled via environment variable.
+    /// The listener will log a warning on first use but won't attempt
+    /// to connect to the SSE stream.
+    pub(crate) fn disabled(client: TerminusDBHttpClient, spec: BranchSpec) -> Self {
+        warn!(
+            "ChangeListener created but SSE is disabled. Set TERMINUSDB_SSE=true to enable real-time updates for database '{}', branch '{}'",
+            spec.db,
+            spec.branch.as_deref().unwrap_or("main")
+        );
+
+        let inner = Arc::new(ChangeListenerInner {
+            client,
+            spec,
+            handlers: RwLock::new(HandlerRegistry::default()),
+            sse_manager: None,
+            disabled: true,
+        });
+
+        Self { inner }
     }
 
     /// Register a callback for when a document ID is added (does not fetch the document)
