@@ -23,7 +23,9 @@ This Docker image provides automated backups of TerminusDB databases to a Git re
 ```yaml
 services:
   terminusdb-backup:
-    build: ./docker/git-backup-cron
+    build:
+      context: ../..
+      dockerfile: docker/git-backup-cron/Dockerfile
     environment:
       # TerminusDB Configuration
       TERMINUSDB_ADMIN_PASS: root
@@ -63,7 +65,9 @@ volumes:
 ```yaml
 services:
   terminusdb-backup:
-    build: ./docker/git-backup-cron
+    build:
+      context: ../..
+      dockerfile: docker/git-backup-cron/Dockerfile
     environment:
       GIT_REPO_URL: https://github.com/your-org/terminusdb-backups.git
       GIT_REPO_USER: your-username
@@ -149,9 +153,11 @@ Examples:
 1. **Container Startup**:
    - Initializes TerminusDB store (if needed)
    - Configures git credentials using credential helper
+   - Auto-clones git repository (or pulls if already exists)
+   - Handles empty repositories by creating initial commit
    - Sets up cron job for scheduled backups
-   - Starts git-sync-rs in watch mode (handles initial clone if needed)
-   - Starts crond for scheduled tasks
+   - Starts git-sync-rs in watch mode
+   - Starts cron for scheduled tasks
    - Starts TerminusDB server
 
 2. **Backup Process** (triggered by cron):
@@ -255,11 +261,12 @@ The git repository uses a volume, so it won't bloat the container. However, git 
 
 - The git repository is stored in a **volume** to prevent container filesystem bloating
 - Files are overwritten each backup - git provides versioning and deduplication
-- git-sync-rs handles all git operations (clone, commit, push, pull)
+- Git repository is **automatically cloned** on first startup (no manual setup needed)
+- Empty repositories are initialized with a README on first run
+- git-sync-rs handles all ongoing git operations (commit, push, pull)
 - The backup script only dumps triples to files - no git commands needed
 - Git credentials are managed via credential helper (not embedded in URLs)
 - git-sync-rs uses file watching with debouncing for efficient syncing
-- Initial clone is handled automatically by git-sync-rs if repository doesn't exist
 
 ## git-sync-rs Configuration
 
