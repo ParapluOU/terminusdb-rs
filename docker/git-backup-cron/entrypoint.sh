@@ -94,6 +94,7 @@ mkdir -p "$GIT_REPO_DIR"
 # Export environment variables for cron jobs and git-sync-rs
 cat > /backup/scripts/backup-env.sh <<EOF
 export TERMINUSDB_ADMIN_PASS="$TERMINUSDB_ADMIN_PASS"
+export BACKUP_DATABASES="$BACKUP_DATABASES"
 export GIT_REPO_DIR="$GIT_REPO_DIR"
 export GIT_REPO_USER="$GIT_REPO_USER"
 export GIT_REPO_PASSWORD="$GIT_REPO_PASSWORD"
@@ -112,18 +113,23 @@ chmod 600 /backup/scripts/backup-env.sh
 
 # Set up cron job
 echo "Setting up cron job with schedule: $BACKUP_CRON_SCHEDULE"
-cat > /etc/crontabs/root <<EOF
+mkdir -p /var/spool/cron/crontabs
+cat > /var/spool/cron/crontabs/root <<EOF
 # TerminusDB backup cron job
 $BACKUP_CRON_SCHEDULE /backup/scripts/backup-triples.sh >> /var/log/backup/cron.log 2>&1
 EOF
+
+# Set correct permissions for crontab (cron requires 600 and root:crontab ownership)
+chmod 600 /var/spool/cron/crontabs/root
+chown root:crontab /var/spool/cron/crontabs/root
 
 # Start git-sync-rs in the background
 echo "Starting git-sync-rs..."
 /backup/scripts/git-sync-wrapper.sh &
 
-# Start crond
-echo "Starting crond..."
-crond
+# Start cron
+echo "Starting cron..."
+service cron start
 
 echo "Backup configuration:"
 echo "  Schedule: $BACKUP_CRON_SCHEDULE"

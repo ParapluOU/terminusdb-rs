@@ -1,17 +1,23 @@
 FROM terminusdb/terminusdb-server:v11.2.0-rc5
 
-# Install git, cronie (Alpine's cron), rust/cargo, and other dependencies
-RUN apk add --no-cache \
+# Install git, cron, rust/cargo, and other dependencies (Debian-based)
+RUN apt-get update && apt-get install -y \
     git \
-    cronie \
+    cron \
     bash \
     curl \
-    build-base \
-    openssl-dev \
-    ca-certificates
+    build-essential \
+    libssl-dev \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust and Cargo
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install git-sync-rs globally
-RUN cargo install git-sync-rs
+RUN /root/.cargo/bin/cargo install git-sync-rs
 
 # Create directories for git repo and scripts
 RUN mkdir -p /backup/repo \
