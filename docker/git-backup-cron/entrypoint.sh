@@ -94,6 +94,7 @@ mkdir -p "$GIT_REPO_DIR"
 # Export environment variables for cron jobs and git-sync-rs
 cat > /backup/scripts/backup-env.sh <<EOF
 export TERMINUSDB_ADMIN_PASS="$TERMINUSDB_ADMIN_PASS"
+export TERMINUSDB_SERVER_DB_PATH="/app/terminusdb/storage/db"
 export BACKUP_DATABASES="$BACKUP_DATABASES"
 export GIT_REPO_DIR="$GIT_REPO_DIR"
 export GIT_REPO_USER="$GIT_REPO_USER"
