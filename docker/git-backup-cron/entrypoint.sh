@@ -85,7 +85,7 @@ mkdir -p "$GIT_REPO_DIR"
 # Auto-clone or pull git repository
 if [ ! -d "$GIT_REPO_DIR/.git" ]; then
     echo "Git repository not found. Cloning from $GIT_REPO_URL..."
-    git clone "$GIT_REPO_URL_WITH_CREDS" "$GIT_REPO_DIR" || {
+    git clone "$GIT_REPO_URL" "$GIT_REPO_DIR" || {
         echo "Warning: Failed to clone repository. git-sync-rs will try to clone on first sync."
     }
 
@@ -100,7 +100,7 @@ if [ ! -d "$GIT_REPO_DIR/.git" ]; then
             echo "Backups are organized by organization and database name." >> README.md
             git add README.md
             git commit -m "Initial commit: Setup TerminusDB backup repository"
-            git push "$GIT_REPO_URL_WITH_CREDS" HEAD:master || git push "$GIT_REPO_URL_WITH_CREDS" HEAD:main || {
+            git push origin HEAD:master 2>/dev/null || git push origin HEAD:main 2>/dev/null || {
                 echo "Warning: Failed to push initial commit. Will continue anyway."
             }
         fi
@@ -108,7 +108,7 @@ if [ ! -d "$GIT_REPO_DIR/.git" ]; then
     fi
 else
     echo "Git repository exists. Pulling latest changes..."
-    (cd "$GIT_REPO_DIR" && git pull "$GIT_REPO_URL_WITH_CREDS") || {
+    (cd "$GIT_REPO_DIR" && git pull) || {
         echo "Warning: Failed to pull latest changes. Will continue with existing repository."
     }
 fi
