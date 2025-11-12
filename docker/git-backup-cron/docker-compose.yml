@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  terminusdb-backup:
+    build:
+      context: ../..
+      dockerfile: docker/git-backup-cron/Dockerfile
+    container_name: terminusdb-backup
+    environment:
+      # TerminusDB Configuration
+      TERMINUSDB_ADMIN_PASS: root
+      TERMINUSDB_SERVER_PORT: 6363
+
+      # Git Repository Configuration
+      # Replace with your actual repository details
+      GIT_REPO_URL: https://github.com/your-org/terminusdb-backups.git
+      GIT_REPO_USER: your-github-username
+      GIT_REPO_PASSWORD: your-github-token
+      GIT_REPO_EMAIL: backup@example.com
+
+      # Backup Configuration
+      # Comma-separated list of databases in format: org/database
+      BACKUP_DATABASES: admin/mydb1,admin/mydb2
+
+      # Cron schedule for backups (default: 2 AM daily)
+      # Format: minute hour day month weekday
+      # Examples:
+      #   "0 2 * * *"    - Every day at 2 AM
+      #   "0 */6 * * *"  - Every 6 hours
+      #   "*/30 * * * *" - Every 30 minutes
+      BACKUP_CRON_SCHEDULE: "0 2 * * *"
+
+      # Git Sync Configuration (optional - all have sensible defaults)
+      GIT_SYNC_INTERVAL: 60           # Periodic sync interval (seconds)
+      GIT_SYNC_DEBOUNCE: 2            # Debounce file changes (seconds)
+      GIT_SYNC_MIN_INTERVAL: 5        # Minimum time between syncs (seconds)
+      GIT_SYNC_NEW_FILES: "true"      # Include untracked files
+      GIT_SYNC_REMOTE: origin         # Git remote name
+
+    volumes:
+      # TerminusDB storage - persists database data
+      - terminusdb-storage:/app/terminusdb/storage
+
+      # Git repository - MUST be a volume to prevent container bloating
+      # This can become very large, so it's stored in a volume
+      - git-backup-repo:/backup/repo
+
+    ports:
+      - "6363:6363"
+
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6363/api/ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  terminusdb-storage:
+    name: terminusdb-backup-storage
+  git-backup-repo:
+    name: terminusdb-backup-repo
+
+# =========================================================================
+# Alternative configuration using Docker secrets (recommended for production)
+# =========================================================================
+#
+# Uncomment the sections below and comment out the environment variables
+# above to use Docker secrets for sensitive data
+#
+# services:
+#   terminusdb-backup:
+#     build:
+#       context: ../..
+#       dockerfile: docker/git-backup-cron/Dockerfile
+#     environment:
+#       # Non-sensitive configuration
+#       GIT_REPO_URL: https://github.com/your-org/terminusdb-backups.git
+#       GIT_REPO_USER: your-github-username
+#       GIT_REPO_EMAIL: backup@example.com
+#       BACKUP_DATABASES: admin/mydb1,admin/mydb2
+#       BACKUP_CRON_SCHEDULE: "0 2 * * *"
+#       GIT_SYNC_INTERVAL: 60
+#       GIT_SYNC_DEBOUNCE: 2
+#       GIT_SYNC_MIN_INTERVAL: 5
+#       GIT_SYNC_NEW_FILES: "true"
+#       GIT_SYNC_REMOTE: origin
+#     secrets:
+#       - terminusdb_admin_pass
+#       - git_repo_password
+#     volumes:
+#       - terminusdb-storage:/app/terminusdb/storage
+#       - git-backup-repo:/backup/repo
+#     ports:
+#       - "6363:6363"
+#
+# secrets:
+#   terminusdb_admin_pass:
+#     file: ./secrets/terminusdb_admin_pass.txt
+#   git_repo_password:
+#     file: ./secrets/git_repo_password.txt
