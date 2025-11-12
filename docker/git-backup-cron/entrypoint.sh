@@ -70,6 +70,11 @@ if [[ "$GIT_REPO_URL" =~ ^https?:// ]]; then
     # Create credential helper script
     cat > /usr/local/bin/git-credential-helper <<CREDHELPER
 #!/bin/sh
+# Read git credential request from stdin (and discard it)
+while read line; do
+    [ -z "\$line" ] && break
+done
+# Always provide our configured credentials
 echo "username=${GIT_REPO_USER}"
 echo "password=${GIT_REPO_PASSWORD}"
 CREDHELPER
