@@ -79,17 +79,47 @@ CREDHELPER
     git config --global credential.helper "/usr/local/bin/git-credential-helper"
 fi
 
+# Create the repo directory if it doesn't exist
+mkdir -p "$GIT_REPO_DIR"
+
+# Auto-clone or pull git repository
+if [ ! -d "$GIT_REPO_DIR/.git" ]; then
+    echo "Git repository not found. Cloning from $GIT_REPO_URL..."
+    git clone "$GIT_REPO_URL_WITH_CREDS" "$GIT_REPO_DIR" || {
+        echo "Warning: Failed to clone repository. git-sync-rs will try to clone on first sync."
+    }
+
+    # If repository is empty (new repo), create initial commit
+    if [ -d "$GIT_REPO_DIR/.git" ]; then
+        cd "$GIT_REPO_DIR"
+        if [ -z "$(git log --oneline 2>/dev/null)" ]; then
+            echo "Empty repository detected. Creating initial commit..."
+            echo "# TerminusDB Backup Repository" > README.md
+            echo "" >> README.md
+            echo "This repository contains automated backups from TerminusDB." >> README.md
+            echo "Backups are organized by organization and database name." >> README.md
+            git add README.md
+            git commit -m "Initial commit: Setup TerminusDB backup repository"
+            git push "$GIT_REPO_URL_WITH_CREDS" HEAD:master || git push "$GIT_REPO_URL_WITH_CREDS" HEAD:main || {
+                echo "Warning: Failed to push initial commit. Will continue anyway."
+            }
+        fi
+        cd -
+    fi
+else
+    echo "Git repository exists. Pulling latest changes..."
+    (cd "$GIT_REPO_DIR" && git pull "$GIT_REPO_URL_WITH_CREDS") || {
+        echo "Warning: Failed to pull latest changes. Will continue with existing repository."
+    }
+fi
+
 # Export git-sync-rs environment variables
-# git-sync-rs will handle cloning if the directory doesn't exist
 export GIT_SYNC_REPOSITORY="$GIT_REPO_URL"
 export GIT_SYNC_DIRECTORY="$GIT_REPO_DIR"
 export GIT_SYNC_INTERVAL="${GIT_SYNC_INTERVAL:-60}"
 export GIT_SYNC_NEW_FILES="${GIT_SYNC_NEW_FILES:-true}"
 export GIT_SYNC_REMOTE="${GIT_SYNC_REMOTE:-origin}"
 export GIT_SYNC_COMMIT_MESSAGE="${GIT_SYNC_COMMIT_MESSAGE:-TerminusDB backup sync from {hostname} at {timestamp}}"
-
-# Create the repo directory if it doesn't exist
-mkdir -p "$GIT_REPO_DIR"
 
 # Export environment variables for cron jobs and git-sync-rs
 cat > /backup/scripts/backup-env.sh <<EOF
