@@ -68,7 +68,7 @@ if [[ "$GIT_REPO_URL" =~ ^https?:// ]]; then
     echo "Setting up git credential helper for HTTPS..."
 
     # Create credential helper script
-    cat > /usr/local/bin/git-credential-helper <<'CREDHELPER'
+    cat > /usr/local/bin/git-credential-helper <<CREDHELPER
 #!/bin/sh
 echo "username=${GIT_REPO_USER}"
 echo "password=${GIT_REPO_PASSWORD}"
