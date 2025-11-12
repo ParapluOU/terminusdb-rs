@@ -23,7 +23,7 @@ echo "  Include new files: $GIT_SYNC_NEW_FILES"
 # Using environment variables for configuration
 # The watch command is default if no command specified
 exec git-sync-rs \
-    --new-files \
+    --new-files=true \
     --remote "$GIT_SYNC_REMOTE" \
     --directory "$GIT_SYNC_DIRECTORY" \
     watch \
