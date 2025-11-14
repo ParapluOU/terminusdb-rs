@@ -887,6 +887,7 @@ async fn run_clone(
         label.as_deref(),
         comment.as_deref(),
         auth,
+        None, // timeout
     ).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -911,7 +912,7 @@ async fn run_fetch(
     let auth = auth_creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
 
     let path = format!("{}/{}/local/branch/{}", org, database, branch);
-    let result = client.fetch(&path, &remote_url, Some(&remote_branch), auth).await?;
+    let result = client.fetch(&path, &remote_url, Some(&remote_branch), auth, None).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -944,6 +945,7 @@ async fn run_pull(
         &author,
         &message,
         auth,
+        None, // timeout
     ).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -968,7 +970,7 @@ async fn run_push(
     let auth = auth_creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
 
     let path = format!("{}/{}/local/branch/{}", org, database, branch);
-    let result = client.push(&path, &remote_url, remote_branch.as_deref(), auth).await?;
+    let result = client.push(&path, &remote_url, remote_branch.as_deref(), auth, None).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -992,7 +994,7 @@ async fn run_optimize(
         format!("{}/{}/local/branch/{}", org, database, branch)
     };
 
-    let result = client.optimize(&path).await?;
+    let result = client.optimize(&path, None).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -1012,7 +1014,7 @@ async fn run_squash(
     let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
 
     let path = format!("{}/{}/local/branch/{}", org, database, branch);
-    let result = client.squash(&path, &author, &message).await?;
+    let result = client.squash(&path, &author, &message, None).await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -1245,7 +1247,8 @@ async fn run_deploy(
         &source_remote_url,
         label,
         comment,
-        Some((&source_user, &source_password))
+        Some((&source_user, &source_password)),
+        None, // timeout
     ).await?;
 
     eprintln!("✓ Successfully cloned database");

@@ -1,4 +1,5 @@
 use crate::TerminusDBModel;
+use std::time::Duration;
 
 #[derive(Clone, Debug)]
 pub struct GetOpts {
@@ -12,6 +13,8 @@ pub struct GetOpts {
     pub type_filter: Option<String>,
     /// Minimize the output (defaults to true for efficient data transfer)
     pub minimized: bool,
+    /// Optional request timeout
+    pub timeout: Option<Duration>,
 }
 
 impl Default for GetOpts {
@@ -23,6 +26,7 @@ impl Default for GetOpts {
             count: None,
             type_filter: None,
             minimized: true,
+            timeout: None,
         }
     }
 }
@@ -84,6 +88,12 @@ impl GetOpts {
     /// Set minimized for chaining
     pub fn with_minimized(mut self, minimized: bool) -> Self {
         self.minimized = minimized;
+        self
+    }
+
+    /// Set timeout for chaining
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 }

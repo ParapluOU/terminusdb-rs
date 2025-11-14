@@ -78,6 +78,7 @@ impl super::client::TerminusDBHttpClient {
         remote: &str,
         remote_branch: Option<&str>,
         remote_auth: Option<(&str, &str)>,
+        timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("fetch").add_path(path).build();
@@ -109,8 +110,10 @@ impl super::client::TerminusDBHttpClient {
             "remote_branch": remote_branch.unwrap_or("main")
         });
 
+        // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
+        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
+
         let res = request
-            .timeout(std::time::Duration::from_secs(900))  // 15 min default for incremental operations
             .body(body.to_string())
             .send()
             .await
@@ -180,6 +183,7 @@ impl super::client::TerminusDBHttpClient {
         remote_url: &str,
         remote_branch: Option<&str>,
         remote_auth: Option<(&str, &str)>,
+        timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("push").add_path(path).build();
@@ -214,8 +218,10 @@ impl super::client::TerminusDBHttpClient {
             request = request.header("AUTHORIZATION_REMOTE", auth_header);
         }
 
+        // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
+        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
+
         let res = request
-            .timeout(std::time::Duration::from_secs(900))  // 15 min default for incremental operations
             .body(body.to_string())
             .send()
             .await
@@ -293,6 +299,7 @@ impl super::client::TerminusDBHttpClient {
         author: &str,
         message: &str,
         remote_auth: Option<(&str, &str)>,
+        timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("pull").add_path(path).build();
@@ -329,8 +336,10 @@ impl super::client::TerminusDBHttpClient {
             request = request.header("AUTHORIZATION_REMOTE", auth_header);
         }
 
+        // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
+        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
+
         let res = request
-            .timeout(std::time::Duration::from_secs(900))  // 15 min default for incremental operations
             .body(body.to_string())
             .send()
             .await
@@ -408,6 +417,7 @@ impl super::client::TerminusDBHttpClient {
         label: Option<&str>,
         comment: Option<&str>,
         remote_auth: Option<(&str, &str)>,
+        timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url()
@@ -444,8 +454,10 @@ impl super::client::TerminusDBHttpClient {
             request = request.header("AUTHORIZATION_REMOTE", auth_header);
         }
 
+        // Apply timeout: use provided timeout or default to 1 hour for full database clone
+        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(3600)));
+
         let res = request
-            .timeout(std::time::Duration::from_secs(3600))  // 1 hour default for full database clone
             .json(&clone_req)
             .send()
             .await

@@ -832,7 +832,7 @@ impl super::client::TerminusDBHttpClient {
         );
 
         // Add a timeout to prevent hanging forever
-        let query_future = self.query_raw(Some(spec.clone()), json_query);
+        let query_future = self.query_raw(Some(spec.clone()), json_query, None);
         let timeout_duration = std::time::Duration::from_secs(30);
 
         let res: crate::WOQLResult<serde_json::Value> =

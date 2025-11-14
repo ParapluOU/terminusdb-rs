@@ -10,7 +10,7 @@ use {
     anyhow::Context,
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},
-    std::{collections::HashMap, fmt::Debug, time::Instant},
+    std::{collections::HashMap, fmt::Debug, time::{Duration, Instant}},
     terminusdb_schema::{ToJson, ToTDBInstance, ToTDBSchema},
     terminusdb_woql2::{prelude::Query as Woql2Query, dsl::ToDSL},
     terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
@@ -73,7 +73,7 @@ impl super::client::TerminusDBHttpClient {
         ).with_query(query.clone());
         
         // Execute the query
-        let result = self.query_raw(db.clone(), json_query.clone()).await;
+        let result = self.query_raw(db.clone(), json_query.clone(), None).await;
         
         let duration_ms = start_time.elapsed().as_millis() as u64;
         
@@ -144,9 +144,10 @@ impl super::client::TerminusDBHttpClient {
         &self,
         spec: Option<BranchSpec>,
         query: serde_json::Value,
+        timeout: Option<Duration>,
     ) -> anyhow::Result<WOQLResult<T>> {
         let start_time = Instant::now();
-        
+
         let uri = match spec {
             None => self.build_url().endpoint("woql").build(),
             Some(spc) => self
@@ -169,14 +170,19 @@ impl super::client::TerminusDBHttpClient {
         // Acquire concurrency permit for read operations (WOQL queries are typically reads)
         let _permit = self.acquire_read_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri.clone())
             .basic_auth(&self.user, Some(&self.pass))
             .header("Content-Type", "application/json")
-            .body(json_string)
-            .send()
-            .await?;
+            .body(json_string);
+
+        // Apply timeout if provided
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+
+        let res = request.send().await?;
 
         let json = self.parse_response(res).await?;
 
@@ -220,6 +226,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         spec: Option<BranchSpec>,
         query_string: &str,
+        timeout: Option<Duration>,
     ) -> anyhow::Result<WOQLResult<T>> {
         let start_time = Instant::now();
         
@@ -250,8 +257,8 @@ impl super::client::TerminusDBHttpClient {
             operation = operation.with_query(query);
         }
         
-        let result = self.query_raw(spec.clone(), json_query.clone()).await;
-        
+        let result = self.query_raw(spec.clone(), json_query.clone(), timeout).await;
+
         let duration_ms = start_time.elapsed().as_millis() as u64;
         
         // Update operation entry based on result
@@ -320,6 +327,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         spec: Option<BranchSpec>,
         query: serde_json::Value,
+        timeout: Option<Duration>,
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
         let uri = match spec {
             None => self.build_url().endpoint("woql").build(),
@@ -343,14 +351,19 @@ impl super::client::TerminusDBHttpClient {
         // Acquire concurrency permit for read operations (WOQL queries are typically reads)
         let _permit = self.acquire_read_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
             .header("Content-Type", "application/json")
-            .body(json)
-            .send()
-            .await?;
+            .body(json);
+
+        // Apply timeout if provided
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+
+        let res = request.send().await?;
 
         let json = self.parse_response_with_headers(res).await?;
 
@@ -384,6 +397,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         spec: Option<BranchSpec>,
         query_string: &str,
+        timeout: Option<Duration>,
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
         // Try to parse as JSON-LD first, then fall back to DSL
         let (json_query, parsed_query) = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
@@ -398,8 +412,8 @@ impl super::client::TerminusDBHttpClient {
             (json, Some(query))
         };
         
-        
-        self.query_raw_with_headers(spec, json_query).await
+
+        self.query_raw_with_headers(spec, json_query, timeout).await
     }
 
     // todo: roll into ORM-like model

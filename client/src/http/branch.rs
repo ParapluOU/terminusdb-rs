@@ -54,6 +54,7 @@ impl super::client::TerminusDBHttpClient {
         path: &str,
         author: &str,
         message: &str,
+        timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<SquashResponse> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("squash").add_path(path).build();
@@ -75,12 +76,16 @@ impl super::client::TerminusDBHttpClient {
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let res = self
+        let mut request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(28800))  // 8 hour default for squash operations
+            .header("Content-Type", "application/json");
+
+        // Apply timeout: use provided timeout or default to 8 hours for squash operations
+        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(28800)));
+
+        let res = request
             .body(
                 json!({
                     "commit_info": commit_info
@@ -208,7 +213,7 @@ impl super::client::TerminusDBHttpClient {
         debug!("Starting squash and reset for {}", path);
 
         // Step 1: Squash the branch
-        let squash_result = self.squash(path, author, message).await
+        let squash_result = self.squash(path, author, message, None).await
             .context("failed to squash branch")?;
 
         // Step 2: Extract the new commit ID

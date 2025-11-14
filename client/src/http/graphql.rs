@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::{TerminusDBAdapterError, TerminusDBHttpClient};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// A GraphQL request following the standard GraphQL over HTTP specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +194,7 @@ impl TerminusDBHttpClient {
     /// * `database` - The database name
     /// * `branch` - The branch name (defaults to "main" if None)
     /// * `request` - The GraphQL request to execute
+    /// * `timeout` - Optional timeout for the request
     ///
     /// # Returns
     /// A GraphQL response with the specified type T for the data field
@@ -202,6 +203,7 @@ impl TerminusDBHttpClient {
         database: &str,
         branch: Option<&str>,
         request: GraphQLRequest,
+        timeout: Option<Duration>,
     ) -> Result<GraphQLResponse<T>, TerminusDBAdapterError> {
         use crate::debug::{OperationEntry, OperationType, QueryLogEntry};
 
@@ -223,12 +225,19 @@ impl TerminusDBHttpClient {
         // Acquire concurrency permit for read operations (GraphQL queries are typically reads)
         let _permit = self.acquire_read_permit().await;
 
-        let response = self
+        let mut http_request = self
             .http
             .post(url)
             .basic_auth(&self.user, Some(&self.pass))
             .header("Content-Type", "application/json")
-            .json(&request)
+            .json(&request);
+
+        // Apply timeout if provided
+        if let Some(timeout) = timeout {
+            http_request = http_request.timeout(timeout);
+        }
+
+        let response = http_request
             .send()
             .await
             .map_err(|e| TerminusDBAdapterError::HTTP(e))?;
@@ -325,8 +334,9 @@ impl TerminusDBHttpClient {
         database: &str,
         branch: Option<&str>,
         request: GraphQLRequest,
+        timeout: Option<Duration>,
     ) -> Result<Value, TerminusDBAdapterError> {
-        self.execute_graphql::<Value>(database, branch, request)
+        self.execute_graphql::<Value>(database, branch, request, timeout)
             .await
             .map(|response| {
                 serde_json::json!({
@@ -342,6 +352,7 @@ impl TerminusDBHttpClient {
     /// # Arguments
     /// * `database` - The database name
     /// * `branch` - The branch name (defaults to "main" if None)
+    /// * `timeout` - Optional timeout for the request
     ///
     /// # Returns
     /// The introspection query result containing the full schema
@@ -350,6 +361,7 @@ impl TerminusDBHttpClient {
         &self,
         database: &str,
         branch: Option<&str>,
+        timeout: Option<Duration>,
     ) -> Result<Value, TerminusDBAdapterError> {
         let request = GraphQLRequest {
             query: INTROSPECTION_QUERY.to_string(),
@@ -358,7 +370,7 @@ impl TerminusDBHttpClient {
         };
 
         let response = self
-            .execute_graphql::<Value>(database, branch, request)
+            .execute_graphql::<Value>(database, branch, request, timeout)
             .await?;
 
         if let Some(errors) = response.errors {

@@ -216,7 +216,7 @@ impl super::client::TerminusDBHttpClient {
         let json_query = woql_query.to_instance(None).to_json();
 
         // perform the query using the serialized JSON
-        let res = self.query_raw(Some(spec.clone()), json_query).await?;
+        let res = self.query_raw(Some(spec.clone()), json_query, None).await?;
 
         // format the error message in case there is a mismatch in deserialization format
         let err = format!("failed to deserialize from Value: {:#?}", &res);

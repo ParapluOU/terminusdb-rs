@@ -120,7 +120,7 @@ impl super::client::TerminusDBHttpClient {
         );
 
         // Execute the query
-        match self.query_raw(Some(spec.clone()), json_query).await {
+        match self.query_raw(Some(spec.clone()), json_query, None).await {
             Ok(result) => {
                 let result: WOQLResult<serde_json::Value> = result;
                 debug!("WOQL query returned {} bindings", result.bindings.len());
@@ -351,7 +351,7 @@ impl super::client::TerminusDBHttpClient {
         );
 
         // Execute the query
-        match self.query_raw(Some(spec.clone()), json_query).await {
+        match self.query_raw(Some(spec.clone()), json_query, None).await {
             Ok(result) => {
                 let result: WOQLResult<serde_json::Value> = result;
                 debug!("WOQL query returned {} bindings", result.bindings.len());

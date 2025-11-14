@@ -1042,21 +1042,31 @@ impl super::client::TerminusDBHttpClient {
 
             let query_json = serde_json::to_string(&query_doc)?;
 
-            self.http
+            let mut request = self.http
                 .post(base_uri)
                 .basic_auth(&self.user, Some(&self.pass))
                 .header("Content-Type", "application/json")
                 .header("X-HTTP-Method-Override", "GET")
-                .body(query_json)
-                .send()
-                .await?
+                .body(query_json);
+
+            // Apply timeout if provided
+            if let Some(timeout) = opts.timeout {
+                request = request.timeout(timeout);
+            }
+
+            request.send().await?
         } else {
             // Use GET for smaller requests
-            self.http
+            let mut request = self.http
                 .get(uri)
-                .basic_auth(&self.user, Some(&self.pass))
-                .send()
-                .await?
+                .basic_auth(&self.user, Some(&self.pass));
+
+            // Apply timeout if provided
+            if let Some(timeout) = opts.timeout {
+                request = request.timeout(timeout);
+            }
+
+            request.send().await?
         };
 
         debug!("Retrieved documents with status code: {}", res.status());
@@ -1167,21 +1177,31 @@ impl super::client::TerminusDBHttpClient {
 
             let query_json = serde_json::to_string(&query_doc)?;
 
-            self.http
+            let mut request = self.http
                 .post(base_uri)
                 .basic_auth(&self.user, Some(&self.pass))
                 .header("Content-Type", "application/json")
                 .header("X-HTTP-Method-Override", "GET")
-                .body(query_json)
-                .send()
-                .await?
+                .body(query_json);
+
+            // Apply timeout if provided
+            if let Some(timeout) = opts.timeout {
+                request = request.timeout(timeout);
+            }
+
+            request.send().await?
         } else {
             // Use GET for smaller requests
-            self.http
+            let mut request = self.http
                 .get(uri)
-                .basic_auth(&self.user, Some(&self.pass))
-                .send()
-                .await?
+                .basic_auth(&self.user, Some(&self.pass));
+
+            // Apply timeout if provided
+            if let Some(timeout) = opts.timeout {
+                request = request.timeout(timeout);
+            }
+
+            request.send().await?
         };
 
         debug!("Retrieved documents with status code: {}", res.status());

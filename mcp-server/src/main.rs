@@ -116,6 +116,9 @@ pub struct ExecuteWoqlTool {
     pub query: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -134,6 +137,9 @@ pub struct GetSchemaTool {
     pub database: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -303,6 +309,9 @@ pub struct SquashTool {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -329,6 +338,9 @@ pub struct OptimizeTool {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -345,6 +357,9 @@ pub struct GetGraphQLSchemaTool {
     pub output_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Clone a remote repository to create a new local database
@@ -370,6 +385,9 @@ pub struct CloneTool {
     pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Fetch changes from a remote repository
@@ -391,6 +409,9 @@ pub struct FetchTool {
     pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Push changes to a remote repository
@@ -412,6 +433,9 @@ pub struct PushTool {
     pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Pull changes from a remote repository (fetch + merge)
@@ -437,6 +461,9 @@ pub struct PullTool {
     pub remote_password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
+    /// Optional timeout in seconds (overrides default)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
 }
 
 /// Add a new remote repository
@@ -599,9 +626,13 @@ impl TerminusDBMcpHandler {
                     BranchSpec::with_branch(database, &config.branch)
                 }
             };
+
+            // Convert timeout from seconds to Duration if provided
+            let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
             // Use the new query_string method that handles both DSL and JSON-LD
             let response: terminusdb_client::WOQLResult<serde_json::Value> =
-                client.query_string(Some(branch_spec), &request.query).await?;
+                client.query_string(Some(branch_spec), &request.query, timeout).await?;
             Ok(serde_json::to_value(&response)?)
         } else {
             Err(anyhow::anyhow!("Database must be specified"))
@@ -684,8 +715,11 @@ impl TerminusDBMcpHandler {
             )
         "#;
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         let response: terminusdb_client::WOQLResult<serde_json::Value> =
-            client.query_string(Some(branch_spec), schema_query).await?;
+            client.query_string(Some(branch_spec), schema_query, timeout).await?;
         Ok(serde_json::to_value(&response)?)
     }
 
@@ -1258,7 +1292,7 @@ impl TerminusDBMcpHandler {
             });
             
             // Execute the deletion query
-            match client.query_string::<serde_json::Value>(Some(branch_spec.clone()), &serde_json::to_string(&delete_query)?).await {
+            match client.query_string::<serde_json::Value>(Some(branch_spec.clone()), &serde_json::to_string(&delete_query)?, None).await {
                 Ok(_) => {
                     deleted_classes.push(class_name.clone());
                     info!("Successfully deleted class: {}", class_name);
@@ -1298,9 +1332,12 @@ impl TerminusDBMcpHandler {
         
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         // Execute the squash operation
-        match client.squash(&request.path, &request.author, &request.message).await {
+        match client.squash(&request.path, &request.author, &request.message, timeout).await {
             Ok(response) => {
                 Ok(serde_json::json!({
                     "status": "success",
@@ -1349,8 +1386,11 @@ impl TerminusDBMcpHandler {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         // Execute the optimize operation
-        match client.optimize(&request.path).await {
+        match client.optimize(&request.path, timeout).await {
             Ok(response) => {
                 Ok(serde_json::json!({
                     "status": "success",
@@ -1375,8 +1415,11 @@ impl TerminusDBMcpHandler {
         // Use the branch from request or default to "main"
         let branch = request.branch.as_deref();
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         // Introspect the GraphQL schema
-        let schema = client.introspect_schema(&request.database, branch).await?;
+        let schema = client.introspect_schema(&request.database, branch, timeout).await?;
 
         // Determine output path
         let output_path = request.output_path.unwrap_or_else(|| "./schema.json".to_string());
@@ -1418,6 +1461,9 @@ impl TerminusDBMcpHandler {
             _ => None,
         };
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         let result = client.clone_repository(
             &request.organization,
             &request.database,
@@ -1425,6 +1471,7 @@ impl TerminusDBMcpHandler {
             request.label.as_deref(),
             request.comment.as_deref(),
             remote_auth,
+            timeout,
         ).await?;
 
         Ok(serde_json::json!({
@@ -1449,11 +1496,15 @@ impl TerminusDBMcpHandler {
             _ => None,
         };
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         let result = client.fetch(
             &request.path,
             &request.remote_url,
             request.remote_branch.as_deref(),
-            remote_auth
+            remote_auth,
+            timeout,
         ).await?;
 
         Ok(serde_json::json!({
@@ -1478,11 +1529,15 @@ impl TerminusDBMcpHandler {
             _ => None,
         };
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         let result = client.push(
             &request.path,
             &request.remote_url,
             request.remote_branch.as_deref(),
             remote_auth,
+            timeout,
         ).await?;
 
         Ok(serde_json::json!({
@@ -1507,6 +1562,9 @@ impl TerminusDBMcpHandler {
             _ => None,
         };
 
+        // Convert timeout from seconds to Duration if provided
+        let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
+
         let result = client.pull(
             &request.path,
             &request.remote_url,
@@ -1514,6 +1572,7 @@ impl TerminusDBMcpHandler {
             &request.author,
             &request.message,
             remote_auth,
+            timeout,
         ).await?;
 
         Ok(serde_json::json!({
