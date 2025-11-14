@@ -7,7 +7,6 @@ members = [
     "woql-builder",
     "woql2",
     "typestate",
-    "woql-dsl",
     "woql-js",
     "mcp-server",
     "cli",

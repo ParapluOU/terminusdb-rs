@@ -110,7 +110,7 @@ pub struct ConnectTool {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_woql",
-    description = "Execute a WOQL query using either DSL syntax or JSON-LD format. DSL syntax uses a compositional, function-based syntax with variables prefixed with $ (e.g., $Person). Common operations include: triple($Subject, predicate, $Object), and(...), or(...), select([$Var1, $Var2], query), greater($Var, value). Alternatively, you can provide a JSON-LD query object following the WOQL schema. The tool automatically detects the format and parses accordingly."
+    description = "Execute a WOQL query using either JavaScript syntax or JSON-LD format. JavaScript syntax uses the official terminusdb-client-js syntax with variables as strings prefixed with \"v:\" (e.g., \"v:Person\"). For select/distinct, variables are passed as variadic arguments without the prefix (e.g., select(\"Name\", \"Age\", ...)). Common operations include: triple(\"v:Subject\", \"predicate\", \"v:Object\"), and(...), or(...), select(\"Var1\", \"Var2\", query), greater(\"v:Value\", 18). Alternatively, you can provide a JSON-LD query object following the WOQL schema. The tool automatically detects the format and parses accordingly."
 )]
 pub struct ExecuteWoqlTool {
     pub query: String,

@@ -191,21 +191,21 @@ impl super::client::TerminusDBHttpClient {
         Ok(json)
     }
 
-    /// Execute a query from a string that can be either WOQL DSL or JSON-LD format.
-    /// 
+    /// Execute a query from a string that can be either WOQL JS syntax or JSON-LD format.
+    ///
     /// # Arguments
     /// * `spec` - Optional database and branch specification
-    /// * `query_string` - The query as a string (either WOQL DSL or JSON-LD)
-    /// 
+    /// * `query_string` - The query as a string (either WOQL JS syntax or JSON-LD)
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```ignore
-    /// // Using WOQL DSL syntax
+    /// // Using WOQL JS syntax
     /// let results = client.query_string(
     ///     Some(spec),
-    ///     r#"select([$Subject, $Predicate, $Object], triple($Subject, $Predicate, $Object))"#
+    ///     r#"select("Subject", "Predicate", "Object", triple("v:Subject", "v:Predicate", "v:Object"))"#
     /// ).await?;
-    /// 
+    ///
     /// // Using JSON-LD format
     /// let results = client.query_string(
     ///     Some(spec),
@@ -218,7 +218,7 @@ impl super::client::TerminusDBHttpClient {
         fields(
             db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
             branch = ?spec.as_ref().and_then(|s| s.branch.as_ref()),
-            format = %if serde_json::from_str::<serde_json::Value>(query_string).is_ok() { "json-ld" } else { "dsl" }
+            format = %if serde_json::from_str::<serde_json::Value>(query_string).is_ok() { "json-ld" } else { "js" }
         ),
         err
     )]
@@ -237,8 +237,8 @@ impl super::client::TerminusDBHttpClient {
             let query_opt = serde_json::from_value::<Woql2Query>(json_value.clone()).ok();
             (json_value, query_opt)
         } else {
-            // If it's not valid JSON, parse as WOQL DSL and convert to JSON
-            let query = terminusdb_woql_dsl::parse_woql_dsl(query_string)?;
+            // If it's not valid JSON, parse as WOQL JS syntax and convert to JSON
+            let query = terminusdb_woql_js::parse_js_woql_to_query(query_string)?;
             let json = query.to_json();
             (json, Some(query))
         };
@@ -372,15 +372,15 @@ impl super::client::TerminusDBHttpClient {
         Ok(json)
     }
 
-    /// Execute a query from a string (WOQL DSL or JSON-LD) and capture response headers.
-    /// 
+    /// Execute a query from a string (WOQL JS syntax or JSON-LD) and capture response headers.
+    ///
     /// Similar to `query_string` but also returns the TerminusDB-Data-Version header
     /// which contains commit information.
-    /// 
+    ///
     /// # Arguments
     /// * `spec` - Optional database and branch specification
-    /// * `query_string` - The query as a string (either WOQL DSL or JSON-LD)
-    /// 
+    /// * `query_string` - The query as a string (either WOQL JS syntax or JSON-LD)
+    ///
     /// # Returns
     /// A `ResponseWithHeaders` containing the query results and optional commit_id header
     #[instrument(
@@ -389,7 +389,7 @@ impl super::client::TerminusDBHttpClient {
         fields(
             db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
             branch = ?spec.as_ref().and_then(|s| s.branch.as_ref()),
-            format = %if serde_json::from_str::<serde_json::Value>(query_string).is_ok() { "json-ld" } else { "dsl" }
+            format = %if serde_json::from_str::<serde_json::Value>(query_string).is_ok() { "json-ld" } else { "js" }
         ),
         err
     )]
@@ -406,8 +406,8 @@ impl super::client::TerminusDBHttpClient {
             let query_opt = serde_json::from_value::<Woql2Query>(json_value.clone()).ok();
             (json_value, query_opt)
         } else {
-            // If it's not valid JSON, parse as WOQL DSL and convert to JSON
-            let query = terminusdb_woql_dsl::parse_woql_dsl(query_string)?;
+            // If it's not valid JSON, parse as WOQL JS syntax and convert to JSON
+            let query = terminusdb_woql_js::parse_js_woql_to_query(query_string)?;
             let json = query.to_json();
             (json, Some(query))
         };

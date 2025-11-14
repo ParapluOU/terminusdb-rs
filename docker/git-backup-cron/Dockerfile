@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     pkg-config \
     ca-certificates \
+    logrotate \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust and Cargo
@@ -22,12 +23,16 @@ RUN /root/.cargo/bin/cargo install git-sync-rs
 # Create directories for git repo and scripts
 RUN mkdir -p /backup/repo \
     /backup/scripts \
-    /var/log/backup
+    /var/log/backup \
+    /var/lib/logrotate
 
 # Copy backup scripts
 COPY docker/git-backup-cron/backup-triples.sh /backup/scripts/backup-triples.sh
 COPY docker/git-backup-cron/git-sync-wrapper.sh /backup/scripts/git-sync-wrapper.sh
 COPY docker/git-backup-cron/entrypoint.sh /backup/scripts/entrypoint.sh
+
+# Copy logrotate configuration
+COPY docker/git-backup-cron/logrotate.conf /etc/logrotate.d/backup-logs
 
 # Make scripts executable
 RUN chmod +x /backup/scripts/*.sh

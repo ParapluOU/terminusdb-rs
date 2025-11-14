@@ -3146,7 +3146,7 @@ dependencies = [
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "terminusdb-woql-builder",
- "terminusdb-woql-dsl",
+ "terminusdb-woql-js",
  "terminusdb-woql2",
  "tokio 1.45.1",
  "tracing",
@@ -3273,19 +3273,6 @@ dependencies = [
  "serde_json",
  "terminusdb-schema",
  "terminusdb-woql2",
-]
-
-[[package]]
-name = "terminusdb-woql-dsl"
-version = "0.1.0"
-dependencies = [
- "nom",
- "pretty_assertions",
- "serde",
- "serde_json",
- "terminusdb-schema",
- "terminusdb-woql2",
- "thiserror 1.0.69",
 ]
 
 [[package]]

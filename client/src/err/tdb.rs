@@ -35,6 +35,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:InsertedSubdocumentAsDocument")]
     InsertedSubdocumentAsDocument(InsertedSubdocumentAsDocumentError),
 
+    #[serde(rename = "api:InternalServerError")]
+    InternalServerError(InternalServerErrorError),
+
     Other(Value),
 
     #[default]
@@ -49,6 +52,7 @@ impl Display for ApiResponseError {
             ApiResponseError::UnresolvableAbsoluteDescriptor(error) => Display::fmt(error, f),
             ApiResponseError::ApiWOQLSyntaxError(error) => write!(f, "WOQL syntax error: {}", error.error_term),
             ApiResponseError::InsertedSubdocumentAsDocument(error) => Display::fmt(error, f),
+            ApiResponseError::InternalServerError(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -242,6 +246,10 @@ pub struct ErrorResponse<E = ApiResponseError> {
     #[serde(rename = "api:what")]
     #[serde(default)]
     pub api_what: Option<String>,
+
+    #[serde(rename = "api:request_id")]
+    #[serde(default)]
+    pub api_request_id: Option<String>,
 }
 
 impl Display for ErrorResponse {
@@ -385,6 +393,18 @@ pub struct UnresolvableAbsoluteDescriptorError {
 impl Display for UnresolvableAbsoluteDescriptorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Could not resolve descriptor: '{}'", self.absolute_descriptor)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct InternalServerErrorError {
+    // The api:InternalServerError type appears to have no additional fields
+    // beyond what's in the parent ErrorResponse
+}
+
+impl Display for InternalServerErrorError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Internal server error")
     }
 }
 
@@ -637,11 +657,100 @@ fn test_deserialize_generic_error() {
     // Test deserialization into ApiResponse
     use crate::result::ApiResponse;
     let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
-    
+
     match api_response {
         ApiResponse::Error(TypedErrorResponse::GenericError(err)) => {
             assert_eq!(err.api_message, "Unexpected failure in request handler");
         }
         _ => panic!("Expected error response with GenericError variant"),
+    }
+}
+
+#[test]
+fn test_deserialize_internal_server_error() {
+    // Test the first internal server error case
+    let json = json!({
+        "@type": "api:ErrorResponse",
+        "api:error": {
+            "@type": "api:InternalServerError",
+        },
+        "api:message": "Processing error: rust_io_error('StorageFull',\"No space left on device (os error 28)\")",
+        "api:request_id": "27195e18-c159-11f0-bb21-43c5d7caa8ab",
+        "api:status": "api:server_error",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::GenericError(err) => {
+            assert_eq!(err.api_message, "Processing error: rust_io_error('StorageFull',\"No space left on device (os error 28)\")");
+            // Check status
+            match err.api_status {
+                TerminusAPIStatus::ServerError => {} // expected
+                _ => panic!("Expected ServerError status"),
+            }
+
+            if let Some(ApiResponseError::InternalServerError(_)) = err.api_error {
+                // Success - the error was properly deserialized
+            } else {
+                panic!("Expected InternalServerError error, got: {:?}", err.api_error);
+            }
+        }
+        _ => panic!("Expected GenericError variant for api:ErrorResponse"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+
+    // Test the second internal server error case (panic message)
+    let json2 = json!({
+        "@type": "api:ErrorResponse",
+        "api:error": {
+            "@type": "api:InternalServerError",
+        },
+        "api:message": "Processing error: rust_error(panic(\"Expected rollup file to have two lines but was unable to skip to the second line\"))",
+        "api:request_id": "3dcf65c6-c15e-11f0-a3a9-22dfe8ec24d5",
+        "api:status": "api:server_error",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response2: TypedErrorResponse = serde_json::from_value(json2.clone()).unwrap();
+
+    match response2 {
+        TypedErrorResponse::GenericError(err) => {
+            assert_eq!(err.api_message, "Processing error: rust_error(panic(\"Expected rollup file to have two lines but was unable to skip to the second line\"))");
+            assert!(err.api_request_id.is_some());
+            assert_eq!(err.api_request_id.unwrap(), "3dcf65c6-c15e-11f0-a3a9-22dfe8ec24d5");
+
+            if let Some(ApiResponseError::InternalServerError(_)) = err.api_error {
+                // Success
+            } else {
+                panic!("Expected InternalServerError error");
+            }
+        }
+        _ => panic!("Expected GenericError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    let api_response2: ApiResponse<Value> = serde_json::from_value(json2).unwrap();
+
+    match api_response2 {
+        ApiResponse::Error(_) => {
+            // Success
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
     }
 }

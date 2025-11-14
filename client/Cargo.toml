@@ -33,7 +33,7 @@ terminusdb-schema = { path = "../schema" }
 terminusdb-schema-derive = { path = "../schema/derive" }
 terminusdb-woql2 = { path = "../woql2" }
 terminusdb-woql-builder = { path = "../woql-builder" }
-terminusdb-woql-dsl = { path = "../woql-dsl" }
+terminusdb-woql-js = { path = "../woql-js" }
 terminusdb-relation = { path = "../relation" }
 urlencoding = "2.1.3"
 url = "2.5.2"

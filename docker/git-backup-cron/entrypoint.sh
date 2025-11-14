@@ -153,6 +153,9 @@ mkdir -p /var/spool/cron/crontabs
 cat > /var/spool/cron/crontabs/root <<EOF
 # TerminusDB backup cron job
 $BACKUP_CRON_SCHEDULE /backup/scripts/backup-triples.sh >> /var/log/backup/cron.log 2>&1
+
+# Log rotation (runs hourly to check if rotation needed based on size)
+0 * * * * /usr/sbin/logrotate /etc/logrotate.d/backup-logs --state /var/lib/logrotate/backup-logs.state 2>&1 | logger -t logrotate
 EOF
 
 # Set correct permissions for crontab (cron requires 600 and root:crontab ownership)
