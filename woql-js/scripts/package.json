@@ -1,0 +1,20 @@
+{
+  "name": "terminusdb-woql-js-parser",
+  "version": "0.1.0",
+  "description": "Node.js script to parse WOQL JS-syntax to JSON-LD",
+  "private": true,
+  "main": "parse-woql.js",
+  "scripts": {
+    "parse": "node parse-woql.js",
+    "build": "esbuild parse-woql.js --bundle --platform=node --outfile=parse-woql.bundle.js"
+  },
+  "dependencies": {
+    "@terminusdb/terminusdb-client": "^11.1.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

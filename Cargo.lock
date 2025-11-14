@@ -3289,6 +3289,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminusdb-woql-js"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "terminusdb-woql2",
+]
+
+[[package]]
 name = "terminusdb-woql2"
 version = "0.1.0"
 dependencies = [

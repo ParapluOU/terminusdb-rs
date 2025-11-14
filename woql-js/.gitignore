@@ -1,0 +1,6 @@
+# Node modules
+scripts/node_modules/
+scripts/package-lock.json
+
+# Bundled output
+scripts/parse-woql.bundle.js

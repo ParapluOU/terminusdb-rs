@@ -1,0 +1,21 @@
+[package]
+name = "terminusdb-woql-js"
+version = "0.1.0"
+edition = "2021"
+authors = ["TerminusDB Team"]
+description = "JavaScript WOQL syntax parser using terminusdb-client-js"
+license = "Apache-2.0"
+repository = "https://github.com/terminusdb/terminusdb-rs"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = "1.0"
+terminusdb-woql2 = { path = "../woql2" }
+tempfile = "3"
+
+[dev-dependencies]
+
+[lib]
+path = "src/lib.rs"
