@@ -1,11 +1,15 @@
 //! Untyped document CRUD operations
 
+use anyhow::bail;
+
+use crate::ErrorResponse;
+
 use {
     crate::{
         document::{CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, GetOpts},
+        err::TypedErrorResponse,
         result::ResponseWithHeaders,
         spec::BranchSpec,
-        err::TypedErrorResponse,
         TDBInsertInstanceResult, TerminusAPIStatus,
     },
     ::tracing::{debug, error, instrument, trace},
@@ -145,7 +149,10 @@ impl super::client::TerminusDBHttpClient {
         spec: &BranchSpec,
     ) -> bool {
         // Use get_document_if_exists to avoid error logging for expected "not found" cases
-        match self.get_document_if_exists(id, spec, GetOpts::default()).await {
+        match self
+            .get_document_if_exists(id, spec, GetOpts::default())
+            .await
+        {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => false, // Treat any real errors as "not exists"
@@ -306,8 +313,8 @@ impl super::client::TerminusDBHttpClient {
 
     /// Retrieves an untyped document from the database if it exists.
     ///
-    /// This method is designed for cases where a document might not exist and that's 
-    /// an expected scenario (e.g., checking before create). Unlike `get_document`, 
+    /// This method is designed for cases where a document might not exist and that's
+    /// an expected scenario (e.g., checking before create). Unlike `get_document`,
     /// this method returns `None` for non-existent documents without logging errors.
     ///
     /// # Arguments
@@ -381,7 +388,9 @@ impl super::client::TerminusDBHttpClient {
                 // Check if the error is DocumentNotFound
                 if let Some(err_response) = err.downcast_ref::<TypedErrorResponse>() {
                     match err_response {
-                        TypedErrorResponse::DocumentError { error: err, .. } if matches!(err.api_status, TerminusAPIStatus::NotFound) => {
+                        TypedErrorResponse::DocumentError { error: err, .. }
+                            if matches!(err.api_status, TerminusAPIStatus::NotFound) =>
+                        {
                             debug!("Document #{} not found (from error response)", id);
                             return Ok(None);
                         }
@@ -432,7 +441,7 @@ impl super::client::TerminusDBHttpClient {
 
         dedup_documents_by_id(&mut to_jsoned);
 
-        let mut documents_to_update_instead = vec!();
+        let mut documents_to_update_instead = vec![];
 
         // For POST method, filter out documents that already exist
         if matches!(method, DocumentMethod::Post) {
@@ -448,15 +457,14 @@ impl super::client::TerminusDBHttpClient {
                 let existing_ids = self.check_existing_ids(&document_ids, &args.spec).await?;
 
                 if !existing_ids.is_empty() {
-
-
                     documents_to_update_instead = to_jsoned
                         .iter()
                         .filter(|d| {
                             existing_ids.contains(
                                 d.get("@id").and_then(|id| id.as_str()).unwrap_or_default(),
                             )
-                        }).cloned()
+                        })
+                        .cloned()
                         .collect();
 
                     debug!(
@@ -513,12 +521,13 @@ impl super::client::TerminusDBHttpClient {
                 // Acquire concurrency permit for write operations
                 let _permit = self.acquire_write_permit().await;
 
-                let mut request = self.http
+                let mut request = self
+                    .http
                     .post(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
                     .body(json.clone());
-                
+
                 if let Some(timeout) = args.timeout {
                     request = request.timeout(timeout);
                 }
@@ -531,10 +540,10 @@ impl super::client::TerminusDBHttpClient {
                     args.clone(),
                     DocumentMethod::Put,
                 ))
-                    .await
-                    .map_err(|e| {
-                        error!("Error updating existing documents during POST: {}", e);
-                    });
+                .await
+                .map_err(|e| {
+                    error!("Error updating existing documents during POST: {}", e);
+                });
 
                 r
             }
@@ -551,16 +560,17 @@ impl super::client::TerminusDBHttpClient {
                 // Acquire concurrency permit for write operations
                 let _permit = self.acquire_write_permit().await;
 
-                let mut request = self.http
+                let mut request = self
+                    .http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
                     .body(json.clone());
-                
+
                 if let Some(timeout) = args.timeout {
                     request = request.timeout(timeout);
                 }
-                
+
                 request.send().await?
             }
             DocumentMethod::PutWithCreate => {
@@ -576,16 +586,17 @@ impl super::client::TerminusDBHttpClient {
                 // Acquire concurrency permit for write operations
                 let _permit = self.acquire_write_permit().await;
 
-                let mut request = self.http
+                let mut request = self
+                    .http
                     .put(uri)
                     .basic_auth(&self.user, Some(&self.pass))
                     .header("Content-Type", "application/json")
                     .body(json.clone());
-                
+
                 if let Some(timeout) = args.timeout {
                     request = request.timeout(timeout);
                 }
-                
+
                 request.send().await?
             }
         };
@@ -1025,7 +1036,10 @@ impl super::client::TerminusDBHttpClient {
             }
             query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
             query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
-            query_doc.insert("minimized".to_string(), serde_json::Value::Bool(opts.minimized));
+            query_doc.insert(
+                "minimized".to_string(),
+                serde_json::Value::Bool(opts.minimized),
+            );
 
             if let Some(skip) = opts.skip {
                 query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
@@ -1042,7 +1056,8 @@ impl super::client::TerminusDBHttpClient {
 
             let query_json = serde_json::to_string(&query_doc)?;
 
-            let mut request = self.http
+            let mut request = self
+                .http
                 .post(base_uri)
                 .basic_auth(&self.user, Some(&self.pass))
                 .header("Content-Type", "application/json")
@@ -1057,9 +1072,7 @@ impl super::client::TerminusDBHttpClient {
             request.send().await?
         } else {
             // Use GET for smaller requests
-            let mut request = self.http
-                .get(uri)
-                .basic_auth(&self.user, Some(&self.pass));
+            let mut request = self.http.get(uri).basic_auth(&self.user, Some(&self.pass));
 
             // Apply timeout if provided
             if let Some(timeout) = opts.timeout {
@@ -1160,7 +1173,10 @@ impl super::client::TerminusDBHttpClient {
             }
             query_doc.insert("as_list".to_string(), serde_json::Value::Bool(true));
             query_doc.insert("unfold".to_string(), serde_json::Value::Bool(opts.unfold));
-            query_doc.insert("minimized".to_string(), serde_json::Value::Bool(opts.minimized));
+            query_doc.insert(
+                "minimized".to_string(),
+                serde_json::Value::Bool(opts.minimized),
+            );
 
             if let Some(skip) = opts.skip {
                 query_doc.insert("skip".to_string(), serde_json::Value::Number(skip.into()));
@@ -1177,7 +1193,8 @@ impl super::client::TerminusDBHttpClient {
 
             let query_json = serde_json::to_string(&query_doc)?;
 
-            let mut request = self.http
+            let mut request = self
+                .http
                 .post(base_uri)
                 .basic_auth(&self.user, Some(&self.pass))
                 .header("Content-Type", "application/json")
@@ -1192,9 +1209,7 @@ impl super::client::TerminusDBHttpClient {
             request.send().await?
         } else {
             // Use GET for smaller requests
-            let mut request = self.http
-                .get(uri)
-                .basic_auth(&self.user, Some(&self.pass));
+            let mut request = self.http.get(uri).basic_auth(&self.user, Some(&self.pass));
 
             // Apply timeout if provided
             if let Some(timeout) = opts.timeout {
@@ -1304,9 +1319,12 @@ impl super::client::TerminusDBHttpClient {
             .send()
             .await?;
 
-        self.parse_response::<Value>(res).await?;
-
-        debug!("Successfully deleted document");
+        // todo: the OpenAPI spec mentions a proper JSON response is missing
+        if let Ok(err) = self.parse_response::<ErrorResponse>(res).await {
+            bail!("failed to delete: {:#?}", err);
+        } else {
+            debug!("Successfully deleted document");
+        }
 
         Ok(self.clone())
     }

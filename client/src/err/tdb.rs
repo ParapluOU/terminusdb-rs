@@ -104,7 +104,14 @@ pub enum TypedErrorResponse {
         #[serde(flatten)]
         error: ErrorResponse,
     },
-    
+    DeleteDocumentError {
+        #[serde(rename = "@type")]
+        #[serde(deserialize_with = "expect_delete_document_error_type")]
+        error_type: String,
+        #[serde(flatten)]
+        error: ErrorResponse,
+    },
+
     // Fallback to generic error (no @type field)
     GenericError(ErrorResponse),
 }
@@ -158,6 +165,18 @@ where
     }
 }
 
+fn expect_delete_document_error_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "api:DeleteDocumentErrorResponse" {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom("not a delete document error"))
+    }
+}
+
 impl Error for TypedErrorResponse {}
 
 impl Display for TypedErrorResponse {
@@ -173,6 +192,9 @@ impl Display for TypedErrorResponse {
                 write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
             TypedErrorResponse::InsertDocumentError { error, .. } => {
+                write!(f, "{}\n\nDetailed error: {:#?}", error, error)
+            }
+            TypedErrorResponse::DeleteDocumentError { error, .. } => {
                 write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
             TypedErrorResponse::GenericError(e) => {
@@ -748,6 +770,65 @@ fn test_deserialize_internal_server_error() {
     match api_response2 {
         ApiResponse::Error(_) => {
             // Success
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_delete_document_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:DeleteDocumentErrorResponse",
+        "api:error": {
+            "@type": "api:DocumentNotFound",
+            "api:document_id": "terminusdb:///data/AwsDBReviewSession/c6f57192-a6f1-498b-989c-d3e9fa856362"
+        },
+        "api:message": "Document not found: \"terminusdb:///data/AwsDBReviewSession/c6f57192-a6f1-498b-989c-d3e9fa856362\"",
+        "api:request_id": "4bc5e800-c4c2-11f0-b9fb-2ebc58a00d09",
+        "api:status": "api:not_found"
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::DeleteDocumentError { error: err, .. } => {
+            assert_eq!(
+                err.api_message,
+                "Document not found: \"terminusdb:///data/AwsDBReviewSession/c6f57192-a6f1-498b-989c-d3e9fa856362\""
+            );
+            // Check status
+            match err.api_status {
+                TerminusAPIStatus::NotFound => {} // expected
+                _ => panic!("Expected NotFound status"),
+            }
+
+            if let Some(ApiResponseError::DocumentNotFound(doc_err)) = err.api_error {
+                assert_eq!(
+                    doc_err.document_id,
+                    "terminusdb:///data/AwsDBReviewSession/c6f57192-a6f1-498b-989c-d3e9fa856362"
+                );
+            } else {
+                panic!("Expected DocumentNotFound error");
+            }
+
+            // Verify request_id is captured
+            assert!(err.api_request_id.is_some());
+            assert_eq!(err.api_request_id.unwrap(), "4bc5e800-c4c2-11f0-b9fb-2ebc58a00d09");
+        }
+        _ => panic!("Expected DeleteDocumentError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
         }
         ApiResponse::Success(_) => {
             panic!("Expected error response, got success");
