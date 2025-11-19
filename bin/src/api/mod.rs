@@ -30,6 +30,6 @@ mod commands;
 
 // Re-export public API
 pub use spec::{DbSpec, GraphSpec, BranchSpec, CommitSpec, GraphType};
-pub use types::{Author, Message, RoleAction, RdfFormat};
+pub use types::{Author, Message, RoleAction, RdfFormat, ScopeType, CommitType};
 pub use options::*;
 pub use client::TerminusDB;

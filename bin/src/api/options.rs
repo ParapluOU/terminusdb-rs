@@ -577,4 +577,568 @@ impl Default for BranchDeleteOptions {
     }
 }
 
-// Continued in next message due to length...
+// ============================================================================
+// Role Commands
+// ============================================================================
+
+/// Options for `role create` command.
+#[derive(Debug, Clone)]
+pub struct RoleCreateOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for RoleCreateOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `role delete` command.
+#[derive(Debug, Clone)]
+pub struct RoleDeleteOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as role ID instead of name.
+    pub id: bool,
+}
+
+impl Default for RoleDeleteOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+        }
+    }
+}
+
+/// Options for `role update` command.
+#[derive(Debug, Clone)]
+pub struct RoleUpdateOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as role ID instead of name.
+    pub id: bool,
+}
+
+impl Default for RoleUpdateOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+        }
+    }
+}
+
+/// Options for `role get` command.
+#[derive(Debug, Clone)]
+pub struct RoleGetOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as role ID instead of name.
+    pub id: bool,
+    /// Return as JSON document.
+    pub json: bool,
+}
+
+impl Default for RoleGetOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+            json: false,
+        }
+    }
+}
+
+// ============================================================================
+// User Commands
+// ============================================================================
+
+/// Options for `user create` command.
+#[derive(Debug, Clone)]
+pub struct UserCreateOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Specify user password.
+    pub password: Option<String>,
+}
+
+impl Default for UserCreateOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            password: None,
+        }
+    }
+}
+
+/// Options for `user delete` command.
+#[derive(Debug, Clone)]
+pub struct UserDeleteOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as user ID instead of name.
+    pub id: bool,
+}
+
+impl Default for UserDeleteOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+        }
+    }
+}
+
+/// Options for `user get` command.
+#[derive(Debug, Clone)]
+pub struct UserGetOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as user ID instead of name.
+    pub id: bool,
+    /// Report all capabilities.
+    pub capability: bool,
+    /// Return as JSON document.
+    pub json: bool,
+}
+
+impl Default for UserGetOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+            capability: false,
+            json: false,
+        }
+    }
+}
+
+/// Options for `user password` command.
+#[derive(Debug, Clone)]
+pub struct UserPasswordOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Specify user password.
+    pub password: Option<String>,
+}
+
+impl Default for UserPasswordOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            password: None,
+        }
+    }
+}
+
+// ============================================================================
+// Organization Commands
+// ============================================================================
+
+/// Options for `organization create` command.
+#[derive(Debug, Clone)]
+pub struct OrganizationCreateOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for OrganizationCreateOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `organization delete` command.
+#[derive(Debug, Clone)]
+pub struct OrganizationDeleteOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as organization ID instead of name.
+    pub id: bool,
+}
+
+impl Default for OrganizationDeleteOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+        }
+    }
+}
+
+/// Options for `organization get` command.
+#[derive(Debug, Clone)]
+pub struct OrganizationGetOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Interpret argument as organization ID instead of name.
+    pub id: bool,
+    /// Return as JSON document.
+    pub json: bool,
+}
+
+impl Default for OrganizationGetOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            id: false,
+            json: false,
+        }
+    }
+}
+
+// ============================================================================
+// Capability Commands
+// ============================================================================
+
+/// Options for `capability grant` command.
+#[derive(Debug, Clone)]
+pub struct CapabilityGrantOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Scope type (database or organization).
+    pub scope_type: ScopeType,
+}
+
+impl Default for CapabilityGrantOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            scope_type: ScopeType::Database,
+        }
+    }
+}
+
+/// Options for `capability revoke` command.
+#[derive(Debug, Clone)]
+pub struct CapabilityRevokeOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Scope type (database or organization).
+    pub scope_type: ScopeType,
+}
+
+impl Default for CapabilityRevokeOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            scope_type: ScopeType::Database,
+        }
+    }
+}
+
+// ============================================================================
+// Store Commands
+// ============================================================================
+
+/// Options for `store init` command.
+#[derive(Debug, Clone)]
+pub struct StoreInitOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Key for admin login.
+    pub key: String,
+    /// Force creation even when store exists.
+    pub force: bool,
+}
+
+impl Default for StoreInitOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            key: "root".to_string(),
+            force: false,
+        }
+    }
+}
+
+// ============================================================================
+// Triples Commands
+// ============================================================================
+
+/// Options for `triples dump` command.
+#[derive(Debug, Clone)]
+pub struct TriplesDumpOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// RDF format.
+    pub format: RdfFormat,
+}
+
+impl Default for TriplesDumpOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            format: RdfFormat::Turtle,
+        }
+    }
+}
+
+/// Options for `triples update` command.
+#[derive(Debug, Clone)]
+pub struct TriplesUpdateOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Commit message.
+    pub message: Message,
+    /// Commit author.
+    pub author: Author,
+    /// RDF format.
+    pub format: RdfFormat,
+}
+
+impl Default for TriplesUpdateOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            message: "cli: triples update".into(),
+            author: Author::default(),
+            format: RdfFormat::Turtle,
+        }
+    }
+}
+
+/// Options for `triples load` command.
+#[derive(Debug, Clone)]
+pub struct TriplesLoadOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Commit message.
+    pub message: Message,
+    /// Commit author.
+    pub author: Author,
+    /// RDF format.
+    pub format: RdfFormat,
+}
+
+impl Default for TriplesLoadOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            message: "cli: triples load".into(),
+            author: Author::default(),
+            format: RdfFormat::Turtle,
+        }
+    }
+}
+
+// ============================================================================
+// Remote Commands
+// ============================================================================
+
+/// Options for `remote add` command.
+#[derive(Debug, Clone)]
+pub struct RemoteAddOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for RemoteAddOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `remote remove` command.
+#[derive(Debug, Clone)]
+pub struct RemoteRemoveOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for RemoteRemoveOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `remote set-url` command.
+#[derive(Debug, Clone)]
+pub struct RemoteSetUrlOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for RemoteSetUrlOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `remote get-url` command.
+#[derive(Debug, Clone)]
+pub struct RemoteGetUrlOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Name of remote to use.
+    pub remote: String,
+}
+
+impl Default for RemoteGetUrlOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            remote: "origin".to_string(),
+        }
+    }
+}
+
+/// Options for `remote list` command.
+#[derive(Debug, Clone)]
+pub struct RemoteListOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for RemoteListOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+// ============================================================================
+// Utility Commands
+// ============================================================================
+
+/// Options for `optimize` command.
+#[derive(Debug, Clone)]
+pub struct OptimizeOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for OptimizeOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `squash` command.
+#[derive(Debug, Clone)]
+pub struct SquashOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Output result as JSON.
+    pub json: bool,
+    /// Commit message.
+    pub message: Message,
+    /// Commit author.
+    pub author: Author,
+}
+
+impl Default for SquashOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            json: false,
+            message: "cli: squash".into(),
+            author: Author::default(),
+        }
+    }
+}
+
+/// Options for `rollup` command.
+#[derive(Debug, Clone)]
+pub struct RollupOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for RollupOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `bundle` command.
+#[derive(Debug, Clone)]
+pub struct BundleOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// File name for pack output.
+    pub output: Option<String>,
+}
+
+impl Default for BundleOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            output: None,
+        }
+    }
+}
+
+/// Options for `unbundle` command.
+#[derive(Debug, Clone)]
+pub struct UnbundleOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for UnbundleOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}
+
+/// Options for `log` command.
+#[derive(Debug, Clone)]
+pub struct LogOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+    /// Return log as JSON.
+    pub json: bool,
+    /// How far back in commit log to start.
+    pub start: i32,
+    /// Number of results to return (-1 = all).
+    pub count: i32,
+    /// Give back additional information on commits.
+    pub verbose: bool,
+}
+
+impl Default for LogOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+            json: false,
+            start: 0,
+            count: -1,
+            verbose: false,
+        }
+    }
+}
+
+/// Options for `reset` command.
+#[derive(Debug, Clone)]
+pub struct ResetOptions {
+    /// Impersonate a particular user.
+    pub impersonate: String,
+}
+
+impl Default for ResetOptions {
+    fn default() -> Self {
+        Self {
+            impersonate: DEFAULT_IMPERSONATE.to_string(),
+        }
+    }
+}

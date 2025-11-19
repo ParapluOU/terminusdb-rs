@@ -357,3 +357,378 @@ impl<'a> GitCommands<'a> {
         execute(args)
     }
 }
+
+// ============================================================================
+// Role Commands
+// ============================================================================
+
+/// Role commands (create, delete, update, get).
+pub struct RoleCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> RoleCommands<'a> {
+    /// Create a new role.
+    pub fn create(&self, name: &str, actions: Vec<super::types::RoleAction>, options: super::options::RoleCreateOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["role".to_string(), "create".to_string(), name.to_string()];
+        for action in actions {
+            args.push(action.as_str().to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Delete a role.
+    pub fn delete(&self, role_id_or_name: &str, options: super::options::RoleDeleteOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["role".to_string(), "delete".to_string(), role_id_or_name.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        execute(args)
+    }
+
+    /// Update a role.
+    pub fn update(&self, role_id_or_name: &str, actions: Vec<super::types::RoleAction>, options: super::options::RoleUpdateOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["role".to_string(), "update".to_string(), role_id_or_name.to_string()];
+        for action in actions {
+            args.push(action.as_str().to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        execute(args)
+    }
+
+    /// Get role information.
+    pub fn get(&self, role_id_or_name: Option<&str>, options: super::options::RoleGetOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["role".to_string(), "get".to_string()];
+        if let Some(name) = role_id_or_name {
+            args.push(name.to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        add_flag(&mut args, "--json", options.json);
+        execute(args)
+    }
+}
+
+// ============================================================================
+// User Commands
+// ============================================================================
+
+/// User commands (create, delete, get, password).
+pub struct UserCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> UserCommands<'a> {
+    /// Create a new user.
+    pub fn create(&self, username: &str, options: super::options::UserCreateOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["user".to_string(), "create".to_string(), username.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_option(&mut args, "--password", &options.password);
+        execute(args)
+    }
+
+    /// Delete a user.
+    pub fn delete(&self, user_id_or_name: &str, options: super::options::UserDeleteOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["user".to_string(), "delete".to_string(), user_id_or_name.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        execute(args)
+    }
+
+    /// Get user information.
+    pub fn get(&self, user_id_or_name: Option<&str>, options: super::options::UserGetOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["user".to_string(), "get".to_string()];
+        if let Some(name) = user_id_or_name {
+            args.push(name.to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        add_flag(&mut args, "--capability", options.capability);
+        add_flag(&mut args, "--json", options.json);
+        execute(args)
+    }
+
+    /// Update user password.
+    pub fn password(&self, username: &str, options: super::options::UserPasswordOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["user".to_string(), "password".to_string(), username.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_option(&mut args, "--password", &options.password);
+        execute(args)
+    }
+}
+
+// ============================================================================
+// Organization Commands
+// ============================================================================
+
+/// Organization commands (create, delete, get).
+pub struct OrganizationCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> OrganizationCommands<'a> {
+    /// Create a new organization.
+    pub fn create(&self, name: &str, options: super::options::OrganizationCreateOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["organization".to_string(), "create".to_string(), name.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Delete an organization.
+    pub fn delete(&self, org_id_or_name: &str, options: super::options::OrganizationDeleteOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["organization".to_string(), "delete".to_string(), org_id_or_name.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        execute(args)
+    }
+
+    /// Get organization information.
+    pub fn get(&self, org_id_or_name: Option<&str>, options: super::options::OrganizationGetOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["organization".to_string(), "get".to_string()];
+        if let Some(name) = org_id_or_name {
+            args.push(name.to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--id", options.id);
+        add_flag(&mut args, "--json", options.json);
+        execute(args)
+    }
+}
+
+// ============================================================================
+// Capability Commands
+// ============================================================================
+
+/// Capability commands (grant, revoke).
+pub struct CapabilityCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> CapabilityCommands<'a> {
+    /// Grant capabilities to a user.
+    pub fn grant(&self, user: &str, scope: &str, roles: Vec<&str>, options: super::options::CapabilityGrantOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["capability".to_string(), "grant".to_string(), user.to_string(), scope.to_string()];
+        for role in roles {
+            args.push(role.to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--scope-type", options.scope_type.as_str());
+        execute(args)
+    }
+
+    /// Revoke capabilities from a user.
+    pub fn revoke(&self, user: &str, scope: &str, roles: Vec<&str>, options: super::options::CapabilityRevokeOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["capability".to_string(), "revoke".to_string(), user.to_string(), scope.to_string()];
+        for role in roles {
+            args.push(role.to_string());
+        }
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--scope-type", options.scope_type.as_str());
+        execute(args)
+    }
+}
+
+// ============================================================================
+// Store Commands
+// ============================================================================
+
+/// Store commands (init).
+pub struct StoreCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> StoreCommands<'a> {
+    /// Initialize the store.
+    pub fn init(&self, options: super::options::StoreInitOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["store".to_string(), "init".to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--key", &options.key);
+        add_flag(&mut args, "--force", options.force);
+        execute(args)
+    }
+}
+
+// ============================================================================
+// Triples Commands
+// ============================================================================
+
+/// Triples commands (dump, update, load).
+pub struct TriplesCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> TriplesCommands<'a> {
+    /// Dump triples from a graph.
+    pub fn dump(&self, graph_spec: GraphSpec, options: super::options::TriplesDumpOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["triples".to_string(), "dump".to_string(), graph_spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--format", options.format.as_str());
+        execute(args)
+    }
+
+    /// Update triples in a graph from a file.
+    pub fn update(&self, graph_spec: GraphSpec, file: &str, options: super::options::TriplesUpdateOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["triples".to_string(), "update".to_string(), graph_spec.to_string(), file.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--message", options.message.as_ref());
+        add_required(&mut args, "--author", options.author.as_ref());
+        add_required(&mut args, "--format", options.format.as_str());
+        execute(args)
+    }
+
+    /// Load triples into a graph from a file.
+    pub fn load(&self, graph_spec: GraphSpec, file: &str, options: super::options::TriplesLoadOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["triples".to_string(), "load".to_string(), graph_spec.to_string(), file.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--message", options.message.as_ref());
+        add_required(&mut args, "--author", options.author.as_ref());
+        add_required(&mut args, "--format", options.format.as_str());
+        execute(args)
+    }
+}
+
+// ============================================================================
+// Remote Commands
+// ============================================================================
+
+/// Remote commands (add, remove, set-url, get-url, list).
+pub struct RemoteCommands<'a> {
+    client: &'a TerminusDB,
+}
+
+impl<'a> RemoteCommands<'a> {
+    /// Add a remote.
+    pub fn add(&self, spec: DbSpec, remote_name: &str, remote_location: &str, options: super::options::RemoteAddOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["remote".to_string(), "add".to_string(), spec.to_string(), remote_name.to_string(), remote_location.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Remove a remote.
+    pub fn remove(&self, spec: DbSpec, remote_name: &str, options: super::options::RemoteRemoveOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["remote".to_string(), "remove".to_string(), spec.to_string(), remote_name.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Set the URL of a remote.
+    pub fn set_url(&self, spec: DbSpec, remote_name: &str, remote_location: &str, options: super::options::RemoteSetUrlOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["remote".to_string(), "set-url".to_string(), spec.to_string(), remote_name.to_string(), remote_location.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Get the URL of a remote.
+    pub fn get_url(&self, spec: DbSpec, remote_name: &str, options: super::options::RemoteGetUrlOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["remote".to_string(), "get-url".to_string(), spec.to_string(), remote_name.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_required(&mut args, "--remote", &options.remote);
+        execute(args)
+    }
+
+    /// List all remotes.
+    pub fn list(&self, spec: DbSpec, options: super::options::RemoteListOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["remote".to_string(), "list".to_string(), spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+}
+
+// ============================================================================
+// Utility Commands
+// ============================================================================
+
+impl TerminusDB {
+    /// Access role commands.
+    pub fn role(&self) -> RoleCommands {
+        RoleCommands { client: self }
+    }
+
+    /// Access user commands.
+    pub fn user(&self) -> UserCommands {
+        UserCommands { client: self }
+    }
+
+    /// Access organization commands.
+    pub fn organization(&self) -> OrganizationCommands {
+        OrganizationCommands { client: self }
+    }
+
+    /// Access capability commands.
+    pub fn capability(&self) -> CapabilityCommands {
+        CapabilityCommands { client: self }
+    }
+
+    /// Access store commands.
+    pub fn store(&self) -> StoreCommands {
+        StoreCommands { client: self }
+    }
+
+    /// Access triples commands.
+    pub fn triples(&self) -> TriplesCommands {
+        TriplesCommands { client: self }
+    }
+
+    /// Access remote commands.
+    pub fn remote(&self) -> RemoteCommands {
+        RemoteCommands { client: self }
+    }
+
+    /// Optimize a database.
+    pub fn optimize(&self, spec: DbSpec, options: super::options::OptimizeOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["optimize".to_string(), spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Squash commits.
+    pub fn squash(&self, spec: DbSpec, options: super::options::SquashOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["squash".to_string(), spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--json", options.json);
+        add_required(&mut args, "--message", options.message.as_ref());
+        add_required(&mut args, "--author", options.author.as_ref());
+        execute(args)
+    }
+
+    /// Rollup commits.
+    pub fn rollup(&self, spec: DbSpec, options: super::options::RollupOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["rollup".to_string(), spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// Create a bundle.
+    pub fn bundle(&self, spec: DbSpec, options: super::options::BundleOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["bundle".to_string(), spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_option(&mut args, "--output", &options.output);
+        execute(args)
+    }
+
+    /// Apply a bundle.
+    pub fn unbundle(&self, spec: DbSpec, file: &str, options: super::options::UnbundleOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["unbundle".to_string(), spec.to_string(), file.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+
+    /// View commit log.
+    pub fn log(&self, spec: DbSpec, options: super::options::LogOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["log".to_string(), spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        add_flag(&mut args, "--json", options.json);
+        add_required(&mut args, "--start", &options.start.to_string());
+        add_required(&mut args, "--count", &options.count.to_string());
+        add_flag(&mut args, "--verbose", options.verbose);
+        execute(args)
+    }
+
+    /// Reset a branch to a specific commit.
+    pub fn reset(&self, branch_spec: BranchSpec, commit_spec: &str, options: super::options::ResetOptions) -> std::io::Result<ExitStatus> {
+        let mut args = vec!["reset".to_string(), branch_spec.to_string(), commit_spec.to_string()];
+        add_required(&mut args, "--impersonate", &options.impersonate);
+        execute(args)
+    }
+}
