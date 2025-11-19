@@ -124,21 +124,6 @@ impl DbSpec {
             graph_type,
         }
     }
-
-    /// Get organization name.
-    pub fn organization(&self) -> &str {
-        &self.organization
-    }
-
-    /// Get database name.
-    pub fn database(&self) -> &str {
-        &self.database
-    }
-
-    /// Get repository name.
-    pub fn repository(&self) -> &str {
-        &self.repository
-    }
 }
 
 impl fmt::Display for DbSpec {
