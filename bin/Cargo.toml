@@ -1,0 +1,21 @@
+[package]
+name = "terminusdb-bin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Build script for compiling TerminusDB from source"
+repository.workspace = true
+publish = false
+
+[dependencies]
+
+[build-dependencies]
+which = "6.0"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "terminusdb"
+path = "src/main.rs"

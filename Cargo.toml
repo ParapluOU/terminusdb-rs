@@ -12,6 +12,7 @@ members = [
     "cli",
     "relation",
     "relation/derive",
+    "bin",
 ]
 
 [workspace.dependencies]
