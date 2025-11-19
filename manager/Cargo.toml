@@ -1,0 +1,40 @@
+[package]
+name = "terminusdb-manager"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Workspace crates
+terminusdb-client = { path = "../client" }
+terminusdb-bin = { path = "../bin" }
+terminusdb-schema = { path = "../schema" }
+
+# Workspace dependencies
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+# Web framework
+rocket = { version = "0.5.1", features = ["json"] }
+
+# Static file embedding for production
+rust-embed = "8.0"
+mime_guess = "2.0"
+
+# Utilities
+portpicker = "0.1"
+parking_lot = "0.12"
+
+# Process management (Unix only)
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27", features = ["signal"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
