@@ -4,6 +4,7 @@
 //! multiple TerminusDB instances across environments.
 
 pub mod api;
+pub mod assets;
 pub mod manager;
 pub mod models;
 pub mod poller;
