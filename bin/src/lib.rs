@@ -9,7 +9,7 @@
 //! - `TERMINUSDB_VERSION`: Git branch or tag to build (default: "main")
 //! - `TERMINUSDB_FORCE_REBUILD`: Set to "1" to force rebuild even if binary exists
 //!
-//! ## Example
+//! ## Example (Low-level API)
 //!
 //! ```no_run
 //! use terminusdb_bin::run_terminusdb;
@@ -18,11 +18,26 @@
 //! // Run TerminusDB with arguments
 //! let status = run_terminusdb(&["--version"]).expect("Failed to run TerminusDB");
 //! ```
+//!
+//! ## Example (High-level API)
+//!
+//! ```no_run
+//! use terminusdb_bin::api::{TerminusDB, DbSpec};
+//!
+//! let client = TerminusDB::new();
+//!
+//! // Create a database
+//! let spec = DbSpec::new("admin", "mydb");
+//! client.db().create(spec, Default::default())?;
+//! # Ok::<(), std::io::Error>(())
+//! ```
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+
+pub mod api;
 
 /// The embedded TerminusDB binary.
 /// This is compiled during the build process and embedded into this crate.
