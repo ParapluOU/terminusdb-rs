@@ -407,15 +407,17 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
 
     println!("cargo:warning=Building TerminusDB binary...");
 
-    // On macOS, use 'make dev' to avoid library stripping (preserves code signatures)
-    // On Linux, use 'make PROFILE=release' for standalone binary
+    // On macOS, use 'make PROFILE=release dev' target to create a development binary
+    // that doesn't strip libraries (preserves code signatures, requires librust.dylib at runtime)
+    // On Linux, use default target with 'make PROFILE=release' for standalone binary
+    // Both explicitly set PROFILE=release to avoid inheriting PROFILE=debug from cargo check/build
     #[cfg(target_os = "macos")]
-    let make_target = "dev";
+    let make_args = &["PROFILE=release", "dev"];
     #[cfg(not(target_os = "macos"))]
-    let make_target = "PROFILE=release";
+    let make_args = &["PROFILE=release"];
 
     let status = Command::new("make")
-        .args(&[make_target])
+        .args(make_args)
         .current_dir(repo_path)
         .env("PATH", &new_path)
         .status()
