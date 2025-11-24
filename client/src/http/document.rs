@@ -1,6 +1,7 @@
 //! Untyped document CRUD operations
 
 use anyhow::bail;
+use tap::TapFallible;
 
 use crate::ErrorResponse;
 
@@ -538,7 +539,10 @@ impl super::client::TerminusDBHttpClient {
                     request = request.timeout(timeout);
                 }
 
-                let r = request.send().await?;
+                let r = request
+                    .send()
+                    .await
+                    .tap_err(|e| error!("error on request.send(): {:?}", e))?;
 
                 // insert existing documents with PUT (only when force=false)
                 if !args.force && !documents_to_update_instead.is_empty() {
