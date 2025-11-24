@@ -13,7 +13,12 @@ pub struct DocumentInsertArgs {
     pub author: String,
     /// spec
     pub spec: BranchSpec,
-    /// force despite it already exists
+    /// Controls existence checking behavior for POST operations:
+    /// - `false` (default): Check for existing document IDs and automatically update them via PUT.
+    ///   This is safer and prevents duplicate errors, but requires an additional WOQL query.
+    /// - `true`: Skip existence checking and use `full_replace=true` query parameter.
+    ///   This is faster for bulk insertions of known-new documents, as it avoids the WOQL check.
+    ///   TerminusDB will replace any existing documents with the same ID.
     pub force: bool,
     /// optional request timeout
     pub timeout: Option<Duration>,

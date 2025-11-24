@@ -443,8 +443,8 @@ impl super::client::TerminusDBHttpClient {
 
         let mut documents_to_update_instead = vec![];
 
-        // For POST method, filter out documents that already exist
-        if matches!(method, DocumentMethod::Post) {
+        // For POST method, filter out documents that already exist (unless force=true)
+        if matches!(method, DocumentMethod::Post) && !args.force {
             let document_ids = extract_document_ids(&to_jsoned);
 
             debug!(
@@ -507,14 +507,20 @@ impl super::client::TerminusDBHttpClient {
         // Build request based on method
         let res = match method {
             DocumentMethod::Post => {
-                let uri = self
+                let mut url_builder = self
                     .build_url()
                     .endpoint("document")
                     .database(&args.spec)
                     .query("author", &args.author)
                     .query_encoded("message", &args.message)
-                    .query("graph_type", &ty)
-                    .build();
+                    .query("graph_type", &ty);
+
+                // When force=true, use full_replace to guarantee success on duplicates
+                if args.force {
+                    url_builder = url_builder.query("full_replace", "true");
+                }
+
+                let uri = url_builder.build();
 
                 debug!("POST {} to URI {}", &ty, &uri);
 
@@ -534,16 +540,18 @@ impl super::client::TerminusDBHttpClient {
 
                 let r = request.send().await?;
 
-                // insert existing documents with PUT
-                let update_res = Box::pin(self.insert_documents_with_method(
-                    documents_to_update_instead.iter().collect(),
-                    args.clone(),
-                    DocumentMethod::Put,
-                ))
-                .await
-                .map_err(|e| {
-                    error!("Error updating existing documents during POST: {}", e);
-                });
+                // insert existing documents with PUT (only when force=false)
+                if !args.force && !documents_to_update_instead.is_empty() {
+                    let update_res = Box::pin(self.insert_documents_with_method(
+                        documents_to_update_instead.iter().collect(),
+                        args.clone(),
+                        DocumentMethod::Put,
+                    ))
+                    .await
+                    .map_err(|e| {
+                        error!("Error updating existing documents during POST: {}", e);
+                    });
+                }
 
                 r
             }
