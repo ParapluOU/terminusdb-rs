@@ -444,8 +444,8 @@ impl super::client::TerminusDBHttpClient {
 
         let mut documents_to_update_instead = vec![];
 
-        // For POST method, filter out documents that already exist (unless force=true)
-        if matches!(method, DocumentMethod::Post) && !args.force {
+        // For POST method, filter out documents that already exist (unless skip_existence_check=true)
+        if matches!(method, DocumentMethod::Post) && !args.skip_existence_check {
             let document_ids = extract_document_ids(&to_jsoned);
 
             debug!(
@@ -544,8 +544,8 @@ impl super::client::TerminusDBHttpClient {
                     .await
                     .tap_err(|e| error!("error on request.send(): {:?}", e))?;
 
-                // insert existing documents with PUT (only when force=false)
-                if !args.force && !documents_to_update_instead.is_empty() {
+                // insert existing documents with PUT (only when skip_existence_check=false)
+                if !args.skip_existence_check && !documents_to_update_instead.is_empty() {
                     let update_res = Box::pin(self.insert_documents_with_method(
                         documents_to_update_instead.iter().collect(),
                         args.clone(),
@@ -626,7 +626,7 @@ impl super::client::TerminusDBHttpClient {
             return Err(anyhow!("Document operation failed: {}", e));
         }
 
-        debug!("{:?} {} into TerminusDB", method, ty);
+        trace!("{:?}'ed {} into TerminusDB", method, ty);
 
         let parsed = parsed?;
         let version_header = parsed.commit_id.clone();
@@ -1094,14 +1094,16 @@ impl super::client::TerminusDBHttpClient {
             request.send().await?
         };
 
-        debug!("Retrieved documents with status code: {}", res.status());
+        // Extract status before consuming response
+        let status = res.status();
 
         // Parse response as array of JSON values
         let docs = self.parse_response::<Vec<serde_json::Value>>(res).await?;
 
         debug!(
-            "Retrieved {} documents in {:?}",
+            "Retrieved {} documents with status code: {} in {:?}",
             docs.len(),
+            status,
             start.elapsed()
         );
 
