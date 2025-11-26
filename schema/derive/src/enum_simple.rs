@@ -129,7 +129,10 @@ pub fn implement_for_simple_enum(
         impl terminusdb_schema::Class for #enum_name {}
     };
 
-    // Combine both implementations
+    // Generate TDBEnum trait implementation for enum deserialization
+    let tdb_enum_impl = generate_tdbenum_impl(data_enum, enum_name, rename_strategy);
+
+    // Combine all implementations
     quote! {
         #schema_impl
 
@@ -138,6 +141,8 @@ pub fn implement_for_simple_enum(
         #schema_class_impl
 
         #class_marker_impl
+
+        #tdb_enum_impl
     }
 }
 
@@ -147,3 +152,73 @@ pub fn implement_for_simple_enum(
 
 // todo: when an enum does not have tags, it is a simple enum
 // in that case it has to derive a terminusdb_schema::Schema::Enum
+
+/// Generate the TDBEnum trait implementation for a simple enum.
+///
+/// This provides bidirectional mapping between Rust enum variants and their
+/// TerminusDB string representations, enabling proper deserialization.
+fn generate_tdbenum_impl(
+    data_enum: &DataEnum,
+    enum_name: &syn::Ident,
+    rename_strategy: crate::args::RenameStrategy,
+) -> proc_macro2::TokenStream {
+    // Collect variant info: (variant_ident, renamed_string)
+    let variant_info: Vec<_> = data_enum
+        .variants
+        .iter()
+        .filter_map(|variant| {
+            match &variant.fields {
+                Fields::Unit => {
+                    let variant_ident = &variant.ident;
+                    let variant_name_str = variant_ident.to_string();
+                    let renamed = rename_strategy.apply(&variant_name_str);
+                    Some((variant_ident.clone(), renamed))
+                }
+                _ => None, // Skip non-unit variants (they'll error elsewhere)
+            }
+        })
+        .collect();
+
+    // Generate variants() - returns Vec of all variants
+    let variants_arms: Vec<_> = variant_info
+        .iter()
+        .map(|(ident, _)| quote! { #enum_name::#ident })
+        .collect();
+
+    // Generate to_tdb_value() - match self to renamed string
+    let to_value_arms: Vec<_> = variant_info
+        .iter()
+        .map(|(ident, renamed)| {
+            quote! { #enum_name::#ident => #renamed.to_string() }
+        })
+        .collect();
+
+    // Generate from_tdb_value() - match string to variant
+    let from_value_arms: Vec<_> = variant_info
+        .iter()
+        .map(|(ident, renamed)| {
+            quote! { #renamed => Some(#enum_name::#ident) }
+        })
+        .collect();
+
+    quote! {
+        impl terminusdb_schema::TDBEnum for #enum_name {
+            fn variants() -> Vec<Self> {
+                vec![#(#variants_arms),*]
+            }
+
+            fn to_tdb_value(&self) -> String {
+                match self {
+                    #(#to_value_arms),*
+                }
+            }
+
+            fn from_tdb_value(s: &str) -> Option<Self> {
+                match s {
+                    #(#from_value_arms,)*
+                    _ => None,
+                }
+            }
+        }
+    }
+}

@@ -112,6 +112,42 @@ pub trait ToTDBSchemas {
     fn to_schemas() -> Vec<crate::Schema>;
 }
 
+/// Trait for enums that can be serialized to/from TerminusDB string values.
+///
+/// This trait is derived automatically for simple enums (unit variants only)
+/// using the `TerminusDBModel` derive macro. It provides bidirectional mapping
+/// between Rust enum variants and their TerminusDB string representations.
+///
+/// # Example
+/// ```rust,ignore
+/// #[derive(TerminusDBModel)]
+/// enum ImportStatus {
+///     FullyImported,
+///     MetadataOnly,
+/// }
+///
+/// // to_tdb_value converts variant to lowercase string
+/// assert_eq!(ImportStatus::FullyImported.to_tdb_value(), "fullyimported");
+///
+/// // from_tdb_value parses string back to variant
+/// assert_eq!(
+///     TDBEnum::from_tdb_value("fullyimported"),
+///     Some(ImportStatus::FullyImported)
+/// );
+/// ```
+pub trait TDBEnum: Sized {
+    /// Returns all variants of this enum.
+    fn variants() -> Vec<Self>;
+
+    /// Convert this variant to its TDB string representation.
+    /// (e.g., `FullyImported` -> `"fullyimported"`)
+    fn to_tdb_value(&self) -> String;
+
+    /// Try to construct enum from TDB string representation.
+    /// (e.g., `"fullyimported"` -> `Some(FullyImported)`)
+    fn from_tdb_value(s: &str) -> Option<Self>;
+}
+
 // Macro to generate ToTDBSchemas implementations for tuples
 macro_rules! impl_to_tdb_schemas_for_tuple {
     // Base case for single element tuple

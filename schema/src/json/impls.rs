@@ -205,32 +205,47 @@ where
     T: 'static, // Needed to confirm type isn't a primitive which would already have an impl
 {
     default fn property_from_json(json: Value) -> Result<InstanceProperty> {
-        // todo: it would be cleaner to derive a (marker) trait for enums
-        // and then have a separate InstancePropertyFromJson for enums
-        // so we wouldn thave this conditional inside the generic
-        if T::to_schema().is_enum() {
-            return if let Value::String(enum_variant) = json {
-                // Convert lowercase enum variant to proper case for serde deserialization
-                // TerminusDB stores enum values as lowercase, but serde expects exact variant names
-                let variant_proper_case = enum_variant
-                    .chars()
-                    .enumerate()
-                    .map(|(i, c)| if i == 0 { c.to_uppercase().collect::<String>() } else { c.to_string() })
-                    .collect::<String>();
-                let enm: T = serde_json::from_str(&format!("\"{}\"", &variant_proper_case))?;
-                // Ok(InstanceProperty::Primitive(PrimitiveValue::String(enum_variant)))
-                Ok(InstanceProperty::Relation(RelationValue::One(
-                    enm.to_instance(None),
-                )))
-            } else {
-                bail!("expected String value for Enum")
-            };
-        }
+        // Note: Enum deserialization is handled by the specialized impl below for T: TDBEnum.
+        // This default impl handles non-enum complex types (structs, tagged unions, etc.)
 
         // Use the InstanceFromJson implementation to create an Instance
         let instance = T::instance_from_json(json)?;
 
         // Convert the Instance to a relation property
         Ok(InstanceProperty::Relation(RelationValue::One(instance)))
+    }
+}
+
+// Specialized implementation for simple enums that implement TDBEnum
+// This is more specific than the default impl because it has all its bounds + TDBEnum
+impl<T, Parent> InstancePropertyFromJson<Parent> for T
+where
+    T: InstanceFromJson + ToTDBInstance + DeserializeOwned + crate::TDBEnum,
+    T: 'static,
+{
+    fn property_from_json(json: Value) -> Result<InstanceProperty> {
+        if let Value::String(enum_variant) = json {
+            // Use TDBEnum trait to deserialize - goes through real T
+            match T::from_tdb_value(&enum_variant) {
+                Some(enm) => Ok(InstanceProperty::Relation(RelationValue::One(
+                    enm.to_instance(None),
+                ))),
+                None => {
+                    // Provide helpful error with valid values
+                    let valid = T::variants()
+                        .iter()
+                        .map(|v| v.to_tdb_value())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    bail!(
+                        "Invalid enum variant '{}'. Valid values: [{}]",
+                        enum_variant,
+                        valid
+                    )
+                }
+            }
+        } else {
+            bail!("expected String value for Enum, got {:?}", json)
+        }
     }
 }
