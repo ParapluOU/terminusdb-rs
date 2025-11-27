@@ -1,4 +1,4 @@
-FROM terminusdb/terminusdb-server:v11.2.0-rc5
+FROM ghcr.io/parapluou/terminusdb-server:main
 
 # Install git, cron, rust/cargo, and other dependencies (Debian-based)
 RUN apt-get update && apt-get install -y \
