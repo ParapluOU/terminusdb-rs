@@ -6,6 +6,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-env-changed=TERMINUSDB_VERSION");
     println!("cargo:rerun-if-env-changed=TERMINUSDB_FORCE_REBUILD");
+    println!("cargo:rerun-if-env-changed=TERMINUSDB_SOURCE");
 
     let out_dir = env::var("OUT_DIR").unwrap();
     let binary_path = Path::new(&out_dir).join("terminusdb");
@@ -35,32 +36,47 @@ fn main() {
         Err(e) => panic!("Failed to ensure dependencies: {}", e),
     };
 
-    // Get version to build
-    let version = env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "main".to_string());
-    println!("cargo:warning=Building TerminusDB version: {}", version);
+    // Check if TERMINUSDB_SOURCE is set to use a local checkout
+    let (build_dir, should_cleanup) = if let Ok(source_path) = env::var("TERMINUSDB_SOURCE") {
+        let source_dir = PathBuf::from(&source_path);
+        if !source_dir.exists() {
+            panic!("TERMINUSDB_SOURCE path does not exist: {}", source_path);
+        }
+        if !source_dir.join("Makefile").exists() {
+            panic!("TERMINUSDB_SOURCE does not appear to be a TerminusDB checkout (no Makefile): {}", source_path);
+        }
+        println!("cargo:warning=Building from local source: {}", source_path);
+        (source_dir, false)
+    } else {
+        // Get version to build
+        let version = env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "main".to_string());
+        println!("cargo:warning=Building TerminusDB version: {}", version);
 
-    // Clone TerminusDB to a consistent temporary directory
-    // Note: The dev build embeds absolute paths to this directory in the saved state,
-    // so we use a fixed path that the runtime can recreate
-    let temp_dir = env::temp_dir().join("terminusdb-build");
-    println!("cargo:warning=Cloning TerminusDB to: {}", temp_dir.display());
+        // Clone TerminusDB to a consistent temporary directory
+        // Note: The dev build embeds absolute paths to this directory in the saved state,
+        // so we use a fixed path that the runtime can recreate
+        let temp_dir = env::temp_dir().join("terminusdb-build");
+        println!("cargo:warning=Cloning TerminusDB to: {}", temp_dir.display());
 
-    // Clean existing directory if it exists
-    if temp_dir.exists() {
-        let _ = fs::remove_dir_all(&temp_dir);
-    }
+        // Clean existing directory if it exists
+        if temp_dir.exists() {
+            let _ = fs::remove_dir_all(&temp_dir);
+        }
 
-    if let Err(e) = clone_terminusdb(&version, &temp_dir) {
-        panic!("Failed to clone TerminusDB: {}", e);
-    }
+        if let Err(e) = clone_terminusdb(&version, &temp_dir) {
+            panic!("Failed to clone TerminusDB: {}", e);
+        }
+
+        (temp_dir, true)
+    };
 
     // Build TerminusDB with dependency context
-    if let Err(e) = build_terminusdb(&temp_dir, &dep_context) {
+    if let Err(e) = build_terminusdb(&build_dir, &dep_context) {
         panic!("Failed to build TerminusDB: {}", e);
     }
 
     // Copy the binary to OUT_DIR
-    let built_binary = temp_dir.join("terminusdb");
+    let built_binary = build_dir.join("terminusdb");
     if let Err(e) = fs::copy(&built_binary, &binary_path) {
         panic!("Failed to copy binary from {} to {}: {}",
                built_binary.display(), binary_path.display(), e);
@@ -78,7 +94,7 @@ fn main() {
     // On macOS, the dev build needs librust.dylib at runtime
     #[cfg(target_os = "macos")]
     {
-        let dylib_src = temp_dir.join("src/rust/librust.dylib");
+        let dylib_src = build_dir.join("src/rust/librust.dylib");
         if dylib_src.exists() {
             let dylib_dest = Path::new(&out_dir).join("librust.dylib");
             println!("cargo:warning=Copying librust.dylib for macOS dev build...");
@@ -90,8 +106,10 @@ fn main() {
         }
     }
 
-    // Clean up temp directory
-    let _ = fs::remove_dir_all(&temp_dir);
+    // Clean up temp directory only if we cloned it
+    if should_cleanup {
+        let _ = fs::remove_dir_all(&build_dir);
+    }
 
     println!("cargo:warning=Successfully built TerminusDB binary at {}", binary_path.display());
 }
@@ -363,7 +381,7 @@ fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
             "clone",
             "--depth=1",
             "--branch", version,
-            "https://github.com/terminusdb/terminusdb.git",
+            "https://github.com/ParapluOU/terminusdb.git",
             dest.to_str().unwrap()
         ])
         .status()
