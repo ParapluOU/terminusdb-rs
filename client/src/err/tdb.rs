@@ -17,6 +17,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:SchemaCheckFailure")]
     SchemaCheckFail(SchemaCheckFailError),
 
+    #[serde(rename = "api:WOQLSchemaCheckFailure")]
+    WOQLSchemaCheckFail(SchemaCheckFailError),
+
     #[serde(rename = "api:NotAllCapturesFound")]
     NotAllCapturesFound(NotAllCapturesFoundError),
 
@@ -38,6 +41,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:InternalServerError")]
     InternalServerError(InternalServerErrorError),
 
+    #[serde(rename = "api:BadDescriptorPath")]
+    BadDescriptorPath(BadDescriptorPathError),
+
     Other(Value),
 
     #[default]
@@ -48,11 +54,13 @@ impl Display for ApiResponseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ApiResponseError::SchemaCheckFail(error) => Display::fmt(error, f),
+            ApiResponseError::WOQLSchemaCheckFail(error) => Display::fmt(error, f),
             ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
             ApiResponseError::UnresolvableAbsoluteDescriptor(error) => Display::fmt(error, f),
             ApiResponseError::ApiWOQLSyntaxError(error) => write!(f, "WOQL syntax error: {}", error.error_term),
             ApiResponseError::InsertedSubdocumentAsDocument(error) => Display::fmt(error, f),
             ApiResponseError::InternalServerError(error) => Display::fmt(error, f),
+            ApiResponseError::BadDescriptorPath(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -107,6 +115,13 @@ pub enum TypedErrorResponse {
     DeleteDocumentError {
         #[serde(rename = "@type")]
         #[serde(deserialize_with = "expect_delete_document_error_type")]
+        error_type: String,
+        #[serde(flatten)]
+        error: ErrorResponse,
+    },
+    LogError {
+        #[serde(rename = "@type")]
+        #[serde(deserialize_with = "expect_log_error_type")]
         error_type: String,
         #[serde(flatten)]
         error: ErrorResponse,
@@ -177,6 +192,18 @@ where
     }
 }
 
+fn expect_log_error_type<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == "api:LogErrorResponse" {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom("not a log error"))
+    }
+}
+
 impl Error for TypedErrorResponse {}
 
 impl Display for TypedErrorResponse {
@@ -195,6 +222,9 @@ impl Display for TypedErrorResponse {
                 write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
             TypedErrorResponse::DeleteDocumentError { error, .. } => {
+                write!(f, "{}\n\nDetailed error: {:#?}", error, error)
+            }
+            TypedErrorResponse::LogError { error, .. } => {
                 write!(f, "{}\n\nDetailed error: {:#?}", error, error)
             }
             TypedErrorResponse::GenericError(e) => {
@@ -281,6 +311,9 @@ impl Display for ErrorResponse {
         if let Some(api_error) = &self.api_error {
             match api_error {
                 ApiResponseError::SchemaCheckFail(schema_error) => {
+                    write!(f, "\n\n{}", schema_error)?;
+                }
+                ApiResponseError::WOQLSchemaCheckFail(schema_error) => {
                     write!(f, "\n\n{}", schema_error)?;
                 }
                 _ => {
@@ -427,6 +460,18 @@ pub struct InternalServerErrorError {
 impl Display for InternalServerErrorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Internal server error")
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BadDescriptorPathError {
+    #[serde(rename = "api:descriptor")]
+    pub descriptor: String,
+}
+
+impl Display for BadDescriptorPathError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Bad descriptor path: '{}'", self.descriptor)
     }
 }
 
@@ -820,6 +865,119 @@ fn test_deserialize_delete_document_error() {
             assert_eq!(err.api_request_id.unwrap(), "4bc5e800-c4c2-11f0-b9fb-2ebc58a00d09");
         }
         _ => panic!("Expected DeleteDocumentError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_bad_descriptor_path_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:LogErrorResponse",
+        "api:error": {
+            "@type": "api:BadDescriptorPath",
+            "api:descriptor": "admin/_meta",
+        },
+        "api:message": "Bad descriptor path: admin/_meta",
+        "api:request_id": "ce47a7a3-e141-4a81-a0ca-390eeff6f9ae",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::LogError { error: err, .. } => {
+            assert_eq!(err.api_message, "Bad descriptor path: admin/_meta");
+            // Check status
+            match err.api_status {
+                TerminusAPIStatus::Failure => {} // expected
+                _ => panic!("Expected Failure status"),
+            }
+
+            if let Some(ApiResponseError::BadDescriptorPath(desc_err)) = err.api_error {
+                assert_eq!(desc_err.descriptor, "admin/_meta");
+            } else {
+                panic!("Expected BadDescriptorPath error");
+            }
+
+            // Verify request_id is captured
+            assert!(err.api_request_id.is_some());
+            assert_eq!(
+                err.api_request_id.unwrap(),
+                "ce47a7a3-e141-4a81-a0ca-390eeff6f9ae"
+            );
+        }
+        _ => panic!("Expected LogError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_woql_schema_check_failure_error() {
+    let json = json!({
+        "@type": "api:WoqlErrorResponse",
+        "api:error": {
+            "@type": "api:WOQLSchemaCheckFailure",
+            "api:witnesses": [
+                {
+                    "@type": "instance_not_of_class",
+                    "class": "terminusdb:///schema#PublicationImportStatus",
+                    "instance": "\"fully_imported\"^^'http://www.w3.org/2001/XMLSchema#string'",
+                },
+            ],
+        },
+        "api:message": "There was an error when schema checking",
+        "api:request_id": "91241350-ca20-11f0-971b-03cbaa962789",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::WoqlError { error: err, .. } => {
+            assert_eq!(err.api_message, "There was an error when schema checking");
+            match err.api_status {
+                TerminusAPIStatus::Failure => {} // expected
+                _ => panic!("Expected Failure status"),
+            }
+
+            if let Some(ApiResponseError::WOQLSchemaCheckFail(schema_err)) = err.api_error {
+                assert_eq!(schema_err.witnesses.len(), 1);
+                assert_eq!(schema_err.witnesses[0]["@type"], "instance_not_of_class");
+            } else {
+                panic!("Expected WOQLSchemaCheckFail error, got: {:?}", err.api_error);
+            }
+
+            assert!(err.api_request_id.is_some());
+            assert_eq!(err.api_request_id.unwrap(), "91241350-ca20-11f0-971b-03cbaa962789");
+        }
+        _ => panic!("Expected WoqlError variant"),
     }
 
     // Test deserialization into ApiResponse
