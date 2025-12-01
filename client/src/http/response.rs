@@ -29,12 +29,24 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<T> {
         use tap::TapFallible;
 
-        let full = res.bytes().await?;
+        // let full = res.bytes().await?;
 
-        let json = serde_json::from_slice::<serde_json::Value>(&full)
+        // let json = serde_json::from_slice::<serde_json::Value>(&full)
+        //     .context("failed to parse response as JSON")
+        //     .tap_err(|e| {
+        //         tracing::error!("failed to parse response bytes as JSON ({:?}): {:?}", e, full);
+        //     })?;
+
+        let full = res.text().await.context("failed to parse response text")?;
+
+        let json = serde_json::from_str::<serde_json::Value>(&full)
             .context("failed to parse response as JSON")
             .tap_err(|e| {
-                tracing::error!("failed to parse response bytes as JSON ({:?}): {:?}", e, full);
+                tracing::error!(
+                    "failed to parse response text as JSON ({:?}): {}",
+                    e,
+                    full
+                );
             })?;
 
         trace!("[TerminusDBHttpClient] response: {:#?}", &json);
