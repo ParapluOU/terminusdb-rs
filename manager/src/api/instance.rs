@@ -7,7 +7,7 @@ use crate::state::AppState;
 /// Information about the local instance
 #[derive(Debug, Serialize)]
 pub struct LocalInstanceInfo {
-    pub port: u16,
+    pub port: u32,
     pub running: bool,
     pub url: String,
 }

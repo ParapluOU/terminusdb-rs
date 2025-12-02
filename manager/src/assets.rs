@@ -24,6 +24,7 @@ impl Asset {
                     "text/html" => ContentType::HTML,
                     "text/css" => ContentType::CSS,
                     "application/javascript" => ContentType::JavaScript,
+                    "text/javascript" => ContentType::JavaScript,
                     "image/png" => ContentType::PNG,
                     "image/jpeg" => ContentType::JPEG,
                     "image/svg+xml" => ContentType::SVG,

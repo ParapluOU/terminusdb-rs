@@ -4,6 +4,12 @@ module Api exposing
     , createNode
     , updateNode
     , deleteNode
+    , getDatabases
+    , getDatabaseSchema
+    , getDatabaseCommits
+    , getDatabaseRemotes
+    , addRemote
+    , deleteRemote
     , nodeDecoder
     , statusDecoder
     )
@@ -14,7 +20,8 @@ module Api exposing
 import Http
 import Json.Decode as Decode exposing (Decoder, field, string, int, bool, float, list, maybe)
 import Json.Encode as Encode
-import Types exposing (Node, NodeStatus, RemoteInfo, NodeForm)
+import Types exposing (Node, NodeStatus, RemoteInfo, NodeForm, Connectivity(..), DatabaseInfo, ModelInfo, CommitInfo)
+import Url
 
 
 -- DECODERS
@@ -22,16 +29,29 @@ import Types exposing (Node, NodeStatus, RemoteInfo, NodeForm)
 
 nodeDecoder : Decoder Node
 nodeDecoder =
-    Decode.map9 Node
+    Decode.map8
+        (\id label host portNumber username password sshEnabled positionX ->
+            \positionY ->
+                { id = id
+                , label = label
+                , host = host
+                , portNumber = portNumber
+                , username = username
+                , password = password
+                , sshEnabled = sshEnabled
+                , positionX = positionX
+                , positionY = positionY
+                }
+        )
         (field "id" string)
         (field "label" string)
         (field "host" string)
-        (field "port" int)
+        (field "port" int)  -- JSON uses "port", Elm uses "portNumber"
         (field "username" string)
         (field "password" string)
         (field "ssh_enabled" bool)
         (field "position_x" float)
-        (field "position_y" float)
+        |> Decode.andThen (\fn -> Decode.map fn (field "position_y" float))
 
 
 remoteInfoDecoder : Decoder RemoteInfo
@@ -43,15 +63,61 @@ remoteInfoDecoder =
         (field "target_node_id" (maybe string))
 
 
+connectivityDecoder : Decoder Connectivity
+connectivityDecoder =
+    string
+        |> Decode.andThen
+            (\str ->
+                case str of
+                    "unreachable" ->
+                        Decode.succeed Unreachable
+
+                    "reachable" ->
+                        Decode.succeed Reachable
+
+                    "accessible" ->
+                        Decode.succeed Accessible
+
+                    _ ->
+                        Decode.fail ("Unknown connectivity: " ++ str)
+            )
+
+
 statusDecoder : Decoder NodeStatus
 statusDecoder =
-    Decode.map6 NodeStatus
+    Decode.map7 NodeStatus
         (field "node_id" string)
         (field "online" bool)
+        (field "connectivity" connectivityDecoder)
         (field "database_count" int)
         (field "remotes" (list remoteInfoDecoder))
         (field "last_check" string)
-        (field "error" (maybe string))
+        (maybe (field "error" string))
+
+
+databaseInfoDecoder : Decoder DatabaseInfo
+databaseInfoDecoder =
+    Decode.map4 DatabaseInfo
+        (field "name" string)
+        (field "commitCount" int)
+        (field "lastModified" string)
+        (field "remoteCount" int)
+
+
+modelInfoDecoder : Decoder ModelInfo
+modelInfoDecoder =
+    Decode.map2 ModelInfo
+        (field "name" string)
+        (field "instanceCount" int)
+
+
+commitInfoDecoder : Decoder CommitInfo
+commitInfoDecoder =
+    Decode.map4 CommitInfo
+        (field "id" string)
+        (field "author" string)
+        (field "message" string)
+        (field "timestamp" string)
 
 
 -- ENCODERS
@@ -62,7 +128,7 @@ encodeNodeForm form =
     Encode.object
         [ ( "label", Encode.string form.label )
         , ( "host", Encode.string form.host )
-        , ( "port", Encode.int (Maybe.withDefault 6363 (String.toInt form.port)) )
+        , ( "port", Encode.int (Maybe.withDefault 6363 (String.toInt form.portNumber)) )
         , ( "username", Encode.string form.username )
         , ( "password", Encode.string form.password )
         , ( "ssh_enabled", Encode.bool form.sshEnabled )
@@ -76,7 +142,7 @@ encodeNodeUpdate node =
     Encode.object
         [ ( "label", Encode.string node.label )
         , ( "host", Encode.string node.host )
-        , ( "port", Encode.int node.port )
+        , ( "port", Encode.int node.portNumber )
         , ( "username", Encode.string node.username )
         , ( "password", Encode.string node.password )
         , ( "ssh_enabled", Encode.bool node.sshEnabled )
@@ -90,6 +156,14 @@ encodePositionUpdate x y =
     Encode.object
         [ ( "position_x", Encode.float x )
         , ( "position_y", Encode.float y )
+        ]
+
+
+encodeAddRemote : String -> String -> Encode.Value
+encodeAddRemote remoteName remoteUrl =
+    Encode.object
+        [ ( "remoteName", Encode.string remoteName )
+        , ( "remoteUrl", Encode.string remoteUrl )
         ]
 
 
@@ -153,6 +227,63 @@ deleteNode nodeId toMsg =
         { method = "DELETE"
         , headers = []
         , url = "/api/nodes/" ++ nodeId
+        , body = Http.emptyBody
+        , expect = Http.expectWhatever toMsg
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+-- DATABASE API CALLS
+
+
+getDatabases : String -> (Result Http.Error (List DatabaseInfo) -> msg) -> Cmd msg
+getDatabases nodeId toMsg =
+    Http.get
+        { url = "/api/nodes/" ++ nodeId ++ "/databases"
+        , expect = Http.expectJson toMsg (field "data" (list databaseInfoDecoder))
+        }
+
+
+getDatabaseSchema : String -> String -> (Result Http.Error (List ModelInfo) -> msg) -> Cmd msg
+getDatabaseSchema nodeId database toMsg =
+    Http.get
+        { url = "/api/nodes/" ++ nodeId ++ "/databases/" ++ Url.percentEncode database ++ "/schema"
+        , expect = Http.expectJson toMsg (field "data" (list modelInfoDecoder))
+        }
+
+
+getDatabaseCommits : String -> String -> (Result Http.Error (List CommitInfo) -> msg) -> Cmd msg
+getDatabaseCommits nodeId database toMsg =
+    Http.get
+        { url = "/api/nodes/" ++ nodeId ++ "/databases/" ++ Url.percentEncode database ++ "/commits"
+        , expect = Http.expectJson toMsg (field "data" (list commitInfoDecoder))
+        }
+
+
+getDatabaseRemotes : String -> String -> (Result Http.Error (List RemoteInfo) -> msg) -> Cmd msg
+getDatabaseRemotes nodeId database toMsg =
+    Http.get
+        { url = "/api/nodes/" ++ nodeId ++ "/databases/" ++ Url.percentEncode database ++ "/remotes"
+        , expect = Http.expectJson toMsg (field "data" (list remoteInfoDecoder))
+        }
+
+
+addRemote : String -> String -> String -> String -> (Result Http.Error () -> msg) -> Cmd msg
+addRemote nodeId database remoteName remoteUrl toMsg =
+    Http.post
+        { url = "/api/nodes/" ++ nodeId ++ "/databases/" ++ Url.percentEncode database ++ "/remotes"
+        , body = Http.jsonBody (encodeAddRemote remoteName remoteUrl)
+        , expect = Http.expectWhatever toMsg
+        }
+
+
+deleteRemote : String -> String -> String -> (Result Http.Error () -> msg) -> Cmd msg
+deleteRemote nodeId database remoteName toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = "/api/nodes/" ++ nodeId ++ "/databases/" ++ Url.percentEncode database ++ "/remotes/" ++ remoteName
         , body = Http.emptyBody
         , expect = Http.expectWhatever toMsg
         , timeout = Nothing

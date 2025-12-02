@@ -1,0 +1,71 @@
+# TerminusDB Manager Development Commands
+
+# Default recipe - show available commands
+default:
+    @just --list
+
+# Build the Elm frontend
+build-elm:
+    cd frontend && elm make src/Main.elm --output=public/app.js
+
+# Build the Elm frontend with optimization
+build-elm-optimized:
+    cd frontend && elm make src/Main.elm --optimize --output=public/app.js
+
+# Watch Elm files and rebuild on changes
+watch-elm:
+    cd frontend && watchexec -w src -e elm -- elm make src/Main.elm --output=public/app.js
+
+# Build and run the manager server
+run: build-elm
+    cargo run -p terminusdb-manager
+
+# Watch manager server and auto-restart on changes
+watch-server:
+    cargo watch -w .handle -x 'run -p terminusdb-manager'
+
+# Restart the manager server (when using watch-server)
+restart:
+    touch .handle
+
+# Build both frontend and backend
+build: build-elm
+    cargo build -p terminusdb-manager
+
+# Build release version
+build-release: build-elm-optimized
+    cargo build -p terminusdb-manager --release
+
+# Run tests
+test:
+    cargo test -p terminusdb-manager
+
+# Clean build artifacts
+clean:
+    cargo clean -p terminusdb-manager
+    rm -f frontend/public/app.js
+
+# Format code
+fmt:
+    cd frontend && elm-format src/ --yes
+    cargo fmt
+
+# Check for issues
+check:
+    cargo clippy -p terminusdb-manager
+
+# Development setup - install tools
+setup:
+    @echo "Installing Elm..."
+    @which elm || npm install -g elm
+    @echo "Installing elm-format..."
+    @which elm-format || npm install -g elm-format
+    @echo "Installing watchexec..."
+    @which watchexec || brew install watchexec
+    @echo "Development tools ready!"
+
+# Start full development environment (Elm watch + Server watch)
+dev:
+    @echo "Starting development environment..."
+    @echo "Run 'just watch-elm' in one terminal and 'just watch-server' in another"
+    @echo "Or use 'just restart' to trigger server reload"

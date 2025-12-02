@@ -23,8 +23,10 @@ view :
     , onMouseDown : String -> Position -> msg
     , onMouseMove : Position -> msg
     , onMouseUp : msg
-    , onWheel : Float -> msg
+    , onWheel : Float -> Float -> msg
     , onContextMenu : Position -> msg
+    , onNodeContextMenu : String -> Position -> msg
+    , onNodeClick : String -> Position -> msg
     }
     -> Html msg
 view config =
@@ -46,15 +48,25 @@ view config =
             ]
             [ -- SVG definitions (shadows, markers)
               Svg.defs []
-                [ -- Drop shadow for nodes
+                [ -- Drop shadow for nodes (using feGaussianBlur + feOffset)
                   Svg.filter [ SA.id "shadow" ]
-                    [ Svg.feDropShadow
-                        [ SA.dx "0"
-                        , SA.dy "2"
-                        , SA.stdDeviation "4"
-                        , SA.floodOpacity "0.2"
+                    [ Svg.feGaussianBlur
+                        [ SA.in_ "SourceAlpha"
+                        , SA.stdDeviation "2"
                         ]
                         []
+                    , Svg.feOffset
+                        [ SA.dx "0"
+                        , SA.dy "2"
+                        , SA.result "offsetblur"
+                        ]
+                        []
+                    , Svg.feComponentTransfer []
+                        [ Svg.feFuncA [ SA.type_ "linear", SA.slope "0.2" ] [] ]
+                    , Svg.feMerge []
+                        [ Svg.feMergeNode [] []
+                        , Svg.feMergeNode [ SA.in_ "SourceGraphic" ] []
+                        ]
                     ]
 
                 , -- Arrow marker for remote connections
@@ -75,85 +87,71 @@ view config =
                     ]
                 ]
 
-            , -- Background grid (optional)
-              viewGrid config.canvasView
-
             , -- Transform group for pan/zoom
               g
                 [ SA.transform
                     (transformString config.canvasView)
                 ]
-                [ -- Remote connection lines
+                [ -- Background grid
+                  viewGrid config.canvasView
+
+                , -- Remote connection lines
                   g [] (viewRemoteLines config.nodes config.statuses)
 
                 , -- Nodes
-                  g [] (List.map (viewNode config.statuses config.onMouseDown) config.nodes)
+                  g [] (List.map (viewNode config.statuses config.onMouseDown config.onNodeContextMenu config.onNodeClick) config.nodes)
                 ]
             ]
         ]
 
 
 transformString : CanvasView -> String
-transformString view =
-    "translate(" ++ String.fromFloat view.offsetX ++ "," ++ String.fromFloat view.offsetY ++ ") scale(" ++ String.fromFloat view.zoom ++ ")"
+transformString canvasView =
+    "translate(" ++ String.fromFloat canvasView.offsetX ++ "," ++ String.fromFloat canvasView.offsetY ++ ") scale(" ++ String.fromFloat canvasView.zoom ++ ")"
 
 
 -- GRID
 
 
 viewGrid : CanvasView -> Svg msg
-viewGrid view =
+viewGrid canvasView =
     let
         gridSize =
             50
 
         gridOpacity =
-            "0.1"
-    in
-    g []
-        [ -- Vertical lines
-          g []
-            (List.range -20 20
-                |> List.map
-                    (\i ->
-                        line
-                            [ SA.x1 (String.fromFloat (toFloat i * gridSize))
-                            , SA.y1 "-1000"
-                            , SA.x2 (String.fromFloat (toFloat i * gridSize))
-                            , SA.y2 "1000"
-                            , SA.stroke "#ccc"
-                            , SA.strokeWidth "1"
-                            , SA.opacity gridOpacity
-                            ]
-                            []
-                    )
-            )
+            "0.4"
 
-        , -- Horizontal lines
-          g []
-            (List.range -20 20
-                |> List.map
-                    (\i ->
-                        line
-                            [ SA.x1 "-1000"
-                            , SA.y1 (String.fromFloat (toFloat i * gridSize))
-                            , SA.x2 "1000"
-                            , SA.y2 (String.fromFloat (toFloat i * gridSize))
-                            , SA.stroke "#ccc"
-                            , SA.strokeWidth "1"
-                            , SA.opacity gridOpacity
-                            ]
-                            []
+        dotRadius =
+            "2"
+
+        -- Generate grid dots at intersection points
+        gridDots =
+            List.range -30 30
+                |> List.concatMap
+                    (\x ->
+                        List.range -30 30
+                            |> List.map
+                                (\y ->
+                                    Svg.circle
+                                        [ SA.cx (String.fromFloat (toFloat x * gridSize))
+                                        , SA.cy (String.fromFloat (toFloat y * gridSize))
+                                        , SA.r dotRadius
+                                        , SA.fill "#666"
+                                        , SA.opacity gridOpacity
+                                        ]
+                                        []
+                                )
                     )
-            )
-        ]
+    in
+    g [] gridDots
 
 
 -- NODES
 
 
-viewNode : List NodeStatus -> (String -> Position -> msg) -> Node -> Svg msg
-viewNode statuses onMouseDown node =
+viewNode : List NodeStatus -> (String -> Position -> msg) -> (String -> Position -> msg) -> (String -> Position -> msg) -> Node -> Svg msg
+viewNode statuses onMouseDown onNodeContextMenu onNodeClick node =
     let
         status =
             findStatus node.id statuses
@@ -161,30 +159,42 @@ viewNode statuses onMouseDown node =
         ( fillColor, strokeColor ) =
             case status of
                 Just s ->
-                    if s.online then
-                        ( "#ffffff", "#4caf50" )
+                    case s.connectivity of
+                        Accessible ->
+                            ( "#ffffff", "#4caf50" )  -- Green
 
-                    else
-                        ( "#ffffff", "#f44336" )
+                        Reachable ->
+                            ( "#ffffff", "#ffa726" )  -- Yellow/Orange
+
+                        Unreachable ->
+                            ( "#ffffff", "#f44336" )  -- Red
 
                 Nothing ->
-                    ( "#ffffff", "#999999" )
+                    ( "#ffffff", "#999999" )  -- Gray
 
         databaseCount =
             status
                 |> Maybe.map .databaseCount
+                |> Maybe.withDefault 0
+
+        remoteCount =
+            status
+                |> Maybe.map (\s -> List.length s.remotes)
                 |> Maybe.withDefault 0
     in
     g
         [ SA.transform ("translate(" ++ String.fromFloat node.positionX ++ "," ++ String.fromFloat node.positionY ++ ")")
         , SA.class "node"
         , SA.cursor "move"
+        , SA.style "user-select: none; -webkit-user-select: none; -moz-user-select: none;"
         , onNodeMouseDown node.id onMouseDown
+        , onNodeRightClick node.id onNodeContextMenu
+        , onNodeClickHandler node.id onNodeClick
         ]
         [ -- Node background
           rect
             [ SA.width "200"
-            , SA.height "100"
+            , SA.height "120"
             , SA.rx "8"
             , SA.fill fillColor
             , SA.stroke strokeColor
@@ -219,7 +229,7 @@ viewNode statuses onMouseDown node =
             , SA.fontSize "12"
             , SA.fill "#666"
             ]
-            [ text (node.host ++ ":" ++ String.fromInt node.port) ]
+            [ text (node.host ++ ":" ++ String.fromInt node.portNumber) ]
 
         , -- Database count
           text_
@@ -229,6 +239,15 @@ viewNode statuses onMouseDown node =
             , SA.fill "#666"
             ]
             [ text ("📊 " ++ String.fromInt databaseCount ++ " database" ++ (if databaseCount == 1 then "" else "s")) ]
+
+        , -- Remote count
+          text_
+            [ SA.x "20"
+            , SA.y "90"
+            , SA.fontSize "12"
+            , SA.fill "#666"
+            ]
+            [ text ("🔗 " ++ String.fromInt remoteCount ++ " remote" ++ (if remoteCount == 1 then "" else "s")) ]
         ]
 
 
@@ -311,10 +330,11 @@ onMouseUp msg =
     Html.Events.on "mouseup" (Decode.succeed msg)
 
 
-onWheel : (Float -> msg) -> Svg.Attribute msg
+onWheel : (Float -> Float -> msg) -> Svg.Attribute msg
 onWheel toMsg =
     Html.Events.preventDefaultOn "wheel"
-        (Decode.map (\delta -> ( toMsg delta, True ))
+        (Decode.map2 (\deltaX deltaY -> ( toMsg deltaX deltaY, True ))
+            (Decode.field "deltaX" Decode.float)
             (Decode.field "deltaY" Decode.float)
         )
 
@@ -322,6 +342,22 @@ onWheel toMsg =
 onNodeMouseDown : String -> (String -> Position -> msg) -> Svg.Attribute msg
 onNodeMouseDown nodeId toMsg =
     Html.Events.stopPropagationOn "mousedown"
+        (Decode.map (\pos -> ( toMsg nodeId pos, True ))
+            positionDecoder
+        )
+
+
+onNodeRightClick : String -> (String -> Position -> msg) -> Svg.Attribute msg
+onNodeRightClick nodeId toMsg =
+    Html.Events.preventDefaultOn "contextmenu"
+        (Decode.map (\pos -> ( toMsg nodeId pos, True ))
+            positionDecoder
+        )
+
+
+onNodeClickHandler : String -> (String -> Position -> msg) -> Svg.Attribute msg
+onNodeClickHandler nodeId toMsg =
+    Html.Events.stopPropagationOn "click"
         (Decode.map (\pos -> ( toMsg nodeId pos, True ))
             positionDecoder
         )

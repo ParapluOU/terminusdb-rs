@@ -18,7 +18,7 @@ type alias Node =
     { id : String
     , label : String
     , host : String
-    , port : Int
+    , portNumber : Int
     , username : String
     , password : String
     , sshEnabled : Bool
@@ -27,11 +27,20 @@ type alias Node =
     }
 
 
+{-| Connectivity level for a node
+-}
+type Connectivity
+    = Unreachable
+    | Reachable
+    | Accessible
+
+
 {-| Runtime status of a node
 -}
 type alias NodeStatus =
     { nodeId : String
     , online : Bool
+    , connectivity : Connectivity
     , databaseCount : Int
     , remotes : List RemoteInfo
     , lastCheck : String
@@ -71,6 +80,7 @@ type DragState
 type alias ContextMenu =
     { position : Position
     , visible : Bool
+    , nodeId : Maybe String  -- If right-clicked on a node, this will be the node ID
     }
 
 
@@ -79,7 +89,7 @@ type alias ContextMenu =
 type alias NodeForm =
     { label : String
     , host : String
-    , port : String
+    , portNumber : String
     , username : String
     , password : String
     , sshEnabled : Bool
@@ -94,3 +104,77 @@ type FormModal
     = NoModal
     | CreateNodeModal NodeForm
     | EditNodeModal String NodeForm -- node ID and form data
+
+
+{-| Confirmation dialog state
+-}
+type ConfirmDialog
+    = NoDialog
+    | DeleteNodeDialog String  -- node ID to delete
+
+
+{-| Database information with metadata
+-}
+type alias DatabaseInfo =
+    { name : String
+    , commitCount : Int
+    , lastModified : String
+    , remoteCount : Int
+    }
+
+
+{-| Model/Entity type information
+-}
+type alias ModelInfo =
+    { name : String
+    , instanceCount : Int
+    }
+
+
+{-| Commit information
+-}
+type alias CommitInfo =
+    { id : String
+    , author : String
+    , message : String
+    , timestamp : String
+    }
+
+
+{-| Database popover state (shown when clicking a node)
+-}
+type alias DatabasePopover =
+    { nodeId : String
+    , position : Position
+    , databases : List DatabaseInfo
+    }
+
+
+{-| Database view modal state
+-}
+type alias DatabaseView =
+    { nodeId : String
+    , database : String
+    , activeTab : DatabaseTab
+    , models : List ModelInfo
+    , commits : List CommitInfo
+    , remotes : List RemoteInfo
+    }
+
+
+{-| Database view tabs
+-}
+type DatabaseTab
+    = ModelsTab
+    | CommitsTab
+    | RemotesTab
+
+
+{-| Remote dialog state
+-}
+type RemoteDialog
+    = NoRemoteDialog
+    | AddRemoteDialog String String -- nodeId, database
+        { remoteName : String
+        , remoteUrl : String
+        }

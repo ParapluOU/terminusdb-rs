@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+use super::database::DatabaseInfo;
+
+/// Connectivity level for a node
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectivityLevel {
+    /// Node is unreachable
+    Unreachable,
+    /// Node responds to info() but auth might be wrong
+    Reachable,
+    /// Full access - can list databases
+    Accessible,
+}
+
 /// Health status for a TerminusDB instance node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeStatus {
@@ -9,8 +23,15 @@ pub struct NodeStatus {
     /// Whether the node is online/reachable
     pub online: bool,
 
+    /// Connectivity level (unreachable, reachable, accessible)
+    pub connectivity: ConnectivityLevel,
+
     /// Number of databases on this instance
     pub database_count: usize,
+
+    /// Cached database information (populated by background poller)
+    #[serde(default)]
+    pub databases: Vec<DatabaseInfo>,
 
     /// Remote connections from databases on this node
     pub remotes: Vec<RemoteInfo>,
@@ -24,15 +45,36 @@ pub struct NodeStatus {
 }
 
 impl NodeStatus {
-    /// Create a new online status
-    pub fn online(node_id: String, database_count: usize, remotes: Vec<RemoteInfo>) -> Self {
+    /// Create a new online status with full access
+    pub fn online(
+        node_id: String,
+        database_count: usize,
+        databases: Vec<DatabaseInfo>,
+        remotes: Vec<RemoteInfo>,
+    ) -> Self {
         Self {
             node_id,
             online: true,
+            connectivity: ConnectivityLevel::Accessible,
             database_count,
+            databases,
             remotes,
             last_check: chrono::Utc::now().to_rfc3339(),
             error: None,
+        }
+    }
+
+    /// Create a new reachable status (info() works but can't list databases)
+    pub fn reachable(node_id: String) -> Self {
+        Self {
+            node_id,
+            online: true,
+            connectivity: ConnectivityLevel::Reachable,
+            database_count: 0,
+            databases: Vec::new(),
+            remotes: Vec::new(),
+            last_check: chrono::Utc::now().to_rfc3339(),
+            error: Some("Cannot list databases - check credentials".to_string()),
         }
     }
 
@@ -41,7 +83,9 @@ impl NodeStatus {
         Self {
             node_id,
             online: false,
+            connectivity: ConnectivityLevel::Unreachable,
             database_count: 0,
+            databases: Vec::new(),
             remotes: Vec::new(),
             last_check: chrono::Utc::now().to_rfc3339(),
             error: Some(error),

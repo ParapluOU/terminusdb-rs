@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Arc;
 use terminusdb_bin::extract_binary;
@@ -16,7 +17,7 @@ struct ManagerInner {
     /// Spawned process handle
     process: Option<Child>,
     /// Port the instance is running on
-    port: u16,
+    port: u32,
     /// Password for the local instance
     password: String,
 }
@@ -65,14 +66,37 @@ impl TerminusDBManager {
         // Get password for spawn command
         let password = self.inner.read().password.clone();
 
+        // Get or create data directory
+        let data_dir = Self::get_data_dir()?;
+        std::fs::create_dir_all(&data_dir)
+            .context("Failed to create data directory")?;
+
+        // Initialize store if it doesn't exist
+        let store_init_marker = data_dir.join(".initialized");
+        if !store_init_marker.exists() {
+            tracing::info!("Initializing TerminusDB store at {:?}", data_dir);
+            let output = Command::new(&binary_path)
+                .args(&["store", "init"])
+                .env("TERMINUSDB_SERVER_DB_PATH", &data_dir)
+                .env("TERMINUSDB_ADMIN_PASS", &password)
+                .output()
+                .context("Failed to initialize TerminusDB store")?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("Failed to initialize store: {}", stderr);
+            }
+
+            // Create marker file
+            std::fs::write(&store_init_marker, "initialized")
+                .context("Failed to create initialization marker")?;
+        }
+
         // Spawn TerminusDB process in background
-        // Use the 'serve' command with memory mode for development
         let child = Command::new(&binary_path)
-            .args(&[
-                "serve",
-                "--memory",
-                &password,
-            ])
+            .args(&["serve"])
+            .env("TERMINUSDB_SERVER_DB_PATH", &data_dir)
+            .env("TERMINUSDB_ADMIN_PASS", &password)
             .spawn()
             .context("Failed to spawn TerminusDB process")?;
 
@@ -93,8 +117,22 @@ impl TerminusDBManager {
         Ok(())
     }
 
+    /// Get the data directory for TerminusDB storage
+    fn get_data_dir() -> Result<PathBuf> {
+        // Use XDG_DATA_HOME or ~/.local/share on Unix, AppData on Windows
+        let base_dir = if cfg!(target_os = "macos") {
+            dirs::data_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
+        } else {
+            dirs::data_dir()
+                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
+        };
+
+        Ok(base_dir.join("terminusdb-manager").join("storage"))
+    }
+
     /// Get the port the local instance is running on
-    pub fn port(&self) -> u16 {
+    pub fn port(&self) -> u32 {
         self.inner.read().port
     }
 

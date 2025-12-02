@@ -1,5 +1,5 @@
 use rocket::{launch, routes, get};
-use terminusdb_manager::{AppState, poller, assets};
+use terminusdb_manager::{AppState, assets};
 
 /// Serve index.html
 #[get("/")]
@@ -25,8 +25,8 @@ async fn rocket() -> _ {
     let state = AppState::new().await
         .expect("Failed to initialize application state");
 
-    // Spawn background poller
-    let _poller_handle = poller::spawn_poller(state.clone());
+    // Start per-node pollers for all configured nodes
+    state.start_all_pollers();
 
     tracing::info!("TerminusDB Manager initialized successfully");
 
@@ -44,6 +44,13 @@ async fn rocket() -> _ {
             // Instance endpoints
             terminusdb_manager::api::get_local_instance,
             terminusdb_manager::api::restart_local_instance,
+            // Database endpoints
+            terminusdb_manager::api::list_databases,
+            terminusdb_manager::api::get_database_schema,
+            terminusdb_manager::api::get_database_commits,
+            terminusdb_manager::api::list_remotes,
+            terminusdb_manager::api::add_remote,
+            terminusdb_manager::api::delete_remote,
         ])
         .mount("/", routes![index, files])
 }

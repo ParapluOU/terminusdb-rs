@@ -10,7 +10,7 @@ use crate::state::AppState;
 pub struct CreateNodeRequest {
     pub label: String,
     pub host: String,
-    pub port: u16,
+    pub port: u32,
     pub username: String,
     pub password: String,
     #[serde(default)]
@@ -29,7 +29,7 @@ pub struct UpdateNodeRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
+    pub port: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
