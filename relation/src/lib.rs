@@ -6,7 +6,12 @@
 mod traits;
 
 
-pub use traits::{RelationTo, RelationFrom, RelationField, DefaultField, basic_relation_constraints, generate_relation_constraints};
+pub use traits::{
+    RelationTo, RelationFrom, RelationField, DefaultField,
+    basic_relation_constraints, generate_relation_constraints,
+    // ORM relation traits
+    BelongsTo, ForwardRelation, ReverseRelation,
+};
 
 // Re-export for convenience
 pub use terminusdb_woql2::{var, triple, type_, optional, and};

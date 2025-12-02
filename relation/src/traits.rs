@@ -1,6 +1,6 @@
 //! Compositional relation traits for generating typed WOQL constraints from model relationships
 
-use terminusdb_schema::TerminusDBModel;
+use terminusdb_schema::{EntityIDFor, TerminusDBModel};
 use terminusdb_woql2::prelude::{Query, Value};
 // Import macros so type_! macro can find them
 use terminusdb_woql2::{triple, typename};
@@ -111,9 +111,9 @@ where
     Target: TerminusDBModel,
 {
     let constraint = terminusdb_woql2::and!(
-        terminusdb_woql2::triple!(terminusdb_woql2::var!(source_var), field_name, terminusdb_woql2::var!(target_var)),
-        terminusdb_woql2::type_!(terminusdb_woql2::var!(source_var), Source),
-        terminusdb_woql2::type_!(terminusdb_woql2::var!(target_var), Target)
+        terminusdb_woql2::triple!(terminusdb_woql2::var!(source_var), field_name, terminusdb_woql2::var!(target_var)).into(),
+        terminusdb_woql2::type_!(terminusdb_woql2::var!(source_var), Source).into(),
+        terminusdb_woql2::type_!(terminusdb_woql2::var!(target_var), Target).into()
     );
     
     if is_optional {
@@ -136,9 +136,9 @@ pub fn generate_relation_constraints(
     let source_variable = Value::Variable(source_var.to_string());
     let target_variable = Value::Variable(target_var.to_string());
     let constraint = terminusdb_woql2::and!(
-        terminusdb_woql2::triple!(source_variable.clone(), field_name, target_variable.clone()),
-        terminusdb_woql2::type_!(source_variable.clone(), source_type),
-        terminusdb_woql2::type_!(target_variable, target_type)
+        terminusdb_woql2::triple!(source_variable.clone(), field_name, target_variable.clone()).into(),
+        terminusdb_woql2::type_!(source_variable.clone(), source_type).into(),
+        terminusdb_woql2::type_!(target_variable, target_type).into()
     );
     
     if is_optional {
@@ -188,36 +188,100 @@ where
     }
 }
 
+// ============================================================================
+// ORM Relation Traits
+// ============================================================================
+
+/// Trait for models that belong to (reference) entity T via a foreign key.
+///
+/// This is the "child" side of a relation - the side with the `EntityIDFor<T>` field.
+/// When `Child` has a field like `parent_id: EntityIDFor<Parent>`, this trait marks that relationship.
+///
+/// # Implementation
+/// The derive macro automatically implements this for each `EntityIDFor<T>` field:
+/// ```ignore
+/// impl BelongsTo<Parent, ChildFields::ParentId> for Child {
+///     fn parent_id(&self) -> Option<&EntityIDFor<Parent>> {
+///         Some(&self.parent_id)
+///     }
+/// }
+/// ```
+pub trait BelongsTo<T: TerminusDBModel, Field: RelationField = DefaultField> {
+    /// Get the field name for this relation.
+    fn field_name() -> &'static str {
+        Field::field_name()
+    }
+
+    /// Get the parent entity's ID from this model.
+    fn parent_id(&self) -> Option<&EntityIDFor<T>>;
+}
+
+/// Forward relation: Self has a field pointing to Target (HasMany or HasOne).
+///
+/// Use with `.with_field::<Target, Self::Fields::FieldName>()` in ORM queries.
+///
+/// # Implementation
+/// The derive macro automatically implements this for each `EntityIDFor<T>` field:
+/// ```ignore
+/// impl ForwardRelation<Wheel, CarFields::FrontWheel> for Car {}
+/// ```
+pub trait ForwardRelation<Target: TerminusDBModel, Field: RelationField> {
+    /// Get the field name for this relation.
+    fn field_name() -> &'static str {
+        Field::field_name()
+    }
+}
+
+/// Reverse relation: Self has a BelongsTo<Target> field (references Target).
+///
+/// Use with `.with::<Self>()` or `.with_via::<Self, Self::Fields::FieldName>()` in ORM queries.
+///
+/// - `.with::<Reply>()` on Comment query → loads all Replies with any BelongsTo<Comment>
+/// - `.with_via::<Doc, DocFields::Author>()` → loads only via specific field
+///
+/// # Implementation
+/// The derive macro generates two types of impls:
+/// - `ReverseRelation<T, SpecificField>` for each EntityIDFor<T> field (enables `.with_via()`)
+/// - `ReverseRelation<T, DefaultField>` for any type with at least one EntityIDFor<T> (enables `.with()`)
+///
+/// The `DefaultField` version acts as a marker saying "this type has at least one reference to T".
+pub trait ReverseRelation<Target: TerminusDBModel, Field: RelationField = DefaultField> {
+    /// Get the field name for this relation (or "default" for any-field queries).
+    fn field_name() -> &'static str {
+        Field::field_name()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_generate_relation_constraints() {
         // Test basic relation constraint generation
         let query = generate_relation_constraints(
             "posts",
-            "User", 
+            "User",
             "Post",
             "u",
             "p",
             false
         );
         println!("Generated query: {:?}", query);
-        
+
         // Test optional relation
         let optional_query = generate_relation_constraints(
             "manager",
             "User",
-            "User", 
+            "User",
             "u1",
             "u2",
             true
         );
         println!("Generated optional query: {:?}", optional_query);
     }
-    
-    #[test] 
+
+    #[test]
     fn test_default_field() {
         assert_eq!(DefaultField::field_name(), "default");
     }

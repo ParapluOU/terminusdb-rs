@@ -2,8 +2,9 @@
 
 use proc_macro2::TokenStream;
 use quote::{quote, format_ident};
-use syn::FieldsNamed;
+use syn::{FieldsNamed, Type, GenericArgument, PathArguments};
 use heck::AsUpperCamelCase;
+use std::collections::HashSet;
 
 /// Detect the crate context and generate appropriate module paths
 fn get_woql_path() -> TokenStream {
@@ -30,14 +31,149 @@ fn get_relation_path() -> Option<TokenStream> {
     Some(quote! { terminusdb_relation })
 }
 
+/// Information about an EntityIDFor<T> field
+struct EntityIdField {
+    /// The field identifier
+    field_ident: syn::Ident,
+    /// The field name as string
+    field_name: String,
+    /// The marker type name (PascalCase)
+    marker_type_name: syn::Ident,
+    /// The target type T in EntityIDFor<T>
+    target_type: Type,
+    /// Whether the field is optional (Option<EntityIDFor<T>>)
+    is_optional: bool,
+    /// Whether the field is a collection (Vec<EntityIDFor<T>>)
+    is_collection: bool,
+}
+
+/// Extract the inner type from Option<T>, returning (inner_type, true) or (original_type, false)
+fn unwrap_option_type(ty: &Type) -> (Type, bool) {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Option" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(inner)) = args.args.first() {
+                        return (inner.clone(), true);
+                    }
+                }
+            }
+        }
+    }
+    (ty.clone(), false)
+}
+
+/// Extract the inner type from Vec<T>, returning (inner_type, true) or (original_type, false)
+fn unwrap_vec_type(ty: &Type) -> (Type, bool) {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "Vec" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(inner)) = args.args.first() {
+                        return (inner.clone(), true);
+                    }
+                }
+            }
+        }
+    }
+    (ty.clone(), false)
+}
+
+/// Check if a type is EntityIDFor<T> and extract T
+fn extract_entity_id_target(ty: &Type) -> Option<Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "EntityIDFor" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(target)) = args.args.first() {
+                        return Some(target.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Analyze a field and extract EntityIDFor information if present
+fn analyze_field_for_entity_id(field: &syn::Field) -> Option<EntityIdField> {
+    let field_ident = field.ident.as_ref()?;
+    let field_name = field_ident.to_string();
+    let field_name_upper = AsUpperCamelCase(&field_name);
+    let marker_type_name = format_ident!("{}", field_name_upper.to_string());
+
+    let ty = &field.ty;
+
+    // Try direct EntityIDFor<T>
+    if let Some(target) = extract_entity_id_target(ty) {
+        return Some(EntityIdField {
+            field_ident: field_ident.clone(),
+            field_name,
+            marker_type_name,
+            target_type: target,
+            is_optional: false,
+            is_collection: false,
+        });
+    }
+
+    // Try Option<EntityIDFor<T>>
+    let (unwrapped, is_option) = unwrap_option_type(ty);
+    if is_option {
+        if let Some(target) = extract_entity_id_target(&unwrapped) {
+            return Some(EntityIdField {
+                field_ident: field_ident.clone(),
+                field_name,
+                marker_type_name,
+                target_type: target,
+                is_optional: true,
+                is_collection: false,
+            });
+        }
+        // Try Option<Vec<EntityIDFor<T>>>
+        let (vec_unwrapped, is_vec) = unwrap_vec_type(&unwrapped);
+        if is_vec {
+            if let Some(target) = extract_entity_id_target(&vec_unwrapped) {
+                return Some(EntityIdField {
+                    field_ident: field_ident.clone(),
+                    field_name,
+                    marker_type_name,
+                    target_type: target,
+                    is_optional: true,
+                    is_collection: true,
+                });
+            }
+        }
+    }
+
+    // Try Vec<EntityIDFor<T>>
+    let (vec_unwrapped, is_vec) = unwrap_vec_type(ty);
+    if is_vec {
+        if let Some(target) = extract_entity_id_target(&vec_unwrapped) {
+            return Some(EntityIdField {
+                field_ident: field_ident.clone(),
+                field_name,
+                marker_type_name,
+                target_type: target,
+                is_optional: false,
+                is_collection: true,
+            });
+        }
+    }
+
+    None
+}
+
 
 /// Generate RelationTo implementations for ALL struct fields
-/// 
-/// This function generates RelationTo implementations for every field in the struct,
-/// regardless of field type. The TerminusDBModel constraint in the RelationTo trait
-/// will cause compile errors at usage time for non-model types, while the blanket
-/// implementations for container types (Option, Vec, Box) will handle those cases
-/// automatically via Rust's trait resolution.
+///
+/// This function generates:
+/// 1. A nested `{StructName}Fields` module with marker types for each field
+/// 2. A type alias `impl Struct { pub type Fields = StructFields; }` for ergonomic access
+/// 3. `RelationTo<FieldType, StructFields::FieldName>` implementations for each field
+///
+/// The TerminusDBModel constraint in the RelationTo trait will cause compile errors
+/// at usage time for non-model types, while the blanket implementations for container
+/// types (Option, Vec, Box) will handle those cases automatically.
 pub fn generate_relation_impls(
     struct_name: &syn::Ident,
     fields_named: &FieldsNamed,
@@ -53,50 +189,54 @@ pub fn generate_relation_impls(
             return quote! {};
         }
     };
-    
+
     let woql_path = get_woql_path();
-    let mut impls = vec![];
-    let mut marker_types = vec![];
-    
-    // Generate RelationTo implementations for ALL fields
+    let mut field_markers = vec![];
+    let mut relation_to_impls = vec![];
+
+    // Generate the Fields module name
+    let fields_module_name = format_ident!("{}Fields", struct_name);
+
+    // Generate marker types and RelationTo implementations for ALL fields
     for field in &fields_named.named {
         let field_ident = match &field.ident {
             Some(ident) => ident,
             None => continue, // Skip tuple struct fields
         };
-        
+
         let field_name = field_ident.to_string();
         let field_name_upper = AsUpperCamelCase(&field_name);
         let field_type = &field.ty;
-        
-        // Generate marker type for this field
-        let marker_type_name = format_ident!("{}{field_name_upper}Relation", struct_name);
-        
-        // Define marker type and implement RelationField from external crate
-        marker_types.push(quote! {
-            /// Marker type for the #field_name relation field
+
+        // Generate marker type name (PascalCase of field name)
+        let marker_type_name = format_ident!("{}", field_name_upper.to_string());
+
+        // Define marker type inside the Fields module
+        field_markers.push(quote! {
+            /// Marker type for the `#field_name` relation field
+            #[derive(Debug, Clone, Copy)]
             pub struct #marker_type_name;
-            
+
             impl #relation_path::RelationField for #marker_type_name {
                 fn field_name() -> &'static str {
                     #field_name
                 }
             }
         });
-        
-        // Generate RelationTo implementation using external trait
-        let explicit_impl = if let Some(clause) = where_clause {
+
+        // Generate RelationTo implementation using the nested marker type
+        let marker_path = quote! { #fields_module_name::#marker_type_name };
+
+        let relation_to_impl = if let Some(clause) = where_clause {
             quote! {
-                impl #impl_generics #relation_path::RelationTo<#field_type, #marker_type_name> for #struct_name #ty_generics 
+                impl #impl_generics #relation_path::RelationTo<#field_type, #marker_path> for #struct_name #ty_generics
                 #clause
                 {
                     fn _constraints_with_vars_unchecked(source_var: &str, target_var: &str) -> #woql_path::prelude::Query {
-                        // Generate WOQL constraints inline - use context-aware paths
-                        // Use the helper function that works with string parameters
                         #relation_path::generate_relation_constraints(
                             #field_name,
                             &<#struct_name as terminusdb_schema::ToSchemaClass>::to_class(),
-                            stringify!(#field_type), // Convert type to string for now
+                            stringify!(#field_type),
                             source_var,
                             target_var,
                             false
@@ -106,14 +246,12 @@ pub fn generate_relation_impls(
             }
         } else {
             quote! {
-                impl #impl_generics #relation_path::RelationTo<#field_type, #marker_type_name> for #struct_name #ty_generics {
+                impl #impl_generics #relation_path::RelationTo<#field_type, #marker_path> for #struct_name #ty_generics {
                     fn _constraints_with_vars_unchecked(source_var: &str, target_var: &str) -> #woql_path::prelude::Query {
-                        // Generate WOQL constraints inline - use context-aware paths
-                        // Use the helper function that works with string parameters
                         #relation_path::generate_relation_constraints(
                             #field_name,
                             &<#struct_name as terminusdb_schema::ToSchemaClass>::to_class(),
-                            stringify!(#field_type), // Convert type to string for now
+                            stringify!(#field_type),
                             source_var,
                             target_var,
                             false
@@ -122,11 +260,144 @@ pub fn generate_relation_impls(
                 }
             }
         };
-        impls.push(explicit_impl);
+        relation_to_impls.push(relation_to_impl);
     }
-    
+
+    // =========================================================================
+    // Generate ORM relation impls for EntityIDFor<T> fields
+    // =========================================================================
+
+    let mut orm_relation_impls = vec![];
+    let mut seen_target_types = HashSet::new();
+
+    for field in &fields_named.named {
+        if let Some(entity_id_field) = analyze_field_for_entity_id(field) {
+            let field_ident = &entity_id_field.field_ident;
+            let _field_name = &entity_id_field.field_name;
+            let marker_type_name = &entity_id_field.marker_type_name;
+            let target_type = &entity_id_field.target_type;
+            let is_optional = entity_id_field.is_optional;
+            let is_collection = entity_id_field.is_collection;
+
+            let marker_path = quote! { #fields_module_name::#marker_type_name };
+
+            // Generate BelongsTo impl ONLY for non-collection fields
+            // Collections (Vec<EntityIDFor<T>>) don't have a single parent ID
+            if !is_collection {
+                let belongs_to_impl = if is_optional {
+                    if let Some(clause) = where_clause {
+                        quote! {
+                            impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics
+                            #clause
+                            {
+                                fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
+                                    self.#field_ident.as_ref()
+                                }
+                            }
+                        }
+                    } else {
+                        quote! {
+                            impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics {
+                                fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
+                                    self.#field_ident.as_ref()
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if let Some(clause) = where_clause {
+                        quote! {
+                            impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics
+                            #clause
+                            {
+                                fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
+                                    Some(&self.#field_ident)
+                                }
+                            }
+                        }
+                    } else {
+                        quote! {
+                            impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics {
+                                fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
+                                    Some(&self.#field_ident)
+                                }
+                            }
+                        }
+                    }
+                };
+                orm_relation_impls.push(belongs_to_impl);
+            }
+
+            // Generate ReverseRelation impl (field-specific, for .with_via())
+            let reverse_relation_impl = if let Some(clause) = where_clause {
+                quote! {
+                    impl #impl_generics #relation_path::ReverseRelation<#target_type, #marker_path> for #struct_name #ty_generics
+                    #clause
+                    {}
+                }
+            } else {
+                quote! {
+                    impl #impl_generics #relation_path::ReverseRelation<#target_type, #marker_path> for #struct_name #ty_generics {}
+                }
+            };
+            orm_relation_impls.push(reverse_relation_impl);
+
+            // Generate ForwardRelation impl
+            let forward_relation_impl = if let Some(clause) = where_clause {
+                quote! {
+                    impl #impl_generics #relation_path::ForwardRelation<#target_type, #marker_path> for #struct_name #ty_generics
+                    #clause
+                    {}
+                }
+            } else {
+                quote! {
+                    impl #impl_generics #relation_path::ForwardRelation<#target_type, #marker_path> for #struct_name #ty_generics {}
+                }
+            };
+            orm_relation_impls.push(forward_relation_impl);
+
+            // Track unique target types for DefaultField impl
+            // Use the quoted target type as a string key for deduplication
+            let target_key = quote! { #target_type }.to_string();
+            if !seen_target_types.contains(&target_key) {
+                seen_target_types.insert(target_key);
+
+                // Generate ReverseRelation<Target, DefaultField> for .with::<Self>() on Target queries
+                let default_reverse_impl = if let Some(clause) = where_clause {
+                    quote! {
+                        impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics
+                        #clause
+                        {}
+                    }
+                } else {
+                    quote! {
+                        impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics {}
+                    }
+                };
+                orm_relation_impls.push(default_reverse_impl);
+            }
+        }
+    }
+
+    // Generate the Fields module
+    // Note: Using `{StructName}Fields` module directly instead of `StructName::Fields`
+    // because inherent associated types are unstable and conflict with serde derives.
+    // Users should use: `CarFields::FrontWheels` instead of `Car::Fields::FrontWheels`
+    let fields_module = quote! {
+        /// Field marker types for `#struct_name` relations.
+        ///
+        /// Use these markers with `.with_field::<Target, #fields_module_name::FieldName>()`
+        /// to specify which relation field to traverse.
+        pub mod #fields_module_name {
+            use super::*;
+
+            #(#field_markers)*
+        }
+    };
+
     quote! {
-        #(#marker_types)*
-        #(#impls)*
+        #fields_module
+        #(#relation_to_impls)*
+        #(#orm_relation_impls)*
     }
 }
