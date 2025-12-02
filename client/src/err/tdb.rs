@@ -44,6 +44,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:BadDescriptorPath")]
     BadDescriptorPath(BadDescriptorPathError),
 
+    #[serde(rename = "api:SameDocumentIdsMutatedInOneTransaction")]
+    SameDocumentIdsMutatedInOneTransaction(SameDocumentIdsMutatedInOneTransactionError),
+
     Other(Value),
 
     #[default]
@@ -61,6 +64,7 @@ impl Display for ApiResponseError {
             ApiResponseError::InsertedSubdocumentAsDocument(error) => Display::fmt(error, f),
             ApiResponseError::InternalServerError(error) => Display::fmt(error, f),
             ApiResponseError::BadDescriptorPath(error) => Display::fmt(error, f),
+            ApiResponseError::SameDocumentIdsMutatedInOneTransaction(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -472,6 +476,22 @@ pub struct BadDescriptorPathError {
 impl Display for BadDescriptorPathError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Bad descriptor path: '{}'", self.descriptor)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SameDocumentIdsMutatedInOneTransactionError {
+    #[serde(rename = "api:duplicate_ids")]
+    pub duplicate_ids: Vec<String>,
+}
+
+impl Display for SameDocumentIdsMutatedInOneTransactionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Tried to mutate {} documents with the same ID in one transaction",
+            self.duplicate_ids.len()
+        )
     }
 }
 
