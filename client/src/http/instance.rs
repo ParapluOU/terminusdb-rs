@@ -943,6 +943,79 @@ impl super::client::TerminusDBHttpClient {
         self.insert_documents(models, args).await
     }
 
+    /// Updates multiple existing strongly-typed model instances in the database using HTTP PUT.
+    ///
+    /// This is the bulk equivalent of [`update_instance`](Self::update_instance). Unlike
+    /// [`insert_instances`](Self::insert_instances) which uses PUT with create=true (upsert),
+    /// this method uses PUT with create=false which requires all instances to already exist.
+    ///
+    /// Use this method when you need to update multiple existing instances efficiently,
+    /// such as batch updates to existing records.
+    ///
+    /// # Type Parameters
+    /// * The input must implement `IntoBoxedTDBInstances` (typically `Vec<Model>` or `&[Model]`)
+    ///
+    /// # Arguments
+    /// * `models` - Collection of strongly-typed model instances to update
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Returns
+    /// A `ResponseWithHeaders` containing:
+    /// - `data`: HashMap with instance IDs and update results
+    /// - `commit_id`: Optional commit ID from the TerminusDB-Data-Version header
+    ///
+    /// # Errors
+    /// Returns an error if any instance doesn't already exist in the database.
+    ///
+    /// # Example
+    /// ```rust
+    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// struct User { name: String, score: i32 }
+    ///
+    /// // Fetch existing users, update them, and save back
+    /// let mut users = client.list_instances::<User>(&spec, Some(100), None).await?;
+    /// for user in &mut users {
+    ///     user.score += 10;
+    /// }
+    /// let result = client.update_instances(users, args).await?;
+    /// ```
+    ///
+    /// # See Also
+    /// - [`update_instance`](Self::update_instance) - For single instance updates
+    /// - [`insert_instances`](Self::insert_instances) - For creating new instances (or upserting)
+    #[instrument(
+        name = "terminus.instance.update_multiple",
+        skip(self, models, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch
+        ),
+        err
+    )]
+    #[pseudonym::alias(update_many)]
+    pub async fn update_instances(
+        &self,
+        models: impl IntoBoxedTDBInstances,
+        mut args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        args.ty = DocumentType::Instance;
+
+        let mut instances = models.into_boxed().to_instance_tree_flatten(true);
+
+        for instance in &mut instances {
+            instance.set_random_key_prefix();
+            instance.capture = true;
+        }
+
+        // Kick out all references because they will lead to schema failure errors
+        instances.retain(|i| !i.is_reference());
+
+        let models = instances.iter().collect();
+
+        // Use PUT (create=false) - documents must exist
+        self.put_documents(models, args).await
+    }
+
     /// Retrieves and deserializes a strongly-typed model instance from the database.
     ///
     /// This is the **preferred method** for retrieving typed models from TerminusDB.
