@@ -1,0 +1,35 @@
+[package]
+name = "terminusdb-orm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "ActiveRecord-like ORM layer for TerminusDB"
+repository.workspace = true
+keywords = ["terminusdb", "orm", "database", "activerecord"]
+categories = ["database", "api-bindings"]
+
+[dependencies]
+terminusdb-client = { path = "../client" }
+terminusdb-schema = { path = "../schema" }
+terminusdb-relation = { path = "../relation" }
+
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1.89"
+
+[features]
+default = []
+## Enable test helpers for integration testing
+testing = []
+
+[dev-dependencies]
+tokio = { workspace = true }
+pretty_assertions = { workspace = true }
+terminusdb-schema-derive = { path = "../schema/derive", features = ["relations"] }
+terminusdb-woql2 = { path = "../woql2" }
+tracing.workspace = true
+terminusdb-bin = { path = "../bin" }

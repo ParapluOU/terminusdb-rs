@@ -1,0 +1,432 @@
+//! Comprehensive tests for ORM relation API
+//!
+//! This file defines all the syntax we want to support for relation loading.
+//! Tests are organized by feature and include both compile-time and runtime checks.
+
+use terminusdb_orm::prelude::*;
+
+// Required for TerminusDBModel derive
+use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema_derive::TerminusDBModel;
+
+use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// Test Models - Define a realistic domain model
+// ============================================================================
+
+/// A user in the system
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct User {
+    pub name: String,
+    pub email: String,
+}
+
+/// A blog post authored by a user
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct Post {
+    pub title: String,
+    pub content: String,
+    /// The author of this post (reverse relation to User)
+    pub author_id: EntityIDFor<User>,
+}
+
+/// A comment on a post, also by a user
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct Comment {
+    pub text: String,
+    /// The post this comment belongs to
+    pub post_id: EntityIDFor<Post>,
+    /// The user who wrote this comment
+    pub author_id: EntityIDFor<User>,
+}
+
+/// A document with multiple user references (author and reviewer)
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct Document {
+    pub title: String,
+    /// Primary author
+    pub author_id: EntityIDFor<User>,
+    /// Reviewer (different from author)
+    pub reviewer_id: EntityIDFor<User>,
+}
+
+/// A car with multiple wheel references (forward relations)
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct Car {
+    pub model: String,
+    pub front_left: EntityIDFor<Wheel>,
+    pub front_right: EntityIDFor<Wheel>,
+    pub back_left: EntityIDFor<Wheel>,
+    pub back_right: EntityIDFor<Wheel>,
+}
+
+/// A wheel (referenced by Car)
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct Wheel {
+    pub size: u32,
+    pub brand: String,
+}
+
+// ============================================================================
+// Trait Implementations - NOW AUTOMATICALLY DERIVED!
+// ============================================================================
+//
+// The TerminusDBModel derive macro now automatically generates:
+//
+// For each `EntityIDFor<T>` field:
+// - `BelongsTo<T, StructFields::FieldName>` - marks the foreign key relationship
+// - `ReverseRelation<T, StructFields::FieldName>` - enables `.with_via::<Self, Field>()`
+// - `ForwardRelation<T, StructFields::FieldName>` - enables `.with_field::<T, Field>()`
+//
+// For each unique target type T:
+// - `ReverseRelation<T, DefaultField>` - enables `.with::<Self>()` on T queries
+//
+// No manual implementations needed!
+
+// ============================================================================
+// Test: Basic Query Building
+// ============================================================================
+
+#[test]
+fn test_find_single_id() {
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id);
+    assert_eq!(query.len(), 1);
+}
+
+#[test]
+fn test_find_multiple_ids() {
+    let id1 = EntityIDFor::<User>::new("user1").unwrap();
+    let id2 = EntityIDFor::<User>::new("user2").unwrap();
+    let query = User::find_all([id1, id2]);
+    assert_eq!(query.len(), 2);
+}
+
+#[test]
+fn test_find_by_string() {
+    let query = User::find_by_string("User/user1");
+    assert_eq!(query.len(), 1);
+}
+
+#[test]
+fn test_find_all_by_strings() {
+    let query = User::find_all_by_strings(["User/user1", "User/user2"]);
+    assert_eq!(query.len(), 2);
+}
+
+// ============================================================================
+// Test: Reverse Relations - .with::<T>()
+// ============================================================================
+
+#[test]
+fn test_with_reverse_relation_single_field() {
+    // Post has one BelongsTo<User> field (author_id)
+    // .with::<Post>() should load all Posts where author_id matches
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id).with::<Post>();
+
+    // Check that the relation was registered
+    assert_eq!(query.relations().len(), 1);
+    match &query.relations()[0].direction {
+        RelationDirection::Reverse { via_field } => {
+            assert!(via_field.is_none(), "with::<T>() should not specify a field");
+        }
+        _ => panic!("Expected Reverse direction"),
+    }
+}
+
+#[test]
+fn test_with_reverse_relation_multiple_fields() {
+    // Document has TWO BelongsTo<User> fields (author_id, reviewer_id)
+    // .with::<Document>() should load Documents where EITHER field matches
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id).with::<Document>();
+
+    assert_eq!(query.relations().len(), 1);
+    match &query.relations()[0].direction {
+        RelationDirection::Reverse { via_field } => {
+            assert!(via_field.is_none(), "with::<T>() loads via any field");
+        }
+        _ => panic!("Expected Reverse direction"),
+    }
+}
+
+#[test]
+fn test_with_multiple_reverse_relations() {
+    // Load both Posts and Comments for a User
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id)
+        .with::<Post>()
+        .with::<Comment>();
+
+    assert_eq!(query.relations().len(), 2);
+}
+
+#[test]
+fn test_with_chained_reverse_relations() {
+    // Post -> Comments (nested relation)
+    let id = EntityIDFor::<Post>::new("post1").unwrap();
+    let query = Post::find(id).with::<Comment>();
+
+    assert_eq!(query.relations().len(), 1);
+}
+
+// ============================================================================
+// Test: Reverse Relations with Field - .with_via::<T, Field>()
+// ============================================================================
+
+#[test]
+fn test_with_via_specific_field() {
+    // Load only Documents where user is the AUTHOR (not reviewer)
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id)
+        .with_via::<Document, DocumentFields::AuthorId>();
+
+    assert_eq!(query.relations().len(), 1);
+    match &query.relations()[0].direction {
+        RelationDirection::Reverse { via_field } => {
+            assert_eq!(via_field.as_deref(), Some("author_id"));
+        }
+        _ => panic!("Expected Reverse direction"),
+    }
+}
+
+#[test]
+fn test_with_via_different_field() {
+    // Load only Documents where user is the REVIEWER
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id)
+        .with_via::<Document, DocumentFields::ReviewerId>();
+
+    assert_eq!(query.relations().len(), 1);
+    match &query.relations()[0].direction {
+        RelationDirection::Reverse { via_field } => {
+            assert_eq!(via_field.as_deref(), Some("reviewer_id"));
+        }
+        _ => panic!("Expected Reverse direction"),
+    }
+}
+
+#[test]
+fn test_with_via_both_fields_separately() {
+    // Load Documents where user is author AND where user is reviewer (separate queries)
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id)
+        .with_via::<Document, DocumentFields::AuthorId>()
+        .with_via::<Document, DocumentFields::ReviewerId>();
+
+    // Both relations are registered
+    assert_eq!(query.relations().len(), 2);
+}
+
+// ============================================================================
+// Test: Forward Relations - .with_field::<T, Field>()
+// ============================================================================
+
+#[test]
+fn test_with_field_forward_relation() {
+    // Car has explicit wheel fields - must specify which one
+    let id = EntityIDFor::<Car>::new("car1").unwrap();
+    let query = Car::find(id)
+        .with_field::<Wheel, CarFields::FrontLeft>();
+
+    assert_eq!(query.relations().len(), 1);
+    match &query.relations()[0].direction {
+        RelationDirection::Forward { field_name } => {
+            assert_eq!(field_name, "front_left");
+        }
+        _ => panic!("Expected Forward direction"),
+    }
+}
+
+#[test]
+fn test_with_field_multiple_forward_relations() {
+    // Load all four wheels
+    let id = EntityIDFor::<Car>::new("car1").unwrap();
+    let query = Car::find(id)
+        .with_field::<Wheel, CarFields::FrontLeft>()
+        .with_field::<Wheel, CarFields::FrontRight>()
+        .with_field::<Wheel, CarFields::BackLeft>()
+        .with_field::<Wheel, CarFields::BackRight>();
+
+    assert_eq!(query.relations().len(), 4);
+}
+
+// ============================================================================
+// Test: Compile-time Safety (these are compile-time tests)
+// ============================================================================
+
+#[test]
+fn test_compile_time_safety_documentation() {
+    // The following would NOT compile - documented here for reference:
+
+    // 1. Forward relation without field marker:
+    // Car::find(id).with::<Wheel>();
+    // Error: Wheel: ReverseRelation<Car> is not satisfied
+
+    // 2. Reverse relation with wrong parent:
+    // Post::find(id).with::<User>();
+    // Error: User: ReverseRelation<Post> is not satisfied
+    // (User doesn't have BelongsTo<Post>)
+
+    // 3. Forward relation with wrong field:
+    // Car::find(id).with_field::<Wheel, UserFields::Name>();
+    // Error: Car: ForwardRelation<Wheel, UserFields::Name> is not satisfied
+
+    // 4. Type-safe IDs:
+    // let user_id = EntityIDFor::<User>::new("u1").unwrap();
+    // Post::find(user_id);
+    // Error: expected EntityIDFor<Post>, found EntityIDFor<User>
+}
+
+// ============================================================================
+// Test: Query Options
+// ============================================================================
+
+#[test]
+fn test_query_with_unfold() {
+    let id = EntityIDFor::<User>::new("user1").unwrap();
+    let query = User::find(id).unfold();
+    // unfold is set (we can't easily check this without accessing private fields)
+    assert_eq!(query.len(), 1);
+}
+
+// ============================================================================
+// Test: Mixed Forward and Reverse Relations
+// ============================================================================
+
+#[test]
+fn test_mixed_relation_types() {
+    // This would be a complex query combining both relation types
+    // For now, just verify they can be chained (even if semantically unusual)
+
+    // Example: If we had a model with both forward and reverse relations
+    // we could chain both types of with calls
+}
+
+// ============================================================================
+// Future: Integration Tests (require running TerminusDB)
+// ============================================================================
+
+// These tests verify actual query execution and data loading
+// They are marked #[ignore] and require the `testing` feature
+
+#[cfg(feature = "testing")]
+mod integration {
+    use super::*;
+    use terminusdb_orm::testing::TestDb;
+    use terminusdb_client::DocumentInsertArgs;
+
+    #[tokio::test]
+    #[ignore = "Requires running TerminusDB instance"]
+    async fn test_execute_with_reverse_relation() {
+        let test_db = TestDb::new("orm_reverse_relation_test").await.unwrap();
+        let client = test_db.client();
+        let spec = test_db.spec();
+
+        // Insert schemas
+        let schema_args = DocumentInsertArgs {
+            spec: spec.clone(),
+            ..Default::default()
+        };
+
+        client.insert_schema(&User::to_schema(), schema_args.clone()).await.unwrap();
+        client.insert_schema(&Post::to_schema(), schema_args.clone()).await.unwrap();
+
+        // Insert a user
+        let user = User {
+            name: "Alice".to_string(),
+            email: "alice@example.com".to_string(),
+        };
+        let user_result = client.save_instance(&user, schema_args.clone()).await.unwrap();
+        let user_id = user_result.root_ref::<User>().unwrap();
+
+        // Insert posts by that user
+        let post1 = Post {
+            title: "First Post".to_string(),
+            content: "Hello world".to_string(),
+            author_id: user_id.clone(),
+        };
+        let post2 = Post {
+            title: "Second Post".to_string(),
+            content: "Another post".to_string(),
+            author_id: user_id.clone(),
+        };
+        client.save_instance(&post1, schema_args.clone()).await.unwrap();
+        client.save_instance(&post2, schema_args.clone()).await.unwrap();
+
+        // Query user with posts
+        let result = User::find(user_id)
+            .with::<Post>()
+            .with_client(client)
+            .execute(&spec)
+            .await
+            .unwrap();
+
+        // Verify results
+        let users: Vec<User> = result.get().unwrap();
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].name, "Alice");
+
+        // TODO: Once relation loading is implemented, verify posts are loaded
+        // let posts: Vec<Post> = result.get().unwrap();
+        // assert_eq!(posts.len(), 2);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running TerminusDB instance"]
+    async fn test_execute_with_via_specific_field() {
+        let test_db = TestDb::new("orm_with_via_test").await.unwrap();
+        let client = test_db.client();
+        let spec = test_db.spec();
+
+        // Insert schemas
+        let schema_args = DocumentInsertArgs {
+            spec: spec.clone(),
+            ..Default::default()
+        };
+
+        client.insert_schema(&User::to_schema(), schema_args.clone()).await.unwrap();
+        client.insert_schema(&Document::to_schema(), schema_args.clone()).await.unwrap();
+
+        // Insert two users
+        let alice = User { name: "Alice".to_string(), email: "alice@example.com".to_string() };
+        let bob = User { name: "Bob".to_string(), email: "bob@example.com".to_string() };
+
+        let alice_result = client.save_instance(&alice, schema_args.clone()).await.unwrap();
+        let bob_result = client.save_instance(&bob, schema_args.clone()).await.unwrap();
+
+        let alice_id = alice_result.root_ref::<User>().unwrap();
+        let bob_id = bob_result.root_ref::<User>().unwrap();
+
+        // Insert document: Alice is author, Bob is reviewer
+        let doc = Document {
+            title: "Important Document".to_string(),
+            author_id: alice_id.clone(),
+            reviewer_id: bob_id.clone(),
+        };
+        client.save_instance(&doc, schema_args.clone()).await.unwrap();
+
+        // Query Alice's authored documents (should find the doc)
+        let result = User::find(alice_id.clone())
+            .with_via::<Document, DocumentFields::AuthorId>()
+            .with_client(client.clone())
+            .execute(&spec)
+            .await
+            .unwrap();
+
+        // TODO: Verify doc is in result
+
+        // Query Alice's reviewed documents (should find nothing)
+        let result2 = User::find(alice_id)
+            .with_via::<Document, DocumentFields::ReviewerId>()
+            .with_client(client)
+            .execute(&spec)
+            .await
+            .unwrap();
+
+        // TODO: Verify no docs in result
+    }
+}

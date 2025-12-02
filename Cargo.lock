@@ -138,9 +138,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.88"
+version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e539d3fca749fcee5236ab05e93a52867dd549cc157c8cb7f99595f3cedffdb5"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
 dependencies = [
  "proc-macro2 1.0.95",
  "quote 1.0.40",
@@ -733,7 +733,16 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a49173b84e034382284f27f1af4dcbbd231ffa358c0fe316541a7337f376a35"
 dependencies = [
- "dirs-sys",
+ "dirs-sys 0.4.1",
+]
+
+[[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys 0.5.0",
 ]
 
 [[package]]
@@ -744,8 +753,20 @@ checksum = "520f05a5cbd335fae5a99ff7a6ab8627577660ee5cfd6a94a6a929b52ff0321c"
 dependencies = [
  "libc",
  "option-ext",
- "redox_users",
+ "redox_users 0.4.6",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users 0.5.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2214,6 +2235,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox_users"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
+dependencies = [
+ "getrandom 0.2.16",
+ "libredox",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3183,6 +3215,9 @@ dependencies = [
 name = "terminusdb-bin"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "terminusdb-client",
+ "tokio 1.45.1",
  "which",
 ]
 
@@ -3241,6 +3276,7 @@ dependencies = [
  "subprocess",
  "tap",
  "tempfile",
+ "terminusdb-bin",
  "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
@@ -3260,6 +3296,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dirs",
+ "futures",
  "mime_guess",
  "nix",
  "parking_lot",
@@ -3271,6 +3309,8 @@ dependencies = [
  "terminusdb-bin",
  "terminusdb-client",
  "terminusdb-schema",
+ "terminusdb-schema-derive",
+ "terminusdb-types",
  "thiserror 1.0.69",
  "tokio 1.45.1",
  "tokio-test 0.4.4",
@@ -3300,6 +3340,26 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "terminusdb-orm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "terminusdb-bin",
+ "terminusdb-client",
+ "terminusdb-relation",
+ "terminusdb-schema",
+ "terminusdb-schema-derive",
+ "terminusdb-woql2",
+ "thiserror 1.0.69",
+ "tokio 1.45.1",
+ "tracing",
 ]
 
 [[package]]
@@ -3387,6 +3447,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "terminusdb-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

@@ -58,3 +58,9 @@ impl FromInstanceProperty for GraphType {
         todo!()
     }
 }
+
+impl crate::ToSchemaClass for GraphType {
+    fn to_class() -> String {
+        STRING.to_string()
+    }
+}
