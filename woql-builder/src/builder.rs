@@ -105,7 +105,7 @@ impl WoqlBuilder {
             subject: subject.into_woql2_node_value(),
             predicate: predicate.into_woql2_node_value(),
             object: object.into_woql2_value(),
-            graph: GraphType::Instance,
+            graph: Some(GraphType::Instance),
         });
 
         self.query = match self.query.take() {
@@ -711,7 +711,7 @@ impl WoqlBuilder {
             subject: subject.into_woql2_node_value(),
             predicate: predicate.into_woql2_node_value(),
             object: object.into_woql2_value(),
-            graph: GraphType::Instance, // Add graph support later if needed
+            graph: Some(GraphType::Instance), // Add graph support later if needed
         });
         self.add_query_component(add_triple_query)
     }
@@ -728,7 +728,7 @@ impl WoqlBuilder {
             subject: subject.into_woql2_node_value(),
             predicate: predicate.into_woql2_node_value(),
             object: object.into_woql2_value(),
-            graph: GraphType::Instance, // Add graph support later if needed
+            graph: Some(GraphType::Instance), // Add graph support later if needed
         });
         self.add_query_component(delete_triple_query)
     }
@@ -752,7 +752,7 @@ impl WoqlBuilder {
             subject: subject.into_woql2_node_value(),
             predicate: predicate.into_woql2_node_value(),
             object: object.into_woql2_value(),
-            graph: graph.map(|g| g.into()).unwrap_or_default(),
+            graph: graph.map(|g| g.into()),
         });
         self.add_query_component(added_triple_query)
     }

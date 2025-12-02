@@ -158,7 +158,7 @@ impl ToDSL for Triple {
         ];
         
         // Only add graph parameter if it's not the default (Instance)
-        if self.graph != GraphType::Instance {
+        if self.graph != Some(GraphType::Instance) {
             args.push(escape_string(&format!("{:?}", self.graph).to_lowercase()));
         }
         

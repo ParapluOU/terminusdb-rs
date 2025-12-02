@@ -14,8 +14,8 @@ pub struct Triple {
     pub predicate: NodeValue,
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
-    /// An optional graph (either 'instance' or 'schema')
-    pub graph: GraphType,
+    /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    pub graph: Option<GraphType>,
 }
 
 /// Specify an edge to add to the graph.
@@ -28,8 +28,8 @@ pub struct AddTriple {
     pub predicate: NodeValue,
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
-    /// An optional graph (either 'instance' or 'schema')
-    pub graph: GraphType,
+    /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    pub graph: Option<GraphType>,
 }
 
 /// Specify an edge pattern which was *added* at *this commit*.
@@ -42,8 +42,8 @@ pub struct AddedTriple {
     pub predicate: NodeValue,
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
-    /// An optional graph (either 'instance' or 'schema')
-    pub graph: GraphType,
+    /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    pub graph: Option<GraphType>,
 }
 
 /// Specify an edge pattern to remove from the graph.
@@ -56,8 +56,8 @@ pub struct DeleteTriple {
     pub predicate: NodeValue,
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
-    /// An optional graph (either 'instance' or 'schema')
-    pub graph: GraphType,
+    /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    pub graph: Option<GraphType>,
 }
 
 /// Specify an edge pattern which was *deleted* at *this commit*.
@@ -70,8 +70,8 @@ pub struct DeletedTriple {
     pub predicate: NodeValue,
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
-    /// An optional graph (either 'instance' or 'schema')
-    pub graph: GraphType,
+    /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    pub graph: Option<GraphType>,
 }
 
 // Note: Link/Data types are similar to Triple but restrict the object type.

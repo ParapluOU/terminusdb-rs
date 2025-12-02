@@ -155,7 +155,7 @@ impl<T> HalfPath<T> {
             subject: crate::macros::into_node_value(self.current_var.clone()),
             predicate: crate::macros::into_node_value("rdf:type"),
             object: crate::macros::into_value(format!("@schema:{}", std::any::type_name::<T>().split("::").last().unwrap_or("Node"))),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         });
         
         self.accumulated_queries.push(type_constraint);
@@ -197,7 +197,7 @@ impl<T> HalfPathDirection<T> {
                     subject: crate::macros::into_node_value(self.source_var.clone()),
                     predicate: crate::macros::into_node_value(pred),
                     object: crate::macros::into_value(target_var.clone()),
-                    graph: terminusdb_schema::GraphType::Instance,
+                    graph: Some(terminusdb_schema::GraphType::Instance),
                 })
             },
             PathDirection::Backward => {
@@ -210,7 +210,7 @@ impl<T> HalfPathDirection<T> {
                     subject: crate::macros::into_node_value(self.source_var.clone()),
                     predicate: crate::macros::into_node_value(pred),
                     object: crate::macros::into_value(target_var.clone()),
-                    graph: terminusdb_schema::GraphType::Instance,
+                    graph: Some(terminusdb_schema::GraphType::Instance),
                 })
             }
         };
@@ -220,14 +220,14 @@ impl<T> HalfPathDirection<T> {
             subject: crate::macros::into_node_value(self.source_var.clone()),
             predicate: crate::macros::into_node_value("rdf:type"),
             object: crate::macros::into_value(format!("@schema:{}", std::any::type_name::<T>().split("::").last().unwrap_or("Node"))),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         });
         
         let target_type = Query::Triple(Triple {
             subject: crate::macros::into_node_value(target_var.clone()),
             predicate: crate::macros::into_node_value("rdf:type"),
             object: crate::macros::into_value(format!("@schema:{}", std::any::type_name::<U>().split("::").last().unwrap_or("Node"))),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         });
         
         let mut queries = self.accumulated_queries;

@@ -41,6 +41,7 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 use anyhow::{Context, Result};
+use terminusdb_woql2::prelude::FromTDBInstance;
 
 // Embed the bundled JavaScript at compile time
 const BUNDLED_SCRIPT: &str = include_str!("../scripts/parse-woql.bundle.js");
@@ -160,7 +161,7 @@ pub fn parse_js_woql(query: &str) -> Result<serde_json::Value> {
 pub fn parse_js_woql_to_query(query: &str) -> Result<terminusdb_woql2::query::Query> {
     let json_ld = parse_js_woql(query)?;
 
-    let woql_query: terminusdb_woql2::query::Query = serde_json::from_value(json_ld)
+    let woql_query: terminusdb_woql2::query::Query = terminusdb_woql2::query::Query::from_json(json_ld)
         .context("Failed to deserialize JSON-LD into terminusdb_woql2::Query")?;
 
     Ok(woql_query)

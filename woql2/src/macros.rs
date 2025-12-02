@@ -204,7 +204,7 @@ macro_rules! triple {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -832,7 +832,7 @@ macro_rules! link {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_node_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -859,7 +859,7 @@ macro_rules! data_triple {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_data_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1751,7 +1751,7 @@ macro_rules! add_triple {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1778,7 +1778,7 @@ macro_rules! added_triple {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1805,7 +1805,7 @@ macro_rules! delete_triple {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1832,7 +1832,7 @@ macro_rules! deleted_triple {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1859,7 +1859,7 @@ macro_rules! add_link {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_node_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1886,7 +1886,7 @@ macro_rules! added_link {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_node_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1913,7 +1913,7 @@ macro_rules! add_data {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_data_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1940,7 +1940,7 @@ macro_rules! added_data {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_data_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1967,7 +1967,7 @@ macro_rules! delete_link {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_node_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
@@ -1994,7 +1994,7 @@ macro_rules! deleted_link {
             subject: $crate::macros::into_node_value($subject),
             predicate: $crate::macros::into_node_value($predicate),
             object: $crate::macros::into_node_value($object),
-            graph: terminusdb_schema::GraphType::Instance,
+            graph: Some(terminusdb_schema::GraphType::Instance),
         })
     };
     ($subject:expr, $predicate:expr, $object:expr, $graph:expr) => {
