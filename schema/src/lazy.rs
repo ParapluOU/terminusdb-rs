@@ -90,6 +90,29 @@ impl<T: TerminusDBModel> TdbLazy<T> {
     pub fn take_expect(self) -> T {
         *self.data.expect("TdbLazy data not loaded")
     }
+
+    /// Convert this TdbLazy to a reference-only variant, discarding loaded data.
+    /// This is a no-op if the data is not loaded.
+    ///
+    /// Useful to prevent nested models from being re-saved in a transaction
+    /// when they already exist in the database.
+    ///
+    /// # Panics
+    /// Panics if neither ID nor data is present (cannot create a reference without an ID).
+    pub fn make_ref(&mut self) {
+        if self.data.is_some() {
+            // Ensure we have an ID before discarding data
+            if self.id.is_none() {
+                // Try to get ID from the data before discarding
+                if let Some(id) = self.data.as_ref().and_then(|d| d.instance_id()) {
+                    self.id = Some(id);
+                } else {
+                    panic!("Cannot make_ref: TdbLazy has data but no ID (lexical key not yet computed?)");
+                }
+            }
+            self.data = None;
+        }
+    }
 }
 
 impl<T: TerminusDBModel> From<T> for TdbLazy<T> {
