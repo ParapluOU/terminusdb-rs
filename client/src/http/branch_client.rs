@@ -369,6 +369,12 @@ impl BranchClient {
         self.client.log(&self.working_spec, opts).await
     }
 
+    /// Get the latest commit ID for the working branch
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn get_latest_commit_id(&self) -> anyhow::Result<CommitId> {
+        self.client.get_latest_commit_id(&self.working_spec).await
+    }
+
     /// Get instance history
     pub async fn get_instance_history<I: TerminusDBModel>(
         &self,

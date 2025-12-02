@@ -64,6 +64,53 @@ impl super::client::TerminusDBHttpClient {
         Err(anyhow::anyhow!("log not implemented for WASM"))
     }
 
+    /// Get the latest commit ID for a branch
+    ///
+    /// This is a convenience method that retrieves only the most recent commit
+    /// from the branch log. Returns the commit identifier as a `CommitId`.
+    ///
+    /// # Arguments
+    /// * `spec` - Branch specification indicating which branch to query
+    ///
+    /// # Returns
+    /// The commit identifier of the latest commit (HEAD)
+    ///
+    /// # Example
+    /// ```rust
+    /// let latest = client.get_latest_commit_id(&branch_spec).await?;
+    /// println!("Latest commit: {}", latest);
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.log.get_latest_commit_id",
+        skip(self),
+        fields(
+            db = %spec.db,
+            branch = ?spec.branch
+        ),
+        err
+    )]
+    pub async fn get_latest_commit_id(&self, spec: &BranchSpec) -> anyhow::Result<crate::CommitId> {
+        let opts = LogOpts {
+            offset: None,
+            count: Some(1),
+            verbose: false,
+        };
+
+        let entries = self.log(spec, opts).await?;
+
+        entries
+            .into_iter()
+            .next()
+            .map(|entry| crate::CommitId::new(entry.identifier))
+            .ok_or_else(|| anyhow::anyhow!("No commits found in branch"))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub async fn get_latest_commit_id(&self, _spec: &BranchSpec) -> anyhow::Result<crate::CommitId> {
+        Err(anyhow::anyhow!("get_latest_commit_id not implemented for WASM"))
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[instrument(
         name = "terminus.log.iterate",

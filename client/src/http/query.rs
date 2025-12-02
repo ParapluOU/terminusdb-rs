@@ -11,7 +11,7 @@ use {
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},
     std::{collections::HashMap, fmt::Debug, time::{Duration, Instant}},
-    terminusdb_schema::{ToJson, ToTDBInstance, ToTDBSchema},
+    terminusdb_schema::{ToJson, ToTDBInstance, ToTDBSchema, FromTDBInstance},
     terminusdb_woql2::{prelude::Query as Woql2Query, dsl::ToDSL},
     terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
 };
@@ -234,13 +234,13 @@ impl super::client::TerminusDBHttpClient {
         let (json_query, parsed_query) = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
             // If it's valid JSON, use it directly as the query payload
             // Try to parse it back to a Query for storage, but don't fail if it can't be parsed
-            let query_opt = serde_json::from_value::<Woql2Query>(json_value.clone()).ok();
+            let query_opt = Woql2Query::from_json(json_value.clone()).ok();
             (json_value, query_opt)
         } else {
-            // If it's not valid JSON, parse as WOQL JS syntax and convert to JSON
-            let query = terminusdb_woql_js::parse_js_woql_to_query(query_string)?;
-            let json = query.to_json();
-            (json, Some(query))
+            // If it's not valid JSON, parse as WOQL JS syntax and convert to JSON-LD
+            let json_ld = terminusdb_woql_js::parse_js_woql(query_string)?;
+            let query = Woql2Query::from_json(json_ld.clone()).ok();
+            (json_ld, query)
         };
         
         // Create operation entry
@@ -403,13 +403,13 @@ impl super::client::TerminusDBHttpClient {
         let (json_query, parsed_query) = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
             // If it's valid JSON, use it directly as the query payload
             // Try to parse it back to a Query for storage, but don't fail if it can't be parsed
-            let query_opt = serde_json::from_value::<Woql2Query>(json_value.clone()).ok();
+            let query_opt = Woql2Query::from_json(json_value.clone()).ok();
             (json_value, query_opt)
         } else {
-            // If it's not valid JSON, parse as WOQL JS syntax and convert to JSON
-            let query = terminusdb_woql_js::parse_js_woql_to_query(query_string)?;
-            let json = query.to_json();
-            (json, Some(query))
+            // If it's not valid JSON, parse as WOQL JS syntax and convert to JSON-LD
+            let json_ld = terminusdb_woql_js::parse_js_woql(query_string)?;
+            let query = Woql2Query::from_json(json_ld.clone()).ok();
+            (json_ld, query)
         };
         
 
@@ -696,6 +696,73 @@ impl super::client::TerminusDBHttpClient {
             },
         )
          */
+        if let Some(binding) = result.bindings.first() {
+            let CountResultBinding { value } = binding
+                .get(&*count_var)
+                .ok_or_else(|| anyhow::anyhow!("Count variable not found in result"))?;
+
+            return Ok(*value as usize);
+        }
+
+        Ok(0)
+    }
+
+    /// Count the number of valid commits in a database.
+    ///
+    /// This method counts all commits of type `ValidCommit` in the specified database's
+    /// commit graph by querying the `_commits` collection.
+    ///
+    /// # Arguments
+    /// * `spec` - Branch specification identifying the database
+    ///
+    /// # Returns
+    /// The number of valid commits in the database
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::{TerminusDBHttpClient, BranchSpec};
+    /// # async fn example() -> anyhow::Result<()> {
+    /// # let client = TerminusDBHttpClient::local_node();
+    /// let spec = BranchSpec::with_branch("my_database", "main");
+    /// let count = client.commits_count(&spec).await?;
+    /// println!("Database has {} commits", count);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn commits_count(
+        &self,
+        spec: &BranchSpec,
+    ) -> anyhow::Result<usize> {
+        let count_var = vars!("Count");
+        let commit_var = vars!("Commit");
+
+        // Build path to the _commits collection for this database
+        // Format: organization/database/local/_commits
+        let commits_collection = format!("{}/{}/local/_commits", self.org, spec.db);
+
+        // Build a query to count ValidCommit instances in the _commits collection
+        let query = WoqlBuilder::new()
+            .triple(commit_var, "rdf:type", "@schema:ValidCommit")
+            .count(count_var.clone())
+            .select(vec![count_var.clone()])
+            .using(commits_collection)
+            .finalize();
+
+        #[derive(Deserialize, Debug)]
+        struct CountResultBinding {
+            #[serde(rename = "@value")]
+            value: u64,
+        }
+
+        // Execute the query
+        let result = self
+            .query::<std::collections::HashMap<String, CountResultBinding>>(
+                Some(spec.clone()),
+                query,
+            )
+            .await?;
+
+        // Extract count from the result
         if let Some(binding) = result.bindings.first() {
             let CountResultBinding { value } = binding
                 .get(&*count_var)
