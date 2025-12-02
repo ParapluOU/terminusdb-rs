@@ -28,14 +28,21 @@ impl<'a> UrlBuilder<'a> {
         self
     }
 
-    /// Add a database path (handles both normal and commit-based paths)
+    /// Add a database path (handles commit, branch, and default paths)
     pub fn database(mut self, spec: &crate::spec::BranchSpec) -> Self {
         if let Some(commit_id) = spec.commit_id() {
             self.parts.push(format!(
                 "{}/{}/local/commit/{}",
                 self.org, spec.db, commit_id
             ));
+        } else if let Some(branch) = &spec.branch {
+            // Include branch in path when explicitly specified
+            self.parts.push(format!(
+                "{}/{}/local/branch/{}",
+                self.org, spec.db, branch
+            ));
         } else {
+            // Default: just org/db (uses main branch)
             self.parts.push(format!("{}/{}", self.org, spec.db));
         }
         self

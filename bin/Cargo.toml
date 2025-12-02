@@ -9,6 +9,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+anyhow.workspace = true
+terminusdb-client = { version = "0.1.0", path = "../client" }
+tokio = { workspace = true, features = ["time"] }
 
 [build-dependencies]
 which = "6.0"

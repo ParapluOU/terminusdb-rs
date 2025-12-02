@@ -19,7 +19,7 @@
 //! let status = run_terminusdb(&["--version"]).expect("Failed to run TerminusDB");
 //! ```
 //!
-//! ## Example (High-level API)
+//! ## Example (High-level CLI API)
 //!
 //! ```no_run
 //! use terminusdb_bin::api::{TerminusDB, DbSpec};
@@ -31,6 +31,26 @@
 //! client.db().create(spec, Default::default())?;
 //! # Ok::<(), std::io::Error>(())
 //! ```
+//!
+//! ## Example (Server Management API)
+//!
+//! ```no_run
+//! use terminusdb_bin::TerminusDBServer;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     // Quick test server (in-memory, quiet)
+//!     let server = TerminusDBServer::test().await?;
+//!     let client = server.client().await?;
+//!     println!("Connected to TerminusDB");
+//!
+//!     // Or use a shared instance across tests
+//!     let server = TerminusDBServer::test_instance().await?;
+//!     let client = server.client().await?;
+//!
+//!     Ok(())
+//! }
+//! ```
 
 use std::fs;
 use std::io::Write;
@@ -38,6 +58,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 pub mod api;
+pub mod server;
+
+// Re-export server API for convenience
+pub use server::{start_server, with_server, ServerOptions, TerminusDBServer};
 
 /// The embedded TerminusDB binary.
 /// This is compiled during the build process and embedded into this crate.

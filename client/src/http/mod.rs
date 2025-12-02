@@ -28,6 +28,7 @@
 
 // Public modules
 pub mod branch;
+pub mod branch_client;
 pub mod change_listener;
 pub mod changeset;
 pub mod client;
@@ -40,6 +41,7 @@ pub mod helpers;
 pub mod insert_result;
 pub mod instance;
 pub mod log;
+pub mod merge_branch;
 pub mod organization;
 pub mod query;
 pub mod remote;
@@ -59,10 +61,12 @@ pub(crate) mod sse_manager;
 pub mod concurrency_limiter;
 
 // Re-export main types and traits
+pub use branch_client::BranchClient;
 pub use change_listener::ChangeListener;
 pub use changeset::{ChangesetEvent, ChangesetCommitInfo, DocumentChange, MetadataInfo};
 pub use client::TerminusDBHttpClient;
 pub use document::DeleteOpts;
+pub use merge_branch::MergeBranchOptions;
 pub use graphql::{GraphQLRequest, GraphQLResponse, GraphQLError};
 pub use helpers::{
     dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema,
