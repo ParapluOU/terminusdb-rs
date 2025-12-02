@@ -9,6 +9,16 @@
         "TERMINUSDB_USER": "admin",
         "TERMINUSDB_PASSWORD": "root"
       }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--browser",
+        "firefox",
+        "--isolated",
+        "--ignore-https-errors"
+      ]
     }
   }
 }
