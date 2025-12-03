@@ -2,27 +2,26 @@
 mod tests {
     use terminusdb_woql2::prelude::*;
     use terminusdb_client::TerminusDBHttpClient;
-    use std::sync::{Arc, RwLock};
-    
+
     #[tokio::test]
     async fn test_last_query_initial_state() {
         let client = TerminusDBHttpClient::local_node().await;
-        
+
         // Initially, there should be no last query
         assert!(client.last_query().is_none());
         assert!(client.last_query_json().is_none());
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_query_string_dsl_storage() {
         let client = TerminusDBHttpClient::local_node().await;
-        
+
         // Initially no query should be stored
         assert!(client.last_query().is_none());
-        
+
         // Try to execute a DSL query string (will fail due to no database, but should store the parsed query)
         let dsl_query = r#"and()"#; // Simple empty And query
-        let _result = client.query_string::<serde_json::Value>(None, dsl_query).await;
+        let _result = client.query_string::<serde_json::Value>(None, dsl_query, None).await;
         
         // The query should have been parsed and stored even if execution failed
         let stored_query = client.last_query();
@@ -57,18 +56,18 @@ mod tests {
         assert!(dsl_result.is_err());
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_last_query_clone_sharing() {
         let client = TerminusDBHttpClient::local_node().await;
         let client_clone = client.clone();
-        
+
         // Initially both should have no last query
         assert!(client.last_query().is_none());
         assert!(client_clone.last_query().is_none());
-        
+
         // Execute a query on one client
         let dsl_query = r#"and()"#;
-        let _result = client.query_string::<serde_json::Value>(None, dsl_query).await;
+        let _result = client.query_string::<serde_json::Value>(None, dsl_query, None).await;
         
         // Both client and clone should see the same query (shared Arc)
         let query1 = client.last_query();

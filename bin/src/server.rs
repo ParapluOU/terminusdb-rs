@@ -170,6 +170,56 @@ impl TerminusDBServer {
         client.info().await?;
         Ok(client)
     }
+
+    /// Run a test with a temporary database that is automatically cleaned up.
+    ///
+    /// Creates a uniquely-named database, passes the client and BranchSpec to the closure,
+    /// and deletes the database when done (even if the test fails/panics).
+    ///
+    /// This enables safe parallel test execution since each test gets its own database.
+    ///
+    /// # Arguments
+    ///
+    /// * `prefix` - A prefix for the database name (e.g., "test_something")
+    /// * `f` - An async closure that receives the client and branch spec
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use terminusdb_bin::TerminusDBServer;
+    ///
+    /// #[tokio::test]
+    /// async fn test_something() -> anyhow::Result<()> {
+    ///     let server = TerminusDBServer::test_instance().await?;
+    ///
+    ///     server.with_tmp_db("test_something", |client, spec| async move {
+    ///         // Your test code here
+    ///         // Database is automatically cleaned up when this closure returns!
+    ///         Ok(())
+    ///     }).await
+    /// }
+    /// ```
+    pub async fn with_tmp_db<F, Fut, T>(&self, prefix: &str, f: F) -> anyhow::Result<T>
+    where
+        F: FnOnce(TerminusDBHttpClient, terminusdb_client::BranchSpec) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<T>>,
+    {
+        use uuid::Uuid;
+
+        let db_name = format!("{}_{}", prefix, Uuid::new_v4().simple());
+        let client = self.client().await?;
+        client.ensure_database(&db_name).await?;
+
+        let spec = terminusdb_client::BranchSpec::with_branch(&db_name, "main");
+
+        // Run the test closure
+        let result = f(client.clone(), spec).await;
+
+        // Always cleanup, regardless of test success/failure
+        let _ = client.delete_database(&db_name).await;
+
+        result
+    }
 }
 
 impl Drop for TerminusDBServer {

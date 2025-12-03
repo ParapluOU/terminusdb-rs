@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
-use terminusdb_client::{RawQueryable, TerminusDBHttpClient};
+use terminusdb_client::RawQueryable;
 use terminusdb_woql2::prelude::Query;
 use terminusdb_woql_builder::{builder::WoqlBuilder, vars};
 
@@ -54,11 +54,11 @@ impl RawQueryable for PersonCountQuery {
 
     fn query(&self) -> Query {
         use terminusdb_woql2::misc::Count;
-        
+
         let inner_query = WoqlBuilder::new()
             .triple(vars!("Person"), "rdf:type", "@schema:Person")
             .finalize();
-        
+
         // Return a Count query directly
         Query::Count(Count {
             query: Box::new(inner_query),
@@ -78,20 +78,20 @@ impl RawQueryable for PaginatedPersonQuery {
 
     fn query(&self) -> Query {
         use terminusdb_woql2::misc::{Start, Limit};
-        
+
         let base_query = WoqlBuilder::new()
             .triple(vars!("Person"), "rdf:type", "@schema:Person")
             .triple(vars!("Person"), "@schema:name", vars!("Name"))
             .triple(vars!("Person"), "@schema:age", vars!("Age"))
             .select(vec![vars!("Name"), vars!("Age")])
             .finalize();
-        
+
         // Wrap in Start and Limit for pagination
         let with_start = Query::Start(Start {
             start: self.skip,
             query: Box::new(base_query),
         });
-        
+
         Query::Limit(Limit {
             limit: self.limit,
             query: Box::new(with_start),
@@ -121,12 +121,12 @@ impl RawQueryable for PaginatedPersonQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_query_count_wraps_non_count_query() {
         let query = PersonQuery;
         let count_query = query.query_count();
-        
+
         // Verify the query is wrapped in a Count
         match count_query {
             Query::Count(_count) => {
@@ -137,12 +137,12 @@ mod tests {
             _ => panic!("Expected Count query, got {:?}", count_query),
         }
     }
-    
+
     #[test]
     fn test_query_count_preserves_existing_count() {
         let query = PersonCountQuery;
         let count_query = query.query_count();
-        
+
         // Verify the Count query is preserved as-is
         match count_query {
             Query::Count(_) => {
@@ -151,7 +151,7 @@ mod tests {
             _ => panic!("Expected Count query to be preserved, got {:?}", count_query),
         }
     }
-    
+
     #[test]
     fn test_query_count_unwraps_pagination() {
         let query = PaginatedPersonQuery {
@@ -159,7 +159,7 @@ mod tests {
             limit: 5,
         };
         let count_query = query.query_count();
-        
+
         // Verify the query is wrapped in Count and pagination is removed
         match count_query {
             Query::Count(count) => {
@@ -173,21 +173,55 @@ mod tests {
             _ => panic!("Expected Count query, got {:?}", count_query),
         }
     }
-    
-    #[ignore]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod db_tests {
+    use super::*;
+    use terminusdb_bin::TerminusDBServer;
+    use terminusdb_client::*;
+    use terminusdb_schema::*;
+    use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+    use serde::{Deserialize as SerdeDeserialize, Serialize};
+
+    #[derive(Debug, Clone, PartialEq, Serialize, SerdeDeserialize, TerminusDBModel, FromTDBInstance)]
+    #[tdb(id_field = "id")]
+    struct Person {
+        id: EntityIDFor<Self>,
+        name: String,
+        age: i32,
+    }
+
     #[tokio::test]
     async fn test_count_execution() -> Result<()> {
-        let client = TerminusDBHttpClient::local_node().await;
-        let spec = terminusdb_client::BranchSpec::with_branch("test", "main");
+        let server = TerminusDBServer::test_instance().await?;
 
-        // This test requires a running TerminusDB instance with test data
-        let query = PersonQuery;
-        let count = query.count(&client, &spec).await?;
-        
-        println!("Found {} persons", count);
-        // Count is always non-negative by type, so just verify it exists
-        let _ = count;
-        
-        Ok(())
+        server
+            .with_tmp_db("test_count_exec", |client, spec| async move {
+                // Insert schema
+                let args = DocumentInsertArgs::from(spec.clone());
+                client.insert_entity_schema::<Person>(args).await.ok();
+
+                // Insert test data
+                for i in 0..5 {
+                    let person = Person {
+                        id: EntityIDFor::new(&format!("person_{}", i)).unwrap(),
+                        name: format!("Person {}", i),
+                        age: 20 + i,
+                    };
+                    let args = DocumentInsertArgs::from(spec.clone());
+                    client.save_instance(&person, args).await?;
+                }
+
+                let query = PersonQuery;
+                let count = query.count(&client, &spec).await?;
+
+                println!("Found {} persons", count);
+                assert_eq!(count, 5, "Should have 5 persons");
+
+                Ok(())
+            })
+            .await
     }
 }

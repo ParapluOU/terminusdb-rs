@@ -1,97 +1,108 @@
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test_document_if_exists {
-    use terminusdb_client::document::GetOpts;
-    use terminusdb_client::spec::BranchSpec;
-    use terminusdb_client::TerminusDBHttpClient;
+    use serde_json::json;
+    use terminusdb_bin::TerminusDBServer;
+    use terminusdb_client::*;
 
     /// Test that get_document_if_exists returns None for non-existent documents
     /// without logging errors (unlike get_document which logs DocumentNotFound as error)
     #[tokio::test]
-    #[ignore] // Requires running TerminusDB instance
-    async fn test_get_document_if_exists_not_found() {
-        let client = TerminusDBHttpClient::local_node().await.unwrap();
-        let spec = BranchSpec::from("test_db");
+    async fn test_get_document_if_exists_not_found() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
 
-        // Ensure the database exists
-        let _ = client.ensure_database(&spec.db).await;
+        server
+            .with_tmp_db("test_doc_if_exists", |client, spec| async move {
+                // Try to get a document that doesn't exist
+                let result = client
+                    .get_document_if_exists("NonExistentDoc/12345", &spec, GetOpts::default())
+                    .await;
 
-        // Try to get a document that doesn't exist
-        let result = client
-            .get_document_if_exists("NonExistentDoc/12345", &spec, GetOpts::default())
-            .await;
+                assert!(result.is_ok());
+                assert_eq!(result.unwrap(), None);
 
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), None);
+                Ok(())
+            })
+            .await
     }
 
     /// Test that get_document_if_exists returns Some(document) for existing documents
     #[tokio::test]
-    #[ignore] // Requires running TerminusDB instance
-    async fn test_get_document_if_exists_found() {
-        use serde_json::json;
-        use terminusdb_client::document::DocumentInsertArgs;
-        use terminusdb_client::document::DocumentType;
+    async fn test_get_document_if_exists_found() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
 
-        let client = TerminusDBHttpClient::local_node().await.unwrap();
-        let spec = BranchSpec::from("test_db");
+        server
+            .with_tmp_db("test_doc_exists_found", |client, spec| async move {
+                // First insert a schema
+                let schema = json!({
+                    "@type": "Class",
+                    "@id": "TestDoc",
+                    "name": "xsd:string"
+                });
+                client
+                    .insert_documents(
+                        vec![&schema],
+                        DocumentInsertArgs::from(spec.clone()).as_schema(),
+                    )
+                    .await?;
 
-        // Ensure the database exists
-        let _ = client.ensure_database(&spec.db).await;
+                // Insert a test document
+                let doc = json!({
+                    "@id": "TestDoc/exists_test",
+                    "@type": "TestDoc",
+                    "name": "Test Document"
+                });
 
-        // Insert a test document
-        let doc = json!({
-            "@id": "TestDoc/exists_test",
-            "@type": "TestDoc",
-            "name": "Test Document"
-        });
+                client
+                    .insert_documents(vec![&doc], DocumentInsertArgs::from(spec.clone()))
+                    .await?;
 
-        let args = DocumentInsertArgs {
-            message: "Insert test document".to_string(),
-            ty: DocumentType::Instance,
-            author: "test".to_string(),
-            spec: spec.clone(),
-            force: false,
-        };
+                // Now try to get it with get_document_if_exists
+                let result = client
+                    .get_document_if_exists("TestDoc/exists_test", &spec, GetOpts::default())
+                    .await;
 
-        let _ = client.post_documents(vec![&doc], args).await;
+                assert!(result.is_ok());
+                let doc_opt = result.unwrap();
+                assert!(doc_opt.is_some());
 
-        // Now try to get it with get_document_if_exists
-        let result = client
-            .get_document_if_exists("TestDoc/exists_test", &spec, GetOpts::default())
-            .await;
+                let retrieved_doc = doc_opt.unwrap();
+                assert!(retrieved_doc["@id"]
+                    .as_str()
+                    .map(|s| s.ends_with("TestDoc/exists_test"))
+                    .unwrap_or(false));
+                assert_eq!(retrieved_doc["name"], "Test Document");
 
-        assert!(result.is_ok());
-        let doc_opt = result.unwrap();
-        assert!(doc_opt.is_some());
-        
-        let retrieved_doc = doc_opt.unwrap();
-        assert_eq!(retrieved_doc["@id"], "TestDoc/exists_test");
-        assert_eq!(retrieved_doc["name"], "Test Document");
+                Ok(())
+            })
+            .await
     }
 
     /// Test that has_document now uses the non-error-logging approach
     #[tokio::test]
-    #[ignore] // Requires running TerminusDB instance
-    async fn test_has_document_no_error_logging() {
-        let client = TerminusDBHttpClient::local_node().await.unwrap();
-        let spec = BranchSpec::from("test_db");
+    async fn test_has_document_no_error_logging() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
 
-        // Ensure the database exists
-        let _ = client.ensure_database(&spec.db).await;
+        server
+            .with_tmp_db("test_has_doc", |client, spec| async move {
+                // Check for a non-existent document - should not log errors
+                let exists = client.has_document("NonExistentDoc/99999", &spec).await;
+                assert!(!exists);
 
-        // Check for a non-existent document - should not log errors
-        let exists = client.has_document("NonExistentDoc/99999", &spec).await;
-        assert_eq!(exists, false);
+                Ok(())
+            })
+            .await
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test_instance_if_exists {
-    use terminusdb_client::{DefaultDeserializer, TDBInstanceDeserializer};
-    use terminusdb_client::spec::BranchSpec;
-    use terminusdb_client::TerminusDBHttpClient;
-    use terminusdb_schema_derive::TerminusDBModel;
     use serde::{Deserialize, Serialize};
+    use terminusdb_bin::TerminusDBServer;
+    use terminusdb_client::*;
+    use terminusdb_schema::ToTDBInstance;
+    use terminusdb_schema_derive::TerminusDBModel;
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel)]
     struct TestPerson {
@@ -102,86 +113,72 @@ mod test_instance_if_exists {
     /// Test that get_instance_if_exists returns None for non-existent instances
     /// without logging errors
     #[tokio::test]
-    #[ignore] // Requires running TerminusDB instance
-    async fn test_get_instance_if_exists_not_found() {
-        let client = TerminusDBHttpClient::local_node().await.unwrap();
-        let spec = BranchSpec::from("test_db");
+    async fn test_get_instance_if_exists_not_found() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
 
-        // Ensure the database exists
-        let _ = client.ensure_database(&spec.db).await;
+        server
+            .with_tmp_db("test_inst_not_found", |client, spec| async move {
+                // Insert schema
+                let args = DocumentInsertArgs::from(spec.clone());
+                let _ = client.insert_entity_schema::<TestPerson>(args).await;
 
-        // Insert schema
-        use terminusdb_client::document::DocumentInsertArgs;
-        use terminusdb_client::document::DocumentType;
-        let args = DocumentInsertArgs {
-            message: "Insert schema".to_string(),
-            ty: DocumentType::Schema,
-            author: "test".to_string(),
-            spec: spec.clone(),
-            force: false,
-        };
-        let _ = client.insert_entity_schema::<TestPerson>(args).await;
+                // Try to get an instance that doesn't exist
+                let mut deserializer = deserialize::DefaultTDBDeserializer;
+                let result = client
+                    .get_instance_if_exists::<TestPerson>(
+                        "nonexistent123",
+                        &spec,
+                        &mut deserializer,
+                    )
+                    .await;
 
-        // Try to get an instance that doesn't exist
-        let mut deserializer = DefaultDeserializer::new();
-        let result = client
-            .get_instance_if_exists::<TestPerson>("nonexistent123", &spec, &mut deserializer)
-            .await;
+                assert!(result.is_ok());
+                assert_eq!(result.unwrap(), None);
 
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), None);
+                Ok(())
+            })
+            .await
     }
 
     /// Test that get_instance_if_exists returns Some(instance) for existing instances
     #[tokio::test]
-    #[ignore] // Requires running TerminusDB instance
-    async fn test_get_instance_if_exists_found() {
-        let client = TerminusDBHttpClient::local_node().await.unwrap();
-        let spec = BranchSpec::from("test_db");
+    async fn test_get_instance_if_exists_found() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
 
-        // Ensure the database exists
-        let _ = client.ensure_database(&spec.db).await;
+        server
+            .with_tmp_db("test_inst_found", |client, spec| async move {
+                // Insert schema
+                let args = DocumentInsertArgs::from(spec.clone());
+                let _ = client.insert_entity_schema::<TestPerson>(args.clone()).await;
 
-        // Insert schema
-        use terminusdb_client::document::DocumentInsertArgs;
-        use terminusdb_client::document::DocumentType;
-        let args = DocumentInsertArgs {
-            message: "Insert schema".to_string(),
-            ty: DocumentType::Schema,
-            author: "test".to_string(),
-            spec: spec.clone(),
-            force: false,
-        };
-        let _ = client.insert_entity_schema::<TestPerson>(args.clone()).await;
+                // Insert a test instance
+                let person = TestPerson {
+                    name: "Alice".to_string(),
+                    age: 30,
+                };
 
-        // Insert a test instance
-        let person = TestPerson {
-            name: "Alice".to_string(),
-            age: 30,
-        };
-        
-        let insert_args = DocumentInsertArgs {
-            message: "Insert test person".to_string(),
-            ty: DocumentType::Instance,
-            author: "test".to_string(),
-            spec: spec.clone(),
-            force: false,
-        };
-        let result = client.create_instance(&person, insert_args).await.unwrap();
-        let person_id = result.root_id.clone();
+                let result = client.create_instance(&person, args).await?;
+                let person_id = result.root_id.clone();
 
-        // Now try to get it with get_instance_if_exists
-        let mut deserializer = DefaultDeserializer::new();
-        let result = client
-            .get_instance_if_exists::<TestPerson>(&person_id, &spec, &mut deserializer)
-            .await;
+                // Extract just the ID part (after the last /)
+                let short_id = person_id.split('/').last().unwrap_or(&person_id);
 
-        assert!(result.is_ok());
-        let person_opt = result.unwrap();
-        assert!(person_opt.is_some());
-        
-        let retrieved_person = person_opt.unwrap();
-        assert_eq!(retrieved_person.name, "Alice");
-        assert_eq!(retrieved_person.age, 30);
+                // Now try to get it with get_instance_if_exists
+                let mut deserializer = deserialize::DefaultTDBDeserializer;
+                let result = client
+                    .get_instance_if_exists::<TestPerson>(short_id, &spec, &mut deserializer)
+                    .await;
+
+                assert!(result.is_ok());
+                let person_opt = result.unwrap();
+                assert!(person_opt.is_some());
+
+                let retrieved_person = person_opt.unwrap();
+                assert_eq!(retrieved_person.name, "Alice");
+                assert_eq!(retrieved_person.age, 30);
+
+                Ok(())
+            })
+            .await
     }
 }

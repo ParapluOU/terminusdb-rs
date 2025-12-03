@@ -30,7 +30,6 @@ fn unique_db_name() -> String {
 }
 
 #[tokio::test]
-#[ignore = "requires terminusdb-bin to be built"]
 async fn test_with_merge_branch_success() -> anyhow::Result<()> {
     // Use shared server instance (prevents port conflicts when tests run in parallel)
     let server = TerminusDBServer::test_instance().await?;
@@ -94,7 +93,6 @@ async fn test_with_merge_branch_success() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires terminusdb-bin to be built"]
 async fn test_with_merge_branch_error_rollback() -> anyhow::Result<()> {
     // Use shared server instance (prevents port conflicts when tests run in parallel)
     let server = TerminusDBServer::test_instance().await?;
@@ -170,7 +168,6 @@ async fn test_with_merge_branch_error_rollback() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-#[ignore = "requires terminusdb-bin to be built"]
 async fn test_with_merge_branch_without_squash() -> anyhow::Result<()> {
     // Use shared server instance (prevents port conflicts when tests run in parallel)
     let server = TerminusDBServer::test_instance().await?;

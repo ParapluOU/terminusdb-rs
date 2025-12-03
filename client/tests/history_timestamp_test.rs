@@ -1,14 +1,14 @@
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, Datelike, Timelike, Utc};
-    use terminusdb_client::CommitHistoryEntry;
+    use terminusdb_client::{CommitHistoryEntry, CommitId};
 
     #[test]
     fn test_timestamp_datetime_parsing() {
         // Test ISO 8601 format
         let entry = CommitHistoryEntry {
             author: "test_user".to_string(),
-            identifier: "abc123".to_string(),
+            identifier: CommitId::new("abc123"),
             message: "Test commit".to_string(),
             timestamp: 1701423000.0, // 2023-12-01T10:30:00Z as Unix timestamp
         };
@@ -29,7 +29,7 @@ mod tests {
     fn test_timestamp_datetime_with_milliseconds() {
         let entry = CommitHistoryEntry {
             author: "test_user".to_string(),
-            identifier: "abc123".to_string(),
+            identifier: CommitId::new("abc123"),
             message: "Test commit".to_string(),
             timestamp: 1701423000.123, // 2023-12-01T10:30:00.123Z as Unix timestamp
         };
@@ -45,7 +45,7 @@ mod tests {
     fn test_timestamp_datetime_invalid_format() {
         let entry = CommitHistoryEntry {
             author: "test_user".to_string(),
-            identifier: "abc123".to_string(),
+            identifier: CommitId::new("abc123"),
             message: "Test commit".to_string(),
             timestamp: -1.0, // Invalid negative timestamp
         };
