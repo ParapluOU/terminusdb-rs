@@ -47,6 +47,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:SameDocumentIdsMutatedInOneTransaction")]
     SameDocumentIdsMutatedInOneTransaction(SameDocumentIdsMutatedInOneTransactionError),
 
+    #[serde(rename = "api:MissingParameter")]
+    MissingParameter(MissingParameterError),
+
     Other(Value),
 
     #[default]
@@ -65,6 +68,7 @@ impl Display for ApiResponseError {
             ApiResponseError::InternalServerError(error) => Display::fmt(error, f),
             ApiResponseError::BadDescriptorPath(error) => Display::fmt(error, f),
             ApiResponseError::SameDocumentIdsMutatedInOneTransaction(error) => Display::fmt(error, f),
+            ApiResponseError::MissingParameter(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -492,6 +496,18 @@ impl Display for SameDocumentIdsMutatedInOneTransactionError {
             "Tried to mutate {} documents with the same ID in one transaction",
             self.duplicate_ids.len()
         )
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MissingParameterError {
+    #[serde(rename = "api:parameter")]
+    pub parameter: String,
+}
+
+impl Display for MissingParameterError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Missing required parameter: '{}'", self.parameter)
     }
 }
 
@@ -996,6 +1012,57 @@ fn test_deserialize_woql_schema_check_failure_error() {
 
             assert!(err.api_request_id.is_some());
             assert_eq!(err.api_request_id.unwrap(), "91241350-ca20-11f0-971b-03cbaa962789");
+        }
+        _ => panic!("Expected WoqlError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_missing_parameter_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:WoqlErrorResponse",
+        "api:error": {
+            "@type": "api:MissingParameter",
+            "api:parameter": "author",
+        },
+        "api:message": "Missing parameter: author",
+        "api:request_id": "fd7dc0b6-d022-11f0-89ab-07e4b5282a20",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::WoqlError { error: err, .. } => {
+            assert_eq!(err.api_message, "Missing parameter: author");
+            match err.api_status {
+                TerminusAPIStatus::Failure => {} // expected
+                _ => panic!("Expected Failure status"),
+            }
+
+            if let Some(ApiResponseError::MissingParameter(param_err)) = err.api_error {
+                assert_eq!(param_err.parameter, "author");
+            } else {
+                panic!("Expected MissingParameter error, got: {:?}", err.api_error);
+            }
+
+            assert!(err.api_request_id.is_some());
+            assert_eq!(err.api_request_id.unwrap(), "fd7dc0b6-d022-11f0-89ab-07e4b5282a20");
         }
         _ => panic!("Expected WoqlError variant"),
     }

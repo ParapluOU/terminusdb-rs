@@ -126,7 +126,118 @@ impl super::client::TerminusDBHttpClient {
         
         // Add to operation log
         self.operation_log.push(operation);
-        
+
+        result
+    }
+
+    /// Execute a mutating WOQL query with commit information.
+    ///
+    /// Use this method when executing queries that modify data (insert, update, delete via triple operations).
+    /// The commit info is required by TerminusDB to track changes.
+    ///
+    /// # Arguments
+    /// * `db` - Branch specification
+    /// * `query` - The WOQL query to execute
+    /// * `author` - Author of the changes (e.g., "user@example.com")
+    /// * `message` - Description of the changes (e.g., "Update commit_id fields")
+    ///
+    /// # Example
+    /// ```ignore
+    /// use terminusdb_woql2::prelude::*;
+    ///
+    /// let update_query = and!(
+    ///     triple!(var!(doc), "rdf:type", "@schema:MyType"),
+    ///     add_triple!(var!(doc), "field", data!("value"))
+    /// );
+    ///
+    /// let result: WOQLResult<HashMap<String, Value>> = client.query_mut(
+    ///     spec,
+    ///     update_query,
+    ///     "user@example.com",
+    ///     "Updated field values"
+    /// ).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.query.execute_mut",
+        skip(self, query, author, message),
+        fields(
+            db = db.db.as_str(),
+            branch = ?db.branch,
+            query_dsl = %query.to_dsl()
+        ),
+        err
+    )]
+    pub async fn query_mut<T: Debug + DeserializeOwned>(
+        &self,
+        db: BranchSpec,
+        query: Woql2Query,
+        author: impl Into<String>,
+        message: impl Into<String>,
+    ) -> anyhow::Result<WOQLResult<T>> {
+        let start_time = Instant::now();
+        let author = author.into();
+        let message = message.into();
+
+        let json_query = query.to_instance(None).to_json();
+
+        let mut operation = OperationEntry::new(
+            OperationType::Query,
+            format!("/api/woql/{}", db.db.as_str())
+        ).with_context(
+            Some(db.db.clone()),
+            db.branch.clone()
+        ).with_query(query.clone());
+
+        let result = self.query_raw_mut(Some(db.clone()), json_query.clone(), &author, &message, None).await;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+
+        match &result {
+            Ok(res) => {
+                let result_count = res.bindings.len();
+                operation = operation.success(Some(result_count), duration_ms);
+
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "query_mut".to_string(),
+                        database: Some(db.db.clone()),
+                        branch: db.branch.clone(),
+                        endpoint: operation.endpoint.clone(),
+                        details: json_query,
+                        success: true,
+                        result_count: Some(result_count),
+                        duration_ms,
+                        error: None,
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+            Err(e) => {
+                operation = operation.failure(e.to_string(), duration_ms);
+
+                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                if let Some(logger) = logger_opt {
+                    let log_entry = QueryLogEntry {
+                        timestamp: chrono::Utc::now(),
+                        operation_type: "query_mut".to_string(),
+                        database: Some(db.db.clone()),
+                        branch: db.branch.clone(),
+                        endpoint: operation.endpoint.clone(),
+                        details: json_query,
+                        success: false,
+                        result_count: None,
+                        duration_ms,
+                        error: Some(e.to_string()),
+                    };
+                    let _ = logger.log(log_entry).await;
+                }
+            }
+        }
+
+        self.operation_log.push(operation);
+
         result
     }
 
@@ -186,6 +297,67 @@ impl super::client::TerminusDBHttpClient {
 
         let json = self.parse_response(res).await?;
 
+        trace!("query result: {:#?}", &json);
+
+        Ok(json)
+    }
+
+    /// Internal method for executing mutating WOQL queries with commit info
+    #[instrument(
+        name = "terminus.query.execute_raw_mut",
+        skip(self, query),
+        fields(
+            db = spec.as_ref().map(|s| s.db.as_str()).unwrap_or("default"),
+            branch = ?spec.as_ref().and_then(|s| s.branch.as_ref()),
+            author = author
+        ),
+        err
+    )]
+    async fn query_raw_mut<T: Debug + DeserializeOwned>(
+        &self,
+        spec: Option<BranchSpec>,
+        query: serde_json::Value,
+        author: &str,
+        message: &str,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<WOQLResult<T>> {
+        let uri = match spec {
+            None => self.build_url().endpoint("woql").build(),
+            Some(spc) => self
+                .build_url()
+                .endpoint("woql")
+                .simple_database(&spc.db)
+                .build(),
+        };
+
+        // Include commit_info in request body per OpenAPI spec
+        let json = json!({
+            "query": query,
+            "commit_info": {
+                "author": author,
+                "message": message
+            }
+        });
+
+        let json_string = serde_json::to_string(&json).unwrap();
+        trace!("payload: {}", &json_string);
+
+        // Acquire concurrency permit for write operations (mutating queries)
+        let _permit = self.acquire_write_permit().await;
+
+        let mut request = self
+            .http
+            .post(uri.clone())
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .body(json_string);
+
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+
+        let res = request.send().await?;
+        let json = self.parse_response(res).await?;
         trace!("query result: {:#?}", &json);
 
         Ok(json)
