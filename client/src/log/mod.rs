@@ -5,29 +5,9 @@ mod iter;
 mod migration;
 mod opts;
 
-use crate::http::TerminusDBHttpClient;
-use crate::spec::BranchSpec;
-
 pub use {commit::*, entity::*, entry::*, iter::*, migration::*, opts::*};
 
-#[tokio::test]
-async fn test_log() {
-    let client = TerminusDBHttpClient::local_node_test().await.unwrap();
-
-    // Create a BranchSpec using the From trait
-    let branch_spec = BranchSpec::from("test");
-
-    let res = client.log(
-        &branch_spec,
-        LogOpts {
-            offset: None,
-            count: None,
-            verbose: true,
-        },
-    );
-
-    let result = res.await;
-    dbg!(&result);
-
-    assert!(result.is_ok());
-}
+// NOTE: Log functionality is tested in client/tests/http_client_tests.rs
+// (test_commit_added_entities_query uses client.log() internally).
+// Unit tests that use terminusdb_bin cause diamond dependency type conflicts
+// when defined inside the terminusdb_client crate.

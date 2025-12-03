@@ -364,14 +364,10 @@ async fn test_header_capture_functionality() -> anyhow::Result<()> {
         println!("Original model inserted with ID: {}", test_id);
         println!("First commit ID captured: {}", first_commit_id);
 
-        // Validate commit ID format (should be "branch:..." format)
+        // Validate commit ID is not empty (the "branch:" prefix is stripped by the client)
         assert!(
-            first_commit_id.starts_with("branch:"),
-            "Commit ID should start with 'branch:'"
-        );
-        assert!(
-            !first_commit_id.split(':').last().unwrap().is_empty(),
-            "Commit hash should not be empty"
+            !first_commit_id.is_empty(),
+            "Commit ID should not be empty"
         );
 
         // Step 2: Modify the model and update it (same ID, different values)
@@ -428,8 +424,10 @@ async fn test_header_capture_functionality() -> anyhow::Result<()> {
         );
 
         // Step 4: Verify current version retrieval still works
+        // Use the full document ID format: "TypeName/id"
+        let full_doc_id = format!("TestHeaderModel/{}", test_id);
         let current_version = client
-            .get_document(test_id, &spec, GetOpts::default())
+            .get_document(&full_doc_id, &spec, GetOpts::default())
             .await?;
         println!("Current version retrieved successfully");
 
@@ -443,10 +441,10 @@ async fn test_header_capture_functionality() -> anyhow::Result<()> {
         }
 
         if let Some(current_value) = current_version.get("value") {
-            assert_eq!(current_value.as_str().unwrap(), "200");
+            assert_eq!(current_value.as_i64().unwrap(), 200);
             println!(
                 "Current version has correct value: {}",
-                current_value.as_str().unwrap()
+                current_value.as_i64().unwrap()
             );
         }
 
@@ -523,8 +521,8 @@ async fn test_time_travel_functionality() -> anyhow::Result<()> {
             "modified_version"
         );
         assert_eq!(
-            current_version.get("value").unwrap().as_str().unwrap(),
-            "200"
+            current_version.get("value").unwrap().as_i64().unwrap(),
+            200
         );
         println!("Current version verification passed");
 
@@ -557,10 +555,10 @@ async fn test_time_travel_functionality() -> anyhow::Result<()> {
                 }
 
                 if let Some(historical_value) = historical_version.get("value") {
-                    let value_str = historical_value.as_str().unwrap();
-                    println!("Historical value: {}", value_str);
+                    let value_int = historical_value.as_i64().unwrap();
+                    println!("Historical value: {}", value_int);
                     assert_eq!(
-                        value_str, "100",
+                        value_int, 100,
                         "Historical version should have original value"
                     );
                 }
