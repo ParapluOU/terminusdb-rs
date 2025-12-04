@@ -3217,6 +3217,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "terminusdb-client",
+ "terminusdb-schema",
  "tokio 1.45.1",
  "uuid",
  "which",

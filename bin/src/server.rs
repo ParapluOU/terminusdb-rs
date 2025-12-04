@@ -220,6 +220,48 @@ impl TerminusDBServer {
 
         result
     }
+
+    /// Run a test with a temporary database with pre-inserted schemas.
+    ///
+    /// Creates a uniquely-named database, inserts schemas for all types in T,
+    /// passes the client and BranchSpec to the closure, and deletes the database
+    /// when done (even if the test fails/panics).
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - A tuple of types implementing `ToTDBSchema` (e.g., `(Model1, Model2)`)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use terminusdb_bin::TerminusDBServer;
+    /// use terminusdb_client::DocumentInsertArgs;
+    ///
+    /// #[tokio::test]
+    /// async fn test_with_schema() -> anyhow::Result<()> {
+    ///     let server = TerminusDBServer::test_instance().await?;
+    ///
+    ///     server.with_db_schema::<(Person, Company)>("test", |client, spec| async move {
+    ///         // Schemas for Person and Company already inserted!
+    ///         let args = DocumentInsertArgs::from(spec.clone());
+    ///         client.insert_instance(&person, args).await?;
+    ///         Ok(())
+    ///     }).await
+    /// }
+    /// ```
+    pub async fn with_db_schema<T, F, Fut, R>(&self, prefix: &str, f: F) -> anyhow::Result<R>
+    where
+        T: terminusdb_schema::ToTDBSchemas,
+        F: FnOnce(TerminusDBHttpClient, terminusdb_client::BranchSpec) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<R>>,
+    {
+        self.with_tmp_db(prefix, |client, spec| async move {
+            let args = terminusdb_client::DocumentInsertArgs::from(spec.clone());
+            client.insert_schemas::<T>(args).await?;
+            f(client, spec).await
+        })
+        .await
+    }
 }
 
 impl Drop for TerminusDBServer {
