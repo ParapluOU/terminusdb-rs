@@ -112,40 +112,21 @@ impl TerminusDBServer {
                 let binary_path = crate::extract_binary()?;
                 eprintln!("[terminusdb-bin] test_instance: Binary path: {:?}", binary_path);
 
-                // Create a clean temp directory for the DB path
-                let db_path = std::env::temp_dir()
-                    .join(format!("terminusdb-test-{}", std::process::id()));
-                std::fs::create_dir_all(&db_path)?;
-                eprintln!("[terminusdb-bin] test_instance: DB path: {:?}", db_path);
-
-                // Initialize the store first (required before starting server in new directory)
-                eprintln!("[terminusdb-bin] test_instance: Initializing store...");
-                let init_status = std::process::Command::new(&binary_path)
-                    .args(["store", "init"])
-                    .current_dir(&db_path)
-                    .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()?;
-                if !init_status.success() {
-                    anyhow::bail!("Failed to initialize store: {:?}", init_status);
-                }
-
-                let mut args = vec!["serve".to_string()];
-                args.push("--memory".to_string());
-                args.push("root".to_string());
+                // --memory mode self-initializes, no store init needed
+                let args = vec!["serve", "--memory", "root"];
 
                 eprintln!("[terminusdb-bin] test_instance: Spawning with args: {:?}", args);
 
-                let mut child = std::process::Command::new(&binary_path)
+                let child = std::process::Command::new(&binary_path)
                     .args(&args)
-                    .current_dir(&db_path)
-                    .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
-                    .stdout(Stdio::null())  // Suppress output for test instance
+                    .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()?;
 
-                eprintln!("[terminusdb-bin] test_instance: Server spawned with PID: {}", child.id());
+                eprintln!(
+                    "[terminusdb-bin] test_instance: Server spawned with PID: {}",
+                    child.id()
+                );
 
                 let server = TerminusDBServer {
                     child: Some(child),
@@ -311,21 +292,22 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
     eprintln!("[terminusdb-bin] Binary path: {:?}", binary_path);
 
     // Create a clean temp directory for the DB path
-    let db_path = std::env::temp_dir()
-        .join(format!("terminusdb-server-{}", std::process::id()));
+    let db_path = std::env::temp_dir().join(format!("terminusdb-server-{}", std::process::id()));
     std::fs::create_dir_all(&db_path)?;
 
-    // Initialize the store first (required before starting server in new directory)
-    eprintln!("[terminusdb-bin] Initializing store in {:?}...", db_path);
-    let init_status = std::process::Command::new(&binary_path)
-        .args(["store", "init"])
-        .current_dir(&db_path)
-        .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !init_status.success() {
-        anyhow::bail!("Failed to initialize store: {:?}", init_status);
+    // Only initialize store for persistent mode; --memory self-initializes
+    if !opts.memory {
+        eprintln!("[terminusdb-bin] Initializing store in {:?}...", db_path);
+        let init_status = std::process::Command::new(&binary_path)
+            .args(["store", "init"])
+            .current_dir(&db_path)
+            .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if !init_status.success() {
+            anyhow::bail!("Failed to initialize store: {:?}", init_status);
+        }
     }
 
     let mut args = vec!["serve".to_string()];
