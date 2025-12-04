@@ -14,7 +14,10 @@ fn main() {
 
     // Check if binary already exists and skip build if not forced
     if binary_path.exists() && !force_rebuild {
-        println!("cargo:warning=TerminusDB binary already exists at {}", binary_path.display());
+        println!(
+            "cargo:warning=TerminusDB binary already exists at {}",
+            binary_path.display()
+        );
         println!("cargo:warning=Skipping build. Set TERMINUSDB_FORCE_REBUILD=1 to force rebuild.");
         return;
     }
@@ -43,7 +46,10 @@ fn main() {
             panic!("TERMINUSDB_SOURCE path does not exist: {}", source_path);
         }
         if !source_dir.join("Makefile").exists() {
-            panic!("TERMINUSDB_SOURCE does not appear to be a TerminusDB checkout (no Makefile): {}", source_path);
+            panic!(
+                "TERMINUSDB_SOURCE does not appear to be a TerminusDB checkout (no Makefile): {}",
+                source_path
+            );
         }
         println!("cargo:warning=Building from local source: {}", source_path);
         (source_dir, false)
@@ -56,7 +62,10 @@ fn main() {
         // Note: The dev build embeds absolute paths to this directory in the saved state,
         // so we use a fixed path that the runtime can recreate
         let temp_dir = env::temp_dir().join("terminusdb-build");
-        println!("cargo:warning=Cloning TerminusDB to: {}", temp_dir.display());
+        println!(
+            "cargo:warning=Cloning TerminusDB to: {}",
+            temp_dir.display()
+        );
 
         // Clean existing directory if it exists
         if temp_dir.exists() {
@@ -78,8 +87,12 @@ fn main() {
     // Copy the binary to OUT_DIR
     let built_binary = build_dir.join("terminusdb");
     if let Err(e) = fs::copy(&built_binary, &binary_path) {
-        panic!("Failed to copy binary from {} to {}: {}",
-               built_binary.display(), binary_path.display(), e);
+        panic!(
+            "Failed to copy binary from {} to {}: {}",
+            built_binary.display(),
+            binary_path.display(),
+            e
+        );
     }
 
     // Set executable permissions on Unix
@@ -111,7 +124,10 @@ fn main() {
         let _ = fs::remove_dir_all(&build_dir);
     }
 
-    println!("cargo:warning=Successfully built TerminusDB binary at {}", binary_path.display());
+    println!(
+        "cargo:warning=Successfully built TerminusDB binary at {}",
+        binary_path.display()
+    );
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -124,7 +140,10 @@ fn detect_platform() -> Platform {
     match env::consts::OS {
         "macos" => Platform::MacOS,
         "linux" => Platform::Linux,
-        other => panic!("Unsupported platform: {}. Only macOS and Linux are supported.", other),
+        other => panic!(
+            "Unsupported platform: {}. Only macOS and Linux are supported.",
+            other
+        ),
     }
 }
 
@@ -174,7 +193,10 @@ fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<Dependency
         println!("cargo:warning=protoc not found, attempting to download and bundle...");
         match download_protoc(platform, deps_dir) {
             Ok(path) => {
-                println!("cargo:warning=Successfully bundled protoc at {}", path.display());
+                println!(
+                    "cargo:warning=Successfully bundled protoc at {}",
+                    path.display()
+                );
                 ctx.protoc_path = Some(path.clone());
                 if let Some(parent) = path.parent() {
                     ctx.path_additions.push(parent.to_path_buf());
@@ -200,7 +222,10 @@ fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<Dependency
         println!("cargo:warning=SWI-Prolog not found, attempting to install locally...");
         match install_swipl_local(platform, deps_dir) {
             Ok(path) => {
-                println!("cargo:warning=Successfully installed SWI-Prolog at {}", path.display());
+                println!(
+                    "cargo:warning=Successfully installed SWI-Prolog at {}",
+                    path.display()
+                );
                 ctx.swipl_path = Some(path.clone());
                 if let Some(parent) = path.parent() {
                     ctx.path_additions.push(parent.to_path_buf());
@@ -222,19 +247,17 @@ fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<Dependency
     match platform {
         Platform::MacOS => {
             if !check_gmp_macos() {
-                return Err(
-                    "GMP library not found. Please install:\n\
-                     - macOS: brew install gmp".to_string()
-                );
+                return Err("GMP library not found. Please install:\n\
+                     - macOS: brew install gmp"
+                    .to_string());
             }
             println!("cargo:warning=Found GMP library");
         }
         Platform::Linux => {
             if !check_gmp_linux() {
-                return Err(
-                    "GMP development library not found. Please install:\n\
-                     - Linux: sudo apt-get install libgmp-dev".to_string()
-                );
+                return Err("GMP development library not found. Please install:\n\
+                     - Linux: sudo apt-get install libgmp-dev"
+                    .to_string());
             }
             println!("cargo:warning=Found GMP library");
         }
@@ -259,6 +282,7 @@ fn check_gmp_linux() -> bool {
     // Check if libgmp-dev is installed
     Path::new("/usr/include/gmp.h").exists()
         || Path::new("/usr/local/include/gmp.h").exists()
+        || Path::new("/usr/include/x86_64-linux-gnu/gmp.h").exists()
 }
 
 fn download_protoc(platform: Platform, deps_dir: &Path) -> Result<PathBuf, String> {
@@ -317,7 +341,13 @@ fn download_protoc(platform: Platform, deps_dir: &Path) -> Result<PathBuf, Strin
 
     // Extract using unzip
     let extract_status = Command::new("unzip")
-        .args(&["-q", "-o", archive_path.to_str().unwrap(), "-d", protoc_dir.to_str().unwrap()])
+        .args(&[
+            "-q",
+            "-o",
+            archive_path.to_str().unwrap(),
+            "-d",
+            protoc_dir.to_str().unwrap(),
+        ])
         .status()
         .map_err(|e| format!("Failed to run unzip: {}", e))?;
 
@@ -360,15 +390,21 @@ fn install_swipl_local(platform: Platform, deps_dir: &Path) -> Result<PathBuf, S
         Platform::MacOS => {
             // For macOS, we can try to download a pre-built version or use homebrew
             // This is complex, so for now just return an error with instructions
-            Err("SWI-Prolog automatic installation not yet supported on macOS.\n\
-                 Please install manually: brew install swi-prolog".to_string())
+            Err(
+                "SWI-Prolog automatic installation not yet supported on macOS.\n\
+                 Please install manually: brew install swi-prolog"
+                    .to_string(),
+            )
         }
         Platform::Linux => {
             // For Linux, we could download and install from PPA or compile from source
             // For now, return an error with instructions
-            Err("SWI-Prolog automatic installation not yet supported on Linux.\n\
+            Err(
+                "SWI-Prolog automatic installation not yet supported on Linux.\n\
                  Please install manually: sudo apt-add-repository ppa:swi-prolog/stable && \
-                 sudo apt-get update && sudo apt-get install swi-prolog".to_string())
+                 sudo apt-get update && sudo apt-get install swi-prolog"
+                    .to_string(),
+            )
         }
     }
 }
@@ -380,9 +416,10 @@ fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
         .args(&[
             "clone",
             "--depth=1",
-            "--branch", version,
+            "--branch",
+            version,
             "https://github.com/ParapluOU/terminusdb.git",
-            dest.to_str().unwrap()
+            dest.to_str().unwrap(),
         ])
         .status()
         .map_err(|e| format!("Failed to run git: {}", e))?;
@@ -408,8 +445,8 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
         }
     }
 
-    let new_path = env::join_paths(&path_dirs)
-        .map_err(|e| format!("Failed to build PATH: {}", e))?;
+    let new_path =
+        env::join_paths(&path_dirs).map_err(|e| format!("Failed to build PATH: {}", e))?;
 
     // Install tus pack
     let status = Command::new("make")
