@@ -3334,6 +3334,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "terminusdb-bin",
  "terminusdb-client",
  "terminusdb-woql2",
  "thiserror 1.0.69",

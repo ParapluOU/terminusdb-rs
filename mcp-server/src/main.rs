@@ -11,11 +11,14 @@ use rust_mcp_sdk::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
+use terminusdb_bin::{TerminusDBServer, ServerOptions, start_server};
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient, GetOpts, DocumentInsertArgs};
 use terminusdb_client::debug::QueryLogEntry;
+use terminusdb_woql2::prelude::{Query, FromTDBInstance};
 use tokio::sync::RwLock;
 use tracing::{info, warn, error};
 use tracing_subscriber;
@@ -110,7 +113,7 @@ pub struct ConnectTool {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_woql",
-    description = "Execute a WOQL query using either JavaScript syntax or JSON-LD format. JavaScript syntax uses the official terminusdb-client-js syntax with variables as strings prefixed with \"v:\" (e.g., \"v:Person\"). For select/distinct, variables are passed as variadic arguments without the prefix (e.g., select(\"Name\", \"Age\", ...)). Common operations include: triple(\"v:Subject\", \"predicate\", \"v:Object\"), and(...), or(...), select(\"Var1\", \"Var2\", query), greater(\"v:Value\", 18). Alternatively, you can provide a JSON-LD query object following the WOQL schema. The tool automatically detects the format and parses accordingly."
+    description = "Execute a WOQL query using either JavaScript syntax or JSON-LD format. JavaScript syntax uses the official terminusdb-client-js syntax with variables as strings prefixed with \"v:\" (e.g., \"v:Person\"). For select/distinct, variables are passed as variadic arguments without the prefix (e.g., select(\"Name\", \"Age\", ...)). Common operations include: triple(\"v:Subject\", \"predicate\", \"v:Object\"), and(...), or(...), select(\"Var1\", \"Var2\", query), greater(\"v:Value\", 18). Alternatively, you can provide a JSON-LD query object following the WOQL schema. The tool automatically detects the format and parses accordingly.\n\nFor mutating queries (add_triple, delete_triple, add_data, etc.), provide 'author' and 'message' parameters for commit tracking. These are required by TerminusDB to properly track changes. Read-only queries do not require these parameters."
 )]
 pub struct ExecuteWoqlTool {
     pub query: String,
@@ -119,6 +122,12 @@ pub struct ExecuteWoqlTool {
     /// Optional timeout in seconds (overrides default)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+    /// Author of the changes (for mutating queries)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Commit message describing the changes (for mutating queries)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -522,14 +531,76 @@ pub struct DeleteRemoteTool {
     pub connection: Option<ConnectionConfig>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// Start a local TerminusDB server
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "start_local_server",
+    description = "Start a local TerminusDB server instance for testing and development. \
+                   The server runs as a separate process on http://localhost:6363. \
+                   Returns a server_id that can be used to stop the server or configure connections."
+)]
+pub struct StartLocalServerTool {
+    /// Server ID for tracking (optional, auto-generated if not provided)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
+
+    /// Run server in memory-only mode (no persistence)
+    #[serde(default)]
+    pub memory: bool,
+
+    /// Admin password (defaults to "root")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+
+    /// Suppress server stdout/stderr
+    #[serde(default = "default_true")]
+    pub quiet: bool,
+
+    /// Automatically set as default connection for subsequent operations
+    #[serde(default)]
+    pub set_as_default: bool,
+}
+
+/// Stop a local TerminusDB server
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "stop_local_server",
+    description = "Stop a running local TerminusDB server instance by its server_id. \
+                   The server process will be terminated and all resources cleaned up."
+)]
+pub struct StopLocalServerTool {
+    /// Server ID to stop (required)
+    pub server_id: String,
+}
+
+/// List running local TerminusDB servers
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[mcp_tool(
+    name = "list_local_servers",
+    description = "List all running local TerminusDB server instances managed by this MCP server."
+)]
+pub struct ListLocalServersTool {}
+
+struct ManagedServer {
+    server: Arc<TerminusDBServer>,
+    url: String,
+    password: String,
+}
+
 pub struct TerminusDBMcpHandler {
     saved_config: Arc<RwLock<Option<ConnectionConfig>>>,
+    managed_servers: Arc<RwLock<HashMap<String, ManagedServer>>>,
 }
 
 impl TerminusDBMcpHandler {
     fn new() -> Self {
         Self {
             saved_config: Arc::new(RwLock::new(None)),
+            managed_servers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -630,9 +701,35 @@ impl TerminusDBMcpHandler {
             // Convert timeout from seconds to Duration if provided
             let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
-            // Use the new query_string method that handles both DSL and JSON-LD
-            let response: terminusdb_client::WOQLResult<serde_json::Value> =
-                client.query_string(Some(branch_spec), &request.query, timeout).await?;
+            // Check if this is a mutating query (author or message provided)
+            let response: terminusdb_client::WOQLResult<serde_json::Value> = if request.author.is_some() || request.message.is_some() {
+                // Mutating query - use query_mut_string (a wrapper we'll need to add)
+                let author = request.author.unwrap_or_else(|| "system".to_string());
+                let message = request.message.unwrap_or_else(|| "execute query".to_string());
+
+                info!("Executing mutating query with author: {}, message: {}", author, message);
+
+                // Parse query using the client's existing logic, then call query_mut
+                let query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&request.query) {
+                    // Try parsing as JSON-LD
+                    Query::from_json(json_value)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse JSON-LD query: {}", e))?
+                } else {
+                    // Try parsing as JS syntax - need to use the client's internal parser
+                    // For now, return error asking user to use JSON-LD for mutating queries
+                    return Err(anyhow::anyhow!(
+                        "Mutating queries currently require JSON-LD format. \
+                        JavaScript syntax is only supported for read-only queries. \
+                        Please convert your query to JSON-LD format."
+                    ));
+                };
+
+                client.query_mut(branch_spec, query, author, message).await?
+            } else {
+                // Read-only query - use existing query_string
+                client.query_string(Some(branch_spec), &request.query, timeout).await?
+            };
+
             Ok(serde_json::to_value(&response)?)
         } else {
             Err(anyhow::anyhow!("Database must be specified"))
@@ -1673,6 +1770,121 @@ impl TerminusDBMcpHandler {
             "message": format!("Successfully deleted remote at {}", request.path)
         }))
     }
+
+    async fn handle_start_local_server(&self, request: StartLocalServerTool) -> Result<serde_json::Value> {
+        // Generate server ID if not provided
+        let server_id = request.server_id.unwrap_or_else(|| {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            format!("server_{}", ts)
+        });
+
+        info!("Starting local server with ID: {}", server_id);
+
+        // Check if server with this ID already exists
+        {
+            let servers = self.managed_servers.read().await;
+            if servers.contains_key(&server_id) {
+                return Err(anyhow::anyhow!("Server with ID '{}' is already running", server_id));
+            }
+        }
+
+        // Create server with options
+        let password = request.password.unwrap_or_else(|| "root".to_string());
+        let opts = ServerOptions {
+            memory: request.memory,
+            password: Some(password.clone()),
+            quiet: request.quiet,
+        };
+
+        // Start the server
+        let server = start_server(opts).await
+            .map_err(|e| anyhow::anyhow!("Failed to start server: {}", e))?;
+
+        // Get connection info - TerminusDB always runs on localhost:6363
+        let url = "http://localhost:6363".to_string();
+        let username = "admin";
+
+        // Store server handle with connection info
+        {
+            let mut servers = self.managed_servers.write().await;
+            servers.insert(server_id.clone(), ManagedServer {
+                server: Arc::new(server),
+                url: url.clone(),
+                password: password.clone(),
+            });
+        }
+
+        // Auto-configure connection if requested
+        if request.set_as_default {
+            let mut config = self.saved_config.write().await;
+            *config = Some(ConnectionConfig {
+                host: url.clone(),
+                user: username.to_string(),
+                password: password.clone(),
+                database: None,
+                branch: "main".to_string(),
+                commit_ref: None,
+            });
+            info!("Set local server as default connection");
+        }
+
+        Ok(serde_json::json!({
+            "server_id": server_id,
+            "url": url,
+            "username": username,
+            "password": password,
+            "status": "running"
+        }))
+    }
+
+    async fn handle_stop_local_server(&self, request: StopLocalServerTool) -> Result<serde_json::Value> {
+        info!("Stopping local server with ID: {}", request.server_id);
+
+        let mut servers = self.managed_servers.write().await;
+
+        match servers.remove(&request.server_id) {
+            Some(managed) => {
+                // Check if this is the last reference
+                let ref_count = Arc::strong_count(&managed.server);
+
+                // Drop our reference - if it's the last one, server will stop
+                drop(managed);
+
+                Ok(serde_json::json!({
+                    "server_id": request.server_id,
+                    "status": "stopped",
+                    "message": if ref_count == 1 {
+                        "Server stopped and cleaned up".to_string()
+                    } else {
+                        format!("Reference removed ({} references remaining)", ref_count - 1)
+                    }
+                }))
+            }
+            None => {
+                Err(anyhow::anyhow!("Server with ID '{}' not found", request.server_id))
+            }
+        }
+    }
+
+    async fn handle_list_local_servers(&self, _request: ListLocalServersTool) -> Result<serde_json::Value> {
+        info!("Listing local servers");
+
+        let servers = self.managed_servers.read().await;
+
+        let server_list: Vec<_> = servers.iter().map(|(id, managed)| {
+            serde_json::json!({
+                "server_id": id,
+                "url": managed.url,
+                "status": "running"
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "servers": server_list,
+            "count": server_list.len()
+        }))
+    }
 }
 
 #[async_trait]
@@ -1707,6 +1919,10 @@ impl ServerHandler for TerminusDBMcpHandler {
                 GetRemoteTool::tool(),
                 UpdateRemoteTool::tool(),
                 DeleteRemoteTool::tool(),
+                // Local server management
+                StartLocalServerTool::tool(),
+                StopLocalServerTool::tool(),
+                ListLocalServersTool::tool(),
                 // Temporarily disabled due to serde_json::Value schema issues
                 // InsertDocumentTool::tool(),
                 // InsertDocumentsTool::tool(),
@@ -2323,6 +2539,81 @@ impl ServerHandler for TerminusDBMcpHandler {
                         .map_err(|e| CallToolError::new(e))?;
 
                 match self.handle_delete_remote(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == StartLocalServerTool::tool_name() => {
+                let tool_request: StartLocalServerTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_start_local_server(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == StopLocalServerTool::tool_name() => {
+                let tool_request: StopLocalServerTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_stop_local_server(tool_request).await {
+                    Ok(result) => {
+                        let text_content = serde_json::to_string_pretty(&result)
+                            .unwrap_or_else(|_| result.to_string());
+
+                        let structured = match result {
+                            serde_json::Value::Object(map) => Some(map),
+                            _ => None,
+                        };
+
+                        Ok(CallToolResult {
+                            content: vec![TextContent::new(text_content, None, None).into()],
+                            is_error: None,
+                            meta: None,
+                            structured_content: structured,
+                        })
+                    }
+                    Err(e) => Err(CallToolError::new(McpError(e))),
+                }
+            }
+            name if name == ListLocalServersTool::tool_name() => {
+                let tool_request: ListLocalServersTool =
+                    serde_json::from_value(serde_json::Value::Object(args))
+                        .map_err(|e| CallToolError::new(e))?;
+
+                match self.handle_list_local_servers(tool_request).await {
                     Ok(result) => {
                         let text_content = serde_json::to_string_pretty(&result)
                             .unwrap_or_else(|_| result.to_string());
