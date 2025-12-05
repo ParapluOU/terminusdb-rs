@@ -24,3 +24,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "terminusdb"
 path = "src/main.rs"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.178"

@@ -36,6 +36,8 @@ pub struct ServerOptions {
     pub password: Option<String>,
     /// Suppress stdout/stderr output.
     pub quiet: bool,
+    /// Custom database path. If not set, a temp directory is created.
+    pub db_path: Option<std::path::PathBuf>,
 }
 
 /// A running TerminusDB server instance.
@@ -117,10 +119,11 @@ impl TerminusDBServer {
 
                 eprintln!("[terminusdb-bin] test_instance: Spawning with args: {:?}", args);
 
-                let child = std::process::Command::new(&binary_path)
+                // Pipe stderr so we can capture early failure messages
+                let mut child = std::process::Command::new(&binary_path)
                     .args(&args)
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
+                    .stderr(Stdio::piped())
                     .spawn()?;
 
                 eprintln!(
@@ -128,13 +131,13 @@ impl TerminusDBServer {
                     child.id()
                 );
 
+                // Wait for server to be ready, checking for early process exit
+                wait_for_ready(&mut child, Duration::from_secs(30)).await?;
+
                 let server = TerminusDBServer {
                     child: Some(child),
                     shared: true,
                 };
-
-                // Wait for server to be ready
-                wait_for_ready(Duration::from_secs(30)).await?;
 
                 Ok(server)
             })
@@ -280,6 +283,7 @@ impl Drop for TerminusDBServer {
 ///         memory: true,
 ///         password: Some("secret".into()),
 ///         quiet: false,
+///         ..Default::default()
 ///     }).await?;
 ///
 ///     let client = server.client().await?;
@@ -291,9 +295,19 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
     let binary_path = crate::extract_binary()?;
     eprintln!("[terminusdb-bin] Binary path: {:?}", binary_path);
 
-    // Create a clean temp directory for the DB path
-    let db_path = std::env::temp_dir().join(format!("terminusdb-server-{}", std::process::id()));
-    std::fs::create_dir_all(&db_path)?;
+    // Use custom db_path or create a temp directory
+    let db_path = match opts.db_path {
+        Some(ref path) => {
+            std::fs::create_dir_all(path)?;
+            path.clone()
+        }
+        None => {
+            let path =
+                std::env::temp_dir().join(format!("terminusdb-server-{}", std::process::id()));
+            std::fs::create_dir_all(&path)?;
+            path
+        }
+    };
 
     // Only initialize store for persistent mode; --memory self-initializes
     if !opts.memory {
@@ -322,60 +336,144 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
     } else {
         Stdio::inherit()
     };
-    let stderr = if opts.quiet {
-        Stdio::null()
-    } else {
-        Stdio::inherit()
-    };
 
     eprintln!("[terminusdb-bin] Spawning server with args: {:?}", args);
 
-    let child = std::process::Command::new(&binary_path)
+    // Always pipe stderr so we can capture early failure messages
+    let mut child = std::process::Command::new(&binary_path)
         .args(&args)
         .current_dir(&db_path)
         .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
         .stdout(stdout)
-        .stderr(stderr)
+        .stderr(Stdio::piped())
         .spawn()?;
 
     eprintln!("[terminusdb-bin] Server spawned with PID: {}", child.id());
+
+    // Wait for server to be ready, checking for early process exit
+    wait_for_ready(&mut child, Duration::from_secs(30)).await?;
 
     let server = TerminusDBServer {
         child: Some(child),
         shared: false,
     };
 
-    // Wait for server to be ready using the client itself
-    wait_for_ready(Duration::from_secs(30)).await?;
-
     Ok(server)
 }
 
+/// Known error patterns that indicate the server failed to start properly.
+/// These errors may appear in stderr even if the process doesn't exit.
+const FATAL_ERROR_PATTERNS: &[&str] = &[
+    "Unable to open system database",
+    "error while loading shared libraries",
+    "FATAL ERROR",
+    "store has not been initialized",
+];
+
 /// Wait for the server to respond using TerminusDBHttpClient.
-async fn wait_for_ready(max_wait: Duration) -> anyhow::Result<()> {
+/// Also checks if the process has exited early or logged fatal errors.
+async fn wait_for_ready(child: &mut Child, max_wait: Duration) -> anyhow::Result<()> {
+    use std::io::Read;
+
     let start = std::time::Instant::now();
 
     eprintln!("[terminusdb-bin] Waiting for server to become ready...");
 
+    // Take stderr for non-blocking reads
+    let mut stderr_handle = child.stderr.take();
+    let mut stderr_buffer = String::new();
+
     while start.elapsed() < max_wait {
+        // Check if process has exited
+        if let Some(status) = child.try_wait()? {
+            // Process exited - read remaining stderr
+            if let Some(ref mut stderr) = stderr_handle {
+                let _ = stderr.read_to_string(&mut stderr_buffer);
+            }
+            let stderr_msg = stderr_buffer.trim();
+            if stderr_msg.is_empty() {
+                anyhow::bail!("Server process exited with status: {}", status);
+            } else {
+                anyhow::bail!(
+                    "Server process exited with status {}: {}",
+                    status,
+                    stderr_msg
+                );
+            }
+        }
+
+        // Try to read any available stderr (non-blocking via set_nonblocking or small reads)
+        if let Some(ref mut stderr) = stderr_handle {
+            let mut buf = [0u8; 4096];
+            // Set non-blocking mode for the read
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::AsRawFd;
+                let fd = stderr.as_raw_fd();
+                unsafe {
+                    let flags = libc::fcntl(fd, libc::F_GETFL);
+                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+            }
+            match stderr.read(&mut buf) {
+                Ok(0) => {} // EOF
+                Ok(n) => {
+                    if let Ok(s) = std::str::from_utf8(&buf[..n]) {
+                        stderr_buffer.push_str(s);
+                        // Check for fatal error patterns
+                        for pattern in FATAL_ERROR_PATTERNS {
+                            if stderr_buffer.contains(pattern) {
+                                // Kill the process since it's in a bad state
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                anyhow::bail!(
+                                    "Server failed to start: {}",
+                                    stderr_buffer.trim()
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // No data available, that's fine
+                }
+                Err(_) => {} // Ignore other read errors
+            }
+        }
+
         // Use the client's local_node() + info() for health check
         let client = TerminusDBHttpClient::local_node().await;
         match client.info().await {
             Ok(_) => {
                 eprintln!("[terminusdb-bin] Server is ready!");
+                // Put stderr back
+                child.stderr = stderr_handle;
                 return Ok(());
             }
             Err(e) => {
                 if start.elapsed().as_secs() % 5 == 0 {
-                    eprintln!("[terminusdb-bin] Still waiting... ({}s): {:?}",
-                        start.elapsed().as_secs(), e);
+                    eprintln!(
+                        "[terminusdb-bin] Still waiting... ({}s): {:?}",
+                        start.elapsed().as_secs(),
+                        e
+                    );
                 }
             }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    anyhow::bail!("Server did not become ready within {:?}", max_wait)
+    // Timeout - include any stderr we collected
+    let stderr_msg = stderr_buffer.trim();
+    if stderr_msg.is_empty() {
+        anyhow::bail!("Server did not become ready within {:?}", max_wait)
+    } else {
+        anyhow::bail!(
+            "Server did not become ready within {:?}. Stderr: {}",
+            max_wait,
+            stderr_msg
+        )
+    }
 }
 
 /// Execute a closure with a running TerminusDB server.
@@ -406,4 +504,55 @@ where
     let client = server.client().await?;
     f(client).await
     // Server dropped here, stopping the process
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that memory mode doesn't write any files to disk.
+    #[tokio::test]
+    async fn test_memory_mode_no_disk_writes() -> anyhow::Result<()> {
+        // Create a fresh temp directory
+        let test_dir = std::env::temp_dir().join(format!(
+            "terminusdb-memory-test-{}",
+            std::process::id()
+        ));
+        if test_dir.exists() {
+            std::fs::remove_dir_all(&test_dir)?;
+        }
+        std::fs::create_dir_all(&test_dir)?;
+
+        // Start server in memory mode using the public API
+        let server = start_server(ServerOptions {
+            memory: true,
+            quiet: true,
+            db_path: Some(test_dir.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+        // Verify the server is responding
+        let client = server.client().await?;
+        client.info().await?;
+
+        // Drop the server to stop it
+        drop(server);
+
+        // Check that no files were written
+        let entries: Vec<_> = std::fs::read_dir(&test_dir)?.collect();
+        assert!(
+            entries.is_empty(),
+            "Memory mode should not write files to disk, but found: {:?}",
+            entries
+                .iter()
+                .filter_map(|e| e.as_ref().ok().map(|e| e.path()))
+                .collect::<Vec<_>>()
+        );
+
+        // Cleanup
+        std::fs::remove_dir_all(&test_dir)?;
+
+        Ok(())
+    }
 }
