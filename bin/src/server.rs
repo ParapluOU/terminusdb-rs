@@ -295,34 +295,39 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
     let binary_path = crate::extract_binary()?;
     eprintln!("[terminusdb-bin] Binary path: {:?}", binary_path);
 
-    // Use custom db_path or create a temp directory
-    let db_path = match opts.db_path {
-        Some(ref path) => {
-            std::fs::create_dir_all(path)?;
-            path.clone()
-        }
-        None => {
-            let path =
-                std::env::temp_dir().join(format!("terminusdb-server-{}", std::process::id()));
-            std::fs::create_dir_all(&path)?;
-            path
-        }
-    };
+    // Only set up db_path for persistent (non-memory) mode
+    // Memory mode should NOT have TERMINUSDB_SERVER_DB_PATH set, as it would
+    // override --memory and cause the server to try opening a disk store
+    let db_path = if !opts.memory {
+        let path = match opts.db_path {
+            Some(ref path) => {
+                std::fs::create_dir_all(path)?;
+                path.clone()
+            }
+            None => {
+                let path = std::env::temp_dir()
+                    .join(format!("terminusdb-server-{}", std::process::id()));
+                std::fs::create_dir_all(&path)?;
+                path
+            }
+        };
 
-    // Only initialize store for persistent mode; --memory self-initializes
-    if !opts.memory {
-        eprintln!("[terminusdb-bin] Initializing store in {:?}...", db_path);
+        eprintln!("[terminusdb-bin] Initializing store in {:?}...", path);
         let init_status = std::process::Command::new(&binary_path)
             .args(["store", "init"])
-            .current_dir(&db_path)
-            .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
+            .current_dir(&path)
+            .env("TERMINUSDB_SERVER_DB_PATH", &path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
         if !init_status.success() {
             anyhow::bail!("Failed to initialize store: {:?}", init_status);
         }
-    }
+
+        Some(path)
+    } else {
+        None
+    };
 
     let mut args = vec!["serve".to_string()];
     if opts.memory {
@@ -339,14 +344,16 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
 
     eprintln!("[terminusdb-bin] Spawning server with args: {:?}", args);
 
-    // Always pipe stderr so we can capture early failure messages
-    let mut child = std::process::Command::new(&binary_path)
-        .args(&args)
-        .current_dir(&db_path)
-        .env("TERMINUSDB_SERVER_DB_PATH", &db_path)
-        .stdout(stdout)
-        .stderr(Stdio::piped())
-        .spawn()?;
+    // Build command - only set db_path/env for persistent mode
+    let mut cmd = std::process::Command::new(&binary_path);
+    cmd.args(&args).stdout(stdout).stderr(Stdio::piped());
+
+    if let Some(ref path) = db_path {
+        cmd.current_dir(path);
+        cmd.env("TERMINUSDB_SERVER_DB_PATH", path);
+    }
+
+    let mut child = cmd.spawn()?;
 
     eprintln!("[terminusdb-bin] Server spawned with PID: {}", child.id());
 
@@ -511,9 +518,12 @@ mod tests {
     use super::*;
 
     /// Test that memory mode doesn't write any files to disk.
+    ///
+    /// This test spawns the server directly (not via start_server) so we can
+    /// control the working directory and verify no files are written.
     #[tokio::test]
     async fn test_memory_mode_no_disk_writes() -> anyhow::Result<()> {
-        // Create a fresh temp directory
+        // Create a fresh temp directory to use as working directory
         let test_dir = std::env::temp_dir().join(format!(
             "terminusdb-memory-test-{}",
             std::process::id()
@@ -523,23 +533,30 @@ mod tests {
         }
         std::fs::create_dir_all(&test_dir)?;
 
-        // Start server in memory mode using the public API
-        let server = start_server(ServerOptions {
-            memory: true,
-            quiet: true,
-            db_path: Some(test_dir.clone()),
-            ..Default::default()
-        })
-        .await?;
+        // Spawn server directly in memory mode with our test dir as cwd
+        // This mimics what would happen if someone ran the server in memory mode
+        // from a specific directory
+        let binary_path = crate::extract_binary()?;
+        let mut child = std::process::Command::new(&binary_path)
+            .args(["serve", "--memory", "root"])
+            .current_dir(&test_dir)
+            // Do NOT set TERMINUSDB_SERVER_DB_PATH - memory mode shouldn't need it
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        // Wait for server to be ready
+        wait_for_ready(&mut child, Duration::from_secs(30)).await?;
 
         // Verify the server is responding
-        let client = server.client().await?;
+        let client = TerminusDBHttpClient::local_node().await;
         client.info().await?;
 
-        // Drop the server to stop it
-        drop(server);
+        // Kill the server
+        let _ = child.kill();
+        let _ = child.wait();
 
-        // Check that no files were written
+        // Check that no files were written to the working directory
         let entries: Vec<_> = std::fs::read_dir(&test_dir)?.collect();
         assert!(
             entries.is_empty(),
