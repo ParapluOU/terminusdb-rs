@@ -128,7 +128,7 @@ fn implement_instance_from_json_for_struct(
     let expanded = quote! {
         impl #impl_generics terminusdb_schema::json::InstanceFromJson for #struct_name #ty_generics #where_clause {
             #[allow(unused_variables)] // json_map might be unused if struct has no fields
-            fn instance_from_json(json: serde_json::Value) -> anyhow::Result<terminusdb_schema::Instance> {
+            fn instance_from_json(json: serde_json::Value) -> ::core::result::Result<terminusdb_schema::Instance, anyhow::Error> {
                 use terminusdb_schema::{Instance, InstanceProperty, ToTDBInstance, Schema, ToTDBSchema};
                 use terminusdb_schema::json::{InstanceFromJson, InstancePropertyFromJson};
                 use serde_json::{Value, Map};
@@ -161,7 +161,7 @@ fn implement_instance_from_json_for_struct(
 
                 #field_deserializers
 
-                Result::Ok(Instance {
+                ::core::result::Result::Ok(Instance {
                     id,
                     schema: <#struct_name #ty_generics as ToTDBSchema>::to_schema(),
                     capture: false,
@@ -199,7 +199,7 @@ fn implement_instance_from_json_for_simple_enum(
                             terminusdb_schema::PrimitiveValue::Unit
                         )
                     );
-                    return Result::Ok(terminusdb_schema::Instance {
+                    return ::core::result::Result::Ok(terminusdb_schema::Instance {
                         id,
                         schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
                         capture: false,
@@ -213,7 +213,7 @@ fn implement_instance_from_json_for_simple_enum(
 
     let expanded = quote! {
         impl terminusdb_schema::json::InstanceFromJson for #enum_name {
-            fn instance_from_json(json: serde_json::Value) -> anyhow::Result<terminusdb_schema::Instance> {
+            fn instance_from_json(json: serde_json::Value) -> ::core::result::Result<terminusdb_schema::Instance, anyhow::Error> {
                 use terminusdb_schema::{Instance, InstanceProperty, PrimitiveValue, Schema, ToTDBSchema};
                 use serde_json::{Value, Map};
                 use anyhow::{Context, anyhow, Result};
@@ -231,7 +231,7 @@ fn implement_instance_from_json_for_simple_enum(
                                 terminusdb_schema::PrimitiveValue::Unit
                             )
                         );
-                        return Result::Ok(terminusdb_schema::Instance {
+                        return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id: None,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
                             capture: false,
@@ -353,7 +353,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                 terminusdb_schema::PrimitiveValue::Unit
                             )
                         );
-                        return Result::Ok(terminusdb_schema::Instance {
+                        return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
                             capture: false,
@@ -375,7 +375,7 @@ fn implement_instance_from_json_for_tagged_enum(
                         let mut properties = std::collections::BTreeMap::new();
                         properties.insert(#variant_name_lower.to_string(), property);
                         
-                        return Result::Ok(terminusdb_schema::Instance {
+                        return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
                             capture: false,
@@ -429,7 +429,7 @@ fn implement_instance_from_json_for_tagged_enum(
                             )
                         );
                         
-                        return Result::Ok(terminusdb_schema::Instance {
+                        return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
                             capture: false,
@@ -482,7 +482,7 @@ fn implement_instance_from_json_for_tagged_enum(
                             )
                         );
                         
-                        return Result::Ok(terminusdb_schema::Instance {
+                        return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
                             capture: false,
@@ -497,7 +497,7 @@ fn implement_instance_from_json_for_tagged_enum(
 
     let expanded = quote! {
         impl terminusdb_schema::json::InstanceFromJson for #enum_name {
-            fn instance_from_json(json: serde_json::Value) -> anyhow::Result<terminusdb_schema::Instance> {
+            fn instance_from_json(json: serde_json::Value) -> ::core::result::Result<terminusdb_schema::Instance, anyhow::Error> {
                 use terminusdb_schema::{Instance, InstanceProperty, PrimitiveValue, Schema, Key, RelationValue, ToTDBSchema};
                 use terminusdb_schema::json::{InstancePropertyFromJson};
                 use serde_json::{Value, Map};
