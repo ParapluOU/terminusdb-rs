@@ -79,6 +79,60 @@ impl_int_deserialization!(u32);
 impl_int_deserialization!(isize);
 impl_int_deserialization!(usize);
 
+// i64 needs special handling - it's the native JSON integer type
+impl<Parent> InstancePropertyFromJson<Parent> for i64 {
+    fn property_from_json(json: Value) -> Result<InstanceProperty> {
+        match json {
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
+                }
+                Err(anyhow!("Number cannot be represented as i64"))
+            }
+            Value::String(s) => {
+                // TerminusDB sometimes returns numbers as strings
+                if let Ok(_i) = s.parse::<i64>() {
+                    if let Ok(n) = serde_json::Number::from_str(&s) {
+                        return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
+                    }
+                }
+                Err(anyhow!("String '{}' cannot be parsed as i64", s))
+            }
+            _ => Err(anyhow!("Expected a number, got {:?}", json)),
+        }
+    }
+}
+
+// u64 needs special handling for range checking
+impl<Parent> InstancePropertyFromJson<Parent> for u64 {
+    fn property_from_json(json: Value) -> Result<InstanceProperty> {
+        match json {
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
+                }
+                // Try as i64 for non-negative values
+                if let Some(i) = n.as_i64() {
+                    if i >= 0 {
+                        return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
+                    }
+                }
+                Err(anyhow!("Number cannot be represented as u64"))
+            }
+            Value::String(s) => {
+                // TerminusDB sometimes returns numbers as strings
+                if let Ok(_u) = s.parse::<u64>() {
+                    if let Ok(n) = serde_json::Number::from_str(&s) {
+                        return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
+                    }
+                }
+                Err(anyhow!("String '{}' cannot be parsed as u64", s))
+            }
+            _ => Err(anyhow!("Expected a number, got {:?}", json)),
+        }
+    }
+}
+
 // Float types
 macro_rules! impl_float_deserialization {
     ($ty:ty) => {
