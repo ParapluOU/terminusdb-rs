@@ -22,10 +22,15 @@
 //! }
 //! ```
 
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::process::{Child, Stdio};
 use std::time::Duration;
 use terminusdb_client::TerminusDBHttpClient;
 use tokio::sync::OnceCell;
+
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 
 /// Options for starting a TerminusDB server.
 #[derive(Debug, Clone, Default)]
@@ -51,6 +56,187 @@ pub struct TerminusDBServer {
 
 /// Shared test server instance
 static TEST_INSTANCE: OnceCell<TerminusDBServer> = OnceCell::const_new();
+
+/// Path to the shared server state file (contains PID and ref count)
+fn shared_server_state_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("terminusdb-test-server.state")
+}
+
+/// Path to the lock file for coordinating access to the state file
+fn shared_server_lock_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("terminusdb-test-server.lock")
+}
+
+/// Shared server state stored in a file
+#[derive(Debug, Clone)]
+struct SharedServerState {
+    /// PID of the server process
+    pid: u32,
+    /// Number of processes currently using the server
+    ref_count: u32,
+}
+
+impl SharedServerState {
+    fn parse(content: &str) -> Option<Self> {
+        let mut lines = content.lines();
+        let pid: u32 = lines.next()?.parse().ok()?;
+        let ref_count: u32 = lines.next()?.parse().ok()?;
+        Some(Self { pid, ref_count })
+    }
+
+    fn serialize(&self) -> String {
+        format!("{}\n{}\n", self.pid, self.ref_count)
+    }
+}
+
+/// Acquire the shared server lock and return the file handle.
+/// The lock is released when the file is dropped.
+#[cfg(unix)]
+fn acquire_shared_lock() -> std::io::Result<File> {
+    let lock_path = shared_server_lock_path();
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    // Block until we get an exclusive lock
+    let fd = lock_file.as_raw_fd();
+    let result = unsafe { libc::flock(fd, libc::LOCK_EX) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(lock_file)
+}
+
+#[cfg(not(unix))]
+fn acquire_shared_lock() -> std::io::Result<File> {
+    let lock_path = shared_server_lock_path();
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+}
+
+/// Read the current shared server state (must hold lock)
+fn read_shared_state() -> Option<SharedServerState> {
+    let state_path = shared_server_state_path();
+    let mut content = String::new();
+    File::open(&state_path)
+        .ok()?
+        .read_to_string(&mut content)
+        .ok()?;
+    SharedServerState::parse(&content)
+}
+
+/// Write the shared server state (must hold lock)
+fn write_shared_state(state: &SharedServerState) -> std::io::Result<()> {
+    let state_path = shared_server_state_path();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&state_path)?;
+    file.write_all(state.serialize().as_bytes())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Clear the shared server state (must hold lock)
+fn clear_shared_state() -> std::io::Result<()> {
+    let state_path = shared_server_state_path();
+    if state_path.exists() {
+        std::fs::remove_file(&state_path)?;
+    }
+    Ok(())
+}
+
+/// Check if a process with the given PID is still running
+#[cfg(unix)]
+fn is_process_running(pid: u32) -> bool {
+    // kill with signal 0 checks if process exists without sending a signal
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_process_running(_pid: u32) -> bool {
+    // Conservative: assume running if we can't check
+    true
+}
+
+/// Increment the reference count for the shared server.
+/// Returns the server PID if a server is already running.
+fn increment_ref_count() -> std::io::Result<Option<u32>> {
+    let _lock = acquire_shared_lock()?;
+
+    if let Some(mut state) = read_shared_state() {
+        // Check if the recorded server is still running
+        if is_process_running(state.pid) {
+            state.ref_count += 1;
+            write_shared_state(&state)?;
+            eprintln!(
+                "[terminusdb-bin] Incremented ref count to {} for server PID {}",
+                state.ref_count, state.pid
+            );
+            return Ok(Some(state.pid));
+        } else {
+            // Server died, clear state
+            eprintln!(
+                "[terminusdb-bin] Server PID {} is dead, clearing state",
+                state.pid
+            );
+            clear_shared_state()?;
+        }
+    }
+
+    Ok(None)
+}
+
+/// Register a new server and set ref count to 1.
+fn register_new_server(pid: u32) -> std::io::Result<()> {
+    let _lock = acquire_shared_lock()?;
+
+    let state = SharedServerState { pid, ref_count: 1 };
+    write_shared_state(&state)?;
+    eprintln!(
+        "[terminusdb-bin] Registered new server PID {} with ref count 1",
+        pid
+    );
+    Ok(())
+}
+
+/// Decrement the reference count. Returns true if this was the last reference
+/// and the server should be killed.
+fn decrement_ref_count() -> std::io::Result<bool> {
+    let _lock = acquire_shared_lock()?;
+
+    if let Some(mut state) = read_shared_state() {
+        if state.ref_count > 1 {
+            state.ref_count -= 1;
+            write_shared_state(&state)?;
+            eprintln!(
+                "[terminusdb-bin] Decremented ref count to {} for server PID {}",
+                state.ref_count, state.pid
+            );
+            return Ok(false);
+        } else {
+            // Last reference, clear state
+            clear_shared_state()?;
+            eprintln!(
+                "[terminusdb-bin] Last reference released for server PID {}",
+                state.pid
+            );
+            return Ok(true);
+        }
+    }
+
+    // No state file means we're probably not the owner
+    Ok(false)
+}
 
 impl TerminusDBServer {
     /// Start a new test server with default test settings.
@@ -85,7 +271,10 @@ impl TerminusDBServer {
     /// lifetime of the process. Subsequent calls return the same instance.
     /// This is useful for running multiple tests against the same server.
     ///
-    /// Note: The shared server is NOT stopped when the reference is dropped.
+    /// The server uses cross-process reference counting: each process that
+    /// calls `test_instance()` increments the ref count, and decrements it
+    /// when the process exits. The server is only killed when the last
+    /// process releases its reference.
     ///
     /// # Example
     ///
@@ -111,34 +300,57 @@ impl TerminusDBServer {
     pub async fn test_instance() -> anyhow::Result<&'static Self> {
         TEST_INSTANCE
             .get_or_try_init(|| async {
-                let binary_path = crate::extract_binary()?;
-                eprintln!("[terminusdb-bin] test_instance: Binary path: {:?}", binary_path);
+                // Use a single lock for the entire operation to avoid deadlocks.
+                // The lock is held briefly while we check/update state.
+                let _lock = acquire_shared_lock()?;
 
-                // --memory mode self-initializes, no store init needed
-                let args = vec!["serve", "--memory", "root"];
+                // Check if there's an existing server we can join
+                if let Some(mut state) = read_shared_state() {
+                    if is_process_running(state.pid) {
+                        // Server is running, increment ref count
+                        state.ref_count += 1;
+                        write_shared_state(&state)?;
+                        eprintln!(
+                            "[terminusdb-bin] test_instance: Joining existing server PID {} (ref count: {})",
+                            state.pid, state.ref_count
+                        );
+                        // Release lock before waiting
+                        drop(_lock);
 
-                eprintln!("[terminusdb-bin] test_instance: Spawning with args: {:?}", args);
+                        // Wait for server to be ready (it should already be running)
+                        wait_for_server_ready(Duration::from_secs(60)).await?;
+                        return Ok(TerminusDBServer {
+                            child: None,
+                            shared: true,
+                        });
+                    } else {
+                        // Server died, clear state
+                        eprintln!(
+                            "[terminusdb-bin] test_instance: Server PID {} is dead, clearing state",
+                            state.pid
+                        );
+                        clear_shared_state()?;
+                    }
+                }
 
-                // Pipe stderr so we can capture early failure messages
-                let mut child = std::process::Command::new(&binary_path)
-                    .args(&args)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::piped())
-                    .spawn()?;
+                // No existing server, we need to start one.
+                eprintln!("[terminusdb-bin] test_instance: Starting new server");
+                let server = start_test_server().await?;
 
-                eprintln!(
-                    "[terminusdb-bin] test_instance: Server spawned with PID: {}",
-                    child.id()
-                );
+                // Register this server with ref count 1
+                if let Some(ref child) = server.child {
+                    let state = SharedServerState {
+                        pid: child.id(),
+                        ref_count: 1,
+                    };
+                    write_shared_state(&state)?;
+                    eprintln!(
+                        "[terminusdb-bin] test_instance: Registered new server PID {} with ref count 1",
+                        child.id()
+                    );
+                }
 
-                // Wait for server to be ready, checking for early process exit
-                wait_for_ready(&mut child, Duration::from_secs(30)).await?;
-
-                let server = TerminusDBServer {
-                    child: Some(child),
-                    shared: true,
-                };
-
+                // Lock is released when _lock goes out of scope
                 Ok(server)
             })
             .await
@@ -250,9 +462,37 @@ impl TerminusDBServer {
 
 impl Drop for TerminusDBServer {
     fn drop(&mut self) {
-        // Don't kill shared instances
-        if !self.shared {
+        if self.shared {
+            // Shared instance: decrement ref count
+            // Only kill if this is the last reference
+            match decrement_ref_count() {
+                Ok(true) => {
+                    // Last reference - kill the server if we own it
+                    if let Some(ref mut child) = self.child {
+                        eprintln!(
+                            "[terminusdb-bin] Drop: Killing server PID {} (last reference)",
+                            child.id()
+                        );
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+                Ok(false) => {
+                    // Not the last reference - don't kill
+                    eprintln!("[terminusdb-bin] Drop: Not killing server (other processes still using it)");
+                }
+                Err(e) => {
+                    eprintln!("[terminusdb-bin] Drop: Error decrementing ref count: {}", e);
+                    // Conservative: don't kill since we don't know the state
+                }
+            }
+        } else {
+            // Non-shared instance: always kill
             if let Some(ref mut child) = self.child {
+                eprintln!(
+                    "[terminusdb-bin] Drop: Killing non-shared server PID {}",
+                    child.id()
+                );
                 let _ = child.kill();
                 let _ = child.wait();
             }
@@ -376,6 +616,59 @@ const FATAL_ERROR_PATTERNS: &[&str] = &[
     "FATAL ERROR",
     "store has not been initialized",
 ];
+
+/// Start the test server (internal helper for test_instance)
+async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
+    let binary_path = crate::extract_binary()?;
+    eprintln!(
+        "[terminusdb-bin] test_instance: Binary path: {:?}",
+        binary_path
+    );
+
+    // --memory mode self-initializes, no store init needed
+    let args = vec!["serve", "--memory", "root"];
+
+    eprintln!(
+        "[terminusdb-bin] test_instance: Spawning with args: {:?}",
+        args
+    );
+
+    // Pipe stderr so we can capture early failure messages
+    let mut child = std::process::Command::new(&binary_path)
+        .args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    eprintln!(
+        "[terminusdb-bin] test_instance: Server spawned with PID: {}",
+        child.id()
+    );
+
+    // Wait for server to be ready, checking for early process exit
+    wait_for_ready(&mut child, Duration::from_secs(30)).await?;
+
+    Ok(TerminusDBServer {
+        child: Some(child),
+        shared: true,
+    })
+}
+
+/// Wait for the server to become ready (without owning the process)
+async fn wait_for_server_ready(max_wait: Duration) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < max_wait {
+        let client = TerminusDBHttpClient::local_node().await;
+        if client.info().await.is_ok() {
+            eprintln!("[terminusdb-bin] Server is ready!");
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    anyhow::bail!("Server did not become ready within {:?}", max_wait)
+}
 
 /// Wait for the server to respond using TerminusDBHttpClient.
 /// Also checks if the process has exited early or logged fatal errors.
