@@ -50,6 +50,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:MissingParameter")]
     MissingParameter(MissingParameterError),
 
+    #[serde(rename = "api:IncorrectAuthenticationError")]
+    IncorrectAuthentication(IncorrectAuthenticationError),
+
     Other(Value),
 
     #[default]
@@ -69,6 +72,7 @@ impl Display for ApiResponseError {
             ApiResponseError::BadDescriptorPath(error) => Display::fmt(error, f),
             ApiResponseError::SameDocumentIdsMutatedInOneTransaction(error) => Display::fmt(error, f),
             ApiResponseError::MissingParameter(error) => Display::fmt(error, f),
+            ApiResponseError::IncorrectAuthentication(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -508,6 +512,15 @@ pub struct MissingParameterError {
 impl Display for MissingParameterError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Missing required parameter: '{}'", self.parameter)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct IncorrectAuthenticationError;
+
+impl Display for IncorrectAuthenticationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Incorrect authentication information")
     }
 }
 

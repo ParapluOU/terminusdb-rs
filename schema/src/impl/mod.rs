@@ -4,6 +4,7 @@ pub mod map;
 pub mod btreemap;
 pub mod datetime;
 pub mod hashmap;
+pub mod hashmap_uuid;
 pub mod uuid;
 
 mod r#box;
@@ -20,8 +21,8 @@ use std::collections::HashSet;
 
 use crate::*;
 pub use {
-    btreemap::*, datetime::*, generic::*, hashmap::*, int::*, map::*, opt::*, phantom::*, set::*,
-    str::*, uuid::*, value::*, vec::*,
+    btreemap::*, datetime::*, generic::*, hashmap::*, hashmap_uuid::*, int::*, map::*, opt::*,
+    phantom::*, set::*, str::*, uuid::*, value::*, vec::*,
 };
 
 macro_rules! impl_ref_tdb_schema {

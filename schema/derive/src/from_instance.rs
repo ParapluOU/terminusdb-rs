@@ -133,23 +133,23 @@ fn implement_from_instance_for_struct(
     // Generate the implementation
     quote! {
         impl #impl_generics terminusdb_schema::FromTDBInstance for #struct_name #ty_generics #where_clause {
-            fn from_instance(instance: &terminusdb_schema::Instance) -> Result<Self, anyhow::Error> {
+            fn from_instance(instance: &terminusdb_schema::Instance) -> ::core::result::Result<Self, anyhow::Error> {
                 use anyhow::*;
 
                 // Check that the schema type matches
                 let expected_schema_name = <Self as terminusdb_schema::ToTDBSchema>::schema_name();
                 if instance.schema.class_name() != &expected_schema_name {
-                    return Err(anyhow::anyhow!("Instance type mismatch, expected {}, got {}", expected_schema_name, instance.schema.class_name()));
+                    return ::core::result::Result::Err(anyhow::anyhow!("Instance type mismatch, expected {}, got {}", expected_schema_name, instance.schema.class_name()));
                 }
 
                 #fields_code
 
-                Result::Ok(Self {
+                ::core::result::Result::Ok(Self {
                     #(#field_names),*
                 })
             }
 
-            fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> Result<Self, anyhow::Error> {
+            fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> ::core::result::Result<Self, anyhow::Error> {
                 if instances.is_empty() {
                     return Err(anyhow::anyhow!("Empty instance tree"));
                 }
@@ -291,7 +291,7 @@ fn implement_from_instance_for_simple_enum(
 
             quote! {
                 if instance.properties.contains_key(#variant_name_str) {
-                    return Result::Ok(#enum_name::#variant_ident);
+                    return ::core::result::Result::Ok(#enum_name::#variant_ident);
                 }
             }
         })
@@ -299,7 +299,7 @@ fn implement_from_instance_for_simple_enum(
 
     quote! {
         impl terminusdb_schema::FromTDBInstance for #enum_name {
-            fn from_instance(instance: &terminusdb_schema::Instance) -> Result<Self, anyhow::Error> {
+            fn from_instance(instance: &terminusdb_schema::Instance) -> ::core::result::Result<Self, anyhow::Error> {
                 // Check that the schema is an Enum and matches the expected type
                 match &instance.schema {
                     terminusdb_schema::Schema::Enum { id, .. } if id == &<Self as terminusdb_schema::ToTDBSchema>::schema_name() => {
@@ -312,7 +312,7 @@ fn implement_from_instance_for_simple_enum(
                 }
             }
 
-            fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> Result<Self, anyhow::Error> {
+            fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> ::core::result::Result<Self, anyhow::Error> {
                 if instances.is_empty() {
                     return Err(anyhow::anyhow!("Empty instance tree"));
                 }
@@ -349,7 +349,7 @@ fn implement_from_instance_for_tagged_enum(
                     if instance.properties.contains_key(#variant_name_str) {
                         if let Some(prop) = instance.properties.get(#variant_name_str) {
                             if let terminusdb_schema::InstanceProperty::Primitive(terminusdb_schema::PrimitiveValue::Unit) = prop {
-                                return Result::Ok(#enum_name::#variant_ident);
+                                return ::core::result::Result::Ok(#enum_name::#variant_ident);
                             }
                         }
                     }
@@ -367,13 +367,13 @@ fn implement_from_instance_for_tagged_enum(
                             if <#field_ty as terminusdb_schema::MaybeIsPrimitive>::is_primitive() {
                                 // Direct primitive deserialization for primitive types
                                 match <#field_ty as terminusdb_schema::FromInstanceProperty>::from_property(prop) {
-                                    Result::Ok(value) => return Result::Ok(#enum_name::#variant_ident(value)),
+                                    ::core::result::Result::Ok(value) => return ::core::result::Result::Ok(#enum_name::#variant_ident(value)),
                                     Err(e) => return Err(anyhow::anyhow!("Failed to deserialize variant {}: {}", #variant_name_str, e)),
                                 }
                             } else {
                                 // Complex type deserialization
                                 match <#field_ty as terminusdb_schema::MaybeFromTDBInstance>::maybe_from_property(prop)? {
-                                    Some(value) => return Result::Ok(#enum_name::#variant_ident(value)),
+                                    Some(value) => return ::core::result::Result::Ok(#enum_name::#variant_ident(value)),
                                     None => return Err(anyhow::anyhow!("Failed to deserialize complex variant {}", #variant_name_str)),
                                 }
                             }
@@ -383,13 +383,13 @@ fn implement_from_instance_for_tagged_enum(
                             if <#field_ty as terminusdb_schema::MaybeIsPrimitive>::is_primitive() {
                                 // Direct primitive deserialization for primitive types
                                 match <#field_ty as terminusdb_schema::FromInstanceProperty>::from_property(prop) {
-                                    Result::Ok(value) => return Result::Ok(#enum_name::#variant_ident(value)),
+                                    ::core::result::Result::Ok(value) => return ::core::result::Result::Ok(#enum_name::#variant_ident(value)),
                                     Err(e) => return Err(anyhow::anyhow!("Failed to deserialize variant {}: {}", #variant_name_cap, e)),
                                 }
                             } else {
                                 // Complex type deserialization
                                 match <#field_ty as terminusdb_schema::MaybeFromTDBInstance>::maybe_from_property(prop)? {
-                                    Some(value) => return Result::Ok(#enum_name::#variant_ident(value)),
+                                    Some(value) => return ::core::result::Result::Ok(#enum_name::#variant_ident(value)),
                                     None => return Err(anyhow::anyhow!("Failed to deserialize complex variant {}", #variant_name_cap)),
                                 }
                             }
@@ -429,7 +429,7 @@ fn implement_from_instance_for_tagged_enum(
                                     if <#field_type as terminusdb_schema::MaybeIsPrimitive>::is_primitive() {
                                         // Direct primitive deserialization for primitive types
                                         match <#field_type as terminusdb_schema::FromInstanceProperty>::from_property(field_prop) {
-                                            Result::Ok(value) => value,
+                                            ::core::result::Result::Ok(value) => value,
                                             Err(e) => return Err(anyhow::anyhow!("Failed to deserialize field {} in variant {}: {}", #field_string, #variant_name_str, e)),
                                         }
                                     } else {
@@ -451,7 +451,7 @@ fn implement_from_instance_for_tagged_enum(
                         if let terminusdb_schema::InstanceProperty::Relation(terminusdb_schema::RelationValue::One(sub_instance)) = prop {
                             #(#field_parsers)*
                             
-                            return Result::Ok(#enum_name::#variant_ident { #(#field_names),* });
+                            return ::core::result::Result::Ok(#enum_name::#variant_ident { #(#field_names),* });
                         }
                     }
                 }
@@ -461,7 +461,7 @@ fn implement_from_instance_for_tagged_enum(
 
     quote! {
         impl terminusdb_schema::FromTDBInstance for #enum_name {
-            fn from_instance(instance: &terminusdb_schema::Instance) -> Result<Self, anyhow::Error> {
+            fn from_instance(instance: &terminusdb_schema::Instance) -> ::core::result::Result<Self, anyhow::Error> {
                 // Check that the schema is a TaggedUnion and matches the expected type
                 match &instance.schema {
                     terminusdb_schema::Schema::TaggedUnion { id, .. } if id == &<Self as terminusdb_schema::ToTDBSchema>::schema_name() => {
@@ -474,7 +474,7 @@ fn implement_from_instance_for_tagged_enum(
                 }
             }
 
-            fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> Result<Self, anyhow::Error> {
+            fn from_instance_tree(instances: &[terminusdb_schema::Instance]) -> ::core::result::Result<Self, anyhow::Error> {
                 if instances.is_empty() {
                     return Err(anyhow::anyhow!("Empty instance tree"));
                 }
