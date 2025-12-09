@@ -55,7 +55,9 @@ fn main() {
         (source_dir, false)
     } else {
         // Get version to build
-        let version = env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "main".to_string());
+        // Default to our fork's fix branch that allows --memory mode to work correctly
+        let version = env::var("TERMINUSDB_VERSION")
+            .unwrap_or_else(|_| "fix/memory-mode-system-db-check".to_string());
         println!("cargo:warning=Building TerminusDB version: {}", version);
 
         // Clone TerminusDB to a consistent temporary directory
