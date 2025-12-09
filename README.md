@@ -147,39 +147,342 @@ enum ContactInfo {
 }
 ```
 
-### ID Fields and Random Keys
+### ID Field Configuration
 
-By default, TerminusDB generates random IDs for documents. You can control this behavior:
+The `id_field` attribute specifies which field holds the document's ID. The field type you use depends on your key strategy:
 
-#### Using Generated IDs (Default)
+#### Key Strategy and ID Field Types
+
+| Key Strategy | ID Field Type | Description |
+|-------------|---------------|-------------|
+| `random` | `EntityIDFor<Self>` or `String` | Client provides or generates ID |
+| `lexical` | `ServerIDFor<Self>` | Server computes ID from `key_fields` |
+| `hash` | `ServerIDFor<Self>` | Server computes hash-based ID |
+| `value_hash` | `ServerIDFor<Self>` | Server computes content hash ID |
+
+#### ServerIDFor (Server-Assigned IDs)
+
+Use `ServerIDFor<Self>` when the server computes the ID (lexical, hash, value_hash keys):
+
 ```rust
+use terminusdb_schema::ServerIDFor;
+
 #[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
-struct Document {
-    title: String,
-    content: String,
+#[tdb(key = "lexical", key_fields = "email", id_field = "id")]
+struct User {
+    id: ServerIDFor<Self>,  // Empty until server assigns
+    email: String,
+    name: String,
 }
-// TerminusDB will generate a random ID like "Document_abc123def456"
+
+// Create with empty ID placeholder
+let user = User {
+    id: ServerIDFor::new(),
+    email: "alice@example.com".to_string(),
+    name: "Alice".to_string(),
+};
+
+// After insertion, retrieve to get the server-assigned ID
+let (saved_user, _) = client.insert_instance_and_retrieve(&user, args).await?;
+println!("Server-assigned ID: {}", saved_user.id.as_ref().unwrap().id());
 ```
 
-#### Using Custom ID Fields
+#### EntityIDFor (Client-Provided IDs)
+
+Use `EntityIDFor<Self>` when you want to control the ID (typically with random keys):
+
 ```rust
+use terminusdb_schema::EntityIDFor;
+
 #[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
-#[tdb(id_field = "id")]  // Use the 'id' field as the document identifier
+#[tdb(key = "random", id_field = "id")]
 struct Document {
-    id: String,      // This field becomes the document ID
+    id: EntityIDFor<Self>,
     title: String,
     content: String,
 }
 
-// Usage:
+// Create with custom ID
 let doc = Document {
-    id: "my-custom-id".to_string(),
+    id: EntityIDFor::new("my-custom-id")?,
     title: "My Document".to_string(),
-    content: "Document content".to_string(),
+    content: "Content here".to_string(),
+};
+
+// Or generate a random UUID-based ID
+let doc_random = Document {
+    id: EntityIDFor::random(),
+    title: "Random Doc".to_string(),
+    content: "Content".to_string(),
 };
 ```
 
-**Important:** When using `id_field`, the specified field value becomes the document's unique identifier in the database. Ensure these values are unique to avoid conflicts.
+#### Using String for Simple Cases
+
+For random keys only, you can use a plain `String`:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[tdb(key = "random", id_field = "id")]
+struct SimpleDoc {
+    id: String,
+    content: String,
+}
+
+let doc = SimpleDoc {
+    id: "my-id".to_string(),
+    content: "Hello".to_string(),
+};
+```
+
+### Entity IDs (`EntityIDFor<T>`)
+
+`EntityIDFor<T>` is a strongly-typed ID wrapper that ensures type-safe references between models. It validates that IDs match the expected type at runtime.
+
+#### Creating IDs
+
+```rust
+use terminusdb_schema::EntityIDFor;
+
+// From a simple ID (auto-prefixes with type name)
+let id = EntityIDFor::<Person>::new("123")?;  // → "Person/123"
+
+// Generate random UUID-based ID
+let id = EntityIDFor::<Person>::random();  // → "Person/550e8400-e29b-..."
+
+// From full typed path
+let id = EntityIDFor::<Person>::new("Person/123")?;
+
+// From full IRI (for advanced use)
+let id = EntityIDFor::<Person>::new_unchecked("terminusdb://data#Person/123")?;
+```
+
+#### Cross-Model References
+
+Reference other models type-safely:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct User {
+    name: String,
+    email: String,
+}
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Post {
+    title: String,
+    content: String,
+    author_id: EntityIDFor<User>,  // Type-safe reference to User
+}
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Comment {
+    text: String,
+    post_id: EntityIDFor<Post>,      // Reference to Post
+    author_id: EntityIDFor<User>,    // Reference to User
+}
+
+// Usage
+let comment = Comment {
+    text: "Great post!".to_string(),
+    post_id: EntityIDFor::new("post-123")?,
+    author_id: EntityIDFor::new("user-456")?,
+};
+```
+
+#### TaggedUnion IDs
+
+For tagged unions, use `new_variant()` to specify the concrete variant type:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+enum PaymentMethod {
+    CreditCard { card_number: String, cvv: String },
+    BankTransfer { account: String, routing: String },
+}
+
+// Create ID for a specific variant
+let id: EntityIDFor<PaymentMethod> =
+    EntityIDFor::new_variant::<PaymentMethodCreditCard>("cc_123")?;
+// Result: "PaymentMethodCreditCard/cc_123"
+```
+
+#### ID Accessors
+
+```rust
+let id = EntityIDFor::<Person>::new("terminusdb://data#Person/123")?;
+
+id.id()            // "123" - just the ID part
+id.typed()         // "Person/123" - type-prefixed
+id.iri()           // "terminusdb://data#Person/123" - full IRI
+id.get_type_name() // "Person" - type name only
+id.get_base_uri()  // Some("terminusdb://data") - base URI if present
+```
+
+### Lazy Loading (`TdbLazy<T>`)
+
+`TdbLazy<T>` provides lazy-loading for relationships, storing either an ID reference or the loaded data. Unlike `EntityIDFor<T>`, it creates actual document links in the schema.
+
+#### When to Use Each
+
+| Type | Schema Link | Lazy Loading | Use Case |
+|------|-------------|--------------|----------|
+| `EntityIDFor<T>` | No | Manual | Lightweight foreign key references |
+| `TdbLazy<T>` | Yes | Built-in | Full relationships with auto-loading |
+
+#### Basic Usage
+
+```rust
+use terminusdb_schema::TdbLazy;
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Writer {
+    name: String,
+}
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct BlogPost {
+    title: String,
+    writer: TdbLazy<Writer>,  // Lazy-loaded relationship
+}
+
+// Create with ID reference only (not loaded)
+let post = BlogPost {
+    title: "My Post".to_string(),
+    writer: TdbLazy::new_id("writer-123")?,
+};
+
+// Or create with loaded data
+let writer = Writer { name: "Alice".to_string() };
+let post = BlogPost {
+    title: "My Post".to_string(),
+    writer: TdbLazy::from(writer),
+};
+```
+
+#### Key Methods
+
+```rust
+// Check if data is loaded
+if lazy_ref.is_loaded() {
+    let data = lazy_ref.get_expect();  // Get loaded data (panics if not loaded)
+}
+
+// Get the ID reference
+let id: &EntityIDFor<Writer> = lazy_ref.id();
+
+// Lazy-load from database
+let data = lazy_ref.get(&client)?;  // Fetches if not already loaded
+
+// Convert to reference-only (discard loaded data)
+lazy_ref.make_ref();  // Useful to avoid re-saving nested documents
+```
+
+#### Serialization Behavior
+
+- **When loaded**: Serializes as the full nested object
+- **When ID-only**: Serializes as just the ID string
+
+```rust
+// ID-only serializes as: "Writer/writer-123"
+// Loaded serializes as: { "name": "Alice", ... }
+```
+
+### Subdocuments
+
+Subdocuments are embedded documents without independent identity—they exist only within their parent document and are stored inline.
+
+#### When to Use Subdocuments
+
+- **Value objects**: Addresses, coordinates, configuration blocks
+- **Tightly coupled data**: Data that has no meaning outside its parent
+- **Performance**: Avoid separate database lookups for related data
+
+#### Struct-Level Subdocument
+
+Mark an entire type to always be embedded:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[tdb(subdocument = true, key = "value_hash")]
+struct Address {
+    street: String,
+    city: String,
+    country: String,
+}
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Person {
+    name: String,
+    home_address: Address,  // Always embedded (Address is a subdocument type)
+}
+```
+
+#### Field-Level Subdocument
+
+Mark specific fields to be embedded, even if the type isn't always a subdocument:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Person {
+    name: String,
+    #[tdb(subdocument = true)]
+    home_address: Address,     // Embedded subdocument
+    employer: Company,         // Regular document reference (separate entity)
+}
+```
+
+#### Subdocument Collections
+
+Embed collections of subdocuments:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[tdb(subdocument = true)]
+struct LineItem {
+    product: String,
+    quantity: i32,
+    price: f64,
+}
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Order {
+    order_number: String,
+    #[tdb(subdocument = true)]
+    items: Vec<LineItem>,  // Vec of embedded subdocuments
+}
+```
+
+#### TaggedUnion Subdocuments
+
+When a tagged union is marked as subdocument, all its variants are also embedded:
+
+```rust
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[tdb(subdocument = true)]
+enum ContactMethod {
+    Email { address: String, verified: bool },
+    Phone { number: String, country_code: String },
+    Address { street: String, city: String },
+}
+
+#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+struct Person {
+    name: String,
+    #[tdb(subdocument = true)]
+    contacts: Vec<ContactMethod>,  // All variants are embedded
+}
+```
+
+#### Subdocuments vs Regular Documents
+
+| Aspect | Subdocuments | Regular Documents |
+|--------|--------------|-------------------|
+| Identity | Path-based (Parent/123/field/Child/456) | Own ID (Child/456) |
+| Storage | Embedded in parent JSON | Separate document |
+| Queries | Must query through parent | Directly queryable |
+| Flattening | Never flattened to references | Flattened when serializing |
+| Use Case | Value objects, embedded data | Standalone entities |
 
 ### Schema vs Instance vs Document
 
