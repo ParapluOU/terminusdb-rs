@@ -13,6 +13,7 @@ anyhow.workspace = true
 terminusdb-client = { version = "0.1.0", path = "../client" }
 terminusdb-schema = { version = "0.1.0", path = "../schema" }
 tokio = { workspace = true, features = ["time"] }
+url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [build-dependencies]

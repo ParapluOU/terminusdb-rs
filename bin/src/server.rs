@@ -358,10 +358,11 @@ impl TerminusDBServer {
 
     /// Get a configured HTTP client for this server.
     ///
-    /// Uses `TerminusDBHttpClient::local_node()` which handles env vars automatically.
+    /// Uses explicit "root" password instead of `local_node()` which reads from
+    /// environment variables. Memory mode servers always use "root" password.
     /// Verifies the server is responding before returning.
     pub async fn client(&self) -> anyhow::Result<TerminusDBHttpClient> {
-        let client = TerminusDBHttpClient::local_node().await;
+        let client = create_test_client().await?;
         // Verify server is responding
         client.info().await?;
         Ok(client)
@@ -654,15 +655,29 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
     })
 }
 
+/// Create a client for the local test server with hardcoded "root" password.
+/// This is used instead of `local_node()` which reads from environment variables,
+/// since memory mode servers always use "root" password.
+async fn create_test_client() -> anyhow::Result<TerminusDBHttpClient> {
+    TerminusDBHttpClient::new(
+        url::Url::parse("http://localhost:6363").unwrap(),
+        "admin",
+        "root",
+        "admin",
+    )
+    .await
+}
+
 /// Wait for the server to become ready (without owning the process)
 async fn wait_for_server_ready(max_wait: Duration) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     while start.elapsed() < max_wait {
-        let client = TerminusDBHttpClient::local_node().await;
-        if client.info().await.is_ok() {
-            eprintln!("[terminusdb-bin] Server is ready!");
-            return Ok(());
+        if let Ok(client) = create_test_client().await {
+            if client.info().await.is_ok() {
+                eprintln!("[terminusdb-bin] Server is ready!");
+                return Ok(());
+            }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -741,8 +756,14 @@ async fn wait_for_ready(child: &mut Child, max_wait: Duration) -> anyhow::Result
             }
         }
 
-        // Use the client's local_node() + info() for health check
-        let client = TerminusDBHttpClient::local_node().await;
+        // Use create_test_client() for health check (hardcoded "root" password)
+        let client = match create_test_client().await {
+            Ok(c) => c,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         match client.info().await {
             Ok(_) => {
                 eprintln!("[terminusdb-bin] Server is ready!");

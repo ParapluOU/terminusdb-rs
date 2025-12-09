@@ -3220,6 +3220,7 @@ dependencies = [
  "terminusdb-client",
  "terminusdb-schema",
  "tokio 1.45.1",
+ "url",
  "uuid",
  "which",
 ]
