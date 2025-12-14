@@ -4,19 +4,15 @@
 //!
 //! # Example
 //! ```ignore
-//! use terminusdb_orm::testing::TestDb;
+//! use terminusdb_orm::testing::with_test_db;
 //!
 //! #[tokio::test]
-//! async fn my_test() {
-//!     let test_db = TestDb::new("my_test_db").await.unwrap();
-//!
-//!     // Use the client
-//!     let client = test_db.client();
-//!     let spec = test_db.spec();
-//!
-//!     // ... run your tests ...
-//!
-//!     // Cleanup happens automatically when test_db is dropped
+//! async fn my_test() -> anyhow::Result<()> {
+//!     with_test_db("my_test", |client, spec| async move {
+//!         // Your test code here...
+//!         // Database is automatically cleaned up when done
+//!         Ok(())
+//!     }).await
 //! }
 //! ```
 
@@ -27,6 +23,62 @@ use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 
 /// Counter for generating unique test database names
 static TEST_DB_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+/// Extension trait for creating test databases from a client.
+#[async_trait::async_trait]
+pub trait TestDbExt {
+    /// Create a test database with a unique name based on the given prefix.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use terminusdb_orm::testing::TestDbExt;
+    ///
+    /// let server = TerminusDBServer::test_instance().await?;
+    /// let client = server.client().await?;
+    /// let test_db = client.with_test_db("my_test").await?;
+    /// ```
+    async fn with_test_db(self, prefix: &str) -> anyhow::Result<TestDb>;
+}
+
+#[async_trait::async_trait]
+impl TestDbExt for TerminusDBHttpClient {
+    async fn with_test_db(self, prefix: &str) -> anyhow::Result<TestDb> {
+        let counter = TEST_DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db_name = format!("{}_{}", prefix, counter);
+        TestDb::with_client(self, &db_name).await
+    }
+}
+
+/// Run a test with a temporary database that is automatically cleaned up.
+///
+/// This is the most ergonomic way to write integration tests. It:
+/// 1. Gets or creates a shared test server instance
+/// 2. Creates a uniquely-named database
+/// 3. Runs your test closure with the client and spec
+/// 4. Cleans up the database when done (even on failure)
+///
+/// # Example
+/// ```ignore
+/// use terminusdb_orm::testing::with_test_db;
+///
+/// #[tokio::test]
+/// async fn my_test() -> anyhow::Result<()> {
+///     with_test_db("my_test", |client, spec| async move {
+///         // Insert schema, data, run queries...
+///         client.ensure_database(&spec.db).await?;
+///         Ok(())
+///     }).await
+/// }
+/// ```
+#[cfg(feature = "testing")]
+pub async fn with_test_db<F, Fut, T>(prefix: &str, f: F) -> anyhow::Result<T>
+where
+    F: FnOnce(TerminusDBHttpClient, BranchSpec) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let server = terminusdb_bin::TerminusDBServer::test_instance().await?;
+    server.with_tmp_db(prefix, f).await
+}
 
 /// A test database context that handles setup and cleanup.
 ///
@@ -278,5 +330,46 @@ mod tests {
         let spec = test_db.spec();
         assert!(spec.db.starts_with("spec_test_"));
         assert_eq!(spec.branch, Some("main".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_with_test_db_extension() {
+        let server = terminusdb_bin::TerminusDBServer::test_instance()
+            .await
+            .unwrap();
+        let test_db = server
+            .client()
+            .await
+            .unwrap()
+            .with_test_db("ext_test")
+            .await
+            .unwrap();
+        assert!(test_db.db_name().starts_with("ext_test_"));
+        assert_eq!(test_db.org(), "admin");
+    }
+
+    #[tokio::test]
+    async fn test_with_test_db_closure() {
+        let result = super::with_test_db("closure_test", |client, spec| async move {
+            // Verify we got a working client and spec
+            assert!(spec.db.starts_with("closure_test_"));
+            assert_eq!(spec.branch, Some("main".to_string()));
+
+            // Verify the database exists
+            let dbs = client.list_databases_simple().await?;
+            let found = dbs.iter().any(|db| {
+                db.path
+                    .as_ref()
+                    .map(|p| p.contains(&spec.db))
+                    .unwrap_or(false)
+            });
+            assert!(found, "Database should exist");
+
+            Ok(42) // Return a value to prove it works
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(result, 42);
     }
 }
