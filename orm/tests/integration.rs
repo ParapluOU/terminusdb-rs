@@ -2,57 +2,52 @@
 //!
 //! These tests use the embedded in-memory TerminusDB server.
 
-use terminusdb_bin::TerminusDBServer;
 use terminusdb_orm::prelude::*;
-use terminusdb_orm::testing::TestDb;
+use terminusdb_orm::testing::with_test_db;
 
 /// Test that ORM client initialization works
 #[tokio::test]
-async fn test_orm_client_init() {
-    let server = TerminusDBServer::test_instance().await.unwrap();
-    let client = server.client().await.unwrap();
+async fn test_orm_client_init() -> anyhow::Result<()> {
+    with_test_db("orm_client_init", |client, _spec| async move {
+        // Initialize should succeed (note: may fail if already initialized in another test)
+        let _ = OrmClient::init(client);
 
-    // Initialize should succeed (note: may fail if already initialized in another test)
-    let _ = OrmClient::init(client);
-
-    // Client should be initialized
-    assert!(OrmClient::is_initialized());
+        // Client should be initialized
+        assert!(OrmClient::is_initialized());
+        Ok(())
+    })
+    .await
 }
 
-/// Test basic fetch operations with TestDb helper
+/// Test basic fetch operations
 #[tokio::test]
-async fn test_fetch_by_ids() {
-    let server = TerminusDBServer::test_instance().await.unwrap();
-    let client = server.client().await.unwrap();
-    let test_db = TestDb::with_client(client, "orm_fetch_test").await.unwrap();
-    let client = test_db.client();
-    let spec = test_db.spec();
+async fn test_fetch_by_ids() -> anyhow::Result<()> {
+    with_test_db("orm_fetch_test", |client, spec| async move {
+        // Fetch non-existent IDs - TerminusDB may return error or empty
+        let result = FetchBuilder::with_client(&client)
+            .add_ids(["NonExistent/1"])
+            .execute(&spec)
+            .await;
 
-    // Fetch non-existent IDs - TerminusDB may return error or empty
-    let result = FetchBuilder::with_client(client)
-        .add_ids(["NonExistent/1"])
-        .execute(&spec)
-        .await;
-
-    // Either empty result or error is acceptable for non-existent IDs
-    match result {
-        Ok(docs) => assert!(docs.is_empty()),
-        Err(_) => {} // Error is expected for non-existent IDs
-    }
+        // Either empty result or error is acceptable for non-existent IDs
+        match result {
+            Ok(docs) => assert!(docs.is_empty()),
+            Err(_) => {} // Error is expected for non-existent IDs
+        }
+        Ok(())
+    })
+    .await
 }
 
-/// Test TestDb helper creation and cleanup
+/// Test that with_test_db provides working client and spec
 #[tokio::test]
-async fn test_test_db_helper() {
-    let server = TerminusDBServer::test_instance().await.unwrap();
-    let client = server.client().await.unwrap();
-    let test_db = TestDb::with_client(client, "orm_helper_test").await.unwrap();
-
-    assert!(test_db.db_name().starts_with("orm_helper_test"));
-    assert_eq!(test_db.org(), "admin");
-
-    let spec = test_db.spec();
-    assert_eq!(spec.branch, Some("main".to_string()));
+async fn test_test_db_helper() -> anyhow::Result<()> {
+    with_test_db("orm_helper_test", |_client, spec| async move {
+        assert!(spec.db.starts_with("orm_helper_test"));
+        assert_eq!(spec.branch, Some("main".to_string()));
+        Ok(())
+    })
+    .await
 }
 
 /// Test GraphQL ID query building
