@@ -80,3 +80,14 @@ node_modules/
 **/*.rs.bk
 *.pdb .temp/
 /mcp-server/.secrets.env
+
+# Test artifacts and screenshots
+.playwright-mcp/
+logs/
+client/logs/
+manager/*.png
+manager/test-*.js
+manager/static/
+manager/tasks/
+manager/test-results/
+manager/tests/
