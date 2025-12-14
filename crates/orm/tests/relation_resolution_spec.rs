@@ -5,21 +5,24 @@
 //!
 //! # Relation Types
 //!
-//! 1. **One-to-One** (HasOne/BelongsTo)
-//!    - User has one Profile
+//! Note: All relations use TdbLazy<T> to create actual document links in TDB.
+//! EntityIDFor<T> is just a typed string ID and doesn't enable relation traversal.
+//!
+//! 1. **One-to-One** (HasOne)
+//!    - User has one Profile (via Profile.user: TdbLazy<User>)
 //!    - Profile belongs to User
 //!
-//! 2. **One-to-Many** (HasMany/BelongsTo)
-//!    - User has many Posts
+//! 2. **One-to-Many** (HasMany)
+//!    - User has many Posts (via Post.author: TdbLazy<User>)
 //!    - Post belongs to User
 //!
-//! 3. **Many-to-Many** (through multiple BelongsTo or direct Vec)
-//!    - Post has many Tags (via Vec<EntityIDFor<Tag>>)
+//! 3. **Many-to-Many** (through TdbLazy Vec)
+//!    - Post has many Tags (via Vec<TdbLazy<Tag>>)
 //!    - Tag appears in many Posts (reverse query)
 //!
 //! 4. **Self-Referential**
-//!    - User has optional Manager (User)
-//!    - User has many DirectReports (User)
+//!    - User has optional Manager (Option<TdbLazy<User>>)
+//!    - User has many DirectReports (via reverse relation)
 //!
 //! 5. **Polymorphic** (via enum or trait object)
 //!    - Comment can belong to Post or Video
@@ -41,7 +44,7 @@ use terminusdb_orm::prelude::*;
 // Required for TerminusDBModel derive
 use terminusdb_schema as terminusdb_schema;
 #[allow(unused_imports)]
-use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema::{ToTDBInstance, TdbLazy};
 use terminusdb_schema_derive::TerminusDBModel;
 
 use serde::{Deserialize, Serialize};
@@ -51,33 +54,33 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// A user in the system - demonstrates multiple relation types
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct User {
     pub username: String,
     pub email: String,
     /// Self-referential: User's manager (optional one-to-one)
-    pub manager_id: Option<EntityIDFor<User>>,
+    pub manager: Option<TdbLazy<User>>,
 }
 
 /// User profile - one-to-one with User
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Profile {
     pub bio: String,
     pub avatar_url: Option<String>,
-    /// Belongs to exactly one User
-    pub user_id: EntityIDFor<User>,
+    /// Belongs to exactly one User (document link)
+    pub user: TdbLazy<User>,
 }
 
 /// A blog post - one-to-many with User, many-to-many with Tag
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Post {
     pub title: String,
     pub content: String,
     pub published: bool,
-    /// Belongs to one author
-    pub author_id: EntityIDFor<User>,
-    /// Has many tags (many-to-many via direct Vec)
-    pub tag_ids: Vec<EntityIDFor<Tag>>,
+    /// Belongs to one author (document link)
+    pub author: TdbLazy<User>,
+    /// Has many tags (many-to-many via direct Vec of document links)
+    pub tags: Vec<TdbLazy<Tag>>,
 }
 
 /// A tag for categorizing posts
@@ -88,22 +91,22 @@ pub struct Tag {
 }
 
 /// A comment on a post - demonstrates nested relations
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Comment {
     pub text: String,
-    /// The post this comment is on
-    pub post_id: EntityIDFor<Post>,
-    /// The user who wrote this comment
-    pub author_id: EntityIDFor<User>,
-    /// Optional parent comment (for nested replies)
-    pub parent_comment_id: Option<EntityIDFor<Comment>>,
+    /// The post this comment is on (document link)
+    pub post: TdbLazy<Post>,
+    /// The user who wrote this comment (document link)
+    pub author: TdbLazy<User>,
+    /// Optional parent comment for nested replies (document link)
+    pub parent_comment: Option<TdbLazy<Comment>>,
 }
 
 /// A "like" on a post - simple join entity
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct PostLike {
-    pub post_id: EntityIDFor<Post>,
-    pub user_id: EntityIDFor<User>,
+    pub post: TdbLazy<Post>,
+    pub user: TdbLazy<User>,
 }
 
 // ============================================================================
@@ -119,8 +122,8 @@ mod one_to_one {
     fn test_has_one_profile_syntax() {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
-        // Forward: User -> Profile via Profile.user_id
-        // This is actually a reverse lookup (find Profile where user_id = this user)
+        // Forward: User -> Profile via Profile.user
+        // This is actually a reverse lookup (find Profile where user = this user)
         let query = User::find(user_id)
             .with::<Profile>(); // Loads the user's profile
 
@@ -132,14 +135,14 @@ mod one_to_one {
     fn test_belongs_to_user_syntax() {
         let profile_id = EntityIDFor::<Profile>::new("profile1").unwrap();
 
-        // Forward: Profile -> User via profile.user_id field
+        // Forward: Profile -> User via profile.user field
         let query = Profile::find(profile_id)
-            .with_field::<User, ProfileFields::UserId>();
+            .with_field::<User, ProfileFields::User>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Forward { field_name } => {
-                assert_eq!(field_name, "user_id");
+                assert_eq!(field_name, "user");
             }
             _ => panic!("Expected Forward direction"),
         }
@@ -158,14 +161,14 @@ mod one_to_many {
     fn test_has_many_posts_syntax() {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
-        // Reverse: Find all Posts where author_id = this user
+        // Reverse: Find all Posts where author = this user
         let query = User::find(user_id)
             .with::<Post>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Reverse { via_field } => {
-                // via_field is None because we're loading via any BelongsTo<User> field
+                // via_field is None because we're loading via any TdbLazy<User> field
                 assert!(via_field.is_none());
             }
             _ => panic!("Expected Reverse direction"),
@@ -177,9 +180,9 @@ mod one_to_many {
     fn test_belongs_to_author_syntax() {
         let post_id = EntityIDFor::<Post>::new("post1").unwrap();
 
-        // Forward: Post -> User via post.author_id field
+        // Forward: Post -> User via post.author field
         let query = Post::find(post_id)
-            .with_field::<User, PostFields::AuthorId>();
+            .with_field::<User, PostFields::Author>();
 
         assert_eq!(query.relations().len(), 1);
     }
@@ -190,14 +193,14 @@ mod one_to_many {
     fn test_has_many_comments_via_specific_field() {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
-        // Reverse with specific field: Find Comments where author_id = this user
+        // Reverse with specific field: Find Comments where author = this user
         let query = User::find(user_id)
-            .with_via::<Comment, CommentFields::AuthorId>();
+            .with_via::<Comment, CommentFields::Author>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Reverse { via_field } => {
-                assert_eq!(via_field.as_deref(), Some("author_id"));
+                assert_eq!(via_field.as_deref(), Some("author"));
             }
             _ => panic!("Expected Reverse direction"),
         }
@@ -216,14 +219,14 @@ mod many_to_many {
     fn test_post_has_many_tags() {
         let post_id = EntityIDFor::<Post>::new("post1").unwrap();
 
-        // Forward: Post -> Tags via post.tag_ids field (Vec<EntityIDFor<Tag>>)
+        // Forward: Post -> Tags via post.tags field (Vec<TdbLazy<Tag>>)
         let query = Post::find(post_id)
-            .with_field::<Tag, PostFields::TagIds>();
+            .with_field::<Tag, PostFields::Tags>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Forward { field_name } => {
-                assert_eq!(field_name, "tag_ids");
+                assert_eq!(field_name, "tags");
             }
             _ => panic!("Expected Forward direction"),
         }
@@ -235,8 +238,8 @@ mod many_to_many {
     fn test_tag_has_many_posts_reverse() {
         let tag_id = EntityIDFor::<Tag>::new("tag1").unwrap();
 
-        // Reverse: Find all Posts where tag_ids contains this tag
-        // This requires the ORM to understand Vec<EntityIDFor<T>> as a many-to-many
+        // Reverse: Find all Posts where tags contains this tag
+        // This requires the ORM to understand Vec<TdbLazy<T>> as a many-to-many
         let query = Tag::find(tag_id)
             .with::<Post>(); // Should find Posts that reference this Tag
 
@@ -256,33 +259,33 @@ mod self_referential {
     fn test_self_ref_belongs_to_manager() {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
-        // Forward: User -> User via manager_id field
+        // Forward: User -> User via manager field
         let query = User::find(user_id)
-            .with_field::<User, UserFields::ManagerId>();
+            .with_field::<User, UserFields::Manager>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Forward { field_name } => {
-                assert_eq!(field_name, "manager_id");
+                assert_eq!(field_name, "manager");
             }
             _ => panic!("Expected Forward direction"),
         }
     }
 
     /// User.direct_reports() -> Vec<User>
-    /// Find all users whose manager_id is this user
+    /// Find all users whose manager is this user
     #[test]
     fn test_self_ref_has_many_direct_reports() {
         let manager_id = EntityIDFor::<User>::new("manager1").unwrap();
 
-        // Reverse: Find all Users where manager_id = this user
+        // Reverse: Find all Users where manager = this user
         let query = User::find(manager_id)
-            .with_via::<User, UserFields::ManagerId>();
+            .with_via::<User, UserFields::Manager>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Reverse { via_field } => {
-                assert_eq!(via_field.as_deref(), Some("manager_id"));
+                assert_eq!(via_field.as_deref(), Some("manager"));
             }
             _ => panic!("Expected Reverse direction"),
         }
@@ -329,9 +332,9 @@ mod nested_relations {
     fn test_comment_replies() {
         let comment_id = EntityIDFor::<Comment>::new("comment1").unwrap();
 
-        // Find all comments whose parent_comment_id = this comment
+        // Find all comments whose parent_comment = this comment
         let query = Comment::find(comment_id)
-            .with_via::<Comment, CommentFields::ParentCommentId>();
+            .with_via::<Comment, CommentFields::ParentComment>();
 
         assert_eq!(query.relations().len(), 1);
     }

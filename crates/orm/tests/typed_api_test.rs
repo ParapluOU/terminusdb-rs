@@ -52,16 +52,18 @@ pub struct Wheel {
 }
 
 /// A car with multiple wheel references (forward relations)
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+/// Uses TdbLazy to create document links (enables relation traversal)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Car {
     pub model: String,
-    /// Front wheels
-    pub front_wheels: Vec<EntityIDFor<Wheel>>,
-    /// Back wheels
-    pub back_wheels: Vec<EntityIDFor<Wheel>>,
+    /// Front wheels (document links)
+    pub front_wheels: Vec<TdbLazy<Wheel>>,
+    /// Back wheels (document links)
+    pub back_wheels: Vec<TdbLazy<Wheel>>,
 }
 
-// ForwardRelation impls are now automatically derived by TerminusDBModel:
+// ForwardRelation impls are now automatically derived by TerminusDBModel
+// for TdbLazy<T> fields only:
 // - ForwardRelation<Wheel, CarFields::FrontWheels>
 // - ForwardRelation<Wheel, CarFields::BackWheels>
 

@@ -34,13 +34,14 @@ pub struct Post {
 }
 
 /// A comment on a post, also by a user
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+/// Uses TdbLazy to create document links (enables reverse relations)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Comment {
     pub text: String,
-    /// The post this comment belongs to
-    pub post_id: EntityIDFor<Post>,
-    /// The user who wrote this comment
-    pub author_id: EntityIDFor<User>,
+    /// The post this comment belongs to (document link)
+    pub post: TdbLazy<Post>,
+    /// The user who wrote this comment (document link)
+    pub author: TdbLazy<User>,
 }
 
 /// A document with multiple user references (author and reviewer)
@@ -55,13 +56,14 @@ pub struct Document {
 }
 
 /// A car with multiple wheel references (forward relations)
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+/// Uses TdbLazy to create document links (enables forward relation traversal)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Car {
     pub model: String,
-    pub front_left: EntityIDFor<Wheel>,
-    pub front_right: EntityIDFor<Wheel>,
-    pub back_left: EntityIDFor<Wheel>,
-    pub back_right: EntityIDFor<Wheel>,
+    pub front_left: TdbLazy<Wheel>,
+    pub front_right: TdbLazy<Wheel>,
+    pub back_left: TdbLazy<Wheel>,
+    pub back_right: TdbLazy<Wheel>,
 }
 
 /// A wheel (referenced by Car)
@@ -75,14 +77,15 @@ pub struct Wheel {
 // Trait Implementations - NOW AUTOMATICALLY DERIVED!
 // ============================================================================
 //
-// The TerminusDBModel derive macro now automatically generates:
+// The TerminusDBModel derive macro now automatically generates relation traits
+// for TdbLazy<T> fields only. EntityIDFor<T> is just a typed string ID and
+// doesn't create document links in TDB, so no relation traits are generated.
 //
-// For each `EntityIDFor<T>` field:
-// - `BelongsTo<T, StructFields::FieldName>` - marks the foreign key relationship
+// For each `TdbLazy<T>` field:
 // - `ReverseRelation<T, StructFields::FieldName>` - enables `.with_via::<Self, Field>()`
 // - `ForwardRelation<T, StructFields::FieldName>` - enables `.with_field::<T, Field>()`
 //
-// For each unique target type T:
+// For each unique target type T (via TdbLazy):
 // - `ReverseRelation<T, DefaultField>` - enables `.with::<Self>()` on T queries
 //
 // No manual implementations needed!
@@ -124,8 +127,8 @@ fn test_find_all_by_strings() {
 
 #[test]
 fn test_with_reverse_relation_single_field() {
-    // Post has one BelongsTo<User> field (author_id)
-    // .with::<Post>() should load all Posts where author_id matches
+    // Post has one TdbLazy<User> field (user)
+    // .with::<Post>() should load all Posts where user matches
     let id = EntityIDFor::<User>::new("user1").unwrap();
     let query = User::find(id).with::<Post>();
 
@@ -141,7 +144,7 @@ fn test_with_reverse_relation_single_field() {
 
 #[test]
 fn test_with_reverse_relation_multiple_fields() {
-    // Document has TWO BelongsTo<User> fields (author_id, reviewer_id)
+    // Document has TWO TdbLazy<User> fields (author, reviewer)
     // .with::<Document>() should load Documents where EITHER field matches
     let id = EntityIDFor::<User>::new("user1").unwrap();
     let query = User::find(id).with::<Document>();
