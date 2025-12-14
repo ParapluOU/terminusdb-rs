@@ -91,3 +91,5 @@ manager/static/
 manager/tasks/
 manager/test-results/
 manager/tests/
+/storage/
+crates/mcp-server/.secrets.env
