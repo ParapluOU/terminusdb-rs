@@ -22,15 +22,19 @@
 //! }
 //! ```
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 use terminusdb_client::TerminusDBHttpClient;
 use tokio::sync::OnceCell;
 
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
+/// Find an available port by binding to port 0 and getting an OS-assigned port.
+/// The listener is dropped after getting the port, freeing it for the server.
+fn find_available_port() -> std::io::Result<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    Ok(port)
+}
 
 /// Options for starting a TerminusDB server.
 #[derive(Debug, Clone, Default)]
@@ -43,202 +47,28 @@ pub struct ServerOptions {
     pub quiet: bool,
     /// Custom database path. If not set, a temp directory is created.
     pub db_path: Option<std::path::PathBuf>,
+    /// Port to listen on. If None, auto-allocates a unique port in memory mode,
+    /// or uses 6363 in persistent mode.
+    pub port: Option<u16>,
 }
 
 /// A running TerminusDB server instance.
 ///
-/// The server is automatically stopped when this handle is dropped,
-/// unless it's a shared instance from `test_instance()`.
+/// The server is automatically stopped when this handle is dropped.
 pub struct TerminusDBServer {
     child: Option<Child>,
-    shared: bool,
+    port: u16,
 }
 
-/// Shared test server instance
+/// Shared test server instance (per-process)
 static TEST_INSTANCE: OnceCell<TerminusDBServer> = OnceCell::const_new();
 
-/// Path to the shared server state file (contains PID and ref count)
-fn shared_server_state_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("terminusdb-test-server.state")
-}
-
-/// Path to the lock file for coordinating access to the state file
-fn shared_server_lock_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("terminusdb-test-server.lock")
-}
-
-/// Shared server state stored in a file
-#[derive(Debug, Clone)]
-struct SharedServerState {
-    /// PID of the server process
-    pid: u32,
-    /// Number of processes currently using the server
-    ref_count: u32,
-}
-
-impl SharedServerState {
-    fn parse(content: &str) -> Option<Self> {
-        let mut lines = content.lines();
-        let pid: u32 = lines.next()?.parse().ok()?;
-        let ref_count: u32 = lines.next()?.parse().ok()?;
-        Some(Self { pid, ref_count })
-    }
-
-    fn serialize(&self) -> String {
-        format!("{}\n{}\n", self.pid, self.ref_count)
-    }
-}
-
-/// Acquire the shared server lock and return the file handle.
-/// The lock is released when the file is dropped.
-#[cfg(unix)]
-fn acquire_shared_lock() -> std::io::Result<File> {
-    let lock_path = shared_server_lock_path();
-    let lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-
-    // Block until we get an exclusive lock
-    let fd = lock_file.as_raw_fd();
-    let result = unsafe { libc::flock(fd, libc::LOCK_EX) };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    Ok(lock_file)
-}
-
-#[cfg(not(unix))]
-fn acquire_shared_lock() -> std::io::Result<File> {
-    let lock_path = shared_server_lock_path();
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-}
-
-/// Read the current shared server state (must hold lock)
-fn read_shared_state() -> Option<SharedServerState> {
-    let state_path = shared_server_state_path();
-    let mut content = String::new();
-    File::open(&state_path)
-        .ok()?
-        .read_to_string(&mut content)
-        .ok()?;
-    SharedServerState::parse(&content)
-}
-
-/// Write the shared server state (must hold lock)
-fn write_shared_state(state: &SharedServerState) -> std::io::Result<()> {
-    let state_path = shared_server_state_path();
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&state_path)?;
-    file.write_all(state.serialize().as_bytes())?;
-    file.sync_all()?;
-    Ok(())
-}
-
-/// Clear the shared server state (must hold lock)
-fn clear_shared_state() -> std::io::Result<()> {
-    let state_path = shared_server_state_path();
-    if state_path.exists() {
-        std::fs::remove_file(&state_path)?;
-    }
-    Ok(())
-}
-
-/// Check if a process with the given PID is still running
-#[cfg(unix)]
-fn is_process_running(pid: u32) -> bool {
-    // kill with signal 0 checks if process exists without sending a signal
-    unsafe { libc::kill(pid as i32, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn is_process_running(_pid: u32) -> bool {
-    // Conservative: assume running if we can't check
-    true
-}
-
-/// Increment the reference count for the shared server.
-/// Returns the server PID if a server is already running.
-fn increment_ref_count() -> std::io::Result<Option<u32>> {
-    let _lock = acquire_shared_lock()?;
-
-    if let Some(mut state) = read_shared_state() {
-        // Check if the recorded server is still running
-        if is_process_running(state.pid) {
-            state.ref_count += 1;
-            write_shared_state(&state)?;
-            eprintln!(
-                "[terminusdb-bin] Incremented ref count to {} for server PID {}",
-                state.ref_count, state.pid
-            );
-            return Ok(Some(state.pid));
-        } else {
-            // Server died, clear state
-            eprintln!(
-                "[terminusdb-bin] Server PID {} is dead, clearing state",
-                state.pid
-            );
-            clear_shared_state()?;
-        }
-    }
-
-    Ok(None)
-}
-
-/// Register a new server and set ref count to 1.
-fn register_new_server(pid: u32) -> std::io::Result<()> {
-    let _lock = acquire_shared_lock()?;
-
-    let state = SharedServerState { pid, ref_count: 1 };
-    write_shared_state(&state)?;
-    eprintln!(
-        "[terminusdb-bin] Registered new server PID {} with ref count 1",
-        pid
-    );
-    Ok(())
-}
-
-/// Decrement the reference count. Returns true if this was the last reference
-/// and the server should be killed.
-fn decrement_ref_count() -> std::io::Result<bool> {
-    let _lock = acquire_shared_lock()?;
-
-    if let Some(mut state) = read_shared_state() {
-        if state.ref_count > 1 {
-            state.ref_count -= 1;
-            write_shared_state(&state)?;
-            eprintln!(
-                "[terminusdb-bin] Decremented ref count to {} for server PID {}",
-                state.ref_count, state.pid
-            );
-            return Ok(false);
-        } else {
-            // Last reference, clear state
-            clear_shared_state()?;
-            eprintln!(
-                "[terminusdb-bin] Last reference released for server PID {}",
-                state.pid
-            );
-            return Ok(true);
-        }
-    }
-
-    // No state file means we're probably not the owner
-    Ok(false)
-}
-
 impl TerminusDBServer {
+    /// Get the port this server is listening on.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     /// Start a new test server with default test settings.
     ///
     /// Equivalent to `start_server(ServerOptions { memory: true, quiet: true, .. })`.
@@ -265,16 +95,14 @@ impl TerminusDBServer {
         .await
     }
 
-    /// Get or create a shared test server instance.
+    /// Get or create a shared test server instance for this process.
     ///
     /// The server is started on the first call and kept running for the
     /// lifetime of the process. Subsequent calls return the same instance.
     /// This is useful for running multiple tests against the same server.
     ///
-    /// The server uses cross-process reference counting: each process that
-    /// calls `test_instance()` increments the ref count, and decrements it
-    /// when the process exits. The server is only killed when the last
-    /// process releases its reference.
+    /// Each process gets its own server on a unique port, enabling parallel
+    /// test execution across multiple processes.
     ///
     /// # Example
     ///
@@ -291,7 +119,7 @@ impl TerminusDBServer {
     ///
     /// #[tokio::test]
     /// async fn test_two() -> anyhow::Result<()> {
-    ///     // Same server instance as test_one
+    ///     // Same server instance as test_one (within same process)
     ///     let server = TerminusDBServer::test_instance().await?;
     ///     let client = server.client().await?;
     ///     Ok(())
@@ -300,58 +128,8 @@ impl TerminusDBServer {
     pub async fn test_instance() -> anyhow::Result<&'static Self> {
         TEST_INSTANCE
             .get_or_try_init(|| async {
-                // Use a single lock for the entire operation to avoid deadlocks.
-                // The lock is held briefly while we check/update state.
-                let _lock = acquire_shared_lock()?;
-
-                // Check if there's an existing server we can join
-                if let Some(mut state) = read_shared_state() {
-                    if is_process_running(state.pid) {
-                        // Server is running, increment ref count
-                        state.ref_count += 1;
-                        write_shared_state(&state)?;
-                        eprintln!(
-                            "[terminusdb-bin] test_instance: Joining existing server PID {} (ref count: {})",
-                            state.pid, state.ref_count
-                        );
-                        // Release lock before waiting
-                        drop(_lock);
-
-                        // Wait for server to be ready (it should already be running)
-                        wait_for_server_ready(Duration::from_secs(60)).await?;
-                        return Ok(TerminusDBServer {
-                            child: None,
-                            shared: true,
-                        });
-                    } else {
-                        // Server died, clear state
-                        eprintln!(
-                            "[terminusdb-bin] test_instance: Server PID {} is dead, clearing state",
-                            state.pid
-                        );
-                        clear_shared_state()?;
-                    }
-                }
-
-                // No existing server, we need to start one.
                 eprintln!("[terminusdb-bin] test_instance: Starting new server");
-                let server = start_test_server().await?;
-
-                // Register this server with ref count 1
-                if let Some(ref child) = server.child {
-                    let state = SharedServerState {
-                        pid: child.id(),
-                        ref_count: 1,
-                    };
-                    write_shared_state(&state)?;
-                    eprintln!(
-                        "[terminusdb-bin] test_instance: Registered new server PID {} with ref count 1",
-                        child.id()
-                    );
-                }
-
-                // Lock is released when _lock goes out of scope
-                Ok(server)
+                start_test_server().await
             })
             .await
     }
@@ -362,7 +140,7 @@ impl TerminusDBServer {
     /// environment variables. Memory mode servers always use "root" password.
     /// Verifies the server is responding before returning.
     pub async fn client(&self) -> anyhow::Result<TerminusDBHttpClient> {
-        let client = create_test_client().await?;
+        let client = create_test_client(self.port).await?;
         // Verify server is responding
         client.info().await?;
         Ok(client)
@@ -463,40 +241,14 @@ impl TerminusDBServer {
 
 impl Drop for TerminusDBServer {
     fn drop(&mut self) {
-        if self.shared {
-            // Shared instance: decrement ref count
-            // Only kill if this is the last reference
-            match decrement_ref_count() {
-                Ok(true) => {
-                    // Last reference - kill the server if we own it
-                    if let Some(ref mut child) = self.child {
-                        eprintln!(
-                            "[terminusdb-bin] Drop: Killing server PID {} (last reference)",
-                            child.id()
-                        );
-                        let _ = child.kill();
-                        let _ = child.wait();
-                    }
-                }
-                Ok(false) => {
-                    // Not the last reference - don't kill
-                    eprintln!("[terminusdb-bin] Drop: Not killing server (other processes still using it)");
-                }
-                Err(e) => {
-                    eprintln!("[terminusdb-bin] Drop: Error decrementing ref count: {}", e);
-                    // Conservative: don't kill since we don't know the state
-                }
-            }
-        } else {
-            // Non-shared instance: always kill
-            if let Some(ref mut child) = self.child {
-                eprintln!(
-                    "[terminusdb-bin] Drop: Killing non-shared server PID {}",
-                    child.id()
-                );
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+        if let Some(ref mut child) = self.child {
+            eprintln!(
+                "[terminusdb-bin] Drop: Killing server PID {} on port {}",
+                child.id(),
+                self.port
+            );
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
@@ -535,6 +287,14 @@ impl Drop for TerminusDBServer {
 pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServer> {
     let binary_path = crate::extract_binary()?;
     eprintln!("[terminusdb-bin] Binary path: {:?}", binary_path);
+
+    // Determine port: auto-allocate for memory mode, use 6363 for persistent mode
+    let port = match opts.port {
+        Some(p) => p,
+        None if opts.memory => find_available_port()?,
+        None => 6363,
+    };
+    eprintln!("[terminusdb-bin] Using port: {}", port);
 
     // Only set up db_path for persistent (non-memory) mode
     // Memory mode should NOT have TERMINUSDB_SERVER_DB_PATH set, as it would
@@ -585,9 +345,12 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
 
     eprintln!("[terminusdb-bin] Spawning server with args: {:?}", args);
 
-    // Build command - only set db_path/env for persistent mode
+    // Build command
     let mut cmd = std::process::Command::new(&binary_path);
-    cmd.args(&args).stdout(stdout).stderr(Stdio::piped());
+    cmd.args(&args)
+        .stdout(stdout)
+        .stderr(Stdio::piped())
+        .env("TERMINUSDB_SERVER_PORT", port.to_string());
 
     if let Some(ref path) = db_path {
         cmd.current_dir(path);
@@ -596,14 +359,18 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
 
     let mut child = cmd.spawn()?;
 
-    eprintln!("[terminusdb-bin] Server spawned with PID: {}", child.id());
+    eprintln!(
+        "[terminusdb-bin] Server spawned with PID: {} on port {}",
+        child.id(),
+        port
+    );
 
     // Wait for server to be ready, checking for early process exit
-    wait_for_ready(&mut child, Duration::from_secs(30)).await?;
+    wait_for_ready(&mut child, port, Duration::from_secs(30)).await?;
 
     let server = TerminusDBServer {
         child: Some(child),
-        shared: false,
+        port,
     };
 
     Ok(server)
@@ -626,6 +393,10 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
         binary_path
     );
 
+    // Allocate a unique port for this server
+    let port = find_available_port()?;
+    eprintln!("[terminusdb-bin] test_instance: Allocated port {}", port);
+
     // --memory mode self-initializes, no store init needed
     let args = vec!["serve", "--memory", "root"];
 
@@ -639,55 +410,35 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
         .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .env("TERMINUSDB_SERVER_PORT", port.to_string())
         .spawn()?;
 
     eprintln!(
-        "[terminusdb-bin] test_instance: Server spawned with PID: {}",
-        child.id()
+        "[terminusdb-bin] test_instance: Server spawned with PID: {} on port {}",
+        child.id(),
+        port
     );
 
     // Wait for server to be ready, checking for early process exit
-    wait_for_ready(&mut child, Duration::from_secs(30)).await?;
+    wait_for_ready(&mut child, port, Duration::from_secs(30)).await?;
 
     Ok(TerminusDBServer {
         child: Some(child),
-        shared: true,
+        port,
     })
 }
 
 /// Create a client for the local test server with hardcoded "root" password.
 /// This is used instead of `local_node()` which reads from environment variables,
 /// since memory mode servers always use "root" password.
-async fn create_test_client() -> anyhow::Result<TerminusDBHttpClient> {
-    TerminusDBHttpClient::new(
-        url::Url::parse("http://localhost:6363").unwrap(),
-        "admin",
-        "root",
-        "admin",
-    )
-    .await
-}
-
-/// Wait for the server to become ready (without owning the process)
-async fn wait_for_server_ready(max_wait: Duration) -> anyhow::Result<()> {
-    let start = std::time::Instant::now();
-
-    while start.elapsed() < max_wait {
-        if let Ok(client) = create_test_client().await {
-            if client.info().await.is_ok() {
-                eprintln!("[terminusdb-bin] Server is ready!");
-                return Ok(());
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    anyhow::bail!("Server did not become ready within {:?}", max_wait)
+async fn create_test_client(port: u16) -> anyhow::Result<TerminusDBHttpClient> {
+    let url = format!("http://localhost:{}", port);
+    TerminusDBHttpClient::new(url::Url::parse(&url).unwrap(), "admin", "root", "admin").await
 }
 
 /// Wait for the server to respond using TerminusDBHttpClient.
 /// Also checks if the process has exited early or logged fatal errors.
-async fn wait_for_ready(child: &mut Child, max_wait: Duration) -> anyhow::Result<()> {
+async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> anyhow::Result<()> {
     use std::io::Read;
 
     let start = std::time::Instant::now();
@@ -757,7 +508,7 @@ async fn wait_for_ready(child: &mut Child, max_wait: Duration) -> anyhow::Result
         }
 
         // Use create_test_client() for health check (hardcoded "root" password)
-        let client = match create_test_client().await {
+        let client = match create_test_client(port).await {
             Ok(c) => c,
             Err(_) => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -884,6 +635,29 @@ mod tests {
         let client = server.client().await?;
         // info() succeeds means server is running
         let _info = client.info().await?;
+        Ok(())
+    }
+
+    /// Test that ensure_database works immediately after test_instance().client()
+    /// This replicates the exact pattern used in apps.
+    #[tokio::test]
+    async fn test_ensure_database_after_client() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        let client = server.client().await?;
+
+        // This is the exact pattern from the app that was failing
+        client.ensure_database("test_ensure_db").await?;
+
+        // Verify it exists
+        let databases = client.list_databases_simple().await?;
+        let found = databases
+            .iter()
+            .any(|db| db.path.as_ref().map(|p| p.contains("test_ensure_db")).unwrap_or(false));
+        assert!(found, "Database should exist after ensure_database");
+
+        // Cleanup
+        client.delete_database("test_ensure_db").await?;
+
         Ok(())
     }
 }
