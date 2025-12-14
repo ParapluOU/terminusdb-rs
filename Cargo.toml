@@ -16,6 +16,8 @@ members = [
     "bin",
     "manager",
     "orm",
+    "test",
+    "test/macros",
 ]
 
 [workspace.dependencies]

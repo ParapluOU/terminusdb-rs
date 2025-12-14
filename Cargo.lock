@@ -3456,6 +3456,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminusdb-test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "terminusdb-bin",
+ "terminusdb-client",
+ "terminusdb-test-macros",
+ "tokio 1.45.1",
+]
+
+[[package]]
+name = "terminusdb-test-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2 1.0.95",
+ "quote 1.0.40",
+ "syn 2.0.104",
+]
+
+[[package]]
 name = "terminusdb-types"
 version = "0.1.0"
 dependencies = [

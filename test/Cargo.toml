@@ -1,0 +1,12 @@
+[package]
+name = "terminusdb-test"
+version = "0.1.0"
+edition = "2021"
+description = "Testing utilities for TerminusDB"
+
+[dependencies]
+terminusdb-test-macros = { path = "macros" }
+terminusdb-bin = { path = "../bin" }
+terminusdb-client = { path = "../client" }
+anyhow = "1.0"
+tokio = { version = "1", features = ["rt", "macros"] }
