@@ -3339,6 +3339,7 @@ dependencies = [
  "serde_json",
  "terminusdb-bin",
  "terminusdb-client",
+ "terminusdb-woql-js",
  "terminusdb-woql2",
  "thiserror 1.0.69",
  "tokio 1.45.1",

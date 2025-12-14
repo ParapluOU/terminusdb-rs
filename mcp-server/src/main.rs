@@ -113,7 +113,17 @@ pub struct ConnectTool {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_woql",
-    description = "Execute a WOQL query using either JavaScript syntax or JSON-LD format. JavaScript syntax uses the official terminusdb-client-js syntax with variables as strings prefixed with \"v:\" (e.g., \"v:Person\"). For select/distinct, variables are passed as variadic arguments without the prefix (e.g., select(\"Name\", \"Age\", ...)). Common operations include: triple(\"v:Subject\", \"predicate\", \"v:Object\"), and(...), or(...), select(\"Var1\", \"Var2\", query), greater(\"v:Value\", 18). Alternatively, you can provide a JSON-LD query object following the WOQL schema. The tool automatically detects the format and parses accordingly.\n\nFor mutating queries (add_triple, delete_triple, add_data, etc.), provide 'author' and 'message' parameters for commit tracking. These are required by TerminusDB to properly track changes. Read-only queries do not require these parameters."
+    description = "Execute a WOQL query using JavaScript syntax or JSON-LD format.\n\n\
+        **JavaScript Syntax** (compatible with terminusdb-client-js):\n\
+        - Variables in queries use \"v:\" prefix: \"v:Person\", \"v:Name\"\n\
+        - Variables in select/distinct are strings without prefix: select(\"Name\", \"Age\", ...)\n\
+        - Example: select(\"Name\", triple(\"v:Person\", \"@schema:name\", \"v:Name\"))\n\
+        - Functions: triple(), and(), or(), not(), opt(), select(), distinct(), limit(), greater(), less(), eq()\n\n\
+        **JSON-LD Format**:\n\
+        - Full JSON-LD object following the WOQL schema\n\
+        - Example: {\"@type\": \"Triple\", \"subject\": {\"@type\": \"NodeValue\", \"variable\": \"Person\"}, ...}\n\n\
+        The tool auto-detects the format. For mutating queries (add_triple, delete_triple, insert_document, etc.), provide 'author' and 'message' parameters for commit tracking.\n\n\
+        For more documentation and examples, see the ./docs directory in the terminusdb-rs crate source."
 )]
 pub struct ExecuteWoqlTool {
     pub query: String,
@@ -715,13 +725,9 @@ impl TerminusDBMcpHandler {
                     Query::from_json(json_value)
                         .map_err(|e| anyhow::anyhow!("Failed to parse JSON-LD query: {}", e))?
                 } else {
-                    // Try parsing as JS syntax - need to use the client's internal parser
-                    // For now, return error asking user to use JSON-LD for mutating queries
-                    return Err(anyhow::anyhow!(
-                        "Mutating queries currently require JSON-LD format. \
-                        JavaScript syntax is only supported for read-only queries. \
-                        Please convert your query to JSON-LD format."
-                    ));
+                    // Try parsing as JS syntax using woql-js
+                    terminusdb_woql_js::parse_js_woql_to_query(&request.query)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse JavaScript syntax: {}", e))?
                 };
 
                 client.query_mut(branch_spec, query, author, message).await?
@@ -1795,6 +1801,7 @@ impl TerminusDBMcpHandler {
             memory: request.memory,
             password: Some(password.clone()),
             quiet: request.quiet,
+            db_path: None,
         };
 
         // Start the server
