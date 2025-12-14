@@ -21,10 +21,13 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 async-trait = "0.1.89"
 
+# Optional dependency for testing feature
+terminusdb-bin = { path = "../bin", optional = true }
+
 [features]
 default = []
-## Enable test helpers for integration testing
-testing = []
+## Enable test helpers for integration testing (includes embedded server support)
+testing = ["terminusdb-bin"]
 
 [dev-dependencies]
 tokio = { workspace = true }

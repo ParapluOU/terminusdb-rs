@@ -31,20 +31,22 @@ fn get_relation_path() -> Option<TokenStream> {
     Some(quote! { terminusdb_relation })
 }
 
-/// Information about an EntityIDFor<T> field
-struct EntityIdField {
+/// Information about an EntityIDFor<T> or TdbLazy<T> field
+struct RelationFieldInfo {
     /// The field identifier
     field_ident: syn::Ident,
     /// The field name as string
     field_name: String,
     /// The marker type name (PascalCase)
     marker_type_name: syn::Ident,
-    /// The target type T in EntityIDFor<T>
+    /// The target type T in EntityIDFor<T> or TdbLazy<T>
     target_type: Type,
-    /// Whether the field is optional (Option<EntityIDFor<T>>)
+    /// Whether the field is optional (Option<...>)
     is_optional: bool,
-    /// Whether the field is a collection (Vec<EntityIDFor<T>>)
+    /// Whether the field is a collection (Vec<...>)
     is_collection: bool,
+    /// The kind of relation field
+    kind: RelationFieldKind,
 }
 
 /// Extract the inner type from Option<T>, returning (inner_type, true) or (original_type, false)
@@ -95,8 +97,44 @@ fn extract_entity_id_target(ty: &Type) -> Option<Type> {
     None
 }
 
-/// Analyze a field and extract EntityIDFor information if present
-fn analyze_field_for_entity_id(field: &syn::Field) -> Option<EntityIdField> {
+/// Check if a type is TdbLazy<T> and extract T
+fn extract_tdblazy_target(ty: &Type) -> Option<Type> {
+    if let Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            if segment.ident == "TdbLazy" {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(GenericArgument::Type(target)) = args.args.first() {
+                        return Some(target.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The kind of relation field (EntityIDFor vs TdbLazy)
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RelationFieldKind {
+    /// EntityIDFor<T> - stores string ID, no document link in schema
+    EntityId,
+    /// TdbLazy<T> - creates actual document link in schema, enables reverse fields
+    TdbLazy,
+}
+
+/// Try to extract a relation target from a type (EntityIDFor<T> or TdbLazy<T>)
+fn extract_relation_target(ty: &Type) -> Option<(Type, RelationFieldKind)> {
+    if let Some(target) = extract_entity_id_target(ty) {
+        return Some((target, RelationFieldKind::EntityId));
+    }
+    if let Some(target) = extract_tdblazy_target(ty) {
+        return Some((target, RelationFieldKind::TdbLazy));
+    }
+    None
+}
+
+/// Analyze a field and extract relation information if present (EntityIDFor or TdbLazy)
+fn analyze_field_for_relation(field: &syn::Field) -> Option<RelationFieldInfo> {
     let field_ident = field.ident.as_ref()?;
     let field_name = field_ident.to_string();
     let field_name_upper = AsUpperCamelCase(&field_name);
@@ -104,58 +142,62 @@ fn analyze_field_for_entity_id(field: &syn::Field) -> Option<EntityIdField> {
 
     let ty = &field.ty;
 
-    // Try direct EntityIDFor<T>
-    if let Some(target) = extract_entity_id_target(ty) {
-        return Some(EntityIdField {
+    // Try direct EntityIDFor<T> or TdbLazy<T>
+    if let Some((target, kind)) = extract_relation_target(ty) {
+        return Some(RelationFieldInfo {
             field_ident: field_ident.clone(),
             field_name,
             marker_type_name,
             target_type: target,
             is_optional: false,
             is_collection: false,
+            kind,
         });
     }
 
-    // Try Option<EntityIDFor<T>>
+    // Try Option<EntityIDFor<T>> or Option<TdbLazy<T>>
     let (unwrapped, is_option) = unwrap_option_type(ty);
     if is_option {
-        if let Some(target) = extract_entity_id_target(&unwrapped) {
-            return Some(EntityIdField {
+        if let Some((target, kind)) = extract_relation_target(&unwrapped) {
+            return Some(RelationFieldInfo {
                 field_ident: field_ident.clone(),
                 field_name,
                 marker_type_name,
                 target_type: target,
                 is_optional: true,
                 is_collection: false,
+                kind,
             });
         }
-        // Try Option<Vec<EntityIDFor<T>>>
+        // Try Option<Vec<...>>
         let (vec_unwrapped, is_vec) = unwrap_vec_type(&unwrapped);
         if is_vec {
-            if let Some(target) = extract_entity_id_target(&vec_unwrapped) {
-                return Some(EntityIdField {
+            if let Some((target, kind)) = extract_relation_target(&vec_unwrapped) {
+                return Some(RelationFieldInfo {
                     field_ident: field_ident.clone(),
                     field_name,
                     marker_type_name,
                     target_type: target,
                     is_optional: true,
                     is_collection: true,
+                    kind,
                 });
             }
         }
     }
 
-    // Try Vec<EntityIDFor<T>>
+    // Try Vec<EntityIDFor<T>> or Vec<TdbLazy<T>>
     let (vec_unwrapped, is_vec) = unwrap_vec_type(ty);
     if is_vec {
-        if let Some(target) = extract_entity_id_target(&vec_unwrapped) {
-            return Some(EntityIdField {
+        if let Some((target, kind)) = extract_relation_target(&vec_unwrapped) {
+            return Some(RelationFieldInfo {
                 field_ident: field_ident.clone(),
                 field_name,
                 marker_type_name,
                 target_type: target,
                 is_optional: false,
                 is_collection: true,
+                kind,
             });
         }
     }
@@ -264,26 +306,28 @@ pub fn generate_relation_impls(
     }
 
     // =========================================================================
-    // Generate ORM relation impls for EntityIDFor<T> fields
+    // Generate ORM relation impls for EntityIDFor<T> and TdbLazy<T> fields
     // =========================================================================
 
     let mut orm_relation_impls = vec![];
     let mut seen_target_types = HashSet::new();
 
     for field in &fields_named.named {
-        if let Some(entity_id_field) = analyze_field_for_entity_id(field) {
-            let field_ident = &entity_id_field.field_ident;
-            let _field_name = &entity_id_field.field_name;
-            let marker_type_name = &entity_id_field.marker_type_name;
-            let target_type = &entity_id_field.target_type;
-            let is_optional = entity_id_field.is_optional;
-            let is_collection = entity_id_field.is_collection;
+        if let Some(relation_field) = analyze_field_for_relation(field) {
+            let field_ident = &relation_field.field_ident;
+            let _field_name = &relation_field.field_name;
+            let marker_type_name = &relation_field.marker_type_name;
+            let target_type = &relation_field.target_type;
+            let is_optional = relation_field.is_optional;
+            let is_collection = relation_field.is_collection;
+            let kind = relation_field.kind;
 
             let marker_path = quote! { #fields_module_name::#marker_type_name };
 
-            // Generate BelongsTo impl ONLY for non-collection fields
+            // Generate BelongsTo impl ONLY for EntityIDFor non-collection fields
+            // (TdbLazy has a different accessor pattern, so we skip BelongsTo for it)
             // Collections (Vec<EntityIDFor<T>>) don't have a single parent ID
-            if !is_collection {
+            if kind == RelationFieldKind::EntityId && !is_collection {
                 let belongs_to_impl = if is_optional {
                     if let Some(clause) = where_clause {
                         quote! {

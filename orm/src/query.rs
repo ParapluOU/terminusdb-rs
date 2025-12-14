@@ -206,7 +206,7 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
     where
         Self: Sized,
     {
-        ModelQuery::new(ids.into_iter().map(|id| id.to_string()))
+        ModelQuery::new(ids.into_iter().map(|id| id.iri()))
     }
 
     /// Find all instances by string IDs (convenience method).
@@ -238,7 +238,7 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
     where
         Self: Sized,
     {
-        ModelQuery::new(std::iter::once(id.to_string()))
+        ModelQuery::new(std::iter::once(id.iri()))
     }
 
     /// Find a single instance by string ID (convenience method).

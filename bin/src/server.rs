@@ -24,9 +24,45 @@
 
 use std::net::TcpListener;
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use terminusdb_client::TerminusDBHttpClient;
 use tokio::sync::OnceCell;
+
+/// Store the PID of the shared test server so we can kill it on exit.
+/// Using AtomicU32 since process IDs fit in u32 on most platforms.
+static TEST_SERVER_PID: AtomicU32 = AtomicU32::new(0);
+
+/// Register an atexit handler to kill the test server process.
+/// This is called once when the first test_instance is created.
+fn register_exit_handler() {
+    extern "C" fn cleanup() {
+        let pid = TEST_SERVER_PID.load(Ordering::SeqCst);
+        if pid != 0 {
+            eprintln!("[terminusdb-bin] atexit: Killing server PID {}", pid);
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+                // Give it a moment to terminate gracefully
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                // Force kill if still running
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            #[cfg(windows)]
+            {
+                // On Windows, we'd need to use TerminateProcess
+                // For now, just log - the process will be orphaned
+                eprintln!("[terminusdb-bin] Windows cleanup not implemented");
+            }
+        }
+    }
+
+    // Register the cleanup function to run at exit
+    // This is safe and only registers once due to OnceCell semantics
+    unsafe {
+        libc::atexit(cleanup);
+    }
+}
 
 /// Find an available port by binding to port 0 and getting an OS-assigned port.
 /// The listener is dropped after getting the port, freeing it for the server.
@@ -387,6 +423,10 @@ const FATAL_ERROR_PATTERNS: &[&str] = &[
 
 /// Start the test server (internal helper for test_instance)
 async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
+    // Register exit handler BEFORE spawning the server
+    // This ensures cleanup even if the process exits unexpectedly
+    register_exit_handler();
+
     let binary_path = crate::extract_binary()?;
     eprintln!(
         "[terminusdb-bin] test_instance: Binary path: {:?}",
@@ -413,11 +453,15 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
         .env("TERMINUSDB_SERVER_PORT", port.to_string())
         .spawn()?;
 
+    let pid = child.id();
     eprintln!(
         "[terminusdb-bin] test_instance: Server spawned with PID: {} on port {}",
-        child.id(),
+        pid,
         port
     );
+
+    // Store the PID so the atexit handler can kill it
+    TEST_SERVER_PID.store(pid, Ordering::SeqCst);
 
     // Wait for server to be ready, checking for early process exit
     wait_for_ready(&mut child, port, Duration::from_secs(30)).await?;

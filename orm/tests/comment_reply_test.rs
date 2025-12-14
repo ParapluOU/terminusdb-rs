@@ -215,18 +215,20 @@ fn test_empty_results() {
 }
 
 // ============================================================================
-// Integration tests (require running TerminusDB)
+// Integration tests (use embedded in-memory TerminusDB server)
 // ============================================================================
 
+use terminusdb_bin::TerminusDBServer;
 use terminusdb_orm::testing::TestDb;
 
 /// Integration test: Verify TestDb helper works
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_db_helper_works() {
-    let test_db = TestDb::new("orm_comment_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_comment_test").await.unwrap();
 
-    assert!(test_db.db_name().starts_with("orm_comment_test_"));
+    assert!(test_db.db_name().starts_with("orm_comment_test"));
     assert_eq!(test_db.org(), "admin");
 
     let spec = test_db.spec();
@@ -235,9 +237,10 @@ async fn test_db_helper_works() {
 
 /// Integration test: FetchBuilder with client returns empty for non-existent
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_fetch_nonexistent_returns_empty() {
-    let test_db = TestDb::new("orm_fetch_empty_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_fetch_empty_test").await.unwrap();
     let client = test_db.client();
     let spec = test_db.spec();
 
@@ -258,9 +261,10 @@ async fn test_fetch_nonexistent_returns_empty() {
 /// Integration test: Execute GraphQL ID query
 /// Note: GraphQL queries require schema to exist, so querying non-existent types will error
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_execute_graphql_id_query() {
-    let test_db = TestDb::new("orm_graphql_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_graphql_test").await.unwrap();
     let client = test_db.client();
     let spec = test_db.spec();
 

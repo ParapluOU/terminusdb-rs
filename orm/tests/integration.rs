@@ -1,16 +1,16 @@
 //! Integration tests for terminusdb-orm
 //!
-//! These tests require a running TerminusDB instance at localhost:6363.
-//! Run with: `cargo test -p terminusdb-orm --test integration -- --ignored`
+//! These tests use the embedded in-memory TerminusDB server.
 
+use terminusdb_bin::TerminusDBServer;
 use terminusdb_orm::prelude::*;
 use terminusdb_orm::testing::TestDb;
 
 /// Test that ORM client initialization works
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_orm_client_init() {
-    let client = TerminusDBHttpClient::local_node().await;
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
 
     // Initialize should succeed (note: may fail if already initialized in another test)
     let _ = OrmClient::init(client);
@@ -21,10 +21,10 @@ async fn test_orm_client_init() {
 
 /// Test basic fetch operations with TestDb helper
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_fetch_by_ids() {
-    // Create a test database
-    let test_db = TestDb::new("orm_fetch_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_fetch_test").await.unwrap();
     let client = test_db.client();
     let spec = test_db.spec();
 
@@ -43,11 +43,12 @@ async fn test_fetch_by_ids() {
 
 /// Test TestDb helper creation and cleanup
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_test_db_helper() {
-    let test_db = TestDb::new("orm_helper_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_helper_test").await.unwrap();
 
-    assert!(test_db.db_name().starts_with("orm_helper_test_"));
+    assert!(test_db.db_name().starts_with("orm_helper_test"));
     assert_eq!(test_db.org(), "admin");
 
     let spec = test_db.spec();

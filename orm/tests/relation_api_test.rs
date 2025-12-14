@@ -7,7 +7,7 @@ use terminusdb_orm::prelude::*;
 
 // Required for TerminusDBModel derive
 use terminusdb_schema as terminusdb_schema;
-use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema::{TdbLazy, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 
 use serde::{Deserialize, Serialize};
@@ -24,12 +24,13 @@ pub struct User {
 }
 
 /// A blog post authored by a user
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+/// Uses TdbLazy<User> to create a document link (enables reverse relations)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Post {
     pub title: String,
     pub content: String,
-    /// The author of this post (reverse relation to User)
-    pub author_id: EntityIDFor<User>,
+    /// The author of this post (document link to User, enables reverse relation)
+    pub user: TdbLazy<User>,
 }
 
 /// A comment on a post, also by a user
@@ -43,13 +44,14 @@ pub struct Comment {
 }
 
 /// A document with multiple user references (author and reviewer)
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+/// Uses TdbLazy<User> to create document links (enables reverse relations)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Document {
     pub title: String,
-    /// Primary author
-    pub author_id: EntityIDFor<User>,
-    /// Reviewer (different from author)
-    pub reviewer_id: EntityIDFor<User>,
+    /// Primary author (document link)
+    pub author: TdbLazy<User>,
+    /// Reviewer (document link, different from author)
+    pub reviewer: TdbLazy<User>,
 }
 
 /// A car with multiple wheel references (forward relations)
@@ -182,12 +184,12 @@ fn test_with_via_specific_field() {
     // Load only Documents where user is the AUTHOR (not reviewer)
     let id = EntityIDFor::<User>::new("user1").unwrap();
     let query = User::find(id)
-        .with_via::<Document, DocumentFields::AuthorId>();
+        .with_via::<Document, DocumentFields::Author>();
 
     assert_eq!(query.relations().len(), 1);
     match &query.relations()[0].direction {
         RelationDirection::Reverse { via_field } => {
-            assert_eq!(via_field.as_deref(), Some("author_id"));
+            assert_eq!(via_field.as_deref(), Some("author"));
         }
         _ => panic!("Expected Reverse direction"),
     }
@@ -198,12 +200,12 @@ fn test_with_via_different_field() {
     // Load only Documents where user is the REVIEWER
     let id = EntityIDFor::<User>::new("user1").unwrap();
     let query = User::find(id)
-        .with_via::<Document, DocumentFields::ReviewerId>();
+        .with_via::<Document, DocumentFields::Reviewer>();
 
     assert_eq!(query.relations().len(), 1);
     match &query.relations()[0].direction {
         RelationDirection::Reverse { via_field } => {
-            assert_eq!(via_field.as_deref(), Some("reviewer_id"));
+            assert_eq!(via_field.as_deref(), Some("reviewer"));
         }
         _ => panic!("Expected Reverse direction"),
     }
@@ -214,8 +216,8 @@ fn test_with_via_both_fields_separately() {
     // Load Documents where user is author AND where user is reviewer (separate queries)
     let id = EntityIDFor::<User>::new("user1").unwrap();
     let query = User::find(id)
-        .with_via::<Document, DocumentFields::AuthorId>()
-        .with_via::<Document, DocumentFields::ReviewerId>();
+        .with_via::<Document, DocumentFields::Author>()
+        .with_via::<Document, DocumentFields::Reviewer>();
 
     // Both relations are registered
     assert_eq!(query.relations().len(), 2);
@@ -307,22 +309,23 @@ fn test_mixed_relation_types() {
 }
 
 // ============================================================================
-// Future: Integration Tests (require running TerminusDB)
+// Integration Tests (use embedded in-memory TerminusDB server)
 // ============================================================================
 
 // These tests verify actual query execution and data loading
-// They are marked #[ignore] and require the `testing` feature
 
 #[cfg(feature = "testing")]
 mod integration {
     use super::*;
+    use terminusdb_bin::TerminusDBServer;
     use terminusdb_orm::testing::TestDb;
     use terminusdb_client::DocumentInsertArgs;
 
     #[tokio::test]
-    #[ignore = "Requires running TerminusDB instance"]
     async fn test_execute_with_reverse_relation() {
-        let test_db = TestDb::new("orm_reverse_relation_test").await.unwrap();
+        let server = TerminusDBServer::test_instance().await.unwrap();
+        let client = server.client().await.unwrap();
+        let test_db = TestDb::with_client(client, "orm_reverse_relation_test").await.unwrap();
         let client = test_db.client();
         let spec = test_db.spec();
 
@@ -341,25 +344,25 @@ mod integration {
             email: "alice@example.com".to_string(),
         };
         let user_result = client.save_instance(&user, schema_args.clone()).await.unwrap();
-        let user_id = user_result.root_ref::<User>().unwrap();
+        let user_id = user_result.root_id.clone();
 
-        // Insert posts by that user
+        // Insert posts by that user (using TdbLazy)
         let post1 = Post {
             title: "First Post".to_string(),
             content: "Hello world".to_string(),
-            author_id: user_id.clone(),
+            user: TdbLazy::new_id(&user_id).unwrap(),
         };
         let post2 = Post {
             title: "Second Post".to_string(),
             content: "Another post".to_string(),
-            author_id: user_id.clone(),
+            user: TdbLazy::new_id(&user_id).unwrap(),
         };
         client.save_instance(&post1, schema_args.clone()).await.unwrap();
         client.save_instance(&post2, schema_args.clone()).await.unwrap();
 
-        // Query user with posts
-        let result = User::find(user_id)
-            .with::<Post>()
+        // Query user with posts using the TdbLazy field name
+        let result = User::find_by_string(&user_id)
+            .with_via::<Post, PostFields::User>()
             .with_client(client)
             .execute(&spec)
             .await
@@ -370,15 +373,16 @@ mod integration {
         assert_eq!(users.len(), 1);
         assert_eq!(users[0].name, "Alice");
 
-        // TODO: Once relation loading is implemented, verify posts are loaded
-        // let posts: Vec<Post> = result.get().unwrap();
-        // assert_eq!(posts.len(), 2);
+        // Verify posts are loaded via reverse relation
+        let posts: Vec<Post> = result.get().unwrap();
+        assert_eq!(posts.len(), 2, "Expected 2 posts via reverse relation");
     }
 
     #[tokio::test]
-    #[ignore = "Requires running TerminusDB instance"]
     async fn test_execute_with_via_specific_field() {
-        let test_db = TestDb::new("orm_with_via_test").await.unwrap();
+        let server = TerminusDBServer::test_instance().await.unwrap();
+        let client = server.client().await.unwrap();
+        let test_db = TestDb::with_client(client, "orm_with_via_test").await.unwrap();
         let client = test_db.client();
         let spec = test_db.spec();
 
@@ -398,35 +402,40 @@ mod integration {
         let alice_result = client.save_instance(&alice, schema_args.clone()).await.unwrap();
         let bob_result = client.save_instance(&bob, schema_args.clone()).await.unwrap();
 
-        let alice_id = alice_result.root_ref::<User>().unwrap();
-        let bob_id = bob_result.root_ref::<User>().unwrap();
+        let alice_id = alice_result.root_id.clone();
+        let bob_id = bob_result.root_id.clone();
 
-        // Insert document: Alice is author, Bob is reviewer
+        // Insert document: Alice is author, Bob is reviewer (using TdbLazy)
         let doc = Document {
             title: "Important Document".to_string(),
-            author_id: alice_id.clone(),
-            reviewer_id: bob_id.clone(),
+            author: TdbLazy::new_id(&alice_id).unwrap(),
+            reviewer: TdbLazy::new_id(&bob_id).unwrap(),
         };
         client.save_instance(&doc, schema_args.clone()).await.unwrap();
 
         // Query Alice's authored documents (should find the doc)
-        let result = User::find(alice_id.clone())
-            .with_via::<Document, DocumentFields::AuthorId>()
+        let result = User::find_by_string(&alice_id)
+            .with_via::<Document, DocumentFields::Author>()
             .with_client(client.clone())
             .execute(&spec)
             .await
             .unwrap();
 
-        // TODO: Verify doc is in result
+        // Verify doc is in result
+        let docs: Vec<Document> = result.get().unwrap();
+        assert_eq!(docs.len(), 1, "Expected 1 document where Alice is author");
+        assert_eq!(docs[0].title, "Important Document");
 
         // Query Alice's reviewed documents (should find nothing)
-        let result2 = User::find(alice_id)
-            .with_via::<Document, DocumentFields::ReviewerId>()
+        let result2 = User::find_by_string(&alice_id)
+            .with_via::<Document, DocumentFields::Reviewer>()
             .with_client(client)
             .execute(&spec)
             .await
             .unwrap();
 
-        // TODO: Verify no docs in result
+        // Verify no docs in result (Alice is not reviewer of any doc)
+        let docs2: Vec<Document> = result2.get().unwrap();
+        assert_eq!(docs2.len(), 0, "Expected 0 documents where Alice is reviewer");
     }
 }

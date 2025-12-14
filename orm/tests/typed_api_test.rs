@@ -3,8 +3,9 @@
 //! This test uses actual Comment/Reply models and tests:
 //! - `Comment::find_all([EntityIDFor<Comment>]).with::<Reply>().execute(&spec)`
 //!
-//! Run with: `cargo test -p terminusdb-orm --features testing --test typed_api_test -- --ignored`
+//! Run with: `cargo test -p terminusdb-orm --features testing --test typed_api_test`
 
+use terminusdb_bin::TerminusDBServer;
 use terminusdb_orm::prelude::*;
 #[cfg(feature = "testing")]
 use terminusdb_orm::testing::TestDb;
@@ -13,6 +14,7 @@ use terminusdb_orm::testing::TestDb;
 use terminusdb_schema as terminusdb_schema;
 #[allow(unused_imports)]
 use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema::TdbLazy;
 use terminusdb_schema_derive::TerminusDBModel;
 
 use serde::{Deserialize, Serialize};
@@ -25,19 +27,19 @@ pub struct Comment {
 }
 
 /// A reply to a comment
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+/// Uses TdbLazy<Comment> to create a document link (enables reverse relations)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
 pub struct Reply {
     pub text: String,
     pub author: String,
-    /// Reference to parent comment
-    pub comment_id: EntityIDFor<Comment>,
+    /// Reference to parent comment (document link, enables reverse relation)
+    pub comment: TdbLazy<Comment>,
 }
 
 // The TerminusDBModel derive macro now automatically generates:
-// - BelongsTo<Comment, ReplyFields::CommentId>
-// - ReverseRelation<Comment, ReplyFields::CommentId>
+// - ReverseRelation<Comment, ReplyFields::Comment>
 // - ReverseRelation<Comment, DefaultField>
-// - ForwardRelation<Comment, ReplyFields::CommentId>
+// - ForwardRelation<Comment, ReplyFields::Comment>
 
 // ============================================================================
 // Forward relation example: Car with multiple wheel fields
@@ -131,11 +133,12 @@ fn test_with_field_forward_relation() {
 /// Full end-to-end test: insert schema, insert data, query with typed API
 #[cfg(feature = "testing")]
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_comment_find_all_with_reply() {
     use terminusdb_client::DocumentInsertArgs;
 
-    let test_db = TestDb::new("orm_typed_api_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_typed_api_test").await.unwrap();
     let client = test_db.client();
     let spec = test_db.spec();
 
@@ -187,32 +190,34 @@ async fn test_comment_find_all_with_reply() {
         .await
         .expect("Failed to insert comment2");
 
-    // Extract the IDs using the typed root_ref method
+    // Extract the IDs - need both typed (for queries) and string (for TdbLazy)
     let comment1_id = result1.root_ref::<Comment>()
         .expect("Should parse comment1 ID");
     let comment2_id = result2.root_ref::<Comment>()
         .expect("Should parse comment2 ID");
+    let comment1_id_str = result1.root_id.clone();
+    let comment2_id_str = result2.root_id.clone();
 
     println!("Inserted Comment 1: {}", comment1_id);
     println!("Inserted Comment 2: {}", comment2_id);
 
-    // Create Reply instances
+    // Create Reply instances using TdbLazy links
     let reply1 = Reply {
         text: "Reply to first".to_string(),
         author: "Carol".to_string(),
-        comment_id: comment1_id.clone(),
+        comment: TdbLazy::new_id(&comment1_id_str).unwrap(),
     };
 
     let reply2 = Reply {
         text: "Another reply to first".to_string(),
         author: "Dave".to_string(),
-        comment_id: comment1_id.clone(),
+        comment: TdbLazy::new_id(&comment1_id_str).unwrap(),
     };
 
     let reply3 = Reply {
         text: "Reply to second".to_string(),
         author: "Eve".to_string(),
-        comment_id: comment2_id.clone(),
+        comment: TdbLazy::new_id(&comment2_id_str).unwrap(),
     };
 
     // Insert replies
@@ -261,7 +266,7 @@ async fn test_comment_find_all_with_reply() {
     let replies: Vec<Reply> = result.get().expect("Should get replies");
     println!("Found {} replies", replies.len());
     for r in &replies {
-        println!("  - {} by {} (comment: {})", r.text, r.author, r.comment_id);
+        println!("  - {} by {}", r.text, r.author);
     }
 
     // Note: The number of replies depends on how with::<Reply>() is implemented
@@ -271,11 +276,12 @@ async fn test_comment_find_all_with_reply() {
 /// Test using find() with a single typed ID
 #[cfg(feature = "testing")]
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_comment_find_single() {
     use terminusdb_client::DocumentInsertArgs;
 
-    let test_db = TestDb::new("orm_find_single_test").await.unwrap();
+    let server = TerminusDBServer::test_instance().await.unwrap();
+    let client = server.client().await.unwrap();
+    let test_db = TestDb::with_client(client, "orm_find_single_test").await.unwrap();
     let client = test_db.client();
     let spec = test_db.spec();
 

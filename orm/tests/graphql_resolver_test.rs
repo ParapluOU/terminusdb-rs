@@ -1,7 +1,6 @@
 //! Integration tests for GraphQL queries against TerminusDB.
 //!
-//! These tests verify that the generated GraphQL queries work correctly
-//! against a real TerminusDB instance.
+//! These tests use the embedded in-memory TerminusDB server.
 //!
 //! # Current Limitations
 //!
@@ -18,6 +17,7 @@
 //! linked documents (embedded or via `TdbLazy<T>`), not `EntityIDFor<T>`.
 
 use serde::{Deserialize, Serialize};
+use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::graphql::GraphQLRequest;
 use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
 use terminusdb_schema::{EntityIDFor, ToTDBInstance};
@@ -57,7 +57,8 @@ async fn setup_test_db(prefix: &str) -> anyhow::Result<(TerminusDBHttpClient, St
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-    let client = TerminusDBHttpClient::local_node().await;
+    let server = TerminusDBServer::test_instance().await?;
+    let client = server.client().await?;
     let db_name = format!("{}_{}", prefix, COUNTER.fetch_add(1, Ordering::SeqCst));
 
     // Delete if exists, then create fresh
@@ -101,7 +102,6 @@ async fn cleanup_db(client: &TerminusDBHttpClient, db_name: &str) {
 
 /// Test basic GraphQL query to fetch an Author by ID.
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_basic_graphql_query() -> anyhow::Result<()> {
     let (client, db_name, spec) = setup_test_db("graphql_basic").await?;
 
@@ -178,7 +178,6 @@ async fn test_basic_graphql_query() -> anyhow::Result<()> {
 /// Test that Article.author_id is stored as a string (not a document link).
 /// This demonstrates the current limitation with `EntityIDFor<T>`.
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_entity_id_stored_as_string() -> anyhow::Result<()> {
     let (client, db_name, spec) = setup_test_db("graphql_entity_id").await?;
 
@@ -288,7 +287,6 @@ async fn test_query_builder_syntax() {
 /// Test that forward relation on EntityIDFor fields is not supported
 /// (because they're strings, not document links).
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_forward_relation_limitation() -> anyhow::Result<()> {
     let (client, db_name, spec) = setup_test_db("graphql_forward_limit").await?;
 
@@ -367,7 +365,6 @@ async fn test_forward_relation_limitation() -> anyhow::Result<()> {
 /// Test that auto-generated reverse fields don't exist for EntityIDFor.
 /// This is expected because EntityIDFor creates string fields, not links.
 #[tokio::test]
-#[ignore = "Requires running TerminusDB instance"]
 async fn test_reverse_field_limitation() -> anyhow::Result<()> {
     let (client, db_name, spec) = setup_test_db("graphql_reverse_limit").await?;
 

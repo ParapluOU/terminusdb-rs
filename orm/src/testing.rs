@@ -43,6 +43,9 @@ impl TestDb {
     ///
     /// The database name will be `{prefix}_{counter}` where counter is auto-incremented.
     ///
+    /// **Note**: This connects to `local_node()` which requires an external server.
+    /// For embedded test servers, use `from_server()` instead.
+    ///
     /// # Example
     /// ```ignore
     /// let test_db = TestDb::new("orm_test").await?;
@@ -53,10 +56,45 @@ impl TestDb {
         Self::with_name(&db_name).await
     }
 
+    /// Create a new test database from a TerminusDBServer test instance.
+    ///
+    /// This is the recommended way to create test databases - it uses the
+    /// embedded in-memory server, so tests don't require an external server.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use terminusdb_bin::TerminusDBServer;
+    ///
+    /// let server = TerminusDBServer::test_instance().await?;
+    /// let test_db = TestDb::from_server(&server, "my_test").await?;
+    /// ```
+    #[cfg(feature = "testing")]
+    pub async fn from_server(
+        server: &terminusdb_bin::TerminusDBServer,
+        prefix: &str,
+    ) -> anyhow::Result<Self> {
+        let counter = TEST_DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db_name = format!("{}_{}", prefix, counter);
+        let client = server.client().await?;
+        Self::with_client(client, &db_name).await
+    }
+
     /// Create a test database with a specific name.
     pub async fn with_name(db_name: &str) -> anyhow::Result<Self> {
         let client = TerminusDBHttpClient::local_node().await;
-        // local_node() always uses "admin" organization
+        Self::with_client(client, db_name).await
+    }
+
+    /// Create a test database using a provided client.
+    ///
+    /// This is useful when using an embedded test server:
+    /// ```ignore
+    /// let server = TerminusDBServer::test_instance().await?;
+    /// let client = server.client().await?;
+    /// let test_db = TestDb::with_client(client, "my_test").await?;
+    /// ```
+    pub async fn with_client(client: TerminusDBHttpClient, db_name: &str) -> anyhow::Result<Self> {
+        // Use "admin" organization (standard for local/test servers)
         let org = "admin".to_string();
 
         // Ensure the database exists (create if not present)
@@ -220,17 +258,23 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "Requires running TerminusDB instance"]
     async fn test_test_db_creation() {
-        let test_db = TestDb::new("test_helper").await.unwrap();
+        let server = terminusdb_bin::TerminusDBServer::test_instance()
+            .await
+            .unwrap();
+        let client = server.client().await.unwrap();
+        let test_db = TestDb::with_client(client, "test_helper_0").await.unwrap();
         assert!(test_db.db_name().starts_with("test_helper_"));
         assert_eq!(test_db.org(), "admin");
     }
 
     #[tokio::test]
-    #[ignore = "Requires running TerminusDB instance"]
     async fn test_spec_creation() {
-        let test_db = TestDb::new("spec_test").await.unwrap();
+        let server = terminusdb_bin::TerminusDBServer::test_instance()
+            .await
+            .unwrap();
+        let client = server.client().await.unwrap();
+        let test_db = TestDb::with_client(client, "spec_test_0").await.unwrap();
         let spec = test_db.spec();
         assert!(spec.db.starts_with("spec_test_"));
         assert_eq!(spec.branch, Some("main".to_string()));
