@@ -87,9 +87,56 @@ with multiple interconnected crates:
 
 - Unit tests are inline with source code
 - Integration tests in `tests/` directories
-- Many tests require a running TerminusDB instance and are marked with
-  `#[ignore]`
 - Async tests use `#[tokio::test]`
+- **Prefer `TerminusDBServer` for integration tests** - no `#[ignore]` needed, runs in parallel
+
+### Writing Parallel Integration Tests with TerminusDBServer
+
+Use `terminusdb_bin::TerminusDBServer` for tests that need a real database. Each process gets its own server on a unique port, enabling parallel test execution without conflicts.
+
+**Best Practice Pattern:**
+```rust
+use terminusdb_bin::TerminusDBServer;
+
+#[tokio::test]
+async fn test_my_feature() -> anyhow::Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+
+    // Use with_tmp_db for automatic cleanup and unique database names
+    server.with_tmp_db("test_my_feature", |client, spec| async move {
+        // Each test gets a unique database like "test_my_feature_<uuid>"
+        // Database is automatically deleted when closure returns
+
+        let args = DocumentInsertArgs::from(spec.clone());
+        client.insert_instance(&my_model, args).await?;
+
+        Ok(())
+    }).await
+}
+```
+
+**With Pre-inserted Schemas:**
+```rust
+#[tokio::test]
+async fn test_with_models() -> anyhow::Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+
+    // Schemas for MyModel are automatically inserted
+    server.with_db_schema::<(MyModel,)>("test_models", |client, spec| async move {
+        let args = DocumentInsertArgs::from(spec.clone());
+        client.insert_instance(&my_instance, args).await?;
+        Ok(())
+    }).await
+}
+```
+
+**Key Points:**
+- `test_instance()` returns a shared server per-process (efficient for multiple tests)
+- `with_tmp_db()` creates a unique database name using UUID (no conflicts between parallel tests)
+- `with_db_schema::<T>()` pre-inserts schemas before running the test
+- Databases are automatically cleaned up even if the test fails/panics
+- No `#[ignore]` needed - tests run automatically with `cargo test`
+- Each test process gets its own server on a unique port via `TERMINUSDB_SERVER_PORT`
 
 ### Important Notes
 
