@@ -317,117 +317,111 @@ fn test_mixed_relation_types() {
 #[cfg(feature = "testing")]
 mod integration {
     use super::*;
-    use terminusdb_orm::testing::with_test_db;
+    use terminusdb_test::test as db_test;
     use terminusdb_client::DocumentInsertArgs;
 
-    #[tokio::test]
-    async fn test_execute_with_reverse_relation() -> anyhow::Result<()> {
-        with_test_db("orm_reverse_relation_test", |client, spec| async move {
-            // Insert schemas
-            let schema_args = DocumentInsertArgs {
-                spec: spec.clone(),
-                ..Default::default()
-            };
+    #[db_test(db = "orm_reverse_relation_test")]
+    async fn test_execute_with_reverse_relation(client: _, spec: _) -> anyhow::Result<()> {
+        // Insert schemas
+        let schema_args = DocumentInsertArgs {
+            spec: spec.clone(),
+            ..Default::default()
+        };
 
-            client.insert_schema(&User::to_schema(), schema_args.clone()).await?;
-            client.insert_schema(&Post::to_schema(), schema_args.clone()).await?;
+        client.insert_schema(&User::to_schema(), schema_args.clone()).await?;
+        client.insert_schema(&Post::to_schema(), schema_args.clone()).await?;
 
-            // Insert a user
-            let user = User {
-                name: "Alice".to_string(),
-                email: "alice@example.com".to_string(),
-            };
-            let user_result = client.save_instance(&user, schema_args.clone()).await?;
-            let user_id = user_result.root_id.clone();
+        // Insert a user
+        let user = User {
+            name: "Alice".to_string(),
+            email: "alice@example.com".to_string(),
+        };
+        let user_result = client.save_instance(&user, schema_args.clone()).await?;
+        let user_id = user_result.root_id.clone();
 
-            // Insert posts by that user (using TdbLazy)
-            let post1 = Post {
-                title: "First Post".to_string(),
-                content: "Hello world".to_string(),
-                user: TdbLazy::new_id(&user_id)?,
-            };
-            let post2 = Post {
-                title: "Second Post".to_string(),
-                content: "Another post".to_string(),
-                user: TdbLazy::new_id(&user_id)?,
-            };
-            client.save_instance(&post1, schema_args.clone()).await?;
-            client.save_instance(&post2, schema_args.clone()).await?;
+        // Insert posts by that user (using TdbLazy)
+        let post1 = Post {
+            title: "First Post".to_string(),
+            content: "Hello world".to_string(),
+            user: TdbLazy::new_id(&user_id)?,
+        };
+        let post2 = Post {
+            title: "Second Post".to_string(),
+            content: "Another post".to_string(),
+            user: TdbLazy::new_id(&user_id)?,
+        };
+        client.save_instance(&post1, schema_args.clone()).await?;
+        client.save_instance(&post2, schema_args.clone()).await?;
 
-            // Query user with posts using the TdbLazy field name
-            let result = User::find_by_string(&user_id)
-                .with_via::<Post, PostFields::User>()
-                .with_client(&client)
-                .execute(&spec)
-                .await?;
+        // Query user with posts using the TdbLazy field name
+        let result = User::find_by_string(&user_id)
+            .with_via::<Post, PostFields::User>()
+            .with_client(&client)
+            .execute(&spec)
+            .await?;
 
-            // Verify results
-            let users: Vec<User> = result.get()?;
-            assert_eq!(users.len(), 1);
-            assert_eq!(users[0].name, "Alice");
+        // Verify results
+        let users: Vec<User> = result.get()?;
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].name, "Alice");
 
-            // Verify posts are loaded via reverse relation
-            let posts: Vec<Post> = result.get()?;
-            assert_eq!(posts.len(), 2, "Expected 2 posts via reverse relation");
-            Ok(())
-        })
-        .await
+        // Verify posts are loaded via reverse relation
+        let posts: Vec<Post> = result.get()?;
+        assert_eq!(posts.len(), 2, "Expected 2 posts via reverse relation");
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn test_execute_with_via_specific_field() -> anyhow::Result<()> {
-        with_test_db("orm_with_via_test", |client, spec| async move {
-            // Insert schemas
-            let schema_args = DocumentInsertArgs {
-                spec: spec.clone(),
-                ..Default::default()
-            };
+    #[db_test(db = "orm_with_via_test")]
+    async fn test_execute_with_via_specific_field(client: _, spec: _) -> anyhow::Result<()> {
+        // Insert schemas
+        let schema_args = DocumentInsertArgs {
+            spec: spec.clone(),
+            ..Default::default()
+        };
 
-            client.insert_schema(&User::to_schema(), schema_args.clone()).await?;
-            client.insert_schema(&Document::to_schema(), schema_args.clone()).await?;
+        client.insert_schema(&User::to_schema(), schema_args.clone()).await?;
+        client.insert_schema(&Document::to_schema(), schema_args.clone()).await?;
 
-            // Insert two users
-            let alice = User { name: "Alice".to_string(), email: "alice@example.com".to_string() };
-            let bob = User { name: "Bob".to_string(), email: "bob@example.com".to_string() };
+        // Insert two users
+        let alice = User { name: "Alice".to_string(), email: "alice@example.com".to_string() };
+        let bob = User { name: "Bob".to_string(), email: "bob@example.com".to_string() };
 
-            let alice_result = client.save_instance(&alice, schema_args.clone()).await?;
-            let bob_result = client.save_instance(&bob, schema_args.clone()).await?;
+        let alice_result = client.save_instance(&alice, schema_args.clone()).await?;
+        let bob_result = client.save_instance(&bob, schema_args.clone()).await?;
 
-            let alice_id = alice_result.root_id.clone();
-            let bob_id = bob_result.root_id.clone();
+        let alice_id = alice_result.root_id.clone();
+        let bob_id = bob_result.root_id.clone();
 
-            // Insert document: Alice is author, Bob is reviewer (using TdbLazy)
-            let doc = Document {
-                title: "Important Document".to_string(),
-                author: TdbLazy::new_id(&alice_id)?,
-                reviewer: TdbLazy::new_id(&bob_id)?,
-            };
-            client.save_instance(&doc, schema_args.clone()).await?;
+        // Insert document: Alice is author, Bob is reviewer (using TdbLazy)
+        let doc = Document {
+            title: "Important Document".to_string(),
+            author: TdbLazy::new_id(&alice_id)?,
+            reviewer: TdbLazy::new_id(&bob_id)?,
+        };
+        client.save_instance(&doc, schema_args.clone()).await?;
 
-            // Query Alice's authored documents (should find the doc)
-            let result = User::find_by_string(&alice_id)
-                .with_via::<Document, DocumentFields::Author>()
-                .with_client(&client)
-                .execute(&spec)
-                .await?;
+        // Query Alice's authored documents (should find the doc)
+        let result = User::find_by_string(&alice_id)
+            .with_via::<Document, DocumentFields::Author>()
+            .with_client(&client)
+            .execute(&spec)
+            .await?;
 
-            // Verify doc is in result
-            let docs: Vec<Document> = result.get()?;
-            assert_eq!(docs.len(), 1, "Expected 1 document where Alice is author");
-            assert_eq!(docs[0].title, "Important Document");
+        // Verify doc is in result
+        let docs: Vec<Document> = result.get()?;
+        assert_eq!(docs.len(), 1, "Expected 1 document where Alice is author");
+        assert_eq!(docs[0].title, "Important Document");
 
-            // Query Alice's reviewed documents (should find nothing)
-            let result2 = User::find_by_string(&alice_id)
-                .with_via::<Document, DocumentFields::Reviewer>()
-                .with_client(&client)
-                .execute(&spec)
-                .await?;
+        // Query Alice's reviewed documents (should find nothing)
+        let result2 = User::find_by_string(&alice_id)
+            .with_via::<Document, DocumentFields::Reviewer>()
+            .with_client(&client)
+            .execute(&spec)
+            .await?;
 
-            // Verify no docs in result (Alice is not reviewer of any doc)
-            let docs2: Vec<Document> = result2.get()?;
-            assert_eq!(docs2.len(), 0, "Expected 0 documents where Alice is reviewer");
-            Ok(())
-        })
-        .await
+        // Verify no docs in result (Alice is not reviewer of any doc)
+        let docs2: Vec<Document> = result2.get()?;
+        assert_eq!(docs2.len(), 0, "Expected 0 documents where Alice is reviewer");
+        Ok(())
     }
 }

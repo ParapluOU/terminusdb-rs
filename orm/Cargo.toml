@@ -36,3 +36,4 @@ terminusdb-schema-derive = { path = "../schema/derive", features = ["relations"]
 terminusdb-woql2 = { path = "../woql2" }
 tracing.workspace = true
 terminusdb-bin = { path = "../bin" }
+terminusdb-test = { path = "../test" }

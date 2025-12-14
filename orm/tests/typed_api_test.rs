@@ -7,7 +7,7 @@
 
 use terminusdb_orm::prelude::*;
 #[cfg(feature = "testing")]
-use terminusdb_orm::testing::with_test_db;
+use terminusdb_test::test as db_test;
 
 // Required for TerminusDBModel derive
 use terminusdb_schema as terminusdb_schema;
@@ -131,190 +131,184 @@ fn test_with_field_forward_relation() {
 
 /// Full end-to-end test: insert schema, insert data, query with typed API
 #[cfg(feature = "testing")]
-#[tokio::test]
-async fn test_comment_find_all_with_reply() -> anyhow::Result<()> {
+#[db_test(db = "orm_typed_api_test")]
+async fn test_comment_find_all_with_reply(client: _, spec: _) -> anyhow::Result<()> {
     use terminusdb_client::DocumentInsertArgs;
 
-    with_test_db("orm_typed_api_test", |client, spec| async move {
-        // Insert schemas for Comment and Reply
-        let comment_schema = Comment::to_schema();
-        let reply_schema = Reply::to_schema();
+    // Insert schemas for Comment and Reply
+    let comment_schema = Comment::to_schema();
+    let reply_schema = Reply::to_schema();
 
-        let schema_args = DocumentInsertArgs {
-            spec: spec.clone(),
-            ..Default::default()
-        };
+    let schema_args = DocumentInsertArgs {
+        spec: spec.clone(),
+        ..Default::default()
+    };
 
-        // Insert Comment schema
-        client
-            .insert_schema(&comment_schema, schema_args.clone())
-            .await
-            .expect("Failed to insert Comment schema");
+    // Insert Comment schema
+    client
+        .insert_schema(&comment_schema, schema_args.clone())
+        .await
+        .expect("Failed to insert Comment schema");
 
-        // Insert Reply schema
-        client
-            .insert_schema(&reply_schema, schema_args.clone())
-            .await
-            .expect("Failed to insert Reply schema");
+    // Insert Reply schema
+    client
+        .insert_schema(&reply_schema, schema_args.clone())
+        .await
+        .expect("Failed to insert Reply schema");
 
-        // Create Comment instances
-        let comment1 = Comment {
-            text: "First comment".to_string(),
-            author: "Alice".to_string(),
-        };
+    // Create Comment instances
+    let comment1 = Comment {
+        text: "First comment".to_string(),
+        author: "Alice".to_string(),
+    };
 
-        let comment2 = Comment {
-            text: "Second comment".to_string(),
-            author: "Bob".to_string(),
-        };
+    let comment2 = Comment {
+        text: "Second comment".to_string(),
+        author: "Bob".to_string(),
+    };
 
-        // Insert comments using save_instance
-        let insert_args = DocumentInsertArgs {
-            spec: spec.clone(),
-            ..Default::default()
-        };
+    // Insert comments using save_instance
+    let insert_args = DocumentInsertArgs {
+        spec: spec.clone(),
+        ..Default::default()
+    };
 
-        let result1 = client
-            .save_instance(&comment1, insert_args.clone())
-            .await
-            .expect("Failed to insert comment1");
+    let result1 = client
+        .save_instance(&comment1, insert_args.clone())
+        .await
+        .expect("Failed to insert comment1");
 
-        let result2 = client
-            .save_instance(&comment2, insert_args.clone())
-            .await
-            .expect("Failed to insert comment2");
+    let result2 = client
+        .save_instance(&comment2, insert_args.clone())
+        .await
+        .expect("Failed to insert comment2");
 
-        // Extract the IDs - need both typed (for queries) and string (for TdbLazy)
-        let comment1_id = result1.root_ref::<Comment>()
-            .expect("Should parse comment1 ID");
-        let comment2_id = result2.root_ref::<Comment>()
-            .expect("Should parse comment2 ID");
-        let comment1_id_str = result1.root_id.clone();
-        let comment2_id_str = result2.root_id.clone();
+    // Extract the IDs - need both typed (for queries) and string (for TdbLazy)
+    let comment1_id = result1.root_ref::<Comment>()
+        .expect("Should parse comment1 ID");
+    let comment2_id = result2.root_ref::<Comment>()
+        .expect("Should parse comment2 ID");
+    let comment1_id_str = result1.root_id.clone();
+    let comment2_id_str = result2.root_id.clone();
 
-        println!("Inserted Comment 1: {}", comment1_id);
-        println!("Inserted Comment 2: {}", comment2_id);
+    println!("Inserted Comment 1: {}", comment1_id);
+    println!("Inserted Comment 2: {}", comment2_id);
 
-        // Create Reply instances using TdbLazy links
-        let reply1 = Reply {
-            text: "Reply to first".to_string(),
-            author: "Carol".to_string(),
-            comment: TdbLazy::new_id(&comment1_id_str)?,
-        };
+    // Create Reply instances using TdbLazy links
+    let reply1 = Reply {
+        text: "Reply to first".to_string(),
+        author: "Carol".to_string(),
+        comment: TdbLazy::new_id(&comment1_id_str)?,
+    };
 
-        let reply2 = Reply {
-            text: "Another reply to first".to_string(),
-            author: "Dave".to_string(),
-            comment: TdbLazy::new_id(&comment1_id_str)?,
-        };
+    let reply2 = Reply {
+        text: "Another reply to first".to_string(),
+        author: "Dave".to_string(),
+        comment: TdbLazy::new_id(&comment1_id_str)?,
+    };
 
-        let reply3 = Reply {
-            text: "Reply to second".to_string(),
-            author: "Eve".to_string(),
-            comment: TdbLazy::new_id(&comment2_id_str)?,
-        };
+    let reply3 = Reply {
+        text: "Reply to second".to_string(),
+        author: "Eve".to_string(),
+        comment: TdbLazy::new_id(&comment2_id_str)?,
+    };
 
-        // Insert replies
-        client
-            .save_instance(&reply1, insert_args.clone())
-            .await
-            .expect("Failed to insert reply1");
+    // Insert replies
+    client
+        .save_instance(&reply1, insert_args.clone())
+        .await
+        .expect("Failed to insert reply1");
 
-        client
-            .save_instance(&reply2, insert_args.clone())
-            .await
-            .expect("Failed to insert reply2");
+    client
+        .save_instance(&reply2, insert_args.clone())
+        .await
+        .expect("Failed to insert reply2");
 
-        let reply3_result = client
-            .save_instance(&reply3, insert_args.clone())
-            .await
-            .expect("Failed to insert reply3");
+    let reply3_result = client
+        .save_instance(&reply3, insert_args.clone())
+        .await
+        .expect("Failed to insert reply3");
 
-        let reply3_id = reply3_result.root_ref::<Reply>()
-            .expect("Should parse reply3 ID");
+    let reply3_id = reply3_result.root_ref::<Reply>()
+        .expect("Should parse reply3 ID");
 
-        println!("Inserted Reply 3: {}", reply3_id);
+    println!("Inserted Reply 3: {}", reply3_id);
 
-        // =========================================================================
-        // NOW TEST THE TYPED API: Comment::find_all([ids]).with::<Reply>()
-        // =========================================================================
+    // =========================================================================
+    // NOW TEST THE TYPED API: Comment::find_all([ids]).with::<Reply>()
+    // =========================================================================
 
-        // Use typed IDs to query
-        let result = Comment::find_all([comment1_id.clone(), comment2_id.clone()])
-            .with::<Reply>()
-            .with_client(&client)
-            .execute(&spec)
-            .await
-            .expect("Query should succeed");
+    // Use typed IDs to query
+    let result = Comment::find_all([comment1_id.clone(), comment2_id.clone()])
+        .with::<Reply>()
+        .with_client(&client)
+        .execute(&spec)
+        .await
+        .expect("Query should succeed");
 
-        // Verify we got the comments
-        let comments: Vec<Comment> = result.get().expect("Should get comments");
-        assert_eq!(comments.len(), 2, "Should have 2 comments");
+    // Verify we got the comments
+    let comments: Vec<Comment> = result.get().expect("Should get comments");
+    assert_eq!(comments.len(), 2, "Should have 2 comments");
 
-        println!("Found {} comments", comments.len());
-        for c in &comments {
-            println!("  - {} by {}", c.text, c.author);
-        }
+    println!("Found {} comments", comments.len());
+    for c in &comments {
+        println!("  - {} by {}", c.text, c.author);
+    }
 
-        // Verify we got the replies (if with::<Reply>() loads them)
-        let replies: Vec<Reply> = result.get().expect("Should get replies");
-        println!("Found {} replies", replies.len());
-        for r in &replies {
-            println!("  - {} by {}", r.text, r.author);
-        }
+    // Verify we got the replies (if with::<Reply>() loads them)
+    let replies: Vec<Reply> = result.get().expect("Should get replies");
+    println!("Found {} replies", replies.len());
+    for r in &replies {
+        println!("  - {} by {}", r.text, r.author);
+    }
 
-        // Note: The number of replies depends on how with::<Reply>() is implemented
-        // It should load related replies based on the comment_id field
-        Ok(())
-    })
-    .await
+    // Note: The number of replies depends on how with::<Reply>() is implemented
+    // It should load related replies based on the comment_id field
+    Ok(())
 }
 
 /// Test using find() with a single typed ID
 #[cfg(feature = "testing")]
-#[tokio::test]
-async fn test_comment_find_single() -> anyhow::Result<()> {
+#[db_test(db = "orm_find_single_test")]
+async fn test_comment_find_single(client: _, spec: _) -> anyhow::Result<()> {
     use terminusdb_client::DocumentInsertArgs;
 
-    with_test_db("orm_find_single_test", |client, spec| async move {
-        // Insert schema
-        let schema_args = DocumentInsertArgs {
-            spec: spec.clone(),
-            ..Default::default()
-        };
+    // Insert schema
+    let schema_args = DocumentInsertArgs {
+        spec: spec.clone(),
+        ..Default::default()
+    };
 
-        client
-            .insert_schema(&Comment::to_schema(), schema_args.clone())
-            .await
-            .expect("Failed to insert schema");
+    client
+        .insert_schema(&Comment::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert schema");
 
-        // Insert a comment
-        let comment = Comment {
-            text: "Single comment test".to_string(),
-            author: "TestUser".to_string(),
-        };
+    // Insert a comment
+    let comment = Comment {
+        text: "Single comment test".to_string(),
+        author: "TestUser".to_string(),
+    };
 
-        let result = client
-            .save_instance(&comment, schema_args.clone())
-            .await
-            .expect("Failed to insert comment");
+    let result = client
+        .save_instance(&comment, schema_args.clone())
+        .await
+        .expect("Failed to insert comment");
 
-        let comment_id = result.root_ref::<Comment>().unwrap();
+    let comment_id = result.root_ref::<Comment>().unwrap();
 
-        // Query using typed find()
-        let query_result = Comment::find(comment_id.clone())
-            .with_client(&client)
-            .execute(&spec)
-            .await
-            .expect("Query should succeed");
+    // Query using typed find()
+    let query_result = Comment::find(comment_id.clone())
+        .with_client(&client)
+        .execute(&spec)
+        .await
+        .expect("Query should succeed");
 
-        let comments: Vec<Comment> = query_result.get().expect("Should deserialize");
-        assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].text, "Single comment test");
-        assert_eq!(comments[0].author, "TestUser");
+    let comments: Vec<Comment> = query_result.get().expect("Should deserialize");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].text, "Single comment test");
+    assert_eq!(comments[0].author, "TestUser");
 
-        println!("Found comment: {:?}", comments[0]);
-        Ok(())
-    })
-    .await
+    println!("Found comment: {:?}", comments[0]);
+    Ok(())
 }

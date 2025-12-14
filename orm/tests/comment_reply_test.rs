@@ -218,68 +218,59 @@ fn test_empty_results() {
 // Integration tests (use embedded in-memory TerminusDB server)
 // ============================================================================
 
-use terminusdb_orm::testing::with_test_db;
+use terminusdb_test::test as db_test;
 
-/// Integration test: Verify with_test_db helper works
-#[tokio::test]
-async fn test_db_helper_works() -> anyhow::Result<()> {
-    with_test_db("orm_comment_test", |_client, spec| async move {
-        assert!(spec.db.starts_with("orm_comment_test"));
-        assert_eq!(spec.branch, Some("main".to_string()));
-        Ok(())
-    })
-    .await
+/// Integration test: Verify test macro works
+#[db_test(db = "orm_comment_test")]
+async fn test_db_helper_works(_client: _, spec: _) -> anyhow::Result<()> {
+    assert!(spec.db.starts_with("orm_comment_test"));
+    assert_eq!(spec.branch, Some("main".to_string()));
+    Ok(())
 }
 
 /// Integration test: FetchBuilder with client returns empty for non-existent
-#[tokio::test]
-async fn test_fetch_nonexistent_returns_empty() -> anyhow::Result<()> {
-    with_test_db("orm_fetch_empty_test", |client, spec| async move {
-        // Fetch non-existent IDs - the database is empty so this may error or return empty
-        // TerminusDB returns an error when fetching IDs that don't exist
-        let result = FetchBuilder::with_client(&client)
-            .add_ids(["NonExistent/1", "NonExistent/2"])
-            .execute(&spec)
-            .await;
+#[db_test(db = "orm_fetch_empty_test")]
+async fn test_fetch_nonexistent_returns_empty(client: _, spec: _) -> anyhow::Result<()> {
+    // Fetch non-existent IDs - the database is empty so this may error or return empty
+    // TerminusDB returns an error when fetching IDs that don't exist
+    let result = FetchBuilder::with_client(&client)
+        .add_ids(["NonExistent/1", "NonExistent/2"])
+        .execute(&spec)
+        .await;
 
-        // Either empty result or error is acceptable for non-existent IDs
-        match result {
-            Ok(docs) => assert!(docs.is_empty()),
-            Err(_) => {} // Error is expected for non-existent IDs in empty DB
-        }
-        Ok(())
-    })
-    .await
+    // Either empty result or error is acceptable for non-existent IDs
+    match result {
+        Ok(docs) => assert!(docs.is_empty()),
+        Err(_) => {} // Error is expected for non-existent IDs in empty DB
+    }
+    Ok(())
 }
 
 /// Integration test: Execute GraphQL ID query
 /// Note: GraphQL queries require schema to exist, so querying non-existent types will error
-#[tokio::test]
-async fn test_execute_graphql_id_query() -> anyhow::Result<()> {
-    with_test_db("orm_graphql_test", |client, spec| async move {
-        // Build an ID query for a type that doesn't exist in the schema
-        let query_builder = IdQueryBuilder::new("Comment").with_relation("replies");
+#[db_test(db = "orm_graphql_test")]
+async fn test_execute_graphql_id_query(client: _, spec: _) -> anyhow::Result<()> {
+    // Build an ID query for a type that doesn't exist in the schema
+    let query_builder = IdQueryBuilder::new("Comment").with_relation("replies");
 
-        // Execute - will error because Comment schema doesn't exist
-        let result = terminusdb_orm::execute_id_query(&client, &spec, &query_builder, None).await;
+    // Execute - will error because Comment schema doesn't exist
+    let result = terminusdb_orm::execute_id_query(&client, &spec, &query_builder, None).await;
 
-        // GraphQL returns error for unknown types - this is expected
-        match result {
-            Ok(id_result) => {
-                // If schema exists (from previous test runs), result should be empty
-                assert!(id_result.is_empty());
-            }
-            Err(e) => {
-                // Expected: "Unknown field 'Comment' on type 'Query'"
-                let err_msg = e.to_string();
-                assert!(
-                    err_msg.contains("Unknown field") || err_msg.contains("GraphQL"),
-                    "Unexpected error: {}",
-                    err_msg
-                );
-            }
+    // GraphQL returns error for unknown types - this is expected
+    match result {
+        Ok(id_result) => {
+            // If schema exists (from previous test runs), result should be empty
+            assert!(id_result.is_empty());
         }
-        Ok(())
-    })
-    .await
+        Err(e) => {
+            // Expected: "Unknown field 'Comment' on type 'Query'"
+            let err_msg = e.to_string();
+            assert!(
+                err_msg.contains("Unknown field") || err_msg.contains("GraphQL"),
+                "Unexpected error: {}",
+                err_msg
+            );
+        }
+    }
+    Ok(())
 }

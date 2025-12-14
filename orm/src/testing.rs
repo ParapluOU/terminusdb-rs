@@ -305,7 +305,7 @@ macro_rules! test_with_db {
     };
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "testing"))]
 mod tests {
     use super::*;
 
