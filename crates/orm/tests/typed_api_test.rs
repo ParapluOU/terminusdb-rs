@@ -473,3 +473,139 @@ async fn test_with_default_field_single_relation(client: _, spec: _) -> anyhow::
 
     Ok(())
 }
+
+// ============================================================================
+// Subdocument unfolding test models
+// ============================================================================
+
+/// A date range subdocument
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel, PartialEq)]
+#[tdb(unfoldable = true, key = "value_hash")]
+pub struct DateRange {
+    pub start: String,
+    pub end: String,
+}
+
+/// A session with a subdocument field
+#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+pub struct Session {
+    pub name: String,
+    /// This is a subdocument - should be unfolded, not returned as a reference string
+    #[tdb(subdocument = true)]
+    pub date_range: DateRange,
+}
+
+/// A task that references a session (for testing relation queries with subdocuments)
+#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+pub struct Task {
+    pub title: String,
+    /// Reference to parent session (document link)
+    pub session: TdbLazy<Session>,
+}
+
+/// Test that relation queries properly unfold subdocuments in the fetched documents.
+///
+/// This is a regression test for the bug where ORM batch document fetch (Phase 2)
+/// returned subdocument references as strings instead of unfolded data.
+///
+/// Before the fix:
+///   date_range: "Session/.../date_range/DateRange/0S6lxALEPvP5jZBZ"
+///
+/// After the fix:
+///   date_range: { start: "2024-01-01", end: "2024-12-31" }
+#[cfg(feature = "testing")]
+#[db_test(db = "orm_subdocument_unfold_test")]
+async fn test_relation_query_unfolds_subdocuments(client: _, spec: _) -> anyhow::Result<()> {
+    use terminusdb_client::DocumentInsertArgs;
+
+    // Insert schemas
+    let schema_args = DocumentInsertArgs {
+        spec: spec.clone(),
+        ..Default::default()
+    };
+
+    client
+        .insert_schema(&DateRange::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert DateRange schema");
+
+    client
+        .insert_schema(&Session::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert Session schema");
+
+    client
+        .insert_schema(&Task::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert Task schema");
+
+    // Insert a session with a subdocument
+    let session = Session {
+        name: "Q1 Review".to_string(),
+        date_range: DateRange {
+            start: "2024-01-01".to_string(),
+            end: "2024-03-31".to_string(),
+        },
+    };
+
+    let session_result = client
+        .save_instance(&session, schema_args.clone())
+        .await
+        .expect("Failed to insert session");
+
+    let session_id = session_result.root_ref::<Session>().unwrap();
+    let session_id_str = session_result.root_id.clone();
+
+    println!("Inserted session: {}", session_id);
+
+    // Insert a task referencing the session
+    let task = Task {
+        title: "Complete review".to_string(),
+        session: TdbLazy::new_id(&session_id_str)?,
+    };
+
+    client
+        .save_instance(&task, schema_args.clone())
+        .await
+        .expect("Failed to insert task");
+
+    // THE KEY TEST: Query session with related tasks
+    // This triggers Phase 2 batch fetch, which should now unfold subdocuments
+    let result = Session::find(session_id.clone())
+        .with::<Task>()  // This triggers relation loading (Phase 2)
+        .with_client(&client)
+        .execute(&spec)
+        .await
+        .expect("Query should succeed");
+
+    let sessions: Vec<Session> = result.get().expect("Should deserialize sessions");
+    assert_eq!(sessions.len(), 1, "Should find exactly one session");
+
+    let fetched_session = &sessions[0];
+    println!("Fetched session: {:?}", fetched_session);
+    println!("  name: {}", fetched_session.name);
+    println!("  date_range.start: {}", fetched_session.date_range.start);
+    println!("  date_range.end: {}", fetched_session.date_range.end);
+
+    // Verify the subdocument was properly unfolded (not a reference string)
+    assert_eq!(
+        fetched_session.date_range.start, "2024-01-01",
+        "date_range.start should be '2024-01-01', not a reference string"
+    );
+    assert_eq!(
+        fetched_session.date_range.end, "2024-03-31",
+        "date_range.end should be '2024-03-31', not a reference string"
+    );
+
+    // Also verify the session name is correct
+    assert_eq!(fetched_session.name, "Q1 Review");
+
+    // Verify the task was also loaded
+    let tasks: Vec<Task> = result.get().expect("Should deserialize tasks");
+    assert_eq!(tasks.len(), 1, "Should find exactly one task");
+    assert_eq!(tasks[0].title, "Complete review");
+
+    println!("SUCCESS: Subdocument was properly unfolded in relation query!");
+
+    Ok(())
+}

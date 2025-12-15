@@ -517,8 +517,13 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         let all_ids = self.collect_relation_ids(spec).await?;
 
         // Phase 2: Single batch fetch of all documents
+        // Always enable unfold for relation queries to get full subdocument data
+        // (users expect complete entities when loading relations, not reference strings)
+        let mut fetch_opts = self.opts;
+        fetch_opts.unfold = true;
+
         self.client
-            .fetch_by_ids(all_ids, spec, self.opts)
+            .fetch_by_ids(all_ids, spec, fetch_opts)
             .await
     }
 
