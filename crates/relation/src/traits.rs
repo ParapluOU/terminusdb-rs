@@ -241,14 +241,25 @@ pub trait ForwardRelation<Target: TerminusDBModel, Field: RelationField> {
 ///
 /// # Implementation
 /// The derive macro generates two types of impls:
-/// - `ReverseRelation<T, SpecificField>` for each EntityIDFor<T> field (enables `.with_via()`)
-/// - `ReverseRelation<T, DefaultField>` for any type with at least one EntityIDFor<T> (enables `.with()`)
+/// - `ReverseRelation<T, SpecificField>` for each TdbLazy<T> field (enables `.with_via()`)
+/// - `ReverseRelation<T, DefaultField>` for any type with at least one TdbLazy<T> (enables `.with()`)
 ///
 /// The `DefaultField` version acts as a marker saying "this type has at least one reference to T".
+/// When there's exactly ONE TdbLazy<T> field, `default_field_name()` returns that field's name
+/// so `.with()` can automatically use the correct field.
 pub trait ReverseRelation<Target: TerminusDBModel, Field: RelationField = DefaultField> {
     /// Get the field name for this relation (or "default" for any-field queries).
     fn field_name() -> &'static str {
         Field::field_name()
+    }
+
+    /// Get the default field name for DefaultField impls (used by `.with()`).
+    ///
+    /// Returns `Some(field_name)` when there's exactly one TdbLazy<Target> field,
+    /// allowing `.with()` to automatically use the correct field name in GraphQL queries.
+    /// Returns `None` when there are multiple fields (ambiguous) or for specific field impls.
+    fn default_field_name() -> Option<&'static str> {
+        None
     }
 }
 

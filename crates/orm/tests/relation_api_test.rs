@@ -128,15 +128,16 @@ fn test_find_all_by_strings() {
 #[test]
 fn test_with_reverse_relation_single_field() {
     // Post has one TdbLazy<User> field (user)
-    // .with::<Post>() should load all Posts where user matches
+    // .with::<Post>() should automatically use the "user" field name
     let id = EntityIDFor::<User>::new("user1").unwrap();
     let query = User::find(id).with::<Post>();
 
-    // Check that the relation was registered
+    // Check that the relation was registered with the correct field name
     assert_eq!(query.relations().len(), 1);
     match &query.relations()[0].direction {
         RelationDirection::Reverse { via_field } => {
-            assert!(via_field.is_none(), "with::<T>() should not specify a field");
+            // Single-field relations now automatically specify the field name
+            assert_eq!(via_field.as_deref(), Some("user"), "with::<T>() should auto-detect single field");
         }
         _ => panic!("Expected Reverse direction"),
     }

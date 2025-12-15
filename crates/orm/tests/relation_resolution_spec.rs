@@ -168,8 +168,8 @@ mod one_to_many {
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
             RelationDirection::Reverse { via_field } => {
-                // via_field is None because we're loading via any TdbLazy<User> field
-                assert!(via_field.is_none());
+                // Post has exactly one TdbLazy<User> field ("author"), so it's auto-detected
+                assert_eq!(via_field.as_deref(), Some("author"));
             }
             _ => panic!("Expected Reverse direction"),
         }

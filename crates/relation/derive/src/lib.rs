@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, format_ident};
 use syn::{FieldsNamed, Type, GenericArgument, PathArguments};
 use heck::AsUpperCamelCase;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 /// Detect the crate context and generate appropriate module paths
 fn get_woql_path() -> TokenStream {
@@ -369,11 +369,13 @@ pub fn generate_relation_impls(
     // (TdbLazy creates actual document links in TDB schema)
     // =========================================================================
 
-    let mut seen_target_types = HashSet::new();
+    // Track target types -> list of field names for DefaultField impl generation
+    // We need to know if there's exactly one field per target to generate default_field_name()
+    let mut target_field_info: HashMap<String, (Type, Vec<String>)> = HashMap::new();
 
     for field in &fields_named.named {
         if let Some(tdblazy_field) = analyze_field_for_tdblazy(field) {
-            let _field_name = &tdblazy_field.field_name;
+            let field_name = &tdblazy_field.field_name;
             let marker_type_name = &tdblazy_field.marker_type_name;
             let target_type = &tdblazy_field.target_type;
 
@@ -407,27 +409,57 @@ pub fn generate_relation_impls(
             };
             orm_relation_impls.push(forward_relation_impl);
 
-            // Track unique target types for DefaultField impl
-            // Use the quoted target type as a string key for deduplication
+            // Track target type -> field names for DefaultField impl
             let target_key = quote! { #target_type }.to_string();
-            if !seen_target_types.contains(&target_key) {
-                seen_target_types.insert(target_key);
-
-                // Generate ReverseRelation<Target, DefaultField> for .with::<Self>() on Target queries
-                let default_reverse_impl = if let Some(clause) = where_clause {
-                    quote! {
-                        impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics
-                        #clause
-                        {}
-                    }
-                } else {
-                    quote! {
-                        impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics {}
-                    }
-                };
-                orm_relation_impls.push(default_reverse_impl);
-            }
+            target_field_info
+                .entry(target_key)
+                .or_insert_with(|| (target_type.clone(), Vec::new()))
+                .1
+                .push(field_name.clone());
         }
+    }
+
+    // Generate ReverseRelation<Target, DefaultField> impls
+    // When there's exactly ONE field for a target, include default_field_name() returning Some(field)
+    // When there are multiple fields, use the trait default (returns None)
+    for (target_type, field_names) in target_field_info.values() {
+        let default_reverse_impl = if field_names.len() == 1 {
+            // Single field - provide the actual field name for .with() to use
+            let field_name = &field_names[0];
+            if let Some(clause) = where_clause {
+                quote! {
+                    impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics
+                    #clause
+                    {
+                        fn default_field_name() -> Option<&'static str> {
+                            Some(#field_name)
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics {
+                        fn default_field_name() -> Option<&'static str> {
+                            Some(#field_name)
+                        }
+                    }
+                }
+            }
+        } else {
+            // Multiple fields - use trait default (None) to indicate ambiguity
+            if let Some(clause) = where_clause {
+                quote! {
+                    impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics
+                    #clause
+                    {}
+                }
+            } else {
+                quote! {
+                    impl #impl_generics #relation_path::ReverseRelation<#target_type, #relation_path::DefaultField> for #struct_name #ty_generics {}
+                }
+            }
+        };
+        orm_relation_impls.push(default_reverse_impl);
     }
 
     // Generate the Fields module

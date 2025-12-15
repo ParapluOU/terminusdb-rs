@@ -384,3 +384,92 @@ async fn test_find_with_bare_id(client: _, spec: _) -> anyhow::Result<()> {
     println!("Successfully queried with bare ID: {:?}", comments[0]);
     Ok(())
 }
+
+/// Test that `.with::<R>()` works for single-field relations without needing `with_via`.
+///
+/// This is a regression test for the DefaultField resolution fix.
+/// When `Reply` has exactly one `TdbLazy<Comment>` field, `.with::<Reply>()`
+/// should automatically use the correct field name in the GraphQL query.
+#[cfg(feature = "testing")]
+#[db_test(db = "orm_default_field_single_relation")]
+async fn test_with_default_field_single_relation(client: _, spec: _) -> anyhow::Result<()> {
+    use terminusdb_client::DocumentInsertArgs;
+
+    // Insert schemas
+    let schema_args = DocumentInsertArgs {
+        spec: spec.clone(),
+        ..Default::default()
+    };
+
+    client
+        .insert_schema(&Comment::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert Comment schema");
+
+    client
+        .insert_schema(&Reply::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert Reply schema");
+
+    // Insert a comment
+    let comment = Comment {
+        text: "Parent comment for default field test".to_string(),
+        author: "TestAuthor".to_string(),
+    };
+
+    let comment_result = client
+        .save_instance(&comment, schema_args.clone())
+        .await
+        .expect("Failed to insert comment");
+
+    let comment_id = comment_result.root_ref::<Comment>().unwrap();
+    let comment_id_str = comment_result.root_id.clone();
+
+    println!("Inserted comment: {}", comment_id);
+
+    // Insert replies referencing this comment
+    let reply1 = Reply {
+        text: "First reply".to_string(),
+        author: "Replier1".to_string(),
+        comment: TdbLazy::new_id(&comment_id_str)?,
+    };
+
+    let reply2 = Reply {
+        text: "Second reply".to_string(),
+        author: "Replier2".to_string(),
+        comment: TdbLazy::new_id(&comment_id_str)?,
+    };
+
+    client
+        .save_instance(&reply1, schema_args.clone())
+        .await
+        .expect("Failed to insert reply1");
+
+    client
+        .save_instance(&reply2, schema_args.clone())
+        .await
+        .expect("Failed to insert reply2");
+
+    // THE KEY TEST: Use .with::<Reply>() WITHOUT specifying the field
+    // This should work because Reply has only one TdbLazy<Comment> field
+    let result = Comment::find(comment_id.clone())
+        .with::<Reply>()  // Should auto-use "comment" field name
+        .with_client(&client)
+        .execute(&spec)
+        .await
+        .expect("Query with .with::<Reply>() should succeed - DefaultField should resolve 'comment' field");
+
+    let comments: Vec<Comment> = result.get().expect("Should deserialize comments");
+    assert_eq!(comments.len(), 1, "Should find exactly one comment");
+    assert_eq!(comments[0].text, "Parent comment for default field test");
+
+    let replies: Vec<Reply> = result.get().expect("Should deserialize replies");
+    assert_eq!(replies.len(), 2, "Should find exactly two replies");
+
+    println!("Found {} comments and {} replies using .with::<Reply>()", comments.len(), replies.len());
+    for reply in &replies {
+        println!("  Reply: {} by {}", reply.text, reply.author);
+    }
+
+    Ok(())
+}

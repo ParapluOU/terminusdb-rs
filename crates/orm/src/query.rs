@@ -99,6 +99,10 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
 
     /// Add a reverse relation (target has `TdbLazy<Parent>` field).
     ///
+    /// When the target type has exactly one `TdbLazy<Parent>` field, this method
+    /// automatically uses that field name. If there are multiple fields, falls
+    /// back to type-based inference (which may not work correctly - use `with_via` instead).
+    ///
     /// # Example
     /// ```ignore
     /// // Comment has: writer: TdbLazy<Writer>
@@ -113,7 +117,9 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
         self.relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
-            direction: RelationDirection::Reverse { via_field: None },
+            direction: RelationDirection::Reverse {
+                via_field: R::default_field_name().map(|s| s.to_string()),
+            },
             children: Vec::new(),
         });
         self
@@ -166,7 +172,9 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
         self.relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
-            direction: RelationDirection::Reverse { via_field: None },
+            direction: RelationDirection::Reverse {
+                via_field: R::default_field_name().map(|s| s.to_string()),
+            },
             children: nested_builder.relations,
         });
         self
@@ -345,6 +353,9 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
     ///
     /// # Compile-time safety
     /// This will not compile if `R` does not implement `ReverseRelation<T>`.
+    ///
+    /// When `R` has exactly one `TdbLazy<T>` field, the correct field name is
+    /// automatically used. If there are multiple fields, use `with_via` instead.
     pub fn with<R>(mut self) -> Self
     where
         R: OrmModel + ToSchemaClass + 'static,
@@ -353,7 +364,9 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         self.with_relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
-            direction: RelationDirection::Reverse { via_field: None },
+            direction: RelationDirection::Reverse {
+                via_field: R::default_field_name().map(|s| s.to_string()),
+            },
             children: Vec::new(),
         });
         self
@@ -428,7 +441,9 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         self.with_relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
-            direction: RelationDirection::Reverse { via_field: None },
+            direction: RelationDirection::Reverse {
+                via_field: R::default_field_name().map(|s| s.to_string()),
+            },
             children: nested_builder.relations,
         });
         self
