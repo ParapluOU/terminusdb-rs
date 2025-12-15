@@ -268,9 +268,15 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
         Self::new_unchecked(&full_path)
     }
 
-    /// Get the full IRI string
-    pub fn iri(&self) -> String {
-        self.iri.to_string()
+    /// Get the IRI with default data prefix applied if none is set.
+    /// Returns a TdbIRI to keep things typed.
+    pub fn iri(&self) -> TdbIRI {
+        self.iri.with_default_base()
+    }
+
+    /// Get the full IRI as a string (convenience method).
+    pub fn iri_string(&self) -> String {
+        self.iri().to_string()
     }
 
     /// Get the parsed IRI object
@@ -894,6 +900,32 @@ mod tests {
             .contains("Mismatched type in IRI"));
     }
 
+    #[test]
+    fn test_iri_returns_typed_iri_with_base() {
+        // EntityIDFor created from bare ID should return TdbIRI with default base
+        let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("123").unwrap();
+        let iri = entity_id.iri();
+        assert_eq!(iri.base_uri(), Some("terminusdb:///data"));
+        assert_eq!(iri.to_string(), "terminusdb:///data/TestEntity/123");
+
+        // EntityIDFor from full IRI should preserve original base
+        let entity_id2: EntityIDFor<TestEntity> =
+            EntityIDFor::new_unchecked("terminusdb:///data/TestEntity/456").unwrap();
+        let iri2 = entity_id2.iri();
+        assert_eq!(iri2.base_uri(), Some("terminusdb:///data"));
+        assert_eq!(iri2.to_string(), "terminusdb:///data/TestEntity/456");
+    }
+
+    #[test]
+    fn test_iri_string_convenience_method() {
+        let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("789").unwrap();
+        // iri_string() should return the full IRI as a String
+        assert_eq!(
+            entity_id.iri_string(),
+            "terminusdb:///data/TestEntity/789"
+        );
+    }
+
     // Test FromFormField implementation
     #[test]
     fn test_from_form_field_simple_id() {
@@ -1402,7 +1434,7 @@ mod tests {
 
         // Should preserve base URI and variant type
         assert_eq!(
-            remapped.iri(),
+            remapped.iri().to_string(),
             "terminusdb://data#TestTaggedUnionVariantB/456"
         );
         assert_eq!(remapped.get_base_uri(), Some("terminusdb://data"));

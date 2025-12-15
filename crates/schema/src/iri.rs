@@ -184,7 +184,33 @@ impl TdbIRI {
             None => self.typed_path.clone()
         }
     }
+
+    /// Returns a new TdbIRI with the default base URI applied if none is set.
+    /// If this IRI already has a base_uri, returns a clone unchanged.
+    pub fn with_default_base(&self) -> TdbIRI {
+        self.with_base(DEFAULT_DATA_BASE)
+    }
+
+    /// Returns a new TdbIRI with the specified base URI applied if none is set.
+    /// If this IRI already has a base_uri, returns a clone unchanged.
+    pub fn with_base(&self, base: &str) -> TdbIRI {
+        if self.base_uri.is_some() {
+            self.clone()
+        } else {
+            TdbIRI {
+                base_uri: Some(base.to_string()),
+                is_fragment_based: false,
+                typed_path: self.typed_path.clone(),
+                type_name: self.type_name.clone(),
+                id: self.id.clone(),
+                parent_path: self.parent_path.clone(),
+            }
+        }
+    }
 }
+
+/// Default TerminusDB data IRI prefix
+pub const DEFAULT_DATA_BASE: &str = "terminusdb:///data";
 
 impl fmt::Display for TdbIRI {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -302,15 +328,43 @@ mod tests {
             "terminusdb:///data/Person/789",
             "Parent/123/child/Child/456",
         ];
-        
+
         for iri_str in iris {
             let iri = TdbIRI::parse(iri_str).unwrap();
             let reconstructed = iri.to_string();
-            
+
             // For simple typed paths, the reconstruction should match
             if !iri_str.contains("://") {
                 assert_eq!(iri_str, reconstructed);
             }
         }
+    }
+
+    #[test]
+    fn test_with_default_base() {
+        // IRI without base should get default applied
+        let iri = TdbIRI::parse("Person/123").unwrap();
+        let full_iri = iri.with_default_base();
+        assert_eq!(full_iri.base_uri(), Some("terminusdb:///data"));
+        assert_eq!(full_iri.to_string(), "terminusdb:///data/Person/123");
+
+        // IRI with existing base should preserve it
+        let iri2 = TdbIRI::parse("terminusdb:///data/Person/456").unwrap();
+        let full_iri2 = iri2.with_default_base();
+        assert_eq!(full_iri2.base_uri(), Some("terminusdb:///data"));
+        assert_eq!(full_iri2.to_string(), "terminusdb:///data/Person/456");
+
+        // Fragment-based IRI should preserve original base
+        let iri3 = TdbIRI::parse("terminusdb://data#Person/789").unwrap();
+        let full_iri3 = iri3.with_default_base();
+        assert_eq!(full_iri3.base_uri(), Some("terminusdb://data"));
+    }
+
+    #[test]
+    fn test_with_custom_base() {
+        let iri = TdbIRI::parse("Person/123").unwrap();
+        let custom = iri.with_base("custom:///base");
+        assert_eq!(custom.base_uri(), Some("custom:///base"));
+        assert_eq!(custom.to_string(), "custom:///base/Person/123");
     }
 }

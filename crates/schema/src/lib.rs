@@ -19,7 +19,7 @@ pub use schema::*;
 pub use xsdtype::*;
 pub mod json;
 pub use id::*;
-pub use iri::TdbIRI;
+pub use iri::{TdbIRI, DEFAULT_DATA_BASE};
 pub use json::{InstanceFromJson, ToJson};
 pub use lazy::*;
 pub use marker::*;

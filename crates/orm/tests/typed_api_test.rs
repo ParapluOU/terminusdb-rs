@@ -314,3 +314,73 @@ async fn test_comment_find_single(client: _, spec: _) -> anyhow::Result<()> {
     println!("Found comment: {:?}", comments[0]);
     Ok(())
 }
+
+/// Test that EntityIDFor created from a bare ID (not server response) works correctly.
+///
+/// This is a regression test for the bug where `.iri()` returned `Type/id` instead of
+/// `terminusdb:///data/Type/id` when EntityIDFor was created from a bare ID.
+/// GraphQL queries require the full IRI format.
+#[cfg(feature = "testing")]
+#[db_test(db = "orm_bare_id_query_test")]
+async fn test_find_with_bare_id(client: _, spec: _) -> anyhow::Result<()> {
+    use terminusdb_client::DocumentInsertArgs;
+
+    // Insert schema
+    let schema_args = DocumentInsertArgs {
+        spec: spec.clone(),
+        ..Default::default()
+    };
+
+    client
+        .insert_schema(&Comment::to_schema(), schema_args.clone())
+        .await
+        .expect("Failed to insert schema");
+
+    // Insert a comment
+    let comment = Comment {
+        text: "Bare ID test comment".to_string(),
+        author: "BareIdTester".to_string(),
+    };
+
+    let result = client
+        .save_instance(&comment, schema_args.clone())
+        .await
+        .expect("Failed to insert comment");
+
+    // Get the server-returned ID and extract just the bare ID part
+    let server_id = result.root_ref::<Comment>().unwrap();
+    let bare_id = server_id.id(); // Just the UUID part, without Type/ prefix
+
+    println!("Server returned ID: {}", server_id);
+    println!("Bare ID extracted: {}", bare_id);
+
+    // Create a NEW EntityIDFor from the bare ID - this is the scenario that was buggy
+    // Previously, .iri() would return "Comment/{uuid}" instead of "terminusdb:///data/Comment/{uuid}"
+    let reconstructed_id = EntityIDFor::<Comment>::new(bare_id).expect("Should create EntityIDFor from bare ID");
+
+    println!("Reconstructed ID typed(): {}", reconstructed_id.typed());
+    println!("Reconstructed ID iri(): {}", reconstructed_id.iri());
+
+    // Verify the IRI has the correct format for GraphQL
+    assert!(
+        reconstructed_id.iri().to_string().starts_with("terminusdb:///data/"),
+        "IRI should start with 'terminusdb:///data/' but got: {}",
+        reconstructed_id.iri()
+    );
+
+    // NOW THE CRITICAL TEST: Query using the reconstructed ID
+    // This would fail if .iri() returned the wrong format
+    let query_result = Comment::find(reconstructed_id)
+        .with_client(&client)
+        .execute(&spec)
+        .await
+        .expect("Query with bare ID should succeed - this fails if IRI format is wrong");
+
+    let comments: Vec<Comment> = query_result.get().expect("Should deserialize");
+    assert_eq!(comments.len(), 1, "Should find exactly one comment");
+    assert_eq!(comments[0].text, "Bare ID test comment");
+    assert_eq!(comments[0].author, "BareIdTester");
+
+    println!("Successfully queried with bare ID: {:?}", comments[0]);
+    Ok(())
+}
