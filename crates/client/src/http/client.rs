@@ -297,6 +297,37 @@ impl TerminusDBHttpClient {
         Ok(client)
     }
 
+    /// Creates a clone of this client configured for a different organization.
+    ///
+    /// This is useful when you need to perform operations in multiple organizations
+    /// using the same server connection and credentials.
+    ///
+    /// # Arguments
+    /// * `org` - The organization name to use
+    ///
+    /// # Returns
+    /// A new client instance configured for the specified organization
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let admin_client = TerminusDBHttpClient::local_node().await;
+    ///
+    /// // Create a client for the "my_org" organization
+    /// let my_org_client = admin_client.for_org("my_org");
+    ///
+    /// // Now operations will use "my_org" as the organization
+    /// my_org_client.ensure_database("my_db").await?;
+    /// ```
+    pub fn for_org(&self, org: &str) -> Self {
+        let mut client = self.clone();
+        client.org = org.to_string();
+        // Clear the ensured databases cache since it's for a different org
+        if let Ok(mut cache) = client.ensured_databases.lock() {
+            cache.clear();
+        }
+        client
+    }
+
     /// Returns a clone of the last executed WOQL query for debugging purposes.
     ///
     /// This method provides access to the most recently executed query, which can be
