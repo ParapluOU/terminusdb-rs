@@ -1,382 +1,123 @@
 //! Organization management operations
+//!
+//! Implements the TerminusDB organization API endpoints for managing
+//! organizations, users within organizations, and user capabilities/roles.
 
 use {
-    crate::{TerminusDBAdapterError, debug::{OperationEntry, OperationType}},
+    crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Serialize, Deserialize},
+    serde::{Deserialize, Serialize},
     serde_json::json,
     std::time::Instant,
 };
 
-/// Organization information
+// ============================================================
+// Types matching TerminusDB API responses
+// ============================================================
+
+/// Organization as returned by TerminusDB API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Organization {
-    /// Organization identifier
+    /// Organization identifier (e.g., "Organization/admin")
+    #[serde(rename = "@id")]
     pub id: String,
+    /// Type identifier (always "Organization")
+    #[serde(rename = "@type")]
+    pub org_type: String,
     /// Organization name
     pub name: String,
-    /// Organization description
-    pub description: Option<String>,
-    /// Organization members
-    pub members: Vec<OrganizationMember>,
+    /// Databases belonging to this organization
+    #[serde(default)]
+    pub database: Vec<String>,
 }
 
-/// Organization member
+/// User with capabilities in an organization
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrganizationMember {
-    /// User ID
-    pub user_id: String,
-    /// Member role in the organization
+pub struct OrganizationUser {
+    /// User identifier (e.g., "User/admin")
+    #[serde(rename = "@id")]
+    pub id: String,
+    /// Username
+    pub name: String,
+    /// Capabilities granted to this user
+    #[serde(default)]
+    pub capability: Vec<Capability>,
+}
+
+/// Capability granted to a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Capability {
+    /// Capability identifier
+    #[serde(rename = "@id")]
+    pub id: String,
+    /// Type identifier (always "Capability")
+    #[serde(rename = "@type")]
+    pub cap_type: String,
+    /// Resource scope (e.g., "Organization/admin")
+    pub scope: String,
+    /// Roles associated with this capability
+    #[serde(default)]
+    pub role: Vec<Role>,
+}
+
+/// Role within a capability
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Role {
+    /// Role identifier (e.g., "Role/admin")
+    #[serde(rename = "@id")]
+    pub id: String,
+    /// Type identifier (always "Role")
+    #[serde(rename = "@type")]
+    pub role_type: String,
+    /// Role name
+    pub name: String,
+    /// Actions permitted by this role
+    #[serde(default)]
+    pub action: Vec<String>,
+}
+
+/// Database info returned from organization user databases endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizationDatabase {
+    /// Database identifier
+    #[serde(rename = "@id")]
+    pub id: String,
+    /// Type identifier (e.g., "SystemDatabase", "UserDatabase")
+    #[serde(rename = "@type")]
+    pub db_type: String,
+    /// Database name
+    pub name: String,
+}
+
+/// Success response from organization operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrganizationResponse {
+    /// Response type
+    #[serde(rename = "@type")]
+    pub response_type: String,
+    /// Status (e.g., "api:success")
+    #[serde(rename = "api:status")]
+    pub status: String,
+}
+
+/// Request body for creating/updating user roles
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRoleRequest {
+    /// Resource scope
+    pub scope: String,
+    /// Role name
     pub role: String,
 }
 
-/// Organization creation request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateOrganizationRequest {
-    /// Organization identifier
-    pub id: String,
-    /// Organization name
-    pub name: String,
-    /// Organization description
-    pub description: Option<String>,
-}
+// ============================================================
+// Organization CRUD Operations
+// ============================================================
 
-/// Organization update request
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateOrganizationRequest {
-    /// New organization name
-    pub name: Option<String>,
-    /// New organization description
-    pub description: Option<String>,
-}
-
-/// Organization management operations for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
-    /// Creates a new organization.
-    ///
-    /// # Arguments
-    /// * `org_id` - Unique identifier for the organization
-    /// * `name` - Organization name
-    /// * `description` - Optional organization description
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use terminusdb_client::*;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// let client = TerminusDBHttpClient::local_node().await;
-    /// client.create_organization(
-    ///     "acme_corp",
-    ///     "ACME Corporation",
-    ///     Some("Leading provider of innovative solutions")
-    /// ).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[instrument(
-        name = "terminus.organization.create",
-        skip(self),
-        fields(
-            org_id = %org_id,
-            name = %name,
-            description = ?description
-        ),
-        err
-    )]
-    pub async fn create_organization(
-        &self,
-        org_id: &str,
-        name: &str,
-        description: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
-        let start_time = Instant::now();
-        let uri = self.build_url().endpoint("organization").build();
-
-        debug!("POST {}", &uri);
-
-        let mut operation = OperationEntry::new(
-            OperationType::Other("create_organization".to_string()),
-            "/api/organization".to_string()
-        ).with_context(None, None);
-
-        let request = CreateOrganizationRequest {
-            id: org_id.to_string(),
-            name: name.to_string(),
-            description: description.map(String::from),
-        };
-
-        // Apply rate limiting for write operations
-        let _permit = self.acquire_write_permit().await;
-
-        let res = self
-            .http
-            .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("failed to create organization")?;
-
-        let duration_ms = start_time.elapsed().as_millis() as u64;
-        let status = res.status().as_u16();
-
-        if !res.status().is_success() {
-            error!("create organization operation failed with status {}", status);
-            
-            let error_text = res.text().await?;
-            let error_msg = format!("create organization failed: {:#?}", error_text);
-            
-            operation = operation.failure(error_msg.clone(), duration_ms);
-            self.operation_log.push(operation);
-            
-            return Err(anyhow::anyhow!(error_msg));
-        }
-
-        let response = self.parse_response::<serde_json::Value>(res).await?;
-        
-        operation = operation.success(None, duration_ms);
-        self.operation_log.push(operation);
-
-        debug!("Successfully created organization in {:?}", start_time.elapsed());
-
-        Ok(response)
-    }
-
-    /// Gets information about an organization.
-    ///
-    /// # Arguments
-    /// * `org_id` - Organization identifier
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use terminusdb_client::*;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// let client = TerminusDBHttpClient::local_node().await;
-    /// let org = client.get_organization("acme_corp").await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[instrument(
-        name = "terminus.organization.get",
-        skip(self),
-        fields(
-            org_id = %org_id
-        ),
-        err
-    )]
-    pub async fn get_organization(
-        &self,
-        org_id: &str,
-    ) -> anyhow::Result<Organization> {
-        let start_time = Instant::now();
-        let uri = self.build_url().endpoint("organization").add_path(org_id).build();
-
-        debug!("GET {}", &uri);
-
-        let mut operation = OperationEntry::new(
-            OperationType::Other("get_organization".to_string()),
-            format!("/api/organization/{}", org_id)
-        ).with_context(None, None);
-
-        // Apply rate limiting for read operations
-        let _permit = self.acquire_read_permit().await;
-
-        let res = self
-            .http
-            .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
-            .send()
-            .await
-            .context("failed to get organization")?;
-
-        let duration_ms = start_time.elapsed().as_millis() as u64;
-        let status = res.status().as_u16();
-
-        if !res.status().is_success() {
-            error!("get organization operation failed with status {}", status);
-            
-            let error_text = res.text().await?;
-            let error_msg = format!("get organization failed: {:#?}", error_text);
-            
-            operation = operation.failure(error_msg.clone(), duration_ms);
-            self.operation_log.push(operation);
-            
-            return Err(anyhow::anyhow!(error_msg));
-        }
-
-        let response = self.parse_response::<Organization>(res).await?;
-        
-        operation = operation.success(None, duration_ms);
-        self.operation_log.push(operation);
-
-        debug!("Successfully retrieved organization in {:?}", start_time.elapsed());
-
-        Ok(response)
-    }
-
-    /// Updates an organization's information.
-    ///
-    /// # Arguments
-    /// * `org_id` - Organization identifier
-    /// * `name` - New name (if provided)
-    /// * `description` - New description (if provided)
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use terminusdb_client::*;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// let client = TerminusDBHttpClient::local_node().await;
-    /// client.update_organization(
-    ///     "acme_corp",
-    ///     Some("ACME Corporation Inc."),
-    ///     None
-    /// ).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[instrument(
-        name = "terminus.organization.update",
-        skip(self),
-        fields(
-            org_id = %org_id,
-            name = ?name,
-            description = ?description
-        ),
-        err
-    )]
-    pub async fn update_organization(
-        &self,
-        org_id: &str,
-        name: Option<&str>,
-        description: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
-        let start_time = Instant::now();
-        let uri = self.build_url().endpoint("organization").add_path(org_id).build();
-
-        debug!("PUT {}", &uri);
-
-        let mut operation = OperationEntry::new(
-            OperationType::Other("update_organization".to_string()),
-            format!("/api/organization/{}", org_id)
-        ).with_context(None, None);
-
-        let request = UpdateOrganizationRequest {
-            name: name.map(String::from),
-            description: description.map(String::from),
-        };
-
-        // Apply rate limiting for write operations
-        let _permit = self.acquire_write_permit().await;
-
-        let res = self
-            .http
-            .put(uri)
-            .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .context("failed to update organization")?;
-
-        let duration_ms = start_time.elapsed().as_millis() as u64;
-        let status = res.status().as_u16();
-
-        if !res.status().is_success() {
-            error!("update organization operation failed with status {}", status);
-            
-            let error_text = res.text().await?;
-            let error_msg = format!("update organization failed: {:#?}", error_text);
-            
-            operation = operation.failure(error_msg.clone(), duration_ms);
-            self.operation_log.push(operation);
-            
-            return Err(anyhow::anyhow!(error_msg));
-        }
-
-        let response = self.parse_response::<serde_json::Value>(res).await?;
-        
-        operation = operation.success(None, duration_ms);
-        self.operation_log.push(operation);
-
-        debug!("Successfully updated organization in {:?}", start_time.elapsed());
-
-        Ok(response)
-    }
-
-    /// Deletes an organization.
-    ///
-    /// # Arguments
-    /// * `org_id` - Organization identifier to delete
-    ///
-    /// # Example
-    /// ```rust,no_run
-    /// # use terminusdb_client::*;
-    /// # async fn example() -> anyhow::Result<()> {
-    /// let client = TerminusDBHttpClient::local_node().await;
-    /// client.delete_organization("acme_corp").await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[instrument(
-        name = "terminus.organization.delete",
-        skip(self),
-        fields(
-            org_id = %org_id
-        ),
-        err
-    )]
-    pub async fn delete_organization(
-        &self,
-        org_id: &str,
-    ) -> anyhow::Result<serde_json::Value> {
-        let start_time = Instant::now();
-        let uri = self.build_url().endpoint("organization").add_path(org_id).build();
-
-        debug!("DELETE {}", &uri);
-
-        let mut operation = OperationEntry::new(
-            OperationType::Other("delete_organization".to_string()),
-            format!("/api/organization/{}", org_id)
-        ).with_context(None, None);
-
-        // Apply rate limiting for write operations
-        let _permit = self.acquire_write_permit().await;
-
-        let res = self
-            .http
-            .delete(uri)
-            .basic_auth(&self.user, Some(&self.pass))
-            .send()
-            .await
-            .context("failed to delete organization")?;
-
-        let duration_ms = start_time.elapsed().as_millis() as u64;
-        let status = res.status().as_u16();
-
-        if !res.status().is_success() {
-            error!("delete organization operation failed with status {}", status);
-            
-            let error_text = res.text().await?;
-            let error_msg = format!("delete organization failed: {:#?}", error_text);
-            
-            operation = operation.failure(error_msg.clone(), duration_ms);
-            self.operation_log.push(operation);
-            
-            return Err(anyhow::anyhow!(error_msg));
-        }
-
-        let response = self.parse_response::<serde_json::Value>(res).await?;
-        
-        operation = operation.success(None, duration_ms);
-        self.operation_log.push(operation);
-
-        debug!("Successfully deleted organization in {:?}", start_time.elapsed());
-
-        Ok(response)
-    }
-
     /// Lists all organizations.
+    ///
+    /// Returns all organizations visible to the authenticated user.
     ///
     /// # Example
     /// ```rust,no_run
@@ -384,26 +125,25 @@ impl super::client::TerminusDBHttpClient {
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// let orgs = client.list_organizations().await?;
+    /// for org in orgs {
+    ///     println!("Organization: {}", org.name);
+    /// }
     /// # Ok(())
     /// # }
     /// ```
-    #[instrument(
-        name = "terminus.organization.list",
-        skip(self),
-        err
-    )]
+    #[instrument(name = "terminus.organization.list", skip(self), err)]
     pub async fn list_organizations(&self) -> anyhow::Result<Vec<Organization>> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("organization").build();
+        let uri = self.build_url().endpoint("organizations").build();
 
         debug!("GET {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("list_organizations".to_string()),
-            "/api/organization".to_string()
-        ).with_context(None, None);
+            "/api/organizations".to_string(),
+        )
+        .with_context(None, None);
 
-        // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
 
         let res = self
@@ -419,167 +159,216 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("list organizations operation failed with status {}", status);
-            
             let error_text = res.text().await?;
             let error_msg = format!("list organizations failed: {:#?}", error_text);
-            
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<Vec<Organization>>(res).await?;
-        
+
         operation = operation.success(Some(response.len()), duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully listed {} organizations in {:?}", response.len(), start_time.elapsed());
+        debug!(
+            "Successfully listed {} organizations in {:?}",
+            response.len(),
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
 
-    /// Adds a member to an organization.
+    /// Gets information about a specific organization.
     ///
     /// # Arguments
-    /// * `org_id` - Organization identifier
-    /// * `user_id` - User identifier to add
-    /// * `role` - Role for the user in the organization
+    /// * `org_name` - Organization name
     ///
     /// # Example
     /// ```rust,no_run
     /// # use terminusdb_client::*;
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
-    /// client.add_organization_member(
-    ///     "acme_corp",
-    ///     "john_doe",
-    ///     "admin"
-    /// ).await?;
+    /// let org = client.get_organization("admin").await?;
+    /// println!("Databases: {:?}", org.database);
     /// # Ok(())
     /// # }
     /// ```
     #[instrument(
-        name = "terminus.organization.add_member",
+        name = "terminus.organization.get",
         skip(self),
-        fields(
-            org_id = %org_id,
-            user_id = %user_id,
-            role = %role
-        ),
+        fields(org_name = %org_name),
         err
     )]
-    pub async fn add_organization_member(
-        &self,
-        org_id: &str,
-        user_id: &str,
-        role: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn get_organization(&self, org_name: &str) -> anyhow::Result<Organization> {
         let start_time = Instant::now();
-        let uri = self.build_url()
-            .endpoint("organization")
-            .add_path(org_id)
-            .endpoint("member")
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
             .build();
 
-        debug!("POST {}", &uri);
+        debug!("GET {}", &uri);
 
         let mut operation = OperationEntry::new(
-            OperationType::Other("add_organization_member".to_string()),
-            format!("/api/organization/{}/member", org_id)
-        ).with_context(None, None);
+            OperationType::Other("get_organization".to_string()),
+            format!("/api/organizations/{}", org_name),
+        )
+        .with_context(None, None);
 
-        let body = json!({
-            "user_id": user_id,
-            "role": role
-        });
-
-        // Apply rate limiting for write operations
-        let _permit = self.acquire_write_permit().await;
+        let _permit = self.acquire_read_permit().await;
 
         let res = self
             .http
-            .post(uri)
+            .get(uri)
             .basic_auth(&self.user, Some(&self.pass))
-            .header("Content-Type", "application/json")
-            .json(&body)
             .send()
             .await
-            .context("failed to add organization member")?;
+            .context("failed to get organization")?;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
         let status = res.status().as_u16();
 
         if !res.status().is_success() {
-            error!("add organization member operation failed with status {}", status);
-            
+            error!("get organization operation failed with status {}", status);
             let error_text = res.text().await?;
-            let error_msg = format!("add organization member failed: {:#?}", error_text);
-            
+            let error_msg = format!("get organization failed: {:#?}", error_text);
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
             return Err(anyhow::anyhow!(error_msg));
         }
 
-        let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+        let response = self.parse_response::<Organization>(res).await?;
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully added organization member in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully retrieved organization in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
 
-    /// Removes a member from an organization.
+    /// Creates a new organization.
     ///
     /// # Arguments
-    /// * `org_id` - Organization identifier
-    /// * `user_id` - User identifier to remove
+    /// * `org_name` - Name for the new organization
     ///
     /// # Example
     /// ```rust,no_run
     /// # use terminusdb_client::*;
     /// # async fn example() -> anyhow::Result<()> {
     /// let client = TerminusDBHttpClient::local_node().await;
-    /// client.remove_organization_member(
-    ///     "acme_corp",
-    ///     "john_doe"
-    /// ).await?;
+    /// client.create_organization("my_org").await?;
     /// # Ok(())
     /// # }
     /// ```
     #[instrument(
-        name = "terminus.organization.remove_member",
+        name = "terminus.organization.create",
         skip(self),
-        fields(
-            org_id = %org_id,
-            user_id = %user_id
-        ),
+        fields(org_name = %org_name),
         err
     )]
-    pub async fn remove_organization_member(
-        &self,
-        org_id: &str,
-        user_id: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn create_organization(&self, org_name: &str) -> anyhow::Result<String> {
         let start_time = Instant::now();
-        let uri = self.build_url()
-            .endpoint("organization")
-            .add_path(org_id)
-            .endpoint("member")
-            .add_path(user_id)
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .build();
+
+        debug!("POST {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("create_organization".to_string()),
+            format!("/api/organizations/{}", org_name),
+        )
+        .with_context(None, None);
+
+        let _permit = self.acquire_write_permit().await;
+
+        // JS client sends empty object {}
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .json(&json!({}))
+            .send()
+            .await
+            .context("failed to create organization")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!(
+                "create organization operation failed with status {}",
+                status
+            );
+            let error_text = res.text().await?;
+            let error_msg = format!("create organization failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        // Response is a URI string like "terminusdb://system/data/Organization/my_org"
+        let response = self.parse_response::<String>(res).await?;
+
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully created organization in {:?}",
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    /// Deletes an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Name of the organization to delete
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.delete_organization("my_org").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.delete",
+        skip(self),
+        fields(org_name = %org_name),
+        err
+    )]
+    pub async fn delete_organization(
+        &self,
+        org_name: &str,
+    ) -> anyhow::Result<OrganizationResponse> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
             .build();
 
         debug!("DELETE {}", &uri);
 
         let mut operation = OperationEntry::new(
-            OperationType::Other("remove_organization_member".to_string()),
-            format!("/api/organization/{}/member/{}", org_id, user_id)
-        ).with_context(None, None);
+            OperationType::Other("delete_organization".to_string()),
+            format!("/api/organizations/{}", org_name),
+        )
+        .with_context(None, None);
 
-        // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
         let res = self
@@ -588,29 +377,569 @@ impl super::client::TerminusDBHttpClient {
             .basic_auth(&self.user, Some(&self.pass))
             .send()
             .await
-            .context("failed to remove organization member")?;
+            .context("failed to delete organization")?;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
         let status = res.status().as_u16();
 
         if !res.status().is_success() {
-            error!("remove organization member operation failed with status {}", status);
-            
+            error!(
+                "delete organization operation failed with status {}",
+                status
+            );
             let error_text = res.text().await?;
-            let error_msg = format!("remove organization member failed: {:#?}", error_text);
-            
+            let error_msg = format!("delete organization failed: {:#?}", error_text);
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<OrganizationResponse>(res).await?;
+
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully deleted organization in {:?}",
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    // ============================================================
+    // Organization Users Operations
+    // ============================================================
+
+    /// Gets all users in an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Organization name
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let users = client.get_organization_users("admin").await?;
+    /// for user in users {
+    ///     println!("User: {} with {} capabilities", user.name, user.capability.len());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.get_users",
+        skip(self),
+        fields(org_name = %org_name),
+        err
+    )]
+    pub async fn get_organization_users(
+        &self,
+        org_name: &str,
+    ) -> anyhow::Result<Vec<OrganizationUser>> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .add_path("users")
+            .build();
+
+        debug!("GET {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("get_organization_users".to_string()),
+            format!("/api/organizations/{}/users", org_name),
+        )
+        .with_context(None, None);
+
+        let _permit = self.acquire_read_permit().await;
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to get organization users")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!(
+                "get organization users operation failed with status {}",
+                status
+            );
+            let error_text = res.text().await?;
+            let error_msg = format!("get organization users failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<Vec<OrganizationUser>>(res).await?;
+
+        operation = operation.success(Some(response.len()), duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully retrieved {} organization users in {:?}",
+            response.len(),
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    /// Gets a specific user's info within an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Organization name
+    /// * `user_name` - User name
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let user = client.get_organization_user("admin", "admin").await?;
+    /// println!("User {} has {} capabilities", user.name, user.capability.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.get_user",
+        skip(self),
+        fields(org_name = %org_name, user_name = %user_name),
+        err
+    )]
+    pub async fn get_organization_user(
+        &self,
+        org_name: &str,
+        user_name: &str,
+    ) -> anyhow::Result<OrganizationUser> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .add_path("users")
+            .add_path(user_name)
+            .build();
+
+        debug!("GET {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("get_organization_user".to_string()),
+            format!("/api/organizations/{}/users/{}", org_name, user_name),
+        )
+        .with_context(None, None);
+
+        let _permit = self.acquire_read_permit().await;
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to get organization user")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!(
+                "get organization user operation failed with status {}",
+                status
+            );
+            let error_text = res.text().await?;
+            let error_msg = format!("get organization user failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<OrganizationUser>(res).await?;
+
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully retrieved organization user in {:?}",
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    /// Gets databases available to a user within an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Organization name
+    /// * `user_name` - User name
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let dbs = client.get_organization_user_databases("admin", "admin").await?;
+    /// for db in dbs {
+    ///     println!("Database: {} ({})", db.name, db.db_type);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.get_user_databases",
+        skip(self),
+        fields(org_name = %org_name, user_name = %user_name),
+        err
+    )]
+    pub async fn get_organization_user_databases(
+        &self,
+        org_name: &str,
+        user_name: &str,
+    ) -> anyhow::Result<Vec<OrganizationDatabase>> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .add_path("users")
+            .add_path(user_name)
+            .add_path("databases")
+            .build();
+
+        debug!("GET {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("get_organization_user_databases".to_string()),
+            format!(
+                "/api/organizations/{}/users/{}/databases",
+                org_name, user_name
+            ),
+        )
+        .with_context(None, None);
+
+        let _permit = self.acquire_read_permit().await;
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to get organization user databases")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!(
+                "get organization user databases operation failed with status {}",
+                status
+            );
+            let error_text = res.text().await?;
+            let error_msg = format!("get organization user databases failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<Vec<OrganizationDatabase>>(res).await?;
+
+        operation = operation.success(Some(response.len()), duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully retrieved {} databases in {:?}",
+            response.len(),
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    // ============================================================
+    // User Role Management Operations
+    // ============================================================
+
+    /// Removes a user from an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Organization name
+    /// * `user_name` - User name to remove
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.remove_user_from_org("my_org", "some_user").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.remove_user",
+        skip(self),
+        fields(org_name = %org_name, user_name = %user_name),
+        err
+    )]
+    pub async fn remove_user_from_org(
+        &self,
+        org_name: &str,
+        user_name: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .add_path("users")
+            .add_path(user_name)
+            .build();
+
+        debug!("DELETE {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("remove_user_from_org".to_string()),
+            format!("/api/organizations/{}/users/{}", org_name, user_name),
+        )
+        .with_context(None, None);
+
+        let _permit = self.acquire_write_permit().await;
+
+        let res = self
+            .http
+            .delete(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to remove user from organization")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!(
+                "remove user from organization operation failed with status {}",
+                status
+            );
+            let error_text = res.text().await?;
+            let error_msg = format!("remove user from organization failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully removed organization member in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully removed user from organization in {:?}",
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    /// Creates a role (capability) for a user within an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Organization name
+    /// * `user_name` - User name
+    /// * `scope` - Resource scope (e.g., "Organization/my_org")
+    /// * `role` - Role name (e.g., "admin", "reader")
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.create_user_role("my_org", "some_user", "Organization/my_org", "admin").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.create_user_role",
+        skip(self),
+        fields(org_name = %org_name, user_name = %user_name, scope = %scope, role = %role),
+        err
+    )]
+    pub async fn create_user_role(
+        &self,
+        org_name: &str,
+        user_name: &str,
+        scope: &str,
+        role: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .add_path("users")
+            .add_path(user_name)
+            .add_path("capabilities")
+            .build();
+
+        debug!("POST {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("create_user_role".to_string()),
+            format!(
+                "/api/organizations/{}/users/{}/capabilities",
+                org_name, user_name
+            ),
+        )
+        .with_context(None, None);
+
+        let request = UserRoleRequest {
+            scope: scope.to_string(),
+            role: role.to_string(),
+        };
+
+        let _permit = self.acquire_write_permit().await;
+
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("failed to create user role")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("create user role operation failed with status {}", status);
+            let error_text = res.text().await?;
+            let error_msg = format!("create user role failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully created user role in {:?}",
+            start_time.elapsed()
+        );
+
+        Ok(response)
+    }
+
+    /// Updates a user's role (capability) within an organization.
+    ///
+    /// # Arguments
+    /// * `org_name` - Organization name
+    /// * `user_name` - User name
+    /// * `capability_hash` - Capability identifier hash
+    /// * `scope` - New resource scope
+    /// * `role` - New role name
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// client.update_user_role("my_org", "some_user", "cap123", "Organization/my_org", "reader").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.organization.update_user_role",
+        skip(self),
+        fields(
+            org_name = %org_name,
+            user_name = %user_name,
+            capability_hash = %capability_hash,
+            scope = %scope,
+            role = %role
+        ),
+        err
+    )]
+    pub async fn update_user_role(
+        &self,
+        org_name: &str,
+        user_name: &str,
+        capability_hash: &str,
+        scope: &str,
+        role: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let start_time = Instant::now();
+        let uri = self
+            .build_url()
+            .endpoint("organizations")
+            .add_path(org_name)
+            .add_path("users")
+            .add_path(user_name)
+            .add_path("capabilities")
+            .add_path(capability_hash)
+            .build();
+
+        debug!("PUT {}", &uri);
+
+        let mut operation = OperationEntry::new(
+            OperationType::Other("update_user_role".to_string()),
+            format!(
+                "/api/organizations/{}/users/{}/capabilities/{}",
+                org_name, user_name, capability_hash
+            ),
+        )
+        .with_context(None, None);
+
+        let request = UserRoleRequest {
+            scope: scope.to_string(),
+            role: role.to_string(),
+        };
+
+        let _permit = self.acquire_write_permit().await;
+
+        let res = self
+            .http
+            .put(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("failed to update user role")?;
+
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        let status = res.status().as_u16();
+
+        if !res.status().is_success() {
+            error!("update user role operation failed with status {}", status);
+            let error_text = res.text().await?;
+            let error_msg = format!("update user role failed: {:#?}", error_text);
+            operation = operation.failure(error_msg.clone(), duration_ms);
+            self.operation_log.push(operation);
+            return Err(anyhow::anyhow!(error_msg));
+        }
+
+        let response = self.parse_response::<serde_json::Value>(res).await?;
+
+        operation = operation.success(None, duration_ms);
+        self.operation_log.push(operation);
+
+        debug!(
+            "Successfully updated user role in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }

@@ -73,11 +73,14 @@ pub use helpers::{
     format_id,
 };
 pub use insert_result::InsertInstanceResult;
-pub use organization::{Organization, OrganizationMember};
+pub use organization::{
+    Capability, Organization, OrganizationDatabase, OrganizationResponse, OrganizationUser,
+    Role as OrganizationRole, UserRoleRequest,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use remote::{RemoteConfig, RemoteInfo};
-pub use role::{Role, Permission};
+pub use role::{Permission, Role};
 pub use terminusdb_schema::TerminusDBModel;
 pub use url_builder::UrlBuilder;
 pub use user::User;
