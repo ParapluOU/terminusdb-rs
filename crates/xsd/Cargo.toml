@@ -1,0 +1,49 @@
+[package]
+name = "terminusdb-xsd"
+description = "XSD to TerminusDB model converter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# PyO3 for calling Python's xmlschema module via FFI
+pyo3 = { version = "0.23", features = ["auto-initialize"] }
+
+# JSON serialization for dumping parsed schemas
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# XSD parsing (pure Rust alternative for some use cases)
+xsd-parser = "1.4.0"
+
+# TerminusDB schema
+terminusdb-schema = { path = "../schema" }
+
+# Utilities
+chrono = { workspace = true }
+heck = "0.5.0"
+
+# RustPython for experimental Python interop testing (test_rustpython binary)
+rustpython-vm = { version = "0.4", optional = true }
+
+[features]
+# Feature flag for rustpython experimental binary
+rustpython = ["dep:rustpython-vm"]
+
+[[bin]]
+name = "test_rustpython"
+required-features = ["rustpython"]
+
+[dev-dependencies]
+# For testing
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
