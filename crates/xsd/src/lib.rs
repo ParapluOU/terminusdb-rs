@@ -43,12 +43,14 @@
 
 pub mod schema_generator;
 pub mod schema_model;
+pub mod xml_parser;
 pub mod xsd_model;
 
 use pyo3::prelude::*;
 use thiserror::Error;
 
 pub use schema_model::*;
+pub use xml_parser::{ParseResult, XmlParseError, XmlToInstanceParser};
 pub use xsd_model::XsdModel;
 
 #[derive(Debug, Error)]
@@ -74,12 +76,12 @@ pub type Result<T> = std::result::Result<T, XsdError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::{PyDict, PyModule};
+    use pyo3::types::PyModule;
 
     #[test]
     fn test_python_basic() {
         Python::with_gil(|py| {
-            let result: i32 = py.eval("2 + 2", None, None).unwrap().extract().unwrap();
+            let result: i32 = py.eval(c"2 + 2", None, None).unwrap().extract().unwrap();
             assert_eq!(result, 4);
         });
     }
@@ -90,8 +92,11 @@ mod tests {
             let json = PyModule::import(py, "json").unwrap();
             let data = r#"{"test": "value"}"#;
             let result = json.call_method1("loads", (data,)).unwrap();
-            let dict: &PyDict = result.downcast().unwrap();
-            let test_val: String = dict.get_item("test").unwrap().unwrap().extract().unwrap();
+            let test_val: String = result
+                .get_item("test")
+                .unwrap()
+                .extract()
+                .unwrap();
             assert_eq!(test_val, "value");
         });
     }

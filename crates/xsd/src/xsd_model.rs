@@ -8,9 +8,10 @@
 
 use crate::schema_generator::XsdToSchemaGenerator;
 use crate::schema_model::XsdSchema;
+use crate::xml_parser::{ParseResult, XmlToInstanceParser};
 use crate::Result;
 use std::path::{Path, PathBuf};
-use terminusdb_schema::Schema;
+use terminusdb_schema::{Instance, Schema};
 
 /// An XSD model containing parsed schemas and conversion rules.
 ///
@@ -260,6 +261,33 @@ impl XsdModel {
                 Err(e) => Err(crate::XsdError::Parsing(format!("XML validation failed: {}", e))),
             }
         })
+    }
+
+    /// Parse XML content into TerminusDB instances.
+    ///
+    /// This parses and validates the XML against the XSD schema, then converts
+    /// the result to TerminusDB instances using the generated schemas.
+    ///
+    /// # Arguments
+    ///
+    /// * `xml` - XML content as a string
+    ///
+    /// # Returns
+    ///
+    /// A vector of TerminusDB instances representing the parsed XML structure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if XML parsing fails, validation fails, or the XML
+    /// structure doesn't match the generated schemas.
+    pub fn parse_xml_to_instances(&self, xml: &str) -> ParseResult<Vec<Instance>> {
+        // First parse to JSON
+        let json = self.parse_xml_to_json(xml)
+            .map_err(|e| crate::xml_parser::XmlParseError::parse(e.to_string()))?;
+
+        // Then convert JSON to instances using the generated schemas
+        let parser = XmlToInstanceParser::new(&self.tdb_schemas);
+        parser.json_to_instances(&json)
     }
 
     /// Get statistics about the model.

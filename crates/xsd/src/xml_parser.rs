@@ -1,0 +1,399 @@
+//! XML to TerminusDB Instance parser
+//!
+//! This module provides functionality to parse XML documents into TerminusDB
+//! instances using the generated schemas from XSD.
+
+use std::collections::BTreeMap;
+use terminusdb_schema::{Instance, InstanceProperty, PrimitiveValue, RelationValue, Schema};
+use thiserror::Error;
+
+/// Errors that can occur during XML parsing to TerminusDB instances.
+#[derive(Debug, Error)]
+pub enum XmlParseError {
+    /// No schema found for the given element type
+    #[error("No schema found for element type '{element_type}'")]
+    NoSchemaForElement { element_type: String },
+
+    /// Property type mismatch
+    #[error("Property '{property}' expected type '{expected}' but got '{actual}'")]
+    PropertyTypeMismatch {
+        property: String,
+        expected: String,
+        actual: String,
+    },
+
+    /// Required property missing
+    #[error("Required property '{property}' missing in element '{element}'")]
+    MissingRequiredProperty { property: String, element: String },
+
+    /// Invalid XML structure
+    #[error("Invalid XML structure: {message}")]
+    InvalidStructure { message: String },
+
+    /// Python/xmlschema error
+    #[error("XML parsing error: {message}")]
+    ParseError { message: String },
+
+    /// Multiple errors occurred
+    #[error("Multiple parsing errors occurred")]
+    Multiple(Vec<XmlParseError>),
+}
+
+impl XmlParseError {
+    /// Create a new error for missing schema
+    pub fn no_schema(element_type: impl Into<String>) -> Self {
+        Self::NoSchemaForElement {
+            element_type: element_type.into(),
+        }
+    }
+
+    /// Create a new parse error
+    pub fn parse(message: impl Into<String>) -> Self {
+        Self::ParseError {
+            message: message.into(),
+        }
+    }
+
+    /// Create an invalid structure error
+    pub fn invalid_structure(message: impl Into<String>) -> Self {
+        Self::InvalidStructure {
+            message: message.into(),
+        }
+    }
+}
+
+/// Result type for XML parsing operations
+pub type ParseResult<T> = std::result::Result<T, XmlParseError>;
+
+/// Parser for converting XML to TerminusDB instances
+pub struct XmlToInstanceParser<'a> {
+    /// Available schemas indexed by class name
+    schemas: BTreeMap<String, &'a Schema>,
+}
+
+impl<'a> XmlToInstanceParser<'a> {
+    /// Create a new parser with the given schemas
+    pub fn new(schemas: &'a [Schema]) -> Self {
+        let mut schema_map = BTreeMap::new();
+        for schema in schemas {
+            if let Schema::Class { id, .. } = schema {
+                schema_map.insert(id.clone(), schema);
+            }
+        }
+        Self { schemas: schema_map }
+    }
+
+    /// Parse XML content into TerminusDB instances.
+    ///
+    /// This uses Python's xmlschema library via PyO3 to parse and validate
+    /// the XML, then converts the result to TerminusDB instances.
+    ///
+    /// # Arguments
+    ///
+    /// * `xml` - XML content as a string
+    /// * `schema_path` - Path to the XSD schema file
+    ///
+    /// # Returns
+    ///
+    /// A vector of TerminusDB instances representing the parsed XML.
+    pub fn parse_xml(
+        &self,
+        xml: &str,
+        schema_path: &str,
+    ) -> ParseResult<Vec<Instance>> {
+        use pyo3::prelude::*;
+        use pyo3::types::PyModule;
+
+        Python::with_gil(|py| {
+            let xmlschema = PyModule::import(py, "xmlschema")
+                .map_err(|e| XmlParseError::parse(format!("Failed to import xmlschema: {}", e)))?;
+            let json_module = PyModule::import(py, "json")
+                .map_err(|e| XmlParseError::parse(format!("Failed to import json: {}", e)))?;
+
+            // Create XMLSchema from the file
+            let schema_obj = xmlschema
+                .call_method1("XMLSchema", (schema_path,))
+                .map_err(|e| XmlParseError::parse(format!("Failed to load XSD schema: {}", e)))?;
+
+            // Parse XML to dict with validation
+            let to_dict = schema_obj
+                .call_method1("to_dict", (xml,))
+                .map_err(|e| XmlParseError::parse(format!("XML validation/parsing failed: {}", e)))?;
+
+            // Convert to JSON string
+            let json_str: String = json_module
+                .call_method1("dumps", (to_dict,))
+                .map_err(|e| XmlParseError::parse(format!("JSON serialization failed: {}", e)))?
+                .extract()
+                .map_err(|e| XmlParseError::parse(format!("String extraction failed: {}", e)))?;
+
+            // Parse JSON to serde_json::Value
+            let json_value: serde_json::Value = serde_json::from_str(&json_str)
+                .map_err(|e| XmlParseError::parse(format!("JSON parsing failed: {}", e)))?;
+
+            // Convert JSON to instances
+            self.json_to_instances(&json_value)
+        })
+    }
+
+    /// Parse JSON value (from xmlschema) to TerminusDB instances
+    pub fn json_to_instances(
+        &self,
+        json: &serde_json::Value,
+    ) -> ParseResult<Vec<Instance>> {
+        let mut instances = Vec::new();
+        let mut errors = Vec::new();
+
+        match json {
+            serde_json::Value::Object(obj) => {
+                // Try to determine the type from the object
+                // xmlschema typically provides @type or the root element name
+                match self.json_object_to_instance(obj, None) {
+                    Ok(inst) => {
+                        // Collect the main instance and any nested instances
+                        instances.push(inst);
+                    }
+                    Err(e) => errors.push(e),
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    if let serde_json::Value::Object(obj) = item {
+                        match self.json_object_to_instance(obj, None) {
+                            Ok(inst) => instances.push(inst),
+                            Err(e) => errors.push(e),
+                        }
+                    }
+                }
+            }
+            _ => {
+                return Err(XmlParseError::invalid_structure(
+                    "Expected object or array at root level",
+                ));
+            }
+        }
+
+        if !errors.is_empty() && instances.is_empty() {
+            return Err(XmlParseError::Multiple(errors));
+        }
+
+        Ok(instances)
+    }
+
+    /// Convert a JSON object to a TerminusDB instance
+    fn json_object_to_instance(
+        &self,
+        obj: &serde_json::Map<String, serde_json::Value>,
+        type_hint: Option<&str>,
+    ) -> ParseResult<Instance> {
+        // Determine the type
+        let type_name = obj
+            .get("@type")
+            .and_then(|v| v.as_str())
+            .or(type_hint)
+            .ok_or_else(|| {
+                // Try to infer from the first key that looks like an element name
+                let first_key = obj.keys().find(|k| !k.starts_with('@') && !k.starts_with('$'));
+                XmlParseError::invalid_structure(format!(
+                    "Cannot determine type for object. Keys: {:?}",
+                    first_key
+                ))
+            })?;
+
+        // Look up the schema
+        let schema = self
+            .schemas
+            .get(type_name)
+            .ok_or_else(|| XmlParseError::no_schema(type_name))?;
+
+        // Get the schema properties
+        let schema_props = match schema {
+            Schema::Class { properties, .. } => properties,
+            _ => return Err(XmlParseError::no_schema(type_name)),
+        };
+
+        // Convert properties
+        let mut instance_props = BTreeMap::new();
+
+        for (key, value) in obj {
+            // Skip metadata keys
+            if key.starts_with('@') || key.starts_with('$') {
+                continue;
+            }
+
+            // Find the matching schema property
+            let _schema_prop = schema_props.iter().find(|p| &p.name == key);
+
+            // Convert the value to an InstanceProperty
+            let instance_prop = self.json_value_to_property(value, key)?;
+            instance_props.insert(key.clone(), instance_prop);
+        }
+
+        // Get the ID if present
+        let id = obj.get("@id").and_then(|v| v.as_str()).map(String::from);
+
+        Ok(Instance {
+            schema: (*schema).clone(),
+            id,
+            capture: false,
+            ref_props: false,
+            properties: instance_props,
+        })
+    }
+
+    /// Convert a JSON value to an InstanceProperty
+    fn json_value_to_property(
+        &self,
+        value: &serde_json::Value,
+        field_name: &str,
+    ) -> ParseResult<InstanceProperty> {
+        match value {
+            serde_json::Value::Null => Ok(InstanceProperty::Primitive(PrimitiveValue::Null)),
+
+            serde_json::Value::Bool(b) => {
+                Ok(InstanceProperty::Primitive(PrimitiveValue::Bool(*b)))
+            }
+
+            serde_json::Value::Number(n) => {
+                Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n.clone())))
+            }
+
+            serde_json::Value::String(s) => {
+                Ok(InstanceProperty::Primitive(PrimitiveValue::String(s.clone())))
+            }
+
+            serde_json::Value::Array(arr) => {
+                if arr.is_empty() {
+                    return Ok(InstanceProperty::Primitives(vec![]));
+                }
+
+                // Check if array contains objects (relations) or primitives
+                let first = &arr[0];
+                if first.is_object() {
+                    // Array of nested instances
+                    let mut relations = Vec::new();
+                    for item in arr {
+                        if let serde_json::Value::Object(obj) = item {
+                            let inst = self.json_object_to_instance(obj, None)?;
+                            relations.push(RelationValue::One(inst));
+                        }
+                    }
+                    Ok(InstanceProperty::Relations(relations))
+                } else {
+                    // Array of primitives
+                    let mut primitives = Vec::new();
+                    for item in arr {
+                        let prim = match item {
+                            serde_json::Value::Null => PrimitiveValue::Null,
+                            serde_json::Value::Bool(b) => PrimitiveValue::Bool(*b),
+                            serde_json::Value::Number(n) => PrimitiveValue::Number(n.clone()),
+                            serde_json::Value::String(s) => PrimitiveValue::String(s.clone()),
+                            _ => PrimitiveValue::Object(item.clone()),
+                        };
+                        primitives.push(prim);
+                    }
+                    Ok(InstanceProperty::Primitives(primitives))
+                }
+            }
+
+            serde_json::Value::Object(obj) => {
+                // Check for @ref (external reference)
+                if let Some(ref_id) = obj.get("@ref").and_then(|v| v.as_str()) {
+                    return Ok(InstanceProperty::Relation(
+                        RelationValue::ExternalReference(ref_id.to_string()),
+                    ));
+                }
+
+                // Try to parse as a nested instance
+                // Use field name as type hint (PascalCase conversion)
+                let type_hint = to_pascal_case(field_name);
+                match self.json_object_to_instance(obj, Some(&type_hint)) {
+                    Ok(inst) => Ok(InstanceProperty::Relation(RelationValue::One(inst))),
+                    Err(_) => {
+                        // Fall back to treating it as a generic object
+                        Ok(InstanceProperty::Primitive(PrimitiveValue::Object(
+                            serde_json::Value::Object(obj.clone()),
+                        )))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Convert a string to PascalCase
+fn to_pascal_case(s: &str) -> String {
+    use heck::ToPascalCase;
+    s.to_pascal_case()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use terminusdb_schema::{Key, Property, TypeFamily};
+
+    fn create_test_schema() -> Vec<Schema> {
+        vec![
+            Schema::Class {
+                id: "Person".to_string(),
+                base: None,
+                key: Key::ValueHash,
+                documentation: None,
+                subdocument: false,
+                r#abstract: false,
+                inherits: vec![],
+                unfoldable: false,
+                properties: vec![
+                    Property {
+                        name: "name".to_string(),
+                        r#type: None,
+                        class: "xsd:string".to_string(),
+                    },
+                    Property {
+                        name: "age".to_string(),
+                        r#type: Some(TypeFamily::Optional),
+                        class: "xsd:integer".to_string(),
+                    },
+                ],
+            },
+        ]
+    }
+
+    #[test]
+    fn test_simple_json_to_instance() {
+        let schemas = create_test_schema();
+        let parser = XmlToInstanceParser::new(&schemas);
+
+        let json: serde_json::Value = serde_json::json!({
+            "@type": "Person",
+            "name": "Alice",
+            "age": 30
+        });
+
+        let instances = parser.json_to_instances(&json).unwrap();
+        assert_eq!(instances.len(), 1);
+
+        let person = &instances[0];
+        assert_eq!(person.schema.class_name(), "Person");
+
+        let name = person.get_property("name").unwrap();
+        assert!(matches!(
+            name,
+            InstanceProperty::Primitive(PrimitiveValue::String(s)) if s == "Alice"
+        ));
+    }
+
+    #[test]
+    fn test_parser_no_schema() {
+        let schemas = create_test_schema();
+        let parser = XmlToInstanceParser::new(&schemas);
+
+        let json: serde_json::Value = serde_json::json!({
+            "@type": "Unknown",
+            "field": "value"
+        });
+
+        let result = parser.json_to_instances(&json);
+        assert!(result.is_err());
+    }
+}
