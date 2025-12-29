@@ -3,21 +3,40 @@
 //! Demonstrates intelligent entry point detection with scoring breakdown.
 //! This shows how to present customers with a dropdown of entry point options.
 
-use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use schemas_dita::{Dita12, SchemaBundle};
+use schemas_niso_sts::NisoSts;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use tempfile::TempDir;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+
+/// Lazily extracted DITA schemas
+static DITA_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().expect("Failed to create temp dir for DITA schemas");
+    Dita12::write_to_directory(dir.path()).expect("Failed to extract DITA schemas");
+    dir
+});
+
+/// Lazily extracted NISO-STS schemas
+static NISO_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().expect("Failed to create temp dir for NISO schemas");
+    NisoSts::write_to_directory(dir.path()).expect("Failed to extract NISO schemas");
+    dir
+});
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Entry Point Analysis Demo ===\n");
 
-    // Test with multiple schema directories
-    let test_dirs = vec![
-        ("DITA Base", "../../schemas/dita/xsd/xsd1.2-url/base/xsd"),
-        ("NISO-STS", "../../schemas/niso/xsd/NISO-STS-extended-1-MathML3-XSD"),
+    // Test with multiple schema directories from embedded bundles
+    let test_dirs: Vec<(&str, PathBuf)> = vec![
+        ("DITA Base", DITA_DIR.path().join("xsd1.2-url/base/xsd")),
+        (
+            "NISO-STS",
+            NISO_DIR.path().join("NISO-STS-extended-1-MathML3-XSD"),
+        ),
     ];
 
-    for (name, dir) in test_dirs {
-        let schema_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dir);
-
+    for (name, schema_dir) in test_dirs {
         if !schema_dir.exists() {
             eprintln!("⚠️  Skipping {}: directory not found\n", name);
             continue;
@@ -46,7 +65,9 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
 
     // Show top 10 candidates with detailed scoring
     for (i, candidate) in candidates.iter().take(10).enumerate() {
-        let file_name = candidate.path.file_name()
+        let file_name = candidate
+            .path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("???");
 
@@ -60,7 +81,8 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
             _ => ("⚪", "UNLIKELY"),
         };
 
-        println!("{}. {} {} - {} points ({})",
+        println!(
+            "{}. {} {} - {} points ({})",
             i + 1,
             symbol,
             file_name,
@@ -69,12 +91,15 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
         );
 
         // Show score breakdown
-        println!("   ├─ Depth:    {:>3} pts  (depth: {})",
-            score.depth_score, score.depth);
-        println!("   ├─ Includes: {:>3} pts  ({} include/import directives)",
-            score.include_count_score, score.include_count);
-        println!("   ├─ Naming:   {:>3} pts",
-            score.naming_score);
+        println!(
+            "   ├─ Depth:    {:>3} pts  (depth: {})",
+            score.depth_score, score.depth
+        );
+        println!(
+            "   ├─ Includes: {:>3} pts  ({} include/import directives)",
+            score.include_count_score, score.include_count
+        );
+        println!("   ├─ Naming:   {:>3} pts", score.naming_score);
 
         // Show reasons
         if !score.reasons.is_empty() {
@@ -99,7 +124,9 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
     println!("   ├─────────────────────────────────────────────────────────┤");
 
     for (i, candidate) in candidates.iter().take(5).enumerate() {
-        let file_name = candidate.path.file_name()
+        let file_name = candidate
+            .path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("???");
 
@@ -112,7 +139,8 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
 
         let checkmark = if i == 0 { "☑" } else { "☐" };
 
-        println!("   │ {} {} {:48} │",
+        println!(
+            "   │ {} {} {:48} │",
             checkmark,
             symbol,
             truncate(file_name, 48)
@@ -126,7 +154,8 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
     println!("{}", "-".repeat(80));
     println!("\n📊 Recommended Selection:\n");
 
-    let top_candidates: Vec<_> = candidates.iter()
+    let top_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.score.total_score >= 60)
         .take(3)
         .collect();
@@ -135,15 +164,22 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
         println!("   No candidates scored above threshold (60 points)");
         println!("   Consider manual selection or review scoring heuristics\n");
     } else {
-        println!("   Automatically selecting {} file(s) with scores ≥ 60:",
-            top_candidates.len());
+        println!(
+            "   Automatically selecting {} file(s) with scores ≥ 60:",
+            top_candidates.len()
+        );
 
         for candidate in top_candidates {
-            let file_name = candidate.path.file_name()
+            let file_name = candidate
+                .path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("???");
 
-            println!("      ✓ {} ({} points)", file_name, candidate.score.total_score);
+            println!(
+                "      ✓ {} ({} points)",
+                file_name, candidate.score.total_score
+            );
         }
 
         println!("\n   These entry points will be parsed, and xmlschema will");

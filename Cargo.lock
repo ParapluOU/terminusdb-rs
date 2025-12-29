@@ -2897,7 +2897,7 @@ dependencies = [
 [[package]]
 name = "schemas-core"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#b1380a62d3ba4bdb6956da01a6c8342e7e435dd8"
+source = "git+https://github.com/parapluou/schemas-rs#5bd9e0e1dbca18bf599aee50c08c8cd3cfef9827"
 dependencies = [
  "include_dir",
  "thiserror 2.0.12",
@@ -2906,7 +2906,16 @@ dependencies = [
 [[package]]
 name = "schemas-dita"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#b1380a62d3ba4bdb6956da01a6c8342e7e435dd8"
+source = "git+https://github.com/parapluou/schemas-rs#5bd9e0e1dbca18bf599aee50c08c8cd3cfef9827"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-dita-lce"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#5bd9e0e1dbca18bf599aee50c08c8cd3cfef9827"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2915,7 +2924,7 @@ dependencies = [
 [[package]]
 name = "schemas-niso-sts"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#b1380a62d3ba4bdb6956da01a6c8342e7e435dd8"
+source = "git+https://github.com/parapluou/schemas-rs#5bd9e0e1dbca18bf599aee50c08c8cd3cfef9827"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -3629,6 +3638,7 @@ dependencies = [
  "chrono",
  "heck 0.5.0",
  "schemas-dita",
+ "schemas-dita-lce",
  "schemas-niso-sts",
  "serde",
  "serde_json",

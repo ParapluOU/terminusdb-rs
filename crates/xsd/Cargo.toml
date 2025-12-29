@@ -31,6 +31,9 @@ terminusdb-schema = { path = "../schema" }
 # Utilities
 chrono = { workspace = true }
 heck = "0.5.0"
+schemas-dita = { git = "https://github.com/parapluou/schemas-rs", version = "0.1.0" }
+schemas-dita-lce = { git = "https://github.com/parapluou/schemas-rs", version = "0.1.0" }
+schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs", version = "0.1.0" }
 
 [dev-dependencies]
 schemas-dita = { git = "https://github.com/parapluou/schemas-rs" }

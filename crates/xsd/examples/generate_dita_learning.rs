@@ -1,23 +1,36 @@
-//! Generate schemas from DITA Learning and Training (LCE) XSD files.
+//! Generate schemas from DITA Learning and Training XSD files.
 //!
-//! Tests the XSD to TerminusDB converter with DITA Learning Content Exchange schemas.
+//! Tests the XSD to TerminusDB converter with DITA Learning Content schemas
+//! from the embedded schemas-dita crate.
 
-use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use schemas_dita::{Dita12, SchemaBundle};
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use tempfile::TempDir;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+
+/// Lazily extracted DITA schemas (shared across example runs)
+static DITA_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().expect("Failed to create temp dir for DITA schemas");
+    Dita12::write_to_directory(dir.path()).expect("Failed to extract DITA schemas");
+    dir
+});
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== DITA Learning (LCE) Schema Generation ===\n");
+    println!("=== DITA Learning Schema Generation ===\n");
 
-    // Use URL-based schemas (no catalog needed)
-    let learning_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schemas/dita/xsd/xsd1.2-url/learning/xsd");
+    // Use URL-based schemas from embedded schemas-dita crate
+    let learning_dir = DITA_DIR.path().join("xsd1.2-url/learning/xsd");
 
     if !learning_dir.exists() {
         eprintln!("ERROR: DITA Learning directory not found: {:?}", learning_dir);
         return Ok(());
     }
 
-    println!("📂 DITA Learning schema directory (URL-based): {:?}\n", learning_dir);
+    println!(
+        "📂 DITA Learning schema directory (URL-based): {:?}\n",
+        learning_dir
+    );
 
     let generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/learning#");
 
@@ -27,7 +40,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📊 Entry Point Analysis Results:\n");
     for (i, candidate) in candidates.iter().take(10).enumerate() {
-        let file_name = candidate.path.file_name()
+        let file_name = candidate
+            .path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("???");
 
@@ -40,8 +55,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => ("⚪", "UNLIKELY"),
         };
 
-        println!("{}. {} {} - {} points ({})",
-            i + 1, symbol, file_name, score.total_score, recommendation);
+        println!(
+            "{}. {} {} - {} points ({})",
+            i + 1,
+            symbol,
+            file_name,
+            score.total_score,
+            recommendation
+        );
     }
 
     println!("\n{}\n", "=".repeat(80));
@@ -77,11 +98,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    let existing_entry_points: Vec<_> = entry_points.iter()
-        .filter(|p| p.exists())
-        .collect();
+    let existing_entry_points: Vec<_> = entry_points.iter().filter(|p| p.exists()).collect();
 
-    let schemas_explicit = generator.generate_from_entry_points(&existing_entry_points, None::<PathBuf>)?;
+    let schemas_explicit =
+        generator.generate_from_entry_points(&existing_entry_points, None::<PathBuf>)?;
 
     show_schema_stats(&schemas_explicit, "Explicit Entry Points");
 
@@ -93,11 +113,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let all_json: Vec<_> = schemas_explicit.iter().map(|s| s.to_json()).collect();
     let json_str = serde_json::to_string_pretty(&all_json)?;
 
-    let output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/dita_learning_schemas.json");
+    let output_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/dita_learning_schemas.json");
 
     std::fs::write(&output_path, json_str)?;
-    println!("   Exported {} schemas to: {:?}", schemas_explicit.len(), output_path);
+    println!(
+        "   Exported {} schemas to: {:?}",
+        schemas_explicit.len(),
+        output_path
+    );
 
     println!("\n{}\n", "=".repeat(80));
     println!("\n✅ DITA Learning Schema Generation Complete!\n");
@@ -112,7 +136,10 @@ fn show_schema_stats(schemas: &[terminusdb_schema::Schema], method: &str) {
     let mut subdocs = 0;
 
     for schema in schemas {
-        if let terminusdb_schema::Schema::Class { base, subdocument, .. } = schema {
+        if let terminusdb_schema::Schema::Class {
+            base, subdocument, ..
+        } = schema
+        {
             let ns = base.as_ref().map(|s| s.as_str()).unwrap_or("(none)");
             *by_namespace.entry(ns.to_string()).or_insert(0) += 1;
             if *subdocument {
@@ -140,7 +167,8 @@ fn show_schema_stats(schemas: &[terminusdb_schema::Schema], method: &str) {
     // Show sample learning-specific schemas
     println!("\n📋 Sample Learning Schemas:\n");
 
-    let learning_schemas: Vec<_> = schemas.iter()
+    let learning_schemas: Vec<_> = schemas
+        .iter()
         .filter(|s| {
             matches!(s, terminusdb_schema::Schema::Class { id, .. }
                 if id.to_lowercase().contains("learning"))
@@ -149,8 +177,16 @@ fn show_schema_stats(schemas: &[terminusdb_schema::Schema], method: &str) {
         .collect();
 
     for (i, schema) in learning_schemas.iter().enumerate() {
-        if let terminusdb_schema::Schema::Class { id, base, properties, subdocument, .. } = schema {
-            println!("{}. {}{}",
+        if let terminusdb_schema::Schema::Class {
+            id,
+            base,
+            properties,
+            subdocument,
+            ..
+        } = schema
+        {
+            println!(
+                "{}. {}{}",
                 i + 1,
                 id,
                 if *subdocument { " (subdocument)" } else { "" }

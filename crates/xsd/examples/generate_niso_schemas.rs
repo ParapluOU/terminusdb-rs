@@ -1,15 +1,27 @@
 //! Generate schemas from NISO-STS XSD files.
 //!
-//! Demonstrates both auto-detection and explicit entry point specification.
+//! Demonstrates both auto-detection and explicit entry point specification
+//! using embedded schemas from the schemas-niso-sts crate.
 
-use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use schemas_niso_sts::{NisoSts, SchemaBundle};
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use tempfile::TempDir;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+
+/// Lazily extracted NISO-STS schemas (shared across example runs)
+static NISO_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().expect("Failed to create temp dir for NISO schemas");
+    NisoSts::write_to_directory(dir.path()).expect("Failed to extract NISO schemas");
+    dir
+});
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== NISO-STS Schema Generation ===\n");
 
-    let niso_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schemas/niso/xsd/NISO-STS-extended-1-MathML3-XSD");
+    let niso_dir = NISO_DIR
+        .path()
+        .join("NISO-STS-extended-1-MathML3-XSD");
 
     if !niso_dir.exists() {
         eprintln!("ERROR: NISO schema directory not found: {:?}", niso_dir);
@@ -18,7 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📂 NISO schema directory: {:?}\n", niso_dir);
 
-    let generator = XsdToSchemaGenerator::with_namespace("https://www.niso.org/standards/z39-102-2022#");
+    let generator =
+        XsdToSchemaGenerator::with_namespace("https://www.niso.org/standards/z39-102-2022#");
 
     // Method 1: Auto-detection
     println!("--- Method 1: Auto-Detection ---\n");
@@ -51,9 +64,7 @@ fn test_explicit_entry_points(
     niso_dir: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Customer provides explicit entry point paths
-    let entry_points = vec![
-        niso_dir.join("NISO-STS-extended-1-mathml3.xsd"),
-    ];
+    let entry_points = vec![niso_dir.join("NISO-STS-extended-1-mathml3.xsd")];
 
     println!("📝 Customer specified entry points:");
     for ep in &entry_points {
@@ -72,8 +83,8 @@ fn test_explicit_entry_points(
     let all_json: Vec<_> = schemas.iter().map(|s| s.to_json()).collect();
     let json_str = serde_json::to_string_pretty(&all_json)?;
 
-    let output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/niso_schemas.json");
+    let output_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/niso_schemas.json");
 
     std::fs::write(&output_path, json_str)?;
     println!("   Exported {} schemas to: {:?}", schemas.len(), output_path);
@@ -89,7 +100,10 @@ fn show_schema_stats(schemas: &[terminusdb_schema::Schema]) {
     let mut subdocs = 0;
 
     for schema in schemas {
-        if let terminusdb_schema::Schema::Class { base, subdocument, .. } = schema {
+        if let terminusdb_schema::Schema::Class {
+            base, subdocument, ..
+        } = schema
+        {
             let ns = base.as_ref().map(|s| s.as_str()).unwrap_or("(none)");
             *by_namespace.entry(ns.to_string()).or_insert(0) += 1;
             if *subdocument {
@@ -113,8 +127,16 @@ fn show_schema_stats(schemas: &[terminusdb_schema::Schema]) {
     println!("\n📋 Sample Schemas (first 15):\n");
 
     for (i, schema) in schemas.iter().take(15).enumerate() {
-        if let terminusdb_schema::Schema::Class { id, base, properties, subdocument, .. } = schema {
-            println!("{}. {}{}",
+        if let terminusdb_schema::Schema::Class {
+            id,
+            base,
+            properties,
+            subdocument,
+            ..
+        } = schema
+        {
+            println!(
+                "{}. {}{}",
                 i + 1,
                 id,
                 if *subdocument { " (subdocument)" } else { "" }

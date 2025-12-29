@@ -1,16 +1,24 @@
 //! Parse real DITA map schema and show generated TerminusDB schema.
 
+use schemas_dita::{Dita12, SchemaBundle};
+use std::path::PathBuf;
+use std::sync::LazyLock;
+use tempfile::TempDir;
 use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
 use terminusdb_xsd::schema_model::XsdSchema;
-use std::path::PathBuf;
+
+/// Lazily extracted DITA schemas (shared across example runs)
+static DITA_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().expect("Failed to create temp dir for DITA schemas");
+    Dita12::write_to_directory(dir.path()).expect("Failed to extract DITA schemas");
+    dir
+});
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== DITA Map Schema Conversion ===\n");
 
-    // Use the URL-based schemas (no catalog needed)
-    let schema_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schemas/dita/xsd/xsd1.2-url");
-
+    // Use the URL-based schemas from embedded bundle (no catalog needed)
+    let schema_dir = DITA_DIR.path().join("xsd1.2-url");
     let xsd_path = schema_dir.join("base/xsd/mapMod.xsd");
 
     if !xsd_path.exists() {
@@ -111,10 +119,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📝 Statistics:");
     println!("   Total schemas: {}", schemas.len());
 
-    let map_related = schemas.iter().filter(|s| {
-        matches!(s, terminusdb_schema::Schema::Class { id, .. }
+    let map_related = schemas
+        .iter()
+        .filter(|s| {
+            matches!(s, terminusdb_schema::Schema::Class { id, .. }
             if id.to_lowercase().contains("map") || id.to_lowercase().contains("topicref"))
-    }).count();
+        })
+        .count();
 
     println!("   Map-related classes: {}", map_related);
 

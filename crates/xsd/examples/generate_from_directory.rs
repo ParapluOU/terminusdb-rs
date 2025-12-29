@@ -1,21 +1,29 @@
 //! Generate schemas from an entire directory of XSD files.
 //!
 //! This demonstrates batch processing of schema bundles by pointing
-//! to a directory rather than individual files.
+//! to a directory rather than individual files, using embedded schemas.
 
-use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use schemas_dita::{Dita12, SchemaBundle};
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use tempfile::TempDir;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+
+/// Lazily extracted DITA schemas (shared across example runs)
+static DITA_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+    let dir = TempDir::new().expect("Failed to create temp dir for DITA schemas");
+    Dita12::write_to_directory(dir.path()).expect("Failed to extract DITA schemas");
+    dir
+});
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Directory-Based Schema Generation ===\n");
 
-    // Point to a schema bundle directory
-    let schema_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../schemas/dita/xsd/xsd1.2-url/base/xsd");
+    // Point to a schema bundle directory from embedded schemas
+    let schema_dir = DITA_DIR.path().join("xsd1.2-url/base/xsd");
 
     if !schema_dir.exists() {
         eprintln!("ERROR: Schema directory not found: {:?}", schema_dir);
-        eprintln!("This example expects DITA schemas in schemas/dita/");
         return Ok(());
     }
 
@@ -35,7 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut subdocs = 0;
 
     for schema in &schemas {
-        if let terminusdb_schema::Schema::Class { base, subdocument, .. } = schema {
+        if let terminusdb_schema::Schema::Class {
+            base, subdocument, ..
+        } = schema
+        {
             let ns = base.as_ref().map(|s| s.as_str()).unwrap_or("(none)");
             *by_namespace.entry(ns.to_string()).or_insert(0) += 1;
             if *subdocument {
@@ -57,13 +68,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📋 First 20 Generated Schemas:\n");
 
     for (i, schema) in schemas.iter().take(20).enumerate() {
-        if let terminusdb_schema::Schema::Class { id, base, properties, subdocument, .. } = schema {
-            println!("{}. {}{}",
+        if let terminusdb_schema::Schema::Class {
+            id,
+            base,
+            properties,
+            subdocument,
+            ..
+        } = schema
+        {
+            println!(
+                "{}. {}{}",
                 i + 1,
                 id,
                 if *subdocument { " (subdocument)" } else { "" }
             );
-            println!("   @base: {}", base.as_ref().unwrap_or(&"(none)".to_string()));
+            println!(
+                "   @base: {}",
+                base.as_ref().unwrap_or(&"(none)".to_string())
+            );
             println!("   Properties: {}", properties.len());
         }
     }
@@ -77,8 +99,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let json_str = serde_json::to_string_pretty(&all_json)?;
 
     // Save to file
-    let output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/generated_schemas.json");
+    let output_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/generated_schemas.json");
 
     std::fs::write(&output_path, json_str)?;
     println!("   Exported {} schemas to: {:?}", schemas.len(), output_path);
