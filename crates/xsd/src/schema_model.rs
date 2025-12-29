@@ -337,9 +337,32 @@ impl XsdSchema {
             match particle {
                 GroupParticle::Element(ep) => {
                     let name = ep.name.to_string();
+
+                    // Try to get the type name from the element declaration
+                    // Priority: 1. type_name reference, 2. resolved element_type, 3. fallback
                     let element_type = ep.element()
-                        .and_then(|e| e.type_name.as_ref())
-                        .map(|q| q.to_string())
+                        .map(|e| {
+                            // First try the type_name reference
+                            if let Some(type_name) = &e.type_name {
+                                return type_name.to_string();
+                            }
+
+                            // Otherwise extract from the resolved element_type
+                            match &e.element_type {
+                                xmlschema::validators::ElementType::Simple(st) => {
+                                    // Use qualified_name_string() which works for both
+                                    // named types and builtin types
+                                    st.qualified_name_string()
+                                        .unwrap_or_else(|| "xs:anySimpleType".to_string())
+                                }
+                                xmlschema::validators::ElementType::Complex(ct) => {
+                                    ct.name.as_ref()
+                                        .map(|q| q.to_string())
+                                        .unwrap_or_else(|| "xs:anyType".to_string())
+                                }
+                                xmlschema::validators::ElementType::Any => "xs:anyType".to_string(),
+                            }
+                        })
                         .unwrap_or_else(|| "xs:anyType".to_string());
 
                     children.push(ChildElement {
@@ -381,13 +404,21 @@ impl XsdSchema {
                 AttributeUse::Prohibited => "prohibited",
             };
 
+            // Get the type - try type_name first, then resolved simple_type
+            let attr_type = attr
+                .type_name
+                .as_ref()
+                .map(|q| q.to_string())
+                .or_else(|| {
+                    // Get the resolved simple type and its qualified name
+                    attr.simple_type()
+                        .and_then(|st| st.qualified_name_string())
+                })
+                .unwrap_or_else(|| "xs:string".to_string());
+
             result.push(XsdAttribute {
                 name: attr.name().local_name.clone(),
-                attr_type: attr
-                    .type_name
-                    .as_ref()
-                    .map(|q| q.to_string())
-                    .unwrap_or_else(|| "xs:string".to_string()),
+                attr_type,
                 use_type: use_type.to_string(),
                 default: attr.default().map(|s| s.to_string()),
             });
