@@ -1563,6 +1563,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2 1.0.95",
+ "quote 1.0.40",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2876,6 +2895,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemas-core"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#b1380a62d3ba4bdb6956da01a6c8342e7e435dd8"
+dependencies = [
+ "include_dir",
+ "thiserror 2.0.12",
+]
+
+[[package]]
+name = "schemas-dita"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#b1380a62d3ba4bdb6956da01a6c8342e7e435dd8"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-niso-sts"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#b1380a62d3ba4bdb6956da01a6c8342e7e435dd8"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3582,8 +3628,11 @@ dependencies = [
  "anyhow",
  "chrono",
  "heck 0.5.0",
+ "schemas-dita",
+ "schemas-niso-sts",
  "serde",
  "serde_json",
+ "tempfile",
  "terminusdb-schema",
  "thiserror 1.0.69",
  "tokio 1.45.1",

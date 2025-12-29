@@ -33,6 +33,9 @@ chrono = { workspace = true }
 heck = "0.5.0"
 
 [dev-dependencies]
+schemas-dita = { git = "https://github.com/parapluou/schemas-rs" }
+schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs" }
+tempfile.workspace = true
 # For testing
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
