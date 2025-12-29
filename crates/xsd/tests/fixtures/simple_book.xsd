@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/book"
+           xmlns:book="http://example.com/book"
+           elementFormDefault="qualified">
+
+    <!-- Root element -->
+    <xs:element name="book" type="book:bookType"/>
+
+    <!-- Book complex type with attributes and child elements -->
+    <xs:complexType name="bookType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string"/>
+            <xs:element name="author" type="book:personType" maxOccurs="unbounded"/>
+            <xs:element name="publisher" type="xs:string" minOccurs="0"/>
+            <xs:element name="year" type="xs:integer" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="isbn" type="xs:string" use="required"/>
+        <xs:attribute name="edition" type="xs:integer" use="optional"/>
+    </xs:complexType>
+
+    <!-- Person complex type for author -->
+    <xs:complexType name="personType">
+        <xs:sequence>
+            <xs:element name="firstName" type="xs:string"/>
+            <xs:element name="lastName" type="xs:string"/>
+            <xs:element name="email" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>

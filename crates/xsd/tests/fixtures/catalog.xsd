@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/catalog"
+           xmlns:cat="http://example.com/catalog"
+           elementFormDefault="qualified">
+
+    <!-- Root element -->
+    <xs:element name="catalog" type="cat:catalogType"/>
+
+    <!-- Catalog contains products -->
+    <xs:complexType name="catalogType">
+        <xs:sequence>
+            <xs:element name="product" type="cat:productType" minOccurs="0" maxOccurs="unbounded"/>
+            <xs:element name="category" type="cat:categoryType" minOccurs="1" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="version" type="xs:string" use="required"/>
+        <xs:attribute name="lastUpdated" type="xs:dateTime" use="optional"/>
+    </xs:complexType>
+
+    <!-- Product type with various data types -->
+    <xs:complexType name="productType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+            <xs:element name="description" type="xs:string" minOccurs="0"/>
+            <xs:element name="price" type="xs:decimal"/>
+            <xs:element name="quantity" type="xs:integer"/>
+            <xs:element name="inStock" type="xs:boolean"/>
+            <xs:element name="tags" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:ID" use="required"/>
+        <xs:attribute name="sku" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <!-- Category type -->
+    <xs:complexType name="categoryType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+            <xs:element name="subcategory" type="cat:categoryType" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:ID" use="required"/>
+    </xs:complexType>
+
+</xs:schema>
