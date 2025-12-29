@@ -1,5 +1,35 @@
 use serde::{Deserialize, Serialize};
-use pyo3::types::IntoPyDict;
+use std::path::Path;
+use std::sync::Arc;
+
+use xmlschema::validators::{
+    XsdSchema as RustXsdSchema,
+    FormDefault,
+    GlobalType,
+    Occurs,
+    GroupParticle,
+    XsdComplexType as RustComplexType,
+    ComplexContent,
+    XsdGroup,
+};
+
+/// Deserialize max_occurs where null means Unbounded
+mod cardinality_option_de {
+    use super::Cardinality;
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Cardinality>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Use Option to handle both null and non-null values
+        let opt: Option<Option<u32>> = Option::deserialize(deserializer)?;
+        match opt {
+            Some(Some(n)) => Ok(Some(Cardinality::Number(n))),
+            Some(None) | None => Ok(Some(Cardinality::Unbounded)), // null means unbounded
+        }
+    }
+}
 
 /// Top-level XSD schema representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +50,7 @@ pub struct XsdElement {
     #[serde(rename = "type")]
     pub type_info: Option<XsdTypeInfo>,
     pub min_occurs: Option<u32>,
+    #[serde(default, deserialize_with = "cardinality_option_de::deserialize")]
     pub max_occurs: Option<Cardinality>,
     pub nillable: bool,
     pub default: Option<String>,
@@ -92,6 +123,7 @@ pub struct ChildElement {
     #[serde(rename = "type")]
     pub element_type: String,
     pub min_occurs: Option<u32>,
+    #[serde(default, deserialize_with = "cardinality_option_de::deserialize")]
     pub max_occurs: Option<Cardinality>,
 }
 
@@ -110,119 +142,274 @@ pub enum Restriction {
 }
 
 impl XsdSchema {
-    /// Parse an XSD schema from a file path using Python xmlschema
+    /// Parse an XSD schema from a file path using the pure Rust xmlschema library
     ///
     /// # Arguments
     ///
     /// * `path` - Path to the XSD schema file
-    /// * `catalog_path` - Optional path to XML catalog file for URN resolution
+    /// * `catalog_path` - Optional path to XML catalog file for URN resolution (currently unused)
     pub fn from_xsd_file(
-        path: impl AsRef<std::path::Path>,
-        catalog_path: Option<impl AsRef<std::path::Path>>,
+        path: impl AsRef<Path>,
+        _catalog_path: Option<impl AsRef<Path>>,
     ) -> crate::Result<Self> {
-        use pyo3::prelude::*;
-        use pyo3::types::PyDict;
-
         let path = path.as_ref();
 
-        Python::with_gil(|py| {
-            // Import xmlschema
-            let xmlschema = pyo3::types::PyModule::import(py, "xmlschema")?;
+        // Parse the schema using xmlschema-rs
+        let rust_schema = RustXsdSchema::from_file(path)?;
 
-            // Run our comprehensive extraction Python code first to get helper functions
-            let code = include_str!("extract_schema.py");
-            let locals = PyDict::new(py);
-            let code_cstr = std::ffi::CString::new(code)
-                .expect("Python code contains null bytes");
+        // Extract data from the parsed schema
+        Self::from_rust_schema(&rust_schema, path)
+    }
 
-            py.run(code_cstr.as_c_str(), Some(&locals), Some(&locals))?;
+    /// Convert a parsed Rust schema to our representation
+    fn from_rust_schema(schema: &RustXsdSchema, path: &Path) -> crate::Result<Self> {
+        let target_namespace = schema.target_namespace.clone();
+        let schema_location = Some(path.to_string_lossy().to_string());
+        let element_form_default = Some(match schema.element_form_default {
+            FormDefault::Qualified => "qualified".to_string(),
+            FormDefault::Unqualified => "unqualified".to_string(),
+        });
 
-            // Load the schema with optional catalog-based URI mapper
-            let schema = if let Some(catalog) = catalog_path {
-                let catalog_str = catalog.as_ref().to_str().unwrap();
+        // Extract root elements
+        let mut root_elements = Vec::new();
+        for (qname, elem) in schema.elements() {
+            let element = Self::extract_element(&qname.to_string(), elem, schema);
+            root_elements.push(element);
+        }
 
-                // Create URI mapper using catalog
-                let create_mapper = locals.get_item("create_uri_mapper")?.unwrap();
-                let uri_mapper = create_mapper.call1((catalog_str,))?;
+        // Extract complex types
+        let mut complex_types = Vec::new();
+        let mut simple_types = Vec::new();
 
-                // Load schema with URI mapper
-                let kwargs = [("uri_mapper", uri_mapper)].into_py_dict(py)?;
-                xmlschema.call_method(
-                    "XMLSchema",
-                    (path.to_str().unwrap(),),
-                    Some(&kwargs),
-                )?
-            } else {
-                // Load schema without URI mapper
-                xmlschema.call_method1("XMLSchema", (path.to_str().unwrap(),))?
+        for (qname, global_type) in schema.types() {
+            match global_type {
+                GlobalType::Complex(ct) => {
+                    let complex = Self::extract_complex_type(&qname.to_string(), ct, schema);
+                    complex_types.push(complex);
+                }
+                GlobalType::Simple(st) => {
+                    let simple = Self::extract_simple_type(&qname.to_string(), st);
+                    simple_types.push(simple);
+                }
+            }
+        }
+
+        // Also extract anonymous complex types from element declarations
+        for (qname, elem) in schema.elements() {
+            if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
+                // Anonymous type (no name)
+                if ct.name.is_none() {
+                    let elem_name = &qname.local_name;
+                    let anon_name = format!("anonymous_{}_type", elem_name);
+                    let mut complex = Self::extract_complex_type(&anon_name, ct, schema);
+                    complex.is_anonymous = true;
+                    complex.element_name = Some(elem_name.to_string());
+                    complex_types.push(complex);
+                }
+            }
+        }
+
+        Ok(Self {
+            target_namespace,
+            schema_location,
+            element_form_default,
+            root_elements,
+            complex_types,
+            simple_types,
+        })
+    }
+
+    /// Extract element information
+    fn extract_element(
+        qname: &str,
+        elem: &Arc<xmlschema::validators::XsdElement>,
+        schema: &RustXsdSchema,
+    ) -> XsdElement {
+        let type_info = Self::extract_element_type(&elem.element_type, schema);
+
+        XsdElement {
+            name: qname.to_string(),
+            qualified_name: qname.to_string(),
+            type_info: Some(type_info),
+            min_occurs: Some(elem.occurs.min),
+            max_occurs: Some(occurs_to_cardinality(&elem.occurs)),
+            nillable: elem.nillable,
+            default: elem.default.clone(),
+        }
+    }
+
+    /// Extract type information from an element type
+    fn extract_element_type(
+        elem_type: &xmlschema::validators::ElementType,
+        schema: &RustXsdSchema,
+    ) -> XsdTypeInfo {
+        match elem_type {
+            xmlschema::validators::ElementType::Complex(ct) => {
+                let (child_elements, content_model) = Self::extract_content_model(&ct.content, schema);
+                let attributes = Self::extract_attributes(&ct.attributes);
+
+                XsdTypeInfo {
+                    name: ct.name.as_ref().map(|q| q.to_string()),
+                    qualified_name: ct.name.as_ref().map(|q| q.to_string()),
+                    category: "XsdComplexType".to_string(),
+                    is_complex: true,
+                    is_simple: false,
+                    content_model,
+                    attributes: Some(attributes),
+                    child_elements: Some(child_elements),
+                }
+            }
+            xmlschema::validators::ElementType::Simple(st) => {
+                XsdTypeInfo {
+                    name: st.name().map(|q| q.to_string()),
+                    qualified_name: st.name().map(|q| q.to_string()),
+                    category: "XsdSimpleType".to_string(),
+                    is_complex: false,
+                    is_simple: true,
+                    content_model: None,
+                    attributes: None,
+                    child_elements: None,
+                }
+            }
+            xmlschema::validators::ElementType::Any => {
+                XsdTypeInfo {
+                    name: Some("xs:anyType".to_string()),
+                    qualified_name: Some("{http://www.w3.org/2001/XMLSchema}anyType".to_string()),
+                    category: "XsdAnyType".to_string(),
+                    is_complex: false,
+                    is_simple: false,
+                    content_model: None,
+                    attributes: None,
+                    child_elements: None,
+                }
+            }
+        }
+    }
+
+    /// Extract complex type information
+    fn extract_complex_type(
+        qname: &str,
+        ct: &Arc<RustComplexType>,
+        schema: &RustXsdSchema,
+    ) -> XsdComplexType {
+        let (child_elements, content_model) = Self::extract_content_model(&ct.content, schema);
+        let attributes = Self::extract_attributes(&ct.attributes);
+
+        XsdComplexType {
+            name: qname.to_string(),
+            qualified_name: qname.to_string(),
+            category: "XsdComplexType".to_string(),
+            is_complex: true,
+            is_simple: false,
+            content_model,
+            attributes: Some(attributes),
+            child_elements: Some(child_elements),
+            is_anonymous: false,
+            element_name: None,
+        }
+    }
+
+    /// Extract content model (child elements and model type)
+    fn extract_content_model(
+        content: &ComplexContent,
+        _schema: &RustXsdSchema,
+    ) -> (Vec<ChildElement>, Option<String>) {
+        match content {
+            ComplexContent::Group(group) => {
+                // Check if group is empty (no particles)
+                if group.is_empty() {
+                    (vec![], Some("EmptyContent".to_string()))
+                } else {
+                    let children = Self::extract_group_children(group);
+                    let model = Some(format!("{:?}", group.model));
+                    (children, model)
+                }
+            }
+            ComplexContent::Simple(_) => (vec![], Some("SimpleContent".to_string())),
+        }
+    }
+
+    /// Extract children from a model group
+    fn extract_group_children(group: &Arc<XsdGroup>) -> Vec<ChildElement> {
+        let mut children = Vec::new();
+
+        for particle in &group.particles {
+            match particle {
+                GroupParticle::Element(ep) => {
+                    let name = ep.name.to_string();
+                    let element_type = ep.element()
+                        .and_then(|e| e.type_name.as_ref())
+                        .map(|q| q.to_string())
+                        .unwrap_or_else(|| "xs:anyType".to_string());
+
+                    children.push(ChildElement {
+                        name,
+                        element_type,
+                        min_occurs: Some(ep.occurs.min),
+                        max_occurs: Some(occurs_to_cardinality(&ep.occurs)),
+                    });
+                }
+                GroupParticle::Group(nested) => {
+                    // Recursively extract children from nested groups
+                    children.extend(Self::extract_group_children(nested));
+                }
+                GroupParticle::Any(_) => {
+                    // Wildcard elements - add as xs:any placeholder
+                    children.push(ChildElement {
+                        name: "##any".to_string(),
+                        element_type: "xs:anyType".to_string(),
+                        min_occurs: Some(0),
+                        max_occurs: Some(Cardinality::Unbounded),
+                    });
+                }
+            }
+        }
+
+        children
+    }
+
+    /// Extract attributes from an attribute group
+    fn extract_attributes(attrs: &xmlschema::validators::XsdAttributeGroup) -> Vec<XsdAttribute> {
+        use xmlschema::validators::AttributeUse;
+
+        let mut result = Vec::new();
+
+        for attr in attrs.iter_attributes() {
+            let use_type = match attr.use_mode() {
+                AttributeUse::Required => "required",
+                AttributeUse::Optional => "optional",
+                AttributeUse::Prohibited => "prohibited",
             };
 
-            // Set schema in locals for extraction
-            locals.set_item("schema", schema)?;
+            result.push(XsdAttribute {
+                name: attr.name().local_name.clone(),
+                attr_type: attr
+                    .type_name
+                    .as_ref()
+                    .map(|q| q.to_string())
+                    .unwrap_or_else(|| "xs:string".to_string()),
+                use_type: use_type.to_string(),
+                default: attr.default().map(|s| s.to_string()),
+            });
+        }
 
-            // Extract schema data (the main extraction code at the bottom of extract_schema.py)
-            let extract_code = std::ffi::CString::new(r#"
-# Extract schema data
-schema_data = {
-    'target_namespace': schema.target_namespace,
-    'schema_location': schema.url if hasattr(schema, 'url') else None,
-    'element_form_default': schema.element_form_default if hasattr(schema, 'element_form_default') else None,
-    'root_elements': [],
-    'complex_types': [],
-    'simple_types': [],
-}
+        result
+    }
 
-# Extract root elements
-if hasattr(schema, 'elements') and schema.elements:
-    for name, element in schema.elements.items():
-        schema_data['root_elements'].append(extract_element_info(element))
-
-# Extract named types
-if hasattr(schema, 'types') and schema.types:
-    for name, type_obj in schema.types.items():
-        type_name = type(type_obj).__name__
-        if 'Complex' in type_name:
-            schema_data['complex_types'].append(extract_complex_type_info(type_obj))
-        elif 'Simple' in type_name:
-            schema_data['simple_types'].append(extract_simple_type_info(type_obj))
-
-# Also extract anonymous complex types from elements (for schemas like NISO-STS)
-# Track unique anonymous types by their structure
-anonymous_complex_types = []
-if hasattr(schema, 'elements') and schema.elements:
-    for name, element in schema.elements.items():
-        if element.type and hasattr(element.type, 'name'):
-            # Only extract if it's an anonymous type (no name)
-            if element.type.name is None:
-                type_name = type(element.type).__name__
-                if 'Complex' in type_name:
-                    # Add element name to distinguish anonymous types
-                    type_info = extract_complex_type_info(element.type)
-                    type_info['name'] = f"anonymous_{name}_type"
-                    type_info['qualified_name'] = f"anonymous_{name}_type"
-                    type_info['is_anonymous'] = True
-                    type_info['element_name'] = name
-                    anonymous_complex_types.append(type_info)
-
-# Add anonymous types to complex_types list
-schema_data['complex_types'].extend(anonymous_complex_types)
-
-# Convert to JSON string for Rust to parse
-schema_data = json.dumps(schema_data)
-"#).expect("Extract code contains null bytes");
-
-            py.run(extract_code.as_c_str(), Some(&locals), Some(&locals))?;
-
-            // Get the result
-            let result = locals.get_item("schema_data")?.unwrap();
-            let result_str = result.str()?;
-            let json_str = result_str.to_str()?;
-
-            // Parse JSON to our Rust types
-            let schema_data: XsdSchema = serde_json::from_str(json_str)?;
-
-            Ok(schema_data)
-        })
+    /// Extract simple type information
+    fn extract_simple_type(
+        qname: &str,
+        _st: &Arc<dyn xmlschema::validators::SimpleType + Send + Sync>,
+    ) -> XsdSimpleType {
+        // Simple types are more complex to fully extract
+        // For now, we provide basic info
+        XsdSimpleType {
+            name: qname.to_string(),
+            qualified_name: qname.to_string(),
+            category: "XsdSimpleType".to_string(),
+            base_type: None, // Would need to traverse type hierarchy
+            restrictions: None, // Would need to extract facets
+        }
     }
 
     /// Get all element names (useful for quick inspection)
@@ -239,6 +426,14 @@ schema_data = json.dumps(schema_data)
             .iter()
             .map(|t| t.name.as_str())
             .collect()
+    }
+}
+
+/// Convert Occurs to our Cardinality type
+fn occurs_to_cardinality(occurs: &Occurs) -> Cardinality {
+    match occurs.max {
+        Some(n) => Cardinality::Number(n),
+        None => Cardinality::Unbounded,
     }
 }
 

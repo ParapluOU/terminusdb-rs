@@ -8,8 +8,8 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# PyO3 for calling Python's xmlschema module via FFI
-pyo3 = { version = "0.23", features = ["auto-initialize"] }
+# Pure Rust XSD/XML Schema library (replaces Python xmlschema)
+xmlschema = { git = "https://github.com/ParapluOU/xmlschema-rs.git" }
 
 # JSON serialization for dumping parsed schemas
 serde = { workspace = true }
@@ -31,17 +31,6 @@ terminusdb-schema = { path = "../schema" }
 # Utilities
 chrono = { workspace = true }
 heck = "0.5.0"
-
-# RustPython for experimental Python interop testing (test_rustpython binary)
-rustpython-vm = { version = "0.4", optional = true }
-
-[features]
-# Feature flag for rustpython experimental binary
-rustpython = ["dep:rustpython-vm"]
-
-[[bin]]
-name = "test_rustpython"
-required-features = ["rustpython"]
 
 [dev-dependencies]
 # For testing

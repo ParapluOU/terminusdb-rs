@@ -1,25 +1,22 @@
 //! # terminusdb-xsd
 //!
-//! Runtime XSD to TerminusDB schema converter using PyO3.
+//! Runtime XSD to TerminusDB schema converter.
 //!
 //! This crate enables dynamic TerminusDB schema generation from XSD (XML Schema Definition)
 //! files. It supports customer-uploaded schemas at runtime without code generation.
 //!
 //! ## Architecture
 //!
-//! 1. **Parse XSD** - Use PyO3 to call Python `xmlschema` library
+//! 1. **Parse XSD** - Use the pure Rust `xmlschema` library
 //! 2. **Extract Types** - Extract complex types, elements, attributes
 //! 3. **Generate Schema** - Programmatically create TerminusDB Schema instances
-//! 4. **Parse XML** - (Future) Convert XML documents to TerminusDB Instances
-//!
-//! ## Requirements
-//!
-//! - Python 3.7+ with xmlschema installed: `pip install xmlschema`
+//! 4. **Parse XML** - Convert XML documents to TerminusDB Instances
 //!
 //! ## Modules
 //!
-//! - `schema_model`: XSD schema extraction and parsing (PyO3-based)
+//! - `schema_model`: XSD schema extraction and parsing
 //! - `schema_generator`: Runtime TerminusDB Schema generation from XSD
+//! - `xml_parser`: XML to TerminusDB instance parsing
 //!
 //! ## Usage
 //!
@@ -28,7 +25,7 @@
 //! use terminusdb_xsd::schema_model::XsdSchema;
 //!
 //! // Parse customer's XSD schema at runtime
-//! let xsd_schema = XsdSchema::from_xsd_file("customer-schema.xsd", None)?;
+//! let xsd_schema = XsdSchema::from_xsd_file("customer-schema.xsd", None::<&str>)?;
 //!
 //! // Generate TerminusDB schemas programmatically
 //! let generator = XsdToSchemaGenerator::new();
@@ -46,7 +43,6 @@ pub mod schema_model;
 pub mod xml_parser;
 pub mod xsd_model;
 
-use pyo3::prelude::*;
 use thiserror::Error;
 
 pub use schema_model::*;
@@ -55,8 +51,8 @@ pub use xsd_model::XsdModel;
 
 #[derive(Debug, Error)]
 pub enum XsdError {
-    #[error("Python error: {0}")]
-    Python(#[from] PyErr),
+    #[error("xmlschema error: {0}")]
+    XmlSchema(#[from] xmlschema::Error),
 
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
@@ -75,29 +71,11 @@ pub type Result<T> = std::result::Result<T, XsdError>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use pyo3::types::PyModule;
-
     #[test]
-    fn test_python_basic() {
-        Python::with_gil(|py| {
-            let result: i32 = py.eval(c"2 + 2", None, None).unwrap().extract().unwrap();
-            assert_eq!(result, 4);
-        });
-    }
-
-    #[test]
-    fn test_json_module() {
-        Python::with_gil(|py| {
-            let json = PyModule::import(py, "json").unwrap();
-            let data = r#"{"test": "value"}"#;
-            let result = json.call_method1("loads", (data,)).unwrap();
-            let test_val: String = result
-                .get_item("test")
-                .unwrap()
-                .extract()
-                .unwrap();
-            assert_eq!(test_val, "value");
-        });
+    fn test_json_roundtrip() {
+        let json_str = r#"{"test": "value"}"#;
+        let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let test_val = parsed.get("test").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(test_val, "value");
     }
 }

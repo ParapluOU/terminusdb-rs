@@ -7,6 +7,11 @@ use std::collections::BTreeMap;
 use terminusdb_schema::{Instance, InstanceProperty, PrimitiveValue, RelationValue, Schema};
 use thiserror::Error;
 
+// xmlschema-rs imports for XML parsing and conversion
+use xmlschema::converters::{create_converter, ConverterType, ElementData};
+use xmlschema::documents::{Document, Element};
+use xmlschema::validators::XsdSchema as RustXsdSchema;
+
 /// Errors that can occur during XML parsing to TerminusDB instances.
 #[derive(Debug, Error)]
 pub enum XmlParseError {
@@ -85,8 +90,8 @@ impl<'a> XmlToInstanceParser<'a> {
 
     /// Parse XML content into TerminusDB instances.
     ///
-    /// This uses Python's xmlschema library via PyO3 to parse and validate
-    /// the XML, then converts the result to TerminusDB instances.
+    /// This uses xmlschema-rs to parse and validate the XML, then converts
+    /// the result to TerminusDB instances.
     ///
     /// # Arguments
     ///
@@ -96,44 +101,47 @@ impl<'a> XmlToInstanceParser<'a> {
     /// # Returns
     ///
     /// A vector of TerminusDB instances representing the parsed XML.
-    pub fn parse_xml(
-        &self,
-        xml: &str,
-        schema_path: &str,
-    ) -> ParseResult<Vec<Instance>> {
-        use pyo3::prelude::*;
-        use pyo3::types::PyModule;
+    pub fn parse_xml(&self, xml: &str, schema_path: &str) -> ParseResult<Vec<Instance>> {
+        // Load the XSD schema from file
+        let rust_schema = RustXsdSchema::from_file(std::path::Path::new(schema_path))
+            .map_err(|e| XmlParseError::parse(format!("Failed to load XSD schema: {}", e)))?;
 
-        Python::with_gil(|py| {
-            let xmlschema = PyModule::import(py, "xmlschema")
-                .map_err(|e| XmlParseError::parse(format!("Failed to import xmlschema: {}", e)))?;
-            let json_module = PyModule::import(py, "json")
-                .map_err(|e| XmlParseError::parse(format!("Failed to import json: {}", e)))?;
+        // Validate the XML against the schema
+        let validation_result = rust_schema.validate_string(xml);
+        if !validation_result.valid {
+            let errors = validation_result.errors.join("; ");
+            return Err(XmlParseError::parse(format!(
+                "XML validation failed: {}",
+                errors
+            )));
+        }
 
-            // Create XMLSchema from the file
-            let schema_obj = xmlschema
-                .call_method1("XMLSchema", (schema_path,))
-                .map_err(|e| XmlParseError::parse(format!("Failed to load XSD schema: {}", e)))?;
+        // Parse the XML document
+        let doc = Document::from_string(xml)
+            .map_err(|e| XmlParseError::parse(format!("Failed to parse XML: {}", e)))?;
 
-            // Parse XML to dict with validation
-            let to_dict = schema_obj
-                .call_method1("to_dict", (xml,))
-                .map_err(|e| XmlParseError::parse(format!("XML validation/parsing failed: {}", e)))?;
+        // Get the root element
+        let root = doc
+            .root
+            .as_ref()
+            .ok_or_else(|| XmlParseError::parse("XML document has no root element"))?;
 
-            // Convert to JSON string
-            let json_str: String = json_module
-                .call_method1("dumps", (to_dict,))
-                .map_err(|e| XmlParseError::parse(format!("JSON serialization failed: {}", e)))?
-                .extract()
-                .map_err(|e| XmlParseError::parse(format!("String extraction failed: {}", e)))?;
+        // Convert Element to ElementData
+        let element_data = element_to_element_data(root);
 
-            // Parse JSON to serde_json::Value
-            let json_value: serde_json::Value = serde_json::from_str(&json_str)
-                .map_err(|e| XmlParseError::parse(format!("JSON parsing failed: {}", e)))?;
+        // Use the default XMLSchema converter
+        let converter = create_converter(ConverterType::Default);
 
-            // Convert JSON to instances
-            self.json_to_instances(&json_value)
-        })
+        // Convert to JSON
+        let json_value = converter.decode(&element_data, 0);
+
+        // Wrap in root element name for consistency
+        let output_json = serde_json::json!({
+            root.local_name(): json_value
+        });
+
+        // Convert JSON to instances
+        self.json_to_instances(&output_json)
     }
 
     /// Parse JSON value (from xmlschema) to TerminusDB instances
@@ -325,6 +333,38 @@ impl<'a> XmlToInstanceParser<'a> {
 fn to_pascal_case(s: &str) -> String {
     use heck::ToPascalCase;
     s.to_pascal_case()
+}
+
+/// Convert a Document Element to an ElementData for the converter.
+///
+/// This recursively converts the element tree to the format expected by
+/// the xmlschema-rs converters.
+fn element_to_element_data(elem: &Element) -> ElementData {
+    let mut data = ElementData::new(elem.local_name());
+
+    // Add text content
+    if let Some(text) = &elem.text {
+        data = data.with_text(text.clone());
+    }
+
+    // Add attributes
+    for (qname, value) in &elem.attributes {
+        data = data.with_attribute(qname.local_name.clone(), value.clone());
+    }
+
+    // Add xmlns declarations
+    for (prefix, uri) in elem.namespaces.iter() {
+        data = data.with_xmlns(prefix, uri);
+    }
+
+    // Add child elements recursively
+    for child in &elem.children {
+        let child_data = element_to_element_data(child);
+        let child_json = create_converter(ConverterType::Default).decode(&child_data, 1);
+        data = data.with_child(child.local_name(), child_json);
+    }
+
+    data
 }
 
 #[cfg(test)]

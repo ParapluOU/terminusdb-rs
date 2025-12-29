@@ -13,6 +13,11 @@ use crate::Result;
 use std::path::{Path, PathBuf};
 use terminusdb_schema::{Instance, Schema};
 
+// xmlschema-rs imports for XML parsing and conversion
+use xmlschema::converters::{create_converter, ConverterType, ElementData};
+use xmlschema::documents::{Document, Element};
+use xmlschema::validators::XsdSchema as RustXsdSchema;
+
 /// An XSD model containing parsed schemas and conversion rules.
 ///
 /// This is the main entry point for working with XSD schemas in TerminusDB.
@@ -200,39 +205,35 @@ impl XsdModel {
     ///
     /// A JSON value representing the parsed XML structure.
     pub fn parse_xml_to_json(&self, xml: &str) -> Result<serde_json::Value> {
-        use pyo3::prelude::*;
-        use pyo3::types::PyModule;
+        // Parse the XML document
+        let doc = Document::from_string(xml)?;
 
-        Python::with_gil(|py| {
-            let xmlschema = PyModule::import(py, "xmlschema")?;
-            let json_module = PyModule::import(py, "json")?;
+        // Get the root element
+        let root = doc
+            .root
+            .as_ref()
+            .ok_or_else(|| crate::XsdError::Parsing("XML document has no root element".into()))?;
 
-            let schema_location = self.xsd_schemas
-                .first()
-                .and_then(|s| s.schema_location.as_ref())
-                .ok_or_else(|| crate::XsdError::Parsing("No schema location available".into()))?;
+        // Convert Element to ElementData
+        let element_data = element_to_element_data(root);
 
-            // Create XMLSchema from the file
-            let schema_obj = xmlschema.call_method1("XMLSchema", (schema_location.as_str(),))?;
+        // Use the default XMLSchema converter
+        let converter = create_converter(ConverterType::Default);
 
-            // Parse and convert XML to dict
-            let to_dict = schema_obj.call_method1("to_dict", (xml,))?;
+        // Convert to JSON
+        let json_value = converter.decode(&element_data, 0);
 
-            // Convert to JSON
-            let json_str: String = json_module
-                .call_method1("dumps", (to_dict,))?
-                .extract()?;
+        // Wrap in root element name
+        let output_json = serde_json::json!({
+            root.local_name(): json_value
+        });
 
-            // Parse JSON
-            let value: serde_json::Value = serde_json::from_str(&json_str)?;
-
-            Ok(value)
-        })
+        Ok(output_json)
     }
 
     /// Validate XML content against the XSD schema.
     ///
-    /// This uses xmlschema to validate the XML directly.
+    /// This uses xmlschema-rs to validate the XML directly.
     ///
     /// # Arguments
     ///
@@ -242,25 +243,27 @@ impl XsdModel {
     ///
     /// Ok(()) if valid, Err with validation errors otherwise.
     pub fn validate_xml(&self, xml: &str) -> Result<()> {
-        use pyo3::prelude::*;
-        use pyo3::types::PyModule;
+        let schema_location = self
+            .xsd_schemas
+            .first()
+            .and_then(|s| s.schema_location.as_ref())
+            .ok_or_else(|| crate::XsdError::Parsing("No schema location available".into()))?;
 
-        Python::with_gil(|py| {
-            let xmlschema = PyModule::import(py, "xmlschema")?;
+        // Load the XSD schema from file
+        let rust_schema = RustXsdSchema::from_file(std::path::Path::new(schema_location))?;
 
-            let schema_location = self.xsd_schemas
-                .first()
-                .and_then(|s| s.schema_location.as_ref())
-                .ok_or_else(|| crate::XsdError::Parsing("No schema location available".into()))?;
+        // Validate the XML string
+        let result = rust_schema.validate_string(xml);
 
-            let schema_obj = xmlschema.call_method1("XMLSchema", (schema_location.as_str(),))?;
-
-            // Validate XML (raises exception if invalid)
-            match schema_obj.call_method1("validate", (xml,)) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(crate::XsdError::Parsing(format!("XML validation failed: {}", e))),
-            }
-        })
+        if result.valid {
+            Ok(())
+        } else {
+            let errors = result.errors.join("; ");
+            Err(crate::XsdError::Parsing(format!(
+                "XML validation failed: {}",
+                errors
+            )))
+        }
     }
 
     /// Parse XML content into TerminusDB instances.
@@ -331,6 +334,38 @@ impl XsdModel {
             })
             .collect()
     }
+}
+
+/// Convert a Document Element to an ElementData for the converter.
+///
+/// This recursively converts the element tree to the format expected by
+/// the xmlschema-rs converters.
+fn element_to_element_data(elem: &Element) -> ElementData {
+    let mut data = ElementData::new(elem.local_name());
+
+    // Add text content
+    if let Some(text) = &elem.text {
+        data = data.with_text(text.clone());
+    }
+
+    // Add attributes
+    for (qname, value) in &elem.attributes {
+        data = data.with_attribute(qname.local_name.clone(), value.clone());
+    }
+
+    // Add xmlns declarations
+    for (prefix, uri) in elem.namespaces.iter() {
+        data = data.with_xmlns(prefix, uri);
+    }
+
+    // Add child elements recursively
+    for child in &elem.children {
+        let child_data = element_to_element_data(child);
+        let child_json = create_converter(ConverterType::Default).decode(&child_data, 1);
+        data = data.with_child(child.local_name(), child_json);
+    }
+
+    data
 }
 
 /// Statistics about an XSD model.
