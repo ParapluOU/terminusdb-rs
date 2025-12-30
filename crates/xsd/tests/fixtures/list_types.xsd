@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/list-types"
+           xmlns:tns="http://example.com/list-types"
+           elementFormDefault="qualified">
+
+  <!-- Simple type with xs:list - space-separated integer values -->
+  <xs:simpleType name="IntegerList">
+    <xs:list itemType="xs:integer"/>
+  </xs:simpleType>
+
+  <!-- Simple type with xs:list - space-separated string values -->
+  <xs:simpleType name="StringList">
+    <xs:list itemType="xs:string"/>
+  </xs:simpleType>
+
+  <!-- Complex type using the list types -->
+  <xs:complexType name="DataContainer">
+    <xs:sequence>
+      <xs:element name="scores" type="tns:IntegerList"/>
+      <xs:element name="tags" type="tns:StringList" minOccurs="0"/>
+      <!-- Regular unbounded element (should be Set, not List) -->
+      <xs:element name="items" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- Root element -->
+  <xs:element name="data" type="tns:DataContainer"/>
+
+</xs:schema>

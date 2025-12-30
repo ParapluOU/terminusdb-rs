@@ -236,7 +236,10 @@ fn test_category_type_self_reference() {
 // ============================================================================
 
 #[test]
-fn test_generated_schemas_use_value_hash_key() {
+fn test_generated_schemas_use_correct_key_strategy() {
+    // Key strategy:
+    // - Documents (named types, non-subdocuments) use ValueHash for content-based addressing
+    // - Subdocuments (anonymous types) use Random to avoid TerminusDB insertion failures
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
@@ -244,9 +247,14 @@ fn test_generated_schemas_use_value_hash_key() {
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     for schema in &schemas {
-        if let Schema::Class { key, id, .. } = schema {
-            assert_eq!(*key, Key::ValueHash,
-                "Class {} should use ValueHash key strategy", id);
+        if let Schema::Class { key, id, subdocument, .. } = schema {
+            if *subdocument {
+                assert_eq!(*key, Key::Random,
+                    "Subdocument class {} should use Random key strategy", id);
+            } else {
+                assert_eq!(*key, Key::ValueHash,
+                    "Document class {} should use ValueHash key strategy", id);
+            }
         }
     }
 }
@@ -313,4 +321,70 @@ fn test_xsd_model_find_schema() {
 
     let unknown = model.find_schema("UnknownType");
     assert!(unknown.is_none(), "Should not find unknown type");
+}
+
+// ============================================================================
+// xs:list Type Tests - Verify TypeFamily::List is generated
+// ============================================================================
+
+#[test]
+fn test_list_types_xmlschema_rs_limitation() {
+    // KNOWN LIMITATION: xmlschema-rs does not properly parse xs:list types.
+    //
+    // In src/validators/parsing.rs, parse_simple_list() creates an XsdAtomicType
+    // with base "string" instead of using XsdListType. This means variety()
+    // returns Atomic instead of List.
+    //
+    // ROOT CAUSE (xmlschema-rs parsing.rs line 789-799):
+    //   fn parse_simple_list(...) {
+    //       // For list types, create a string-based type for now
+    //       // Full list type implementation would require the XsdListType
+    //       let simple = XsdAtomicType::with_name("string", qname.clone())...
+    //   }
+    //
+    // FIX REQUIRED: Update xmlschema-rs to use XsdListType for xs:list types.
+    // This is in the ParapluOU/xmlschema-rs fork.
+    //
+    // When xmlschema-rs is fixed, this test should be updated to verify
+    // TypeFamily::List is generated for xs:list types.
+
+    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/list_types.xsd");
+    let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>)
+        .expect("Failed to parse list_types.xsd");
+
+    // Document current behavior: xs:list types have variety=Atomic (incorrect)
+    eprintln!("\n=== XSD Simple Types (documenting xmlschema-rs limitation) ===");
+    for st in &xsd_schema.simple_types {
+        eprintln!("  SimpleType: {} (variety: {:?})", st.name, st.variety);
+        // xmlschema-rs returns Atomic for list types - this is the bug
+        if st.name.contains("List") {
+            assert_eq!(
+                st.variety,
+                Some(terminusdb_xsd::schema_model::SimpleTypeVariety::Atomic),
+                "KNOWN LIMITATION: xmlschema-rs returns Atomic for xs:list types. \
+                 When this test fails, the upstream fix has been applied!"
+            );
+        }
+    }
+
+    let generator = XsdToSchemaGenerator::new();
+    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+
+    // Find DataContainer class
+    let data_container = find_class(&schemas, "DataContainer")
+        .expect("DataContainer class not found");
+    let props = get_properties(data_container).expect("No properties");
+
+    // Document current behavior: scores uses the list type name, but not List TypeFamily
+    let scores = find_property(props, "scores").expect("scores property not found");
+    // Currently no TypeFamily (required single) because variety is Atomic
+    eprintln!("scores property: class={}, type={:?}", scores.class, scores.r#type);
+
+    // Check items property (unbounded elements) - should be Set or Optional
+    let items = find_property(props, "items").expect("items property not found");
+    assert!(
+        matches!(items.r#type, Some(TypeFamily::Set(_)) | Some(TypeFamily::Optional)),
+        "Unbounded elements should use Set or Optional, not List. Got {:?}",
+        items.r#type
+    );
 }

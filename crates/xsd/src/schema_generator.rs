@@ -1,6 +1,6 @@
 //! Runtime TerminusDB Schema Generator from XSD
 
-use crate::schema_model::{Cardinality, ChildElement, Restriction, XsdAttribute, XsdComplexType, XsdSchema, XsdSimpleType};
+use crate::schema_model::{Cardinality, ChildElement, Restriction, SimpleTypeVariety, XsdAttribute, XsdComplexType, XsdSchema, XsdSimpleType};
 use crate::Result;
 use heck::ToPascalCase;
 use std::collections::HashMap;
@@ -46,9 +46,63 @@ impl XsdToSchemaGenerator {
     pub fn generate(&self, xsd_schema: &XsdSchema) -> Result<Vec<Schema>> {
         let mut schemas = Vec::new();
 
+        // Use entry point elements (inferred from file name) to determine document roots.
+        // Only these should be non-subdocuments. Other global elements are just reusable
+        // building blocks that should be embedded as subdocuments.
+        let document_root_types: std::collections::HashSet<String> = xsd_schema.entry_point_elements
+            .iter()
+            .map(|name| {
+                // Convert to PascalCase (e.g., "topic" → "Topic")
+                use heck::ToPascalCase;
+                name.to_pascal_case()
+            })
+            .collect();
+
+        // Build a map of base type -> derived types for inheritance tracking.
+        // In TerminusDB, @subdocument status is inherited, so if a child is a document root,
+        // its parent cannot be a subdocument.
+        let mut base_to_derived: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for complex_type in &xsd_schema.complex_types {
+            if let Some(ref base_type) = complex_type.base_type {
+                let (_, base_local_name) = self.parse_clark_notation(base_type);
+                let base_class = base_local_name.to_pascal_case();
+
+                let (_, derived_local_name) = self.parse_clark_notation(
+                    if complex_type.is_anonymous {
+                        complex_type.element_name.as_ref().unwrap_or(&complex_type.name)
+                    } else {
+                        &complex_type.name
+                    }
+                );
+                let derived_class = derived_local_name.to_pascal_case();
+
+                base_to_derived.entry(base_class).or_default().push(derived_class);
+            }
+        }
+
+        // Find all types that have document roots in their inheritance tree (direct or transitive).
+        // These types cannot be subdocuments because @subdocument is inherited.
+        let mut non_subdocument_types: std::collections::HashSet<String> = document_root_types.clone();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (base, derived_list) in &base_to_derived {
+                // If any derived type is non-subdocument, the base must also be non-subdocument
+                if derived_list.iter().any(|d| non_subdocument_types.contains(d)) {
+                    if non_subdocument_types.insert(base.clone()) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
         // Generate schemas for complex types
         for complex_type in &xsd_schema.complex_types {
-            let schema = self.generate_class_from_complex_type(complex_type)?;
+            let schema = self.generate_class_from_complex_type_with_context(
+                complex_type,
+                &non_subdocument_types,
+                &xsd_schema.simple_types,
+            )?;
             schemas.push(schema);
         }
 
@@ -597,7 +651,12 @@ impl XsdToSchemaGenerator {
         deduplicated
     }
 
-    fn generate_class_from_complex_type(&self, complex_type: &XsdComplexType) -> Result<Schema> {
+    fn generate_class_from_complex_type_with_context(
+        &self,
+        complex_type: &XsdComplexType,
+        root_element_types: &std::collections::HashSet<String>,
+        simple_types: &[XsdSimpleType],
+    ) -> Result<Schema> {
         // Extract namespace and local name from Clark notation: {namespace}localName
         let (namespace, local_name) = self.parse_clark_notation(
             if complex_type.is_anonymous {
@@ -623,15 +682,46 @@ impl XsdToSchemaGenerator {
 
         if let Some(ref child_elements) = complex_type.child_elements {
             for element in child_elements {
-                properties.push(self.child_element_to_property(element)?);
+                properties.push(self.child_element_to_property(element, simple_types)?);
             }
         }
 
-        // Always use ValueHash for content-based addressing
-        // XML instance tracking is handled separately via Chunk models
-        let key = Key::ValueHash;
+        // Add _text property for text content if this type has mixed or simple content.
+        // We add it regardless of inheritance because:
+        // - If parent has _text, TerminusDB handles property overriding
+        // - If parent doesn't have _text, we need to add it here
+        // The simple_content flag on derived types indicates they allow text even if parent didn't.
+        if complex_type.mixed || complex_type.has_simple_content {
+            properties.push(Property {
+                name: "_text".to_string(),
+                r#type: Some(TypeFamily::Optional),  // Text is optional (element may be empty)
+                class: "xsd:string".to_string(),
+            });
+        }
 
-        let subdocument = complex_type.is_anonymous;
+        // Determine subdocument status:
+        // - Document roots (entry points like "Topic") are NOT subdocuments - they're top-level documents
+        // - All other types ARE subdocuments - they're embedded within their parent documents
+        //
+        // This is critical for TerminusDB property typing:
+        // - If a property type is a non-subdocument, TerminusDB expects a REFERENCE (ID string)
+        // - If a property type is a subdocument, TerminusDB expects an EMBEDDED object
+        //
+        // In XSD, named types (like title.class) define structure but are never instantiated directly.
+        // Their anonymous extensions (like the title element type) are what actually get used.
+        // Since properties are typed as the base types (TitleClass), those base types must also
+        // be subdocuments to allow embedding instances of derived types (Title).
+        let subdocument = !root_element_types.contains(&class_id);
+
+        // Key strategy:
+        // - Documents (non-subdocuments) use ValueHash for content-based addressing
+        // - Subdocuments should NOT use ValueHash as it causes TerminusDB to fail
+        //   on instance insertion (returns "Unexpected failure in request handler")
+        let key = if subdocument {
+            Key::Random
+        } else {
+            Key::ValueHash
+        };
 
         // Extract inheritance from XSD base_type (for extension/restriction)
         let inherits = if let Some(ref base_type) = complex_type.base_type {
@@ -724,22 +814,55 @@ impl XsdToSchemaGenerator {
         })
     }
 
-    fn child_element_to_property(&self, element: &ChildElement) -> Result<Property> {
-        let class = self.map_xsd_type_to_tdb_class(&element.element_type)?;
+    fn child_element_to_property(
+        &self,
+        element: &ChildElement,
+        simple_types: &[XsdSimpleType],
+    ) -> Result<Property> {
+        // Check if the element's type is a list simple type
+        let is_list_type = self.is_list_simple_type(&element.element_type, simple_types);
 
-        let min = element.min_occurs.unwrap_or(1);
-        let max = element.max_occurs.clone();
+        // For list types, use TypeFamily::List regardless of cardinality
+        // xs:list types represent space-separated values in a single element,
+        // not multiple XML elements (which would use Set based on maxOccurs)
+        let r#type = if is_list_type {
+            Some(TypeFamily::List)
+        } else {
+            let min = element.min_occurs.unwrap_or(1);
+            let max = element.max_occurs.clone();
 
-        let r#type = match (min, &max) {
-            (0, Some(Cardinality::Unbounded)) => Some(TypeFamily::Optional),
-            (0, Some(Cardinality::Number(1))) | (0, None) => Some(TypeFamily::Optional),
-            (1, Some(Cardinality::Unbounded)) => Some(TypeFamily::Set(SetCardinality::None)),
-            (1, Some(Cardinality::Number(1))) | (1, None) => None,
-            _ => match max {
-                Some(Cardinality::Unbounded) => Some(TypeFamily::Set(SetCardinality::None)),
-                Some(Cardinality::Number(n)) if n > 1 => Some(TypeFamily::Set(SetCardinality::None)),
-                _ => None,
-            },
+            match (min, &max) {
+                (0, Some(Cardinality::Unbounded)) => Some(TypeFamily::Optional),
+                (0, Some(Cardinality::Number(1))) | (0, None) => Some(TypeFamily::Optional),
+                (1, Some(Cardinality::Unbounded)) => Some(TypeFamily::Set(SetCardinality::None)),
+                (1, Some(Cardinality::Number(1))) | (1, None) => None,
+                _ => match max {
+                    Some(Cardinality::Unbounded) => Some(TypeFamily::Set(SetCardinality::None)),
+                    Some(Cardinality::Number(n)) if n > 1 => Some(TypeFamily::Set(SetCardinality::None)),
+                    _ => None,
+                },
+            }
+        };
+
+        // For list types, we need the item type as the class
+        // TODO: Once item_type is extracted from xmlschema-rs, use that here
+        // For now, if it's a list type without item_type, we fall back to the type name
+        let class = if is_list_type {
+            // Try to get item_type from the simple type
+            if let Some(st) = simple_types.iter().find(|st| {
+                st.name == element.element_type || st.qualified_name == element.element_type
+            }) {
+                st.item_type.clone().unwrap_or_else(|| {
+                    // Fallback: use base_type if available, otherwise xsd:anySimpleType
+                    st.base_type.clone()
+                        .map(|bt| self.map_xsd_type_to_tdb_class(&bt).unwrap_or_else(|_| "xsd:anySimpleType".to_string()))
+                        .unwrap_or_else(|| "xsd:anySimpleType".to_string())
+                })
+            } else {
+                self.map_xsd_type_to_tdb_class(&element.element_type)?
+            }
+        } else {
+            self.map_xsd_type_to_tdb_class(&element.element_type)?
         };
 
         // Extract local name from Clark notation for property name
@@ -752,7 +875,24 @@ impl XsdToSchemaGenerator {
         })
     }
 
+    /// Check if a type name refers to a list simple type
+    fn is_list_simple_type(&self, type_name: &str, simple_types: &[XsdSimpleType]) -> bool {
+        simple_types.iter().any(|st| {
+            (st.name == type_name || st.qualified_name == type_name)
+                && st.variety == Some(SimpleTypeVariety::List)
+        })
+    }
+
     fn map_xsd_type_to_tdb_class(&self, xsd_type: &str) -> Result<String> {
+        // Check for unresolved elements - these are errors, not xs:anyType
+        if xsd_type.starts_with("UNRESOLVED:") {
+            let element_name = xsd_type.strip_prefix("UNRESOLVED:").unwrap_or(xsd_type);
+            return Err(crate::XsdError::Parsing(format!(
+                "Element '{}' has unresolved type - element declaration not found in schema",
+                element_name
+            )));
+        }
+
         // Extract local name from Clark notation if present
         let type_name = if xsd_type.contains('}') {
             xsd_type.split('}').nth(1).unwrap_or(xsd_type)

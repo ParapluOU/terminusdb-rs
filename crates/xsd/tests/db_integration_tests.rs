@@ -335,6 +335,25 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
         .collect();
     println!("  Topic-related classes: {:?}", topic_classes);
 
+    // Debug: Show number of XSD schemas and their root elements
+    println!("  Number of XSD schemas: {}", model.xsd_schemas().len());
+    for (i, xsd) in model.xsd_schemas().iter().enumerate() {
+        println!("    XSD[{}] root elements: {:?}", i,
+            xsd.root_elements.iter().map(|e| e.name.split('}').last().unwrap_or(&e.name)).collect::<Vec<_>>());
+    }
+
+    // Debug: Show is_anonymous flag and mixed content for key types before schema generation
+    println!("  XSD complex types flags:");
+    for xsd in model.xsd_schemas() {
+        for ct in &xsd.complex_types {
+            let ct_local = ct.name.split('}').last().unwrap_or(&ct.name);
+            if ct_local.contains("title") || ct_local.contains("body") || ct_local.contains("topic") || ct_local == "p" {
+                println!("    {} -> is_anonymous={}, mixed={}, simple_content={}, base_type={:?}",
+                    ct_local, ct.is_anonymous, ct.mixed, ct.has_simple_content, ct.base_type);
+            }
+        }
+    }
+
     // Debug: Show properties of Topic-related classes (with inheritance)
     for class_name in &["Topic", "TopicClass", "Title", "TitleClass", "Body", "BodyClass"] {
         if let Some(Schema::Class { properties, inherits, .. }) = model.find_schema(class_name) {
@@ -386,7 +405,8 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
                 if let Some(children) = &ct.child_elements {
                     println!("      children ({}):", children.len());
                     for child in children.iter() {
-                        println!("        {} -> {}", child.name, child.element_type);
+                        println!("        {} -> {} (min={:?}, max={:?})",
+                            child.name, child.element_type, child.min_occurs, child.max_occurs);
                     }
                 } else {
                     println!("      children: None");
@@ -422,15 +442,38 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
 
                     // Insert schemas first
                     if !schemas.is_empty() {
+                        println!("Inserting {} schemas", schemas.len());
+                        // Debug: Show Topic and Body schemas
+                        for s in &schemas {
+                            if let Schema::Class { id, inherits, properties, subdocument, .. } = s {
+                                if id == "Topic" || id == "Body" || id == "TopicClass" || id == "BodyClass"
+                                    || id == "Title" || id == "TitleClass" || id == "P" || id == "PClass" {
+                                    println!("Schema {}: inherits={:?}, subdoc={}, props={:?}", id, inherits, subdocument,
+                                        properties.iter().map(|p| format!("{}: {}", p.name, p.class)).collect::<Vec<_>>());
+                                }
+                            }
+                        }
                         client.insert_schema_instances(schemas, args.clone()).await?;
                         println!("Step 3a: Inserted schemas");
                     }
 
                     // Insert instances
                     if !insts.is_empty() {
+                        // Debug: Print instance JSON before inserting
+                        use terminusdb_schema::json::ToJson;
+                        for inst in &insts {
+                            let json = serde_json::to_string_pretty(&inst.to_json())?;
+                            println!("Instance to insert:\n{}", json);
+                        }
                         let instance_refs: Vec<_> = insts.iter().collect();
-                        client.insert_documents(instance_refs, args).await?;
-                        println!("Step 3b: Inserted instances");
+                        match client.insert_documents(instance_refs, args).await {
+                            Ok(_) => println!("Step 3b: Inserted instances"),
+                            Err(e) => {
+                                println!("Error: {}", e);
+                                println!("\nDetailed error: {:#?}", e);
+                                return Err(e);
+                            }
+                        }
                     }
 
                     Ok(())
@@ -448,6 +491,395 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
             println!("  - This requires enhancement to the XmlToInstanceParser");
         }
     }
+
+    Ok(())
+}
+
+/// Test minimal DITA-like schema structure to isolate TerminusDB failure
+#[tokio::test]
+async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
+    use terminusdb_schema::{Key, Property, TypeFamily};
+    use serde_json::json;
+
+    // Simplified DITA-like structure:
+    // - TitleClass (base subdocument)
+    // - Title (extends TitleClass, subdocument)
+    // - BodyClass (base subdocument)
+    // - Body (extends BodyClass, subdocument)
+    // - PClass (base subdocument)
+    // - P (extends PClass, subdocument)
+    // - TopicClass (base document, has title: TitleClass and body: BodyClass)
+    // - Topic (extends TopicClass, document)
+
+    // Use Key::Random for subdocuments (like in passing tests)
+    let title_class = Schema::Class {
+        id: "TitleClass".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property { name: "_text".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let title = Schema::Class {
+        id: "Title".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec!["TitleClass".to_string()],
+        properties: vec![
+            Property { name: "class".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let body_class = Schema::Class {
+        id: "BodyClass".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property { name: "p".to_string(), class: "PClass".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let body = Schema::Class {
+        id: "Body".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec!["BodyClass".to_string()],
+        properties: vec![
+            Property { name: "class".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let p_class = Schema::Class {
+        id: "PClass".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property { name: "_text".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let p = Schema::Class {
+        id: "P".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec!["PClass".to_string()],
+        properties: vec![
+            Property { name: "class".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let topic_class = Schema::Class {
+        id: "TopicClass".to_string(),
+        base: None,
+        key: Key::ValueHash,
+        documentation: None,
+        subdocument: false,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property { name: "id".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+            Property { name: "title".to_string(), class: "TitleClass".to_string(), r#type: None }, // Required (min=1)
+            Property { name: "body".to_string(), class: "BodyClass".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let topic = Schema::Class {
+        id: "Topic".to_string(),
+        base: None,
+        key: Key::ValueHash,
+        documentation: None,
+        subdocument: false,
+        r#abstract: false,
+        inherits: vec!["TopicClass".to_string()],
+        properties: vec![
+            Property { name: "class".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let schemas = vec![title_class, title, body_class, body, p_class, p, topic_class, topic];
+
+    let server = TerminusDBServer::test_instance().await?;
+
+    server.with_tmp_db("test_minimal_dita", |client, spec| {
+        let schemas = schemas.clone();
+        async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+
+            // Insert schemas
+            client.insert_schema_instances(schemas, args.clone().as_schema()).await?;
+            println!("✓ Schemas inserted");
+
+            // Test instance matching DITA test - simplified without body
+            let instance = json!({
+                "@type": "Topic",
+                "id": "test-topic",
+                "title": {
+                    "@type": "Title",
+                    "_text": "Test Topic Title"
+                }
+            });
+
+            match client.insert_documents(vec![&instance], args.clone()).await {
+                Ok(_) => println!("✓ Instance inserted successfully"),
+                Err(e) => {
+                    println!("✗ Instance insertion failed: {}", e);
+                    println!("Detailed error: {:#?}", e);
+                    return Err(e);
+                }
+            }
+
+            Ok(())
+        }
+    }).await?;
+
+    Ok(())
+}
+
+/// Test inheritance with property access
+#[tokio::test]
+async fn test_inherited_properties_with_subdocuments() -> anyhow::Result<()> {
+    use terminusdb_schema::{Key, Property, TypeFamily};
+    use serde_json::json;
+
+    // Reproduce DITA-like structure:
+    // - BaseClass has property `child: ChildBaseClass`
+    // - DerivedClass extends BaseClass
+    // - Child extends ChildBaseClass
+    // Test: Insert DerivedClass instance with `child: { @type: Child }`
+
+    let child_base = Schema::Class {
+        id: "ChildBaseClass".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property { name: "name".to_string(), class: "xsd:string".to_string(), r#type: None },
+        ],
+        unfoldable: false,
+    };
+
+    let child_derived = Schema::Class {
+        id: "ChildDerived".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec!["ChildBaseClass".to_string()],
+        properties: vec![
+            Property { name: "_text".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let parent_base = Schema::Class {
+        id: "ParentBaseClass".to_string(),
+        base: None,
+        key: Key::ValueHash,
+        documentation: None,
+        subdocument: false,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property { name: "id".to_string(), class: "xsd:string".to_string(), r#type: None },
+            Property { name: "child".to_string(), class: "ChildBaseClass".to_string(), r#type: None },
+        ],
+        unfoldable: false,
+    };
+
+    let parent_derived = Schema::Class {
+        id: "ParentDerived".to_string(),
+        base: None,
+        key: Key::ValueHash,
+        documentation: None,
+        subdocument: false,
+        r#abstract: false,
+        inherits: vec!["ParentBaseClass".to_string()],
+        properties: vec![
+            Property { name: "_text".to_string(), class: "xsd:string".to_string(), r#type: Some(TypeFamily::Optional) },
+        ],
+        unfoldable: false,
+    };
+
+    let schemas = vec![child_base, child_derived, parent_base, parent_derived];
+
+    let server = TerminusDBServer::test_instance().await?;
+
+    server.with_tmp_db("test_inherited_props", |client, spec| {
+        let schemas = schemas.clone();
+        async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            client.insert_schema_instances(schemas, args.clone().as_schema()).await?;
+            println!("Schemas inserted");
+
+            // Test: Insert ParentDerived with inherited property `child`
+            let instance = json!({
+                "@type": "ParentDerived",
+                "id": "test-id",
+                "child": {
+                    "@type": "ChildDerived",
+                    "name": "child name",
+                    "_text": "text content"
+                }
+            });
+
+            match client.insert_documents(vec![&instance], args.clone()).await {
+                Ok(_) => println!("✓ Inherited property with derived subdocument type works"),
+                Err(e) => {
+                    println!("✗ Inherited property with derived subdocument type failed: {}", e);
+                    return Err(e);
+                }
+            }
+
+            Ok(())
+        }
+    }).await?;
+
+    Ok(())
+}
+
+/// Minimal test to isolate subtype polymorphism issue
+#[tokio::test]
+async fn test_subtype_polymorphism_in_subdocuments() -> anyhow::Result<()> {
+    use terminusdb_schema::{Key, Property};
+    use serde_json::json;
+
+    // Create a minimal schema hierarchy:
+    // - ParentClass (subdocument)
+    // - ChildClass extends ParentClass (subdocument)
+    // - Container (document) has property `item: ParentClass`
+
+    let parent_schema = Schema::Class {
+        id: "ParentClass".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property {
+                name: "name".to_string(),
+                class: "xsd:string".to_string(),
+                r#type: None,
+            },
+        ],
+        unfoldable: false,
+    };
+
+    let child_schema = Schema::Class {
+        id: "ChildClass".to_string(),
+        base: None,
+        key: Key::Random,
+        documentation: None,
+        subdocument: true,
+        r#abstract: false,
+        inherits: vec!["ParentClass".to_string()],
+        properties: vec![
+            Property {
+                name: "extra".to_string(),
+                class: "xsd:string".to_string(),
+                r#type: None,
+            },
+        ],
+        unfoldable: false,
+    };
+
+    let container_schema = Schema::Class {
+        id: "Container".to_string(),
+        base: None,
+        key: Key::ValueHash,
+        documentation: None,
+        subdocument: false,
+        r#abstract: false,
+        inherits: vec![],
+        properties: vec![
+            Property {
+                name: "item".to_string(),
+                class: "ParentClass".to_string(),  // Property typed as ParentClass
+                r#type: None,
+            },
+        ],
+        unfoldable: false,
+    };
+
+    let schemas = vec![parent_schema, child_schema, container_schema];
+
+    let server = TerminusDBServer::test_instance().await?;
+
+    server.with_tmp_db("test_polymorphism", |client, spec| {
+        let schemas = schemas.clone();
+        async move {
+            // Insert schemas
+            let args = DocumentInsertArgs::from(spec.clone());
+            client.insert_schema_instances(schemas, args.clone().as_schema()).await?;
+            println!("Schemas inserted");
+
+            // Test 1: Insert with exact type (ParentClass)
+            let instance_exact = json!({
+                "@type": "Container",
+                "item": {
+                    "@type": "ParentClass",
+                    "name": "exact type"
+                }
+            });
+
+            match client.insert_documents(vec![&instance_exact], args.clone()).await {
+                Ok(_) => println!("✓ Exact type (ParentClass) works"),
+                Err(e) => println!("✗ Exact type (ParentClass) failed: {}", e),
+            }
+
+            // Test 2: Insert with subtype (ChildClass where ParentClass expected)
+            let instance_subtype = json!({
+                "@type": "Container",
+                "item": {
+                    "@type": "ChildClass",
+                    "name": "subtype",
+                    "extra": "child-specific"
+                }
+            });
+
+            match client.insert_documents(vec![&instance_subtype], args.clone()).await {
+                Ok(_) => println!("✓ Subtype (ChildClass where ParentClass expected) works"),
+                Err(e) => println!("✗ Subtype (ChildClass where ParentClass expected) failed: {}", e),
+            }
+
+            Ok(())
+        }
+    }).await?;
 
     Ok(())
 }
