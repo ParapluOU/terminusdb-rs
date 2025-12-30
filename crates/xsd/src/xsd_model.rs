@@ -11,7 +11,7 @@ use crate::schema_model::XsdSchema;
 use crate::xml_parser::{ParseResult, XmlToInstanceParser};
 use crate::Result;
 use std::path::{Path, PathBuf};
-use terminusdb_schema::{Instance, Schema};
+use terminusdb_schema::{Context, Instance, Schema};
 
 // xmlschema-rs imports for XML parsing and conversion
 use xmlschema::converters::{create_converter, ConverterType, ElementData};
@@ -53,6 +53,9 @@ pub struct XsdModel {
     /// Generated TerminusDB schemas
     tdb_schemas: Vec<Schema>,
 
+    /// TerminusDB Context with namespace from XSD target namespace
+    context: Context,
+
     /// Namespace for generated schemas
     namespace: String,
 }
@@ -87,23 +90,31 @@ impl XsdModel {
             xsd_schemas.push(schema);
         }
 
-        // Generate TerminusDB schemas
+        // Generate TerminusDB schemas with context
         let generator = XsdToSchemaGenerator::new();
         let mut all_schemas = Vec::new();
+        let mut context = Context::default();
+
         for xsd in &xsd_schemas {
-            let schemas = generator.generate(xsd)?;
+            let (ctx, schemas) = generator.generate_with_context(xsd)?;
+            // Use the first XSD's context (they should share namespace for a bundle)
+            if all_schemas.is_empty() {
+                context = ctx;
+            }
             all_schemas.extend(schemas);
         }
 
         // Deduplicate by schema ID
         let tdb_schemas = generator.deduplicate_schemas(all_schemas);
 
+        let namespace = context.schema.clone();
         Ok(Self {
             bundle_path,
             catalog_path: catalog,
             xsd_schemas,
             tdb_schemas,
-            namespace: "terminusdb://schema#".to_string(),
+            context,
+            namespace,
         })
     }
 
@@ -125,10 +136,7 @@ impl XsdModel {
 
         let generator = XsdToSchemaGenerator::new();
 
-        // Use the generator's directory scanning
-        let tdb_schemas = generator.generate_from_directory(schema_dir, catalog.as_ref())?;
-
-        // Also collect the raw XSD schemas for later use
+        // Collect the raw XSD schemas for later use
         let xsd_files = generator.discover_xsd_files(schema_dir)?;
         let entry_points = generator.identify_entry_points(&xsd_files);
 
@@ -139,12 +147,28 @@ impl XsdModel {
             }
         }
 
+        // Generate TerminusDB schemas with context
+        let mut all_schemas = Vec::new();
+        let mut context = Context::default();
+
+        for xsd in &xsd_schemas {
+            let (ctx, schemas) = generator.generate_with_context(xsd)?;
+            if all_schemas.is_empty() {
+                context = ctx;
+            }
+            all_schemas.extend(schemas);
+        }
+
+        let tdb_schemas = generator.deduplicate_schemas(all_schemas);
+        let namespace = context.schema.clone();
+
         Ok(Self {
             bundle_path: schema_dir.to_path_buf(),
             catalog_path: catalog,
             xsd_schemas,
             tdb_schemas,
-            namespace: "terminusdb://schema#".to_string(),
+            context,
+            namespace,
         })
     }
 
@@ -187,9 +211,19 @@ impl XsdModel {
         &self.namespace
     }
 
+    /// Get the TerminusDB Context with namespace from XSD target namespace.
+    pub fn context(&self) -> &Context {
+        &self.context
+    }
+
     /// Consume the model and return just the TerminusDB schemas.
     pub fn into_schemas(self) -> Vec<Schema> {
         self.tdb_schemas
+    }
+
+    /// Consume the model and return both Context and schemas.
+    pub fn into_context_and_schemas(self) -> (Context, Vec<Schema>) {
+        (self.context, self.tdb_schemas)
     }
 
     /// Parse XML content into a JSON representation using the XSD schema.

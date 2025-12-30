@@ -5,7 +5,7 @@ use crate::Result;
 use heck::ToPascalCase;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use terminusdb_schema::{Key, Property, Schema, SetCardinality, TypeFamily};
+use terminusdb_schema::{Context, Key, Property, Schema, SetCardinality, TypeFamily};
 
 /// Entry point candidate with scoring information.
 #[derive(Debug, Clone)]
@@ -60,6 +60,48 @@ impl XsdToSchemaGenerator {
         }
 
         Ok(schemas)
+    }
+
+    /// Generate TerminusDB Context and Schemas from XSD.
+    ///
+    /// This captures the XSD target namespace in the TerminusDB Context,
+    /// allowing proper namespace resolution. Class names remain unprefixed;
+    /// TerminusDB resolves them using the `@schema` namespace.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of (Context, Vec<Schema>) where:
+    /// - Context has `@schema` derived from XSD target namespace
+    /// - Schemas have unprefixed class names (e.g., "TopicClass")
+    pub fn generate_with_context(&self, xsd_schema: &XsdSchema) -> Result<(Context, Vec<Schema>)> {
+        let schemas = self.generate(xsd_schema)?;
+
+        // Derive TerminusDB schema namespace from XSD target namespace
+        let schema_ns = match &xsd_schema.target_namespace {
+            Some(ns) => {
+                // Ensure namespace ends with # or / for proper IRI formation
+                if ns.ends_with('#') || ns.ends_with('/') {
+                    ns.clone()
+                } else {
+                    format!("{}#", ns)
+                }
+            }
+            None => self.namespace.clone(),
+        };
+
+        // Derive base namespace for instance data
+        let base_ns = schema_ns
+            .replace("#", "/data/")
+            .replace("/schema/", "/data/");
+
+        let context = Context {
+            schema: schema_ns,
+            base: base_ns,
+            xsd: Some("http://www.w3.org/2001/XMLSchema#".to_string()),
+            documentation: None,
+        };
+
+        Ok((context, schemas))
     }
 
     /// Generate TerminusDB schemas from explicit entry-point XSD files.
