@@ -328,41 +328,32 @@ fn test_xsd_model_find_schema() {
 // ============================================================================
 
 #[test]
-fn test_list_types_xmlschema_rs_limitation() {
-    // KNOWN LIMITATION: xmlschema-rs does not properly parse xs:list types.
+fn test_list_types_generate_type_family_list() {
+    // Test that xs:list types correctly generate TypeFamily::List.
     //
-    // In src/validators/parsing.rs, parse_simple_list() creates an XsdAtomicType
-    // with base "string" instead of using XsdListType. This means variety()
-    // returns Atomic instead of List.
+    // xs:list is a simple type that represents a whitespace-separated list of values.
+    // It's different from maxOccurs="unbounded" which represents multiple XML elements.
     //
-    // ROOT CAUSE (xmlschema-rs parsing.rs line 789-799):
-    //   fn parse_simple_list(...) {
-    //       // For list types, create a string-based type for now
-    //       // Full list type implementation would require the XsdListType
-    //       let simple = XsdAtomicType::with_name("string", qname.clone())...
-    //   }
+    // Example XSD:
+    //   <xs:simpleType name="IntegerList">
+    //     <xs:list itemType="xs:integer"/>
+    //   </xs:simpleType>
     //
-    // FIX REQUIRED: Update xmlschema-rs to use XsdListType for xs:list types.
-    // This is in the ParapluOU/xmlschema-rs fork.
-    //
-    // When xmlschema-rs is fixed, this test should be updated to verify
-    // TypeFamily::List is generated for xs:list types.
+    // XML instance: <scores>1 2 3 4 5</scores> (space-separated values)
 
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/list_types.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>)
         .expect("Failed to parse list_types.xsd");
 
-    // Document current behavior: xs:list types have variety=Atomic (incorrect)
-    eprintln!("\n=== XSD Simple Types (documenting xmlschema-rs limitation) ===");
+    // Verify xs:list types have variety=List
+    eprintln!("\n=== XSD Simple Types ===");
     for st in &xsd_schema.simple_types {
         eprintln!("  SimpleType: {} (variety: {:?})", st.name, st.variety);
-        // xmlschema-rs returns Atomic for list types - this is the bug
         if st.name.contains("List") {
             assert_eq!(
                 st.variety,
-                Some(terminusdb_xsd::schema_model::SimpleTypeVariety::Atomic),
-                "KNOWN LIMITATION: xmlschema-rs returns Atomic for xs:list types. \
-                 When this test fails, the upstream fix has been applied!"
+                Some(terminusdb_xsd::schema_model::SimpleTypeVariety::List),
+                "xs:list types should have variety=List"
             );
         }
     }
@@ -375,12 +366,27 @@ fn test_list_types_xmlschema_rs_limitation() {
         .expect("DataContainer class not found");
     let props = get_properties(data_container).expect("No properties");
 
-    // Document current behavior: scores uses the list type name, but not List TypeFamily
+    // scores uses an xs:list type - should have TypeFamily::List
     let scores = find_property(props, "scores").expect("scores property not found");
-    // Currently no TypeFamily (required single) because variety is Atomic
     eprintln!("scores property: class={}, type={:?}", scores.class, scores.r#type);
+    assert_eq!(
+        scores.r#type,
+        Some(TypeFamily::List),
+        "xs:list type should generate TypeFamily::List"
+    );
 
-    // Check items property (unbounded elements) - should be Set or Optional
+    // tags uses an optional xs:list type - should have TypeFamily::Optional with List inner
+    let tags = find_property(props, "tags").expect("tags property not found");
+    eprintln!("tags property: class={}, type={:?}", tags.class, tags.r#type);
+    // Optional list type - since it has minOccurs=0, it's Optional
+    // The underlying type is List but the cardinality makes it Optional
+    assert!(
+        matches!(tags.r#type, Some(TypeFamily::Optional) | Some(TypeFamily::List)),
+        "Optional xs:list type should be Optional or List. Got {:?}",
+        tags.r#type
+    );
+
+    // items uses maxOccurs="unbounded" - should be Set (NOT List)
     let items = find_property(props, "items").expect("items property not found");
     assert!(
         matches!(items.r#type, Some(TypeFamily::Set(_)) | Some(TypeFamily::Optional)),

@@ -149,7 +149,7 @@ fn test_xsd_simple_type_has_variety_field() {
 }
 
 // ============================================================================
-// LIMITATION 2: xs:list types mapped to Set instead of List
+// FIXED: xs:list types now correctly generate TypeFamily::List
 // ============================================================================
 
 /// Creates an XSD schema demonstrating the xs:list issue
@@ -385,10 +385,9 @@ fn test_print_limitation_summary() {
     eprintln!("   Fix: Update xmlschema-rs parse_simple_union() to use XsdUnionType");
     eprintln!();
 
-    eprintln!("2. xs:list → TypeFamily::List (PARTIALLY IMPLEMENTED)");
-    eprintln!("   terminusdb-xsd: READY - will use TypeFamily::List when variety=List");
-    eprintln!("   xmlschema-rs: NOT READY - parse_simple_list() creates XsdAtomicType");
-    eprintln!("   Fix: Update xmlschema-rs to use XsdListType for xs:list types");
+    eprintln!("2. xs:list → TypeFamily::List (FIXED ✓)");
+    eprintln!("   xmlschema-rs: parse_simple_list() now uses XsdListType");
+    eprintln!("   terminusdb-xsd: Generates TypeFamily::List for xs:list types");
     eprintln!();
 
     eprintln!("3. xs:redefine (NOT SUPPORTED)");

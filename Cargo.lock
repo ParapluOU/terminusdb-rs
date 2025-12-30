@@ -4695,7 +4695,7 @@ dependencies = [
 [[package]]
 name = "xmlschema"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/xmlschema-rs.git#6f09d63e992703fc8c2b3df541f9394eda2e7baf"
+source = "git+https://github.com/ParapluOU/xmlschema-rs.git#472c0086bcabcacea3b73253cc56dbabbe7297b5"
 dependencies = [
  "base64 0.21.7",
  "chrono",
