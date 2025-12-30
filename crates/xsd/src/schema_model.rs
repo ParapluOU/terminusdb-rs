@@ -40,6 +40,11 @@ pub struct XsdSchema {
     pub root_elements: Vec<XsdElement>,
     pub complex_types: Vec<XsdComplexType>,
     pub simple_types: Vec<XsdSimpleType>,
+    /// The actual document root element name(s) inferred from the entry point file.
+    /// Only these elements should be non-subdocuments when their anonymous types are generated.
+    /// Other global elements are just reusable building blocks.
+    #[serde(default)]
+    pub entry_point_elements: Vec<String>,
 }
 
 /// XSD element declaration
@@ -95,6 +100,23 @@ pub struct XsdComplexType {
     pub element_name: Option<String>,
     /// Base type for extension/restriction (XSD inheritance)
     pub base_type: Option<String>,
+    /// True if this type has mixed content (text + elements)
+    #[serde(default)]
+    pub mixed: bool,
+    /// True if this type has simple content (text only, possibly with attributes)
+    #[serde(default)]
+    pub has_simple_content: bool,
+}
+
+/// XSD simple type variety - distinguishes atomic, list, and union types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimpleTypeVariety {
+    /// Atomic type (single value based on primitive)
+    Atomic,
+    /// List type (space-separated values)
+    List,
+    /// Union type (choice of member types)
+    Union,
 }
 
 /// XSD simple type
@@ -105,6 +127,11 @@ pub struct XsdSimpleType {
     pub category: String,
     pub base_type: Option<String>,
     pub restrictions: Option<Vec<Restriction>>,
+    /// The variety of this simple type (Atomic, List, or Union)
+    pub variety: Option<SimpleTypeVariety>,
+    /// For List types: the item type name (qualified name)
+    /// TODO: Requires adding item_type() to SimpleType trait in xmlschema-rs
+    pub item_type: Option<String>,
 }
 
 /// XSD attribute
@@ -173,6 +200,10 @@ impl XsdSchema {
             FormDefault::Unqualified => "unqualified".to_string(),
         });
 
+        // Infer entry point element from file name
+        // e.g., "basetopic.xsd" → "topic", "map.xsd" → "map"
+        let entry_point_elements = Self::infer_entry_point_elements(path);
+
         // Extract root elements
         let mut root_elements = Vec::new();
         for (qname, elem) in schema.elements() {
@@ -220,7 +251,35 @@ impl XsdSchema {
             root_elements,
             complex_types,
             simple_types,
+            entry_point_elements,
         })
+    }
+
+    /// Infer entry point element names from the XSD file path.
+    ///
+    /// DITA and similar XSD bundles often use naming conventions:
+    /// - `basetopic.xsd` → `topic` is the document root
+    /// - `map.xsd` → `map` is the document root
+    /// - `concept.xsd` → `concept` is the document root
+    ///
+    /// This helps distinguish true document roots from globally-declared reusable elements.
+    fn infer_entry_point_elements(path: &Path) -> Vec<String> {
+        let mut elements = Vec::new();
+
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            // Strip common prefixes like "base" (e.g., "basetopic" → "topic")
+            let name = stem
+                .strip_prefix("base")
+                .unwrap_or(stem)
+                .to_lowercase();
+
+            // The element name is the file name without prefix
+            if !name.is_empty() {
+                elements.push(name);
+            }
+        }
+
+        elements
     }
 
     /// Extract element information
@@ -302,6 +361,10 @@ impl XsdSchema {
         // Extract base type for inheritance (XSD extension/restriction)
         let base_type = ct.base_type.as_ref().map(|q| q.to_string());
 
+        // Check for mixed content and simple content
+        let mixed = ct.mixed;
+        let has_simple_content = ct.has_simple_content();
+
         XsdComplexType {
             name: qname.to_string(),
             qualified_name: qname.to_string(),
@@ -314,13 +377,15 @@ impl XsdSchema {
             is_anonymous: false,
             element_name: None,
             base_type,
+            mixed,
+            has_simple_content,
         }
     }
 
     /// Extract content model (child elements and model type)
     fn extract_content_model(
         content: &ComplexContent,
-        _schema: &RustXsdSchema,
+        schema: &RustXsdSchema,
     ) -> (Vec<ChildElement>, Option<String>) {
         match content {
             ComplexContent::Group(group) => {
@@ -328,7 +393,8 @@ impl XsdSchema {
                 if group.is_empty() {
                     (vec![], Some("EmptyContent".to_string()))
                 } else {
-                    let children = Self::extract_group_children(group);
+                    // Start with parent_optional=false (root level is not optional)
+                    let children = Self::extract_group_children_with_context(group, false, schema);
                     let model = Some(format!("{:?}", group.model));
                     (children, model)
                 }
@@ -337,9 +403,19 @@ impl XsdSchema {
         }
     }
 
-    /// Extract children from a model group
-    fn extract_group_children(group: &Arc<XsdGroup>) -> Vec<ChildElement> {
+    /// Extract children from a model group with parent optionality context
+    ///
+    /// When a parent compositor (choice/sequence) has minOccurs=0, all children
+    /// are effectively optional, regardless of their own minOccurs setting.
+    fn extract_group_children_with_context(
+        group: &Arc<XsdGroup>,
+        parent_optional: bool,
+        schema: &RustXsdSchema,
+    ) -> Vec<ChildElement> {
         let mut children = Vec::new();
+
+        // If this group itself is optional (minOccurs=0), children are effectively optional
+        let is_optional = parent_optional || group.occurs.min == 0;
 
         for particle in &group.particles {
             match particle {
@@ -347,45 +423,28 @@ impl XsdSchema {
                     let name = ep.name.to_string();
 
                     // Try to get the type name from the element declaration
-                    // Priority: 1. type_name reference, 2. resolved element_type, 3. fallback
-                    let element_type = ep.element()
-                        .map(|e| {
-                            // First try the type_name reference
-                            if let Some(type_name) = &e.type_name {
-                                return type_name.to_string();
-                            }
+                    // Priority order:
+                    // 1. Local element declaration (element_decl)
+                    // 2. Global element lookup via element_ref or name
+                    // 3. Error if not found (only xs:any should map to anyType)
+                    let element_type = Self::resolve_element_type(ep, schema);
 
-                            // Otherwise extract from the resolved element_type
-                            match &e.element_type {
-                                xmlschema::validators::ElementType::Simple(st) => {
-                                    // Use qualified_name_string() which works for both
-                                    // named types and builtin types
-                                    st.qualified_name_string()
-                                        .unwrap_or_else(|| "xs:anySimpleType".to_string())
-                                }
-                                xmlschema::validators::ElementType::Complex(ct) => {
-                                    ct.name.as_ref()
-                                        .map(|q| q.to_string())
-                                        .unwrap_or_else(|| "xs:anyType".to_string())
-                                }
-                                xmlschema::validators::ElementType::Any => "xs:anyType".to_string(),
-                            }
-                        })
-                        .unwrap_or_else(|| "xs:anyType".to_string());
+                    // Effective minOccurs: if parent is optional, this is optional
+                    let effective_min = if is_optional { 0 } else { ep.occurs.min };
 
                     children.push(ChildElement {
                         name,
                         element_type,
-                        min_occurs: Some(ep.occurs.min),
+                        min_occurs: Some(effective_min),
                         max_occurs: Some(occurs_to_cardinality(&ep.occurs)),
                     });
                 }
                 GroupParticle::Group(nested) => {
-                    // Recursively extract children from nested groups
-                    children.extend(Self::extract_group_children(nested));
+                    // Recursively extract children, propagating optionality context
+                    children.extend(Self::extract_group_children_with_context(nested, is_optional, schema));
                 }
                 GroupParticle::Any(_) => {
-                    // Wildcard elements - add as xs:any placeholder
+                    // Wildcard elements (xs:any) - these are the ONLY case for xs:anyType
                     children.push(ChildElement {
                         name: "##any".to_string(),
                         element_type: "xs:anyType".to_string(),
@@ -397,6 +456,71 @@ impl XsdSchema {
         }
 
         children
+    }
+
+    /// Resolve element type from an ElementParticle
+    ///
+    /// Tries in order:
+    /// 1. Local element declaration (element_decl)
+    /// 2. Global element lookup via element_ref
+    /// 3. Global element lookup via element name
+    ///
+    /// Returns an error marker if element cannot be resolved.
+    fn resolve_element_type(
+        ep: &xmlschema::validators::groups::ElementParticle,
+        schema: &RustXsdSchema,
+    ) -> String {
+        // Try local element declaration first
+        if let Some(elem) = ep.element() {
+            return Self::extract_type_from_element(elem);
+        }
+
+        // Try to look up by element_ref
+        if let Some(ref_qname) = &ep.element_ref {
+            if let Some(elem) = schema.lookup_element(ref_qname) {
+                return Self::extract_type_from_element(elem);
+            }
+        }
+
+        // Try to look up by element name (common case for group references)
+        if let Some(elem) = schema.lookup_element(&ep.name) {
+            return Self::extract_type_from_element(elem);
+        }
+
+        // Element not found - this is an error condition
+        // Mark with special prefix so we can detect unresolved elements
+        format!("UNRESOLVED:{}", ep.name.to_string())
+    }
+
+    /// Extract type information from an XsdElement
+    fn extract_type_from_element(elem: &Arc<xmlschema::validators::XsdElement>) -> String {
+        // First try the type_name reference
+        if let Some(type_name) = &elem.type_name {
+            return type_name.to_string();
+        }
+
+        // Otherwise extract from the resolved element_type
+        match &elem.element_type {
+            xmlschema::validators::ElementType::Simple(st) => {
+                st.qualified_name_string()
+                    .unwrap_or_else(|| "xs:anySimpleType".to_string())
+            }
+            xmlschema::validators::ElementType::Complex(ct) => {
+                // Try named complex type first
+                if let Some(name) = &ct.name {
+                    return name.to_string();
+                }
+                // For anonymous types, check if they extend a named base type
+                // This is common in DITA where <xs:element name="title"> has an inline
+                // complex type that extends "title.class"
+                if let Some(base_type) = &ct.base_type {
+                    return base_type.to_string();
+                }
+                // Truly anonymous type with no base - this is effectively any content
+                "xs:anyType".to_string()
+            }
+            xmlschema::validators::ElementType::Any => "xs:anyType".to_string(),
+        }
     }
 
     /// Extract attributes from an attribute group
@@ -441,6 +565,7 @@ impl XsdSchema {
         st: &Arc<dyn xmlschema::validators::SimpleType + Send + Sync>,
     ) -> XsdSimpleType {
         use xmlschema::validators::SimpleType as SimpleTypeTrait;
+        use xmlschema::validators::SimpleTypeVariety as XmlSchemaVariety;
 
         // Extract facets from the simple type
         let facets = st.facets();
@@ -472,12 +597,27 @@ impl XsdSchema {
         let base_type = SimpleTypeTrait::base_type(st.as_ref())
             .and_then(|base| base.qualified_name_string());
 
+        // Extract variety (Atomic, List, Union)
+        let variety = Some(match st.variety() {
+            XmlSchemaVariety::Atomic => SimpleTypeVariety::Atomic,
+            XmlSchemaVariety::List => SimpleTypeVariety::List,
+            XmlSchemaVariety::Union => SimpleTypeVariety::Union,
+        });
+
+        // TODO: Extract item_type for List types
+        // This requires adding item_type() method to SimpleType trait in xmlschema-rs,
+        // or downcasting to XsdListType which isn't currently possible.
+        // For now, we detect list types via variety and leave item_type as None.
+        let item_type = None;
+
         XsdSimpleType {
             name: qname.to_string(),
             qualified_name: qname.to_string(),
             category: "XsdSimpleType".to_string(),
             base_type,
             restrictions: if restrictions.is_empty() { None } else { Some(restrictions) },
+            variety,
+            item_type,
         }
     }
 

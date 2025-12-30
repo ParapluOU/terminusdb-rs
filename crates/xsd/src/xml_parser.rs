@@ -291,25 +291,40 @@ impl<'a> XmlToInstanceParser<'a> {
         let mut instance_props = BTreeMap::new();
 
         for (key, value) in obj {
-            // Skip metadata keys
-            if key.starts_with('@') || key.starts_with('$') {
+            // Skip TerminusDB metadata keys (but keep XML attributes like @id, @class)
+            // TerminusDB uses @type, @ref, $, etc. for its own metadata
+            if key == "@type" || key == "@ref" || key.starts_with('$') {
                 continue;
             }
 
+            // Normalize key: strip @ prefix for XML attributes to match schema property names
+            let property_name = if key.starts_with('@') && key != "@id" {
+                // XML attributes like @class -> class
+                key.trim_start_matches('@').to_string()
+            } else if key == "@id" {
+                // @id is special - it's both a TerminusDB ID and often an XML attribute
+                // Include it as "id" property if schema has an id property
+                "id".to_string()
+            } else {
+                key.clone()
+            };
+
             // Find the matching schema property
-            let _schema_prop = schema_props.iter().find(|p| &p.name == key);
+            let _schema_prop = schema_props.iter().find(|p| p.name == property_name);
 
             // Convert the value to an InstanceProperty
-            let instance_prop = self.json_value_to_property(value, key)?;
-            instance_props.insert(key.clone(), instance_prop);
+            let instance_prop = self.json_value_to_property(value, &property_name)?;
+            instance_props.insert(property_name, instance_prop);
         }
 
-        // Get the ID if present
-        let id = obj.get("@id").and_then(|v| v.as_str()).map(String::from);
+        // Don't set TerminusDB @id from XML id attribute
+        // - TerminusDB uses ValueHash key generation for deduplication
+        // - XML id attribute is stored as a property (lines 304-307 above)
+        // - Setting @id would conflict with ValueHash-generated IDs
 
         Ok(Instance {
             schema: (*schema).clone(),
-            id,
+            id: None,
             capture: false,
             ref_props: false,
             properties: instance_props,
@@ -334,7 +349,28 @@ impl<'a> XmlToInstanceParser<'a> {
             }
 
             serde_json::Value::String(s) => {
-                Ok(InstanceProperty::Primitive(PrimitiveValue::String(s.clone())))
+                // Check if this field should be a complex type (has a schema)
+                // If so, wrap the string in an Instance with _text property for text content
+                let class_name = self.resolve_class_name(field_name);
+                if let Some(schema) = self.schemas.get(&class_name) {
+                    // This is a complex type - wrap the text in an Instance
+                    let mut properties = BTreeMap::new();
+                    properties.insert(
+                        "_text".to_string(),
+                        InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
+                    );
+                    let inst = Instance {
+                        schema: (*schema).clone(),
+                        id: None,
+                        capture: false,
+                        ref_props: false,
+                        properties,
+                    };
+                    Ok(InstanceProperty::Relation(RelationValue::One(inst)))
+                } else {
+                    // No schema found - treat as primitive string
+                    Ok(InstanceProperty::Primitive(PrimitiveValue::String(s.clone())))
+                }
             }
 
             serde_json::Value::Array(arr) => {

@@ -12,6 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         schema_location: None,
         element_form_default: Some("qualified".to_string()),
         root_elements: vec![],
+        entry_point_elements: vec![],
         complex_types: vec![
             // Named complex type with namespace
             XsdComplexType {
@@ -20,6 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 category: "XsdComplexType".to_string(),
                 is_complex: true,
                 is_simple: false,
+                has_simple_content: false,
+                mixed: false,
                 content_model: Some("XsdGroup".to_string()),
                 attributes: Some(vec![
                     XsdAttribute {
@@ -45,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ]),
                 is_anonymous: false,
                 element_name: None,
+                base_type: None,
             },
             // Anonymous complex type (subdocument)
             XsdComplexType {
@@ -53,6 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 category: "XsdComplexType".to_string(),
                 is_complex: true,
                 is_simple: false,
+                has_simple_content: false,
+                mixed: false,
                 content_model: Some("XsdGroup".to_string()),
                 attributes: Some(vec![
                     XsdAttribute {
@@ -78,6 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ]),
                 is_anonymous: true,
                 element_name: Some("{http://example.com/book}book".to_string()),
+                base_type: None,
             },
         ],
         simple_types: vec![],
