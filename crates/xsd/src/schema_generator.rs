@@ -738,6 +738,8 @@ impl XsdToSchemaGenerator {
             "gYearMonth" | "xs:gYearMonth" | "xsd:gYearMonth" => "xsd:gYearMonth",
             "base64Binary" | "xs:base64Binary" | "xsd:base64Binary" => "xsd:string",
             "hexBinary" | "xs:hexBinary" | "xsd:hexBinary" => "xsd:string",
+            // xs:anyType allows arbitrary content - map to sys:JSON (unconstrained JSON subdocument)
+            "anyType" | "xs:anyType" | "xsd:anyType" => "sys:JSON",
             // User-defined type - convert to PascalCase using heck
             other => return Ok(other.to_pascal_case()),
         };

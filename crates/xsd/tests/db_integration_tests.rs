@@ -57,7 +57,8 @@ fn find_missing_dependencies(schemas: &[Schema]) -> Vec<String> {
     for schema in schemas {
         if let Schema::Class { properties, inherits, .. } = schema {
             for prop in properties {
-                if !prop.class.starts_with("xsd:") {
+                // Skip built-in types (xsd: primitives and sys: system types like sys:JSON)
+                if !prop.class.starts_with("xsd:") && !prop.class.starts_with("sys:") {
                     referenced.insert(prop.class.clone());
                 }
             }
@@ -116,9 +117,9 @@ fn filter_valid_schemas(schemas: &[Schema]) -> Vec<Schema> {
         .iter()
         .filter(|s| {
             if let Schema::Class { properties, inherits, .. } = s {
-                // Check all property types exist
+                // Check all property types exist (xsd: and sys: are built-in types)
                 let props_ok = properties.iter().all(|p| {
-                    p.class.starts_with("xsd:") || defined.contains(&p.class)
+                    p.class.starts_with("xsd:") || p.class.starts_with("sys:") || defined.contains(&p.class)
                 });
                 // Check all parent classes exist
                 let inherits_ok = inherits.iter().all(|parent| defined.contains(parent));
