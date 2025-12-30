@@ -53,6 +53,9 @@ pub enum ApiResponseError {
     #[serde(rename = "api:IncorrectAuthenticationError")]
     IncorrectAuthentication(IncorrectAuthenticationError),
 
+    #[serde(rename = "api:SubmittedIdDoesNotMatchGeneratedId")]
+    SubmittedIdDoesNotMatchGeneratedId(SubmittedIdDoesNotMatchGeneratedIdError),
+
     Other(Value),
 
     #[default]
@@ -73,6 +76,7 @@ impl Display for ApiResponseError {
             ApiResponseError::SameDocumentIdsMutatedInOneTransaction(error) => Display::fmt(error, f),
             ApiResponseError::MissingParameter(error) => Display::fmt(error, f),
             ApiResponseError::IncorrectAuthentication(error) => Display::fmt(error, f),
+            ApiResponseError::SubmittedIdDoesNotMatchGeneratedId(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
         }
     }
@@ -521,6 +525,28 @@ pub struct IncorrectAuthenticationError;
 impl Display for IncorrectAuthenticationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Incorrect authentication information")
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SubmittedIdDoesNotMatchGeneratedIdError {
+    #[serde(rename = "api:document")]
+    pub document: Value,
+
+    #[serde(rename = "api:generated_id")]
+    pub generated_id: String,
+
+    #[serde(rename = "api:submitted_id")]
+    pub submitted_id: String,
+}
+
+impl Display for SubmittedIdDoesNotMatchGeneratedIdError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Submitted ID '{}' does not match generated ID '{}'",
+            self.submitted_id, self.generated_id
+        )
     }
 }
 
@@ -1078,6 +1104,73 @@ fn test_deserialize_missing_parameter_error() {
             assert_eq!(err.api_request_id.unwrap(), "fd7dc0b6-d022-11f0-89ab-07e4b5282a20");
         }
         _ => panic!("Expected WoqlError variant"),
+    }
+
+    // Test deserialization into ApiResponse
+    use crate::result::ApiResponse;
+    let api_response: ApiResponse<Value> = serde_json::from_value(json).unwrap();
+
+    match api_response {
+        ApiResponse::Error(_) => {
+            // Success - it correctly identified this as an error
+        }
+        ApiResponse::Success(_) => {
+            panic!("Expected error response, got success");
+        }
+    }
+}
+
+#[test]
+fn test_deserialize_submitted_id_does_not_match_generated_id_error() {
+    // Test the exact JSON from the user's error message
+    let json = json!({
+        "@type": "api:ReplaceDocumentErrorResponse",
+        "api:error": {
+            "@type": "api:SubmittedIdDoesNotMatchGeneratedId",
+            "api:document": {
+                "@id": "test-topic",
+                "@type": "Topic",
+                "body": {
+                    "@type": "Body",
+                    "p": "This is a test paragraph.",
+                },
+                "id": "test-topic",
+                "title": "Test Topic Title",
+            },
+            "api:generated_id": "terminusdb:///data/Topic/47bfac14de73fd9886de0f254bc2816b2fb5233594028d106e872bc0f1735400",
+            "api:submitted_id": "terminusdb:///data/test-topic",
+        },
+        "api:message": "Document was submitted with id 'terminusdb:///data/test-topic', but id 'terminusdb:///data/Topic/47bfac14de73fd9886de0f254bc2816b2fb5233594028d106e872bc0f1735400' was generated",
+        "api:status": "api:failure",
+    });
+
+    // Test deserialization into TypedErrorResponse
+    let response: TypedErrorResponse = serde_json::from_value(json.clone()).unwrap();
+
+    match response {
+        TypedErrorResponse::ReplaceDocumentError { error: err, .. } => {
+            assert_eq!(
+                err.api_message,
+                "Document was submitted with id 'terminusdb:///data/test-topic', but id 'terminusdb:///data/Topic/47bfac14de73fd9886de0f254bc2816b2fb5233594028d106e872bc0f1735400' was generated"
+            );
+            match err.api_status {
+                TerminusAPIStatus::Failure => {} // expected
+                _ => panic!("Expected Failure status"),
+            }
+
+            if let Some(ApiResponseError::SubmittedIdDoesNotMatchGeneratedId(id_err)) = err.api_error {
+                assert_eq!(id_err.submitted_id, "terminusdb:///data/test-topic");
+                assert_eq!(
+                    id_err.generated_id,
+                    "terminusdb:///data/Topic/47bfac14de73fd9886de0f254bc2816b2fb5233594028d106e872bc0f1735400"
+                );
+                assert_eq!(id_err.document["@type"], "Topic");
+                assert_eq!(id_err.document["title"], "Test Topic Title");
+            } else {
+                panic!("Expected SubmittedIdDoesNotMatchGeneratedId error, got: {:?}", err.api_error);
+            }
+        }
+        _ => panic!("Expected ReplaceDocumentError variant"),
     }
 
     // Test deserialization into ApiResponse
