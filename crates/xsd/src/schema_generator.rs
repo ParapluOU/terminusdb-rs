@@ -633,6 +633,15 @@ impl XsdToSchemaGenerator {
 
         let subdocument = complex_type.is_anonymous;
 
+        // Extract inheritance from XSD base_type (for extension/restriction)
+        let inherits = if let Some(ref base_type) = complex_type.base_type {
+            let (_, base_local_name) = self.parse_clark_notation(base_type);
+            let base_class = base_local_name.to_pascal_case();
+            vec![base_class]
+        } else {
+            vec![]
+        };
+
         Ok(Schema::Class {
             id: class_id,
             base: namespace,  // Use TerminusDB @base for namespace preservation
@@ -640,7 +649,7 @@ impl XsdToSchemaGenerator {
             documentation: None,
             subdocument,
             r#abstract: false,
-            inherits: vec![],
+            inherits,
             unfoldable: false,
             properties,
         })

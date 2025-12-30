@@ -93,6 +93,8 @@ pub struct XsdComplexType {
     pub is_anonymous: bool,
     /// For anonymous types, the element name this type is defined within
     pub element_name: Option<String>,
+    /// Base type for extension/restriction (XSD inheritance)
+    pub base_type: Option<String>,
 }
 
 /// XSD simple type
@@ -196,13 +198,14 @@ impl XsdSchema {
         }
 
         // Also extract anonymous complex types from element declarations
+        // These are named after the element itself (e.g., element `topic` → type `topic`)
         for (qname, elem) in schema.elements() {
             if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
                 // Anonymous type (no name)
                 if ct.name.is_none() {
                     let elem_name = &qname.local_name;
-                    let anon_name = format!("anonymous_{}_type", elem_name);
-                    let mut complex = Self::extract_complex_type(&anon_name, ct, schema);
+                    // Use element name directly as type name for anonymous types
+                    let mut complex = Self::extract_complex_type(elem_name, ct, schema);
                     complex.is_anonymous = true;
                     complex.element_name = Some(elem_name.to_string());
                     complex_types.push(complex);
@@ -296,6 +299,9 @@ impl XsdSchema {
         let (child_elements, content_model) = Self::extract_content_model(&ct.content, schema);
         let attributes = Self::extract_attributes(&ct.attributes);
 
+        // Extract base type for inheritance (XSD extension/restriction)
+        let base_type = ct.base_type.as_ref().map(|q| q.to_string());
+
         XsdComplexType {
             name: qname.to_string(),
             qualified_name: qname.to_string(),
@@ -307,6 +313,7 @@ impl XsdSchema {
             child_elements: Some(child_elements),
             is_anonymous: false,
             element_name: None,
+            base_type,
         }
     }
 
