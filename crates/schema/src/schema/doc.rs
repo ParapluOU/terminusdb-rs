@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 // todo: the derive should take this from the docstring
-#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ContextDocumentation {
     pub(crate) title: String,
     pub(crate) authors: Vec<String>,
