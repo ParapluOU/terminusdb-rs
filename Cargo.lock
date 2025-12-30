@@ -3643,6 +3643,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "terminusdb-bin",
+ "terminusdb-client",
  "terminusdb-schema",
  "thiserror 1.0.69",
  "tokio 1.45.1",

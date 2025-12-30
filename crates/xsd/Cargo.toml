@@ -39,6 +39,8 @@ schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs", version = 
 schemas-dita = { git = "https://github.com/parapluou/schemas-rs" }
 schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs" }
 tempfile.workspace = true
+terminusdb-bin = { path = "../bin" }
+terminusdb-client = { path = "../client" }
 # For testing
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
