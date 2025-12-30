@@ -306,9 +306,17 @@ async fn test_insert_minimal_subset_schemas() -> anyhow::Result<()> {
 
 /// End-to-end test showing the full intended flow
 ///
-/// NOTE: This test currently documents the limitation that XML-to-Instance
-/// parsing doesn't work correctly because the JSON structure from xmlschema-rs
-/// doesn't include @type annotations. This is a known issue to be addressed.
+/// NOTE: This test currently documents two limitations:
+///
+/// 1. **xs:redefine not supported**: The underlying xmlschema-rs library doesn't
+///    support `xs:redefine` yet. DITA uses `xs:redefine` to include `commonElementGrp.xsd`
+///    which contains essential model groups like `title`, `keyword`, etc.
+///    This causes the `title` element (and others) to be missing from `TopicClass` properties.
+///
+/// 2. **Inheritance works**: XSD type extension is now correctly mapped to TerminusDB's
+///    `inherits` field. For example, `Topic` inherits from `TopicClass`.
+///
+/// Once xmlschema-rs supports `xs:redefine`, the full flow should work correctly.
 #[tokio::test]
 async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
     let topic_path = dita_topic_xsd_path();
@@ -319,6 +327,73 @@ async fn test_full_xsd_xml_flow_documents_limitations() -> anyhow::Result<()> {
 
     println!("Step 1: Loaded XSD model");
     println!("  Generated {} TerminusDB schemas", model.schemas().len());
+
+    // Debug: Show class names containing "topic" (case-insensitive)
+    let topic_classes: Vec<_> = model.class_names()
+        .into_iter()
+        .filter(|n| n.to_lowercase().contains("topic"))
+        .collect();
+    println!("  Topic-related classes: {:?}", topic_classes);
+
+    // Debug: Show properties of Topic-related classes (with inheritance)
+    for class_name in &["Topic", "TopicClass", "Title", "TitleClass", "Body", "BodyClass"] {
+        if let Some(Schema::Class { properties, inherits, .. }) = model.find_schema(class_name) {
+            println!("  {} class:", class_name);
+            println!("    inherits: {:?}", inherits);
+            println!("    properties ({}):", properties.len());
+            for prop in properties.iter().take(5) {
+                println!("      - {}: {}", prop.name, prop.class);
+            }
+            if properties.len() > 5 {
+                println!("      ... and {} more", properties.len() - 5);
+            }
+        } else {
+            println!("  {} - NOT FOUND", class_name);
+        }
+    }
+
+    // Debug: Show element-to-class mapping
+    let element_map = model.element_to_class_map();
+    println!("  Element-to-class mappings ({}):", element_map.len());
+    for key in &["topic", "title", "body", "p"] {
+        if let Some(class) = element_map.get(*key) {
+            println!("    {} -> {}", key, class);
+        } else {
+            println!("    {} -> NOT MAPPED", key);
+        }
+    }
+
+    // Debug: Show XSD root elements and their types
+    println!("  XSD root elements:");
+    for xsd in model.xsd_schemas() {
+        for elem in &xsd.root_elements {
+            let local_name = elem.name.split('}').last().unwrap_or(&elem.name);
+            let type_name = elem.type_info.as_ref()
+                .and_then(|ti| ti.name.as_ref().or(ti.qualified_name.as_ref()))
+                .map(|s| s.as_str())
+                .unwrap_or("(anonymous)");
+            println!("    {} -> {}", local_name, type_name);
+        }
+        // Show complex types named 'topic' or 'body' (exactly)
+        println!("  Complex types named 'topic', 'body', 'title':");
+        for ct in xsd.complex_types.iter() {
+            let ct_local = ct.name.split('}').last().unwrap_or(&ct.name);
+            if ct_local == "topic" || ct_local == "body" || ct_local == "title" ||
+               ct_local == "topic.class" || ct_local == "body.class" || ct_local == "title.class" {
+                println!("    Complex type '{}' (anonymous={}):", ct_local, ct.is_anonymous);
+                println!("      base_type: {:?}", ct.base_type);
+                println!("      attributes: {:?}", ct.attributes.as_ref().map(|a| a.len()).unwrap_or(0));
+                if let Some(children) = &ct.child_elements {
+                    println!("      children ({}):", children.len());
+                    for child in children.iter() {
+                        println!("        {} -> {}", child.name, child.element_type);
+                    }
+                } else {
+                    println!("      children: None");
+                }
+            }
+        }
+    }
 
     // Step 2: Try parsing XML (expected to fail with current implementation)
     let minimal_dita = r#"<?xml version="1.0" encoding="UTF-8"?>

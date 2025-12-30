@@ -322,8 +322,11 @@ impl XsdModel {
         let json = self.parse_xml_to_json(xml)
             .map_err(|e| crate::xml_parser::XmlParseError::parse(e.to_string()))?;
 
-        // Then convert JSON to instances using the generated schemas
-        let parser = XmlToInstanceParser::new(&self.tdb_schemas);
+        // Build element-to-class mapping from XSD schemas
+        let element_map = self.element_to_class_map();
+
+        // Convert JSON to instances using the generated schemas and element mapping
+        let parser = XmlToInstanceParser::with_element_mapping(&self.tdb_schemas, element_map);
         parser.json_to_instances(&json)
     }
 
@@ -367,6 +370,60 @@ impl XsdModel {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Build a mapping from XML element names to TerminusDB class names.
+    ///
+    /// This uses the actual XSD element declarations:
+    /// 1. Root elements with named types → map element to type's class
+    /// 2. Root elements with anonymous types → map element to element-named class
+    /// 3. Complex types that track their element_name (anonymous types)
+    ///
+    /// Returns a map of lowercase element names to their TerminusDB class names.
+    pub fn element_to_class_map(&self) -> std::collections::HashMap<String, String> {
+        use heck::ToPascalCase;
+        let mut map = std::collections::HashMap::new();
+
+        for xsd in &self.xsd_schemas {
+            // Map root elements to their types
+            for elem in &xsd.root_elements {
+                let local_name = elem.name.split('}').last().unwrap_or(&elem.name);
+
+                if let Some(type_info) = &elem.type_info {
+                    // Check if this is a named type or anonymous type
+                    if let Some(type_qname) = type_info.name.as_ref().or(type_info.qualified_name.as_ref()) {
+                        // Named type - use type name
+                        let type_name = type_qname.split('}').last().unwrap_or(type_qname);
+                        let class_name = type_name.to_pascal_case();
+
+                        if self.find_schema(&class_name).is_some() {
+                            map.insert(local_name.to_lowercase(), class_name);
+                        }
+                    } else {
+                        // Anonymous type - use element name as class name
+                        let class_name = local_name.to_pascal_case();
+                        if self.find_schema(&class_name).is_some() {
+                            map.insert(local_name.to_lowercase(), class_name);
+                        }
+                    }
+                }
+            }
+
+            // Map from complex types that have an element_name (anonymous types)
+            for ct in &xsd.complex_types {
+                if let Some(elem_name) = &ct.element_name {
+                    let local_name = elem_name.split('}').last().unwrap_or(elem_name);
+                    // The class name for anonymous types should be the element name
+                    let class_name = local_name.to_pascal_case();
+
+                    if self.find_schema(&class_name).is_some() {
+                        map.insert(local_name.to_lowercase(), class_name);
+                    }
+                }
+            }
+        }
+
+        map
     }
 }
 

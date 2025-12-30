@@ -74,6 +74,8 @@ pub type ParseResult<T> = std::result::Result<T, XmlParseError>;
 pub struct XmlToInstanceParser<'a> {
     /// Available schemas indexed by class name
     schemas: BTreeMap<String, &'a Schema>,
+    /// Mapping from element names to TerminusDB class names
+    element_to_class: std::collections::HashMap<String, String>,
 }
 
 impl<'a> XmlToInstanceParser<'a> {
@@ -85,7 +87,45 @@ impl<'a> XmlToInstanceParser<'a> {
                 schema_map.insert(id.clone(), schema);
             }
         }
-        Self { schemas: schema_map }
+        Self {
+            schemas: schema_map,
+            element_to_class: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Create a parser with element-to-class mapping from XSD schema.
+    ///
+    /// This allows the parser to correctly resolve XML element names to
+    /// their corresponding TerminusDB class types using the XSD schema's
+    /// element type declarations.
+    pub fn with_element_mapping(
+        schemas: &'a [Schema],
+        element_to_class: std::collections::HashMap<String, String>,
+    ) -> Self {
+        let mut schema_map = BTreeMap::new();
+        for schema in schemas {
+            if let Schema::Class { id, .. } = schema {
+                schema_map.insert(id.clone(), schema);
+            }
+        }
+        Self {
+            schemas: schema_map,
+            element_to_class,
+        }
+    }
+
+    /// Resolve an element name to its TerminusDB class name.
+    ///
+    /// Tries in order:
+    /// 1. XSD element-to-type mapping (if available)
+    /// 2. PascalCase conversion of the element name
+    fn resolve_class_name(&self, element_name: &str) -> String {
+        // Try XSD mapping first
+        if let Some(class) = self.element_to_class.get(&element_name.to_lowercase()) {
+            return class.clone();
+        }
+        // Fall back to PascalCase
+        to_pascal_case(element_name)
     }
 
     /// Parse XML content into TerminusDB instances.
@@ -145,6 +185,13 @@ impl<'a> XmlToInstanceParser<'a> {
     }
 
     /// Parse JSON value (from xmlschema) to TerminusDB instances
+    ///
+    /// The JSON is expected to be in the format produced by `parse_xml_to_json`:
+    /// ```json
+    /// {"elementName": { ... }}
+    /// ```
+    ///
+    /// The element name is converted to PascalCase to find the matching schema class.
     pub fn json_to_instances(
         &self,
         json: &serde_json::Value,
@@ -154,11 +201,31 @@ impl<'a> XmlToInstanceParser<'a> {
 
         match json {
             serde_json::Value::Object(obj) => {
-                // Try to determine the type from the object
-                // xmlschema typically provides @type or the root element name
+                // Check if this is a wrapper object like {"topic": {...}}
+                // where the key is the element name
+                if obj.len() == 1 {
+                    if let Some((element_name, inner_value)) = obj.iter().next() {
+                        // Skip @-prefixed keys (metadata)
+                        if !element_name.starts_with('@') {
+                            // Resolve element name to class using XSD mapping
+                            let type_hint = self.resolve_class_name(element_name);
+
+                            if let serde_json::Value::Object(inner_obj) = inner_value {
+                                match self.json_object_to_instance(inner_obj, Some(&type_hint)) {
+                                    Ok(inst) => {
+                                        instances.push(inst);
+                                        return Ok(instances);
+                                    }
+                                    Err(e) => errors.push(e),
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fall back to trying to parse the object directly
                 match self.json_object_to_instance(obj, None) {
                     Ok(inst) => {
-                        // Collect the main instance and any nested instances
                         instances.push(inst);
                     }
                     Err(e) => errors.push(e),
@@ -313,8 +380,8 @@ impl<'a> XmlToInstanceParser<'a> {
                 }
 
                 // Try to parse as a nested instance
-                // Use field name as type hint (PascalCase conversion)
-                let type_hint = to_pascal_case(field_name);
+                // Resolve field name to class using XSD mapping
+                let type_hint = self.resolve_class_name(field_name);
                 match self.json_object_to_instance(obj, Some(&type_hint)) {
                     Ok(inst) => Ok(InstanceProperty::Relation(RelationValue::One(inst))),
                     Err(_) => {
