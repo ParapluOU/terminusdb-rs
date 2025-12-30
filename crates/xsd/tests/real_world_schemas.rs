@@ -247,12 +247,12 @@ fn test_niso_sts_schema_properties() {
                     prop.name
                 );
 
-                // Class should either be an XSD type or PascalCase
-                if !prop.class.starts_with("xsd:") {
+                // Class should either be an XSD type, sys: type, or PascalCase
+                if !prop.class.starts_with("xsd:") && !prop.class.starts_with("sys:") {
                     // Custom type should be PascalCase (first char uppercase)
                     let first_char = prop.class.chars().next().unwrap();
                     assert!(
-                        first_char.is_uppercase() || prop.class.starts_with("xsd:"),
+                        first_char.is_uppercase(),
                         "Custom type {} should be PascalCase in {}.{}",
                         prop.class,
                         id,
