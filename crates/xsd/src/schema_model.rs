@@ -131,6 +131,7 @@ pub struct ChildElement {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Restriction {
+    Length { value: u32 },
     MinLength { value: u32 },
     MaxLength { value: u32 },
     Pattern { value: String },
@@ -430,16 +431,46 @@ impl XsdSchema {
     /// Extract simple type information
     fn extract_simple_type(
         qname: &str,
-        _st: &Arc<dyn xmlschema::validators::SimpleType + Send + Sync>,
+        st: &Arc<dyn xmlschema::validators::SimpleType + Send + Sync>,
     ) -> XsdSimpleType {
-        // Simple types are more complex to fully extract
-        // For now, we provide basic info
+        use xmlschema::validators::SimpleType as SimpleTypeTrait;
+
+        // Extract facets from the simple type
+        let facets = st.facets();
+        let mut restrictions = Vec::new();
+
+        // Extract enumeration values if present
+        if let Some(ref enum_facet) = facets.enumeration {
+            restrictions.push(Restriction::Enumeration {
+                values: enum_facet.values.clone(),
+            });
+        }
+
+        // Extract other facets
+        if let Some(ref len_facet) = facets.length {
+            restrictions.push(Restriction::Length { value: len_facet.value as u32 });
+        }
+        if let Some(ref min_len) = facets.min_length {
+            restrictions.push(Restriction::MinLength { value: min_len.value as u32 });
+        }
+        if let Some(ref max_len) = facets.max_length {
+            restrictions.push(Restriction::MaxLength { value: max_len.value as u32 });
+        }
+        for pattern in &facets.patterns {
+            restrictions.push(Restriction::Pattern { value: pattern.pattern.clone() });
+        }
+
+        // Get base type if this is a restricted type
+        // Use SimpleTypeTrait::base_type to disambiguate from TypeValidator::base_type
+        let base_type = SimpleTypeTrait::base_type(st.as_ref())
+            .and_then(|base| base.qualified_name_string());
+
         XsdSimpleType {
             name: qname.to_string(),
             qualified_name: qname.to_string(),
             category: "XsdSimpleType".to_string(),
-            base_type: None, // Would need to traverse type hierarchy
-            restrictions: None, // Would need to extract facets
+            base_type,
+            restrictions: if restrictions.is_empty() { None } else { Some(restrictions) },
         }
     }
 

@@ -74,6 +74,28 @@ fn find_missing_dependencies(schemas: &[Schema]) -> Vec<String> {
         .collect()
 }
 
+/// Trace which schemas reference a specific missing type
+fn trace_missing_type_references(schemas: &[Schema], missing_type: &str) -> Vec<(String, String)> {
+    let mut references = Vec::new();
+
+    for schema in schemas {
+        if let Schema::Class { id, properties, inherits, .. } = schema {
+            for prop in properties {
+                if prop.class == missing_type {
+                    references.push((id.clone(), format!("property '{}'", prop.name)));
+                }
+            }
+            for parent in inherits {
+                if parent == missing_type {
+                    references.push((id.clone(), "inherits".to_string()));
+                }
+            }
+        }
+    }
+
+    references
+}
+
 /// Filter schemas to only include those without missing dependencies
 fn filter_valid_schemas(schemas: &[Schema]) -> Vec<Schema> {
     use std::collections::HashSet;
@@ -172,15 +194,22 @@ fn test_analyze_schema_dependencies() {
     println!("  Missing dependencies: {}", missing.len());
 
     if !missing.is_empty() {
-        println!("  Missing types (first 10):");
-        for (i, dep) in missing.iter().take(10).enumerate() {
-            println!("    {}: {}", i + 1, dep);
+        println!("\n  Missing types and their references:");
+        for dep in missing.iter().take(10) {
+            println!("\n    {} is referenced by:", dep);
+            let refs = trace_missing_type_references(schemas, dep);
+            for (schema_id, ref_type) in refs.iter().take(5) {
+                println!("      - {} via {}", schema_id, ref_type);
+            }
+            if refs.len() > 5 {
+                println!("      ... and {} more", refs.len() - 5);
+            }
         }
     }
 
     // Check how many schemas are valid
     let valid = filter_valid_schemas(schemas);
-    println!("  Valid schemas (all deps satisfied): {}", valid.len());
+    println!("\n  Valid schemas (all deps satisfied): {}", valid.len());
 }
 
 // ============================================================================

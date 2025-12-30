@@ -1,6 +1,6 @@
 //! Runtime TerminusDB Schema Generator from XSD
 
-use crate::schema_model::{Cardinality, ChildElement, XsdAttribute, XsdComplexType, XsdSchema};
+use crate::schema_model::{Cardinality, ChildElement, Restriction, XsdAttribute, XsdComplexType, XsdSchema, XsdSimpleType};
 use crate::Result;
 use heck::ToPascalCase;
 use std::collections::HashMap;
@@ -46,9 +46,17 @@ impl XsdToSchemaGenerator {
     pub fn generate(&self, xsd_schema: &XsdSchema) -> Result<Vec<Schema>> {
         let mut schemas = Vec::new();
 
+        // Generate schemas for complex types
         for complex_type in &xsd_schema.complex_types {
             let schema = self.generate_class_from_complex_type(complex_type)?;
             schemas.push(schema);
+        }
+
+        // Generate schemas for simple types (enums, type aliases)
+        for simple_type in &xsd_schema.simple_types {
+            if let Some(schema) = self.generate_from_simple_type(simple_type)? {
+                schemas.push(schema);
+            }
         }
 
         Ok(schemas)
@@ -594,6 +602,41 @@ impl XsdToSchemaGenerator {
             unfoldable: false,
             properties,
         })
+    }
+
+    /// Generate a TerminusDB schema from an XSD simple type.
+    ///
+    /// Simple types with enumeration restrictions become Schema::Enum.
+    /// Other simple types (type aliases, pattern restrictions) are skipped
+    /// because they map to primitive xsd: types or string patterns.
+    ///
+    /// Returns None if the simple type doesn't need a schema definition.
+    fn generate_from_simple_type(&self, simple_type: &XsdSimpleType) -> Result<Option<Schema>> {
+        // Extract namespace and local name from Clark notation
+        let (_namespace, local_name) = self.parse_clark_notation(&simple_type.name);
+
+        // Convert to PascalCase for TerminusDB naming
+        let enum_id = local_name.to_pascal_case();
+
+        // Check if this simple type has enumeration restrictions
+        if let Some(ref restrictions) = simple_type.restrictions {
+            for restriction in restrictions {
+                if let Restriction::Enumeration { values } = restriction {
+                    // Generate Schema::Enum for enumeration types
+                    // Note: Schema::Enum doesn't support base/namespace yet (TODO in schema crate)
+                    return Ok(Some(Schema::Enum {
+                        id: enum_id,
+                        documentation: None,
+                        values: values.clone(),
+                    }));
+                }
+            }
+        }
+
+        // Simple types without enumeration don't need separate schema definitions
+        // They map to xsd: primitives (string, integer, etc.) or are just restricted
+        // string types that TerminusDB represents as xsd:string
+        Ok(None)
     }
 
     /// Parse Clark notation to extract namespace and local name.
