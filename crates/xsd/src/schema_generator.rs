@@ -747,17 +747,58 @@ impl XsdToSchemaGenerator {
 
     /// Generate a TerminusDB schema from an XSD simple type.
     ///
-    /// Simple types with enumeration restrictions become Schema::Enum.
-    /// Other simple types (type aliases, pattern restrictions) are skipped
-    /// because they map to primitive xsd: types or string patterns.
+    /// - Simple types with enumeration restrictions become Schema::Enum.
+    /// - Union types (xs:union) become Schema::TaggedUnion.
+    /// - Other simple types (type aliases, pattern restrictions) are skipped
+    ///   because they map to primitive xsd: types or string patterns.
     ///
     /// Returns None if the simple type doesn't need a schema definition.
     fn generate_from_simple_type(&self, simple_type: &XsdSimpleType) -> Result<Option<Schema>> {
         // Extract namespace and local name from Clark notation
-        let (_namespace, local_name) = self.parse_clark_notation(&simple_type.name);
+        let (namespace, local_name) = self.parse_clark_notation(&simple_type.name);
 
         // Convert to PascalCase for TerminusDB naming
-        let enum_id = local_name.to_pascal_case();
+        let type_id = local_name.to_pascal_case();
+
+        // Check for union types (xs:union memberTypes="...")
+        if simple_type.variety == Some(SimpleTypeVariety::Union) {
+            if let Some(ref member_types) = simple_type.member_types {
+                let properties: Vec<Property> = member_types
+                    .iter()
+                    .map(|member_type| {
+                        // Map the member type to a TerminusDB class
+                        let class = self.map_xsd_type_to_tdb_class(member_type)
+                            .unwrap_or_else(|_| "xsd:anySimpleType".to_string());
+
+                        // Create tag name from the class (lowercase, strip xsd: prefix)
+                        let tag_name = if class.starts_with("xsd:") {
+                            class.strip_prefix("xsd:").unwrap().to_string()
+                        } else {
+                            class.chars().next().unwrap().to_lowercase().to_string()
+                                + &class[1..]
+                        };
+
+                        Property {
+                            name: tag_name,
+                            r#type: None, // TaggedUnion variants are mutually exclusive, not optional
+                            class,
+                        }
+                    })
+                    .collect();
+
+                // TaggedUnion for XSD union - subdocument with Random key
+                return Ok(Some(Schema::TaggedUnion {
+                    id: type_id,
+                    base: namespace,
+                    key: Key::Random,
+                    r#abstract: false,
+                    documentation: None,
+                    subdocument: true, // Union values are embedded
+                    properties,
+                    unfoldable: false,
+                }));
+            }
+        }
 
         // Check if this simple type has enumeration restrictions
         if let Some(ref restrictions) = simple_type.restrictions {
@@ -766,7 +807,7 @@ impl XsdToSchemaGenerator {
                     // Generate Schema::Enum for enumeration types
                     // Note: Schema::Enum doesn't support base/namespace yet (TODO in schema crate)
                     return Ok(Some(Schema::Enum {
-                        id: enum_id,
+                        id: type_id,
                         documentation: None,
                         values: values.clone(),
                     }));
@@ -774,7 +815,7 @@ impl XsdToSchemaGenerator {
             }
         }
 
-        // Simple types without enumeration don't need separate schema definitions
+        // Simple types without enumeration or union don't need separate schema definitions
         // They map to xsd: primitives (string, integer, etc.) or are just restricted
         // string types that TerminusDB represents as xsd:string
         Ok(None)

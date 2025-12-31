@@ -130,8 +130,9 @@ pub struct XsdSimpleType {
     /// The variety of this simple type (Atomic, List, or Union)
     pub variety: Option<SimpleTypeVariety>,
     /// For List types: the item type name (qualified name)
-    /// TODO: Requires adding item_type() to SimpleType trait in xmlschema-rs
     pub item_type: Option<String>,
+    /// For Union types: the member type names (qualified names)
+    pub member_types: Option<Vec<String>>,
 }
 
 /// XSD attribute
@@ -604,11 +605,21 @@ impl XsdSchema {
             XmlSchemaVariety::Union => SimpleTypeVariety::Union,
         });
 
-        // TODO: Extract item_type for List types
-        // This requires adding item_type() method to SimpleType trait in xmlschema-rs,
-        // or downcasting to XsdListType which isn't currently possible.
-        // For now, we detect list types via variety and leave item_type as None.
-        let item_type = None;
+        // Extract item_type for List types
+        let item_type = st.item_type()
+            .and_then(|item| item.qualified_name_string());
+
+        // Extract member_types for Union types
+        let member_types = {
+            let members = st.member_types();
+            if members.is_empty() {
+                None
+            } else {
+                Some(members.iter()
+                    .filter_map(|m| m.qualified_name_string())
+                    .collect())
+            }
+        };
 
         XsdSimpleType {
             name: qname.to_string(),
@@ -618,6 +629,7 @@ impl XsdSchema {
             restrictions: if restrictions.is_empty() { None } else { Some(restrictions) },
             variety,
             item_type,
+            member_types,
         }
     }
 
