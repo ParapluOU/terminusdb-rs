@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<map xml:lang="en-US">
+  <title>DITA Open Toolkit <keyword keyref="release"/></title>
+
+  <topicref keyref="intro" linking="targetonly">
+    <mapref href="../topics/intro.ditamap"/>
+  </topicref>
+  <topicref keyref="installing">
+    <mapref href="../topics/installing.ditamap"/>
+  </topicref>
+  <topicref keyref="publishing">
+    <mapref href="../topics/publishing.ditamap"/>
+  </topicref>
+  <topicref keyref="parameters">
+    <mapref href="../parameters/parameters.ditamap"/>
+  </topicref>
+  <topicref keyref="extending">
+    <mapref href="../topics/using-plugins.ditamap"/>
+  </topicref>
+  <topicref keyref="troubleshooting-overview">
+    <mapref href="../topics/troubleshooting.ditamap"/>
+  </topicref>
+  <topicref keyref="reference">
+    <mapref href="../reference/reference.ditamap"/>
+  </topicref>
+
+  <topicgroup processing-role="resource-only">
+    <mapref href="common-resources.ditamap"/>
+  </topicgroup>
+</map>

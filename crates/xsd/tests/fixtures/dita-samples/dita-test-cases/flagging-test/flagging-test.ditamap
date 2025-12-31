@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<map>
+  <title>Flagging Test</title>
+  <topicref href="ditavals/flagging.ditaval" keys="flagging-ditaval" format="xml" scope="external">
+    <topicmeta>
+      <navtitle>ditavals/flagging.ditaval</navtitle>
+    </topicmeta>
+  </topicref>
+  <topicref href="flagging-tests-01.dita">
+    <topicref href="flagging_on_status.dita">
+      <topicref href="topic_marked_as_revised.dita"/>
+      <topicref href="status_flagging_within_content.dita"/>
+    </topicref>
+    <topicref href="topics/flagging-test.dita" keys="basic-flagging-tests"/>
+    <topicref href="conditions_with_groups.dita" keys="conditions-with-groups"/>
+    <topicref href="topics/composite-01.dita#topic-01" keys="composite-01"
+      chunk="select-branch to-content"/>
+    <topicref href="topics/composite-01.dita#topic-02" keys="composite-02"
+      chunk="select-branch to-content"/>
+    <topicgroup>
+      <topicref href="topics/composite-02.dita#topic-01" keys="composite-03" chunk="select-branch to-content"/>
+      <topicref href="topics/composite-02.dita#topic-02" keys="composite-04" chunk="select-branch to-content"/>
+    </topicgroup>
+    <topicgroup>
+      <topicref href="topics/composite-02.dita#topic-02" keys="composite-04-no-chunk"/>
+    </topicgroup>
+    <topicref href="topics/task_01.dita" keys="task-01"/>
+  </topicref>
+  <reltable>
+    <relrow>
+      <relcell><topicref keyref="basic-flagging-tests"/></relcell>
+      <relcell><topicref keyref="conditions-with-groups"/></relcell>
+    </relrow>
+  </reltable>
+</map>

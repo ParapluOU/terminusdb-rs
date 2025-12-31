@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<map>
+  <title>Reference</title>
+  <topicref keyref="architecture">
+    <topicref keyref="processing-structure"/>
+    <topicref keyref="map-first-preproc"/>
+    <topicref keyref="processing-pipeline-modules"/>
+    <topicref keyref="processing-order"/>
+    <topicref keyref="store-api"/>
+    <topicref collection-type="sequence" keyref="preprocessing">
+      <topicref keyref="preprocess-genlist"/>
+      <topicref keyref="preprocess-debugfilter"/>
+      <topicref keyref="preprocess-mapref"/>
+      <topicref keyref="preprocess-branch-filter"/>
+      <topicref keyref="preprocess-keyref"/>
+      <topicref keyref="preprocess-copy-to"/>
+      <topicref keyref="preprocess-conrefpush"/>
+      <topicref keyref="preprocess-conref"/>
+      <topicref keyref="preprocess-profile"/>
+      <topicref keyref="preprocess-topic-fragment"/>
+      <topicref keyref="preprocess-chunk"/>
+      <topicref keyref="preprocess-metadata"/>
+      <topicref keyref="preprocess-maplink"/>
+      <topicref keyref="preprocess-topicpull"/>
+      <topicref keyref="preprocess-flagging"/>
+      <topicref keyref="preprocess-clean-map"/>
+      <topicref keyref="preprocess-copyfiles"/>
+    </topicref>
+    <topicref keyref="html-based-processing">
+      <topicref keyref="common-html-processing"/>
+      <topicref keyref="xhtml-processing"/>
+      <topicref keyref="html5-processing"/>
+      <topicref keyref="eclipsehelp-processing"/>
+      <topicref keyref="htmlhelp-processing"/>
+    </topicref>
+    <topicref keyref="pdf-transform">
+      <topicref keyref="pdf-transformation-history"/>
+    </topicref>
+  </topicref>
+
+  <topicref keyref="dita-spec-support">
+    <topicref keyref="dita-v1-2-support"/>
+    <topicref keyref="dita-v1-3-support"/>
+    <topicref keyref="dita-v2-0-support"/>
+    <topicref keyref="implementation-dependent-features"/>
+    <topicref keyref="extended-functionality"/>
+    <topicref keyref="docs-dita-features"/>
+  </topicref>
+  
+  <mapref href="../extension-points/extension-points.ditamap"/>
+
+  <mapref href="markdown-formats.ditamap"/>
+
+  <mapref href="license.ditamap"/>
+
+  <topicref keyref="dita-and-dita-ot-resources">
+    <topicgroup deliveryTarget="html">
+      <mapref href="../topics/dita-resources.ditamap" toc="no"/>
+      <mapref href="../topics/dita-ot-day-videos.ditamap"/>
+    </topicgroup>
+    <topicref keyref="web-based-resources" deliveryTarget="pdf" print="yes"/>
+    <topicref keyref="books" toc="yes"/>
+    <mapref href="glossary.ditamap"/>
+  </topicref>
+
+  <reltable>
+    <relrow>
+      <relcell>
+        <topicref keyref="preprocess-chunk"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="dita13-spec-chunking"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="preprocess-topic-fragment"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="extended-functionality"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugins-installing"/>
+        <topicref keyref="plugins-removing"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="dita-command-arguments" linking="targetonly"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="extension-points-by-plugin"/>
+        <topicref keyref="messages"/>
+        <topicref keyref="dita-ot-params"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="rebuilding-docs" linking="targetonly"/>
+      </relcell>
+    </relrow>
+  </reltable>
+</map>

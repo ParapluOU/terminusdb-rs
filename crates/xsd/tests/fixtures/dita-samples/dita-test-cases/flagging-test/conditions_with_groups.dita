@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">
+<topic id="conditions_with_groups">
+  <title>Conditions With Groups</title>
+  <body>
+    <p>This topic exercises the use of groups within conditional attributes.</p>
+    <!-- Making this ID the same to test handling of topic and non-topic having same ID, which is allowed. -->
+    <ul id="conditions_with_groups">
+      <li><xref href="#./groups-within-props"/></li>
+      <li><xref href="#./groups-within-audience"/></li>
+    </ul>
+    <section  id="groups-within-props">
+      <title>Groups within <xmlatt>props</xmlatt></title>
+      <p id="p1" props="group1(value-A)"><xmlatt>props</xmlatt> with a single group:
+          <codeph>props="group1(value-A)"</codeph>.</p>
+      <p props="group1(value-B)"><xmlatt>props</xmlatt> with a single group:
+        <codeph>props="group1(value-B)"</codeph>.</p>
+      <p props="group1(valueC)"><xmlatt>props</xmlatt> with a single group:
+        <codeph>props="group1(valueC)"</codeph>.</p>
+      <p props="value-A"><xmlatt>props</xmlatt> with ungrouped keywords. This is not correct usage
+        of <xmlatt>props</xmlatt>. It specifies <codeph>props="value-A"</codeph>.</p>
+      <p props="group1(value-A value-B)"><xmlatt>props</xmlatt> with a group with two values:
+          <codeph>props="group1(value-A value-B)"</codeph>.</p>
+      <p props="group1(value-A) group2(value-B)"><xmlatt>props</xmlatt> with two groups:
+          <codeph>props="group1(value-A) group2(value-B)"</codeph>.</p>
+    </section>
+    <section id="groups-within-audience" spectitle="Groups within &lt;audience&gt;">      
+      <p audience="beginner"><xmlatt>audience</xmlatt> with a simple value:
+          <codeph>audience="beginner"</codeph>.</p>
+      <p audience="group1(value-A)"><xmlatt>audience</xmlatt> with a single group:
+          <codeph>audience="group1(value-A)"</codeph></p>
+      <p audience="beginner group1(value-B)"><xmlatt>audience</xmlatt> with a simple value and a
+        group: <codeph>audience="beginner group1(value-B)"</codeph>.</p>
+      <p audience="group2(beginner) group1(value-B)"><xmlatt>audience</xmlatt> with two groups
+        group: <codeph>audience="group2(beginner) group1(value-B)"</codeph>.</p>
+    </section>
+  </body>
+</topic>

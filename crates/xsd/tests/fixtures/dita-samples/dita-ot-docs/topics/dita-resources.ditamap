@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<map>
+  <title>DITA and DITA-OT resources</title>
+
+  <topicref format="html" href="https://groups.io/g/dita-users" scope="external">
+    <topicmeta>
+      <linktext>DITA Users group</linktext>
+      <shortdesc>The original dita-users group was founded in 2004 as a Yahoo! Group and moved to Groups.io in November
+        2019. The mailing list addresses the needs of DITA users at all levels of experience, from beginners to experts,
+        and serves as a vital resource for the DITA community.</shortdesc>
+    </topicmeta>
+  </topicref>
+  <topicref format="html" href="https://github.com/orgs/dita-ot/discussions" scope="external">
+    <topicmeta>
+      <linktext>DITA-OT Discussions</linktext>
+      <shortdesc>The DITA-OT Discussions forum on GitHub is a collaborative communication platform that allows members
+        of the community to ask questions, share suggestions, upvote discussions to signal support, and mark questions
+        as answered.</shortdesc>
+    </topicmeta>
+  </topicref>
+  <topicref format="html" href="https://groups.google.com/d/forum/dita-ot-users" scope="external">
+    <topicmeta>
+      <linktext>DITA-OT Users group archive</linktext>
+      <shortdesc>From 2013 to 2024, the DITA-OT Users group served as a general interest DITA-OT mailing list, for
+        questions ranging from installation and getting started to specific overrides, plug-ins, and
+        customizations. <i>(Archived in favor of the DITA-OT Discussions forum.)</i>
+      </shortdesc>
+    </topicmeta>
+  </topicref>
+  <topicref format="html" href="http://dita-archive.xml.org/wiki/the-dita-open-toolkit" scope="external">
+    <topicmeta>
+      <linktext>DITA-OT project archive</linktext>
+      <shortdesc>The DITA-OT project archive at dita-archive.xml.org provides news about earlier toolkit releases, and
+        release notes for legacy versions.</shortdesc>
+    </topicmeta>
+  </topicref>
+  <topicref format="html" href="http://www.oasis-open.org/committees/dita/" scope="external">
+    <topicmeta>
+      <linktext>DITA Technical Committee</linktext>
+      <shortdesc>The OASIS DITA Technical Committee develops the DITA standard.</shortdesc>
+    </topicmeta>
+  </topicref>
+</map>

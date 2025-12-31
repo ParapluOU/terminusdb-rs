@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<map>
+  <title>Relationship Tables</title>
+
+  <reltable>
+    <relheader>
+      <relcolspec>
+        <!--Topics in the referencing ditamap, e.g., in publishing.ditamap. -->
+      </relcolspec>
+      <relcolspec>
+        <!--Two-way links with the first-column topics. -->
+      </relcolspec>
+      <relcolspec linking="targetonly">
+        <!--Target-only links, e.g., external content or topics that do not need to refer back to the source of the link.-->
+      </relcolspec>
+    </relheader>
+    <relrow>
+      <relcell>
+        <topicref keyref="build-using-dita-command"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="dita-command-arguments"/>
+        <topicref keyref="dita-command-help"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="dita-ot-params"/>
+        <topicref keyref="internal-ant-properties"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="dita-command-arguments"/>
+        <topicref keyref="dita-ot-params"/>
+      </relcell>
+      <relcell/>
+      <relcell>
+        <topicref keyref="using-dita-properties-file"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="dita-command-arguments"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="dita-command-help"/>
+      </relcell>
+      <relcell/>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="publishing-with-ant"/>
+        <topicref keyref="ant"/>
+        <topicref keyref="building-with-ant"/>
+        <topicref keyref="creating-an-ant-build-script"/>
+      </relcell>
+      <relcell/>
+      <relcell>
+        <topicref keyref="migrating-ant-to-dita"/>
+      </relcell>
+    </relrow>
+  </reltable>
+</map>

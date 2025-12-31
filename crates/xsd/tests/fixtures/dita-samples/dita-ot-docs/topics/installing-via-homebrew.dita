@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE task PUBLIC "-//OASIS//DTD DITA Task//EN" "task.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<task id="installing-via-homebrew">
+  <title>Installing DITA-OT via Homebrew</title>
+  <titlealts>
+    <navtitle>Installing via Homebrew</navtitle>
+  </titlealts>
+  <shortdesc>An alternative installation method can be used to install DITA-OT via
+    <xref keyref="homebrew"/>, one of the most popular open-source package managers on macOS and Linux.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm>macOS</indexterm>
+        <indexterm><cmdname>dita</cmdname> command
+          <indexterm>Homebrew</indexterm></indexterm>
+        <indexterm>installing
+          <indexterm>Homebrew</indexterm></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <taskbody>
+    <prereq>
+      <p>The steps below assume you have already installed
+        <xref keyref="homebrew"/> according to the instructions at
+        <xref keyref="homebrew">brew.sh</xref>.</p>
+      <note type="tip">Verify that your
+        <xref keyref="PATH"/> begins with the <filepath>bin</filepath> subfolder of the Homebrew installation directory
+        <fn>Homebrew’s default installation location depends on the operating system architecture:
+          <ul>
+            <li><filepath>/usr/local</filepath> on macOS Intel</li>
+            <li><filepath>/opt/homebrew</filepath> on macOS ARM</li>
+            <li><filepath>/home/linuxbrew/.linuxbrew</filepath> on Linux</li>
+          </ul>
+        </fn> to ensure that Homebrew-installed software
+        takes precedence over any programs of the same name elsewhere on the system.</note>
+    </prereq>
+    <steps>
+      <step>
+        <cmd>Update Homebrew to make sure the latest package formulas are available on your system:</cmd>
+        <stepxmp><codeblock outputclass="syntax-bash">$ <cmdname>brew update</cmdname>
+Already up-to-date.</codeblock></stepxmp>
+        <stepresult>
+          <p>Homebrew responds with a list of any new or updated formulæ.</p></stepresult>
+      </step>
+      <step importance="optional">
+        <cmd>Check the version of DITA-OT that is available from Homebrew:</cmd>
+        <stepxmp><codeblock outputclass="syntax-bash">$ <cmdname>brew info dita-ot</cmdname>
+<systemoutput>dita-ot: stable <keyword keyref="maintenance-version"/>
+DITA Open Toolkit is an implementation of the OASIS DITA specification
+https://www.dita-ot.org/
+/opt/homebrew/Cellar/dita-ot/<keyword keyref="maintenance-version"/> (<varname>number of files</varname>, <varname
+              >package size</varname>) *
+  Poured from bottle using the formulae.brew.sh API on <varname>YYYY-MM-DD</varname> at <varname>hh:mm:ss</varname>
+From: https://github.com/Homebrew/homebrew-core/blob/master/Formula/dita-ot.rb
+License: Apache-2.0
+==> Dependencies
+Required: openjdk ✔</systemoutput>
+</codeblock></stepxmp>
+        <stepresult>
+          <p>The version of the DITA-OT formula is shown, along with basic information on the package.</p></stepresult>
+      </step>
+      <step>
+        <cmd>Install the <codeph>dita-ot</codeph> package:</cmd>
+        <stepxmp><codeblock outputclass="syntax-bash">$ <cmdname>brew install dita-ot</cmdname>
+<systemoutput>Downloading…</systemoutput></codeblock></stepxmp>
+        <stepresult>
+          <p>Homebrew will automatically download the latest version of the toolkit, install it in a subfolder of the
+            local package Cellar and symlink the <cmdname>dita</cmdname> command to the <filepath>bin</filepath>
+            subfolder of the Homebrew installation directory.</p>
+        </stepresult>
+      </step>
+      <step importance="optional">
+        <cmd>Verify the installation:</cmd>
+        <stepxmp><codeblock outputclass="syntax-bash">$ <cmdname>which dita</cmdname>
+<systemoutput>/opt/homebrew/bin/dita</systemoutput></codeblock></stepxmp>
+        <stepresult>
+          <p>The response confirms that the system will use the Homebrew-installed version of DITA-OT.</p></stepresult>
+      </step>
+      <step importance="optional">
+        <cmd>Check the DITA-OT version number:</cmd>
+        <stepxmp><codeblock outputclass="syntax-bash">$ <cmdname>dita</cmdname> <parmname>--version</parmname>
+<systemoutput>DITA-OT version <keyword keyref="maintenance-version"/></systemoutput></codeblock></stepxmp>
+        <stepresult>The DITA-OT version number appears on the console.</stepresult>
+      </step>
+    </steps>
+    <result>
+      <p>You can now run the <cmdname>dita</cmdname> command to transform DITA content.</p></result>
+  </taskbody>
+</task>

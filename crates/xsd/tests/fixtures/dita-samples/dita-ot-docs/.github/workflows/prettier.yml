@@ -1,0 +1,37 @@
+# This workflow checks code formatting
+
+name: Run Prettier
+
+# This action works with pull requests and pushes
+
+on:
+  pull_request:
+  push:
+    branches:
+      # Push events on development branch
+      - develop
+
+jobs:
+  prettier:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Make sure the actual branch is checked out when running on pull requests
+          ref: ${{ github.ref }}
+
+      - name: Set Node.js version
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+
+      - name: Prettify code
+        run: |
+          npm run check

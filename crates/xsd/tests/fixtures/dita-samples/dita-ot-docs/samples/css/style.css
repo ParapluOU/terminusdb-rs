@@ -1,0 +1,95 @@
+/**
+ *  This file is part of the DITA Open Toolkit project.
+ *  See the accompanying LICENSE file for applicable license.
+ *
+ *  This file uses a few simple settings to create a new look and feel
+ *  for the generated XHTML output. Note that most elements are still
+ *  styled based on the toolkit's default CSS file, while this CSS
+ *  file only provides a few overrides to that core style.
+ *
+ *  For a sample build that uses this CSS file, see the following Ant
+ *  build file within the DITA-OT installation directory:
+ *  `docsrc/samples/ant_sample/sample_xhtml_plus_css.xml`
+ */
+
+* {
+  margin: 0;
+  padding: 0;
+  top: auto;
+}
+
+.topictitle1 {
+  font-size: 2.5em;
+}
+
+body {
+  background: #fff;
+  background: linear-gradient(to bottom, #eee 0%, #fff);
+  color: #666;
+  float: left;
+  font-family: 'Trebuchet MS', 'Times New Roman', Times, serif;
+  font-size: 0.9em;
+  margin: 30px 0;
+  padding: 0 5px 0 30px;
+  text-align: left;
+  width: 640px;
+}
+
+h1,
+h2,
+h3 {
+  font-family: Arial, Helvetica, sans-serif;
+  margin-bottom: 15px;
+  padding-bottom: 10px;
+  text-transform: uppercase;
+}
+
+p,
+ul,
+ol,
+dl {
+  margin-top: 1.5em;
+}
+
+ul,
+ol,
+dl {
+  margin-left: 3em;
+}
+
+dt {
+  font-weight: bold;
+}
+
+dd {
+  margin-left: 3em;
+}
+
+blockquote {
+  font-style: italic;
+  margin-left: 3em;
+  margin-right: 3em;
+}
+
+a {
+  color: #70a300;
+  text-decoration: none;
+}
+
+a:hover {
+  border: 0;
+  color: #70a300;
+}
+
+/* Inline Table of Contents */
+nav.toc {
+  border-left: 1px solid #70a300;
+  float: right;
+  font-size: small;
+  margin-left: 1em;
+  max-width: 200px;
+}
+
+nav.toc > ul {
+  margin-top: 0;
+}

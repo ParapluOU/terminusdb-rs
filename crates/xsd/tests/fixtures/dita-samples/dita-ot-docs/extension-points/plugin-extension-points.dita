@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE reference PUBLIC "-//OASIS//DTD DITA Reference//EN" "reference.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<reference id="plugin-extension-points">
+  <title>Extension point reference</title>
+  <titlealts>
+    <navtitle>Extension points</navtitle>
+  </titlealts>
+  <shortdesc>DITA Open Toolkit provides a series of extension points that can be used to integrate changes into the core
+    code. Extension points are defined in the <filepath>plugin.xml</filepath> file for each plug-in. When plug-ins are
+    installed, DITA-OT makes each extension visible to the rest of the toolkit.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm>extension points
+          <indexterm>overview</indexterm>
+          <indexterm>plug-in</indexterm></indexterm>
+        <indexterm>extension points
+          <index-see-also>pre-processing</index-see-also></indexterm>
+        <indexterm><filepath>plugin.xml</filepath></indexterm>
+        <indexterm>topicmerge
+          <index-see>org.dita.pdf2.xsl.topicmerge</index-see></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <refbody>
+    <section>
+      <p>Depending on which extension points you use, your custom code will either run whenever output is generated,
+        before or after certain processing stages, or only with certain transformation types.</p>
+    </section>
+    <example>
+      <title>Extension points govern when code runs</title>
+      <ul>
+        <li>To run a custom Ant target after the pre-processing stage regardless of transformation type, use
+            <parmname>depend.preprocess.post</parmname></li>
+        <li>To run an Ant target before the <codeph>copy-html</codeph> step when generating HTML output, use
+            <parmname>depend.preprocess.copy-html.pre</parmname></li>
+      </ul>
+    </example>
+    <example>
+      <title>Checking the transformation type</title>
+      <p>If you want to isolate your custom code so it only runs when output is generated for a particular
+        transformation type, you can define a condition that checks the transtype before running the custom code.</p>
+      <codeblock
+        outputclass="language-xml normalize-space show-line-numbers show-whitespace"
+      >&lt;!-- Add a condition that checks the transtype -->
+&lt;condition property="isYourTranstype">
+  &lt;matches pattern="your.transtype" string="${transtype}"/>
+&lt;/condition></codeblock>
+      <p>You can then check this condition before running your custom code:</p>
+      <codeblock
+        outputclass="language-xml normalize-space show-line-numbers show-whitespace"
+      >&lt;!-- Check the condition before running your target -->
+&lt;target name="your-target" if="${isYourTranstype}">
+  ⋮
+&lt;/target></codeblock>
+    </example>
+  </refbody>
+</reference>

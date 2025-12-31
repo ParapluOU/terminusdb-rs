@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE task PUBLIC "-//OASIS//DTD DITA Task//EN" "task.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<task id="ID">
+  <title>Conref file for tasks</title>
+  <taskbody>
+    <context>
+      <p id="semver-info">DITA-OT releases follow
+        <xref keyref="semver"/> guidelines. Version numbers use the <varname>major.minor.patch</varname> syntax, where
+          <varname>major</varname> versions may include incompatible API changes, <varname>minor</varname> versions add
+        functionality in a backwards-compatible manner and <varname>patch</varname> versions are maintenance releases
+        that include backwards-compatible bug fixes.</p>
+      <p id="semver-plugins">Custom plug-ins developed for a previous <varname>major</varname> version may require
+        changes to work correctly with recent toolkit versions. Most plug-ins should be compatible with subsequent
+          <varname>minor</varname> and <varname>patch</varname> versions of the <varname>major</varname> release for
+        which they were originally developed.</p>
+      <dl>
+        <dlentry>
+          <dt>Standard Path / Directory Names</dt>
+          <dd><filepath id="ot-dir"><varname>dita-ot-dir</varname></filepath></dd>
+          <dd><filepath id="dita-cmd"><cmdname>dita</cmdname></filepath></dd>
+          <dd><filepath id="docsrc-dir"><varname>dita-ot-dir</varname>/docsrc</filepath></dd>
+          <dd><filepath id="docsrc-absolute"><varname>/absolute/path/to/dita-ot-dir</varname>/docsrc</filepath></dd>
+          <dd><filepath id="samples-dir"><varname>dita-ot-dir</varname>/docsrc/samples</filepath></dd>
+          <dd><filepath id="samples-absolute"><varname
+              >/absolute/path/to/dita-ot-dir</varname>/docsrc/samples</filepath></dd>
+        </dlentry>
+        <dlentry>
+          <dt>Plug-In Info</dt>
+          <dd>
+            <ul>
+              <li id="plug-in-id"><filepath><varname>&lt;plug-in-id&gt;</varname></filepath> is the unique ID of the
+                plug-in, as defined in the plug-in’s configuration file (<filepath>plugin.xml</filepath>).</li>
+              <li id="plug-in-zip"><filepath><varname>plug-in-zip</varname></filepath> is the
+                  <varname>filename</varname> or <varname>URL</varname> of the plug-in’s distribution ZIP file
+                (optional).</li>
+              <li id="plug-in">the optional <filepath><varname>&lt;plug-in&gt;</varname></filepath> argument is one of
+                the following:
+                <ul>
+                  <li>the unique <varname>ID</varname> of the plug-in as defined in the plug-in registry at
+                    <xref keyref="site-plugin-registry"/> (or a local registry)</li>
+                  <li>the remote <varname>URL</varname> of the plug-in’s distribution ZIP file</li>
+                  <li>the name of a local ZIP <varname>file</varname></li>
+                </ul>
+              </li>
+              <li><ph id="plugin-integrate-all">If no <varname>ID</varname>, <varname>URL</varname>, or
+                    <varname>file</varname> argument is provided, the installation process reloads the current set of
+                  plug-ins from the <filepath>plugins</filepath> directory (or any custom locations defined via the
+                    <parmname>pluginsdir</parmname> property in the <filepath>configuration.properties</filepath> file
+                  in the <filepath>config</filepath> directory). This approach can be used to add or remove multiple
+                  plug-ins at once, or any individual plug-ins you have already copied to (or removed from) the plug-in
+                  directories. Any plug-ins added or removed in the process will be listed by their plug-in
+                ID.</ph></li>
+              <li><note id="plugin-remove-subdir" type="attention">The <cmdname>uninstall</cmdname> subcommand also
+                  removes the corresponding plug-in directory from the <filepath>plugins</filepath> folder.
+                  <indexterm>uninstalling</indexterm></note></li>
+            </ul>
+          </dd>
+        </dlentry>
+      </dl>
+    </context>
+    <steps>
+      <step>
+        <cmd>
+          <!-- Used in installation topic & Release Notes -->
+          <ph id="download-ot">Download the <filepath>dita-ot-<keyword keyref="maintenance-version"/>.zip</filepath>
+            package from the project website at
+            <xref keyref="download.dita-ot"/>.</ph>
+        </cmd>
+      </step>
+      <step>
+        <cmd id="open-terminal">Open a command prompt or terminal session.</cmd>
+        <info>
+          <ul id="basic-variables">
+            <li id="novice-variables"><varname>input-file</varname> is the DITA map or DITA file that you want to
+              process.</li>
+            <!-- ↓ excerpt-variables ↓ -->
+            <li id="novice-variables-last" audience="novice">
+              <p id="common-format-info">
+                <varname>format</varname> is the output format (transformation type). This argument corresponds to the
+                common parameter <xref keyref="parameters-base/transtype"/>. Use the same values as for the
+                  <parmname>transtype</parmname> build parameter, for example <option>html5</option> or
+                  <option>pdf</option>.</p>
+            </li>
+            <!-- ↑ end-excerpt ↑ -->
+            <li id="expert-variables-last" audience="expert">
+              <p conref="#ID/common-format-info"/>
+              <p id="transtypes">You can create plug-ins to add new output formats; by default, the following values are
+                available:
+                <indexterm>transtype
+                  <indexterm>list</indexterm></indexterm>
+                <ul>
+                  <li><option>dita</option></li>
+                  <li><option>eclipsehelp</option></li>
+                  <li><option>html5</option></li>
+                  <li platform="windows"><option>htmlhelp</option></li>
+                  <li><option>markdown</option>, <option>markdown_gitbook</option>, and
+                    <option>markdown_github</option></li>
+                  <li><option>pdf</option></li>
+                  <li><option>xhtml</option></li>
+                </ul>
+                <note type="tip">See
+                  <xref keyref="output-formats"/> for sample command line syntax and more information on each
+                  transformation. </note>
+              </p>
+            </li>
+            <li id="options">[<varname>options</varname>] include the following optional build parameters:
+              <parml conkeyref="dita-command-arguments/dita_build_options">
+                <plentry>
+                  <pt/>
+                  <pd/>
+                </plentry>
+              </parml></li>
+          </ul>
+        </info>
+      </step>
+      <step>
+        <cmd>Extending pre-processing</cmd>
+        <info>
+          <note id="tip-extend-before-after-preprocessing" type="tip">For maximum compatibility with future versions of
+            DITA-OT, most plug-ins should use the extension points that run <b>before</b> or <b>after</b>
+            pre-processing.</note>
+          <note id="caution-extend-within-preprocessing" type="caution">The internal order of pre-processing steps is
+            subject to change between versions of DITA-OT. New versions may remove, reorder, combine, or add steps to
+            the process, so the extension points <b>within</b> the pre-processing stage should only be used if
+            absolutely necessary.</note>
+        </info>
+      </step>
+      <step id="install-plugin">
+        <cmd>Use the <cmdname>dita install</cmdname> subcommand to install the plug-in.</cmd>
+        <info>
+          <note>For more information, see
+            <xref keyref="plugins-installing"/>.</note></info>
+      </step>
+    </steps>
+    <postreq>
+      <note type="tip" id="template-properties">Copy <filepath conref="#ID/samples-dir"/><filepath
+        >/properties/template.properties</filepath>; this template describes each of the properties you can
+        set.</note>
+      <note type="tip" id="pass-input-dir">If you are building in different environments where the location of the input
+        files is not consistent, set <option>args.input.dir</option> with the <cmdname>dita</cmdname> command and
+        reference its value with <codeph>${args.input.dir}</codeph> in your <filepath>.properties</filepath> file.
+        <indexterm><cmdname>dita</cmdname> command
+          <indexterm><option>args.input.dir</option></indexterm>
+          <indexterm>.properties file</indexterm></indexterm>
+        <indexterm>args.input.dir</indexterm>
+      </note>
+      <ol>
+        <li id="install-plugin-postreq-li">
+          <p>Use the <cmdname>dita install</cmdname> subcommand to install the plug-in.</p>
+          <note>For more information, see
+            <xref keyref="plugins-installing"/>.</note>
+        </li>
+      </ol>
+    </postreq>
+  </taskbody>
+</task>

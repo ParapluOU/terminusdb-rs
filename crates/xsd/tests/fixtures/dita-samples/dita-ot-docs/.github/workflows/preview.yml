@@ -1,0 +1,82 @@
+# This workflow builds PR changes and deploys to Netlify
+
+name: Generate website preview
+
+on:
+  pull_request:
+    branches:
+      - 'develop'
+      - 'release/*'
+    types: [opened, synchronize, reopened]
+
+jobs:
+  preview:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      WEBSITE_BRANCH: 'master'
+    steps:
+      - name: Check out docs
+        uses: actions/checkout@v5
+      - name: Check out website
+        uses: actions/checkout@v5
+        with:
+          repository: dita-ot/website
+          ref: ${{ env.WEBSITE_BRANCH }}
+          path: website
+
+      - name: Render website
+        uses: ./.github/actions/render
+
+      - name: Cache NPM
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Build website
+        run: |
+          cd ${{ github.workspace }}/website && npm ci && npm run install
+          cd ${{ github.workspace }}
+          echo "PR_ID=$(echo $GITHUB_REF |  cut -d'/' -f 3 )" >> $GITHUB_ENV
+
+          # Move website to root
+          mv -f ${{ github.workspace }}/website/* ${{ github.workspace }}/
+          rm -fr build
+
+      - name: Cache gems
+        uses: actions/cache@v4
+        with:
+          path: vendor/bundle
+          key: ${{ runner.os }}-gems-${{ hashFiles('**/Gemfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-gems-
+
+      - name: Install Jekyll
+        run: |
+          bundle config path vendor/bundle
+          bundle install
+      - name: Run Jekyll
+        run: |
+          bundle exec jekyll build
+
+      - name: Deploy to Netlify
+        uses: netlify/actions/cli@master
+        with:
+          args: deploy --dir _site --alias "preview-pr-${{ env.PR_ID }}"
+        env:
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+
+      - name: Create status
+        uses: Sibz/github-status-action@v1
+        with:
+          authToken: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.event.pull_request.head.sha }}
+          # may have to use $GITHUB_REPOSITORY and split it into repository and owner by /
+          context: 'Preview'
+          description: 'Website preview generated'
+          state: 'success'
+          target_url: 'https://preview-pr-${{ env.PR_ID }}--dita-ot.netlify.app'

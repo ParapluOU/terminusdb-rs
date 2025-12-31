@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<map>
+  <title>Test Case Catalog</title>
+  <topicgroup>
+    <topicmeta>
+      <navtitle>Key Definitions</navtitle>
+    </topicmeta>
+    <mapref href="key-spaces/allowed-key-name-characters/allowed-key-characters-keydefs.ditamap"/>
+    <mapref keyscope="branch-filtering-name-augmentation-01"
+      href="key-spaces/branch-filtering-name-augmentation-01/branch-filtering-name-augmentation-01.ditamap"
+      scope="peer" toc="no">
+      <topicmeta>
+        <navtitle>Branch filtering name augmentation test 01.</navtitle>
+      </topicmeta>
+    </mapref>
+    <mapref keyscope="keyscope-test-01"
+      href="key-spaces/keyscope-test-01/root-map-keyscope-test-01.ditamap" scope="peer" toc="no">
+      <topicmeta>
+        <navtitle>Key scope test 01</navtitle>
+      </topicmeta>
+    </mapref>
+    <mapref keyscope="this-topic-fragment-ids"
+      href="this-topic-fragment-ids/this-topic-fragment-ids.ditamap" scope="peer" toc="no">
+      <topicmeta>
+        <navtitle>"This-topic" fragment identifier tests</navtitle>
+      </topicmeta>
+    </mapref>
+    <mapref keyscope="cross-deliverable-links"
+      href="cross-deliverable-links/cross-deliverable-links-test-01.ditamap" scope="peer" toc="no">
+      <topicmeta>
+        <navtitle>"This-topic" fragment identifier tests</navtitle>
+      </topicmeta>
+    </mapref>
+    <mapref href="content-references/content-references.ditamap"
+      keyscope="content-references"
+      scope="peer"
+      toc="no"
+    >
+      <topicmeta>
+        <navtitle>Content reference tests</navtitle>
+      </topicmeta>
+    </mapref>
+    <keydef href="http://github.com/dita-community/dita-test-cases"
+      keys="github-project-dita-test-cases" format="html" scope="external">
+      <topicmeta>
+        <navtitle>dita-community/dita-test-cases</navtitle>
+      </topicmeta>
+    </keydef>
+    <topicgroup toc="no"><!-- Maps used as root maps for cross-deliverable linking tests -->
+      <mapref href="cross-deliverable-links/map-a/map-a.ditamap" scope="peer" keyscope="map-a">
+        <topicmeta>
+          <navtitle>Root Map A</navtitle>
+        </topicmeta>        
+      </mapref>
+      <mapref href="cross-deliverable-links/map-b/map-b.ditamap" scope="peer" keyscope="map-b">
+        <topicmeta>
+          <navtitle>Root Map A</navtitle>
+        </topicmeta>        
+      </mapref>
+    </topicgroup>
+    <topicref href="topicsets/topicsetref_test_maps.ditamap" format="ditamap"/>
+  </topicgroup>
+  <topicref keys="test-case-catalog" href="test-case-catalog.dita">
+    <topicref keys="key-spaces" href="key-spaces/key-spaces-tests.dita">
+      <topicref
+        href="key-spaces/branch-filtering-name-augmentation-01/branch-filtering-name-augmentation-01.dita"
+        keys="branch-filtering-name-augmentation-test-01"/>
+      <topicref href="key-spaces/keyscope-test-01/keyscope-test-01-overview.dita"
+        keys="keyscope-test-01"/>
+      <topicref href="key-spaces/allowed-key-name-characters/allowed_key_name_characters_test.dita"/>
+      <topicref href="key-spaces/multiple_levels_of_indirection_with_key_scopes_test.dita"/>
+      <topicref
+        href="key-spaces/scoped-coderef/scoped-coderef-test-01.dita"/>
+    </topicref>
+    <topicref href="this-topic-fragment-ids/this-topic-fragment-ids-test-01.dita">
+    </topicref>
+    <topicref href="cross-deliverable-links/cross-deliverable-links-test-01.dita">
+    </topicref>
+    <topicref href="content-references/conkeyref/topics/conkeyref_tests.dita"/>
+    <topicref href="topicsets/topicset_and_topicsetref_test_cases.dita">
+      <topicref href="topicsets/topicsetref_with_key_scopes_test.dita"/>
+    </topicref>
+    <topicref
+      href="glossaries/glossary_tests.dita">
+      <topicref
+        href="glossaries/glossary-with-resourceonly-keys/glossary_with_resource_only_keys.dita"/>
+    </topicref>
+  </topicref>
+  <reltable>
+    <!-- This relationship table is intended to relate the mapin test case
+         catalog topic to the root topics in each of the test-case-type
+         maps as cross-document links, that is, treating each of those
+         maps as a separate root map.
+      -->
+    <relrow>
+      <relcell>
+        <topicref keyref="test-case-catalog"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="branch-filtering-name-augmentation-01.test-case-description"/>
+        <topicref keyref="keyscope-test-01.overview"/>
+        <topicref keyref="this-topic-fragment-ids.test-case-definition"/>
+        <topicref keyref="content-references.content-reference-tests"/>
+      </relcell>
+    </relrow>
+  </reltable>
+</map>

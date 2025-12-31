@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">
+<topic id="topic_b"> 
+  <title>Topic B</title> 
+  <body> 
+	 <p>Link to URI "topic_a.dita": 
+		<xref href="topic_a.dita"/>
+	 </p> 
+    <p>Link to URI "topic_a-use-02.dita#topic_a": 
+	   <xref href="topic_a-use-02.dita#topic_a"/>
+	 </p> 
+    <p>Link to URI "topic_a-use-02.dita (no fragment ID)": 
+      <xref href="topic_a-use-02.dita"/>
+    </p> 
+    <p>Link to URI "topic_a-use-03.dita": 
+      <xref href="topic_a-use-03.dita#topic_a"/>
+    </p> 
+    <p>Link to URI "topic_a-use-04.dita": 
+      <xref href="topic_a-use-04.dita#topic_a"/>
+    </p> 
+    <p>Link to URI "topic_a-use-05.dita": 
+      <xref href="topic_a-use-05.dita#topic_a"/>
+    </p> 
+  </body>
+</topic>

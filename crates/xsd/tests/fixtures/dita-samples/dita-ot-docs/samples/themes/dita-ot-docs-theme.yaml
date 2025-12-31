@@ -1,0 +1,275 @@
+# Sample PDF theme
+#
+# https://www.dita-ot.org/dev/topics/sample-pdf-theme.html
+
+# ↓ add-brand-colors ↓
+brand:
+  color:
+    inverse: '#e9ecef'
+    links: '#3563ab'
+    note:
+      background:
+        attention: '#fff3cd'
+        caution: '#f8d7da'
+        info: '#dce4f0'
+        tip: '#d1e7dd'
+    primary: '#1d365d'
+    secondary: '#6c757d'
+    tertiary: '#bac8d1'
+    xml-domain: '#639'
+# ↑ end-brand-colors ↑
+
+# Add part/chapter ToCs
+chapter-layout: MINITOC
+
+# Apply default theme settings
+extends: default
+
+# ↓ add-footer-setup ↓
+footer:
+  color: $brand-color-secondary
+  end-indent: 10mm
+  even:
+    content: '{folio}'
+    font-weight: bold
+    text-align: start
+  font-family: $pdf2-font-sans
+  odd:
+    content: '{folio}'
+    font-weight: bold
+    text-align: end
+  padding-after: 12pt
+  padding-before: 6pt
+  start-indent: 10mm
+# ↑ end-footer-setup ↑
+
+force-page-count: even
+
+# ↓ add-header-setup ↓
+header:
+  color: $brand-color-secondary
+  display-align: before
+  end-indent: 10mm
+  even:
+    content: '{part-title}'
+    text-align: start
+  font-family: $pdf2-font-sans
+  odd:
+    content: '{chapter-title}'
+    text-align: end
+  padding-after: 6pt
+  padding-before: 12pt
+  start-indent: 10mm
+# ↑ end-header-setup ↑
+
+# ↓ add-page-settings ↓
+page:
+  mirror-margins: true
+  size: PA4
+# ↑ end-page-settings ↑
+
+# Add part ToC links
+part-layout: MINITOC
+
+# ↓ add-font-stacks ↓
+pdf2:
+  font:
+    monospaced: 'Courier New, Courier, Arial Unicode MS, Tahoma, Batang, SimSun'
+    sans: 'Helvetica, Arial Unicode MS, Tahoma, Batang, SimSun'
+    serif: 'Times New Roman, Times, Arial Unicode MS, Tahoma, Batang, SimSun'
+# ↑ end-font-stacks ↑
+
+style:
+  body:
+    font-family: $pdf2-font-serif
+    font-size: 11pt
+    line-height: 1.3
+    start-indent: 50pt
+  chapter:
+    border-after: solid 2pt $brand-color-inverse
+    toc:
+      1:
+        start-indent: 50pt
+        color: $brand-color-links
+        font-size: 12pt
+      maximum-level: 0
+  cmdname:
+    color: $brand-color-primary
+    font-weight: bold
+  codeblock:
+    background-color: $brand-color-inverse
+    border: solid 1pt $brand-color-tertiary
+    font-family: $pdf2-font-monospaced
+    font-size: 8pt
+    keep-together.within-page: always
+    space-after: 8pt
+  codeph:
+    color: $brand-color-secondary
+  # ↓ set-cover-page ↓
+  cover:
+    background-image: dita-ot-logo-inverse.svg
+    background-repeat: no-repeat
+    height: 25.7cm
+  cover-title:
+    color: $brand-color-primary
+    font-size: 36pt
+    font-weight: bold
+    line-height: 1.5
+    space-before: 195mm
+  # ↑ end-cover-page ↑
+  example-title:
+    color: $brand-color-secondary
+  fig:
+    caption:
+      color: $brand-color-secondary
+      font-size: 9pt
+      font-style: italic
+      font-weight: normal
+  filepath:
+    color: $brand-color-secondary
+  h1:
+    color: $brand-color-primary
+    font-size: 18pt
+    font-weight: bold
+    padding-top: 0pt
+    space-after: 9pt
+    space-before: 0pt
+    title-numbering: true
+  h2:
+    color: $brand-color-primary
+    font-size: 16pt
+    font-style: italic
+    space-after: 8pt
+    space-before: 16pt
+    title-numbering: false
+  h3:
+    color: $brand-color-primary
+    font-size: 14pt
+    font-weight: bold
+    space-after: 7pt
+    space-before: 21pt
+    title-numbering: false
+  h4:
+    font-size: 12pt
+    font-style: italic
+    space-before: 12pt
+    title-numbering: false
+  index:
+    border-after: solid 2pt $brand-color-inverse
+    color: $brand-color-primary
+    font-family: $pdf2-font-sans
+  li:
+    label:
+      color: $brand-color-secondary
+  link:
+    color: $brand-color-links
+  note:
+    attention:
+      background-color: $brand-color-note-background-attention
+    background-color: $brand-color-note-background-info
+    border: solid 1pt $brand-color-tertiary
+    caution:
+      background-color: $brand-color-note-background-caution
+    end-indent: '6pt + from-parent(end-indent)'
+    important:
+      background-color: $brand-color-note-background-attention
+    keep-together.within-page: always
+    label:
+      font-family: $pdf2-font-sans
+      space-end: 2pt
+    notice:
+      background-color: $brand-color-note-background-attention
+    padding-end: 6pt
+    padding-start: 6pt
+    restriction:
+      background-color: $brand-color-note-background-attention
+    space-after: 12pt
+    space-before: 6pt
+    start-indent: '6pt + from-parent(start-indent)'
+    tip:
+      background-color: $brand-color-note-background-tip
+    warning:
+      background-color: $brand-color-note-background-caution
+  option:
+    color: $brand-color-secondary
+    font-family: $pdf2-font-monospaced
+    font-weight: bold
+  parmname:
+    color: $brand-color-primary
+    font-family: $pdf2-font-monospaced
+    font-weight: bold
+  part:
+    border-after: solid 4pt $brand-color-inverse
+    toc:
+      chapter:
+        color: $brand-color-links
+        font-size: 12pt
+        space-before: 0
+        start-indent: 50pt
+      maximum-level: 0
+      space-before: 1.5em
+  section-title:
+    color: $brand-color-secondary
+  shortdesc:
+    color: $brand-color-secondary
+    font-size: 12pt
+    line-height: 1.3
+  table:
+    caption:
+      color: $brand-color-secondary
+      font-size: 9pt
+      font-style: italic
+      font-weight: normal
+    font-family: $pdf2-font-sans
+    font-size: 9pt
+    header:
+      background-color: $brand-color-inverse
+  toc:
+    1:
+      color: black
+      font-family: $pdf2-font-sans
+      space-before: 2pt
+      start-indent: 112pt
+    2:
+      color: black
+      font-family: $pdf2-font-sans
+      space-before: 2pt
+      start-indent: 130pt
+    3:
+      color: black
+      font-family: $pdf2-font-sans
+      space-before: 2pt
+      start-indent: 148pt
+    4:
+      color: black
+      font-family: $pdf2-font-sans
+      space-before: 2pt
+      start-indent: 166pt
+    appendix:
+      color: $brand-color-secondary
+      font-family: $pdf2-font-sans
+      space-before: 1em
+    chapter:
+      color: $brand-color-primary
+      font-family: $pdf2-font-sans
+      font-weight: bold
+      font-size: 12pt
+      start-indent: 45pt
+    maximum-level: 3
+    part:
+      color: $brand-color-secondary
+      font-family: $pdf2-font-sans
+      font-size: 14pt
+      keep-with-next.within-page: always
+      space-before: 1.5em
+  varname:
+    color: $brand-color-secondary
+    font-family: $pdf2-font-monospaced
+    font-style: italic
+    font-weight: bold
+  xmlatt:
+    color: $brand-color-xml-domain
+  xmlelement:
+    color: $brand-color-xml-domain
+  xmlnsname:
+    color: $brand-color-xml-domain

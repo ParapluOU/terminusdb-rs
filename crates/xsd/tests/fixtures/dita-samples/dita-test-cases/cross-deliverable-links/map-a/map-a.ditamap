@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<map>
+ <title>Map A</title>
+  <topicgroup>
+    <mapref href="../map-b/map-b.ditamap" keys="map-b-map" scope="peer" keyscope="map-b"
+      toc="no"
+    />
+    <mapref href="../map-c/map-c.ditamap" keys="map-c-map" scope="peer" keyscope="map-c"
+      toc="no"
+    />
+  </topicgroup>
+  <mapref href="content-topics.ditamap"/>
+  <reltable title="Cross-Deliverable Links">
+    <relheader>
+      <relcolspec>
+        <title>This publication</title>
+      </relcolspec>
+      <relcolspec>
+        <title>Target deliverable</title>
+      </relcolspec>
+    </relheader>
+    <relrow>
+      <relcell>
+        <topicref keyref="topic-01"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="map-b.topic-01">
+          <topicmeta>
+            <navtitle>Topic 01 Map B as a Root Map</navtitle>
+          </topicmeta>
+        </topicref>
+        <topicref keyref="map-c.topic-01">
+          <topicmeta>
+            <navtitle>Topic 01 Map C as a Root Map</navtitle>
+          </topicmeta>
+        </topicref>
+      </relcell>
+    </relrow>
+  </reltable>
+</map>

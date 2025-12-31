@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<map>
+  <title>Plug-ins</title>
+
+  <topicref keyref="plugin-benefits"/>
+  <topicref keyref="plugin-configfile"/>
+  <topicref keyref="plugin-coding-conventions"/>
+  <topicref keyref="plugin-dependencies">
+    <topicref keyref="referencing-other-plugins"/>
+  </topicref>
+  <topicref keyref="plugin-use-cases">
+    <topicref keyref="plugin-set-parameters"/>
+    <topicref keyref="plugin-anttarget"/>
+    <topicref keyref="plugin-antpreprocess"/>
+    <topicref keyref="plugin-newtranstype"/>
+    <topicref keyref="plugin-preprocess-xslt"/>
+    <topicref keyref="plugin-xsltparams"/>
+    <topicref keyref="plugin-overridestyle"/>
+    <topicref keyref="plugin-javalib"/>
+    <topicref keyref="plugin-messages"/>
+    <topicref keyref="plugin-newextensions"/>
+    <topicref keyref="plugin-xmlcatalog"/>
+    <topicref keyref="plugin-rewrite-rules"/>
+    <topicref keyref="plugin-implement-saxon-customizations">
+      <topicref keyref="plugin-implement-saxon-extension-functions"/>
+      <topicref keyref="plugin-implement-saxon-collation-uri-resolvers"/>
+    </topicref>
+  </topicref>
+  <topicref keyref="html-customization-plugins">
+    <topicref keyref="html-customization-plugin-bundle-css"/>
+    <topicref keyref="html-customization-plugin-webfont"/>
+    <topicref keyref="html-customization-plugin-javascript"/>
+  </topicref>
+  <topicref keyref="pdf-customization-plugins">
+    <topicref keyref="pdf-customization-plugin-types"/>
+    <topicref keyref="pdf-plugin-structure" collection-type="family">
+      <topicref keyref="pdf-plugin-structure_common-artwork"/>
+      <topicref keyref="pdf-plugin-structure_common-index"/>
+      <topicref keyref="pdf-plugin-structure_common-vars"/>
+      <topicref keyref="pdf-plugin-structure_fo-attrs"/>
+      <topicref keyref="pdf-plugin-structure_fo-i18n"/>
+      <topicref keyref="pdf-plugin-structure_fo-xsl"/>
+    </topicref>
+    <topicref keyref="pdf-customization-example"/>
+    <topicref keyref="pdf-customization-resources"/>
+  </topicref>
+  <mapref href="globalizing.ditamap"/>
+
+  <reltable>
+    <title>Bi-directional links</title>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-dependencies"/>
+        <topicref keyref="referencing-other-plugins"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-coding-conventions"/>
+      </relcell>
+    </relrow>
+  </reltable>
+
+  <reltable>
+    <title>Source and target links</title>
+    <relheader>
+      <relcolspec linking="sourceonly"/>
+      <relcolspec linking="targetonly"/>
+    </relheader>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-xmlcatalog"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-general"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-anttarget"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-general"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-antpreprocess"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-pre-processing"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-newtranstype"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-general"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-overridestyle"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-xslt-import"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-xsltparams"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-xslt-parameters"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-javalib"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-general"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-messages"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-extension-points-general"/>
+      </relcell>
+    </relrow>
+    <relrow>
+      <relcell>
+        <topicref keyref="plugin-configfile"/>
+      </relcell>
+      <relcell>
+        <topicref keyref="plugin-newextensions"/>
+      </relcell>
+    </relrow>
+  </reltable>
+</map>

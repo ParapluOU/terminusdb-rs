@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE task PUBLIC "-//OASIS//DTD DITA General Task//EN" "generalTask.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<task id="ID">
+  <title>Publishing with project files</title>
+  <titlealts>
+    <navtitle>Using a project file</navtitle>
+  </titlealts>
+  <shortdesc>DITA-OT project files allow you to publish multiple deliverables at once. Each deliverable specifies a
+    re-usable source <codeph>context</codeph> that groups the maps or topics you want to publish, an
+     <codeph>output</codeph> folder, and a <codeph>publication</codeph> format (such as HTML, or PDF) with
+    transformation parameters.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm><cmdname>dita</cmdname> command
+          <indexterm>project files</indexterm></indexterm>
+        <indexterm>project files
+          <indexterm>using</indexterm></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <taskbody>
+    <section>
+      <title>About project files</title>
+      <p id="projects-formats">Project files may be defined in one of three formats: XML,
+        <xref keyref="json"/>, or
+        <xref keyref="yaml-home"/>. The XML format can be validated with a RELAX NG schema provided in the
+          <filepath>resources</filepath> folder of the DITA-OT installation (<filepath>project.rnc</filepath>).</p>
+      <note>The XML project file format is the normative version provided for interoperability with existing XML-based
+        toolchains. The JSON and YAML versions are alternative compact formats that are easier to read and write, but
+        otherwise equivalent to the XML syntax.</note>
+      <p id="projects-advantages">Whereas <filepath>.properties</filepath> files can only be used to set parameters,
+        project files go further, allowing you to define multiple deliverables with separate input files and output
+        folders and formats for each publication. A project file can also refer to other project files with
+          <codeph>include</codeph> statements. Deliverables, contexts, and publications can either be entirely
+        self-contained, or reference others with <codeph>idref</codeph> attributes, so you can re-use common
+        configuration structures across (and within) projects.</p>
+      <p id="projects-relpaths">Another advantage of project files over <filepath>.properties</filepath> files is that
+        they allow you to specify paths relative to the project file, even for parameters that require absolute paths,
+        such as:
+        <ul>
+          <li><codeph>args.cssroot</codeph></li>
+          <li><codeph>args.ftr</codeph></li>
+          <li><codeph>args.hdf</codeph></li>
+          <li><codeph>args.hdr</codeph></li>
+        </ul>
+      </p>
+    </section>
+    <section>
+      <title>Syntax</title>
+      <p id="projects-structure">Though the exact syntax differs slightly, the basic structure of project files is
+        similar in all supported formats.</p>
+      <p>The following settings can be defined for each <codeph>deliverable</codeph>:</p>
+      <ul compact="yes">
+        <li>
+          <p>a source <codeph>context</codeph> that may include:
+            <ul compact="yes">
+              <li>an <codeph>id</codeph> that allows you to refer to this context from other contexts or projects</li>
+              <li>an <codeph>idref</codeph> that refers to another context</li>
+              <li>a series of <codeph>input</codeph> files (the DITA maps or topics you want to publish)</li>
+              <li>a <codeph>profile</codeph> with a series of DITAVAL files used to filter the content of all
+                publications in the deliverable</li>
+            </ul>
+          </p>
+        </li>
+        <li>
+          <p>an <codeph>output</codeph> location (relative to the CLI <parmname>--output</parmname> directory)</p></li>
+        <li>
+          <p>a <codeph>publication</codeph> type that defines:
+            <ul compact="yes">
+              <li>an <codeph>id</codeph> that allows you to refer to this publication from other publications or
+                projects</li>
+              <li>an <codeph>idref</codeph> that refers to another publication</li>
+              <li>a <codeph>transtype</codeph> that specifies an output format (such as HTML, or PDF)</li>
+              <li>a series of <codeph>param</codeph> elements, with any parameters to set for this transformation type,
+                specified via <codeph>name</codeph> and either <codeph>href</codeph>, <codeph>path</codeph>, or
+                  <codeph>value</codeph></li>
+              <li>a <codeph>profile</codeph> with any additional DITAVAL files used to filter the content of the
+                publication (in addition to any filters defined in the map context)</li>
+            </ul></p>
+          <p>Parameters defined in a publication can override those in other publications that are referenced via
+              <codeph>idref</codeph>.</p>
+          <fig>
+            <title>Sample project file with publication parameter overrides: <filepath
+                conkeyref="conref-task/samples-dir"
+              /><filepath>/project-files/param-override.xml</filepath></title>
+            <codeblock outputclass="language-xml normalize-space show-line-numbers show-whitespace"><coderef
+                href="../samples/project-files/param-override.xml"
+              /></codeblock>
+          </fig>
+        </li>
+      </ul>
+      <note type="tip">
+        <ul>
+          <li>Use <codeph>href</codeph> for web addresses and other resources that should resolve to an absolute
+            URI. Relative references are resolved using the project file as a base directory.</li>
+          <li>Use <codeph>path</codeph> for parameters that require an absolute value, like
+              <parmname>args.cssroot</parmname>. Paths may be defined relative to the project file, but are always
+            expanded to an absolute system path.</li>
+          <li>Use <codeph>value</codeph> to define strings and relative values for properties like
+              <parmname>args.csspath</parmname>, which is used to describe a relative path in the output folder. String
+            values are passed as is.</li>
+        </ul>
+      </note>
+    </section>
+    <section id="project-filtering">
+      <title>Project filtering</title>
+      <p>As of DITA-OT 4.0, you can add DITAVAL filters to both contexts and publications. If a set of filter conditions
+        applies to most or all of your deliverables, then it should probably be defined in a publication, rather than in
+        contexts.</p>
+      <p> For example, consider a case with 100 maps that have multiple <xmlatt>product</xmlatt> variants, but every one
+        of which is published in two <xmlatt>audience</xmlatt> conditions (internal or external). If
+          <xmlatt>audience</xmlatt> is varied in publications, the structure is orthogonal and well-organized:</p>
+      <fig>
+        <title>Sample filtering scenario</title>
+        <image href="../reference/images/sample-project-filtering-scenario.svg" placement="break" width="6.5in"/>
+      </fig>
+    </section>
+    <steps>
+      <step>
+        <cmd>Create a project file to define the deliverables in your publication project.</cmd>
+        <stepxmp>
+          <p>For example:</p>
+          <fig>
+            <title>Sample project file for PDF output: <filepath conkeyref="conref-task/samples-dir"/><filepath
+              >/project-files/pdf.xml</filepath></title>
+            <codeblock outputclass="language-xml normalize-space show-line-numbers show-whitespace"><coderef
+                href="../samples/project-files/pdf.xml"
+              /></codeblock>
+          </fig>
+        </stepxmp>
+      </step>
+      <step>
+        <cmd>Pass your project file to the <cmdname>dita</cmdname> command to build output.</cmd>
+        <stepxmp>
+          <codeblock outputclass="syntax-bash"><cmdname>dita</cmdname> <parmname>--project</parmname>=<varname
+            >pdf.xml</varname></codeblock>
+        </stepxmp>
+      </step>
+      <step importance="optional">
+        <cmd>If needed, pass additional arguments to the <cmdname>dita</cmdname> command to override specific build
+          parameters. </cmd>
+        <stepxmp>
+          <p>For example, to build output once with <xmlelement>draft</xmlelement> and
+              <xmlelement>required-cleanup</xmlelement> content:</p>
+          <codeblock outputclass="syntax-bash"><cmdname>dita</cmdname> <parmname>--project</parmname>=<varname
+            >pdf.xml</varname> <parmname>--args.draft</parmname>=<option>yes</option></codeblock>
+        </stepxmp>
+      </step>
+      <step importance="optional">
+        <cmd>If your project contains multiple deliverables, you can pass the <parmname>--deliverable</parmname> option
+          to generate output for a single deliverable ID.</cmd>
+        <stepxmp>
+          <codeblock outputclass="syntax-bash"><cmdname>dita</cmdname> <parmname>--project</parmname>=<varname
+            >all.xml</varname> <parmname>--deliverable</parmname>=<option>htmlhelp</option></codeblock>
+        </stepxmp>
+      </step>
+    </steps>
+  </taskbody>
+</task>

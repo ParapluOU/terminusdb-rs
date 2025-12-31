@@ -1,0 +1,56 @@
+{
+  "name": "docs",
+  "description": "DITA-OT Documentation",
+  "homepage": "https://github.com/dita-ot/docs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dita-ot/docs.git"
+  },
+  "license": "Apache-2.0",
+  "scripts": {
+    "check": "npm run prettier-check && npm run stylelint",
+    "fix:style": "stylelint \"**/*.css\" --fix",
+    "fmt": "npm run format",
+    "format": "prettier --write \"**/*.{css,dita*,json,md,scss,xml,yaml,yml}\"",
+    "lint-staged": "lint-staged --no-stash",
+    "prepare": "husky",
+    "prettier": "prettier --write \"**/*.{css,dita*,json,md,scss,xml,yaml,yml}\"",
+    "prettier-check": "prettier --check \"**/*.{css,dita*,json,md,scss,xml,yaml,yml}\"",
+    "stylelint": "stylelint \"**/*.css\"",
+    "test": "prettier --list-different \"**/*.{css,dita*,json,md,scss,xml,yaml,yml}\""
+  },
+  "lint-staged": {
+    "*.{css,dita*,json,md,scss,xml,yaml,yml}": [
+      "prettier --write"
+    ],
+    "*.{css,scss}": [
+      "stylelint"
+    ]
+  },
+  "stylelint": {
+    "extends": [
+      "stylelint-config-recommended",
+      "stylelint-config-sass-guidelines"
+    ],
+    "ignoreFiles": [
+      "out/**/*.css"
+    ],
+    "rules": {
+      "no-descending-specificity": null,
+      "no-irregular-whitespace": null,
+      "selector-class-pattern": null,
+      "selector-max-id": 1,
+      "selector-max-type": 3,
+      "selector-no-qualifying-type": null
+    }
+  },
+  "devDependencies": {
+    "@prettier/plugin-xml": "3.4.2",
+    "husky": "^9.1.7",
+    "lint-staged": "16.2.6",
+    "prettier": "3.6.2",
+    "stylelint": "^16.25.0",
+    "stylelint-config-recommended": "^17.0.0",
+    "stylelint-config-sass-guidelines": "^12.1.0"
+  }
+}

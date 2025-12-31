@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE concept PUBLIC "-//OASIS//DTD DITA Concept//EN" "concept.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<concept id="prerequisite-software">
+  <title>Prerequisite software</title>
+  <shortdesc>The software that DITA-OT requires depends on the output formats you want to use.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm>RenderX
+          <indexterm>XSL-FO processor</indexterm></indexterm>
+        <indexterm>Antenna House
+          <indexterm>XSL-FO processor</indexterm></indexterm>
+        <indexterm>Apache FOP
+          <indexterm>XSL-FO processor</indexterm></indexterm>
+        <indexterm>installing
+          <indexterm>prerequisites</indexterm></indexterm>
+        <indexterm>XSLT
+          <indexterm>processor</indexterm></indexterm>
+        <indexterm>XSLT
+          <indexterm>2.0</indexterm></indexterm>
+        <indexterm>Saxon
+          <indexterm>version</indexterm></indexterm>
+        <indexterm>Java
+          <indexterm>Java Development Kit (JDK)</indexterm>
+          <indexterm>Java Runtime Environment (JRE)</indexterm></indexterm>
+        <indexterm>XSL-FO processor
+          <index-see>Antenna House</index-see>
+          <index-see>RenderX</index-see>
+          <index-see>Apache FOP</index-see></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <conbody>
+    <section>
+      <title>Software required for core DITA-OT processing</title>
+      <p>DITA-OT requires the following software applications:
+        <dl>
+          <dlentry>
+            <dt>Java Development Kit (JDK) or Java Runtime Environment (JRE)</dt>
+            <dd>
+              <p conkeyref="reusable-components/java-clients"/>
+              <note>This is the <i>only</i> prerequisite that you need to install. All other required software is
+                provided in the distribution package, including
+                <xref keyref="download.ant"><keyword keyref="tool.ant.tm"/></xref>
+                <keyword keyref="tool.ant.version"/>,
+                <xref keyref="download.saxon">Saxon</xref>
+                <keyword keyref="tool.saxon.version"/>, and
+                <xref keyref="download.icu4j">ICU for Java</xref>
+                <keyword keyref="tool.icu4j.version"/>.</note>
+            </dd>
+          </dlentry>
+        </dl>
+      </p>
+    </section>
+    <section>
+      <title>Software required for specific transformations</title>
+      <indexterm>locale</indexterm>
+      <p>Depending on the type of output that you want to generate, you might need the following applications:
+        <dl>
+          <dlentry>
+            <dt>HTML Help Workshop</dt>
+            <dd>Microsoft no longer provides the software required for generating Compiled HTML Help (.chm) files. You
+              can download an archived copy of the HTML Help Workshop from the Internet Archive’s Wayback Machine at
+              <xref keyref="download.html-help-workshop"/>.</dd>
+          </dlentry>
+          <dlentry>
+            <dt>XSL-FO processor</dt>
+            <dd>Required for generating PDF output. <keyword keyref="tool.fop.tm"/>
+              <cite>(Formatting Objects Processor)</cite>
+              <keyword keyref="tool.fop.version"/> is included in the distribution package. You can download other
+              versions from
+              <xref keyref="download.fop"/>. You can also use commercial FO processors such as Antenna House Formatter
+              or RenderX XEP.</dd>
+          </dlentry>
+        </dl>
+      </p>
+    </section>
+  </conbody>
+</concept>

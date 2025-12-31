@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">
+<topic id="topic_ahb_v2n_cv">
+  <title>This-Topic Fragment ID Tests</title>
+  <shortdesc>Tests the resolution of this-topic fragment IDs within elements used by content
+    reference.</shortdesc>
+  <body>
+    <section spectitle="Overview">
+      <p>The DITA 1.3 specification requires that these references be resolved in the context of the
+        referencing topic, not the topic that contains the re-used elements. This means that these
+        references must be resolved after content reference resolution has been performed.</p>
+    </section>
+    <section spectitle="Expected Results">
+      <p>For task test-case-01, which uses the steps by conref, the reference from step 3 to step 1
+        should be resolved in the context of the test-case-01 topic.</p>
+      <p>For task warehouse-task-01 when used directly from the map, the reference from step 3 to
+        step 1 should be resolved in the context of the warehouse topic as rendered for that
+        normal-role use.</p>
+    </section>
+    <section spectitle="Relevant Specification Language">
+      <p>The this-topic fragment identifier is defined here: <xref
+          href="http://docs.oasis-open.org/dita/dita/v1.3/os/part1-base/archSpec/base/uri-based-addressing.html"
+          format="html" scope="external"
+          >http://docs.oasis-open.org/dita/dita/v1.3/os/part1-base/archSpec/base/uri-based-addressing.html</xref>. </p>
+      <p>The requirements for processing this-topic fragment identifiers in content references is
+        defined here: <xref
+          href="http://docs.oasis-open.org/dita/dita/v1.3/os/part1-base/archSpec/base/handling-xref-and-conref-within-topics.html#handling-xref-and-conref-within-topics"
+          format="html" scope="external"
+          >http://docs.oasis-open.org/dita/dita/v1.3/os/part1-base/archSpec/base/handling-xref-and-conref-within-topics.html#handling-xref-and-conref-within-topics</xref></p>
+    </section>
+    <section spectitle="Test Results">
+      <table frame="all" rowsep="1" colsep="1" id="table_f1q_4s3_sgb">
+        <title>Test Results 7 Feb 2018</title>
+        <tgroup cols="3">
+          <colspec colname="c1" colnum="1" colwidth="1.0*"/>
+          <colspec colname="c2" colnum="2" colwidth="1.0*"/>
+          <colspec colname="c3" colnum="3" colwidth="1.0*"/>
+          <thead>
+            <row>
+              <entry>Processor</entry>
+              <entry>Test Result</entry>
+              <entry>Notes</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry>DITA Open Toolkit 3.3</entry>
+              <entry>
+                <p>Test case 1: Failed:  link from within conreffed steps to step within conreffed
+                  steps not resolved.</p>
+                <p>Test case 2: Passed: Link from inside conref to element outside conref works.</p>
+                <p>Test case 3: Failed:<ul id="ul_yxr_rfp_2hb">
+                    <li>Link from inside conref to element in using topic is not resolved.</li>
+                    <li>Link from within conreffed content to ID in conreffed content not
+                      resolved.</li>
+                  </ul></p>
+                <p>Test case 4: Passed. Conref to element in the same topic is resolved.</p>
+                <p>Test case 5: Passed. All conrefs correctly resolved</p>
+              </entry>
+              <entry>It looks like case 1 almost worked in that the generated IDs were close but the
+                actual generated values are different between the ID values set on the list items
+                and on the reference to them.</entry>
+            </row>
+            <row>
+              <entry>DITA Open Toolkit 2.5.4</entry>
+              <entry>Test cases 1-3 fail.<p>Test case 4 succeeds.</p><p>Test case 5: Passed. All
+                  conrefs correctly resolved</p></entry>
+              <entry>This-topic fragment identifiers within conreffed elements are not correctly
+                resolved. They are correctly resolved in the same content when processed
+                directly.</entry>
+            </row>
+            <row>
+              <entry>oXygenXML Editor 20.1 beta</entry>
+              <entry>Partly succeeded. Navigation from links to targets done correctly in all cases.
+                Resolution of link text not done correctly.</entry>
+              <entry/>
+            </row>
+            <row>
+              <entry>XMetaL 11</entry>
+              <entry>Not tested</entry>
+              <entry/>
+            </row>
+            <row>
+              <entry>FrameMaker 19</entry>
+              <entry>Failed</entry>
+              <entry>Links were not resolved although conrefs were resolved.</entry>
+            </row>
+            <row>
+              <entry>ditac 2.5.x</entry>
+              <entry>Not tested</entry>
+              <entry/>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+      <table frame="all" rowsep="1" colsep="1" id="table_t4w_rgn_cv">
+        <title>Test Results 29 March 2016</title>
+        <tgroup cols="3">
+          <colspec colname="c1" colnum="1" colwidth="1.0*"/>
+          <colspec colname="c2" colnum="2" colwidth="1.0*"/>
+          <colspec colname="c3" colnum="3" colwidth="1.0*"/>
+          <thead>
+            <row>
+              <entry>Processor</entry>
+              <entry>Test Result</entry>
+              <entry>Notes</entry>
+            </row>
+          </thead>
+          <tbody>
+            <row>
+              <entry>DITA Open Toolkit 2.2.3</entry>
+              <entry>HTML: Failed with unresolved or incorrectly-resolved links<p>PDF: Failed with
+                  unresolved/incorrectly-resolved references in the conreffed elements.</p></entry>
+              <entry>This-topic fragment identifiers within conreffed elements are not correctly
+                resolved. They are correctly resolved in the same content when processed
+                directly.</entry>
+            </row>
+            <row>
+              <entry>oXygenXML Editor 18 beta</entry>
+              <entry>Failed</entry>
+              <entry>Reference is resolved in the context of source topic containing the conreffed
+                elements, not in the referencing context.<p>Issue has been reported to Syncro Soft
+                  and logged as an issue.</p></entry>
+            </row>
+            <row>
+              <entry>XMetaL 11</entry>
+              <entry>Not tested</entry>
+              <entry/>
+            </row>
+            <row>
+              <entry>FrameMaker 13</entry>
+              <entry>Not tested</entry>
+              <entry/>
+            </row>
+            <row>
+              <entry>ditac 2.5.x</entry>
+              <entry>Not tested</entry>
+              <entry/>
+            </row>
+          </tbody>
+        </tgroup>
+      </table>
+    </section>
+  </body>
+</topic>

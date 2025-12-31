@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<topic id="markdown-input">
+  <title>Markdown input</title>
+  <shortdesc>
+    <xref
+      keyref="markdown-home"
+    /> is a lightweight markup language that allows you to write using an easy-to-read plain text
+    format and convert to structurally valid markup as necessary.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm><xmlatt>format</xmlatt></indexterm>
+        <indexterm>authoring formats
+          <indexterm>Markdown</indexterm></indexterm>
+        <indexterm>Markdown</indexterm>
+        <indexterm>CommonMark</indexterm>
+        <indexterm>converting lightweight formats to DITA</indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <body>
+    <p>In the words of its creators:</p>
+
+    <lq>“The overriding design goal for Markdown’s formatting syntax is to make it as readable as possible. The idea is
+      that a Markdown-formatted document should be publishable as-is, as plain text, without looking like it’s been
+      marked up with tags or formatting instructions.”</lq>
+
+    <p>DITA Open Toolkit allows you to use Markdown files directly in topic references and export DITA content as
+      Markdown.</p>
+
+    <p>These features enable lightweight authoring scenarios that allow subject matter experts to contribute to DITA
+      publications without writing in XML, and support publishing workflows that include DITA content in Markdown-based
+      publishing systems.</p>
+
+    <section>
+      <title>Adding Markdown topics</title>
+      <p>In 2015, the original <term>DITA-OT Markdown</term> plug-in introduced a series of conventions to convert
+        Markdown content to DITA, and vice-versa. This Markdown flavor was called
+        <xref keyref="markdown-dita-syntax">Markdown DITA</xref>. The <codeph>markdown</codeph> format adds several
+        complementary constructs to represent DITA content in Markdown, beyond those proposed for the
+        <xref keyref="mdita-syntax">MDITA</xref> format in the
+        <xref keyref="lwdita-input">Lightweight DITA</xref> specification drafts.</p>
+      <note conkeyref="reusable-components/md-formats"/>
+      <p>To add a Markdown topic to a DITA publication, create a topic reference in your map and set the
+          <xmlatt>format</xmlatt> attribute to <codeph>markdown</codeph> so the toolkit will recognize the source file
+        as Markdown and convert it to DITA:</p>
+      <p><codeblock
+          outputclass="language-xml normalize-space show-line-numbers show-whitespace"
+        >&lt;?xml version="1.0" encoding="utf-8"?>
+&lt;!DOCTYPE map PUBLIC "-//OASIS//DTD DITA Map//EN" "map.dtd">
+&lt;map>
+  &lt;topicref href="markdown-dita-topic.md" <b>format="markdown"</b>/>
+&lt;/map></codeblock></p>
+      <p>When you add Markdown topics to a DITA publication as described above, the content is temporarily converted to
+        DITA in the background when generating other output formats like HTML or PDF, but the Markdown source files
+        remain unchanged.</p>
+      <note type="tip">This approach is recommended in cases where simple content is authored collaboratively over
+        multiple versions, as Markdown topics can be edited by a wide range of authors and combined as necessary with
+        more complex content maintained in DITA XML.</note>
+    </section>
+    <section>
+      <title>Converting Markdown to DITA</title>
+      <p>In cases where the Markdown input is a one-off contribution, members of the DITA authoring team can use the
+        Markdown file as raw material that is easily converted to DITA and enriched with conditional processing
+        attributes, conkeyrefs or other more complex semantics that have no equivalent in limited formats like
+        Markdown.</p>
+      <p>If you prefer to maintain this content in DITA in the future, you can generate DITA output by passing the
+          <parmname>--format</parmname>=<option>dita</option> option on the command line.</p>
+      <p>This converts all input files (both DITA XML and Markdown) to
+        <xref keyref="dita2dita">Normalized DITA</xref>. You can then copy the generated DITA files from the output
+        folder to your project and replace references to the Markdown topics with their DITA equivalents.</p>
+    </section>
+  </body>
+</topic>

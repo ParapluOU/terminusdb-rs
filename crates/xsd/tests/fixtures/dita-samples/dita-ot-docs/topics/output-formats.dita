@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE concept PUBLIC "-//OASIS//DTD DITA Concept//EN" "concept.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<concept id="availabletransforms">
+  <title>Output formats</title>
+  <shortdesc>DITA Open Toolkit ships with several core transformations that convert DITA content to different output
+    formats. Additional formats are available from the plug-in registry at
+    <xref keyref="site-plugin-registry"/>.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm>output formats</indexterm>
+        <indexterm>transformations</indexterm>
+        <indexterm>DITA specification</indexterm>
+        <indexterm>plug-ins
+          <indexterm>default, list of</indexterm></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <conbody>
+    <note type="tip">For information on how to install other formats, see
+      <xref keyref="extending"/>.</note>
+  </conbody>
+</concept>

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE bookmap PUBLIC "-//OASIS//DTD DITA BookMap//EN" "bookmap.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<bookmap xml:lang="en-US">
+  <title>DITA Open Toolkit Release <keyword keyref="release"/></title>
+  <bookmeta>
+    <prodinfo>
+      <prodname>DITA Open Toolkit</prodname>
+      <vrmlist>
+        <vrm version=""/>
+      </vrmlist>
+    </prodinfo>
+  </bookmeta>
+  <frontmatter>
+    <booklists>
+      <toc/>
+    </booklists>
+  </frontmatter>
+  <part keyref="intro">
+    <chapter format="ditamap" href="topics/intro.ditamap"/>
+  </part>
+  <part keyref="installing">
+    <chapter format="ditamap" href="topics/installing.ditamap"/>
+  </part>
+  <part keyref="publishing">
+    <chapter href="topics/publishing.ditamap" format="ditamap"/>
+  </part>
+  <part keyref="parameters">
+    <chapter href="parameters/parameters.ditamap" format="ditamap"/>
+  </part>
+  <part keyref="extending">
+    <chapter href="topics/using-plugins.ditamap" format="ditamap"/>
+  </part>
+  <part keyref="troubleshooting-overview">
+    <chapter href="topics/troubleshooting.ditamap" format="ditamap"/>
+  </part>
+  <part keyref="reference">
+    <chapter href="reference/reference.ditamap" format="ditamap"/>
+  </part>
+  <backmatter>
+    <booklists>
+      <indexlist/>
+    </booklists>
+    <mapref href="resources/common-resources.ditamap" processing-role="resource-only"/>
+  </backmatter>
+</bookmap>

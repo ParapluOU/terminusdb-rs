@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE task PUBLIC "-//OASIS//DTD DITA Task//EN" "task.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<task id="determining-version-of-dita-ot">
+  <title>Checking the DITA-OT version number</title>
+  <titlealts>
+    <navtitle>Checking the version</navtitle>
+  </titlealts>
+  <shortdesc>You can determine the DITA Open Toolkit version number from a command prompt.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm>macOS
+          <indexterm>DITA-OT version</indexterm></indexterm>
+        <indexterm>Linux
+          <indexterm>DITA-OT version</indexterm></indexterm>
+        <indexterm>Windows
+          <indexterm>DITA-OT version</indexterm></indexterm>
+        <indexterm>command line
+          <indexterm>checking DITA-OT version</indexterm></indexterm>
+        <indexterm>installing
+          <indexterm>check current version</indexterm></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <taskbody>
+    <steps>
+      <step>
+        <cmd conkeyref="conref-task/open-terminal"/>
+      </step>
+      <step>
+        <cmd>Issue the following command:</cmd>
+        <stepxmp>
+          <codeblock><filepath conkeyref="conref-task/dita-cmd"/> <parmname>--version</parmname></codeblock>
+        </stepxmp>
+      </step>
+    </steps>
+    <result>
+      <p>The DITA-OT version number appears on the console:</p>
+      <codeblock><systemoutput>DITA-OT version <keyword keyref="maintenance-version"/></systemoutput></codeblock>
+    </result>
+  </taskbody>
+</task>

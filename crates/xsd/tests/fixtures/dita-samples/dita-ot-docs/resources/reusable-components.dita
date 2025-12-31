@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE concept PUBLIC "-//OASIS//DTD DITA Concept//EN" "concept.dtd">
+<!--  This file is part of the DITA Open Toolkit project. See the accompanying LICENSE file for applicable license.  -->
+<concept id="ID">
+  <title>Re-usable components</title>
+  <shortdesc>Warehouse topic used to store re-usable content for concept topics or other constructs that would not be
+    valid in the existing warehouse task <filepath>conref-task.dita</filepath>.</shortdesc>
+  <prolog>
+    <metadata>
+      <keywords>
+        <indexterm><!-- This file contains reusable content. Index entries are in each <section>.  --></indexterm>
+      </keywords>
+    </metadata>
+  </prolog>
+  <conbody>
+    <section id="use-xslt2">
+      <title>Upgrade stylesheets to XSLT 2.0</title>
+      <indexterm>upgrading</indexterm>
+      <indexterm>Saxon</indexterm>
+      <indexterm>XSLT
+        <indexterm>1.0</indexterm></indexterm>
+      <indexterm>XSLT
+        <indexterm>2.0</indexterm></indexterm>
+      <indexterm>plug-ins
+        <indexterm>upgrading</indexterm></indexterm>
+      <p>The Saxon project has announced plans to remove XSLT 1.0 support from the Saxon-HE library that ships with
+        DITA-OT:</p>
+      <lq href="https://www.xml.com/news/release-saxon-98/" format="html" scope="external">…we’re dropping XSLT 1.0
+        backwards compatibility mode from Saxon-HE, and hope to eliminate it entirely in due course.</lq>
+      <p>DITA-OT 3.0 and 3.0.1 included Saxon-HE 9.8.0.5, which rejects XSLT stylesheets that specify
+          <codeph>version="1.0"</codeph>. Plug-ins with XSLT templates specifying version 1.0 will fail with the message
+          “<msgph>XSLT 1.0 compatibility mode is not available in this configuration</msgph>.”</p>
+      <p>To resolve this issue, change any occurrences of <codeph>&lt;xsl:stylesheet version="1.0"></codeph> in custom
+        plug-in stylesheets to at least <codeph>&lt;xsl:stylesheet version="2.0"></codeph>.</p>
+      <note type="tip">DITA-OT 3.0.2 includes Saxon-HE 9.8.0.7, which restores XSLT 1.0 backwards-compatibility mode,
+        but the DITA Open Toolkit project recommends upgrading all stylesheets to XSLT 2.0 to ensure plug-ins remain
+        compatible with future versions of DITA-OT and Saxon-HE.</note>
+    </section>
+    
+    <section id="use-xslt3">
+      <title>Upgrade stylesheets to XSLT3</title>
+      <indexterm>upgrading</indexterm>
+      <indexterm>Saxon</indexterm>
+      <indexterm>XSLT
+        <indexterm>1.0</indexterm></indexterm>
+      <indexterm>XSLT
+        <indexterm>2.0</indexterm></indexterm>
+      <indexterm>XSLT
+        <indexterm>3.0</indexterm></indexterm>
+      <indexterm>plug-ins
+        <indexterm>upgrading</indexterm></indexterm>
+      <p>DITA-OT 4.2 updates XSLT stylesheet headers from XSLT version 1.0 and 2.0 to version 3.0 to make way for the
+        use of XSLT3 features in future toolkit versions.</p>
+      <p>This is a backwards-compatible change, as there are no changes to the actual code; only the stylesheet headers
+        have been modified for now. This approach has been chosen to help identify any external or third-party
+        incompatibilities that might result from switching to XSLT3.</p>
+      <note type="attention">The next major version of DITA-OT will upgrade template content to use XSLT3 syntax.</note>
+      <p>To ensure plug-ins remain compatible with future versions of DITA-OT and Saxon-HE, the DITA Open Toolkit
+        project recommends upgrading all stylesheets to XSLT 3.0.</p>
+      <p>Change any occurrences of <xmlelement>xsl:stylesheet version="1.0"</xmlelement> or <xmlelement>xsl:stylesheet
+          version="2.0"</xmlelement> in custom plug-in stylesheets to at least <xmlelement>xsl:stylesheet
+          version="3.0"</xmlelement>.</p>
+    </section>
+
+    <section id="validating-plugins">
+      <title>Validating plug-ins</title>
+      <div id="plugin.rnc">
+        <p>DITA-OT includes a RELAX NG schema file that can be used to validate the <filepath>plugin.xml</filepath>
+          files that define the capabilities of each plug-in.
+          <indexterm>schema
+            <indexterm>RELAX NG</indexterm></indexterm>
+          <indexterm>validate</indexterm>
+        </p>
+        <p>To ensure the syntax of your custom plug-in is correct, include an <xmlpi>xml-model</xmlpi> processing
+          instruction at the beginning of the <filepath>plugin.xml</filepath> file, immediately after the XML
+          prolog:</p>
+        <p><xmlpi
+          >xml-model href="https://www.dita-ot.org/rng/plugin.rnc" type="application/relax-ng-compact-syntax"</xmlpi></p>
+        <p>If your authoring environment does not apply this schema automatically, point your editor to <filepath
+            id="samples-dir"
+          ><varname>dita-ot-dir</varname>/resources/plugin.rnc</filepath> to associate the schema with
+          your plug-in file.</p>
+      </div>
+    </section>
+
+    <section id="dita-for-print">
+      <title><cite>DITA for Print: A DITA Open Toolkit Workbook</cite> (Second Edition, 2017)</title>
+      <indexterm>Leigh White</indexterm>
+      <indexterm>DITA for Print</indexterm>
+      <p>Authored by Leigh W. White, DITA Specialist at IXIASOFT, and published by XML Press, <cite>DITA for
+          Print</cite> walks readers through developing a PDF customization from scratch. </p>
+      <p>Here is an excerpt from the back cover:</p>
+      <lq><cite>DITA for Print</cite> is for anyone who wants to learn how to create PDFs using the DITA Open Toolkit
+        without learning everything there is to know about XSL-FO, XSLT, or XPath, or even about the DITA Open Toolkit
+        itself. <cite>DITA for Print</cite> is written for non-programmers, by a non-programmer, and although it is
+        written for people who have a good understanding of the DITA standard, you don’t need a technical background to
+        get custom PDFs up and running quickly.</lq>
+      <p>This is an excellent, long-needed resource that was initially developed in 2013 for DITA-OT 1.8.</p>
+      <p>The second edition has been revised to cover DITA Open Toolkit Version 2, including customizing the DITA 1.3
+        troubleshooting topic type, localization strings, bookmarks, and the new back-cover functionality.</p>
+      <note type="important">
+        <p>The first edition of <cite>DITA for Print</cite> recommended copying entire files from the PDF2 plug-in to
+          your custom plug-in. The DITA-OT project — and the second edition of the book — do not recommend this
+          practice.</p>
+        <p>Instead, you should copy only the specific attribute sets and templates that you want to override. Following
+          this practice will more cleanly isolate your customizations from the DITA-OT code, which will make it easier
+          for you to update your plug-ins to work with future versions of DITA-OT.</p></note>
+    </section>
+
+    <section id="dita-for-practitioners">
+      <title><cite>DITA for Practitioners: Volume 1, Architecture and Technology</cite> (2012)</title>
+      <indexterm>Eliot Kimber</indexterm>
+      <indexterm>DITA for Practitioners: Volume 1, Architecture and Technology</indexterm>
+      <p>Authored by Eliot Kimber and published by XML Press, this seminal resource contains a chapter dedicated to DITA
+        Open Toolkit: “Running, Configuring, and Customizing the Open Toolkit”. In addition to a robust overview of
+        DITA-OT customization and extension, the chapter contains a detailed example of customizing a PDF plug-in to
+        specify 7" × 10" paper size and custom fonts for body text and headers.</p>
+      <p>The DITA-OT chapter in <cite>DITA for Practitioners: Volume 1</cite> was written for DITA-OT 1.5.4, which was
+        the latest stable version at the time it was written.</p>
+    </section>
+
+    <section id="java">
+      <title>Supported Java versions</title>
+      <p id="java-clients">DITA-OT <keyword keyref="release"/> is designed to run on Java version <keyword
+          keyref="tool.java.version"
+        /> or later and built and tested with the Open Java Development Kit (OpenJDK).
+        Compatible Java distributions are available from multiple sources:
+        <indexterm>Java
+          <indexterm>versions</indexterm></indexterm>
+        <indexterm>Amazon Corretto</indexterm>
+        <indexterm>OpenJDK</indexterm>
+        <indexterm>Oracle JDK</indexterm>
+        <ul>
+          <li>You can download Oracle distributions from
+            <xref keyref="download.oracle-jdk"/> under commercial license.</li>
+          <li>Eclipse Temurin is the free OpenJDK distribution available from
+            <xref keyref="download.openjdk"/>.</li>
+          <li>Free OpenJDK distributions are also provided by
+            <xref keyref="download.openjdk.corretto"/>,
+            <xref keyref="download.openjdk.azul"/>, and
+            <xref keyref="download.openjdk.redhat"/>.</li>
+          <li>Java versions are also available via package managers such as
+            <xref keyref="chocolatey"/>,
+            <xref keyref="homebrew"/>, or
+            <xref keyref="sdkman"/></li>
+        </ul>
+      </p>
+      <p id="java-bc">
+        <note>The Java virtual machine is generally backwards compatible, so class files built with earlier versions
+          should still run correctly with Java 17 and DITA-OT <keyword keyref="release"/>. If your DITA-OT installation
+          contains plug-ins with custom Java code, you may need to recompile these with Java 17 — but in most cases,
+          this step should not be necessary.</note>
+      </p>
+    </section>
+
+    <section id="preprocess2">
+      <title>Limitations of map-first pre-processing</title>
+      <p id="no-internal-preprocess2-ext">The internal extension points that run before or after individual steps in the
+        original <codeph>preprocess</codeph> pipeline (<codeph>preprocess.*.pre/preprocess.*.post</codeph>) are not
+        available in the newer map-first pre-processing pipeline (<codeph
+        >preprocess2</codeph>), which is used in the PDF
+        and HTML Help transformations as of DITA-OT 3.0, and in HTML5 and Normalized DITA output as of DITA-OT 4.2.</p>
+    </section>
+
+    <section id="legacy-plugins">
+      <title>Unbundled plug-ins</title>
+      <note id="legacy-plugins-note">If necessary, legacy plug-ins may be re-installed from earlier DITA-OT
+        distributions, but they are no longer actively maintained or supported by the core toolkit committers. The
+        source code is available on GitHub for anyone interested in maintaining the plug-ins for use with future toolkit
+        versions.</note>
+    </section>
+
+    <section id="subcommands">
+      <title>New subcommands in 3.5</title>
+      <dl id="3.5-subcommands">
+        <dlentry>
+          <dt><cmdname>dita deliverables</cmdname></dt>
+          <dd>Prints the list of deliverables in a project <varname>file</varname></dd>
+        </dlentry>
+        <dlentry id="install-subcommand">
+          <dt><cmdname>dita install</cmdname></dt>
+          <dd>Installs or reloads plug-ins (replaces <cmdname>dita</cmdname>
+            <parmname>--install</parmname>)</dd>
+        </dlentry>
+        <dlentry>
+          <dt><cmdname>dita plugins</cmdname></dt>
+          <dd>Prints a list of installed plug-ins (replaces <cmdname>dita</cmdname>
+            <parmname>--plugins</parmname>)</dd>
+        </dlentry>
+        <dlentry>
+          <dt><cmdname>dita transtypes</cmdname></dt>
+          <dd>Prints a list of installed transformation types, or <i>output formats</i> (replaces
+              <cmdname>dita</cmdname>
+            <parmname>--transtypes</parmname>)</dd>
+        </dlentry>
+        <dlentry>
+          <dt><cmdname>dita uninstall</cmdname></dt>
+          <dd>Removes and deletes a plug-in (replaces <cmdname>dita</cmdname>
+            <parmname>--uninstall</parmname>)</dd>
+        </dlentry>
+        <dlentry id="version-subcommand">
+          <dt><cmdname>dita version</cmdname></dt>
+          <dd>Prints version information and exits (replaces <cmdname>dita</cmdname>
+            <parmname>--version</parmname>)</dd>
+        </dlentry>
+      </dl>
+    </section>
+
+    <section id="dita-ot-migration-tip">
+      <title>Recommendations for upgrading DITA-OT customizations</title>
+      <p id="migration-recommendation">When migrating customizations, identify the version of the toolkit you're
+        currently using (base version) and the version of the toolkit you want to migrate to (target version). Then,
+        review all of the migration changes described in <i>all</i> of the versions from the base through the target.
+        For instance, if you're currently on 2.2 and want to move to 3.3, you should review all of the changes in 2.3
+        through 3.3. You may want to start at the oldest version and read forward so you can chronologically follow the
+        changes, since it is possible that files or topics have had multiple changes. </p>
+    </section>
+
+    <section id="strings-format">
+      <title>Common format for generated text</title>
+      <div id="gentext-string-structure">
+        <p>Prior to DITA-OT 3.7, there were two different XML structures for adding or modifying generated text
+          (gentext). The base plug-in <b>org.dita.base</b> and any custom overrides defined via the 
+          <parmname>dita.strings.xsl</parmname> extension point used a root element <xmlelement>strings</xmlelement>,
+          with individual strings in <xmlelement>str</xmlelement> elements with <xmlatt>name</xmlatt> attributes. This
+          format was previously used for HTML, and all other output formats except PDF.</p>
+        <fig>
+          <title>Base strings file structure prior to DITA-OT 3.7</title>
+          <codeblock
+            outputclass="language-xml normalize-space show-line-numbers show-whitespace"
+          >&lt;?xml version="1.0" encoding="utf-8"?>
+&lt;strings xml:lang="en-US">
+  &lt;str name="String1">English generated text&lt;/str>
+&lt;/strings></codeblock>
+        </fig>
+        <p>The PDF plug-in <b>org.dita.pdf2</b> used a root element <xmlelement>vars</xmlelement> with an XML namespace,
+          and strings in <xmlelement>variable</xmlelement> elements with <xmlatt>id</xmlatt> attributes.</p>
+        <fig>
+          <title>PDF2 strings file structure prior to DITA-OT 3.7</title>
+          <codeblock
+            outputclass="language-xml normalize-space show-line-numbers show-whitespace"
+          >&lt;?xml version="1.0" encoding="UTF-8"?>
+&lt;vars xmlns="http://www.idiominc.com/opentopic/vars">
+  &lt;variable id="String1">English generated text&lt;/variable>
+&lt;/vars></codeblock>
+        </fig>
+        <p>Starting with DITA-OT 3.7, these structures have been deprecated and replaced with a new unified format. All
+          files now use <xmlelement>variables</xmlelement> as the root element, with the
+            <xmlelement>variable</xmlelement> elements previously used in PDF strings. The new format supports the XSL
+          parameters used by the earlier PDF strings format to pass dynamic information such as chapter numbers or
+          figure titles.</p>
+        <fig>
+          <title>New common variable format as of DITA-OT 3.7</title>
+          <codeblock
+            outputclass="language-xml normalize-space show-line-numbers show-whitespace"
+          >&lt;?xml version="1.0" encoding="UTF-8"?>
+&lt;variables>
+  &lt;variable id="String1">English generated text&lt;/variable>
+&lt;/variables></codeblock>
+        </fig>
+        <p>The old formats are still supported, but plug-in developers should update any generated text files to reflect
+          the new structure, as support for the old formats may be removed in a future release.
+          <xref href="https://github.com/dita-ot/dita-ot/issues/3817" format="html" scope="external">#3817</xref>
+        </p>
+      </div>
+    </section>
+
+    <section id="markdown-format-details">
+      <note type="tip" id="md-formats">For details on the differences in
+        <xref keyref="markdown-formats"/>, see
+        <xref keyref="markdown-dita-syntax"/>,
+        <xref keyref="mdita-syntax"/>, and
+        <xref keyref="format-comparison"/>.</note>
+    </section>
+  </conbody>
+</concept>

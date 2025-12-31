@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic PUBLIC "-//OASIS//DTD DITA Topic//EN" "topic.dtd">
+<topic id="topic_ahb_v2n_cv">
+  <title>Content Reference Tests</title>
+  <shortdesc>Tests that exercise different aspects of content reference.</shortdesc>
+  <body>
+    <p>NOTE: Need more tests in this area, e.g., range referencing, conref push, etc.</p>
+    <p>Note that tests for "this-topic" fragment identifiers in the context of content references
+      are covered in the separate "this topic" fragment identifier tests.</p>
+  </body>
+</topic>
