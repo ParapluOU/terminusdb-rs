@@ -98,12 +98,12 @@ impl XsdToSchemaGenerator {
 
         // Generate schemas for complex types
         for complex_type in &xsd_schema.complex_types {
-            let schema = self.generate_class_from_complex_type_with_context(
+            let type_schemas = self.generate_class_from_complex_type_with_context(
                 complex_type,
                 &non_subdocument_types,
                 &xsd_schema.simple_types,
             )?;
-            schemas.push(schema);
+            schemas.extend(type_schemas);
         }
 
         // Generate schemas for simple types (enums, type aliases)
@@ -651,12 +651,20 @@ impl XsdToSchemaGenerator {
         deduplicated
     }
 
+    /// Generate TerminusDB schema(s) from an XSD complex type.
+    ///
+    /// For mixed content types (text + elements interleaved), this generates:
+    /// - The main class with a `content` property pointing to MixedContent
+    /// - A `{TypeName}Inline` TaggedUnion for allowed inline element types
+    /// - A `MixedContent{TypeName}` class with `text` and `subs: List` properties
+    ///
+    /// For non-mixed types, returns a single schema with individual child properties.
     fn generate_class_from_complex_type_with_context(
         &self,
         complex_type: &XsdComplexType,
         root_element_types: &std::collections::HashSet<String>,
         simple_types: &[XsdSimpleType],
-    ) -> Result<Schema> {
+    ) -> Result<Vec<Schema>> {
         // Extract namespace and local name from Clark notation: {namespace}localName
         let (namespace, local_name) = self.parse_clark_notation(
             if complex_type.is_anonymous {
@@ -672,31 +680,72 @@ impl XsdToSchemaGenerator {
         // Convert to PascalCase for TerminusDB class naming convention
         let class_id = local_name.to_pascal_case();
 
+        let mut schemas = Vec::new();
         let mut properties = Vec::new();
 
+        // Add attribute properties (common to both mixed and non-mixed)
         if let Some(ref attributes) = complex_type.attributes {
             for attr in attributes {
                 properties.push(self.attribute_to_property(attr)?);
             }
         }
 
-        if let Some(ref child_elements) = complex_type.child_elements {
-            for element in child_elements {
-                properties.push(self.child_element_to_property(element, simple_types)?);
-            }
-        }
+        // Check if this is a mixed content type with child elements
+        let use_mixed_content = self.should_use_mixed_content(complex_type);
 
-        // Add _text property for text content if this type has mixed or simple content.
-        // We add it regardless of inheritance because:
-        // - If parent has _text, TerminusDB handles property overriding
-        // - If parent doesn't have _text, we need to add it here
-        // The simple_content flag on derived types indicates they allow text even if parent didn't.
-        if complex_type.mixed || complex_type.has_simple_content {
+        // Check if base type also has mixed content - in that case, we inherit `content` property
+        // rather than defining our own (which would cause diamond property violation in TerminusDB)
+        let base_has_mixed_content = if let Some(ref base_type) = complex_type.base_type {
+            // The base type name indicates it's also mixed - e.g., "p.class" is mixed if "p" element is mixed
+            // In DITA, if a base type is mixed, its derived element types are also mixed
+            // Check if base type ends with ".class" pattern which indicates the base class
+            base_type.ends_with(".class") || base_type.ends_with("Class")
+        } else {
+            false
+        };
+
+        if use_mixed_content && !base_has_mixed_content {
+            // Mixed content ON BASE CLASS: generate MixedContent structure
+            let child_elements = complex_type.child_elements.as_ref().unwrap();
+
+            let (inline_union, mixed_content_class, mixed_content_name) =
+                self.generate_mixed_content_schemas(
+                    &class_id,
+                    namespace.clone(),
+                    child_elements,
+                    simple_types,
+                )?;
+
+            // Add the supporting schemas
+            schemas.push(inline_union);
+            schemas.push(mixed_content_class);
+
+            // Add a single `content` property instead of individual child properties
             properties.push(Property {
-                name: "_text".to_string(),
-                r#type: Some(TypeFamily::Optional),  // Text is optional (element may be empty)
-                class: "xsd:string".to_string(),
+                name: "content".to_string(),
+                r#type: Some(TypeFamily::Optional), // May be empty element
+                class: mixed_content_name,
             });
+        } else if use_mixed_content && base_has_mixed_content {
+            // Mixed content ON DERIVED CLASS: inherit `content` from base, don't add property
+            // This avoids diamond property violation in TerminusDB
+        } else {
+            // Non-mixed: generate individual properties for child elements
+            if let Some(ref child_elements) = complex_type.child_elements {
+                for element in child_elements {
+                    properties.push(self.child_element_to_property(element, simple_types)?);
+                }
+            }
+
+            // Add _text property for simple content (text only, no interleaved elements)
+            // Only for non-mixed types that have simple content
+            if complex_type.has_simple_content {
+                properties.push(Property {
+                    name: "_text".to_string(),
+                    r#type: Some(TypeFamily::Optional),
+                    class: "xsd:string".to_string(),
+                });
+            }
         }
 
         // Determine subdocument status:
@@ -732,9 +781,10 @@ impl XsdToSchemaGenerator {
             vec![]
         };
 
-        Ok(Schema::Class {
+        // Add the main class schema
+        schemas.push(Schema::Class {
             id: class_id,
-            base: namespace,  // Use TerminusDB @base for namespace preservation
+            base: namespace,
             key,
             documentation: None,
             subdocument,
@@ -742,7 +792,9 @@ impl XsdToSchemaGenerator {
             inherits,
             unfoldable: false,
             properties,
-        })
+        });
+
+        Ok(schemas)
     }
 
     /// Generate a TerminusDB schema from an XSD simple type.
@@ -977,6 +1029,99 @@ impl XsdToSchemaGenerator {
         };
 
         Ok(mapped.to_string())
+    }
+
+    // ========================================================================
+    // Mixed Content Support
+    // ========================================================================
+
+    /// Generate schemas for mixed content: a TaggedUnion for inline elements and a MixedContent class.
+    ///
+    /// Mixed content is when an XML element can contain both text and child elements interleaved:
+    /// ```xml
+    /// <p>The <term>first term</term> and <term>second term</term> are important.</p>
+    /// ```
+    ///
+    /// We model this as:
+    /// - `{TypeName}Inline` - TaggedUnion of all allowed child element types
+    /// - `MixedContent{TypeName}` - Class with `text: String` and `subs: List({TypeName}Inline)`
+    ///
+    /// Returns: (inline_union_schema, mixed_content_schema, inline_union_name)
+    fn generate_mixed_content_schemas(
+        &self,
+        type_name: &str,
+        namespace: Option<String>,
+        child_elements: &[ChildElement],
+        _simple_types: &[XsdSimpleType],
+    ) -> Result<(Schema, Schema, String)> {
+        let inline_union_name = format!("{}Inline", type_name);
+        let mixed_content_name = format!("MixedContent{}", type_name);
+
+        // Generate TaggedUnion properties from child elements
+        let union_properties: Vec<Property> = child_elements
+            .iter()
+            .filter_map(|element| {
+                // Extract local name from Clark notation
+                let (_, local_name) = self.parse_clark_notation(&element.name);
+
+                // Get the class for this element type
+                let class = self.map_xsd_type_to_tdb_class(&element.element_type).ok()?;
+
+                Some(Property {
+                    name: local_name,
+                    r#type: None, // TaggedUnion variants are mutually exclusive
+                    class,
+                })
+            })
+            .collect();
+
+        // Create the inline union TaggedUnion
+        let inline_union = Schema::TaggedUnion {
+            id: inline_union_name.clone(),
+            base: namespace.clone(),
+            key: Key::Random,
+            r#abstract: false,
+            documentation: None,
+            subdocument: true,
+            properties: union_properties,
+            unfoldable: false,
+        };
+
+        // Create the MixedContent class with text and subs
+        let mixed_content = Schema::Class {
+            id: mixed_content_name.clone(),
+            base: namespace,
+            key: Key::Random,
+            documentation: None,
+            subdocument: true,
+            r#abstract: false,
+            inherits: vec![],
+            unfoldable: false,
+            properties: vec![
+                Property {
+                    name: "text".to_string(),
+                    r#type: None, // Required
+                    class: "xsd:string".to_string(),
+                },
+                Property {
+                    name: "subs".to_string(),
+                    r#type: Some(TypeFamily::List), // List preserves order
+                    class: inline_union_name.clone(),
+                },
+            ],
+        };
+
+        Ok((inline_union, mixed_content, mixed_content_name))
+    }
+
+    /// Check if a complex type should use mixed content handling.
+    ///
+    /// Mixed content is used when:
+    /// 1. The type is marked as mixed (complex_type.mixed == true)
+    /// 2. The type has child elements
+    fn should_use_mixed_content(&self, complex_type: &XsdComplexType) -> bool {
+        complex_type.mixed
+            && complex_type.child_elements.as_ref().map_or(false, |children| !children.is_empty())
     }
 }
 

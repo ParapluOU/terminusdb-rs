@@ -287,7 +287,28 @@ impl<'a> XmlToInstanceParser<'a> {
             _ => return Err(XmlParseError::no_schema(type_name)),
         };
 
-        // Convert properties
+        // Check if this is a mixed content type (has a `content` property pointing to MixedContent*)
+        // First check own properties, then check inherited classes
+        let mixed_content_prop = schema_props
+            .iter()
+            .find(|p| p.name == "content" && p.class.starts_with("MixedContent"));
+
+        let inherited_mixed_content = if mixed_content_prop.is_none() {
+            // Check inherited classes for mixed content
+            self.find_inherited_mixed_content(schema)
+        } else {
+            None
+        };
+
+        if let Some(content_prop) = mixed_content_prop {
+            // This is a mixed content type - build MixedContent instance
+            return self.build_mixed_content_instance(obj, schema, &content_prop.class);
+        } else if let Some((_base_schema, content_class)) = inherited_mixed_content {
+            // This type inherits from a mixed content base - use original schema but base's MixedContent class
+            return self.build_mixed_content_instance(obj, schema, &content_class);
+        }
+
+        // Convert properties (non-mixed content path)
         let mut instance_props = BTreeMap::new();
 
         for (key, value) in obj {
@@ -331,6 +352,303 @@ impl<'a> XmlToInstanceParser<'a> {
         })
     }
 
+    /// Build a MixedContent instance for mixed content types.
+    ///
+    /// Mixed content (text interleaved with elements) is represented as:
+    /// - `text`: String with `{}` placeholders marking substitution positions
+    /// - `subs`: List of inline element instances in order
+    ///
+    /// For example, `<p>The <term>first</term> and <term>second</term> are important.</p>`
+    /// becomes:
+    /// ```json
+    /// {
+    ///   "content": {
+    ///     "@type": "MixedContentPClass",
+    ///     "text": "The {} and {} are important.",
+    ///     "subs": [{"@type": "TermClass", "_text": "first"}, {"@type": "TermClass", "_text": "second"}]
+    ///   }
+    /// }
+    /// ```
+    fn build_mixed_content_instance(
+        &self,
+        obj: &serde_json::Map<String, serde_json::Value>,
+        parent_schema: &Schema,
+        mixed_content_class: &str,
+    ) -> ParseResult<Instance> {
+        // Get the parent schema properties for attributes
+        let parent_props = match parent_schema {
+            Schema::Class { properties, .. } => properties,
+            _ => return Err(XmlParseError::no_schema(parent_schema.class_name())),
+        };
+
+        // Look up the MixedContent schema
+        let mixed_content_schema = self
+            .schemas
+            .get(mixed_content_class)
+            .ok_or_else(|| XmlParseError::no_schema(mixed_content_class))?;
+
+        // Get the inline union type from MixedContent's `subs` property
+        let inline_union_name = match mixed_content_schema {
+            Schema::Class { properties, .. } => properties
+                .iter()
+                .find(|p| p.name == "subs")
+                .map(|p| p.class.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+
+        // Build the parent instance properties (attributes only)
+        let mut instance_props = BTreeMap::new();
+
+        // Collect text content and child elements
+        let mut text_content = obj.get("$").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut subs: Vec<RelationValue> = Vec::new();
+
+        for (key, value) in obj {
+            if key == "@type" || key == "@ref" {
+                continue;
+            }
+
+            if key == "$" {
+                // Text content - already captured above
+                continue;
+            }
+
+            // Check if this is an attribute (@ prefix) or a child element
+            if key.starts_with('@') {
+                // Attribute - add to parent instance
+                let property_name = if key == "@id" {
+                    "id".to_string()
+                } else {
+                    key.trim_start_matches('@').to_string()
+                };
+
+                // Only add if it's a known property on the parent (not `content`)
+                if parent_props.iter().any(|p| p.name == property_name && property_name != "content") {
+                    let instance_prop = self.json_value_to_property(value, &property_name)?;
+                    instance_props.insert(property_name, instance_prop);
+                }
+            } else {
+                // Child element - add to subs
+                // Resolve element name to class for the TaggedUnion variant
+                let element_class = self.resolve_class_name(key);
+
+                match value {
+                    serde_json::Value::Array(arr) => {
+                        // Multiple child elements with same name
+                        for item in arr {
+                            if let Some(inst) =
+                                self.build_inline_element(&element_class, item, &inline_union_name)?
+                            {
+                                subs.push(RelationValue::One(inst));
+                                // Add placeholder to text if we have text
+                                if !text_content.is_empty() {
+                                    text_content = format!("{} {{}}", text_content);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        if let Some(inst) =
+                            self.build_inline_element(&element_class, value, &inline_union_name)?
+                        {
+                            subs.push(RelationValue::One(inst));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build the MixedContent instance
+        let mut mixed_props = BTreeMap::new();
+
+        // Add text property (with {} placeholders - simplified for now)
+        // Note: We can't perfectly reconstruct placeholder positions without changes to xmlschema-rs
+        // For now, use the raw text content
+        mixed_props.insert(
+            "text".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String(text_content)),
+        );
+
+        // Add subs property (List of inline elements)
+        if !subs.is_empty() {
+            mixed_props.insert("subs".to_string(), InstanceProperty::Relations(subs));
+        }
+
+        let mixed_content_inst = Instance {
+            schema: (*mixed_content_schema).clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: mixed_props,
+        };
+
+        // Add MixedContent to parent instance
+        instance_props.insert(
+            "content".to_string(),
+            InstanceProperty::Relation(RelationValue::One(mixed_content_inst)),
+        );
+
+        Ok(Instance {
+            schema: (*parent_schema).clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: instance_props,
+        })
+    }
+
+    /// Build an inline element instance for mixed content subs.
+    ///
+    /// This wraps child elements in the appropriate type for the inline TaggedUnion.
+    fn build_inline_element(
+        &self,
+        element_class: &str,
+        value: &serde_json::Value,
+        _inline_union_name: &str,
+    ) -> ParseResult<Option<Instance>> {
+        // Look up the element's schema
+        let schema = match self.schemas.get(element_class) {
+            Some(s) => s,
+            None => {
+                // Try with "Class" suffix (e.g., "Term" -> "TermClass")
+                let class_name = format!("{}Class", element_class);
+                match self.schemas.get(&class_name) {
+                    Some(s) => s,
+                    None => return Ok(None), // Unknown element type, skip
+                }
+            }
+        };
+
+        match value {
+            serde_json::Value::String(s) => {
+                // Simple text content
+                let mut properties = BTreeMap::new();
+                properties.insert(
+                    "_text".to_string(),
+                    InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
+                );
+                Ok(Some(Instance {
+                    schema: (*schema).clone(),
+                    id: None,
+                    capture: false,
+                    ref_props: false,
+                    properties,
+                }))
+            }
+            serde_json::Value::Object(obj) => {
+                // Complex inline element
+                self.json_object_to_instance(obj, Some(schema.class_name()))
+                    .map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Find mixed content property in inherited classes.
+    ///
+    /// Returns the base schema and mixed content class name if found.
+    fn find_inherited_mixed_content<'b>(&'b self, schema: &'b Schema) -> Option<(&'b Schema, String)> {
+        let inherits = match schema {
+            Schema::Class { inherits, .. } => inherits,
+            _ => return None,
+        };
+
+        for base_name in inherits {
+            if let Some(base_schema) = self.schemas.get(base_name) {
+                if let Schema::Class { properties, .. } = base_schema {
+                    // Check if base has mixed content
+                    if let Some(content_prop) = properties
+                        .iter()
+                        .find(|p| p.name == "content" && p.class.starts_with("MixedContent"))
+                    {
+                        return Some((base_schema, content_prop.class.clone()));
+                    }
+
+                    // Recursively check base's parents
+                    if let Some(result) = self.find_inherited_mixed_content(base_schema) {
+                        return Some(result);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Find the MixedContent class for a schema (checking own properties and inherited classes).
+    ///
+    /// Returns the MixedContent class name if found.
+    fn find_mixed_content_class(&self, schema: &Schema) -> Option<String> {
+        // First check own properties
+        if let Schema::Class { properties, .. } = schema {
+            if let Some(content_prop) = properties
+                .iter()
+                .find(|p| p.name == "content" && p.class.starts_with("MixedContent"))
+            {
+                return Some(content_prop.class.clone());
+            }
+        }
+
+        // Check inherited classes
+        if let Some((_, content_class)) = self.find_inherited_mixed_content(schema) {
+            return Some(content_class);
+        }
+
+        None
+    }
+
+    /// Build an instance with MixedContent for simple text content.
+    ///
+    /// This is used when an XML element contains only text (no child elements).
+    fn build_simple_mixed_content_instance(
+        &self,
+        parent_schema: &Schema,
+        mixed_content_class: &str,
+        text: &str,
+    ) -> ParseResult<Instance> {
+        // Look up the MixedContent schema
+        let mixed_content_schema = self
+            .schemas
+            .get(mixed_content_class)
+            .ok_or_else(|| XmlParseError::no_schema(mixed_content_class))?;
+
+        // Build the MixedContent instance
+        let mut mixed_props = BTreeMap::new();
+
+        // Add text property (no placeholders since there are no inline elements)
+        mixed_props.insert(
+            "text".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String(text.to_string())),
+        );
+
+        // Add empty subs list (required by schema, even when empty)
+        mixed_props.insert("subs".to_string(), InstanceProperty::Relations(vec![]));
+
+        let mixed_content_inst = Instance {
+            schema: (*mixed_content_schema).clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: mixed_props,
+        };
+
+        // Build the parent instance with the content property
+        let mut instance_props = BTreeMap::new();
+        instance_props.insert(
+            "content".to_string(),
+            InstanceProperty::Relation(RelationValue::One(mixed_content_inst)),
+        );
+
+        Ok(Instance {
+            schema: (*parent_schema).clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: instance_props,
+        })
+    }
+
     /// Convert a JSON value to an InstanceProperty
     fn json_value_to_property(
         &self,
@@ -350,23 +668,31 @@ impl<'a> XmlToInstanceParser<'a> {
 
             serde_json::Value::String(s) => {
                 // Check if this field should be a complex type (has a schema)
-                // If so, wrap the string in an Instance with _text property for text content
                 let class_name = self.resolve_class_name(field_name);
                 if let Some(schema) = self.schemas.get(&class_name) {
-                    // This is a complex type - wrap the text in an Instance
-                    let mut properties = BTreeMap::new();
-                    properties.insert(
-                        "_text".to_string(),
-                        InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
-                    );
-                    let inst = Instance {
-                        schema: (*schema).clone(),
-                        id: None,
-                        capture: false,
-                        ref_props: false,
-                        properties,
-                    };
-                    Ok(InstanceProperty::Relation(RelationValue::One(inst)))
+                    // Check if this schema (or its base) has mixed content
+                    let mixed_content_class = self.find_mixed_content_class(schema);
+
+                    if let Some(mixed_class) = mixed_content_class {
+                        // This is a mixed content type - build MixedContent instance with the text
+                        let inst = self.build_simple_mixed_content_instance(schema, &mixed_class, s)?;
+                        Ok(InstanceProperty::Relation(RelationValue::One(inst)))
+                    } else {
+                        // Regular complex type - wrap the text in an Instance with _text property
+                        let mut properties = BTreeMap::new();
+                        properties.insert(
+                            "_text".to_string(),
+                            InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
+                        );
+                        let inst = Instance {
+                            schema: (*schema).clone(),
+                            id: None,
+                            capture: false,
+                            ref_props: false,
+                            properties,
+                        };
+                        Ok(InstanceProperty::Relation(RelationValue::One(inst)))
+                    }
                 } else {
                     // No schema found - treat as primitive string
                     Ok(InstanceProperty::Primitive(PrimitiveValue::String(s.clone())))
