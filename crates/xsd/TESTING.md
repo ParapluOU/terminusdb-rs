@@ -272,17 +272,98 @@ The converter includes robust error handling:
 
 ## Known Limitations
 
-1. **Catalog Resolution:** URL-based schemas work better than URN-based
-   - Use `xsd1.2-url` instead of `xsd1.2` for DITA schemas
-   - NISO schemas use direct URLs
+### XSD Type Mapping Gaps
 
-2. **XSD Redefine:** Some complex redefine patterns may fail validation
-   - Example: `learningContent.xsd` redefine restriction
-   - Converter continues with other schemas
+#### 1. `xs:union` Types Not Converted
 
-3. **Recursion Depth:** xmlschema may warn about deep recursion
-   - Does not prevent schema generation
-   - Common in recursive content models
+**Severity:** Medium - affects type accuracy
+
+XSD union types are parsed by xmlschema-rs but not extracted or converted to TerminusDB schemas.
+
+```xml
+<!-- XSD definition -->
+<xs:simpleType name="stringOrNumber">
+  <xs:union memberTypes="xs:string xs:integer"/>
+</xs:simpleType>
+```
+
+**Current behavior:** Union types are silently ignored.
+
+**Expected behavior:** Should generate `Schema::TaggedUnion`:
+```json
+{
+  "@type": "TaggedUnion",
+  "@id": "StringOrNumber",
+  "stringValue": "xsd:string",
+  "integerValue": "xsd:integer"
+}
+```
+
+**Root cause:** `schema_model.rs` XsdSimpleType struct doesn't extract `variety()` or `member_types` from xmlschema-rs. The SimpleType struct only captures enumeration restrictions.
+
+**To fix:**
+1. Add `variety: SimpleTypeVariety` and `member_types: Vec<String>` to XsdSimpleType
+2. Extract from xmlschema-rs `SimpleType::variety()` and `XsdUnionType::member_types()`
+3. Generate `Schema::TaggedUnion` in schema_generator.rs
+
+#### 2. `xs:list` Types Mapped to Set Instead of List
+
+**Severity:** Medium - affects ordering semantics
+
+XSD list types (space-separated values) are incorrectly mapped to `TypeFamily::Set` instead of `TypeFamily::List`.
+
+```xml
+<!-- XSD definition -->
+<xs:simpleType name="integerList">
+  <xs:list itemType="xs:integer"/>
+</xs:simpleType>
+```
+
+**Current behavior:** Uses `TypeFamily::Set` (unordered, no duplicates).
+
+**Expected behavior:** Should use `TypeFamily::List` (ordered, allows duplicates).
+
+**Root cause:** `schema_generator.rs` determines collection type based on `maxOccurs` cardinality heuristics, not from `SimpleTypeVariety::List`.
+
+**To fix:**
+1. Add `variety: SimpleTypeVariety` and `item_type: Option<String>` to XsdSimpleType
+2. When `variety == List`, use `TypeFamily::List` in property generation
+3. Distinguish `xs:list` (space-separated in single element) from `maxOccurs="unbounded"` (multiple elements)
+
+#### 3. xs:any and xs:anyAttribute
+
+**Severity:** Low - affects extensibility
+
+Wildcard elements and attributes are not fully represented in generated schemas.
+
+**Current behavior:** Wildcard content may be omitted or simplified.
+
+**Expected behavior:** Should represent with appropriate TerminusDB constructs (potentially JSON properties).
+
+### Schema Resolution Issues
+
+#### 4. Catalog Resolution
+
+URL-based schemas work better than URN-based:
+- Use `xsd1.2-url` instead of `xsd1.2` for DITA schemas
+- NISO schemas use direct URLs
+
+#### 5. XSD Redefine Not Supported
+
+Some complex redefine patterns fail:
+- Example: `learningContent.xsd` redefine restriction
+- Converter continues with other schemas
+- DITA domain specialization may have missing elements
+
+**Workaround:** Use URL-based schemas where possible.
+
+### Performance Notes
+
+#### 6. Recursion Depth
+
+xmlschema may warn about deep recursion:
+- Does not prevent schema generation
+- Common in recursive content models (e.g., nested sections)
 
 ## Success Metrics
 

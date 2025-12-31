@@ -1,61 +1,56 @@
 # terminusdb-xsd
 
-XSD to TerminusDB model converter using **PyO3** and Python's `xmlschema`.
+XSD to TerminusDB schema converter using **xmlschema-rs** (pure Rust).
 
 ## Overview
 
-This crate enables parsing XSD schemas and converting them to TerminusDB model definitions, allowing XML documents to be stored in TerminusDB's native format.
+This crate enables parsing XSD schemas and converting them to TerminusDB schema definitions, allowing XML documents to be stored in TerminusDB's native format.
 
-## Status
-
-✅ **Experimental - PyO3 approach WORKS!**
-
-Successfully tested:
-- Python integration via PyO3
-- xmlschema module import (v4.2.0)
-- XSD schema parsing
-- JSON data extraction
-
-## Approach
-
-Uses PyO3 (Rust bindings for Python) to call the battle-tested `xmlschema` Python library:
+## Architecture
 
 ```
-XSD File → xmlschema (Python) → JSON → TerminusDB Model (Rust)
+┌─────────────┐
+│  XSD File   │
+└──────┬──────┘
+       │ xmlschema-rs (Rust)
+┌──────▼──────┐
+│  XsdSchema  │  (schema_model.rs)
+└──────┬──────┘
+       │ XsdToSchemaGenerator
+┌──────▼──────┐
+│ Vec<Schema> │  (TerminusDB schemas)
+└──────┬──────┘
+       │
+┌──────▼──────┐
+│  Database   │
+└─────────────┘
+
+XML Instance Parsing:
+┌─────────────┐
+│  XML File   │
+└──────┬──────┘
+       │ XmlParser
+┌──────▼──────┐
+│ Vec<Instance>│ (TerminusDB instances)
+└─────────────┘
 ```
 
-### Why PyO3?
+### Why xmlschema-rs?
 
-- ✅ **Works immediately** - Full Python stdlib and package support
-- ✅ **Proven solution** - Leverages mature `xmlschema` library
-- ✅ **Complete XSD support** - W3C XML Schema 1.0/1.1 compliant
-- ✅ **Maintained** - Active Python package development
-- ✅ **Fast development** - No custom XSD parser needed
-
-### Why Not RustPython?
-
-RustPython (pure Rust Python interpreter) was tested but failed:
-- ❌ Incomplete stdlib (no JSON module!)
-- ❌ No third-party package support
-- ❌ Not production-ready for complex libraries
-
-See [FINDINGS.md](./FINDINGS.md) for detailed comparison.
+- ✅ **Pure Rust** - No Python/FFI dependencies
+- ✅ **Fast** - Native performance, no runtime overhead
+- ✅ **Comprehensive** - Handles complex XSD features (includes, imports, groups)
+- ✅ **Battle-tested** - Based on Python xmlschema's well-tested logic
 
 ## Requirements
 
 - **Rust** 1.85+
-- **Python** 3.7+
-- **xmlschema** Python package (required)
-- **lxml** Python package (recommended for DITA/OASIS catalog support)
 
 ### Installation
 
 ```bash
-# Install required Python packages
-pip install xmlschema
-
-# Optional: Install lxml for proper OASIS XML Catalog support (DITA schemas)
-pip install lxml
+# Add to Cargo.toml
+terminusdb-xsd = { path = "path/to/crates/xsd" }
 
 # Build the Rust crate
 cargo build --release
@@ -63,150 +58,231 @@ cargo build --release
 
 ## Usage
 
+### High-Level API (XsdModel)
+
 ```rust
-use terminusdb_xsd::{XsdParser, Result};
+use terminusdb_xsd::XsdModel;
 
-fn main() -> Result<()> {
-    // Create parser (initializes Python via PyO3)
-    let parser = XsdParser::new()?;
+fn main() -> anyhow::Result<()> {
+    // Load and convert an XSD schema
+    let model = XsdModel::from_file("path/to/schema.xsd", None::<&str>)?;
 
-    // Verify xmlschema is available
-    let version = parser.test_xmlschema_import()?;
-    println!("Using xmlschema version: {}", version);
+    // Get generated TerminusDB schemas
+    let schemas = model.schemas();
+    println!("Generated {} schemas", schemas.len());
 
-    // Parse an XSD schema
-    let schema_json = parser.parse_xsd_to_json("path/to/schema.xsd")?;
-    println!("{}", serde_json::to_string_pretty(&schema_json)?);
+    // Get class names
+    for name in model.class_names() {
+        println!("  Class: {}", name);
+    }
 
-    // Get detailed element information
-    let elements = parser.get_schema_elements("path/to/schema.xsd")?;
-    println!("{}", serde_json::to_string_pretty(&elements)?);
+    // Find a specific schema
+    if let Some(schema) = model.find_schema("BookType") {
+        println!("Found BookType schema");
+    }
 
-    // Get comprehensive schema info
-    let info = parser.get_schema_comprehensive("path/to/schema.xsd")?;
-    println!("{}", serde_json::to_string_pretty(&info)?);
+    // Get statistics
+    let stats = model.stats();
+    println!("Complex types: {}", stats.total_complex_types);
 
     Ok(())
+}
+```
+
+### Low-Level API
+
+```rust
+use terminusdb_xsd::schema_model::XsdSchema;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+
+fn main() -> anyhow::Result<()> {
+    // Parse XSD schema
+    let xsd_schema = XsdSchema::from_xsd_file("path/to/schema.xsd", None::<&str>)?;
+
+    // Generate TerminusDB schemas
+    let generator = XsdToSchemaGenerator::with_namespace("http://example.com/ns#");
+    let schemas = generator.generate(&xsd_schema)?;
+
+    // Convert to JSON for TerminusDB
+    use terminusdb_schema::json::ToJson;
+    for schema in &schemas {
+        let json = schema.to_json();
+        println!("{}", serde_json::to_string_pretty(&json)?);
+    }
+
+    Ok(())
+}
+```
+
+### Directory-Based Generation
+
+```rust
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+
+// Process entire schema bundles with automatic entry point detection
+let generator = XsdToSchemaGenerator::with_namespace("http://example.com/ns#");
+let schemas = generator.generate_from_directory(&schema_dir, None::<PathBuf>)?;
+```
+
+### XML Instance Parsing
+
+```rust
+use terminusdb_xsd::xml_parser::XmlParser;
+
+let parser = XmlParser::new();
+let instances = parser.parse_xml_file("path/to/document.xml", &xsd_schema)?;
+
+for instance in instances {
+    println!("Instance: {:?}", instance);
 }
 ```
 
 ## Examples
 
 ```bash
-# Test PyO3 integration
-cargo run --example test_pyo3
+# Entry point analysis demo
+cargo run --example analyze_entry_points
 
-# Parse an XSD file
-cargo run --example test_pyo3 -- path/to/schema.xsd
+# Generate from directory
+cargo run --example generate_from_directory
+
+# NISO-STS schemas
+cargo run --example generate_niso_schemas
+
+# DITA Learning schemas
+cargo run --example generate_dita_learning
+
+# S1000D Issue 6 schemas
+cargo run --example generate_s1000d
 ```
 
 ## Testing
 
 ```bash
-# Run basic tests (no xmlschema needed)
+# Run all tests
 cargo test
 
-# Run integration test (requires xmlschema)
-cargo test --ignored
+# Run schema generation tests
+cargo test --test schema_generation_tests
+
+# Run real-world schema tests
+cargo test --test real_world_schemas
 ```
 
-## Deployment Options
+## XSD to TerminusDB Mapping
 
-### Option 1: System Python (Simplest)
+| XSD Construct | TerminusDB Schema |
+|---------------|-------------------|
+| `xs:complexType` | `Schema::Class` |
+| `xs:element` (child) | `Property` |
+| `xs:attribute` | `Property` |
+| `xs:simpleType` (enum) | `Schema::Enum` |
+| `xs:string` | `xsd:string` |
+| `xs:integer` | `xsd:integer` |
+| `xs:decimal` | `xsd:decimal` |
+| `xs:boolean` | `xsd:boolean` |
+| `xs:dateTime` | `xsd:dateTime` |
+| `maxOccurs="unbounded"` | `TypeFamily::Set` |
+| `minOccurs="0"` | `TypeFamily::Optional` |
+| Named types | `Key::ValueHash` |
+| Anonymous types | `Key::Random` (subdocument) |
 
-Users install Python and xmlschema:
-```bash
-pip install xmlschema
-cargo run --release
+## Known Limitations
+
+### 1. `xs:union` Types Not Converted
+
+**Issue:** XSD union types are parsed by xmlschema-rs but not extracted/converted to TerminusDB schemas.
+
+**Current Behavior:** Union types are silently ignored.
+
+**Correct Mapping:** Should map to `Schema::TaggedUnion` or `Schema::OneOfClass`.
+
+**Root Cause:** `schema_model.rs` XsdSimpleType struct doesn't extract `variety()` or `member_types` from xmlschema-rs.
+
+**Example:**
+```xml
+<xs:simpleType name="stringOrNumber">
+  <xs:union memberTypes="xs:string xs:integer"/>
+</xs:simpleType>
 ```
 
-### Option 2: Docker (Recommended)
-
-```dockerfile
-FROM rust:latest
-RUN apt-get update && apt-get install -y python3-pip
-RUN pip3 install xmlschema==4.2.0
-COPY . .
-RUN cargo build --release
+Should become:
+```json
+{
+  "@type": "TaggedUnion",
+  "@id": "StringOrNumber",
+  "stringValue": "xsd:string",
+  "integerValue": "xsd:integer"
+}
 ```
 
-### Option 3: Bundled Python
+### 2. `xs:list` Types Incorrectly Mapped to Set
 
-Use [PyOxidizer](https://github.com/indygreg/PyOxidizer) to bundle Python + xmlschema into a single binary (advanced).
+**Issue:** XSD list types (space-separated values) are mapped to `TypeFamily::Set` instead of `TypeFamily::List`.
 
-## Development Roadmap
+**Current Behavior:** Uses Set (unordered, no duplicates) based on cardinality heuristics.
 
-### Phase 1: Core Functionality ✅
+**Correct Mapping:** Should map to `TypeFamily::List` (ordered, allows duplicates).
 
-- [x] PyO3 integration
-- [x] xmlschema import verification
-- [x] Basic XSD parsing
-- [x] JSON extraction
+**Root Cause:** `schema_generator.rs` determines collection type from `maxOccurs` cardinality, not from `SimpleTypeVariety::List`.
 
-### Phase 2: XSD → TerminusDB Mapping
-
-- [ ] Extract full schema structure (elements, types, attributes)
-- [ ] Design XSD to TerminusDB type mapping
-- [ ] Generate TerminusDB JSON schema
-- [ ] Generate Rust code with terminusdb-schema macros
-
-### Phase 3: DITA Support
-
-- [ ] Parse DITA XSD schemas
-- [ ] Generate TerminusDB models for DITA
-- [ ] Validate against real DITA documents
-
-### Phase 4: Production
-
-- [ ] Comprehensive error handling
-- [ ] Schema validation
-- [ ] Namespace resolution
-- [ ] Include/import handling
-- [ ] CLI tool
-
-## Architecture
-
-```
-┌─────────────┐
-│  Rust Code  │
-└──────┬──────┘
-       │ PyO3 FFI
-┌──────▼──────┐
-│   Python    │
-│ xmlschema   │
-└──────┬──────┘
-       │
-┌──────▼──────┐
-│  XSD File   │
-└─────────────┘
-       │
-       ▼
-┌─────────────┐
-│    JSON     │
-└──────┬──────┘
-       │
-┌──────▼──────┐
-│ TerminusDB  │
-│   Schema    │
-└─────────────┘
+**Example:**
+```xml
+<xs:simpleType name="integerList">
+  <xs:list itemType="xs:integer"/>
+</xs:simpleType>
 ```
 
-## Limitations
+Should use `TypeFamily::List`, not `TypeFamily::Set`.
 
-1. **Python Dependency**: Requires Python runtime (acceptable for server deployments)
-2. **FFI Overhead**: Small performance cost for Rust ↔ Python calls
-3. **Package Management**: xmlschema must be installed separately
+### 3. `xs:redefine` Not Supported
 
-## Alternatives Considered
+**Issue:** XSD redefine directive is not supported by xmlschema-rs.
 
-- **Pure Rust XSD Parser**: Too complex, significant development effort
-- **RustPython**: Incomplete stdlib, not production-ready
-- **Java via JNI**: JVM dependency, added complexity
-- **XSLT**: Limited transformation capability
+**Impact:** DITA schemas that use `xs:redefine` for domain specialization may have missing elements (e.g., `title` element in TopicClass).
+
+**Workaround:** Use URL-based schemas (`xsd1.2-url`) instead of catalog-based schemas where possible.
+
+See [PLAN.md](../../.claude/plans/) for implementation plan.
+
+### 4. Catalog Resolution
+
+**Issue:** URN-based schemas may fail resolution.
+
+**Current Behavior:** URL-based schemas work reliably; URN-based schemas depend on catalog configuration.
+
+**Workaround:** Use `xsd1.2-url` instead of `xsd1.2` for DITA schemas.
+
+### 5. xs:any and xs:anyAttribute
+
+**Issue:** Wildcard elements and attributes are not fully represented in generated schemas.
+
+**Current Behavior:** Wildcard content may be omitted or simplified.
+
+## Tested Schema Standards
+
+| Standard | Schemas Generated | Status |
+|----------|-------------------|--------|
+| DITA Base 1.2 | 286 | ✅ |
+| NISO-STS (JATS) | 347 | ✅ |
+| DITA Learning | 744 | ✅ |
+| S1000D Issue 6 | 1,166 | ✅ |
+| **Total** | **2,543** | ✅ |
+
+See [TESTING.md](./TESTING.md) for detailed test results.
+
+## Related Documentation
+
+- [TESTING.md](./TESTING.md) - Detailed testing summary
+- [FINDINGS.md](./FINDINGS.md) - Historical PyO3 experiment findings
 
 ## Contributing
 
-This is an experimental crate. Feedback and contributions welcome!
+Contributions welcome! Priority areas:
+
+1. **xs:union support** - Extract `variety()` and `member_types` from xmlschema-rs
+2. **xs:list support** - Map to `TypeFamily::List` instead of Set
+3. **xs:redefine support** - Implement in xmlschema-rs upstream
 
 ## License
 
@@ -214,7 +290,6 @@ MIT OR Apache-2.0 (same as workspace)
 
 ## References
 
-- [PyO3 Documentation](https://pyo3.rs/)
-- [xmlschema Package](https://github.com/sissaschool/xmlschema)
-- [W3C XML Schema Spec](https://www.w3.org/TR/xmlschema11-1/)
+- [xmlschema-rs](https://github.com/your-fork/xmlschema-rs) - XSD parsing library
 - [TerminusDB](https://terminusdb.com/)
+- [W3C XML Schema Spec](https://www.w3.org/TR/xmlschema11-1/)
