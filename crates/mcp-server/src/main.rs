@@ -1802,6 +1802,7 @@ impl TerminusDBMcpHandler {
             password: Some(password.clone()),
             quiet: request.quiet,
             db_path: None,
+            port: None, // Auto-allocate port
         };
 
         // Start the server
