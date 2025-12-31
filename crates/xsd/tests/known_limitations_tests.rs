@@ -70,43 +70,61 @@ fn create_union_type_schema() -> XsdSchema {
             restrictions: None,
             // Now we can express union types!
             variety: Some(SimpleTypeVariety::Union),
-            // TODO: member_types would need to be added to support TaggedUnion generation
             item_type: None,
+            member_types: Some(vec![
+                "{http://www.w3.org/2001/XMLSchema}string".to_string(),
+                "{http://www.w3.org/2001/XMLSchema}integer".to_string(),
+            ]),
         }],
     }
 }
 
 #[test]
-fn test_limitation_union_types_not_converted() {
-    // This test documents that xs:union types are NOT currently converted
-    // to TerminusDB TaggedUnion schemas.
+fn test_union_types_generate_tagged_union() {
+    // FIXED: xs:union types are now converted to TerminusDB TaggedUnion schemas!
     //
     // XSD definition:
     // <xs:simpleType name="stringOrNumber">
     //   <xs:union memberTypes="xs:string xs:integer"/>
     // </xs:simpleType>
     //
-    // EXPECTED: Should generate Schema::TaggedUnion
-    // ACTUAL: Union types are silently ignored
+    // This generates a Schema::TaggedUnion with properties for each member type.
 
     let xsd_schema = create_union_type_schema();
     let generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
-    // Document current behavior: union type is NOT converted to TaggedUnion
+    // Verify TaggedUnion is generated for union type
     let tagged_union = find_tagged_union(&schemas, "StringOrNumber");
     assert!(
-        tagged_union.is_none(),
-        "KNOWN LIMITATION: xs:union types are not converted to TaggedUnion. \
-         When this test fails, the limitation has been fixed!"
+        tagged_union.is_some(),
+        "xs:union types should now generate TaggedUnion schemas!"
     );
 
-    // The container type should exist
+    // Verify the TaggedUnion has the expected structure
+    if let Schema::TaggedUnion { id, properties, subdocument, .. } = tagged_union.unwrap() {
+        assert_eq!(id, "StringOrNumber");
+        assert!(subdocument, "Union types should be subdocuments");
+
+        // Should have two properties: one for string, one for integer
+        assert_eq!(properties.len(), 2, "Should have 2 member type properties");
+
+        // Find string variant
+        let string_prop = properties.iter().find(|p| p.class == "xsd:string");
+        assert!(string_prop.is_some(), "Should have xsd:string variant");
+        assert_eq!(string_prop.unwrap().name, "string", "String variant tag should be 'string'");
+
+        // Find integer variant
+        let integer_prop = properties.iter().find(|p| p.class == "xsd:integer");
+        assert!(integer_prop.is_some(), "Should have xsd:integer variant");
+        assert_eq!(integer_prop.unwrap().name, "integer", "Integer variant tag should be 'integer'");
+    } else {
+        panic!("Expected TaggedUnion schema");
+    }
+
+    // The container type should also exist
     let container = find_class(&schemas, "ContainerType");
     assert!(container.is_some(), "ContainerType should be generated");
-
-    // Note: The 'value' property will reference the union type name,
-    // but since no TaggedUnion schema exists, this is an unresolved reference.
 }
 
 #[test]
@@ -116,9 +134,7 @@ fn test_xsd_simple_type_has_variety_field() {
     // PRESENT:
     // - variety: SimpleTypeVariety (Atomic | List | Union)
     // - item_type: Option<String> (for lists - extracted from xmlschema-rs)
-    //
-    // STILL MISSING (for full union support):
-    // - member_types: Vec<String> (for unions)
+    // - member_types: Option<Vec<String>> (for unions - extracted from xmlschema-rs)
 
     let simple_type = XsdSimpleType {
         name: "TestType".to_string(),
@@ -128,6 +144,7 @@ fn test_xsd_simple_type_has_variety_field() {
         restrictions: None,
         variety: Some(SimpleTypeVariety::Atomic),
         item_type: None,
+        member_types: None,
     };
 
     // Verify variety is present
@@ -143,6 +160,7 @@ fn test_xsd_simple_type_has_variety_field() {
         restrictions: None,
         variety: Some(SimpleTypeVariety::List),
         item_type: Some("xsd:integer".to_string()),
+        member_types: None,
     };
     assert_eq!(list_type.variety, Some(SimpleTypeVariety::List));
     assert_eq!(list_type.item_type, Some("xsd:integer".to_string()));
@@ -198,6 +216,7 @@ fn create_list_type_schema() -> XsdSchema {
                 restrictions: None,
                 variety: Some(SimpleTypeVariety::List),
                 item_type: Some("xsd:integer".to_string()),
+                member_types: None,
             },
         ],
     }
@@ -285,6 +304,7 @@ fn create_list_property_schema() -> XsdSchema {
                 restrictions: None,
                 variety: Some(SimpleTypeVariety::List),
                 item_type: Some("xsd:integer".to_string()),
+                member_types: None,
             },
         ],
     }
@@ -338,12 +358,12 @@ fn test_type_family_list_exists() {
 }
 
 // ============================================================================
-// LIMITATION 3: xs:redefine not supported
+// FIXED: xs:redefine now supported
 // ============================================================================
 
 #[test]
-fn test_limitation_redefine_documented() {
-    // This test documents that xs:redefine is not supported.
+fn test_redefine_is_supported() {
+    // xs:redefine IS NOW SUPPORTED!
     //
     // xs:redefine allows including a schema and modifying its components:
     // <xs:redefine schemaLocation="base.xsd">
@@ -356,18 +376,18 @@ fn test_limitation_redefine_documented() {
     //   </xs:complexType>
     // </xs:redefine>
     //
-    // IMPACT: DITA schemas using redefine for domain specialization
-    // may have missing elements (e.g., 'title' in TopicClass).
+    // The implementation includes:
+    // 1. parse_redefine() in xmlschema-rs parses xs:redefine elements
+    // 2. Redefined types/groups are registered in global_maps with original stored
+    // 3. resolve_group_references() uses the redefined versions
+    // 4. resolve_inline_element_type_derivations() resolves inline element types
     //
-    // WORKAROUND: Use URL-based schemas (xsd1.2-url) where possible.
-    //
-    // See PLAN.md for implementation plan to fix this in xmlschema-rs.
+    // DITA schemas using redefine for domain specialization now work correctly.
+    // See xmlschema-rs tests: test_dita_redefine_support, test_dita_topic_children_from_redefine
 
-    // This is a documentation-only test
-    // The actual failure would occur when parsing DITA learningContent.xsd
     eprintln!(
-        "KNOWN LIMITATION: xs:redefine is not supported by xmlschema-rs. \
-         DITA domain specialization may have missing elements."
+        "FIXED: xs:redefine is now supported by xmlschema-rs. \
+         DITA domain specialization works correctly."
     );
 }
 
@@ -380,9 +400,9 @@ fn test_print_limitation_summary() {
     eprintln!("\n");
     eprintln!("=== terminusdb-xsd Known Limitations ===\n");
 
-    eprintln!("1. xs:union → TaggedUnion (NOT IMPLEMENTED)");
-    eprintln!("   Root cause: xmlschema-rs doesn't use XsdUnionType for xs:union");
-    eprintln!("   Fix: Update xmlschema-rs parse_simple_union() to use XsdUnionType");
+    eprintln!("1. xs:union → TaggedUnion (FIXED ✓)");
+    eprintln!("   xmlschema-rs: parse_simple_union() now uses XsdUnionType");
+    eprintln!("   terminusdb-xsd: Generates Schema::TaggedUnion for xs:union types");
     eprintln!();
 
     eprintln!("2. xs:list → TypeFamily::List (FIXED ✓)");
@@ -390,9 +410,9 @@ fn test_print_limitation_summary() {
     eprintln!("   terminusdb-xsd: Generates TypeFamily::List for xs:list types");
     eprintln!();
 
-    eprintln!("3. xs:redefine (NOT SUPPORTED)");
-    eprintln!("   Root cause: Not implemented in xmlschema-rs");
-    eprintln!("   Fix: Implement in xmlschema-rs upstream (see PLAN.md)");
+    eprintln!("3. xs:redefine (FIXED ✓)");
+    eprintln!("   xmlschema-rs: parse_redefine() + resolve_inline_element_type_derivations()");
+    eprintln!("   DITA domain specialization now works correctly");
     eprintln!();
 
     eprintln!("4. xs:any / xs:anyAttribute (PARTIALLY SUPPORTED)");
