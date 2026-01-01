@@ -508,10 +508,8 @@ impl<'a> XmlToInstanceParser<'a> {
             InstanceProperty::Primitive(PrimitiveValue::String(text_content)),
         );
 
-        // Add subs property (List of inline elements)
-        if !subs.is_empty() {
-            mixed_props.insert("subs".to_string(), InstanceProperty::Relations(subs));
-        }
+        // Add subs property (List of inline elements) - always required, even when empty
+        mixed_props.insert("subs".to_string(), InstanceProperty::Relations(subs));
 
         let mixed_content_inst = Instance {
             schema: (*mixed_content_schema).clone(),
@@ -902,13 +900,15 @@ impl<'a> XmlToInstanceParser<'a> {
                 let type_hint = self.resolve_class_name(field_name);
                 match self.json_object_to_instance(obj, Some(&type_hint)) {
                     Ok(inst) => Ok(InstanceProperty::Relation(RelationValue::One(inst))),
-                    Err(_) => {
-                        // Fall back to treating it as a generic object
-                        // Filter out xmlns and other XML-specific attributes
-                        let filtered_obj = filter_xml_attributes(obj);
-                        Ok(InstanceProperty::Primitive(PrimitiveValue::Object(
-                            serde_json::Value::Object(filtered_obj),
-                        )))
+                    Err(e) => {
+                        // Unknown element type - skip by returning null
+                        // Don't fall back to raw JSON as it creates documents without @type
+                        // which TerminusDB cannot validate
+                        tracing::warn!(
+                            "Could not parse element '{}' as type '{}': {}. Property will be skipped.",
+                            field_name, type_hint, e
+                        );
+                        Ok(InstanceProperty::Primitive(PrimitiveValue::Null))
                     }
                 }
             }

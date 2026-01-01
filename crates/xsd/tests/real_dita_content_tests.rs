@@ -220,18 +220,85 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // Debug: count how many UlClass schemas exist
+    let ul_class_count = model.schemas().iter().filter(|s| matches!(s, Schema::Class { id, .. } if id == "UlClass")).count();
+    println!("Number of UlClass schemas: {}", ul_class_count);
+
+    // Debug: print Ul, Conbody and Fig schema properties and inheritance BEFORE filtering
+    for schema in model.schemas() {
+        if let Schema::Class { id, properties, inherits, .. } = schema {
+            if id == "UlClass" {
+                println!("BEFORE FILTER - Schema UlClass: all properties = {:?}",
+                    properties.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+            }
+            if id == "Conbody" || id == "ConbodyClass" {
+                println!("BEFORE FILTER - {} inherits = {:?}, properties = {:?}",
+                    id,
+                    inherits,
+                    properties.iter().map(|p| format!("{}: {}", p.name, p.class)).collect::<Vec<_>>());
+            }
+            if id == "Fig" || id == "FigClass" {
+                println!("BEFORE FILTER - {} exists with {} properties",
+                    id,
+                    properties.len());
+            }
+        }
+    }
+
+    // Check if fig property exists anywhere
+    let has_fig_property = model.schemas().iter().any(|s| {
+        if let Schema::Class { properties, .. } = s {
+            properties.iter().any(|p| p.name == "fig")
+        } else {
+            false
+        }
+    });
+    println!("Any schema has 'fig' property: {}", has_fig_property);
+
+    // Also check if id property type is defined
+    let defined: std::collections::HashSet<String> = model.schemas()
+        .iter()
+        .filter_map(|s| match s {
+            Schema::Class { id, .. } => Some(id.clone()),
+            Schema::Enum { id, .. } => Some(id.clone()),
+            Schema::OneOfClass { id, .. } => Some(id.clone()),
+            Schema::TaggedUnion { id, .. } => Some(id.clone()),
+        })
+        .collect();
+    println!("Is 'xsd:ID' in defined? {}", defined.contains("xsd:ID"));
+    println!("Is 'NmtokenType' in defined? {}", defined.contains("NmtokenType"));
+
     // Start TerminusDB and insert
     let server = TerminusDBServer::test_instance().await?;
 
     server.with_tmp_db("test_gnostyx_demo", |client, spec| {
         let schemas = filter_valid_schemas(model.schemas());
+
+        // Debug: check UlClass and Conbody AFTER filtering
+        for schema in &schemas {
+            if let Schema::Class { id, properties, inherits, .. } = schema {
+                if id == "UlClass" {
+                    println!("AFTER FILTER - UlClass all properties = {:?}",
+                        properties.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+                }
+                if id == "Conbody" || id == "ConbodyClass" {
+                    println!("AFTER FILTER - {} inherits = {:?}, properties = {:?}",
+                        id,
+                        inherits,
+                        properties.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+                }
+            }
+        }
         let instances = all_instances.clone();
         async move {
             let args = DocumentInsertArgs::from(spec.clone());
 
             // Insert schemas first
             println!("Inserting {} schemas...", schemas.len());
-            client.insert_schema_instances(schemas, args.clone()).await?;
+            match client.insert_schema_instances(schemas, args.clone()).await {
+                Ok(_) => println!("Schema insertion successful"),
+                Err(e) => println!("Schema insertion error: {:?}", e),
+            }
 
             // Insert instances
             println!("Inserting {} instances...", instances.len());
