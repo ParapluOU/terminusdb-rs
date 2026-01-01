@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::database::DatabaseInfo;
 
 /// Connectivity level for a node
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectivityLevel {
     /// Node is unreachable
@@ -15,7 +15,7 @@ pub enum ConnectivityLevel {
 }
 
 /// Health status for a TerminusDB instance node
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NodeStatus {
     /// Node ID this status belongs to
     pub node_id: String,
@@ -94,7 +94,7 @@ impl NodeStatus {
 }
 
 /// Information about a remote connection
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RemoteInfo {
     /// Database name that has this remote
     pub database: String,

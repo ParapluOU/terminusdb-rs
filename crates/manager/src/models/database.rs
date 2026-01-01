@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Database information with metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseInfo {
     /// Database name/path
@@ -19,7 +19,7 @@ pub struct DatabaseInfo {
 }
 
 /// Model/Entity type information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     /// Model/Entity type name
@@ -30,7 +30,7 @@ pub struct ModelInfo {
 }
 
 /// Commit information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
     /// Commit ID/hash

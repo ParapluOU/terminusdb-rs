@@ -3,7 +3,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
 
 /// Configuration for a TerminusDB instance node
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(key = "id")]
 pub struct NodeConfig {
     /// Unique identifier for the node (also used as TerminusDB key)
