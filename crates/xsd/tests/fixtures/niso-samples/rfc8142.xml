@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE standard PUBLIC "-//NISO//DTD NISO STS Interchange Tag Set (NISO STS) DTD with MathML 3.0 v0.2 20170331//EN" "file:NISO-STS-interchange-1-mathml3.dtd">
+<!-- Source:  Internet Engineering Task Force (IETF), Request for Comments (RFC) 
+8142, ISSN:  2070-1721.  Used with permission in accordance with IETF Trust Legal 
+Provisions, section 3.c. Licenses For Use Outside the IETF Standards Process 
+(https://trustee.ietf.org/license-info/IETF-TLP.htm). -->
+<standard
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:mml="http://www.w3.org/1998/Math/MathML"
+  xmlns:xlink="http://www.w3.org/1999/xlink"
+  xmlns:ali="https://www.niso.org/schemas/ali/1.0/"
+  xmlns:tbx="urn:iso:std:iso:30042:ed-1"
+  dtd-version="0.2"
+  xml:lang="en">
+ <front>
+  <std-meta>
+   <title-wrap>
+    <full>GeoJSON Text Sequences</full>
+   </title-wrap>
+   <std-ident>
+    <doc-type>Request for Comments</doc-type>
+    <doc-number>8142</doc-number>
+    <issn>2070-1721</issn>
+   </std-ident>
+   <std-org>
+    <std-org-name>Internet Engineering Task Force</std-org-name>
+    <std-org-abbrev>IETF</std-org-abbrev>
+   </std-org>
+   <release-date date-type="published">April 2017</release-date> 
+   <permissions>
+    <copyright-statement>Copyright (c) 2017 IETF Trust and the persons identified as 
+     the document authors.  All rights reserved.</copyright-statement>
+    <license>
+     <license-p>This document is subject to BCP 78 and the IETF Trust's Legal
+      Provisions Relating to IETF Documents (http://trustee.ietf.org/license-info) 
+      in effect on the date of publication of this document.  Please review
+      these documents carefully, as they describe your rights and restrictions 
+      with respect to this document.  Code Components extracted from this 
+      document must include Simplified BSD License text as described in 
+      Section 4.e of the Trust Legal Provisions and are provided without 
+      warranty as described in the Simplified BSD License.</license-p>
+    </license>
+   </permissions>
+   <abstract>
+    <title>Abstract</title>
+    <p>This document describes the GeoJSON text sequence format and
+     "application/geo+json-seq" media type.  This format is based on
+     JavaScript Object Notation (JSON) text sequences and GeoJSON, and it
+     makes arbitrarily large geographic datasets incrementally parseable
+     without restricting the form of GeoJSON texts within a sequence.</p>
+   </abstract>
+   <custom-meta-group>
+    <custom-meta>
+     <meta-name>Category</meta-name>
+     <meta-value>Standards Track</meta-value>
+    </custom-meta>
+    <custom-meta>
+     <meta-name>author</meta-name>
+     <meta-value>S. Gillies</meta-value>
+    </custom-meta>
+    <custom-meta>
+     <meta-name>auth-org</meta-name>
+     <meta-value>Mapbox</meta-value>
+    </custom-meta>
+   </custom-meta-group>
+  </std-meta>
+  <sec>
+   <title>Status of This Memo</title>
+   <p>This is an Internet Standards Track document.</p>
+   <p>This document is a product of the Internet Engineering Task Force
+    (IETF).  It represents the consensus of the IETF community.  It has
+    received public review and has been approved for publication by the
+    Internet Engineering Steering Group (IESG).  Further information on
+    Internet Standards is available in Section 2 of RFC 7841.</p>
+   <p>Information about the current status of this document, any errata,
+    and how to provide feedback on it may be obtained at
+    http://www.rfc-editor.org/info/rfc8142.</p>
+  </sec>
+ </front>
+ <body>
+  <sec id="s1">
+   <label>1.</label>
+   <title>Introduction</title>
+   <p>Arbitrarily large sequences of values pose a problem for JavaScript
+    Object Notation (JSON) [RFC7159] that is well explained in the
+    motivation for JSON text sequences [RFC7464].  The GeoJSON format
+    [RFC7946] faces the same kind of problem.  Geographic datasets often
+    run to the tens of thousands or millions of features.  The problem is
+    often amplified by the presence of large arrays of coordinates for
+    each of the features.</p>
+   <p>This document describes a specialization of JSON text sequences.  A
+    GeoJSON text sequence is a document of arbitrarily large size
+    containing one or more GeoJSON objects (e.g., multiple GeoJSON texts
+    that can be produced and parsed incrementally) and not just a single
+    GeoJSON FeatureCollection, Feature, or Geometry.</p>
+   <sec id="s1.1">
+    <label>1.1.</label>
+    <title>Requirements Language</title>
+    <p>The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+    "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+    "OPTIONAL" in this document are to be interpreted as described in
+    [RFC2119].</p>
+   </sec>
+  </sec>
+  <sec id="s2">
+   <label>2.</label>
+   <title>GeoJSON Text Sequence Format</title>
+   <p>Defined in prose similar to the description of the JSON text sequence
+    in [RFC7464], a GeoJSON text sequence is any number of GeoJSON
+    [RFC7946] texts, each encoded in UTF-8 [RFC3629], preceded by one
+    ASCII [RFC20] record separator (RS) character, and followed by a line
+    feed (LF).</p>
+   <p>The GeoJSON text sequence format conforms to all the rules of
+    [RFC7464] and adds the following constraint: each JSON text MUST
+    contain a single GeoJSON object as defined in [RFC7946].</p>
+   <p>Heterogeneous sequences containing a mix of GeoJSON Geometry,
+    Feature, and FeatureCollection objects are permitted.  How producers
+    and parsers of GeoJSON text sequences communicate rules for allowed
+    GeoJSON types in exchanged sequences is not specified in this
+    document.</p>
+  </sec>
+  <sec id="s3">
+   <label>3.</label>
+   <title>Security Considerations</title>
+   <p>GeoJSON text sequences have no security considerations beyond those
+    of JSON text sequences [RFC7464] and the GeoJSON format [RFC7946].</p>
+  </sec>
+  <sec id="s4">
+   <label>4.</label>
+   <title>Interoperability Considerations</title>
+   <p>The advantage of using ASCII character RS "0x1e" to denote a text is
+    that sequence producers and parsers need not enforce a canonical form
+    of GeoJSON.  Any valid GeoJSON, pretty-printed or compact, can be
+    used in a GeoJSON text sequence.</p>
+   <p>A variety of parsers designed for newline-delimited sequences of
+    compact JSON text are deployed on the internet today.  While there is
+    no canonical form for JSON texts, and pretty-printed and compact
+    forms are equally valid, GeoJSON text sequences containing compact
+    GeoJSON texts with no internal newlines are more interoperable with
+    existing non-standardized parsers.</p>
+   <p>In a distributed system where order and exactly-once delivery of
+    messages are difficult to achieve, GeoJSON text sequences that do not
+    rely on order of texts for extra semantics are more interoperable
+    than those that do.</p>
+  </sec>
+  <sec id="s5">
+   <label>5.</label>
+   <title>IANA Considerations</title>
+   <p>The MIME media type for GeoJSON text sequences is "application/
+    geo+json-seq" (which uses the suffix established in [RFC8091]).  IANA
+    has registered it in the "Media Types" registry
+    &lt;https://www.iana.org/assignments/media-types/&gt;.</p>
+   <def-list>
+    <def-item>
+     <term>Type name:</term>
+     <def><p>application</p></def>
+    </def-item>
+    <def-item>
+     <term>Subtype name:</term>
+     <def><p>geo+json-seq</p></def>
+    </def-item>
+    <def-item>
+     <term>Required parameters:</term>
+     <def><p>n/a</p></def>
+    </def-item>
+    <def-item>
+     <term>Optional parameters:</term>
+     <def><p>n/a</p></def>
+    </def-item>
+    <def-item>
+     <term>Encoding considerations:</term>
+     <def><p>binary</p></def>
+    </def-item>
+    <def-item>
+     <term>Security considerations:</term>
+     <def><p>See Section 3 of RFC 8142</p></def>
+    </def-item>
+    <def-item>
+     <term>Interoperability considerations:</term>
+     <def><p>See Section 4 of RFC 8142</p></def>
+    </def-item>
+    <def-item>
+     <term>Published specification:</term>
+     <def><p>RFC 8142</p></def>
+    </def-item>
+    <def-item>
+     <term>Applications that use this media type:</term>
+     <def><p>Geographic information systems (GIS)</p></def>
+    </def-item>
+    <def-item>
+     <term>Additional information:</term>
+     <def><p>
+      <def-list>
+       <def-item>
+        <term>Deprecated alias names for this type:</term>
+        <def><p>n/a</p></def>
+       </def-item>
+       <def-item>
+        <term>Magic number(s):</term>
+        <def><p>n/a</p></def>
+       </def-item>
+       <def-item>
+        <term>File extension(s):</term>
+        <def><p>n/a</p></def>
+       </def-item>
+       <def-item>
+        <term>Macintosh file type code(s):</term>
+        <def><p>n/a</p></def>
+       </def-item>
+      </def-list>
+     </p></def>
+    </def-item>
+    <def-item>
+     <term>Person to contact for further information:</term>
+     <def><p>Sean Gillies (sean.gillies@gmail.com)</p></def>
+    </def-item>
+    <def-item>
+     <term>Intended usage:</term>
+     <def><p>COMMON</p></def>
+    </def-item>
+    <def-item>
+     <term>Restrictions on usage:</term>
+     <def><p>none</p></def>
+    </def-item>
+    <def-item>
+     <term>Author:</term>
+     <def><p>Sean Gillies (sean.gillies@gmail.com)</p></def>
+    </def-item>
+    <def-item>
+     <term>Change controller:</term>
+     <def><p>IETF</p></def>
+    </def-item>
+   </def-list>
+  </sec>
+  <sec id="s6">
+   <label>6.</label>
+   <title>References</title>
+   <sec id="s6.1">
+    <label>6.1.</label>
+    <title>Normative References</title>
+    <ref-list>
+     <ref id="nr1">
+      <label>[RFC20]</label>
+      <std>Cerf, V., "ASCII format for network interchange," 
+       STD 80, RFC 20, DOI 10.17487/RFC0020, October 1969, 
+       &lt;http://www.rfc-editor.org/info/rfc20&gt;.</std>
+     </ref>
+     <ref id="nr2">
+      <label>[RFC2119]</label>
+      <std>Bradner, S., "Key words for use in RFCs to Indicate
+       Requirement Levels," BCP 14, RFC 2119, DOI 10.17487/RFC2119, 
+       March 1997, &lt;http://www.rfc-editor.org/info/rfc2119&gt;.</std>
+     </ref>
+     <ref id="nr3">
+      <label>[RFC3629]</label>
+      <std>Yergeau, F., "UTF-8, a transformation format of ISO 
+       10646," STD 63, RFC 3629, DOI 10.17487/RFC3629, November 2003, 
+       &lt;http://www.rfc-editor.org/info/rfc3629&gt;.</std>
+     </ref>
+     <ref id="nr4">
+      <label>[RFC7159]</label>
+      <std>Bray, T., Ed., "The JavaScript Object Notation (JSON) Data
+       Interchange Format," RFC 7159, DOI 10.17487/RFC7159, March 2014, 
+       &lt;http://www.rfc-editor.org/info/rfc7159&gt;.</std>
+     </ref>
+     <ref id="nr5">
+      <label>[RFC7464]</label>
+      <std>Williams, N., "JavaScript Object Notation (JSON) Text
+       Sequences," RFC 7464, DOI 10.17487/RFC7464, February 2015, 
+       &lt;http://www.rfc-editor.org/info/rfc7464&gt;.</std>
+     </ref>
+     <ref id="nr6">
+      <label>[RFC7946]</label>
+      <std>Butler, H., Daly, M., Doyle, A., Gillies, S., Hagen, S., and 
+       T. Schaub, "The GeoJSON Format," RFC 7946, DOI 10.17487/RFC7946, 
+       August 2016, &lt;http://www.rfc-editor.org/info/rfc7946&gt;.</std>
+     </ref>
+    </ref-list>
+   </sec>
+   <sec id="s6.2">
+    <label>6.2.</label>
+    <title>Informative References</title>
+    <ref-list>
+     <ref id="ir1">
+      <label>[RFC8091]</label>
+      <std>Wilde, E., "A Media Type Structured Syntax Suffix for JSON
+       Text Sequences," RFC 8091, DOI 10.17487/RFC8091, February 2017, 
+       &lt;http://www.rfc-editor.org/info/rfc8091&gt;.</std>
+     </ref>
+    </ref-list>
+   </sec>
+  </sec>
+ </body>
+ <back>
+  <sec id="b1">
+   <title>Author's Address</title>
+   <address>
+    <addr-line>Sean Gillies</addr-line>
+    <addr-line><institution>Mapbox</institution></addr-line>
+    <email>sean.gillies@gmail.com</email>
+    <uri>http://sgillies.net</uri>
+   </address>
+  </sec>
+ </back>
+</standard>  
