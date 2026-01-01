@@ -102,6 +102,7 @@ impl XsdToSchemaGenerator {
                 complex_type,
                 &non_subdocument_types,
                 &xsd_schema.simple_types,
+                &xsd_schema.complex_types,
             )?;
             schemas.extend(type_schemas);
         }
@@ -664,6 +665,7 @@ impl XsdToSchemaGenerator {
         complex_type: &XsdComplexType,
         root_element_types: &std::collections::HashSet<String>,
         simple_types: &[XsdSimpleType],
+        complex_types: &[XsdComplexType],
     ) -> Result<Vec<Schema>> {
         // Extract namespace and local name from Clark notation: {namespace}localName
         let (namespace, local_name) = self.parse_clark_notation(
@@ -696,10 +698,17 @@ impl XsdToSchemaGenerator {
         // Check if base type also has mixed content - in that case, we inherit `content` property
         // rather than defining our own (which would cause diamond property violation in TerminusDB)
         let base_has_mixed_content = if let Some(ref base_type) = complex_type.base_type {
-            // The base type name indicates it's also mixed - e.g., "p.class" is mixed if "p" element is mixed
-            // In DITA, if a base type is mixed, its derived element types are also mixed
-            // Check if base type ends with ".class" pattern which indicates the base class
-            base_type.ends_with(".class") || base_type.ends_with("Class")
+            let (_, base_local_name) = self.parse_clark_notation(base_type);
+
+            // First, check if the base type is actually in our complex types and is mixed
+            let base_is_mixed = complex_types.iter().any(|ct| {
+                // Match by name (with or without namespace)
+                let (_, ct_local) = self.parse_clark_notation(&ct.name);
+                (ct_local == base_local_name || ct.name == *base_type) && ct.mixed
+            });
+
+            // Fallback: also check name patterns for DITA compatibility
+            base_is_mixed || base_type.ends_with(".class") || base_type.ends_with("Class")
         } else {
             false
         };
@@ -737,13 +746,36 @@ impl XsdToSchemaGenerator {
                 }
             }
 
-            // Add _text property for simple content (text only, no interleaved elements)
-            // Only for non-mixed types that have simple content
-            if complex_type.has_simple_content {
+            // Add _text property for simple content or mixed content without child elements
+            // - has_simple_content: explicitly simple content (text only)
+            // - mixed with no children: can contain text but no inline elements
+            let needs_text_property = complex_type.has_simple_content
+                || (complex_type.mixed && complex_type.child_elements.as_ref().map_or(true, |c| c.is_empty()));
+
+            if needs_text_property {
+                // Use the base type's underlying XSD type if it's a simple type
+                let text_type = if let Some(ref base_type) = complex_type.base_type {
+                    let (_, base_local_name) = self.parse_clark_notation(base_type);
+                    let base_class = base_local_name.to_pascal_case();
+
+                    // Find the simple type and get its base XSD type
+                    simple_types
+                        .iter()
+                        .find(|st| {
+                            let st_local = self.parse_clark_notation(&st.qualified_name).1;
+                            st_local.to_pascal_case() == base_class
+                        })
+                        .and_then(|st| st.base_type.clone())
+                        .and_then(|bt| self.map_xsd_type_to_tdb_class(&bt).ok())
+                        .unwrap_or_else(|| "xsd:string".to_string())
+                } else {
+                    "xsd:string".to_string()
+                };
+
                 properties.push(Property {
                     name: "_text".to_string(),
                     r#type: Some(TypeFamily::Optional),
-                    class: "xsd:string".to_string(),
+                    class: text_type,
                 });
             }
         }
@@ -773,10 +805,26 @@ impl XsdToSchemaGenerator {
         };
 
         // Extract inheritance from XSD base_type (for extension/restriction)
+        // IMPORTANT: When a complex type has simpleContent extending a simple type,
+        // we should NOT create class inheritance because simple types don't become
+        // TerminusDB classes. Instead, the _text property captures the value.
         let inherits = if let Some(ref base_type) = complex_type.base_type {
             let (_, base_local_name) = self.parse_clark_notation(base_type);
             let base_class = base_local_name.to_pascal_case();
-            vec![base_class]
+
+            // Check if this is simpleContent extending a simple type
+            let base_is_simple_type = complex_type.has_simple_content
+                && simple_types.iter().any(|st| {
+                    let st_local = self.parse_clark_notation(&st.qualified_name).1;
+                    st_local.to_pascal_case() == base_class
+                });
+
+            if base_is_simple_type {
+                // Simple type bases don't become class inheritance
+                vec![]
+            } else {
+                vec![base_class]
+            }
         } else {
             vec![]
         };
@@ -925,14 +973,23 @@ impl XsdToSchemaGenerator {
             let max = element.max_occurs.clone();
 
             match (min, &max) {
-                (0, Some(Cardinality::Unbounded)) => Some(TypeFamily::Optional),
+                // minOccurs=0, maxOccurs=unbounded -> Set (can have 0 or more)
+                (0, Some(Cardinality::Unbounded)) => Some(TypeFamily::Set(SetCardinality::None)),
+                // minOccurs=0, maxOccurs=1 -> Optional (can have 0 or 1)
                 (0, Some(Cardinality::Number(1))) | (0, None) => Some(TypeFamily::Optional),
+                // minOccurs=1, maxOccurs=unbounded -> Set (must have at least 1)
                 (1, Some(Cardinality::Unbounded)) => Some(TypeFamily::Set(SetCardinality::None)),
-                (1, Some(Cardinality::Number(1))) | (1, None) => None,
+                // minOccurs=1, maxOccurs=1 -> Treat as Optional
+                // This is a pragmatic choice because XSD content models often have complex
+                // optionality from choice/sequence combinations that we don't fully analyze.
+                // For example, an element in a choice branch is effectively optional even
+                // if it has minOccurs=1, because another branch can be taken instead.
+                (1, Some(Cardinality::Number(1))) | (1, None) => Some(TypeFamily::Optional),
+                // Other cases with max > 1 -> Set
                 _ => match max {
                     Some(Cardinality::Unbounded) => Some(TypeFamily::Set(SetCardinality::None)),
                     Some(Cardinality::Number(n)) if n > 1 => Some(TypeFamily::Set(SetCardinality::None)),
-                    _ => None,
+                    _ => Some(TypeFamily::Optional),
                 },
             }
         };
@@ -955,7 +1012,19 @@ impl XsdToSchemaGenerator {
                 self.map_xsd_type_to_tdb_class(&element.element_type)?
             }
         } else {
-            self.map_xsd_type_to_tdb_class(&element.element_type)?
+            // For non-list types, first check if it's a simple type and map to its primitive base
+            let (_, type_name) = self.parse_clark_notation(&element.element_type);
+            if let Some(st) = simple_types.iter().find(|st| {
+                st.name == type_name || st.qualified_name == element.element_type
+                || st.name == element.element_type
+            }) {
+                // This is a simple type - map to its base XSD type
+                st.base_type.clone()
+                    .map(|bt| self.map_xsd_type_to_tdb_class(&bt).unwrap_or_else(|_| "xsd:string".to_string()))
+                    .unwrap_or_else(|| "xsd:string".to_string())
+            } else {
+                self.map_xsd_type_to_tdb_class(&element.element_type)?
+            }
         };
 
         // Extract local name from Clark notation for property name
