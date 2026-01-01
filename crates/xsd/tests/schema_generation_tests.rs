@@ -394,3 +394,97 @@ fn test_list_types_generate_type_family_list() {
         items.r#type
     );
 }
+
+// ============================================================================
+// Namespace Tests - Verify targetNamespace is used in Context
+// ============================================================================
+
+#[test]
+fn test_context_uses_target_namespace() {
+    // Verify that XsdModel extracts targetNamespace and sets it in Context.@schema
+    //
+    // simple_book.xsd has: targetNamespace="http://example.com/book"
+    // This should become context.schema = "http://example.com/book#"
+    use terminusdb_xsd::XsdModel;
+
+    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let model = XsdModel::from_file(xsd_path, None::<&str>)
+        .expect("Failed to load XsdModel");
+
+    let context = model.context();
+
+    // Context schema should be derived from targetNamespace
+    assert!(
+        context.schema.contains("example.com/book"),
+        "Context @schema should contain the XSD targetNamespace. Got: {}",
+        context.schema
+    );
+
+    // Should end with # or / for proper IRI formation
+    assert!(
+        context.schema.ends_with('#') || context.schema.ends_with('/'),
+        "Context @schema should end with # or /. Got: {}",
+        context.schema
+    );
+
+    // namespace() accessor should match context.schema
+    assert_eq!(
+        model.namespace(),
+        &context.schema,
+        "namespace() should return context.schema"
+    );
+}
+
+#[test]
+fn test_with_namespace_overrides_context() {
+    // Verify that with_namespace() updates both namespace and context.schema
+    use terminusdb_xsd::XsdModel;
+
+    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let model = XsdModel::from_file(xsd_path, None::<&str>)
+        .expect("Failed to load XsdModel")
+        .with_namespace("http://custom.org/schema#");
+
+    let context = model.context();
+
+    assert_eq!(
+        context.schema,
+        "http://custom.org/schema#",
+        "with_namespace() should update context.schema"
+    );
+
+    assert_eq!(
+        model.namespace(),
+        "http://custom.org/schema#",
+        "with_namespace() should update namespace()"
+    );
+}
+
+#[test]
+fn test_different_xsd_get_different_namespaces() {
+    // Verify that different XSD files get their own namespaces
+    // This is the core of the multi-schema solution
+    use terminusdb_xsd::XsdModel;
+
+    let book_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let catalog_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
+
+    let book_model = XsdModel::from_file(book_path, None::<&str>)
+        .expect("Failed to load book model");
+    let catalog_model = XsdModel::from_file(catalog_path, None::<&str>)
+        .expect("Failed to load catalog model");
+
+    let book_ns = book_model.namespace();
+    let catalog_ns = catalog_model.namespace();
+
+    // They should have different namespaces (from their targetNamespace)
+    eprintln!("Book namespace: {}", book_ns);
+    eprintln!("Catalog namespace: {}", catalog_ns);
+
+    // Book should have example.com/book namespace
+    assert!(
+        book_ns.contains("example.com/book"),
+        "Book should have example.com/book namespace. Got: {}",
+        book_ns
+    );
+}
