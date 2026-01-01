@@ -730,12 +730,10 @@ fn debug_addr_line_child_elements() {
 
 /// Full NISO-STS integration test with RFC8142 sample document
 ///
-/// TODO: Currently fails with "Schema check failure" due to complex type
-/// relationships in NISO-STS that aren't fully supported. The Back type's
-/// sec property has a type mismatch between the generated schema and instance.
-/// This requires deeper investigation into XSD→TerminusDB schema translation.
+/// Tests the complete flow: XSD → TerminusDB Schema → XML parsing → Instance insertion.
+/// This validates group reference resolution (xs:group ref="...") which is critical
+/// for JATS/NISO-STS schemas that use model groups extensively.
 #[tokio::test]
-#[ignore = "Schema check failure: Back.sec type mismatch - needs investigation"]
 async fn test_full_niso_flow_with_rfc8142() -> anyhow::Result<()> {
     let model = XsdModel::from_file(&niso_sts_xsd_path(), None::<&str>)
         .expect("Failed to load NISO-STS model");

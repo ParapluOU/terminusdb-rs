@@ -574,7 +574,24 @@ impl XsdSchema {
             (None, _) => None,
         };
 
-        for particle in &group.particles {
+        // If this group is a reference to another group (xs:group ref="..."),
+        // resolve it and use the referenced group's particles
+        let particles: &Vec<GroupParticle> = if let Some(ref group_ref) = group.group_ref {
+            // Look up the referenced group in the schema
+            if let Some((_qname, referenced_group)) = schema.groups().find(|(qname, _)| {
+                // Match by local name (group_ref may or may not have namespace)
+                qname.local_name == group_ref.local_name
+            }) {
+                &referenced_group.particles
+            } else {
+                // Group reference not found, use this group's particles (likely empty)
+                &group.particles
+            }
+        } else {
+            &group.particles
+        };
+
+        for particle in particles {
             match particle {
                 GroupParticle::Element(ep) => {
                     let name = ep.name.to_string();
