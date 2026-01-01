@@ -58,10 +58,6 @@ pub struct XsdModel {
 
     /// Namespace for generated schemas
     namespace: String,
-
-    /// Optional class prefix for multi-schema databases.
-    /// When set, all class names are prefixed (e.g., "Dita_TitleClass").
-    class_prefix: Option<String>,
 }
 
 impl XsdModel {
@@ -119,7 +115,6 @@ impl XsdModel {
             tdb_schemas,
             context,
             namespace,
-            class_prefix: None,
         })
     }
 
@@ -174,7 +169,6 @@ impl XsdModel {
             tdb_schemas,
             context,
             namespace,
-            class_prefix: None,
         })
     }
 
@@ -190,49 +184,6 @@ impl XsdModel {
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = namespace.into();
         self
-    }
-
-    /// Set a class prefix for all generated class names.
-    ///
-    /// This is useful when storing multiple XSD schemas in the same TerminusDB
-    /// database, allowing class names to be disambiguated. For example, both
-    /// DITA and NISO-STS schemas define a `Title` type; with prefixes they
-    /// become `Dita_Title` and `NisoSts_Title`.
-    ///
-    /// The prefix is applied to:
-    /// - All schema class IDs
-    /// - Inheritance references
-    /// - Property class references
-    /// - Element-to-class mappings for XML parsing
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use terminusdb_xsd::XsdModel;
-    ///
-    /// let dita_model = XsdModel::from_file("dita/topic.xsd", None::<&str>)?
-    ///     .with_class_prefix("Dita_");
-    ///
-    /// let sts_model = XsdModel::from_file("niso-sts/NISO-STS.xsd", None::<&str>)?
-    ///     .with_class_prefix("NisoSts_");
-    ///
-    /// // Both can now coexist in the same database
-    /// # Ok::<(), terminusdb_xsd::XsdError>(())
-    /// ```
-    pub fn with_class_prefix(mut self, prefix: impl Into<String>) -> Self {
-        let prefix = prefix.into();
-
-        // Apply prefix to schemas
-        let generator = XsdToSchemaGenerator::new().with_class_prefix(&prefix);
-        self.tdb_schemas = generator.apply_class_prefix(std::mem::take(&mut self.tdb_schemas));
-        self.class_prefix = Some(prefix);
-
-        self
-    }
-
-    /// Get the class prefix, if set.
-    pub fn class_prefix(&self) -> Option<&str> {
-        self.class_prefix.as_deref()
     }
 
     /// Get the bundle path.
@@ -428,8 +379,6 @@ impl XsdModel {
     /// 2. Root elements with anonymous types → map element to element-named class
     /// 3. Complex types that track their element_name (anonymous types)
     ///
-    /// If a class prefix is set, the returned class names will include the prefix.
-    ///
     /// Returns a map of lowercase element names to their TerminusDB class names.
     pub fn element_to_class_map(&self) -> std::collections::HashMap<String, String> {
         use heck::ToPascalCase;
@@ -445,16 +394,14 @@ impl XsdModel {
                     if let Some(type_qname) = type_info.name.as_ref().or(type_info.qualified_name.as_ref()) {
                         // Named type - use type name
                         let type_name = type_qname.split('}').last().unwrap_or(type_qname);
-                        let base_class = type_name.to_pascal_case();
-                        let class_name = self.prefixed_class_name(&base_class);
+                        let class_name = type_name.to_pascal_case();
 
                         if self.find_schema(&class_name).is_some() {
                             map.insert(local_name.to_lowercase(), class_name);
                         }
                     } else {
                         // Anonymous type - use element name as class name
-                        let base_class = local_name.to_pascal_case();
-                        let class_name = self.prefixed_class_name(&base_class);
+                        let class_name = local_name.to_pascal_case();
                         if self.find_schema(&class_name).is_some() {
                             map.insert(local_name.to_lowercase(), class_name);
                         }
@@ -467,8 +414,7 @@ impl XsdModel {
                 if let Some(elem_name) = &ct.element_name {
                     let local_name = elem_name.split('}').last().unwrap_or(elem_name);
                     // The class name for anonymous types should be the element name
-                    let base_class = local_name.to_pascal_case();
-                    let class_name = self.prefixed_class_name(&base_class);
+                    let class_name = local_name.to_pascal_case();
 
                     if self.find_schema(&class_name).is_some() {
                         map.insert(local_name.to_lowercase(), class_name);
@@ -478,14 +424,6 @@ impl XsdModel {
         }
 
         map
-    }
-
-    /// Apply class prefix to a base class name if one is set.
-    fn prefixed_class_name(&self, base_class: &str) -> String {
-        match &self.class_prefix {
-            Some(prefix) => format!("{}{}", prefix, base_class),
-            None => base_class.to_string(),
-        }
     }
 }
 

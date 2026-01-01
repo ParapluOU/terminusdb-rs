@@ -28,50 +28,18 @@ pub struct EntryPointScore {
 
 pub struct XsdToSchemaGenerator {
     pub namespace: String,
-    /// Optional prefix for all generated class names (e.g., "Dita_" or "NisoSts_").
-    /// This allows multiple XSD schemas to coexist in the same TerminusDB database
-    /// without class name collisions.
-    pub class_prefix: Option<String>,
 }
 
 impl XsdToSchemaGenerator {
     pub fn new() -> Self {
         Self {
             namespace: "terminusdb://schema#".to_string(),
-            class_prefix: None,
         }
     }
 
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
         Self {
             namespace: namespace.into(),
-            class_prefix: None,
-        }
-    }
-
-    /// Set a prefix for all generated class names.
-    ///
-    /// This is useful when you need to store multiple XSD schemas in the same
-    /// TerminusDB database. For example, setting prefix "Dita_" would generate
-    /// class names like "Dita_TitleClass" instead of just "TitleClass".
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use terminusdb_xsd::XsdToSchemaGenerator;
-    ///
-    /// let generator = XsdToSchemaGenerator::new().with_class_prefix("Dita_");
-    /// ```
-    pub fn with_class_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.class_prefix = Some(prefix.into());
-        self
-    }
-
-    /// Apply the class prefix to a class name if one is set.
-    fn prefixed_class_name(&self, name: &str) -> String {
-        match &self.class_prefix {
-            Some(prefix) => format!("{}{}", prefix, name),
-            None => name.to_string(),
         }
     }
 
@@ -682,121 +650,6 @@ impl XsdToSchemaGenerator {
         }
 
         deduplicated
-    }
-
-    /// Apply the class prefix to all schemas.
-    ///
-    /// This transforms all class names, property class references, inheritance lists,
-    /// and tagged union variants to include the prefix. XSD primitive types (xsd:*)
-    /// and system types (sys:*) are not prefixed.
-    ///
-    /// # Arguments
-    ///
-    /// * `schemas` - The schemas to transform
-    ///
-    /// # Returns
-    ///
-    /// The transformed schemas with prefixed class names.
-    pub fn apply_class_prefix(&self, schemas: Vec<Schema>) -> Vec<Schema> {
-        let Some(ref prefix) = self.class_prefix else {
-            return schemas;
-        };
-
-        schemas.into_iter().map(|schema| {
-            match schema {
-                Schema::Class {
-                    id,
-                    base,
-                    key,
-                    documentation,
-                    subdocument,
-                    r#abstract,
-                    inherits,
-                    unfoldable,
-                    properties,
-                } => Schema::Class {
-                    id: format!("{}{}", prefix, id),
-                    base,
-                    key,
-                    documentation,
-                    subdocument,
-                    r#abstract,
-                    inherits: inherits.into_iter().map(|i| self.maybe_prefix_class(&i, prefix)).collect(),
-                    unfoldable,
-                    properties: properties.into_iter().map(|p| Property {
-                        name: p.name,
-                        r#type: p.r#type,
-                        class: self.maybe_prefix_class(&p.class, prefix),
-                    }).collect(),
-                },
-                Schema::Enum { id, documentation, values } => Schema::Enum {
-                    id: format!("{}{}", prefix, id),
-                    documentation,
-                    values,
-                },
-                Schema::OneOfClass {
-                    id,
-                    base,
-                    documentation,
-                    subdocument,
-                    r#abstract,
-                    inherits,
-                    classes,
-                    properties,
-                } => Schema::OneOfClass {
-                    id: format!("{}{}", prefix, id),
-                    base,
-                    documentation,
-                    subdocument,
-                    r#abstract,
-                    inherits: inherits.into_iter().map(|i| self.maybe_prefix_class(&i, prefix)).collect(),
-                    classes: classes.into_iter().map(|class_props| {
-                        class_props.into_iter().map(|p| Property {
-                            name: p.name,
-                            r#type: p.r#type,
-                            class: self.maybe_prefix_class(&p.class, prefix),
-                        }).collect()
-                    }).collect(),
-                    properties: properties.into_iter().map(|p| Property {
-                        name: p.name,
-                        r#type: p.r#type,
-                        class: self.maybe_prefix_class(&p.class, prefix),
-                    }).collect(),
-                },
-                Schema::TaggedUnion {
-                    id,
-                    base,
-                    key,
-                    r#abstract,
-                    documentation,
-                    subdocument,
-                    properties,
-                    unfoldable,
-                } => Schema::TaggedUnion {
-                    id: format!("{}{}", prefix, id),
-                    base,
-                    key,
-                    r#abstract,
-                    documentation,
-                    subdocument,
-                    properties: properties.into_iter().map(|p| Property {
-                        name: p.name,
-                        r#type: p.r#type,
-                        class: self.maybe_prefix_class(&p.class, prefix),
-                    }).collect(),
-                    unfoldable,
-                },
-            }
-        }).collect()
-    }
-
-    /// Apply prefix to a class name if it's not an XSD or system type.
-    fn maybe_prefix_class(&self, class: &str, prefix: &str) -> String {
-        if class.starts_with("xsd:") || class.starts_with("sys:") {
-            class.to_string()
-        } else {
-            format!("{}{}", prefix, class)
-        }
     }
 
     /// Generate TerminusDB schema(s) from an XSD complex type.
