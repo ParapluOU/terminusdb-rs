@@ -444,10 +444,13 @@ fn element_to_element_data(elem: &Element) -> ElementData {
         data = data.with_attribute(qname.local_name.clone(), value.clone());
     }
 
-    // Add xmlns declarations
-    for (prefix, uri) in elem.namespaces.iter() {
-        data = data.with_xmlns(prefix, uri);
-    }
+    // NOTE: We intentionally do NOT add xmlns declarations to ElementData.
+    // Namespace declarations are XML metadata for parsing, not data content.
+    // They would be converted to JSON keys like "xmlns:ali" which cause
+    // "Unknown prefix" errors when inserting into TerminusDB.
+    // for (prefix, uri) in elem.namespaces.iter() {
+    //     data = data.with_xmlns(prefix, uri);
+    // }
 
     // Add child elements recursively
     for child in &elem.children {

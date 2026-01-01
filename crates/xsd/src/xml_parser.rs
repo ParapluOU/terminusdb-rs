@@ -83,8 +83,14 @@ impl<'a> XmlToInstanceParser<'a> {
     pub fn new(schemas: &'a [Schema]) -> Self {
         let mut schema_map = BTreeMap::new();
         for schema in schemas {
-            if let Schema::Class { id, .. } = schema {
-                schema_map.insert(id.clone(), schema);
+            match schema {
+                Schema::Class { id, .. } => {
+                    schema_map.insert(id.clone(), schema);
+                }
+                Schema::TaggedUnion { id, .. } => {
+                    schema_map.insert(id.clone(), schema);
+                }
+                _ => {}
             }
         }
         Self {
@@ -104,8 +110,14 @@ impl<'a> XmlToInstanceParser<'a> {
     ) -> Self {
         let mut schema_map = BTreeMap::new();
         for schema in schemas {
-            if let Schema::Class { id, .. } = schema {
-                schema_map.insert(id.clone(), schema);
+            match schema {
+                Schema::Class { id, .. } => {
+                    schema_map.insert(id.clone(), schema);
+                }
+                Schema::TaggedUnion { id, .. } => {
+                    schema_map.insert(id.clone(), schema);
+                }
+                _ => {}
             }
         }
         Self {
@@ -318,6 +330,19 @@ impl<'a> XmlToInstanceParser<'a> {
                 continue;
             }
 
+            // Skip XML namespace declarations - these are not data properties
+            // Example: xmlns:ali, xmlns:mml, xmlns:xlink, xmlns:xsi, xmlns
+            if key.starts_with("xmlns:") || key == "xmlns" {
+                continue;
+            }
+
+            // Skip dtd-version and similar DTD-related attributes
+            // Also skip xml:lang which becomes "lang" after prefix stripping
+            if key == "dtd-version" || key == "@dtd-version"
+                || key == "lang" || key == "@lang" || key == "xml:lang" {
+                continue;
+            }
+
             // Normalize key: strip @ prefix for XML attributes to match schema property names
             let property_name = if key.starts_with('@') && key != "@id" {
                 // XML attributes like @class -> class
@@ -397,6 +422,9 @@ impl<'a> XmlToInstanceParser<'a> {
             _ => String::new(),
         };
 
+        // Debug: print the inline union name
+        tracing::debug!("Mixed content inline union: {}", inline_union_name);
+
         // Build the parent instance properties (attributes only)
         let mut instance_props = BTreeMap::new();
 
@@ -411,6 +439,16 @@ impl<'a> XmlToInstanceParser<'a> {
 
             if key == "$" {
                 // Text content - already captured above
+                continue;
+            }
+
+            // Skip XML namespace declarations - these are not data properties
+            if key.starts_with("xmlns:") || key == "xmlns" {
+                continue;
+            }
+
+            // Skip dtd-version and similar DTD-related attributes
+            if key == "dtd-version" || key == "xml:lang" {
                 continue;
             }
 
@@ -501,11 +539,12 @@ impl<'a> XmlToInstanceParser<'a> {
     /// Build an inline element instance for mixed content subs.
     ///
     /// This wraps child elements in the appropriate type for the inline TaggedUnion.
+    /// The returned instance is a TaggedUnion instance with the variant name as the property.
     fn build_inline_element(
         &self,
         element_class: &str,
         value: &serde_json::Value,
-        _inline_union_name: &str,
+        inline_union_name: &str,
     ) -> ParseResult<Option<Instance>> {
         // Look up the element's schema
         let schema = match self.schemas.get(element_class) {
@@ -520,29 +559,102 @@ impl<'a> XmlToInstanceParser<'a> {
             }
         };
 
-        match value {
+        // Build the variant instance based on the value type
+        let variant_instance = match value {
             serde_json::Value::String(s) => {
-                // Simple text content
-                let mut properties = BTreeMap::new();
-                properties.insert(
-                    "_text".to_string(),
-                    InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
-                );
-                Ok(Some(Instance {
-                    schema: (*schema).clone(),
-                    id: None,
-                    capture: false,
-                    ref_props: false,
-                    properties,
-                }))
+                // Check if this schema (or its base) has mixed content
+                // For example, <institution>Mapbox</institution> should use MixedContentInstitution
+                if let Some(mixed_content_class) = self.find_mixed_content_class(schema) {
+                    // This inline element has its own mixed content structure
+                    self.build_simple_mixed_content_instance(schema, &mixed_content_class, s)?
+                } else {
+                    // Simple text content without mixed content structure
+                    let mut properties = BTreeMap::new();
+                    properties.insert(
+                        "_text".to_string(),
+                        InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
+                    );
+                    Instance {
+                        schema: (*schema).clone(),
+                        id: None,
+                        capture: false,
+                        ref_props: false,
+                        properties,
+                    }
+                }
             }
             serde_json::Value::Object(obj) => {
                 // Complex inline element
-                self.json_object_to_instance(obj, Some(schema.class_name()))
-                    .map(Some)
+                self.json_object_to_instance(obj, Some(schema.class_name()))?
             }
-            _ => Ok(None),
-        }
+            _ => return Ok(None),
+        };
+
+        // Wrap the variant instance in a TaggedUnion instance
+        // The TaggedUnion expects { "@type": "AddrLineInline", "institution": { ... } }
+        tracing::debug!(
+            "build_inline_element: element_class={}, inline_union_name={}",
+            element_class,
+            inline_union_name
+        );
+        let union_schema = match self.schemas.get(inline_union_name) {
+            Some(s) => {
+                tracing::debug!("Found union schema: {}", s.class_name());
+                s
+            }
+            None => {
+                tracing::debug!("Union schema NOT found, returning variant directly");
+                // Fallback: return the variant directly if union schema not found
+                return Ok(Some(variant_instance));
+            }
+        };
+
+        // Find the variant name from the TaggedUnion schema properties
+        // The variant name corresponds to the element class (e.g., "institution" for Institution)
+        let variant_name = match union_schema {
+            Schema::TaggedUnion { properties, .. } => {
+                // Find the property whose class matches element_class
+                properties
+                    .iter()
+                    .find(|p| p.class == element_class)
+                    .map(|p| p.name.clone())
+            }
+            _ => None,
+        };
+
+        let variant_name = match variant_name {
+            Some(name) => name,
+            None => {
+                // Fallback: convert class name to kebab-case for variant name
+                // e.g., "Institution" -> "institution"
+                element_class
+                    .chars()
+                    .enumerate()
+                    .flat_map(|(i, c)| {
+                        if c.is_uppercase() && i > 0 {
+                            vec!['-', c.to_ascii_lowercase()]
+                        } else {
+                            vec![c.to_ascii_lowercase()]
+                        }
+                    })
+                    .collect()
+            }
+        };
+
+        // Build the TaggedUnion instance
+        let mut union_props = BTreeMap::new();
+        union_props.insert(
+            variant_name,
+            InstanceProperty::Relation(RelationValue::One(variant_instance)),
+        );
+
+        Ok(Some(Instance {
+            schema: (*union_schema).clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: union_props,
+        }))
     }
 
     /// Find mixed content property in inherited classes.
@@ -706,18 +818,62 @@ impl<'a> XmlToInstanceParser<'a> {
 
                 // Check if array contains objects (relations) or primitives
                 let first = &arr[0];
+
+                // Resolve the element type for this field
+                let class_name = self.resolve_class_name(field_name);
+                let element_schema = self.schemas.get(&class_name);
+
                 if first.is_object() {
                     // Array of nested instances
+                    // e.g., "sec" array items should be type "Sec"
                     let mut relations = Vec::new();
                     for item in arr {
                         if let serde_json::Value::Object(obj) = item {
-                            let inst = self.json_object_to_instance(obj, None)?;
+                            let inst = self.json_object_to_instance(obj, Some(&class_name))?;
                             relations.push(RelationValue::One(inst));
                         }
                     }
                     Ok(InstanceProperty::Relations(relations))
+                } else if first.is_string() && element_schema.is_some() {
+                    // Array of strings but we have a schema for the element type
+                    // This happens with elements like <p>text</p> repeated
+                    let schema = element_schema.unwrap();
+
+                    // Check if this schema (or its base) has mixed content
+                    let mixed_content_class = self.find_mixed_content_class(schema);
+
+                    let mut relations = Vec::new();
+                    for item in arr {
+                        if let serde_json::Value::String(s) = item {
+                            let inst = if let Some(ref mixed_class) = mixed_content_class {
+                                // This is a mixed content type - build MixedContent instance with the text
+                                self.build_simple_mixed_content_instance(schema, mixed_class, s)?
+                            } else {
+                                // Regular complex type - wrap the text in an Instance with _text property
+                                let mut properties = BTreeMap::new();
+                                properties.insert(
+                                    "_text".to_string(),
+                                    InstanceProperty::Primitive(PrimitiveValue::String(s.clone())),
+                                );
+                                Instance {
+                                    schema: (*schema).clone(),
+                                    id: None,
+                                    capture: false,
+                                    ref_props: false,
+                                    properties,
+                                }
+                            };
+                            relations.push(RelationValue::One(inst));
+                        } else if let serde_json::Value::Object(obj) = item {
+                            // Mixed array (some strings, some objects) - try to parse object
+                            if let Ok(inst) = self.json_object_to_instance(obj, Some(&class_name)) {
+                                relations.push(RelationValue::One(inst));
+                            }
+                        }
+                    }
+                    Ok(InstanceProperty::Relations(relations))
                 } else {
-                    // Array of primitives
+                    // Array of primitives (no schema for element type)
                     let mut primitives = Vec::new();
                     for item in arr {
                         let prim = match item {
@@ -748,8 +904,10 @@ impl<'a> XmlToInstanceParser<'a> {
                     Ok(inst) => Ok(InstanceProperty::Relation(RelationValue::One(inst))),
                     Err(_) => {
                         // Fall back to treating it as a generic object
+                        // Filter out xmlns and other XML-specific attributes
+                        let filtered_obj = filter_xml_attributes(obj);
                         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(
-                            serde_json::Value::Object(obj.clone()),
+                            serde_json::Value::Object(filtered_obj),
                         )))
                     }
                 }
@@ -762,6 +920,54 @@ impl<'a> XmlToInstanceParser<'a> {
 fn to_pascal_case(s: &str) -> String {
     use heck::ToPascalCase;
     s.to_pascal_case()
+}
+
+/// Filter and normalize XML-specific attributes for TerminusDB storage.
+///
+/// This:
+/// - Removes xmlns namespace declarations (xmlns:*, xmlns)
+/// - Removes DTD-related attributes (dtd-version)
+/// - Removes xml: prefixed attributes (xml:lang, xml:space)
+/// - Removes xsi: prefixed attributes (xsi:schemaLocation, xsi:noNamespaceSchemaLocation)
+/// - Renames @id to id (TerminusDB uses @id specially for document IDs)
+/// - Renames other @-prefixed attributes to remove the prefix
+fn filter_xml_attributes(obj: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+    obj.iter()
+        .filter(|(key, _)| {
+            !key.starts_with("xmlns:")
+                && *key != "xmlns"
+                && !key.starts_with("xml:")
+                && !key.starts_with("xsi:")
+                && *key != "dtd-version"
+        })
+        .map(|(k, v)| {
+            // Recursively filter nested objects
+            let filtered_value = filter_xml_attributes_value(v);
+
+            // Rename @-prefixed attributes (XML attributes in JSON convention)
+            // to remove the prefix, especially @id which TerminusDB interprets specially
+            let normalized_key = if k.starts_with('@') {
+                k.trim_start_matches('@').to_string()
+            } else {
+                k.clone()
+            };
+
+            (normalized_key, filtered_value)
+        })
+        .collect()
+}
+
+/// Recursively filter XML attributes from any JSON value
+fn filter_xml_attributes_value(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(obj) => {
+            serde_json::Value::Object(filter_xml_attributes(obj))
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(filter_xml_attributes_value).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Convert a Document Element to an ElementData for the converter.
@@ -781,10 +987,13 @@ fn element_to_element_data(elem: &Element) -> ElementData {
         data = data.with_attribute(qname.local_name.clone(), value.clone());
     }
 
-    // Add xmlns declarations
-    for (prefix, uri) in elem.namespaces.iter() {
-        data = data.with_xmlns(prefix, uri);
-    }
+    // NOTE: We intentionally do NOT add xmlns declarations to ElementData.
+    // Namespace declarations are XML metadata for parsing, not data content.
+    // They would be converted to JSON keys like "xmlns:ali" which cause
+    // "Unknown prefix" errors when inserting into TerminusDB.
+    // for (prefix, uri) in elem.namespaces.iter() {
+    //     data = data.with_xmlns(prefix, uri);
+    // }
 
     // Add child elements recursively
     for child in &elem.children {
