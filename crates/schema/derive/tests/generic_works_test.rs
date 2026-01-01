@@ -5,14 +5,14 @@ use terminusdb_schema::{EntityIDFor, ToSchemaClass, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Define concrete TerminusDBModel types
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Document {
     id: String,
     title: String,
     content: String,
 }
 
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Author {
     id: String,
     name: String,

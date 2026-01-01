@@ -1,5 +1,4 @@
 use crate::prelude::*;
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
@@ -7,9 +6,8 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 // Represents Enum "Order"
 /// Specifies the ordering direction (ascending or descending).
 #[derive(
-    TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash,
+    TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Eq, Hash,
 )]
-#[serde(rename_all = "lowercase")]
 #[tdb(rename_all = "lowercase")]
 pub enum Order {
     /// Ascending order.
@@ -20,7 +18,7 @@ pub enum Order {
 
 // Represents Class "OrderTemplate"
 /// The order template, consisting of the variable and ordering direction.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct OrderTemplate {
     /// The variable to order.
@@ -31,7 +29,7 @@ pub struct OrderTemplate {
 
 // Represents Class "OrderBy"
 /// Orders query results according to an ordering specification.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct OrderBy {
     /// A specification of the ordering of solutions.
@@ -42,7 +40,7 @@ pub struct OrderBy {
 
 // Represents Class "GroupBy"
 /// Group a query into a list with each element of the list specified by 'template' using a given variable set for the group.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct GroupBy {
     /// The template of elements in the result list.

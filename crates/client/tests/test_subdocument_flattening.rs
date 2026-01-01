@@ -4,7 +4,7 @@ use terminusdb_schema::{ToTDBSchema, ToTDBInstance, ToTDBInstances};
 use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
 
 // A subdocument model - should NOT be flattened when inserted
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
 #[tdb(subdocument = true, key = "value_hash")]
 struct Address {
     street: String,
@@ -13,13 +13,13 @@ struct Address {
 }
 
 // A regular document that can be referenced
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
 struct Company {
     name: String,
 }
 
 // A model with both subdocument and regular document references
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
 struct Person {
     name: String,
     // This is a subdocument - should remain nested
@@ -30,14 +30,14 @@ struct Person {
 }
 
 // A subdocument that contains a reference to a regular document
-#[derive(Debug, Clone, Default, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
 #[tdb(subdocument = true, key = "value_hash")]
 struct ContactInfo {
     phone: String,
     preferred_company: Company, // Regular document reference within a subdocument
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 struct Employee {
     name: String,
     #[tdb(subdocument = true)]

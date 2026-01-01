@@ -10,7 +10,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Test models for our integration tests
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Document {
     id: EntityIDFor<Self>,
@@ -19,7 +19,7 @@ struct Document {
     created_date: String, // ISO 8601 date string
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct User {
     id: EntityIDFor<Self>,
@@ -28,7 +28,7 @@ struct User {
     registration_date: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Subscription {
     id: EntityIDFor<Self>,
@@ -38,7 +38,7 @@ struct Subscription {
     status: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Event {
     id: EntityIDFor<Self>,

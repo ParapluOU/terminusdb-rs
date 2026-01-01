@@ -90,7 +90,7 @@ mod tests {
     use terminusdb_schema::*;
     use terminusdb_schema_derive::TerminusDBModel;
 
-    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     struct TestEntity {
         name: String,
     }

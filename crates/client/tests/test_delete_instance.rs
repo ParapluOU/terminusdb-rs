@@ -8,7 +8,7 @@ mod tests {
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
     /// Test model for instance deletion
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct DeleteTestModel {
         id: EntityIDFor<Self>,

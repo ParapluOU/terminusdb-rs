@@ -7,7 +7,7 @@ mod tests {
     use terminusdb_schema::ToTDBInstance;
     use terminusdb_schema_derive::TerminusDBModel;
 
-    #[derive(TerminusDBModel, Clone, Debug, Serialize, Deserialize, PartialEq)]
+    #[derive(TerminusDBModel, Clone, Debug, PartialEq)]
     struct Product {
         name: String,
         price: i32,

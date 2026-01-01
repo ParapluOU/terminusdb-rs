@@ -6,14 +6,14 @@ use terminusdb_schema::{TerminusDBField, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Define concrete types that are TerminusDBModel models
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Product {
     id: String,
     name: String,
     price: f64,
 }
 
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Customer {
     id: String,
     name: String,

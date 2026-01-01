@@ -2,21 +2,21 @@ use serde::{Deserialize, Serialize};
 use terminusdb_schema::{ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(rename_all = "lowercase")]
 pub enum TestOrder {
     Asc,
     Desc,
 }
 
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(rename_all = "UPPERCASE")]
 pub enum TestStatus {
     Active,
     Inactive,
 }
 
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(rename_all = "snake_case")]
 pub enum TestMode {
     ReadOnly,

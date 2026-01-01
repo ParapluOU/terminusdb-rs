@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use crate::prelude::*;
-use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
+use serde::{Serializer, ser::SerializeStruct};
 use terminusdb_schema::{FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty, ToTDBInstance};
 use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
 use terminusdb_schema::json::{InstancePropertyFromJson, ToJson};
@@ -14,8 +14,6 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 #[derive(
     TerminusDBModel,
     FromTDBInstance,
-    Serialize,
-    Deserialize,
     Debug,
     Clone,
     PartialEq,
@@ -24,7 +22,6 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
     Ord,
     PartialOrd,
 )]
-
 pub struct FieldValuePair {
     /// The field or key of a dictionary value pair
     pub field: String,
@@ -38,8 +35,6 @@ pub struct FieldValuePair {
 #[derive(
     TerminusDBModel,
     FromTDBInstance,
-    Serialize,
-    Deserialize,
     Debug,
     Clone,
     PartialEq,
@@ -48,7 +43,6 @@ pub struct FieldValuePair {
     Ord,
     PartialOrd,
 )]
-
 pub struct DictionaryTemplate {
     /// Pairs of Key-Values to be constructed into a dictionary
     pub data: BTreeSet<FieldValuePair>,
@@ -59,8 +53,6 @@ pub struct DictionaryTemplate {
 #[derive(
     TerminusDBModel,
     FromTDBInstance,
-    Serialize,
-    Deserialize,
     Debug,
     Clone,
     PartialEq,
@@ -71,7 +63,6 @@ pub struct DictionaryTemplate {
 )]
 #[tdb(class_name = "Value")]
 #[tdb(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum WoqlValue {
     /// An xsd data type value.
     Data(XSDAnySimpleType),
@@ -89,9 +80,8 @@ pub type Value = WoqlValue;
 
 // Represents TaggedUnion "NodeValue"
 /// A variable or node.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 #[tdb(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum NodeValue {
     /// A URI representing a resource.
     Node(String),
@@ -101,9 +91,8 @@ pub enum NodeValue {
 
 // Represents TaggedUnion "DataValue"
 /// A variable or node.
-#[derive(TerminusDBModel, FromTDBInstance, Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 #[tdb(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum DataValue {
     /// An xsd data type value.
     Data(XSDAnySimpleType),
@@ -116,7 +105,7 @@ pub enum DataValue {
 
 /// Represents either a list of values or a variable that will resolve to a list at runtime.
 /// Used in operations like Concatenate and Join that expect list inputs.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 // #[tdb(abstract_class = true)]
 pub enum ListOrVariable {
     /// A concrete list of data values

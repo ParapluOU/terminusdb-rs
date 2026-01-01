@@ -23,7 +23,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // todo: define key type as lexical on the 'name' field
 /// A named query names a specific query for later retrieval and re-use.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct NamedQuery {
     /// The name of the NamedQuery to be retrieved
@@ -33,7 +33,7 @@ pub struct NamedQuery {
 }
 
 /// A named parametric query which names a specific query for later retrieval and re-use and allows the specification of bindings for a specific set of variables in the query.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct NamedParametricQuery {
     /// The name of the NamedParametricQuery to be retrieved.
@@ -46,7 +46,7 @@ pub struct NamedParametricQuery {
 
 // todo: define key type as lexical on the 'name' field
 /// A call of a named parametric query. Variables will be passed to the named query and bound according to the results. Named queries can be (mutually) recursive.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 pub struct Call {
     /// The name of the NamedParametricQuery to be retrieved.
     pub name: String,
@@ -56,7 +56,7 @@ pub struct Call {
 
 // Represents the abstract class "Query"
 /// An abstract class which represents an arbitrary query AST.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 #[tdb(abstract_class = true)]
 pub enum Query {
     And(And),
@@ -219,7 +219,7 @@ mod tests {
 }
 
 /// A conjunction of queries which must all have a solution.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct And {
     /// List of queries which must hold.
@@ -227,7 +227,7 @@ pub struct And {
 }
 
 /// A disjunction of queries any of which can provide a solution.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Or {
     /// List of queries which may hold.
@@ -235,7 +235,7 @@ pub struct Or {
 }
 
 /// The negation of a query. Provides no solution bindings, but will succeed if its sub-query fails.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Not {
     /// The query which must not hold.
@@ -243,12 +243,12 @@ pub struct Not {
 }
 
 /// The query which is always true.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct True {}
 
 /// Evaluate an arithmetic expression to obtain a result.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Eval {
     /// The expression to be evaluated.
@@ -259,7 +259,7 @@ pub struct Eval {
 }
 
 /// Find a path through the graph according to 'pattern'. This 'pattern' is a regular graph expression which avoids cycles.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Path {
     /// The starting node.

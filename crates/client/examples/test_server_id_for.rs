@@ -2,7 +2,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Model with ServerIDFor using random key
-#[derive(Clone, Debug, Default, TerminusDBModel, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "random", id_field = "id")]
 pub struct TestModel {
     pub id: ServerIDFor<Self>,

@@ -3,7 +3,7 @@ use terminusdb_schema::{Schema, ToTDBSchema, ToTDBInstance};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Test case: TaggedUnion marked as subdocument
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(subdocument = true, key = "value_hash")]
 pub enum SubdocumentTaggedUnion {
     Simple(String),
@@ -15,7 +15,7 @@ pub enum SubdocumentTaggedUnion {
 }
 
 // Test case: TaggedUnion NOT marked as subdocument
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 pub enum RegularTaggedUnion {
     Simple(String),
     Complex {

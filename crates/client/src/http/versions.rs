@@ -31,7 +31,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct Person { name: String, age: i32 }
     ///
     /// let commit_ids = vec!["abc123".to_string(), "def456".to_string()];
@@ -180,7 +180,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct Person { name: String, age: i32 }
     ///
     /// let mut deserializer = DefaultDeserializer::new();
@@ -249,7 +249,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct Product { name: String, price: f64 }
     ///
     /// let queries = vec![
@@ -413,7 +413,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct Product { name: String, price: f64 }
     ///
     /// let instance_ids = vec!["product1", "product2", "product3"];

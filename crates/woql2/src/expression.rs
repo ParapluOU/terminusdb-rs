@@ -6,7 +6,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Represents TaggedUnion "ArithmeticValue"
 /// A variable or data value used within an arithmetic expression.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub enum ArithmeticValue {
     /// An xsd data type value.
@@ -17,7 +17,7 @@ pub enum ArithmeticValue {
 
 // Represents the abstract class "ArithmeticExpression"
 /// An abstract class specifying the AST super-class of all arithemtic expressions.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub enum ArithmeticExpression {
     Value(ArithmeticValue),
@@ -31,7 +31,7 @@ pub enum ArithmeticExpression {
 }
 
 /// Add two numbers.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Plus {
     /// First operand of add.
@@ -41,7 +41,7 @@ pub struct Plus {
 }
 
 /// Subtract two numbers.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Minus {
     /// First operand of minus.
@@ -51,7 +51,7 @@ pub struct Minus {
 }
 
 /// Multiply two numbers.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Times {
     /// First operand of times.
@@ -61,7 +61,7 @@ pub struct Times {
 }
 
 /// Divide two numbers.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Divide {
     /// First operand of divide.
@@ -71,7 +71,7 @@ pub struct Divide {
 }
 
 /// Integer divide two numbers.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Div {
     /// First operand of div.
@@ -81,7 +81,7 @@ pub struct Div {
 }
 
 /// Exponentiate a number.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Exp {
     /// The base.
@@ -91,7 +91,7 @@ pub struct Exp {
 }
 
 /// Find the integral part of a number.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Floor {
     /// The number to floor.

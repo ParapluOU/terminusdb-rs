@@ -12,7 +12,7 @@ pub enum PaymentMethod {
 }
 
 /// A model type that will be wrapped by a TaggedUnion variant
-#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance)]
 #[tdb(id_field = "id")]
 pub struct UserLoginEvent {
     pub id: Option<String>,
@@ -21,7 +21,7 @@ pub struct UserLoginEvent {
 }
 
 /// Test TaggedUnion with single-field wrapped model types
-#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance)]
 #[allow(dead_code)]
 pub enum ActivityEvent {
     UserLogin(UserLoginEvent),
@@ -166,8 +166,8 @@ fn test_tagged_union_delegates_id_from_variant() {
     // with the variant's ID value
     let entity_id = activity.instance_id().expect("Should have an ID");
     assert_eq!(
-        entity_id.iri(),
-        "UserLoginEvent/login-123",
+        entity_id.iri_string(),
+        "terminusdb:///data/UserLoginEvent/login-123",
         "instance_id() should return the variant's ID"
     );
 

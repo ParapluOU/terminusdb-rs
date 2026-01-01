@@ -1487,28 +1487,28 @@ mod tests {
 
     // ========== Nested TaggedUnion Tests ==========
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     struct InnerVariantA {
         value_a: String,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     struct InnerVariantB {
         value_b: String,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     enum InnerUnion {
         A(InnerVariantA),
         B(InnerVariantB),
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     struct OuterVariantC {
         value_c: String,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     enum OuterUnion {
         Inner(InnerUnion),
         C(OuterVariantC),
@@ -1610,28 +1610,28 @@ mod tests {
     }
 
     // Test with three levels of nesting
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     struct DeepVariantX {
         value_x: String,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     struct DeepVariantY {
         value_y: String,
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     enum DeepInnerUnion {
         X(DeepVariantX),
         Y(DeepVariantY),
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     enum DeepMiddleUnion {
         Deep(DeepInnerUnion),
     }
 
-    #[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Clone, Debug, TerminusDBModel)]
     enum DeepOuterUnion {
         Middle(DeepMiddleUnion),
     }

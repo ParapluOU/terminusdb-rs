@@ -3,7 +3,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
 // Test model with ServerIDFor and hash key (required for non-random keys)
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email", id_field = "id")]
 pub struct UserWithEntityID {
     pub id: ServerIDFor<Self>,
@@ -12,7 +12,7 @@ pub struct UserWithEntityID {
 }
 
 // Test model with EntityIDFor and random key
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "random", id_field = "id")]
 pub struct RandomUserWithEntityID {
     pub id: EntityIDFor<Self>,

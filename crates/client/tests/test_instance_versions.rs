@@ -11,7 +11,7 @@ mod tests {
 
     /// Test model for experimenting with instance versions
     #[derive(
-        Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
     )]
     struct Person {
         name: String,
@@ -21,7 +21,7 @@ mod tests {
     }
 
     /// Test model with explicit ID for version history testing
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct PersonWithId {
         id: EntityIDFor<Self>,

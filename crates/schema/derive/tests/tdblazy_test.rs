@@ -45,7 +45,7 @@ impl Client for MockClient {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, PartialEq, Clone, TerminusDBModel, FromTDBInstance)]
 struct Activity {
     name: String,
     description: String

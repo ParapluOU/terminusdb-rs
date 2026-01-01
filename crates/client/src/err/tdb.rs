@@ -5,7 +5,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::fmt::{Display, Formatter, Write};
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(tag = "@type")]
 pub enum ApiResponseError {
     #[serde(rename = "api:UnknownDatabase")]
@@ -82,7 +82,7 @@ impl Display for ApiResponseError {
     }
 }
 
-// #[derive(Serialize, Deserialize, Debug, Default)]
+// #[derive(Debug, Default)]
 // #[serde(tag = "@type")]
 // pub enum DocumentResponseError {
 //     #[serde(rename = "api:DocumentNotFound")]
@@ -96,7 +96,7 @@ impl Display for ApiResponseError {
 
 impl Error for ApiResponseError {}
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum TypedErrorResponse {
     // Try typed errors first - these must have @type field that matches
@@ -298,7 +298,7 @@ fn deser_doc_replace_err() {
     )).unwrap();
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct ErrorResponse<E = ApiResponseError> {
     #[serde(rename = "api:error")]
     #[serde(default)]
@@ -361,7 +361,7 @@ fn test_deserialize_err() {
     let res: ErrorResponse = serde_json::from_value(err.clone()).unwrap();
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct UnknownDatabaseError {
     #[serde(rename = "api:database_name")]
     pub database_name: String,
@@ -376,7 +376,7 @@ impl Display for UnknownDatabaseError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct NotAllCapturesFoundError {
     #[serde(rename = "api:captures")]
     pub captures: Vec<String>,
@@ -388,7 +388,7 @@ impl Display for NotAllCapturesFoundError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct WOQLSyntaxError {
     #[serde(rename = "vio:path")]
     pub path: Vec<serde_json::Value>, // todo: type
@@ -398,13 +398,13 @@ pub struct WOQLSyntaxError {
     pub query: serde_json::Value,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct ApiWOQLSyntaxError {
     #[serde(rename = "api:error_term")]
     pub error_term: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct DocumentNotFoundError {
     #[serde(rename = "api:document_id")]
     pub document_id: String,
@@ -416,7 +416,7 @@ impl Display for DocumentNotFoundError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct SchemaCheckFailError {
     #[serde(rename = "api:witnesses")]
     pub witnesses: Vec<Value>,
@@ -428,7 +428,7 @@ impl Display for SchemaCheckFailError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct DocumentIdAlreadyExistsError {
     #[serde(rename = "api:document_id")]
     pub document_id: String,
@@ -443,7 +443,7 @@ impl Display for DocumentIdAlreadyExistsError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct InsertedSubdocumentAsDocumentError {
     #[serde(rename = "api:document")]
     pub document: Value,
@@ -455,7 +455,7 @@ impl Display for InsertedSubdocumentAsDocumentError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct UnresolvableAbsoluteDescriptorError {
     #[serde(rename = "api:absolute_descriptor")]
     pub absolute_descriptor: String,
@@ -467,7 +467,7 @@ impl Display for UnresolvableAbsoluteDescriptorError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct InternalServerErrorError {
     // The api:InternalServerError type appears to have no additional fields
     // beyond what's in the parent ErrorResponse
@@ -479,7 +479,7 @@ impl Display for InternalServerErrorError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct BadDescriptorPathError {
     #[serde(rename = "api:descriptor")]
     pub descriptor: String,
@@ -491,7 +491,7 @@ impl Display for BadDescriptorPathError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct SameDocumentIdsMutatedInOneTransactionError {
     #[serde(rename = "api:duplicate_ids")]
     pub duplicate_ids: Vec<String>,
@@ -507,7 +507,7 @@ impl Display for SameDocumentIdsMutatedInOneTransactionError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct MissingParameterError {
     #[serde(rename = "api:parameter")]
     pub parameter: String,
@@ -519,7 +519,7 @@ impl Display for MissingParameterError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct IncorrectAuthenticationError;
 
 impl Display for IncorrectAuthenticationError {
@@ -528,7 +528,7 @@ impl Display for IncorrectAuthenticationError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct SubmittedIdDoesNotMatchGeneratedIdError {
     #[serde(rename = "api:document")]
     pub document: Value,

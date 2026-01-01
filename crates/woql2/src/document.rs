@@ -5,7 +5,7 @@ use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Read a full document from an identifier.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct ReadDocument {
     /// The URI of the document to load.
@@ -15,7 +15,7 @@ pub struct ReadDocument {
 }
 
 /// Insert a document in the graph.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct InsertDocument {
     /// The document to insert. Must either have an '@id' or have a class specified key.
@@ -25,7 +25,7 @@ pub struct InsertDocument {
 }
 
 /// Update a document in the graph.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct UpdateDocument {
     /// The document to update. Must either have an '@id' or have a class specified key.
@@ -35,7 +35,7 @@ pub struct UpdateDocument {
 }
 
 /// Delete a document from the graph.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct DeleteDocument {
     /// An identifier specifying the documentation location to delete.

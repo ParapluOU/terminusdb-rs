@@ -13,7 +13,7 @@ use terminusdb_woql_builder::prelude::*;
 // --- Helper Structs/Enums for Tests ---
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
+    Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
 )]
 enum TestStatus {
     #[default]
@@ -24,7 +24,7 @@ enum TestStatus {
 }
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
+    Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
 )]
 struct TestItem {
     name: String,
@@ -32,7 +32,7 @@ struct TestItem {
 }
 
 #[derive(
-    Serialize, Deserialize, Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
+    Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
 )]
 struct TestDoc {
     name: String,

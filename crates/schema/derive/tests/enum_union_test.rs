@@ -4,7 +4,7 @@ use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Basic tagged union enum
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[allow(dead_code)]
 pub enum BasicTaggedUnion {
     Integer(i32),
@@ -14,7 +14,7 @@ pub enum BasicTaggedUnion {
 }
 
 // Complex tagged union with struct variants
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[allow(dead_code)]
 pub enum ComplexTaggedUnion {
     Person {
@@ -29,7 +29,7 @@ pub enum ComplexTaggedUnion {
 }
 
 // Enum with tuple struct variants
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[allow(dead_code)]
 pub enum TupleStructVariants {
     Point(f32, f32),
@@ -37,14 +37,14 @@ pub enum TupleStructVariants {
     Empty,
 }
 
-#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 enum SimpleEnum {
     Red,
     Green,
     Blue,
 }
 
-#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 enum TaggedEnum {
     Text(String),
     Number(i32),
@@ -346,7 +346,7 @@ mod tests {
 
         // Define separate model structs
         #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
         )]
         struct EventUserLogin {
             user_id: String,
@@ -354,7 +354,7 @@ mod tests {
         }
 
         #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
         )]
         struct EventUserLogout {
             user_id: String,
@@ -362,7 +362,7 @@ mod tests {
         }
 
         #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
         )]
         struct EventPublicationCreated {
             publication_id: String,
@@ -371,7 +371,7 @@ mod tests {
 
         // Define enum that wraps these separate models
         #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize,
+            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
         )]
         enum ActivityEvent {
             UserLogin(EventUserLogin),

@@ -208,7 +208,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
     /// struct User {
     ///     id: ServerIDFor<Self>,
@@ -283,7 +283,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct User { name: String, age: i32 }
     ///
     /// let users = vec![
@@ -341,7 +341,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(Clone, TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(Clone, TerminusDBModel)]
     /// #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
     /// struct User {
     ///     id: ServerIDFor<Self>,
@@ -452,7 +452,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct User { name: String, age: i32 }
     ///
     /// let user = User { name: "Alice".to_string(), age: 30 };
@@ -500,7 +500,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct User { name: String, age: i32 }
     ///
     /// let user = User { name: "Alice Updated".to_string(), age: 31 };
@@ -556,7 +556,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct User { name: String, age: i32 }
     ///
     /// let user = User { name: "Alice".to_string(), age: 30 };
@@ -890,7 +890,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct User { name: String, age: i32 }
     ///
     /// let users = vec![
@@ -969,7 +969,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct User { name: String, score: i32 }
     ///
     /// // Fetch existing users, update them, and save back
@@ -1406,7 +1406,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct Person { name: String, age: i32 }
     ///
     /// // Get history for a Person instance
@@ -1839,7 +1839,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Example
     /// ```rust
-    /// #[derive(TerminusDBModel, Serialize, Deserialize)]
+    /// #[derive(TerminusDBModel)]
     /// struct Person { name: String, age: i32 }
     ///
     /// let mut deserializer = DefaultDeserializer::new();

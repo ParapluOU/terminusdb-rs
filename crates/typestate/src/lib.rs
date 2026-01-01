@@ -33,7 +33,7 @@ macro_rules! make_type_param {
         // pub trait $typ: Debug + Clone + Eq + PartialEq + Send + Sync + Default {}
 
         $(
-            #[derive(Debug, Eq, PartialEq, Clone, serde::Serialize, serde::Deserialize/*, schemars::JsonSchema*/)]
+            #[derive(Debug, Eq, PartialEq, Clone/*, schemars::JsonSchema*/)]
             pub struct $paramname;
 
             impl $paramname {

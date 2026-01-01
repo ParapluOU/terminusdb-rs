@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// A user in the system
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct User {
     pub name: String,
     pub email: String,
@@ -25,7 +25,7 @@ pub struct User {
 
 /// A blog post authored by a user
 /// Uses TdbLazy<User> to create a document link (enables reverse relations)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Post {
     pub title: String,
     pub content: String,
@@ -35,7 +35,7 @@ pub struct Post {
 
 /// A comment on a post, also by a user
 /// Uses TdbLazy to create document links (enables reverse relations)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Comment {
     pub text: String,
     /// The post this comment belongs to (document link)
@@ -46,7 +46,7 @@ pub struct Comment {
 
 /// A document with multiple user references (author and reviewer)
 /// Uses TdbLazy<User> to create document links (enables reverse relations)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Document {
     pub title: String,
     /// Primary author (document link)
@@ -57,7 +57,7 @@ pub struct Document {
 
 /// A car with multiple wheel references (forward relations)
 /// Uses TdbLazy to create document links (enables forward relation traversal)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Car {
     pub model: String,
     pub front_left: TdbLazy<Wheel>,
@@ -67,7 +67,7 @@ pub struct Car {
 }
 
 /// A wheel (referenced by Car)
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Wheel {
     pub size: u32,
     pub brand: String,

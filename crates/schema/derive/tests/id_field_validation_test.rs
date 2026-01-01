@@ -3,7 +3,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
 // Valid: ServerIDFor with lexical key
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "name", id_field = "id")]
 pub struct ValidLexicalWithOption {
     pub id: ServerIDFor<Self>,
@@ -12,7 +12,7 @@ pub struct ValidLexicalWithOption {
 }
 
 // Valid: String with random key
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "random", id_field = "id")]
 pub struct ValidRandomWithString {
     pub id: String,
@@ -21,7 +21,7 @@ pub struct ValidRandomWithString {
 }
 
 // Valid: No id_field specified
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email")]
 pub struct ValidNoIdField {
     pub email: String,
@@ -82,7 +82,7 @@ fn test_valid_no_id_field() {
 // The runtime validation in HttpClient will ensure these don't have IDs set for non-Random keys
 
 // Valid: ServerIDFor with lexical key (compile-time validation enforced)
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "name", id_field = "id")]
 pub struct LexicalWithString {
     pub id: ServerIDFor<Self>,
@@ -90,7 +90,7 @@ pub struct LexicalWithString {
 }
 
 // Valid: ServerIDFor with hash key
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email", id_field = "id")]
 pub struct HashWithEntityIDFor {
     pub id: terminusdb_schema::ServerIDFor<Self>,

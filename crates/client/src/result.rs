@@ -17,7 +17,7 @@ use crate::TerminusDBAdapterError::Serde;
 use crate::*;
 
 /// Response from the squash endpoint
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SquashResponse {
     #[serde(rename = "@type")]
     pub r#type: String,
@@ -30,7 +30,7 @@ pub struct SquashResponse {
 }
 
 /// Commit information for operations that require author and message
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize)]
 pub struct CommitInfo {
     pub author: String,
     pub message: String,
@@ -159,14 +159,14 @@ pub enum ApiResponse<R> {
     Success(R),
 }
 
-// #[derive(Debug, Deserialize, Serialize, Clone)]
+// #[derive(Debug, Clone)]
 // #[serde(untagged)]
 // pub enum DocumentResult {
 //     Error(TerminusDBAdapterError),
 //     NodeURIs(Vec<String>),
 // }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "@type")]
 pub enum DocumentError {
     #[serde(alias = "api:ReplaceDocumentErrorResponse")]
@@ -180,7 +180,7 @@ pub enum DocumentError {
 //   "api:status":"api:failure",
 //   "api:what":"illegal_json"
 // }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct ReplaceDocumentErrorResponse {
     #[serde(rename = "api:error")]
     api_error: APIError,
@@ -195,13 +195,13 @@ pub struct ReplaceDocumentErrorResponse {
     api_what: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 pub struct APIError {
     #[serde(rename(deserialize = "@type"))]
     r#type: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "@type")]
 pub enum QueryResult {
     #[serde(alias = "api:WoqlResponse")]
@@ -264,15 +264,15 @@ fn test_woql_response() {
 //   "inserts":0,
 //   "transaction_retry_count":0
 // }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct WOQLResult<Binding = HashMap<String, QueryResultVariableBinding>> {
     // #[serde(rename(deserialize = "@type"))]
     // schema_type: String,
-    #[serde(rename(deserialize = "api:status"))]
+    #[serde(rename = "api:status")]
     pub api_status: TerminusAPIStatus,
 
     // todo: somehow typecheck these variables with preexisting variable types
-    #[serde(rename(deserialize = "api:variable_names"))]
+    #[serde(rename = "api:variable_names")]
     pub api_variable_names: Vec<String>,
 
     // todo: somehow typecheck this map
@@ -323,12 +323,12 @@ mod tests {
         let res: WOQLResult = serde_json::from_str(FILEHASH_RESULT_FIXTURE).unwrap();
     }
 
-    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     struct Person {
         name: String,
     }
 
-    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     struct Company {
         name: String,
     }
@@ -384,7 +384,7 @@ mod tests {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct QueryResultTypedValue {
     #[serde(rename(deserialize = "@type"))]
     pub r#type: String,
@@ -403,7 +403,7 @@ impl QueryResultTypedValue {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum QueryResultVariableBinding {
     Value(QueryResultTypedValue),

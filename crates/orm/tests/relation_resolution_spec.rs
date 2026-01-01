@@ -54,7 +54,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 /// A user in the system - demonstrates multiple relation types
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct User {
     pub username: String,
     pub email: String,
@@ -63,7 +63,7 @@ pub struct User {
 }
 
 /// User profile - one-to-one with User
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Profile {
     pub bio: String,
     pub avatar_url: Option<String>,
@@ -72,7 +72,7 @@ pub struct Profile {
 }
 
 /// A blog post - one-to-many with User, many-to-many with Tag
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Post {
     pub title: String,
     pub content: String,
@@ -84,14 +84,14 @@ pub struct Post {
 }
 
 /// A tag for categorizing posts
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Tag {
     pub name: String,
     pub slug: String,
 }
 
 /// A comment on a post - demonstrates nested relations
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Comment {
     pub text: String,
     /// The post this comment is on (document link)
@@ -103,7 +103,7 @@ pub struct Comment {
 }
 
 /// A "like" on a post - simple join entity
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct PostLike {
     pub post: TdbLazy<Post>,
     pub user: TdbLazy<User>,

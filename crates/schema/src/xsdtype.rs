@@ -21,7 +21,7 @@ impl ToString for XSDDate {
 
 // todo: expand
 /// http://www.datypic.com/sc/xsd/t-xsd_anySimpleType.html
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum XSDAnySimpleType {
     String(String),
     Decimal(Decimal),

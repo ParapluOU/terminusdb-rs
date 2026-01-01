@@ -10,7 +10,7 @@ use {
 };
 
 /// Remote repository configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct RemoteConfig {
     /// Remote repository URL
     pub remote_url: String,

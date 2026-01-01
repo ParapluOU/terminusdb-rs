@@ -15,7 +15,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Test model for merge branch testing
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+    Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
 )]
 #[tdb(id_field = "id")]
 struct TestPerson {

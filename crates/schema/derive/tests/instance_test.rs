@@ -7,7 +7,7 @@ use terminusdb_schema::{
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Simple struct for testing
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 struct SimpleStruct {
     name: String,
     count: i32,
@@ -15,7 +15,7 @@ struct SimpleStruct {
 }
 
 // Struct with optional fields
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 struct StructWithOptions {
     name: String,
     description: Option<String>,
@@ -23,7 +23,7 @@ struct StructWithOptions {
 }
 
 // Struct with collections
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 struct StructWithCollections {
     name: String,
     tags: Vec<String>,
@@ -31,7 +31,7 @@ struct StructWithCollections {
 }
 
 // Address struct for nesting
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 struct Address {
     street: String,
     city: String,
@@ -39,7 +39,7 @@ struct Address {
 }
 
 // Person struct with nested Address
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 struct Person {
     name: String,
     age: i32,
@@ -47,7 +47,7 @@ struct Person {
 }
 
 // Simple enum
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 enum Color {
     Red,
     Green,
@@ -55,20 +55,20 @@ enum Color {
 }
 
 // Tagged union enum with values
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 enum TaggedValue {
     Text(String),
     Number(i32),
     Flag(bool),
 }
 
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 struct StructWithHashMap {
     name: String,
     properties: HashMap<String, String>,
 }
 
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(id_field = "id")]
 struct StructWithId {
     id: String,

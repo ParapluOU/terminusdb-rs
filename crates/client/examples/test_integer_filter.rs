@@ -3,7 +3,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use terminusdb_schema::ToTDBInstance;
 use serde::{Serialize, Deserialize};
 
-#[derive(TerminusDBModel, Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(TerminusDBModel, Clone, Debug, PartialEq)]
 struct TestItem {
     name: String,
     value: i32,

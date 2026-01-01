@@ -33,7 +33,7 @@ use terminusdb_test::test as db_test;
 // ============================================================================
 
 /// A user in the system
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Author {
     pub name: String,
     pub email: String,
@@ -41,7 +41,7 @@ pub struct Author {
 
 /// A blog post that belongs to an author
 /// Note: `author_id` is stored as a STRING in the schema, not as a document link!
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Article {
     pub title: String,
     pub content: String,

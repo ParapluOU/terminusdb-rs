@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use terminusdb_woql2::prelude::Query;
 
 /// Type of operation performed
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationType {
     Query,
@@ -47,7 +47,7 @@ impl std::fmt::Display for OperationType {
 }
 
 /// A single operation entry in the log
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct OperationEntry {
     /// When the operation was executed
     pub timestamp: DateTime<Utc>,

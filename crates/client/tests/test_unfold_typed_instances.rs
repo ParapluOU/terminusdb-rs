@@ -13,7 +13,7 @@ mod test_unfold_typed_instances_disabled {
 
     // Define test models with relationships
     #[derive(
-        Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
     )]
     #[tdb(id_field = "id")]
     struct Address {
@@ -24,7 +24,7 @@ mod test_unfold_typed_instances_disabled {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
     )]
     #[tdb(id_field = "id", unfoldable)]
     struct Person {
@@ -36,7 +36,7 @@ mod test_unfold_typed_instances_disabled {
     }
 
     #[derive(
-        Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
     )]
     #[tdb(id_field = "id")]
     struct Company {

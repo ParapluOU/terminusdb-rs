@@ -10,7 +10,7 @@ use terminusdb_woql2::{triple, type_, var, and, optional};
 // Required for TerminusDBModel derive to work
 use terminusdb_schema as terminusdb_schema;
 
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random", class_name = "User")]
 struct User {
     id: String,
@@ -19,7 +19,7 @@ struct User {
     manager: Option<TdbLazy<User>>,
 }
 
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random", class_name = "Post")]
 struct Post {
     id: String,

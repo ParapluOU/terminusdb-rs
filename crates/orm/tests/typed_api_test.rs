@@ -19,7 +19,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
 /// A comment that can have multiple replies
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Comment {
     pub text: String,
     pub author: String,
@@ -27,7 +27,7 @@ pub struct Comment {
 
 /// A reply to a comment
 /// Uses TdbLazy<Comment> to create a document link (enables reverse relations)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Reply {
     pub text: String,
     pub author: String,
@@ -45,7 +45,7 @@ pub struct Reply {
 // ============================================================================
 
 /// A wheel for a car
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Wheel {
     pub position: String,
     pub size: u32,
@@ -53,7 +53,7 @@ pub struct Wheel {
 
 /// A car with multiple wheel references (forward relations)
 /// Uses TdbLazy to create document links (enables relation traversal)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Car {
     pub model: String,
     /// Front wheels (document links)
@@ -479,7 +479,7 @@ async fn test_with_default_field_single_relation(client: _, spec: _) -> anyhow::
 // ============================================================================
 
 /// A date range subdocument
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel, PartialEq)]
+#[derive(Clone, Debug, Default, TerminusDBModel, PartialEq)]
 #[tdb(unfoldable = true, key = "value_hash")]
 pub struct DateRange {
     pub start: String,
@@ -487,7 +487,7 @@ pub struct DateRange {
 }
 
 /// A session with a subdocument field
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Session {
     pub name: String,
     /// This is a subdocument - should be unfolded, not returned as a reference string
@@ -496,7 +496,7 @@ pub struct Session {
 }
 
 /// A task that references a session (for testing relation queries with subdocuments)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct Task {
     pub title: String,
     /// Reference to parent session (document link)

@@ -6,7 +6,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Represents TaggedUnion "Indicator"
 /// Tagged union for specifying a column by index or name.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub enum Indicator {
     /// Column index (non-negative integer).
@@ -16,7 +16,7 @@ pub enum Indicator {
 }
 
 /// Specifies a column for data retrieval, mapping an indicator to a variable.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Column {
     /// Indicator (index or name) for the column.
@@ -30,7 +30,7 @@ pub struct Column {
 
 // Represents TaggedUnion "Source"
 /// Tagged union specifying the source of data (POST body or URL).
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub enum Source {
     /// Data source is a POST request body.
@@ -41,7 +41,7 @@ pub enum Source {
 
 // Represents Enum "FormatType"
 /// Enum specifying the format of the input data.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub enum FormatType {
     /// Comma-Separated Values format.
@@ -50,7 +50,7 @@ pub enum FormatType {
 
 // Represents TaggedUnion "QueryResource"
 /// Specifies the resource for the Get query, including source, format, and options.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct QueryResource {
     // Modeled as struct based on Get usage
@@ -63,7 +63,7 @@ pub struct QueryResource {
 }
 
 /// Retrieves data from an external resource (CSV via URL or POST) and binds it to variables.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Get {
     /// List of columns to extract and bind to variables.

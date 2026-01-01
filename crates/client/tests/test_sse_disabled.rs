@@ -4,7 +4,7 @@ use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
-#[derive(Serialize, Deserialize, TerminusDBModel, FromTDBInstance, Clone, Debug, Default)]
+#[derive(TerminusDBModel, FromTDBInstance, Clone, Debug, Default)]
 struct TestUser {
     name: String
 }

@@ -171,12 +171,12 @@ mod tests {
     use terminusdb_schema::*;
     use terminusdb_schema_derive::TerminusDBModel;
 
-    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     struct Person {
         name: String,
     }
 
-    #[derive(Debug, Clone, TerminusDBModel, serde::Serialize)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     struct Company {
         name: String,
     }

@@ -10,7 +10,7 @@ mod tests {
 
     /// Test model for query count testing
     #[derive(
-        Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
     )]
     #[tdb(id_field = "id")]
     struct CountTestModel {

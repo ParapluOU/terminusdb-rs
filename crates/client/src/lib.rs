@@ -64,15 +64,15 @@ pub enum TerminusDBOperation {
     Get,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum TerminusAPIStatus {
-    #[serde(rename(deserialize = "api:success"))]
+    #[serde(rename = "api:success")]
     Success,
-    #[serde(rename(deserialize = "api:failure"))]
+    #[serde(rename = "api:failure")]
     Failure,
-    #[serde(rename(deserialize = "api:not_found"))]
+    #[serde(rename = "api:not_found")]
     NotFound,
-    #[serde(rename(deserialize = "api:server_error"))]
+    #[serde(rename = "api:server_error")]
     ServerError,
 }
 

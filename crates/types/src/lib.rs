@@ -23,7 +23,7 @@ pub enum PathError {
 
 /// A database name without organization prefix (e.g., "mydb")
 /// System databases (starting with underscore) are allowed but marked
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DatabaseName(String);
 
 impl DatabaseName {
@@ -81,7 +81,7 @@ impl AsRef<str> for DatabaseName {
 }
 
 /// A database path with organization prefix (e.g., "admin/mydb")
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DatabasePath {
     organization: String,
     database: DatabaseName,
@@ -171,7 +171,7 @@ impl fmt::Display for DatabasePath {
 }
 
 /// Location type for resource paths
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Location {
     Local,
     Remote,
@@ -202,7 +202,7 @@ impl fmt::Display for Location {
 }
 
 /// Resource type for resource paths
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceType {
     Branch(String),
     Commit(String),
@@ -224,7 +224,7 @@ impl fmt::Display for ResourceType {
 }
 
 /// A full resource path (e.g., "admin/mydb/local/branch/main" or "admin/mydb/local/_meta")
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResourcePath {
     database_path: DatabasePath,
     location: Location,

@@ -8,7 +8,7 @@ mod tests {
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
     /// Test models for multi-schema insertion
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Person {
         id: EntityIDFor<Self>,
@@ -16,7 +16,7 @@ mod tests {
         age: i32,
     }
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Company {
         id: EntityIDFor<Self>,
@@ -24,7 +24,7 @@ mod tests {
         founded: i32,
     }
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Product {
         id: EntityIDFor<Self>,

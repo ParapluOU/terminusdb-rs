@@ -10,7 +10,7 @@ use {
 };
 
 /// Role information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Role {
     /// Role identifier
     pub id: String,
@@ -30,7 +30,7 @@ pub struct Permission {
 }
 
 /// Role creation request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CreateRoleRequest {
     /// Role identifier
     pub id: String,
@@ -41,7 +41,7 @@ pub struct CreateRoleRequest {
 }
 
 /// Role update request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UpdateRoleRequest {
     /// New role name
     pub name: Option<String>,

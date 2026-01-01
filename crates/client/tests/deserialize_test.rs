@@ -6,7 +6,7 @@ use terminusdb_client::DocumentInsertArgs;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 struct TestStruct {
     name: String,
     count: i32,

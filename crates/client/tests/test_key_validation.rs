@@ -4,28 +4,28 @@ mod test_key_validation {
     use terminusdb_schema::ToTDBInstance;
     use terminusdb_schema_derive::TerminusDBModel;
 
-    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TerminusDBModel)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel)]
     #[tdb(key = "lexical", key_fields = "name")]
     struct PersonWithLexicalKey {
         pub name: String,
         pub age: i32,
     }
 
-    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TerminusDBModel)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel)]
     #[tdb(key = "hash", key_fields = "email")]
     struct UserWithHashKey {
         pub email: String,
         pub username: String,
     }
 
-    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TerminusDBModel)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel)]
     #[tdb(key = "value_hash")]
     struct DocumentWithValueHashKey {
         pub title: String,
         pub content: String,
     }
 
-    #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TerminusDBModel)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel)]
     // Default is Random key
     struct PersonWithRandomKey {
         pub name: String,

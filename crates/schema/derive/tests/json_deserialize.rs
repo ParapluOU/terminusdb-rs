@@ -24,7 +24,7 @@ struct SimpleAddress {
 }
 
 // Simple enum for testing
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 enum Color {
     Red,
     Green,
@@ -33,21 +33,21 @@ enum Color {
 }
 
 // Simple struct for testing
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 struct SimpleStruct {
     name: String,
     color: Color,
 }
 
 // Complex struct for tagged union value
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 struct TaggedValueComplex {
     x: f64,
     y: f64,
 }
 
 // Tagged union enum for testing
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 enum TaggedValue {
     Simple(String),
     Number(i32),
@@ -256,19 +256,19 @@ fn test_variant_type_to_union_deserialization() {
     // Test deserializing a variant type's Instance into the union type
     // This simulates fetching a Comment from the database and deserializing it as Annotation
 
-    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     struct Comment {
         text: String,
         author: String,
     }
 
-    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     struct Proposal {
         title: String,
         votes: i32,
     }
 
-    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     enum Annotation {
         CommentType(Comment),
         ProposalType(Proposal),

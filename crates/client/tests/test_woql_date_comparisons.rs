@@ -10,7 +10,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use terminusdb_woql_builder::prelude::*;
 use terminusdb_woql_builder::value::{datetime_literal, date_literal};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Event {
     id: EntityIDFor<Self>,

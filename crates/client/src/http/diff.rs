@@ -10,14 +10,14 @@ use {
 };
 
 /// Response from a diff operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DiffResponse {
     /// Array of diff operations
     pub diffs: Vec<serde_json::Value>,
 }
 
 /// Request for applying a patch
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PatchRequest {
     /// Author of the patch
     pub author: String,

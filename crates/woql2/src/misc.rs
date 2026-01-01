@@ -5,7 +5,7 @@ use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Start a query at the nth solution specified by 'start'. Allows resumption and paging of queries.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Start {
     /// The numbered solution to start at.
@@ -15,7 +15,7 @@ pub struct Start {
 }
 
 /// Limit a query to a particular maximum number of solutions specified by 'limit'. Can be used with start to perform paging.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Limit {
     /// Maximum number of solutions.
@@ -25,7 +25,7 @@ pub struct Limit {
 }
 
 /// Counts the number of solutions of a query.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Count {
     /// The query from which to obtain the count.
@@ -35,7 +35,7 @@ pub struct Count {
 }
 
 /// Generates a key identical to those generated automatically by 'LexicalKey' specifications.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct LexicalKey {
     /// The URI base to the left of the key.
@@ -47,7 +47,7 @@ pub struct LexicalKey {
 }
 
 /// Generates a key identical to those generated automatically by 'HashKey' specifications.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct HashKey {
     /// The URI base to the left of the key.
@@ -59,7 +59,7 @@ pub struct HashKey {
 }
 
 /// Generates a key identical to those generated automatically by 'RandomKey' specifications.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct RandomKey {
     /// The URI base to the left of the key.
@@ -69,7 +69,7 @@ pub struct RandomKey {
 }
 
 /// Size of a database in magic units (bytes?).
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Size {
     /// The resource to obtain the size of.
@@ -79,7 +79,7 @@ pub struct Size {
 }
 
 /// The number of edges in a database.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct TripleCount {
     /// The resource to obtain the edges from.

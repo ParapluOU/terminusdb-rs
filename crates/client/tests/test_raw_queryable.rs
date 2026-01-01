@@ -12,7 +12,7 @@ mod tests {
     use terminusdb_woql_builder::value::string_literal;
 
     /// Test model for raw query testing
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Book {
         id: EntityIDFor<Self>,

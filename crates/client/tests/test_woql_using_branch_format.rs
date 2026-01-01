@@ -10,7 +10,7 @@ mod tests {
     use terminusdb_woql_builder::prelude::*;
 
     /// Test model with explicit ID for version history testing
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct PersonWithId {
         id: EntityIDFor<Self>,

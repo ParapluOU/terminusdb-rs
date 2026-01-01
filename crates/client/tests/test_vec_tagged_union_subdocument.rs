@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, BTreeSet};
 
 // Tagged union enum marked as subdocument with struct variants
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(subdocument = true)]
 pub enum ContactMethod {
     Email {
@@ -33,7 +33,7 @@ pub enum ContactMethod {
 }
 
 // Parent class containing a Vec of the tagged union subdocument
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 pub struct Person {
     pub name: String,
     pub age: i32,
@@ -47,7 +47,7 @@ pub struct Person {
 }
 
 // Alternative parent class using HashSet
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 pub struct PersonWithHashSet {
     pub name: String,
     pub age: i32,
@@ -61,7 +61,7 @@ pub struct PersonWithHashSet {
 }
 
 // Alternative parent class using BTreeSet
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 pub struct PersonWithBTreeSet {
     pub name: String,
     pub age: i32,

@@ -7,7 +7,7 @@ mod tests {
     use terminusdb_schema::{EntityIDFor, ToTDBInstance};
     use terminusdb_schema_derive::*;
 
-    #[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+    #[derive(Debug, Clone, TerminusDBModel)]
     #[tdb(id_field = "id")]
     struct ModelWithCommitId {
         id: EntityIDFor<Self>,

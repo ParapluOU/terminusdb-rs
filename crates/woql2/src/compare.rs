@@ -6,7 +6,7 @@ use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// True whenever 'left' is the same as 'right'. Performs unification.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Equals {
     /// A URI, data value or variable.
@@ -16,7 +16,7 @@ pub struct Equals {
 }
 
 /// Predicate determining if one thing is less than another according to natural ordering.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Less {
     /// The lesser element.
@@ -26,7 +26,7 @@ pub struct Less {
 }
 
 /// Predicate determining if one thing is greater than another according to natural ordering.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Greater {
     /// The greater element.
@@ -36,7 +36,7 @@ pub struct Greater {
 }
 
 /// Provides class subsumption (the inheritance model) according to the schema design. True whenver 'child' is a child of 'parent'. Can be used as a generator or a check.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Subsumption {
     /// The child class as a URI or variable.
@@ -46,7 +46,7 @@ pub struct Subsumption {
 }
 
 /// Test (or generate) the type of an element.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct IsA {
     /// The element to test.
@@ -57,7 +57,7 @@ pub struct IsA {
 }
 
 /// TypeOf gives the type of an element.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct TypeOf {
     /// The value of which to obtain the type.
@@ -68,7 +68,7 @@ pub struct TypeOf {
 }
 
 /// Casts one type as another if possible.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Typecast {
     /// The value to cast.

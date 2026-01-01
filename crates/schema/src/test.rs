@@ -35,7 +35,7 @@ pub struct Model {
     submodel: SubModel,
 }
 
-#[derive(Clone, TerminusDBModel, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, TerminusDBModel)]
 pub struct SubModel {
     u32: u32,
 }
@@ -451,15 +451,7 @@ mod tests {
         }
     }
 
-    #[derive(
-        Debug,
-        PartialEq,
-        Clone,
-        TerminusDBModel,
-        FromTDBInstance,
-        serde::Serialize,
-        serde::Deserialize,
-    )]
+    #[derive(Debug, PartialEq, Clone, TerminusDBModel, FromTDBInstance)]
     struct Activity {
         name: String,
         description: String,
@@ -771,14 +763,14 @@ mod tests {
 }
 
 // Test for Option<EntityIDFor<T>>
-#[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Clone, Debug, TerminusDBModel, PartialEq)]
 #[tdb(key = "random", id_field = "id")]
 pub struct ModelWithOptionalEntityID {
     pub id: Option<EntityIDFor<Self>>, // Self-referential, as used in real code
     pub name: String,
 }
 
-#[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Clone, Debug, TerminusDBModel, PartialEq)]
 #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 pub struct UserWithOptionalEntityID {
     pub id: ServerIDFor<Self>, // Updated to use ServerIDFor for lexical key
@@ -856,7 +848,7 @@ fn test_tdb_lazy_with_lexical_key() {
     use crate::{TdbLazy, ToTDBInstance, FromTDBInstance};
     
     // Define a model with lexical key
-    #[derive(Clone, Debug, TerminusDBModel, serde::Serialize, serde::Deserialize, PartialEq)]
+    #[derive(Clone, Debug, TerminusDBModel, PartialEq)]
     #[tdb(key = "lexical", key_fields = "email")]
     pub struct LexicalUser {
         pub email: String,

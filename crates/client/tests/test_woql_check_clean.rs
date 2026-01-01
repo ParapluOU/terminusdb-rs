@@ -8,7 +8,7 @@ mod tests {
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     pub struct TestModel {
         pub id: EntityIDFor<Self>,

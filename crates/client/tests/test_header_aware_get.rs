@@ -11,7 +11,7 @@ mod tests {
 
     /// Test model for header-aware GET operations
     #[derive(
-        Debug, Clone, PartialEq, Serialize, Deserialize, Default, TerminusDBModel, FromTDBInstance,
+        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
     )]
     #[tdb(id_field = "id")]
     struct TestProduct {

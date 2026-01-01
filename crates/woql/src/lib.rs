@@ -32,7 +32,7 @@ extern crate exec_time;
 // #[macro_use]
 // extern crate serde_derive;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 pub enum TerminusAPIStatus {
     #[serde(rename(deserialize = "api:success"))]
     Success,

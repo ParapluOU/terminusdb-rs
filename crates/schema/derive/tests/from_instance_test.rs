@@ -24,7 +24,7 @@ struct StructWithOptions {
 }
 
 // Address struct for nesting
-#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 struct Address {
     street: String,
     city: String,
@@ -32,7 +32,7 @@ struct Address {
 }
 
 // Person struct with nested Address
-#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 struct Person {
     name: String,
     age: i32,

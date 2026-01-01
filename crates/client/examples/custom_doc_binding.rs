@@ -8,7 +8,7 @@ use terminusdb_schema::{InstanceFromJson, TerminusDBModel};
 use serde::{Deserialize, Serialize};
 use terminusdb_schema_derive::TerminusDBModel;
 
-#[derive(Clone, Debug, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, TerminusDBModel)]
 struct ExampleModel {
     name: String,
 }

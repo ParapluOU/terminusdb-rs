@@ -9,7 +9,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Serialize, Deserialize};
 
 // Model with LexicalID using lexical key
-#[derive(Clone, Debug, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 pub struct UserWithLexicalID {
     pub id: LexicalID<Self>,
@@ -18,7 +18,7 @@ pub struct UserWithLexicalID {
 }
 
 // Model with HashID using hash key
-#[derive(Clone, Debug, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email,name", id_field = "id")]
 pub struct UserWithHashID {
     pub id: HashID<Self>,

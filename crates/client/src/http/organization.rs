@@ -17,7 +17,7 @@ use {
 // ============================================================
 
 /// Organization as returned by TerminusDB API
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Organization {
     /// Organization identifier (e.g., "Organization/admin")
     #[serde(rename = "@id")]
@@ -33,7 +33,7 @@ pub struct Organization {
 }
 
 /// User with capabilities in an organization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationUser {
     /// User identifier (e.g., "User/admin")
     #[serde(rename = "@id")]
@@ -46,7 +46,7 @@ pub struct OrganizationUser {
 }
 
 /// Capability granted to a user
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Capability {
     /// Capability identifier
     #[serde(rename = "@id")]
@@ -62,7 +62,7 @@ pub struct Capability {
 }
 
 /// Role within a capability
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Role {
     /// Role identifier (e.g., "Role/admin")
     #[serde(rename = "@id")]
@@ -78,7 +78,7 @@ pub struct Role {
 }
 
 /// Database info returned from organization user databases endpoint
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationDatabase {
     /// Database identifier
     #[serde(rename = "@id")]
@@ -91,7 +91,7 @@ pub struct OrganizationDatabase {
 }
 
 /// Success response from organization operations
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationResponse {
     /// Response type
     #[serde(rename = "@type")]
@@ -102,7 +102,7 @@ pub struct OrganizationResponse {
 }
 
 /// Request body for creating/updating user roles
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UserRoleRequest {
     /// Resource scope
     pub scope: String,

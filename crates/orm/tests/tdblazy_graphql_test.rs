@@ -17,13 +17,13 @@ use terminusdb_test::test as db_test;
 // Test Models using TdbLazy (creates actual document links)
 // ============================================================================
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct Writer {
     pub name: String,
 }
 
 /// A blog post with TdbLazy link to Writer (creates document link, not string!)
-#[derive(Clone, Debug, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Clone, Debug, TerminusDBModel)]
 pub struct BlogPost {
     pub title: String,
     /// This creates an actual document link in the schema

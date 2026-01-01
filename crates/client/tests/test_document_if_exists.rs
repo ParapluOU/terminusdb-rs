@@ -104,7 +104,7 @@ mod test_instance_if_exists {
     use terminusdb_schema::ToTDBInstance;
     use terminusdb_schema_derive::TerminusDBModel;
 
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TerminusDBModel)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel)]
     struct TestPerson {
         name: String,
         age: i32,

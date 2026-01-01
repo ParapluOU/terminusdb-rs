@@ -5,14 +5,14 @@ use terminusdb_schema::{TerminusDBField, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Define concrete TerminusDBModel types
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct User {
     id: String,
     name: String,
     email: String,
 }
 
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Article {
     id: String,
     title: String,

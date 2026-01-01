@@ -185,7 +185,7 @@ mod db_tests {
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
     use serde::{Deserialize as SerdeDeserialize, Serialize};
 
-    #[derive(Debug, Clone, PartialEq, Serialize, SerdeDeserialize, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Person {
         id: EntityIDFor<Self>,

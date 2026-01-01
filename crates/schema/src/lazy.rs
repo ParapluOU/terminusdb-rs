@@ -6,7 +6,7 @@ use crate::{
     ToTDBSchema, URI,
 };
 use anyhow::{anyhow, bail};
-use serde::{Deserialize, Serialize, Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::HashSet;

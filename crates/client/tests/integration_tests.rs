@@ -216,7 +216,7 @@ use serde::{Deserialize, Serialize};
 use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
 
-#[derive(TerminusDBModel, Clone, Debug, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Clone, Debug)]
 #[tdb(id_field = "id")]
 struct TestHeaderModel {
     id: String,

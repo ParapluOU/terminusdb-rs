@@ -9,7 +9,7 @@ use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Person {
     id: EntityIDFor<Self>,
@@ -18,7 +18,7 @@ struct Person {
     email: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Company {
     id: EntityIDFor<Self>,
@@ -27,7 +27,7 @@ struct Company {
     employees: Vec<Person>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Product {
     id: EntityIDFor<Self>,
@@ -36,7 +36,7 @@ struct Product {
     manufacturer: Company,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Order {
     id: EntityIDFor<Self>,

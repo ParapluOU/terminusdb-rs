@@ -5,7 +5,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Model with ServerIDFor using random key
-#[derive(Clone, Debug, Default, TerminusDBModel, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "random", id_field = "id")]
 pub struct RandomKeyServerModel {
     pub id: ServerIDFor<Self>,
@@ -14,7 +14,7 @@ pub struct RandomKeyServerModel {
 }
 
 // Model with ServerIDFor using lexical key
-#[derive(Clone, Debug, Default, TerminusDBModel, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 pub struct LexicalKeyServerModel {
     pub id: ServerIDFor<Self>,
@@ -23,7 +23,7 @@ pub struct LexicalKeyServerModel {
 }
 
 // Model with ServerIDFor using value_hash key
-#[derive(Clone, Debug, Default, TerminusDBModel, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "value_hash", id_field = "id")]
 pub struct ValueHashServerModel {
     pub id: ServerIDFor<Self>,

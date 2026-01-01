@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 // Required for TerminusDBModel derive to work
 use terminusdb_schema as terminusdb_schema;
 
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random", class_name = "User")]
 struct User {
     id: String,

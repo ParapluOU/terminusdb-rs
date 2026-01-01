@@ -12,7 +12,7 @@ use serde::{Serialize, Deserialize};
 use terminusdb_schema as terminusdb_schema;
 
 /// Model with self-referential EntityIDFor - this used to cause conflicting impls
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random", id_field = "id")]
 struct SelfRefModel {
     id: EntityIDFor<Self>,
@@ -20,7 +20,7 @@ struct SelfRefModel {
 }
 
 /// Model with optional self-referential EntityIDFor
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random")]
 struct OptionalSelfRef {
     parent_id: Option<EntityIDFor<Self>>,
@@ -28,13 +28,13 @@ struct OptionalSelfRef {
 }
 
 /// Model that references another model via EntityIDFor (not TdbLazy)
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(TerminusDBModel, Debug, Clone, Default)]
 #[tdb(key = "random")]
 struct Parent {
     name: String,
 }
 
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random")]
 struct ChildWithEntityId {
     parent_id: EntityIDFor<Parent>,
@@ -42,7 +42,7 @@ struct ChildWithEntityId {
 }
 
 /// Model with TdbLazy self-reference (this SHOULD generate relations)
-#[derive(TerminusDBModel, Serialize, Deserialize, Debug, Clone)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random")]
 struct TreeNode {
     name: String,

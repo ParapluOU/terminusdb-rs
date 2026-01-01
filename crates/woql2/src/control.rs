@@ -5,7 +5,7 @@ use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Select a specific collection for query.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Using {
     /// The resource over which to run the query.
@@ -15,7 +15,7 @@ pub struct Using {
 }
 
 /// Change the default read graph (between instance/schema).
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct From {
     /// The graph filter: 'schema' or 'instance' or '*'.. The graph filter: 'schema' or 'instance' or '*'..
@@ -25,7 +25,7 @@ pub struct From {
 }
 
 /// Change the default write graph (between instance/schema).
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Into {
     /// The graph filter: schema or instance.
@@ -35,7 +35,7 @@ pub struct Into {
 }
 
 /// Select specific variables from a query to return.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Select {
     /// The variables to select from the query.
@@ -45,7 +45,7 @@ pub struct Select {
 }
 
 /// Ensure variables listed result in distinct solutions.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Distinct {
     /// The variables which must be distinct from the query.
@@ -55,7 +55,7 @@ pub struct Distinct {
 }
 
 /// Keep a subquery from being optimized, 'Pin' it in the order given
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Pin {
     /// The query to pin
@@ -63,7 +63,7 @@ pub struct Pin {
 }
 
 /// A conditional which runs the then clause for every success from the test clause, otherwise runs the else clause.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct If {
     /// A query which will provide bindings for the then clause.
@@ -78,7 +78,7 @@ pub struct If {
 
 // Renamed from Optional due to Rust keyword conflict
 /// A query which will succeed (without bindings) even in the case of failure.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 #[tdb(class_name = "Optional")]
 pub struct WoqlOptional {
     /// The query to run.
@@ -86,7 +86,7 @@ pub struct WoqlOptional {
 }
 
 /// Obtains exactly one solution from a query. Simliar to a limit of 1.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Once {
     /// The query from which to obtain a solution.
@@ -94,7 +94,7 @@ pub struct Once {
 }
 
 /// Attempts to perform all side-effecting operations immediately. Can have strange non-backtracking effects but can also increase performance. Use at your own risk.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Immediately {
     /// The query from which to obtain the side-effects.

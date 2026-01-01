@@ -12,7 +12,7 @@ pub enum Color {
 }
 
 /// Status enum demonstrates another enum model with documentation
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(
     class_name = "Status",
     doc = "Status represents the current state of an entity",
@@ -25,7 +25,7 @@ pub enum Status {
     Expired,
 }
 
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, Debug, Clone)]
 pub struct Comment {
     status: Status
 }
@@ -96,7 +96,7 @@ fn test_documented_enum() {
 
 /// Test for multi-word PascalCase variants (the original bug case)
 /// This verifies that TDBEnum correctly handles variants like FullyImported
-#[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(TerminusDBModel, Debug, Clone, PartialEq)]
 #[tdb(subdocument = true)]
 pub enum ImportStatus {
     LocallyCreated,

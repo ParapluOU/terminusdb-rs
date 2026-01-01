@@ -8,7 +8,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Simple test model with ServerIDFor
-#[derive(Clone, Debug, Default, TerminusDBModel, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "name", id_field = "id")]
 pub struct SimpleModel {
     pub id: ServerIDFor<Self>,

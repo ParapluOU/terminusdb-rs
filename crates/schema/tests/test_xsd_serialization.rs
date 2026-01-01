@@ -20,21 +20,22 @@ fn test_xsd_any_simple_type_serialization_fixed() {
         _ => panic!("Expected Primitive Object for Decimal")
     }
     
-    // Test UnsignedInt (used for u32, usize)
+    // Test UnsignedInt (used for u32, usize) - produces xsd:unsignedInt typed value
     let uint_value = XSDAnySimpleType::UnsignedInt(50);
     let uint_prop: InstanceProperty = <XSDAnySimpleType as ToInstanceProperty<()>>::to_property(uint_value, "test", &schema);
-    
+
     match uint_prop {
-        InstanceProperty::Primitive(PrimitiveValue::Number(n)) => {
-            println!("UnsignedInt serialization: {}", n);
-            assert_eq!(n.as_u64(), Some(50));
+        InstanceProperty::Primitive(PrimitiveValue::Object(json)) => {
+            println!("UnsignedInt serialization: {}", serde_json::to_string_pretty(&json).unwrap());
+            assert_eq!(json["@type"], "xsd:unsignedInt");
+            assert_eq!(json["@value"], 50);
         }
-        _ => panic!("Expected Primitive Number for UnsignedInt")
+        _ => panic!("Expected Primitive Object for UnsignedInt")
     }
-    
+
     println!("\n✅ XSDAnySimpleType serialization has been fixed!");
     println!("- Decimal now produces: {{\"@type\": \"xsd:decimal\", \"@value\": \"50\"}}");
-    println!("- UnsignedInt produces: 50 (as JSON number)");
+    println!("- UnsignedInt produces: {{\"@type\": \"xsd:unsignedInt\", \"@value\": 50}}");
 }
 
 #[test]

@@ -3,7 +3,7 @@ use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Simple test struct to check if Vec<String> works
-#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 #[tdb(doc = "Test model for Vec<String>")]
 pub struct VecStringTest {
     /// Unique identifier  

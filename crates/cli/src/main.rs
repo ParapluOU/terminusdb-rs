@@ -726,7 +726,7 @@ enum RemoteCommands {
 }
 
 /// SSE event data from TerminusDB changeset plugin
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ChangesetEvent {
     /// Resource path, e.g., "admin/dev/local/branch/main"
     resource: String,
@@ -740,7 +740,7 @@ struct ChangesetEvent {
     changes: Vec<DocumentChange>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ChangesetCommitInfo {
     id: String,
     author: String,
@@ -748,7 +748,7 @@ struct ChangesetCommitInfo {
     timestamp: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct MetadataInfo {
     inserts_count: u64,
     deletes_count: u64,

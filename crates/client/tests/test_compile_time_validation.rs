@@ -6,7 +6,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
 // This should compile successfully - ServerIDFor with lexical key
-#[derive(Clone, Debug, Default, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 pub struct ValidLexicalModel {
     pub id: ServerIDFor<Self>,
@@ -15,7 +15,7 @@ pub struct ValidLexicalModel {
 }
 
 // This should compile successfully - ServerIDFor with value_hash key
-#[derive(Clone, Debug, Default, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "value_hash", id_field = "id")]
 pub struct ValidValueHashModel {
     pub id: ServerIDFor<Self>,
@@ -23,7 +23,7 @@ pub struct ValidValueHashModel {
 }
 
 // This should compile successfully - Random key can use regular String
-#[derive(Clone, Debug, Default, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 #[tdb(key = "random", id_field = "id")]
 pub struct ValidRandomModel {
     pub id: String,
@@ -32,7 +32,7 @@ pub struct ValidRandomModel {
 
 // The following would fail at compile time (commented out to allow tests to run):
 // 
-// #[derive(Clone, Debug, Default, TerminusDBModel, Serialize, Deserialize)]
+// #[derive(Clone, Debug, Default, TerminusDBModel)]
 // #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 // pub struct InvalidLexicalModel {
 //     pub id: String, // Error: must be ServerIDFor<Self> for lexical key
@@ -45,7 +45,7 @@ pub struct ValidRandomModel {
 // when the ServerIDFor functionality is implemented.
 
 // Helper struct for testing embedded models
-#[derive(Clone, Debug, Default, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, TerminusDBModel)]
 pub struct ModelWrapper {
     pub name: String,
     pub embedded_model: ValidLexicalModel,

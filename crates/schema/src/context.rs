@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 // todo: use default Json derive and use field hints to rename to using the @
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Context {
     pub schema: String,
     pub base: String,

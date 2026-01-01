@@ -6,7 +6,7 @@ use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Simple type to use as a phantom parameter
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Tag {
     name: String,
 }

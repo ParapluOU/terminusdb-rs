@@ -2,7 +2,7 @@ use terminusdb_schema::{ToTDBSchema, ToTDBInstance, Key};
 use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "first_name,last_name")]
 pub struct PersonWithLexicalKey {
     pub first_name: String,
@@ -10,7 +10,7 @@ pub struct PersonWithLexicalKey {
     pub age: i32,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "hash", key_fields = "email,phone")]
 pub struct ContactWithHashKey {
     pub email: String,
@@ -48,7 +48,7 @@ fn test_hash_key_with_multiple_fields() {
 
 #[test]
 fn test_lexical_key_fallback_to_id() {
-    #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel)]
+    #[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
     #[tdb(key = "lexical")]
     pub struct DefaultLexicalKey {
         pub id: String,

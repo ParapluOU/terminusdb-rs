@@ -5,7 +5,7 @@ use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Generate or test every element of a list.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Member {
     /// The element to test for membership or to supply as generated.
@@ -15,7 +15,7 @@ pub struct Member {
 }
 
 /// Sum a list of strings.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Sum {
     /// The list of numbers to sum.
@@ -25,7 +25,7 @@ pub struct Sum {
 }
 
 /// The length of a list.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Length {
     /// The list of which to find the length.
@@ -35,7 +35,7 @@ pub struct Length {
 }
 
 /// Extract the value of a key in a bound document.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Dot {
     /// Document which is being accessed.

@@ -11,7 +11,7 @@ use crate::{TerminusDBAdapterError, TerminusDBHttpClient};
 use std::time::{Duration, Instant};
 
 /// A GraphQL request following the standard GraphQL over HTTP specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphQLRequest {
     /// The GraphQL query string
     pub query: String,
@@ -44,7 +44,7 @@ impl GraphQLRequest {
 }
 
 /// A GraphQL response following the standard GraphQL specification
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GraphQLResponse<T> {
     /// The data returned by the query (can be null on errors)
     pub data: Option<T>,

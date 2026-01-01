@@ -3,7 +3,7 @@ use terminusdb_schema::{Schema, ToTDBSchema, ToTDBInstance, TypeFamily};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Tagged union marked as subdocument
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(subdocument = true)]
 pub enum ContactMethod {
     Email {
@@ -24,7 +24,7 @@ pub enum ContactMethod {
 }
 
 // Parent struct with Vec of subdocument tagged union
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 pub struct Person {
     pub name: String,
     #[tdb(subdocument = true)]

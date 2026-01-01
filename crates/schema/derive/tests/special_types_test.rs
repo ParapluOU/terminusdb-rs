@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 /// Test struct with UUID, DateTime and HashMap fields to demonstrate
 /// their handling with TerminusDBModel
-#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, Serialize, Deserialize)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone)]
 #[tdb(doc = "A test model for special types")]
 pub struct SpecialTypesModel {
     /// Unique identifier

@@ -5,7 +5,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Serialize, Deserialize};
 use terminusdb_schema::ToTDBInstance;
 
-#[derive(Debug, Clone, TerminusDBModel, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel)]
 struct Person {
     name: String,
     age: i32,

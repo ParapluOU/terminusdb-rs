@@ -5,7 +5,7 @@ use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema, Ty
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Address type used for nested structures
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 struct Address {
     street: String,
     city: String,
@@ -15,7 +15,7 @@ struct Address {
 }
 
 // Simple enum for status
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 enum UserStatus {
     Active,
     Inactive,
@@ -23,7 +23,7 @@ enum UserStatus {
 }
 
 // Contact information tagged union
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(unfoldable = true)]
 enum ContactInfo {
     Email(String),
@@ -38,7 +38,7 @@ enum ContactInfo {
 }
 
 // Comprehensive user profile with nested types and enums
-#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance, Serialize, Deserialize)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(
     base = "http://example.org/users/",
     doc = "Comprehensive user profile with contact information"

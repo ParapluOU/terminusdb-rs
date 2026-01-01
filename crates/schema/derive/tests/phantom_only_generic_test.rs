@@ -11,7 +11,7 @@ pub trait MyConstraint: Clone + Serialize + Send {
 }
 
 // Simple type that implements the user trait but NOT TerminusDB traits
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct SimpleMarker;
 
 impl MyConstraint for SimpleMarker {
@@ -21,18 +21,18 @@ impl MyConstraint for SimpleMarker {
 }
 
 // This should work now - T is only used in PhantomData, not as an actual field
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Debug, Clone, TerminusDBModel)]
 pub struct PhantomOnlyContainer<T: MyConstraint> {
     pub id: String,
     pub count: usize,
     pub name: String,
     // T is only used here, not as an actual field
-    #[serde(skip)]
+    // PhantomData is skipped by the TDB derive (it's a zero-sized type)
     _phantom: PhantomData<T>,
 }
 
 // Multiple phantom markers
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel)]
+#[derive(Debug, Clone, TerminusDBModel)]
 pub struct MultiPhantom<T, U, V> 
 where
     T: Send,

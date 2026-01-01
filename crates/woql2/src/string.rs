@@ -1,13 +1,13 @@
 use crate::prelude::*;
 use crate::value::ListOrVariable;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Serializer};
 use serde::ser::SerializeStruct;
 use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Trims whitespace from 'untrimmed'.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Trim {
     /// The untrimmed string.
@@ -17,7 +17,7 @@ pub struct Trim {
 }
 
 /// Lowercase a string.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Lower {
     /// The mixed case string.
@@ -27,7 +27,7 @@ pub struct Lower {
 }
 
 /// Uppercase a string.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Upper {
     /// The mixed case string.
@@ -37,7 +37,7 @@ pub struct Upper {
 }
 
 /// Pad a string.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Pad {
     /// The starting string.
@@ -52,7 +52,7 @@ pub struct Pad {
 }
 
 /// Split a string.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Split {
     /// The starting string.
@@ -64,7 +64,7 @@ pub struct Split {
 }
 
 /// Join a list of strings using 'separator'.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Join {
     /// The list to concatenate.
@@ -77,7 +77,7 @@ pub struct Join {
 }
 
 /// Concatenate a list of strings.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Concatenate {
     /// The list to concatenate.
@@ -88,7 +88,7 @@ pub struct Concatenate {
 }
 
 /// Finds the boundaries of a substring in a string.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Substring {
     /// The super-string as data or variable.
@@ -104,7 +104,7 @@ pub struct Substring {
 }
 
 /// Test a string against a PCRE style regex pattern.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Regexp {
     /// The PCRE style pattern.
@@ -116,7 +116,7 @@ pub struct Regexp {
 }
 
 /// Distance between strings, similar to a Levenstein distance.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct Like {
     /// The first string.

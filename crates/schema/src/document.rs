@@ -36,7 +36,7 @@ impl<T: ToMaybeTDBSchema> ToMaybeSchemaDocuments for T {}
 impl<T: ToTDBSchema> ToSchemaDocuments for T {}
 impl<T: ToTDBInstance> ToTDBInstanceDocument for T {}
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub enum Document {
     Schema(Schema),
     Instance(Instance),

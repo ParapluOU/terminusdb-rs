@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// SSE event data from TerminusDB changeset plugin
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChangesetEvent {
     /// Resource path, e.g., "admin/dev/local/branch/main"
     pub resource: String,
@@ -21,7 +21,7 @@ pub struct ChangesetEvent {
 }
 
 /// Information about the commit that triggered the event
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChangesetCommitInfo {
     /// Commit ID
     pub id: String,
@@ -34,7 +34,7 @@ pub struct ChangesetCommitInfo {
 }
 
 /// Metadata about the number of changes
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MetadataInfo {
     /// Number of triple insertions
     pub inserts_count: u64,

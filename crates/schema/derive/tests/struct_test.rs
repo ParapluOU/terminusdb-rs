@@ -10,7 +10,7 @@ mod tests {
     use terminusdb_schema::json::InstanceFromJson;
 
     // Basic struct test
-    #[derive(TerminusDBModel, Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone, PartialEq)]
     struct BasicPerson {
         name: String,
         age: i32,
@@ -18,7 +18,7 @@ mod tests {
     }
 
     // Struct with collection types
-    #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone)]
     struct PersonWithCollections {
         name: String,
         tags: Vec<String>,
@@ -26,7 +26,7 @@ mod tests {
     }
 
     // Struct with custom attributes
-    #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone)]
     #[tdb(
         class_name = "CustomPerson",
         base = "http://example.org/",
@@ -42,7 +42,7 @@ mod tests {
     }
 
     // Simple struct for nesting
-    #[derive(TerminusDBModel, Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone, PartialEq)]
     struct Address {
         street: String,
         city: String,
@@ -50,7 +50,7 @@ mod tests {
     }
 
     // Struct with nested struct (defaults to Link)
-    #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone)]
     struct PersonWithLinkAddress {
         name: String,
         #[tdb(subdocument)]
@@ -58,7 +58,7 @@ mod tests {
     }
 
     // Struct with nested subdocument
-    #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone)]
     struct PersonWithSubDocAddress {
         name: String,
         #[tdb(subdocument)]
@@ -66,7 +66,7 @@ mod tests {
     }
 
     // Struct with Vec<SubDocument>
-    #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone)]
     struct Building {
         name: String,
         #[tdb(subdocument)]
@@ -74,7 +74,7 @@ mod tests {
     }
 
     // Struct with Vec<Link>
-    #[derive(TerminusDBModel, Debug, Clone, Serialize, Deserialize)]
+    #[derive(TerminusDBModel, Debug, Clone)]
     struct Department {
         name: String,
         locations: Vec<Address>,

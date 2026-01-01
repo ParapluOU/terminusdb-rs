@@ -36,7 +36,7 @@ impl fmt::Display for McpError {
 
 impl std::error::Error for McpError {}
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ConnectionConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -93,7 +93,7 @@ impl Default for ConnectionConfig {
 }
 
 // Tool definitions using mcp_tool macro
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "connect",
     description = "Establish and save a connection to TerminusDB. Once connected, other commands will use these saved credentials automatically. Optionally provide an env_file path to load environment variables."
@@ -110,7 +110,7 @@ pub struct ConnectTool {
     pub env_file: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_woql",
     description = "Execute a WOQL query using JavaScript syntax or JSON-LD format.\n\n\
@@ -140,14 +140,14 @@ pub struct ExecuteWoqlTool {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(name = "list_databases", description = "List all available databases")]
 pub struct ListDatabasesTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "get_schema",
     description = "Get the schema for a specific database"
@@ -161,7 +161,7 @@ pub struct GetSchemaTool {
     pub timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "check_server_status",
     description = "Check if the TerminusDB server is running and accessible"
@@ -171,7 +171,7 @@ pub struct CheckServerStatusTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "reset_database",
     description = "Reset a database by deleting and recreating it. WARNING: This permanently deletes all data in the database!"
@@ -182,7 +182,7 @@ pub struct ResetDatabaseTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "get_document",
     description = "Retrieve a document by ID from TerminusDB. Returns the document as JSON with optional metadata like commit ID."
@@ -206,7 +206,7 @@ pub struct GetDocumentTool {
 }
 
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "query_log",
     description = "Manage and view TerminusDB query logging. Supports enabling/disabling file-based query logging, viewing recent entries, and log rotation."
@@ -228,7 +228,7 @@ pub struct QueryLogTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "insert_document",
     description = "Insert a single JSON document into TerminusDB. The document must include @id and @type fields. Supports both creation and update (upsert) behavior."
@@ -251,7 +251,7 @@ pub struct InsertDocumentTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "insert_documents",
     description = "Insert multiple JSON documents into TerminusDB in a single transaction. All documents must include @id and @type fields. This is an atomic operation - all documents succeed or all fail."
@@ -274,7 +274,7 @@ pub struct InsertDocumentsTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "replace_document",
     description = "Replace an existing document entirely. This operation will fail if the document doesn't exist (safer than upsert). Use this when you want to guarantee the document already exists."
@@ -294,7 +294,7 @@ pub struct ReplaceDocumentTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "delete_classes",
     description = "Delete schema classes (tables) from TerminusDB by removing all their schema triples. WARNING: This permanently deletes the class definitions from the schema!"
@@ -314,7 +314,7 @@ pub struct DeleteClassesTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "squash",
     description = "Squash commit history into a single commit. Creates a new unattached commit containing the squashed data. This commit can be queried directly, or be assigned to a particular branch using the reset endpoint."
@@ -333,7 +333,7 @@ pub struct SquashTool {
     pub timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "reset",
     description = "Reset branch to a specific commit. This will set the branch HEAD to the submitted commit."
@@ -347,7 +347,7 @@ pub struct ResetTool {
     pub connection: Option<ConnectionConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "optimize",
     description = "Optimize a database by removing unreachable data. This can significantly reduce database size and improve performance."
@@ -362,7 +362,7 @@ pub struct OptimizeTool {
     pub timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "get_graphql_schema",
     description = "Download the GraphQL schema for a database using introspection. The schema is saved to a file (default: ./schema.json)."
@@ -382,7 +382,7 @@ pub struct GetGraphQLSchemaTool {
 }
 
 /// Clone a remote repository to create a new local database
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "clone",
     description = "Clone a remote repository to create a new local database"
@@ -410,7 +410,7 @@ pub struct CloneTool {
 }
 
 /// Fetch changes from a remote repository
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "fetch",
     description = "Fetch changes from a remote repository into the local database"
@@ -434,7 +434,7 @@ pub struct FetchTool {
 }
 
 /// Push changes to a remote repository
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "push",
     description = "Push changes from the local database to a remote repository"
@@ -458,7 +458,7 @@ pub struct PushTool {
 }
 
 /// Pull changes from a remote repository (fetch + merge)
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "pull",
     description = "Pull changes from a remote repository and merge them into the local database"
@@ -486,7 +486,7 @@ pub struct PullTool {
 }
 
 /// Add a new remote repository
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "add_remote",
     description = "Add a new remote repository to a database. The remote name is specified in the path (e.g., 'admin/mydb/remote/origin'). For full API details, see terminusdb-rs/docs/openapi.yaml or https://github.com/terminusdb/terminusdb/blob/main/docs/openapi.yaml"
@@ -501,7 +501,7 @@ pub struct AddRemoteTool {
 }
 
 /// Get information about a remote repository
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "get_remote",
     description = "Get information about a remote repository"
@@ -514,7 +514,7 @@ pub struct GetRemoteTool {
 }
 
 /// Update a remote repository URL
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "update_remote",
     description = "Update the URL of an existing remote repository"
@@ -529,7 +529,7 @@ pub struct UpdateRemoteTool {
 }
 
 /// Delete a remote repository
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "delete_remote",
     description = "Delete a remote repository from a database"
@@ -546,7 +546,7 @@ fn default_true() -> bool {
 }
 
 /// Start a local TerminusDB server
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "start_local_server",
     description = "Start a local TerminusDB server instance for testing and development. \
@@ -576,7 +576,7 @@ pub struct StartLocalServerTool {
 }
 
 /// Stop a local TerminusDB server
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "stop_local_server",
     description = "Stop a running local TerminusDB server instance by its server_id. \
@@ -588,7 +588,7 @@ pub struct StopLocalServerTool {
 }
 
 /// List running local TerminusDB servers
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "list_local_servers",
     description = "List all running local TerminusDB server instances managed by this MCP server."

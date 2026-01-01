@@ -10,7 +10,7 @@ use {
 };
 
 /// User information
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct User {
     /// User identifier
     pub id: String,
@@ -23,7 +23,7 @@ pub struct User {
 }
 
 /// User creation request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CreateUserRequest {
     /// User identifier
     pub id: String,
@@ -36,7 +36,7 @@ pub struct CreateUserRequest {
 }
 
 /// User update request
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct UpdateUserRequest {
     /// New user name
     pub name: Option<String>,

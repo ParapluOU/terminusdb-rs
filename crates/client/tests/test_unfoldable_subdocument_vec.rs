@@ -5,7 +5,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(unfoldable = true)]
 pub struct IdAndTitle {
     /// section or document ID
@@ -14,7 +14,7 @@ pub struct IdAndTitle {
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[serde(rename_all = "camelCase")]
 #[tdb(unfoldable = true)]
 pub struct ReviewSession {

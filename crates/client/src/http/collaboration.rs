@@ -10,7 +10,7 @@ use {
 };
 
 /// Clone request parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CloneRequest {
     /// URL of the remote repository to clone
     pub remote_url: String,

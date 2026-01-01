@@ -5,7 +5,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Represents the abstract class "PathPattern"
 /// An abstract class specifying the AST super-class of all path patterns.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub enum PathPattern {
     Predicate(PathPredicate),
@@ -18,7 +18,7 @@ pub enum PathPattern {
 }
 
 /// A predicate to traverse.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct PathPredicate {
     /// The predicate to use in the pattern traversal.
@@ -26,7 +26,7 @@ pub struct PathPredicate {
 }
 
 /// A predicate to traverse *backwards*.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct InversePathPredicate {
     /// The predicate to use in reverse direction in the pattern traversal.
@@ -34,7 +34,7 @@ pub struct InversePathPredicate {
 }
 
 /// A sequence of patterns in which each of the patterns in the list must result in objects which are subjects of the next pattern in the list.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct PathSequence {
     /// A sequence of path patterns.
@@ -42,7 +42,7 @@ pub struct PathSequence {
 }
 
 /// A set of patterns in which each of the patterns can result in objects starting from our current subject set.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct PathOr {
     /// A disjunction of path patterns.
@@ -50,7 +50,7 @@ pub struct PathOr {
 }
 
 /// The path pattern specified by 'plus' must hold one or more times in succession.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct PathPlus {
     /// A path patterns.
@@ -58,7 +58,7 @@ pub struct PathPlus {
 }
 
 /// The path pattern specified by 'star' may hold zero or more times in succession.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct PathStar {
     /// A path pattern.
@@ -66,7 +66,7 @@ pub struct PathStar {
 }
 
 /// The path pattern specified by 'times' may hold 'from' to 'to' times in succession.
-#[derive(TerminusDBModel, FromTDBInstance, Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct PathTimes {
     /// A path pattern.

@@ -9,7 +9,7 @@ use serde_json::Value;
 const GRAPH_TYPE_SCHEMA: &str = "schema";
 const GRAPH_TYPE_INSTANCE: &str = "instance";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub enum GraphType {
     Schema,
     #[default]

@@ -5,7 +5,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
 use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct Article {
     id: EntityIDFor<Self>,
