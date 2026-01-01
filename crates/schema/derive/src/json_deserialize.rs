@@ -578,7 +578,6 @@ fn generate_field_deserializers(
                     json_value.clone()
                 )
                 .context("generate_field_deserializers() - id_field");
-                ;
 
                 if let Err(ref e) = _prop {
                     ::tracing::error!("failed to deserialize id_field '{}' of type {}: {}. payload: {:#?}", #json_key_name, stringify!(#field_ty), e, json_value);
@@ -596,9 +595,7 @@ fn generate_field_deserializers(
                 let _prop = <#field_ty as terminusdb_schema::json::InstancePropertyFromJson<#struct_name #ty_generics>>::property_from_maybe_json(
                     json_value.clone()
                 )
-                // .context(&err)?;
                 .context("generate_field_deserializers()");
-                ;
 
                 if let Err(ref e) = _prop {
                     ::tracing::error!("failed to deserialize field '{}' of type {}: {}. payload: {:#?}", #json_key_name, stringify!(#field_ty), e, json_value);
