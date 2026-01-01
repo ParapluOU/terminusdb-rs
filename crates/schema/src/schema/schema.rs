@@ -702,6 +702,15 @@ impl ToJson for Schema {
     }
 }
 
+impl serde::Serialize for Schema {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_json().serialize(serializer)
+    }
+}
+
 impl ToString for Schema {
     fn to_string(&self) -> String {
         self.to_json_string()

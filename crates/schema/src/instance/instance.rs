@@ -486,3 +486,12 @@ impl ToJson for Instance {
         map
     }
 }
+
+impl Serialize for Instance {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_json().serialize(serializer)
+    }
+}
