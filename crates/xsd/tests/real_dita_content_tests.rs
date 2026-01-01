@@ -236,10 +236,8 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
             // Insert instances
             println!("Inserting {} instances...", instances.len());
             let instance_refs: Vec<_> = instances.iter().collect();
-            match client.insert_documents(instance_refs, args).await {
-                Ok(result) => println!("Successfully inserted {} documents", result.len()),
-                Err(e) => println!("Insert error (some may have succeeded): {}", e),
-            }
+            let result = client.insert_documents(instance_refs, args).await?;
+            println!("Successfully inserted {} documents", result.len());
 
             Ok(())
         }
