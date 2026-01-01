@@ -180,9 +180,27 @@ impl XsdModel {
         Self::from_entry_points(&[schema_path.as_ref()], catalog_path)
     }
 
-    /// Set the namespace for generated schemas.
+    /// Set the schema namespace URI for generated schemas.
+    ///
+    /// This updates both the internal namespace tracking and the TerminusDB
+    /// Context's `@schema` field, which controls how type names are expanded
+    /// to full URIs.
+    ///
+    /// By default, the namespace is derived from the XSD's `targetNamespace`.
+    /// Use this method to override it.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use terminusdb_xsd::XsdModel;
+    /// let model = XsdModel::from_file("schema.xsd", None::<&str>)?
+    ///     .with_namespace("http://my.org/schema#");
+    /// # Ok::<(), terminusdb_xsd::XsdError>(())
+    /// ```
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
-        self.namespace = namespace.into();
+        let ns = namespace.into();
+        self.context.schema = ns.clone();
+        self.namespace = ns;
         self
     }
 

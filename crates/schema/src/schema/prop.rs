@@ -14,7 +14,7 @@ pub trait ToSchemaProperty<Parent> {
     fn to_property(prop_name: &str) -> crate::schema::Property;
 }
 
-#[derive(Eq, PartialEq, Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Clone, Hash)]
 pub struct Property {
     /// graph edge name
     pub name: String,

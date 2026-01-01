@@ -193,7 +193,7 @@ pub trait ToTDBInstance: ToTDBSchema + ToTDBInstances {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Instance {
     /// the @type key has to be derived from the schema
     pub schema: Schema,

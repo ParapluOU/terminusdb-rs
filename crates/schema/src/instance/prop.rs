@@ -78,7 +78,7 @@ impl<T: FromInstanceProperty> FromInstanceProperty for Option<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum InstanceProperty {
     Primitive(PrimitiveValue),
     Primitives(Vec<PrimitiveValue>),

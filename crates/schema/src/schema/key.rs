@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 // TDB uses "Random" as default
-#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, PartialOrd, Ord, Debug, Clone, Hash)]
 pub enum Key {
     /// A Lexical key specifies a URI name formed from a URI encoded combination of all @fields arguments provided,
     /// in the order provided. An example is shown below.

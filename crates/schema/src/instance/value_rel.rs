@@ -2,7 +2,7 @@ use crate::{json::ToJson, Instance};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RelationValue {
     /// a reference to an entity that already exists in the database
     ExternalReference(String),

@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 // todo: the derive should take this from the docstring
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct ContextDocumentation {
     pub(crate) title: String,
     pub(crate) authors: Vec<String>,
@@ -21,7 +21,7 @@ impl ToJson for ContextDocumentation {
     }
 }
 
-#[derive(Eq, PartialEq, Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Eq, PartialEq, Debug, Clone, Hash)]
 pub struct ClassDocumentation {
     pub comment: String,
     /// The keywords of the @documentation object are @comment and either @properties or @values for standard classes or Enums respectively

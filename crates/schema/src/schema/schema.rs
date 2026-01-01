@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::Write;
 
 // todo: the derived serialize and deserialize do not comply with the TerminusDB schema and are only used for RPC calls!
-#[derive(Eq, Debug, Clone, Hash, Serialize, Deserialize)]
+#[derive(Eq, Debug, Clone, Hash)]
 pub enum Schema {
     Class {
         id: ID,

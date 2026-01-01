@@ -381,7 +381,7 @@ macro_rules! newtype {
         type: $typ:ident,
         schemaclass: $class:ident
     }) => {
-        #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, Debug)]
         #[serde(transparent)]
         pub struct $name($typ);
 
