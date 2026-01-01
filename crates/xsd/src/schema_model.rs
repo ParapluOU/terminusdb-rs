@@ -188,12 +188,12 @@ impl XsdSchema {
         // Parse the schema using xmlschema-rs
         let rust_schema = RustXsdSchema::from_file(path)?;
 
-        // Extract data from the parsed schema
-        Self::from_rust_schema(&rust_schema, path)
+        // Extract data from the parsed schema, including imports
+        Self::from_rust_schema_with_imports(&rust_schema, path)
     }
 
-    /// Convert a parsed Rust schema to our representation
-    fn from_rust_schema(schema: &RustXsdSchema, path: &Path) -> crate::Result<Self> {
+    /// Convert a parsed Rust schema to our representation, including imported schemas
+    fn from_rust_schema_with_imports(schema: &RustXsdSchema, path: &Path) -> crate::Result<Self> {
         let target_namespace = schema.target_namespace.clone();
         let schema_location = Some(path.to_string_lossy().to_string());
         let element_form_default = Some(match schema.element_form_default {
@@ -201,18 +201,16 @@ impl XsdSchema {
             FormDefault::Unqualified => "unqualified".to_string(),
         });
 
-        // Infer entry point element from file name
-        // e.g., "basetopic.xsd" → "topic", "map.xsd" → "map"
-        let entry_point_elements = Self::infer_entry_point_elements(path);
+        let base_dir = path.parent().unwrap_or(Path::new("."));
 
-        // Extract root elements
+        // Extract root elements from main schema
         let mut root_elements = Vec::new();
         for (qname, elem) in schema.elements() {
             let element = Self::extract_element(&qname.to_string(), elem, schema);
             root_elements.push(element);
         }
 
-        // Extract complex types
+        // Extract complex and simple types from main schema
         let mut complex_types = Vec::new();
         let mut simple_types = Vec::new();
 
@@ -229,20 +227,86 @@ impl XsdSchema {
             }
         }
 
-        // Also extract anonymous complex types from element declarations
-        // These are named after the element itself (e.g., element `topic` → type `topic`)
+        // Extract anonymous complex types from main schema's element declarations
         for (qname, elem) in schema.elements() {
             if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
-                // Anonymous type (no name)
                 if ct.name.is_none() {
                     let elem_name = &qname.local_name;
-                    // Use element name directly as type name for anonymous types
                     let mut complex = Self::extract_complex_type(elem_name, ct, schema);
                     complex.is_anonymous = true;
                     complex.element_name = Some(elem_name.to_string());
                     complex_types.push(complex);
                 }
             }
+        }
+
+        // Process imported schemas to extract their elements and types
+        // This ensures elements from external namespaces (MathML, XInclude, TBX, etc.) are available
+        for (_ns, import) in &schema.imports {
+            if let Some(location) = &import.location {
+                let import_path = base_dir.join(location);
+                if import_path.exists() {
+                    if let Ok(imported_schema) = RustXsdSchema::from_file(&import_path) {
+                        // Extract elements from imported schema
+                        for (qname, elem) in imported_schema.elements() {
+                            let element = Self::extract_element(&qname.to_string(), elem, &imported_schema);
+                            root_elements.push(element);
+                        }
+
+                        // Extract types from imported schema
+                        for (qname, global_type) in imported_schema.types() {
+                            match global_type {
+                                GlobalType::Complex(ct) => {
+                                    let complex = Self::extract_complex_type(&qname.to_string(), ct, &imported_schema);
+                                    complex_types.push(complex);
+                                }
+                                GlobalType::Simple(st) => {
+                                    let simple = Self::extract_simple_type(&qname.to_string(), st);
+                                    simple_types.push(simple);
+                                }
+                            }
+                        }
+
+                        // Extract anonymous complex types from imported elements
+                        for (qname, elem) in imported_schema.elements() {
+                            if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
+                                if ct.name.is_none() {
+                                    let elem_name = &qname.local_name;
+                                    let mut complex = Self::extract_complex_type(elem_name, ct, &imported_schema);
+                                    complex.is_anonymous = true;
+                                    complex.element_name = Some(elem_name.to_string());
+                                    complex_types.push(complex);
+                                }
+                            }
+                        }
+
+                        // Extract LOCAL elements from groups
+                        // Some schemas (like MathML) define elements inside groups, not as global elements
+                        // e.g., the `semantics` element is defined inside the `semantics` group
+                        Self::extract_local_elements_from_groups(
+                            &imported_schema,
+                            &mut root_elements,
+                            &mut complex_types,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Infer entry point elements from main schema only
+        let mut entry_point_elements: Vec<String> = schema.elements()
+            .filter_map(|(qname, elem)| {
+                if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
+                    if ct.name.is_none() {
+                        return Some(qname.local_name.to_lowercase());
+                    }
+                }
+                None
+            })
+            .collect();
+
+        if entry_point_elements.is_empty() {
+            entry_point_elements = Self::infer_entry_point_elements(path);
         }
 
         Ok(Self {
@@ -299,6 +363,70 @@ impl XsdSchema {
             max_occurs: Some(occurs_to_cardinality(&elem.occurs)),
             nillable: elem.nillable,
             default: elem.default.clone(),
+        }
+    }
+
+    /// Extract local elements defined inside groups
+    ///
+    /// Some schemas (like MathML) define elements as local declarations inside groups
+    /// rather than as global elements. For example, the `semantics` element in MathML
+    /// is defined inside the `semantics` group.
+    ///
+    /// This function walks through all groups in a schema and extracts local element
+    /// declarations as if they were global elements.
+    fn extract_local_elements_from_groups(
+        schema: &RustXsdSchema,
+        root_elements: &mut Vec<XsdElement>,
+        complex_types: &mut Vec<XsdComplexType>,
+    ) {
+        use xmlschema::validators::groups::GroupParticle;
+
+        // Helper to recursively extract local elements from group particles
+        fn extract_from_particles(
+            particles: &[GroupParticle],
+            schema: &RustXsdSchema,
+            root_elements: &mut Vec<XsdElement>,
+            complex_types: &mut Vec<XsdComplexType>,
+        ) {
+            for particle in particles {
+                match particle {
+                    GroupParticle::Element(ep) => {
+                        // If this element particle has element_decl, it's a local element
+                        if let Some(elem) = &ep.element_decl {
+                            // Extract as a root element
+                            let element = XsdSchema::extract_element(
+                                &ep.name.to_string(),
+                                elem,
+                                schema,
+                            );
+                            root_elements.push(element);
+
+                            // Also extract anonymous complex type if present
+                            if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
+                                if ct.name.is_none() {
+                                    let elem_name = &ep.name.local_name;
+                                    let mut complex = XsdSchema::extract_complex_type(elem_name, ct, schema);
+                                    complex.is_anonymous = true;
+                                    complex.element_name = Some(elem_name.to_string());
+                                    complex_types.push(complex);
+                                }
+                            }
+                        }
+                    }
+                    GroupParticle::Group(nested_group) => {
+                        // Recursively process nested groups
+                        extract_from_particles(&nested_group.particles, schema, root_elements, complex_types);
+                    }
+                    GroupParticle::Any(_) => {
+                        // Wildcards don't have local elements
+                    }
+                }
+            }
+        }
+
+        // Iterate over all groups in the schema
+        for (_qname, group) in schema.groups() {
+            extract_from_particles(&group.particles, schema, root_elements, complex_types);
         }
     }
 
@@ -404,19 +532,47 @@ impl XsdSchema {
         }
     }
 
-    /// Extract children from a model group with parent optionality context
+    /// Extract children from a model group with parent optionality and cardinality context
     ///
     /// When a parent compositor (choice/sequence) has minOccurs=0, all children
     /// are effectively optional, regardless of their own minOccurs setting.
+    ///
+    /// When a parent group has maxOccurs="unbounded", all children inside can
+    /// appear multiple times, so they inherit the unbounded cardinality.
     fn extract_group_children_with_context(
         group: &Arc<XsdGroup>,
         parent_optional: bool,
+        schema: &RustXsdSchema,
+    ) -> Vec<ChildElement> {
+        Self::extract_group_children_with_full_context(group, parent_optional, None, schema)
+    }
+
+    /// Internal helper that also propagates parent maxOccurs
+    fn extract_group_children_with_full_context(
+        group: &Arc<XsdGroup>,
+        parent_optional: bool,
+        parent_max_occurs: Option<&Cardinality>,
         schema: &RustXsdSchema,
     ) -> Vec<ChildElement> {
         let mut children = Vec::new();
 
         // If this group itself is optional (minOccurs=0), children are effectively optional
         let is_optional = parent_optional || group.occurs.min == 0;
+
+        // If this group has maxOccurs > 1 or unbounded, propagate to children
+        let this_group_max = occurs_to_cardinality(&group.occurs);
+        let effective_parent_max = match (parent_max_occurs, &this_group_max) {
+            // Parent is unbounded -> all descendants are unbounded
+            (Some(Cardinality::Unbounded), _) => Some(Cardinality::Unbounded),
+            // This group is unbounded -> descendants inherit it
+            (_, Cardinality::Unbounded) => Some(Cardinality::Unbounded),
+            // This group has max > 1 -> descendants can repeat
+            (_, Cardinality::Number(n)) if *n > 1 => Some(this_group_max.clone()),
+            // Use parent's max if available
+            (Some(pm), _) => Some(pm.clone()),
+            // No repetition from parents
+            (None, _) => None,
+        };
 
         for particle in &group.particles {
             match particle {
@@ -433,16 +589,34 @@ impl XsdSchema {
                     // Effective minOccurs: if parent is optional, this is optional
                     let effective_min = if is_optional { 0 } else { ep.occurs.min };
 
+                    // Effective maxOccurs: if parent allows repetition, element can repeat
+                    let element_max = occurs_to_cardinality(&ep.occurs);
+                    let effective_max = match (&effective_parent_max, &element_max) {
+                        // Parent is unbounded -> element can repeat
+                        (Some(Cardinality::Unbounded), _) => Cardinality::Unbounded,
+                        // Element itself is unbounded
+                        (_, Cardinality::Unbounded) => Cardinality::Unbounded,
+                        // Parent has max > 1, use parent's max (group can repeat)
+                        (Some(Cardinality::Number(pm)), _) if *pm > 1 => Cardinality::Unbounded,
+                        // No parent repetition, use element's own max
+                        (_, em) => em.clone(),
+                    };
+
                     children.push(ChildElement {
                         name,
                         element_type,
                         min_occurs: Some(effective_min),
-                        max_occurs: Some(occurs_to_cardinality(&ep.occurs)),
+                        max_occurs: Some(effective_max),
                     });
                 }
                 GroupParticle::Group(nested) => {
-                    // Recursively extract children, propagating optionality context
-                    children.extend(Self::extract_group_children_with_context(nested, is_optional, schema));
+                    // Recursively extract children, propagating both optionality and max occurs
+                    children.extend(Self::extract_group_children_with_full_context(
+                        nested,
+                        is_optional,
+                        effective_parent_max.as_ref(),
+                        schema,
+                    ));
                 }
                 GroupParticle::Any(_) => {
                     // Wildcard elements (xs:any) - these are the ONLY case for xs:anyType
@@ -494,6 +668,10 @@ impl XsdSchema {
     }
 
     /// Extract type information from an XsdElement
+    ///
+    /// For elements with anonymous complex types, we use the element name as the type.
+    /// This corresponds to how we generate TerminusDB schemas: elements with inline
+    /// complex types get their own schema class named after the element (PascalCase).
     fn extract_type_from_element(elem: &Arc<xmlschema::validators::XsdElement>) -> String {
         // First try the type_name reference
         if let Some(type_name) = &elem.type_name {
@@ -517,8 +695,10 @@ impl XsdSchema {
                 if let Some(base_type) = &ct.base_type {
                     return base_type.to_string();
                 }
-                // Truly anonymous type with no base - this is effectively any content
-                "xs:anyType".to_string()
+                // Anonymous type with no base - use the element's own name as the type reference.
+                // We generate a TerminusDB schema class for each global element with an anonymous
+                // complex type, so the element name (PascalCased) is the correct type reference.
+                elem.name.local_name.clone()
             }
             xmlschema::validators::ElementType::Any => "xs:anyType".to_string(),
         }
