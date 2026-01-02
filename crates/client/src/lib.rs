@@ -4,6 +4,7 @@
 #![feature(try_blocks)]
 #![feature(trait_alias)]
 #![feature(let_chains)]
+#![recursion_limit = "256"]
 #![allow(warnings)]
 
 use enum_variant_macros::FromVariants;
