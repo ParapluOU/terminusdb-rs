@@ -1,7 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
@@ -16,7 +15,6 @@ mod tests {
         id: EntityIDFor<Self>,
         name: String,
         age: i32,
-        #[serde(skip_serializing_if = "Option::is_none")]
         email: Option<String>,
     }
 

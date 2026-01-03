@@ -3,7 +3,6 @@ use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(unfoldable = true)]
@@ -15,7 +14,6 @@ pub struct IdAndTitle {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel, FromTDBInstance)]
-#[serde(rename_all = "camelCase")]
 #[tdb(unfoldable = true)]
 pub struct ReviewSession {
     #[tdb(subdocument = true)]

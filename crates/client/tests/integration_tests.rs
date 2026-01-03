@@ -90,15 +90,12 @@ fn test_parse_var_binding() {
 
 #[test]
 fn test_deserde_query_result() {
-    dbg!(serde_json::to_string(&QueryResultVariableBinding::URI(
-        "test".to_string()
-    )));
-    dbg!(serde_json::to_string(&QueryResultVariableBinding::Value(
-        QueryResultTypedValue {
-            r#type: "test".to_string(),
-            value: "test".into()
-        }
-    )));
+    // Test creating QueryResultVariableBinding variants
+    dbg!(&QueryResultVariableBinding::URI("test".to_string()));
+    dbg!(&QueryResultVariableBinding::Value(QueryResultTypedValue {
+        r#type: "test".to_string(),
+        value: "test".into(),
+    }));
 
     let qr1: QueryResult = serde_json::from_value(serde_json::json!(
         {

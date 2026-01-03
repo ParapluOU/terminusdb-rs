@@ -1,7 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::{CommitId, *};
@@ -16,7 +15,6 @@ mod tests {
     struct Person {
         name: String,
         age: i32,
-        #[serde(skip_serializing_if = "Option::is_none")]
         email: Option<String>,
     }
 
@@ -27,7 +25,6 @@ mod tests {
         id: EntityIDFor<Self>,
         name: String,
         age: i32,
-        #[serde(skip_serializing_if = "Option::is_none")]
         email: Option<String>,
     }
 
@@ -159,7 +156,7 @@ mod tests {
                 );
 
                 let result: WOQLResult = client.query_raw(Some(spec.clone()), json_query, None).await?;
-                println!("Query result: {}", serde_json::to_string_pretty(&result)?);
+                println!("Query result: {:?}", result);
 
                 // Check if we got results
                 println!("Found {} result bindings", result.bindings.len());
@@ -225,7 +222,7 @@ mod tests {
                 );
 
                 let result: WOQLResult = client.query_raw(Some(spec.clone()), json_query, None).await?;
-                println!("Query result: {}", serde_json::to_string_pretty(&result)?);
+                println!("Query result: {:?}", result);
 
                 // Analyze results
                 println!(
