@@ -264,7 +264,8 @@ mod tests {
         clear_all_semaphores();
 
         let config = ConcurrencyLimitConfig::new(Some(0), Some(0));
-        let (read, write) = get_or_create_semaphores("test-host", &config);
+        // Use unique host name to avoid test pollution from parallel tests
+        let (read, write) = get_or_create_semaphores("test-host-zero-limit", &config);
 
         assert!(read.is_none());
         assert!(write.is_none());
