@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- XSD schema for book documents - uses namespace http://example.com/book -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/book"
+           xmlns:tns="http://example.com/book"
+           elementFormDefault="qualified">
+
+    <!-- Root element -->
+    <xs:element name="document" type="tns:DocumentType"/>
+
+    <!-- DocumentType - same name as in namespace_library.xsd but different structure -->
+    <xs:complexType name="DocumentType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string"/>
+            <xs:element name="author" type="xs:string"/>
+            <xs:element name="isbn" type="xs:string"/>
+            <xs:element name="price" type="xs:decimal" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:ID" use="required"/>
+    </xs:complexType>
+
+    <!-- PersonType - unique to book namespace -->
+    <xs:complexType name="PersonType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+            <xs:element name="bio" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>

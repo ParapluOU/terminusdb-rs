@@ -263,7 +263,12 @@ fn test_generated_schemas_use_correct_key_strategy() {
 }
 
 #[test]
-fn test_namespace_preserved_in_base() {
+fn test_namespace_preserved_in_base_for_multi_namespace_support() {
+    // Schema classes SHOULD set `base` to the XSD namespace because:
+    // 1. This enables to_namespaced_json() to produce fully-qualified URIs
+    // 2. Fully-qualified URIs allow multiple schemas with same class names to coexist
+    //    (e.g., "http://example.com/book#DocumentType" vs "http://example.com/library#DocumentType")
+    // 3. Instance @type uses fully-qualified URI to match the correct schema
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
@@ -272,9 +277,11 @@ fn test_namespace_preserved_in_base() {
 
     let book_type = find_class(&schemas, "BookType").expect("BookType not found");
     if let Schema::Class { base, .. } = book_type {
-        assert!(base.is_some(), "Namespace should be preserved in @base");
-        assert!(base.as_ref().unwrap().contains("example.com"),
-            "Base should contain original namespace");
+        assert!(base.is_some(), "Namespace should be preserved in base for multi-namespace support");
+        assert!(
+            base.as_ref().unwrap().contains("example.com"),
+            "Base should contain original namespace"
+        );
     }
 }
 

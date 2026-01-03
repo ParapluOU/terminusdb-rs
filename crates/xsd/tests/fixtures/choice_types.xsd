@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/choice"
+           xmlns:ch="http://example.com/choice"
+           elementFormDefault="qualified">
+
+    <!-- Root element for testing -->
+    <xs:element name="document" type="ch:documentType"/>
+
+    <!-- Document with a choice of content types -->
+    <xs:complexType name="documentType">
+        <xs:sequence>
+            <xs:element name="title" type="xs:string"/>
+            <!-- Choice: document can have either article, report, or memo content -->
+            <xs:choice>
+                <xs:element name="article" type="ch:articleType"/>
+                <xs:element name="report" type="ch:reportType"/>
+                <xs:element name="memo" type="ch:memoType"/>
+            </xs:choice>
+            <xs:element name="footer" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:string" use="required"/>
+    </xs:complexType>
+
+    <!-- Article type -->
+    <xs:complexType name="articleType">
+        <xs:sequence>
+            <xs:element name="abstract" type="xs:string"/>
+            <xs:element name="body" type="xs:string"/>
+            <xs:element name="keywords" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <!-- Report type -->
+    <xs:complexType name="reportType">
+        <xs:sequence>
+            <xs:element name="summary" type="xs:string"/>
+            <xs:element name="findings" type="xs:string"/>
+            <xs:element name="recommendations" type="xs:string"/>
+        </xs:sequence>
+        <xs:attribute name="reportNumber" type="xs:string"/>
+    </xs:complexType>
+
+    <!-- Memo type (simpler structure) -->
+    <xs:complexType name="memoType">
+        <xs:sequence>
+            <xs:element name="to" type="xs:string"/>
+            <xs:element name="from" type="xs:string"/>
+            <xs:element name="subject" type="xs:string"/>
+            <xs:element name="content" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <!-- Container with repeating choice (choice with maxOccurs="unbounded") -->
+    <xs:element name="mixedContent" type="ch:mixedContentType"/>
+
+    <xs:complexType name="mixedContentType">
+        <xs:choice maxOccurs="unbounded">
+            <xs:element name="paragraph" type="xs:string"/>
+            <xs:element name="image" type="ch:imageType"/>
+            <xs:element name="code" type="ch:codeType"/>
+        </xs:choice>
+    </xs:complexType>
+
+    <!-- Image type -->
+    <xs:complexType name="imageType">
+        <xs:attribute name="src" type="xs:string" use="required"/>
+        <xs:attribute name="alt" type="xs:string"/>
+    </xs:complexType>
+
+    <!-- Code type -->
+    <xs:complexType name="codeType">
+        <xs:simpleContent>
+            <xs:extension base="xs:string">
+                <xs:attribute name="language" type="xs:string"/>
+            </xs:extension>
+        </xs:simpleContent>
+    </xs:complexType>
+
+    <!-- Nested choice example -->
+    <xs:element name="payment" type="ch:paymentType"/>
+
+    <xs:complexType name="paymentType">
+        <xs:sequence>
+            <xs:element name="amount" type="xs:decimal"/>
+            <xs:element name="currency" type="xs:string"/>
+            <!-- Choice of payment methods -->
+            <xs:choice>
+                <xs:element name="creditCard" type="ch:creditCardType"/>
+                <xs:element name="bankTransfer" type="ch:bankTransferType"/>
+                <xs:element name="digitalWallet" type="ch:digitalWalletType"/>
+            </xs:choice>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="creditCardType">
+        <xs:sequence>
+            <xs:element name="cardNumber" type="xs:string"/>
+            <xs:element name="expiryDate" type="xs:string"/>
+            <xs:element name="cvv" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="bankTransferType">
+        <xs:sequence>
+            <xs:element name="accountNumber" type="xs:string"/>
+            <xs:element name="routingNumber" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="digitalWalletType">
+        <xs:sequence>
+            <xs:element name="walletId" type="xs:string"/>
+            <xs:element name="provider" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <!-- Optional choice (minOccurs="0") -->
+    <xs:element name="contact" type="ch:contactType"/>
+
+    <xs:complexType name="contactType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+            <!-- Optional choice - can have email OR phone, or neither -->
+            <xs:choice minOccurs="0">
+                <xs:element name="email" type="xs:string"/>
+                <xs:element name="phone" type="xs:string"/>
+            </xs:choice>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>

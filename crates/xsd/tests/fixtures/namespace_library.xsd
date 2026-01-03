@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- XSD schema for library documents - uses namespace http://example.com/library -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="http://example.com/library"
+           xmlns:tns="http://example.com/library"
+           elementFormDefault="qualified">
+
+    <!-- Root element -->
+    <xs:element name="document" type="tns:DocumentType"/>
+
+    <!-- DocumentType - same name as in namespace_book.xsd but different structure -->
+    <xs:complexType name="DocumentType">
+        <xs:sequence>
+            <xs:element name="catalogNumber" type="xs:string"/>
+            <xs:element name="location" type="xs:string"/>
+            <xs:element name="borrower" type="xs:string" minOccurs="0"/>
+            <xs:element name="dueDate" type="xs:date" minOccurs="0"/>
+        </xs:sequence>
+        <xs:attribute name="id" type="xs:ID" use="required"/>
+    </xs:complexType>
+
+    <!-- BranchType - unique to library namespace -->
+    <xs:complexType name="BranchType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string"/>
+            <xs:element name="address" type="xs:string"/>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>
