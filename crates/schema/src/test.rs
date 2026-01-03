@@ -410,6 +410,7 @@ fn test_instance_json_generate() {
 
 #[cfg(test)]
 mod tests {
+    use crate as terminusdb_schema;
     use super::*;
     use crate::Instance;
     use crate::InstanceProperty;
@@ -455,16 +456,6 @@ mod tests {
     struct Activity {
         name: String,
         description: String,
-    }
-
-    impl<Parent> ToSchemaProperty<Parent> for Activity {
-        fn to_property(name: &str) -> Property {
-            Property {
-                name: name.to_string(),
-                r#type: None,
-                class: "Activity".to_string(),
-            }
-        }
     }
 
     #[derive(Debug, PartialEq, Clone, TerminusDBModel, FromTDBInstance)]
@@ -762,171 +753,163 @@ mod tests {
     }
 }
 
-// Test for Option<EntityIDFor<T>>
-#[derive(Clone, Debug, TerminusDBModel, PartialEq)]
-#[tdb(key = "random", id_field = "id")]
-pub struct ModelWithOptionalEntityID {
-    pub id: Option<EntityIDFor<Self>>, // Self-referential, as used in real code
-    pub name: String,
-}
+// Tests for Option<EntityIDFor<T>> and related functionality
+// These are in a separate cfg(test) module to avoid workspace compilation issues
+#[cfg(test)]
+mod optional_entity_id_tests {
+    use crate as terminusdb_schema;
+    use crate::*;
+    use terminusdb_schema_derive::TerminusDBModel;
 
-#[derive(Clone, Debug, TerminusDBModel, PartialEq)]
-#[tdb(key = "lexical", key_fields = "email", id_field = "id")]
-pub struct UserWithOptionalEntityID {
-    pub id: ServerIDFor<Self>, // Updated to use ServerIDFor for lexical key
-    pub email: String,
-    pub username: String,
-}
-
-#[test]
-fn test_optional_entity_id_compiles_and_works() {
-    use crate::{ToSchemaProperty, ToInstanceProperty};
-    
-    // Simple test - just verify compilation works
-    let _model = ModelWithOptionalEntityID {
-        id: Some(EntityIDFor::new("test-123").unwrap()),
-        name: "Test Model".to_string(),
-    };
-    
-    let _model2 = ModelWithOptionalEntityID {
-        id: None,
-        name: "Another Model".to_string(),
-    };
-    
-    // Test that the type implements ToSchemaProperty
-    let prop_name = "id";
-    let prop = <Option<EntityIDFor<ModelWithOptionalEntityID>> as ToSchemaProperty<ModelWithOptionalEntityID>>::to_property(prop_name);
-    assert_eq!(prop.name, "id");
-    assert_eq!(prop.r#type, Some(TypeFamily::Optional));
-    assert_eq!(prop.class, STRING); // Should be xsd:string, not the model name
-    
-    // Test to_instance works without stack overflow
-    let instance1 = _model.to_instance(None);
-    assert!(instance1.id.is_some(), "Model with Some(EntityIDFor) should have ID");
-    assert_eq!(instance1.id.as_ref().unwrap(), "ModelWithOptionalEntityID/test-123");
-    
-    let instance2 = _model2.to_instance(None); 
-    assert!(instance2.id.is_none(), "Model with None EntityIDFor should not have ID");
-    
-    // Test lexical key model with ServerIDFor
-    let _user_with_id = UserWithOptionalEntityID {
-        id: ServerIDFor::from_entity_id(EntityIDFor::new("user-456").unwrap()),
-        email: "test@example.com".to_string(),
-        username: "testuser".to_string(),
-    };
-    // With ServerIDFor, this is now allowed and won't panic
-    let instance_with_id = _user_with_id.to_instance(None);
-    assert!(instance_with_id.id.is_some());
-    
-    // This should work fine with empty ServerIDFor
-    let user_without_id = UserWithOptionalEntityID {
-        id: ServerIDFor::new(),
-        email: "test2@example.com".to_string(),  
-        username: "testuser2".to_string(),
-    };
-    
-    let user_instance = user_without_id.to_instance(None);
-    assert!(user_instance.id.is_none());
-    
-    // Test schema generation doesn't stack overflow
-    let schema = <ModelWithOptionalEntityID as ToTDBSchema>::to_schema();
-    match &schema {
-        Schema::Class { properties, .. } => {
-            let id_prop = properties.iter().find(|p| p.name == "id").expect("id property not found");
-            assert_eq!(id_prop.r#type, Some(TypeFamily::Optional));
-            assert_eq!(id_prop.class, STRING);
-        }
-        _ => panic!("Expected Schema::Class"),
-    }
-    
-    // If we get here, everything works correctly
-    assert!(true, "Option<EntityIDFor<Self>> works without stack overflow!");
-}
-
-#[test]
-fn test_tdb_lazy_with_lexical_key() {
-    use crate::{TdbLazy, ToTDBInstance, FromTDBInstance};
-    
-    // Define a model with lexical key
     #[derive(Clone, Debug, TerminusDBModel, PartialEq)]
-    #[tdb(key = "lexical", key_fields = "email")]
-    pub struct LexicalUser {
-        pub email: String,
+    #[tdb(key = "random", id_field = "id")]
+    pub struct ModelWithOptionalEntityID {
+        pub id: Option<EntityIDFor<Self>>,
         pub name: String,
     }
-    
-    // Create a user without an ID (will be server-generated)
-    let user = LexicalUser {
-        email: "test@example.com".to_string(),
-        name: "Test User".to_string(),
-    };
-    
-    // Create TdbLazy from data - should work without ID
-    let lazy_result = TdbLazy::new_data(user.clone());
-    assert!(lazy_result.is_ok(), "Should be able to create TdbLazy without ID for lexical key model");
-    
-    let mut lazy = lazy_result.unwrap();
-    
-    // But we should be able to access the data first
-    assert_eq!(lazy.get_expect().email, "test@example.com");
-    assert_eq!(lazy.get_expect().name, "Test User");
-    
-    // Create another lazy for testing id() panic
-    let lazy2 = TdbLazy::new_data(user.clone()).unwrap();
-    
-    // Accessing id() should panic since there's no ID yet
-    let id_result = std::panic::catch_unwind(|| {
-        lazy2.id();
-    });
-    assert!(id_result.is_err(), "id() should panic when ID is None");
-    
-    // Test ToInstanceProperty - should include full instance when data is loaded
-    use crate::{ToInstanceProperty, Schema, Key};
-    let schema = Schema::Class {
-        id: "TestParent".to_string(),
-        base: None,
-        key: Key::Random,
-        documentation: None,
-        subdocument: false,
-        r#abstract: false,
-        inherits: vec![],
-        properties: vec![],
-        unfoldable: false,
-    };
-    
-    // Create another lazy for ToInstanceProperty test since to_property consumes self
-    let lazy3 = TdbLazy::new_data(user.clone()).unwrap();
-    let prop = <TdbLazy<LexicalUser> as ToInstanceProperty<Schema>>::to_property(lazy3, "user", &schema);
-    match prop {
-        InstanceProperty::Relation(RelationValue::One(instance)) => {
-            // The instance should have no ID
-            assert!(instance.id.is_none(), "Instance should have no ID for lexical key without ID");
-        }
-        _ => panic!("Expected Relation::One for loaded TdbLazy")
+
+    #[derive(Clone, Debug, TerminusDBModel, PartialEq)]
+    #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
+    pub struct UserWithOptionalEntityID {
+        pub id: ServerIDFor<Self>,
+        pub email: String,
+        pub username: String,
     }
-    
-    // Test creating TdbLazy with just an ID (for existing entities)
-    let lazy_with_id = TdbLazy::<LexicalUser>::new(
-        Some(EntityIDFor::new("LexicalUser/test@example.com").unwrap()),
-        None
-    );
-    
-    // This should work and return the ID
-    assert_eq!(lazy_with_id.id().to_string(), "LexicalUser/test@example.com");
-    
-    // Test FromTDBInstance with no ID
-    let instance_no_id = user.to_instance(None);
-    assert!(instance_no_id.id.is_none());
-    
-    let lazy_from_instance = TdbLazy::<LexicalUser>::from_instance(&instance_no_id).unwrap();
-    
-    // Should panic when accessing ID
-    let id_result2 = std::panic::catch_unwind(|| {
-        lazy_from_instance.id();
-    });
-    assert!(id_result2.is_err(), "id() should panic for instance without ID");
-    
-    // But data should be available
-    assert_eq!(lazy_from_instance.get_expect().email, "test@example.com");
+
+    #[test]
+    fn test_optional_entity_id_compiles_and_works() {
+        // Simple test - just verify compilation works
+        let _model = ModelWithOptionalEntityID {
+            id: Some(EntityIDFor::new("test-123").unwrap()),
+            name: "Test Model".to_string(),
+        };
+
+        let _model2 = ModelWithOptionalEntityID {
+            id: None,
+            name: "Another Model".to_string(),
+        };
+
+        // Test that the type implements ToSchemaProperty
+        let prop_name = "id";
+        let prop = <Option<EntityIDFor<ModelWithOptionalEntityID>> as ToSchemaProperty<ModelWithOptionalEntityID>>::to_property(prop_name);
+        assert_eq!(prop.name, "id");
+        assert_eq!(prop.r#type, Some(TypeFamily::Optional));
+        assert_eq!(prop.class, STRING);
+
+        // Test to_instance works without stack overflow
+        let instance1 = _model.to_instance(None);
+        assert!(instance1.id.is_some(), "Model with Some(EntityIDFor) should have ID");
+        assert_eq!(instance1.id.as_ref().unwrap(), "ModelWithOptionalEntityID/test-123");
+
+        let instance2 = _model2.to_instance(None);
+        assert!(instance2.id.is_none(), "Model with None EntityIDFor should not have ID");
+
+        // Test lexical key model with ServerIDFor
+        let _user_with_id = UserWithOptionalEntityID {
+            id: ServerIDFor::from_entity_id(EntityIDFor::new("user-456").unwrap()),
+            email: "test@example.com".to_string(),
+            username: "testuser".to_string(),
+        };
+        let instance_with_id = _user_with_id.to_instance(None);
+        assert!(instance_with_id.id.is_some());
+
+        // This should work fine with empty ServerIDFor
+        let user_without_id = UserWithOptionalEntityID {
+            id: ServerIDFor::new(),
+            email: "test2@example.com".to_string(),
+            username: "testuser2".to_string(),
+        };
+
+        let user_instance = user_without_id.to_instance(None);
+        assert!(user_instance.id.is_none());
+
+        // Test schema generation doesn't stack overflow
+        let schema = <ModelWithOptionalEntityID as ToTDBSchema>::to_schema();
+        match &schema {
+            Schema::Class { properties, .. } => {
+                let id_prop = properties.iter().find(|p| p.name == "id").expect("id property not found");
+                assert_eq!(id_prop.r#type, Some(TypeFamily::Optional));
+                assert_eq!(id_prop.class, STRING);
+            }
+            _ => panic!("Expected Schema::Class"),
+        }
+
+        assert!(true, "Option<EntityIDFor<Self>> works without stack overflow!");
+    }
+
+    #[test]
+    fn test_tdb_lazy_with_lexical_key() {
+        #[derive(Clone, Debug, TerminusDBModel, PartialEq)]
+        #[tdb(key = "lexical", key_fields = "email")]
+        pub struct LexicalUser {
+            pub email: String,
+            pub name: String,
+        }
+
+        let user = LexicalUser {
+            email: "test@example.com".to_string(),
+            name: "Test User".to_string(),
+        };
+
+        // Create TdbLazy from data - should work without ID
+        let lazy_result = TdbLazy::new_data(user.clone());
+        assert!(lazy_result.is_ok(), "Should be able to create TdbLazy without ID for lexical key model");
+
+        let mut lazy = lazy_result.unwrap();
+        assert_eq!(lazy.get_expect().email, "test@example.com");
+        assert_eq!(lazy.get_expect().name, "Test User");
+
+        // Create another lazy for testing id() panic
+        let lazy2 = TdbLazy::new_data(user.clone()).unwrap();
+
+        // Accessing id() should panic since there's no ID yet
+        let id_result = std::panic::catch_unwind(|| {
+            lazy2.id();
+        });
+        assert!(id_result.is_err(), "id() should panic when ID is None");
+
+        // Test ToInstanceProperty - should include full instance when data is loaded
+        let schema = Schema::Class {
+            id: "TestParent".to_string(),
+            base: None,
+            key: Key::Random,
+            documentation: None,
+            subdocument: false,
+            r#abstract: false,
+            inherits: vec![],
+            properties: vec![],
+            unfoldable: false,
+        };
+
+        let lazy3 = TdbLazy::new_data(user.clone()).unwrap();
+        let prop = <TdbLazy<LexicalUser> as ToInstanceProperty<Schema>>::to_property(lazy3, "user", &schema);
+        match prop {
+            InstanceProperty::Relation(RelationValue::One(instance)) => {
+                assert!(instance.id.is_none(), "Instance should have no ID for lexical key without ID");
+            }
+            _ => panic!("Expected Relation::One for loaded TdbLazy")
+        }
+
+        // Test creating TdbLazy with just an ID (for existing entities)
+        let lazy_with_id = TdbLazy::<LexicalUser>::new(
+            Some(EntityIDFor::new("LexicalUser/test@example.com").unwrap()),
+            None
+        );
+        assert_eq!(lazy_with_id.id().to_string(), "LexicalUser/test@example.com");
+
+        // Test FromTDBInstance with no ID
+        let instance_no_id = user.to_instance(None);
+        assert!(instance_no_id.id.is_none());
+
+        let lazy_from_instance = TdbLazy::<LexicalUser>::from_instance(&instance_no_id).unwrap();
+
+        // Should panic when accessing ID
+        let id_result2 = std::panic::catch_unwind(|| {
+            lazy_from_instance.id();
+        });
+        assert!(id_result2.is_err(), "id() should panic for instance without ID");
+
+        assert_eq!(lazy_from_instance.get_expect().email, "test@example.com");
+    }
 }
 
