@@ -49,14 +49,61 @@ impl XsdToSchemaGenerator {
         // Use entry point elements (inferred from file name) to determine document roots.
         // Only these should be non-subdocuments. Other global elements are just reusable
         // building blocks that should be embedded as subdocuments.
-        let document_root_types: std::collections::HashSet<String> = xsd_schema.entry_point_elements
-            .iter()
-            .map(|name| {
-                // Convert to PascalCase (e.g., "topic" → "Topic")
-                use heck::ToPascalCase;
-                name.to_pascal_case()
-            })
-            .collect();
+        //
+        // IMPORTANT: We need to use the TYPE name of the element, not the element name.
+        // For example: <xs:element name="payment" type="ch:paymentType"/>
+        // - Element name: "payment" -> would give "Payment"
+        // - Type name: "paymentType" -> gives "PaymentType" (correct!)
+        let document_root_types: std::collections::HashSet<String> = {
+            use heck::ToPascalCase;
+
+            // First, try to find matches from entry_point_elements
+            let matched_types: std::collections::HashSet<String> = xsd_schema.entry_point_elements
+                .iter()
+                .filter_map(|elem_name| {
+                    // Find the root element by name (case-insensitive match)
+                    let elem_name_lower = elem_name.to_lowercase();
+                    xsd_schema.root_elements.iter().find(|e| {
+                        // Match on local name part (after } if Clark notation)
+                        let local = e.name.split('}').last().unwrap_or(&e.name);
+                        local.to_lowercase() == elem_name_lower
+                    }).and_then(|elem| {
+                        // Get the type name from the element's type_info
+                        elem.type_info.as_ref().and_then(|ti| {
+                            // Use qualified_name or name if available
+                            ti.qualified_name.as_ref().or(ti.name.as_ref()).map(|type_name| {
+                                // Extract local part and convert to PascalCase
+                                let local = type_name.split('}').last().unwrap_or(type_name);
+                                local.to_pascal_case()
+                            })
+                        })
+                    })
+                })
+                .collect();
+
+            // If no entry_point_elements matched any root elements, fall back to treating
+            // ALL root element types as document roots. This handles custom schemas where
+            // the file name doesn't match any element name (e.g., choice_types.xsd with
+            // elements like "document", "payment", etc.)
+            if matched_types.is_empty() && !xsd_schema.root_elements.is_empty() {
+                xsd_schema.root_elements.iter()
+                    .filter_map(|elem| {
+                        elem.type_info.as_ref().and_then(|ti| {
+                            ti.qualified_name.as_ref().or(ti.name.as_ref()).map(|type_name| {
+                                let local = type_name.split('}').last().unwrap_or(type_name);
+                                local.to_pascal_case()
+                            })
+                        }).or_else(|| {
+                            // For anonymous types, use element name as type name
+                            let local = elem.name.split('}').last().unwrap_or(&elem.name);
+                            Some(local.to_pascal_case())
+                        })
+                    })
+                    .collect()
+            } else {
+                matched_types
+            }
+        };
 
         // Build a map of base type -> derived types for inheritance tracking.
         // In TerminusDB, @subdocument status is inherited, so if a child is a document root,
@@ -809,15 +856,26 @@ impl XsdToSchemaGenerator {
         // we should NOT create class inheritance because simple types don't become
         // TerminusDB classes. Instead, the _text property captures the value.
         let inherits = if let Some(ref base_type) = complex_type.base_type {
-            let (_, base_local_name) = self.parse_clark_notation(base_type);
+            let (base_ns, base_local_name) = self.parse_clark_notation(base_type);
             let base_class = base_local_name.to_pascal_case();
+
+            // Check if base is an XSD built-in primitive type (xs:string, xs:integer, etc.)
+            // Note: parse_clark_notation adds a # suffix, so check for both variants
+            let base_is_xsd_primitive = base_ns
+                .as_ref()
+                .map(|ns| {
+                    ns == "http://www.w3.org/2001/XMLSchema"
+                        || ns == "http://www.w3.org/2001/XMLSchema#"
+                })
+                .unwrap_or(false);
 
             // Check if this is simpleContent extending a simple type
             let base_is_simple_type = complex_type.has_simple_content
-                && simple_types.iter().any(|st| {
-                    let st_local = self.parse_clark_notation(&st.qualified_name).1;
-                    st_local.to_pascal_case() == base_class
-                });
+                && (base_is_xsd_primitive
+                    || simple_types.iter().any(|st| {
+                        let st_local = self.parse_clark_notation(&st.qualified_name).1;
+                        st_local.to_pascal_case() == base_class
+                    }));
 
             if base_is_simple_type {
                 // Simple type bases don't become class inheritance
@@ -830,9 +888,14 @@ impl XsdToSchemaGenerator {
         };
 
         // Add the main class schema
+        // Note: We set `base` from XSD namespace to enable multi-namespace support.
+        // When the namespace is set, Instance serialization produces fully-qualified
+        // @type: "http://xsd-namespace#ClassName" which matches the expanded schema URI
+        // when the schema is inserted with Context { schema: "http://xsd-namespace#" }.
+        // This allows multiple XSD schemas with the same class names to coexist.
         schemas.push(Schema::Class {
             id: class_id,
-            base: namespace,
+            base: namespace.clone(),
             key,
             documentation: None,
             subdocument,
@@ -889,7 +952,7 @@ impl XsdToSchemaGenerator {
                 // TaggedUnion for XSD union - subdocument with Random key
                 return Ok(Some(Schema::TaggedUnion {
                     id: type_id,
-                    base: namespace,
+                    base: namespace.clone(), // Use XSD namespace for multi-namespace support
                     key: Key::Random,
                     r#abstract: false,
                     documentation: None,
@@ -924,11 +987,18 @@ impl XsdToSchemaGenerator {
     /// Parse Clark notation to extract namespace and local name.
     ///
     /// Clark notation format: `{http://example.com/ns}localName`
-    /// Returns: (Some(namespace), localName) or (None, fullName)
+    /// Returns: (Some(namespace_with_hash), localName) or (None, fullName)
+    ///
+    /// The namespace is returned with a `#` suffix for TerminusDB URI compatibility.
+    /// For example: `{http://example.com/book}Doc` returns `Some("http://example.com/book#")`.
     fn parse_clark_notation(&self, name: &str) -> (Option<String>, String) {
         if let Some(start) = name.find('{') {
             if let Some(end) = name.find('}') {
-                let namespace = name[start + 1..end].to_string();
+                let mut namespace = name[start + 1..end].to_string();
+                // Add # suffix for TerminusDB URI format if not already present
+                if !namespace.ends_with('#') && !namespace.ends_with('/') {
+                    namespace.push('#');
+                }
                 let local_name = name[end + 1..].to_string();
                 return (Some(namespace), local_name);
             }
@@ -1147,7 +1217,7 @@ impl XsdToSchemaGenerator {
         // Create the inline union TaggedUnion
         let inline_union = Schema::TaggedUnion {
             id: inline_union_name.clone(),
-            base: namespace.clone(),
+            base: namespace.clone(), // Use XSD namespace for multi-namespace support
             key: Key::Random,
             r#abstract: false,
             documentation: None,
@@ -1159,7 +1229,7 @@ impl XsdToSchemaGenerator {
         // Create the MixedContent class with text and subs
         let mixed_content = Schema::Class {
             id: mixed_content_name.clone(),
-            base: namespace,
+            base: namespace.clone(), // Use XSD namespace for multi-namespace support
             key: Key::Random,
             documentation: None,
             subdocument: true,
