@@ -33,8 +33,8 @@ struct User {
 struct Subscription {
     id: EntityIDFor<Self>,
     name: String,
-    start_date: String,
-    end_date: String,
+    start_date: chrono::DateTime<chrono::Utc>,
+    end_date: chrono::DateTime<chrono::Utc>,
     status: String,
 }
 
@@ -264,9 +264,10 @@ async fn test_today_macro() -> anyhow::Result<()> {
         // Get today's date from the macro
         let today_value = today!();
 
-        // Verify it's a valid ISO 8601 date string
-        match today_value {
-            Value::Data(terminusdb_schema::XSDAnySimpleType::String(date_str)) => {
+        // Verify it's a valid DateTime value
+        let today_str = match today_value {
+            Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(dt)) => {
+                let date_str = dt.format("%Y-%m-%dT%H:%M:%SZ").to_string();
                 println!("today! generated: {}", date_str);
 
                 // Verify format
@@ -276,16 +277,13 @@ async fn test_today_macro() -> anyhow::Result<()> {
                 // Verify it can be parsed
                 let parsed = chrono::DateTime::parse_from_rfc3339(&date_str);
                 assert!(parsed.is_ok(), "Should be valid RFC3339/ISO8601 date");
+                date_str
             }
-            _ => panic!("today! should return a Data string value"),
-        }
+            other => panic!("today! should return a Data DateTime value, got {:?}", other),
+        };
 
         // Test in a query: Find documents created today
         // First insert a document with today's date
-        let today_str = match today!() {
-            Value::Data(terminusdb_schema::XSDAnySimpleType::String(s)) => s,
-            _ => panic!("Expected string from today!"),
-        };
 
         let doc = Document {
             id: EntityIDFor::new("today_doc").unwrap(),
@@ -530,32 +528,32 @@ async fn test_today_in_between_macro() -> anyhow::Result<()> {
 
         // Calculate dates relative to today
         let today = chrono::Utc::now();
-        let past_date = (today - chrono::Duration::days(30)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        let future_date = (today + chrono::Duration::days(30)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        let long_past = (today - chrono::Duration::days(365)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        let long_future = (today + chrono::Duration::days(365)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let past_date = today - chrono::Duration::days(30);
+        let future_date = today + chrono::Duration::days(30);
+        let long_past = today - chrono::Duration::days(365);
+        let long_future = today + chrono::Duration::days(365);
 
         // Insert test subscriptions
         let subscriptions = vec![
             Subscription {
                 id: EntityIDFor::new("sub1").unwrap(),
                 name: "Active Subscription".to_string(),
-                start_date: past_date.clone(),
-                end_date: future_date.clone(),
+                start_date: past_date,
+                end_date: future_date,
                 status: "active".to_string(),
             },
             Subscription {
                 id: EntityIDFor::new("sub2").unwrap(),
                 name: "Expired Subscription".to_string(),
-                start_date: long_past.clone(),
-                end_date: past_date.clone(),
+                start_date: long_past,
+                end_date: past_date,
                 status: "expired".to_string(),
             },
             Subscription {
                 id: EntityIDFor::new("sub3").unwrap(),
                 name: "Future Subscription".to_string(),
-                start_date: future_date.clone(),
-                end_date: long_future.clone(),
+                start_date: future_date,
+                end_date: long_future,
                 status: "pending".to_string(),
             },
         ];
