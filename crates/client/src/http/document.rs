@@ -689,6 +689,67 @@ impl super::client::TerminusDBHttpClient {
             .await
     }
 
+    /// Inserts documents with a namespace context.
+    ///
+    /// This is essential when inserting instances that belong to a specific namespace,
+    /// especially in multi-namespace databases where the same class name may exist
+    /// in different namespaces. The Context's `@schema` field tells TerminusDB how
+    /// to resolve short type names like "DocumentType" to full URIs.
+    ///
+    /// # Arguments
+    /// * `context` - The context with namespace configuration (schema, base)
+    /// * `documents` - The documents to insert
+    /// * `args` - Document insertion arguments specifying the database, branch, and options
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use terminusdb_xsd::XsdModel;
+    ///
+    /// let model = XsdModel::from_file("book.xsd", None::<&str>)?;
+    /// let context = model.context().clone();
+    /// let instances = model.parse_xml_to_instances(xml)?;
+    ///
+    /// // Instance with @type: "DocumentType" resolves to
+    /// // "http://example.com/book#DocumentType" via context
+    /// client.insert_documents_with_context(context, &instances, args).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.document.insert_with_context",
+        skip(self, context, documents, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            schema_namespace = %context.schema,
+            document_count = documents.len()
+        ),
+        err
+    )]
+    pub async fn insert_documents_with_context(
+        &self,
+        context: terminusdb_schema::Context,
+        documents: Vec<&impl ToJson>,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        use terminusdb_schema::json::ToJson as _;
+
+        // Convert context and documents to JSON
+        let context_json = context.to_json();
+        let doc_jsons: Vec<_> = documents.iter().map(|d| d.to_json()).collect();
+
+        // Combine into a single batch - context first, then documents
+        let mut all_docs: Vec<&serde_json::Value> = Vec::with_capacity(1 + documents.len());
+        all_docs.push(&context_json);
+        all_docs.extend(doc_jsons.iter());
+
+        debug!(
+            "Inserting {} documents with context namespace {}",
+            documents.len(),
+            context.schema
+        );
+
+        self.insert_documents(all_docs, args).await
+    }
+
     /// Inserts a single untyped document into the database.
     ///
     /// **⚠️ Consider using the strongly-typed alternative instead:**

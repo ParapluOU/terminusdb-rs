@@ -6,9 +6,9 @@ use tap::Pipe;
 use {
     crate::{document::DocumentInsertArgs, document::DocumentType, Schema},
     ::tracing::{debug, instrument},
-    anyhow::Context,
+    anyhow::Context as AnyhowContext,
     tap::{Tap, TapFallible},
-    terminusdb_schema::{ToTDBSchema, ToTDBSchemas},
+    terminusdb_schema::{json::ToJson, Context as TDBContext, ToTDBSchema, ToTDBSchemas},
 };
 
 /// Schema management methods for the TerminusDB HTTP client
@@ -180,7 +180,7 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<()> {
         self.ensure_database(&args.spec.db)
             .await
-            .context("ensuring database")?;
+            .with_context(|| "ensuring database")?;
 
         let schemas = T::to_schemas();
 
@@ -190,10 +190,91 @@ impl super::client::TerminusDBHttpClient {
 
         self.insert_schema_instances(schemas, args.as_schema())
             .await
-            .context("insert_documents()")?;
+            .with_context(|| "insert_documents()")?;
 
         debug!("inserted {} schemas into TerminusDB", count);
 
         Ok(())
+    }
+
+    /// Inserts a schema context and schemas together into the database.
+    ///
+    /// This is essential for XSD-derived schemas where namespacing prevents conflicts
+    /// when multiple schemas have overlapping class names. The Context defines:
+    /// - `@schema`: The namespace for resolving class IDs (e.g., `http://example.com/book#`)
+    /// - `@base`: The namespace for instance IDs (e.g., `http://example.com/book/data/`)
+    ///
+    /// # Arguments
+    /// * `context` - The schema context with namespace configuration
+    /// * `schemas` - The schema definitions to insert
+    /// * `args` - Document insertion arguments specifying the database and branch
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// use terminusdb_xsd::XsdModel;
+    ///
+    /// let model = XsdModel::from_file("book.xsd", None::<&str>)?;
+    /// let context = model.context().clone();
+    /// let schemas = model.schemas().to_vec();
+    ///
+    /// // Insert with namespace context - class "BookType" resolves to
+    /// // "http://example.com/book#BookType" instead of the default namespace
+    /// client.insert_schema_with_context(context, schemas, args).await?;
+    /// ```
+    ///
+    /// # Multiple Schemas with Same Class Names
+    /// When inserting multiple XSD schemas that have overlapping class names,
+    /// use different contexts to prevent conflicts:
+    /// ```rust,ignore
+    /// // First schema: http://example.com/book#BookType
+    /// client.insert_schema_with_context(book_context, book_schemas, args).await?;
+    ///
+    /// // Second schema: http://example.com/library#BookType
+    /// client.insert_schema_with_context(library_context, library_schemas, args).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.schema.insert_with_context",
+        skip(self, context, schemas, args),
+        fields(
+            db = %args.spec.db,
+            branch = ?args.spec.branch,
+            schema_namespace = %context.schema,
+            schema_count = schemas.len()
+        ),
+        err
+    )]
+    pub async fn insert_schema_with_context(
+        &self,
+        context: TDBContext,
+        schemas: Vec<Schema>,
+        args: DocumentInsertArgs,
+    ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
+        self.ensure_database(&args.spec.db)
+            .await
+            .with_context(|| "ensuring database")?;
+
+        debug!(
+            "inserting schema context {} with {} schemas",
+            context.schema,
+            schemas.len()
+        );
+
+        // Convert to JSON values - context first, then schemas
+        let context_json = context.to_json();
+        let schema_jsons: Vec<_> = schemas.iter().map(|s| s.to_json()).collect();
+
+        // Combine into a single batch - context must be first
+        let mut all_docs: Vec<&serde_json::Value> = Vec::with_capacity(1 + schemas.len());
+        all_docs.push(&context_json);
+        all_docs.extend(schema_jsons.iter());
+
+        let result = self.insert_documents(all_docs, args.as_schema()).await?;
+
+        debug!(
+            "inserted context + {} schemas into TerminusDB",
+            schemas.len()
+        );
+
+        Ok(result)
     }
 }
