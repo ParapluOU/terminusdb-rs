@@ -62,3 +62,8 @@ features = ["v4"]
 [lib]
 path = "src/lib.rs"
 #crate-type = ["cdylib"]
+
+# Generic model example requires the generic-derive feature
+[[example]]
+name = "generic_model_demo"
+required-features = ["terminusdb-schema-derive/generic-derive"]
