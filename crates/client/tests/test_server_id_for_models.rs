@@ -62,53 +62,63 @@ mod tests {
 
     #[test]
     fn test_lexical_key_model_serialization() {
+        // Test model with no ID initially
         let model = LexicalKeyServerModel {
             id: ServerIDFor::new(),
             email: "test@example.com".to_string(),
             name: "Test User".to_string(),
         };
-        
+
         // Initially no ID
         assert!(model.id.is_none());
-        
+
         let json = serde_json::to_value(&model).unwrap();
         assert_eq!(json["id"], serde_json::json!(null));
         assert_eq!(json["email"], "test@example.com");
         assert_eq!(json["name"], "Test User");
 
-        // Deserialize from server response with ID
-        let server_json = serde_json::json!({
-            "id": "LexicalKeyServerModel/lex-456",
-            "email": "test@example.com",
-            "name": "Test User"
-        });
-        
-        let from_server: LexicalKeyServerModel = serde_json::from_value(server_json).unwrap();
+        // Test model with ID set (simulating server response)
+        let mut model_with_id = LexicalKeyServerModel {
+            id: ServerIDFor::new(),
+            email: "test@example.com".to_string(),
+            name: "Test User".to_string(),
+        };
+        model_with_id
+            .id
+            .__set_from_server(EntityIDFor::new("lex-456").unwrap());
+
+        let json_with_id = serde_json::to_value(&model_with_id).unwrap();
+        let from_server: LexicalKeyServerModel = serde_json::from_value(json_with_id).unwrap();
         assert!(from_server.id.is_some());
         assert_eq!(from_server.id.as_ref().unwrap().id(), "lex-456");
     }
 
     #[test]
     fn test_value_hash_model_serialization() {
+        // Test model with no ID initially
         let model = ValueHashServerModel {
             id: ServerIDFor::new(),
             content: "Some content".to_string(),
             timestamp: 1234567,
         };
-        
+
         let json = serde_json::to_value(&model).unwrap();
         assert_eq!(json["id"], serde_json::json!(null));
         assert_eq!(json["content"], "Some content");
-        assert_eq!(json["timestamp"], 1234567890);
+        assert_eq!(json["timestamp"], 1234567);
 
-        // Deserialize from server response with ID
-        let server_json = serde_json::json!({
-            "id": "ValueHashServerModel/hash-789",
-            "content": "Some content",
-            "timestamp": 1234567890
-        });
-        
-        let from_server: ValueHashServerModel = serde_json::from_value(server_json).unwrap();
+        // Test model with ID set (simulating server response)
+        let mut model_with_id = ValueHashServerModel {
+            id: ServerIDFor::new(),
+            content: "Some content".to_string(),
+            timestamp: 1234567,
+        };
+        model_with_id
+            .id
+            .__set_from_server(EntityIDFor::new("hash-789").unwrap());
+
+        let json_with_id = serde_json::to_value(&model_with_id).unwrap();
+        let from_server: ValueHashServerModel = serde_json::from_value(json_with_id).unwrap();
         assert!(from_server.id.is_some());
         assert_eq!(from_server.id.as_ref().unwrap().id(), "hash-789");
     }

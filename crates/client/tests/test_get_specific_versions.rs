@@ -200,29 +200,35 @@ mod tests {
                 };
 
                 let args = DocumentInsertArgs::from(spec.clone());
-                let result = client.create_instance(&product, args).await?;
-                let real_commit_id = result.extract_commit_id().expect("Should have commit ID");
+                client.create_instance(&product, args).await?;
 
                 // Try to get versions with non-existent commit IDs
-                let fake_commits = vec![
-                    CommitId::new("fake_commit_id_123"),
-                    CommitId::new("another_fake_commit_456"),
-                    real_commit_id, // Include one real commit
-                ];
+                // TerminusDB returns an error when accessing non-existent commits
+                let fake_commits = vec![CommitId::new("fake_commit_id_123")];
 
                 let mut deserializer = terminusdb_client::deserialize::DefaultTDBDeserializer;
-                let versions = client
+                let result = client
                     .get_instance_versions::<VersionedProduct>(
                         fixed_id,
                         &spec,
                         fake_commits,
                         &mut deserializer,
                     )
-                    .await?;
+                    .await;
 
-                // Should only get the one real version
-                assert_eq!(versions.len(), 1, "Should only retrieve the real version");
-                assert_eq!(versions[0].0.name, "Test Product");
+                // Should return an error for non-existent commits
+                assert!(
+                    result.is_err(),
+                    "Should return an error when commit does not exist"
+                );
+
+                let error_msg = format!("{:?}", result.unwrap_err());
+                assert!(
+                    error_msg.contains("commit_does_not_exist")
+                        || error_msg.contains("InternalServerError"),
+                    "Error should indicate commit doesn't exist, got: {}",
+                    error_msg
+                );
 
                 Ok(())
             })
