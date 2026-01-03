@@ -433,10 +433,14 @@ fn implement_from_instance_for_tagged_enum(
                                             Err(e) => return Err(anyhow::anyhow!("Failed to deserialize field {} in variant {}: {}", #field_string, #variant_name_str, e)),
                                         }
                                     } else {
-                                        // Complex type deserialization
+                                        // Complex type deserialization - try MaybeFromTDBInstance first
+                                        // If it returns None, fall back to FromInstanceProperty (for Option<primitive> types)
                                         match <#field_type as terminusdb_schema::MaybeFromTDBInstance>::maybe_from_property(field_prop)? {
                                             Some(value) => value,
-                                            None => return Err(anyhow::anyhow!("Failed to deserialize complex field {} in variant {}", #field_string, #variant_name_str)),
+                                            None => {
+                                                // Type signals it's primitive-like (e.g., Option<String>), use FromInstanceProperty
+                                                <#field_type as terminusdb_schema::FromInstanceProperty>::from_property(field_prop)?
+                                            }
                                         }
                                     }
                                 },
