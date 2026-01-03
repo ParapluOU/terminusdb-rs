@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Fetching GraphQL schema for database: {}", database);
     
     // Method 1: Using the convenience introspect_schema method
-    match client.introspect_schema(database, None).await {
+    match client.introspect_schema(database, None, None).await {
         Ok(schema) => {
             println!("\n✅ Schema introspection successful!");
             
@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Running custom GraphQL query...");
     
     let request = GraphQLRequest::new(custom_query);
-    match client.execute_graphql::<serde_json::Value>(database, None, request).await {
+    match client.execute_graphql::<serde_json::Value>(database, None, request, None).await {
         Ok(response) => {
             if let Some(data) = response.data {
                 println!("\n✅ Custom query successful!");

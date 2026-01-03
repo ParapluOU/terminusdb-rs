@@ -14,6 +14,7 @@ async fn main() -> anyhow::Result<()> {
             "admin/mydb/local/branch/main",
             "admin",
             "Squash all commits into one",
+            None, // No timeout
         )
         .await?;
 
@@ -26,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     println!("\nSquashing from a specific commit...");
     let commit_path = format!("admin/mydb/local/commit/{}", response.commit);
     let response2 = client
-        .squash(&commit_path, "admin", "Another squash from a commit")
+        .squash(&commit_path, "admin", "Another squash from a commit", None)
         .await?;
 
     println!("Second squash successful!");
