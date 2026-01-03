@@ -435,17 +435,13 @@ impl ToJson for Instance {
 
         let mut map = serde_json::Map::new();
 
-        let maybe_namespaced_classname = match self.schema.base() {
-            None => self.schema.class_name().clone(),
-            Some(base) => {
-                format!("{}{}", base, self.schema.class_name())
-            }
-        };
+        // Use SHORT names everywhere - Context @schema will expand them
+        // This allows Context to handle all namespace resolution
 
-        // class type name
+        // class type name - use short name, Context will expand
         map.insert(
             "@type".to_string(),
-            maybe_namespaced_classname.as_str().into(),
+            self.schema.class_name().clone().into(),
         );
 
         // insert id if we have one
@@ -458,32 +454,64 @@ impl ToJson for Instance {
             }
         }
 
-        // properties
+        // Use SHORT property names - TerminusDB applies context expansion
+        // The @type uses full URI but property names use short names that
+        // the context will expand to match the schema
         for (propkey, propval) in &self.properties {
-            // // if the prop is not a relation, then its implementation is sufficient
-            // if !propval.is_reference() || self.ref_props {
-            //     // todo: remove cloning
-            //     map.insert(propkey.clone(), propval.clone().into());
-            // }
-            // // array of references
-            // else if propval.is_relations() {
-            //     map.insert(propkey.clone(), propval.as_ids().unwrap().into());
-            // }
-            // // however, if it is a reference, we have two ways of defining that reference.
-            // // if we use self.ref_props, we will use the {@ref: ...} key, otherwise we will use the
-            // // direct URI as a property
-            // else {
-            //     map.insert(propkey.clone(), propval.as_id().unwrap().into());
-            // }
-
-            // if we do not need transaction-internal referencing, we either mount primitives directly,
-            // or leave references directly
-            // if !self.ref_props {}
-
             map.insert(propkey.clone(), propval.clone().into());
         }
 
         map
+    }
+}
+
+impl Instance {
+    /// Convert instance to JSON with fully-qualified type URI for multi-namespace support.
+    ///
+    /// This method produces JSON where the `@type` field uses the fully-qualified
+    /// class URI (e.g., `http://example.com/book#DocumentType`) rather than the
+    /// short name. This allows instances from different namespaces with the same
+    /// class names to coexist in the same TerminusDB database.
+    ///
+    /// Property names remain short as TerminusDB validates them against the schema.
+    pub fn to_namespaced_json(&self) -> serde_json::Value {
+        if self.is_enum() {
+            return self
+                .enum_value()
+                .expect("enum instances should always have a property with the variant name")
+                .into();
+        }
+
+        if self.is_reference() {
+            return Value::String(self.id().cloned().unwrap());
+        }
+
+        let mut map = serde_json::Map::new();
+        let namespace = self.schema.namespace_base();
+
+        // Use fully-qualified type if namespace is present
+        let type_name = if let Some(ns) = namespace {
+            format!("{}{}", ns, self.schema.class_name())
+        } else {
+            self.schema.class_name().clone()
+        };
+        map.insert("@type".to_string(), type_name.into());
+
+        // Insert id if we have one
+        if let Some(id) = self.id.clone() {
+            map.insert("@id".to_string(), id.clone().into());
+
+            if self.schema.is_key_random() && self.capture {
+                map.insert("@capture".to_string(), id.into());
+            }
+        }
+
+        // Property names remain short - TerminusDB validates against schema
+        for (propkey, propval) in &self.properties {
+            map.insert(propkey.clone(), propval.clone().into());
+        }
+
+        serde_json::Value::Object(map)
     }
 }
 

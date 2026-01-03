@@ -9,6 +9,41 @@ use std::cmp::Ordering;
 use std::fs::File;
 use std::io::Write;
 
+/// Helper function to namespace-qualify class references in property values.
+/// This prefixes class references with the namespace when they're not already
+/// fully qualified (xsd:*, sys:*, or already start with http).
+fn namespace_property_value(namespace: &str, value: &Value) -> Value {
+    match value {
+        // Simple string class reference like "PersonType" -> "http://ns#PersonType"
+        Value::String(s) => {
+            if s.starts_with("xsd:") || s.starts_with("sys:") || s.starts_with("http") {
+                value.clone()
+            } else {
+                Value::String(format!("{}{}", namespace, s))
+            }
+        }
+        // Complex property like {"@type": "Optional", "@class": "PersonType"}
+        Value::Object(obj) => {
+            let mut new_obj = obj.clone();
+            if let Some(class_val) = obj.get("@class") {
+                if let Value::String(class_str) = class_val {
+                    if !class_str.starts_with("xsd:")
+                        && !class_str.starts_with("sys:")
+                        && !class_str.starts_with("http")
+                    {
+                        new_obj.insert(
+                            "@class".to_string(),
+                            Value::String(format!("{}{}", namespace, class_str)),
+                        );
+                    }
+                }
+            }
+            Value::Object(new_obj)
+        }
+        _ => value.clone(),
+    }
+}
+
 // todo: the derived serialize and deserialize do not comply with the TerminusDB schema and are only used for RPC calls!
 #[derive(Eq, Debug, Clone, Hash)]
 pub enum Schema {
@@ -522,6 +557,29 @@ impl Schema {
         }
     }
 
+    /// Returns the namespace base URL if one is set and is a valid URL.
+    /// This is used for XSD-derived schemas where the base contains the namespace like
+    /// "http://example.com/book#".
+    pub fn namespace_base(&self) -> Option<&str> {
+        match self {
+            Schema::Class { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
+            Schema::OneOfClass { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
+            Schema::TaggedUnion { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Returns the fully qualified class URI if a namespace base is present,
+    /// otherwise returns just the class name.
+    /// Example: "http://example.com/book#DocumentType" or just "DocumentType"
+    pub fn full_class_uri(&self) -> String {
+        if let Some(ns) = self.namespace_base() {
+            format!("{}{}", ns, self.class_name())
+        } else {
+            self.class_name().clone()
+        }
+    }
+
     pub fn is_of_type<T: ToTDBInstance>(&self) -> bool {
         &T::schema_name() == self.id()
     }
@@ -537,6 +595,159 @@ impl Schema {
             inherits: vec![],
             properties: vec![],
             unfoldable: true,
+        }
+    }
+
+    /// Convert schema to JSON with fully-qualified URIs for multi-namespace support.
+    ///
+    /// Unlike `to_json()` which uses short names, this method produces fully-qualified
+    /// class URIs when a namespace base is present. Use this when inserting multiple
+    /// XSD schemas with the same class names but different namespaces into the same
+    /// TerminusDB database.
+    ///
+    /// Example output:
+    /// ```json
+    /// {
+    ///   "@type": "Class",
+    ///   "@id": "http://example.com/book#DocumentType",
+    ///   ...
+    /// }
+    /// ```
+    pub fn to_namespaced_json(&self) -> serde_json::Value {
+        let namespace = self.namespace_base();
+
+        match self {
+            Schema::Class {
+                id,
+                base,
+                key,
+                subdocument,
+                inherits,
+                unfoldable,
+                properties,
+                documentation,
+                r#abstract,
+            } => {
+                let mut map = serde_json::Map::new();
+
+                map.insert("@type".to_string(), "Class".to_string().into());
+
+                // Use fully-qualified ID if namespace is present
+                if let Some(ns) = namespace {
+                    map.insert("@id".to_string(), format!("{}{}", ns, id).into());
+                } else {
+                    map.insert("@id".to_string(), id.clone().into());
+                }
+
+                // Only output @base for ID generation prefixes, not for namespace URLs
+                if let Some(base2) = base {
+                    if !base2.contains("://") {
+                        map.insert("@base".to_string(), base2.clone().into());
+                    }
+                }
+
+                map.insert("@key".to_string(), key.to_map().into());
+
+                if *subdocument {
+                    map.insert("@subdocument".to_string(), Value::Array(vec![]));
+                }
+                if *r#abstract {
+                    map.insert("@abstract".to_string(), Value::Array(vec![]));
+                }
+                if *unfoldable {
+                    map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if let Some(doc) = documentation {
+                    map.insert("@documentation".to_string(), doc.to_map().into());
+                }
+
+                // Namespace-qualify inherits
+                if !inherits.is_empty() {
+                    let inherits_vals: Vec<Value> = inherits
+                        .iter()
+                        .map(|s| {
+                            if let Some(ns) = namespace {
+                                if !s.starts_with("http") {
+                                    Value::String(format!("{}{}", ns, s))
+                                } else {
+                                    Value::String(s.clone())
+                                }
+                            } else {
+                                Value::String(s.clone())
+                            }
+                        })
+                        .collect();
+                    map.insert("@inherits".to_string(), inherits_vals.into());
+                }
+
+                // Namespace-qualify property type references
+                for prop in properties {
+                    let prop_value = prop.to_property_value();
+                    if let Some(ns) = namespace {
+                        map.insert(prop.name.clone(), namespace_property_value(ns, &prop_value));
+                    } else {
+                        map.insert(prop.name.clone(), prop_value);
+                    }
+                }
+
+                serde_json::Value::Object(map)
+            }
+            Schema::TaggedUnion {
+                id,
+                base,
+                key,
+                subdocument,
+                properties,
+                documentation,
+                r#abstract,
+                unfoldable,
+            } => {
+                let mut map = serde_json::Map::new();
+
+                map.insert("@type".to_string(), "TaggedUnion".to_string().into());
+
+                // Use fully-qualified ID if namespace is present
+                if let Some(ns) = namespace {
+                    map.insert("@id".to_string(), format!("{}{}", ns, id).into());
+                } else {
+                    map.insert("@id".to_string(), id.clone().into());
+                }
+
+                if let Some(base2) = base {
+                    if !base2.contains("://") {
+                        map.insert("@base".to_string(), base2.clone().into());
+                    }
+                }
+
+                map.insert("@key".to_string(), key.to_map().into());
+
+                if *subdocument {
+                    map.insert("@subdocument".to_string(), Value::Array(vec![]));
+                }
+                if *r#abstract {
+                    map.insert("@abstract".to_string(), Value::Array(vec![]));
+                }
+                if *unfoldable {
+                    map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if let Some(doc) = documentation {
+                    map.insert("@documentation".to_string(), doc.to_map().into());
+                }
+
+                // Namespace-qualify property type references
+                for prop in properties {
+                    let prop_value = prop.to_property_value();
+                    if let Some(ns) = namespace {
+                        map.insert(prop.name.clone(), namespace_property_value(ns, &prop_value));
+                    } else {
+                        map.insert(prop.name.clone(), prop_value);
+                    }
+                }
+
+                serde_json::Value::Object(map)
+            }
+            // For other schema types, just use the regular to_json
+            _ => self.to_json(),
         }
     }
 }
@@ -557,10 +768,19 @@ impl ToJson for Schema {
                 documentation,
                 r#abstract,
             } => {
+                // Use SHORT names - Context @schema will expand them
+                // This allows Context to handle namespace resolution
+
                 map.insert("@type".to_string(), "Class".to_string().into());
+
+                // Use short @id - Context will expand it
                 map.insert("@id".to_string(), id.clone().into());
+
+                // Only output @base for ID generation prefixes, not for namespace URLs
                 if let Some(base2) = base {
-                    map.insert("@base".to_string(), base2.clone().into());
+                    if !base2.contains("://") {
+                        map.insert("@base".to_string(), base2.clone().into());
+                    }
                 }
                 map.insert("@key".to_string(), key.to_map().into());
                 if *subdocument {
@@ -576,17 +796,16 @@ impl ToJson for Schema {
                     map.insert("@documentation".to_string(), doc.to_map().into());
                 }
                 if !inherits.is_empty() {
-                    map.insert(
-                        "@inherits".to_string(),
-                        inherits
-                            .into_iter()
-                            .map(|s| Value::from(s.clone()))
-                            .collect::<Vec<_>>()
-                            .into(),
-                    );
+                    // Use short names for inherits - Context will expand
+                    let inherits_vals: Vec<Value> = inherits
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect();
+                    map.insert("@inherits".to_string(), inherits_vals.into());
                 }
+                // Use SHORT property names - Context @schema will expand them
                 for prop in properties {
-                    map.append(&mut prop.to_map());
+                    map.insert(prop.name.clone(), prop.to_property_value());
                 }
             }
             Schema::Enum {
@@ -620,10 +839,19 @@ impl ToJson for Schema {
                 unfoldable,
                 r#abstract,
             } => {
+                // Use SHORT names - Context @schema will expand them
+
                 map.insert("@type".to_string(), "TaggedUnion".to_string().into());
+
+                // Use short @id - Context will expand it
                 map.insert("@id".to_string(), id.clone().into());
+
+                // Only output @base for ID generation prefixes, not for namespace URLs
+                // (namespace is handled by Context.schema)
                 if let Some(base2) = base {
-                    map.insert("@base".to_string(), base2.clone().into());
+                    if !base2.contains("://") {
+                        map.insert("@base".to_string(), base2.clone().into());
+                    }
                 }
                 map.insert("@key".to_string(), key.to_map().into());
                 if *subdocument {
@@ -638,8 +866,9 @@ impl ToJson for Schema {
                 if let Some(doc) = documentation {
                     map.insert("@documentation".to_string(), doc.to_map().into());
                 }
+                // Use SHORT property names - Context will expand them
                 for prop in properties {
-                    map.append(&mut prop.to_map());
+                    map.insert(prop.name.clone(), prop.to_property_value());
                 }
             }
             Schema::OneOfClass {
@@ -653,10 +882,19 @@ impl ToJson for Schema {
                 documentation,
                 r#abstract,
             } => {
+                // Use SHORT names - Context @schema will expand them
+
                 map.insert("@type".to_string(), "Class".to_string().into());
+
+                // Use short @id - Context will expand it
                 map.insert("@id".to_string(), id.clone().into());
+
+                // Only output @base for ID generation prefixes, not for namespace URLs
+                // (namespace is handled by Context.schema)
                 if let Some(base2) = base {
-                    map.insert("@base".to_string(), base2.clone().into());
+                    if !base2.contains("://") {
+                        map.insert("@base".to_string(), base2.clone().into());
+                    }
                 }
                 // map.insert("@key".to_string(), key.to_map().into());
                 if *subdocument {
@@ -669,33 +907,29 @@ impl ToJson for Schema {
                     map.insert("@documentation".to_string(), doc.to_map().into());
                 }
                 if !inherits.is_empty() {
-                    map.insert(
-                        "@inherits".to_string(),
-                        inherits
-                            .into_iter()
-                            .map(|s| Value::from(s.clone()))
-                            .collect::<Vec<_>>()
-                            .into(),
-                    );
+                    // Use short names for inherits - Context will expand
+                    let inherits_vals: Vec<Value> = inherits
+                        .iter()
+                        .map(|s| Value::String(s.clone()))
+                        .collect();
+                    map.insert("@inherits".to_string(), inherits_vals.into());
                 }
+                // Use SHORT property names - Context will expand them
                 for prop in properties {
-                    map.append(&mut prop.to_map());
+                    map.insert(prop.name.clone(), prop.to_property_value());
                 }
-                map.insert(
-                    "@oneOf".to_string(),
-                    serde_json::Value::Array(
-                        classes
-                            .iter()
-                            .map(|prop_set| {
-                                let mut map = serde_json::Map::new();
-                                for prop in prop_set {
-                                    map.append(&mut prop.to_map());
-                                }
-                                serde_json::Value::Object(map)
-                            })
-                            .collect(),
-                    ),
-                );
+                // For @oneOf classes, also use short property names
+                let oneof_classes: Vec<Value> = classes
+                    .iter()
+                    .map(|prop_set| {
+                        let mut class_map = serde_json::Map::new();
+                        for prop in prop_set {
+                            class_map.insert(prop.name.clone(), prop.to_property_value());
+                        }
+                        serde_json::Value::Object(class_map)
+                    })
+                    .collect();
+                map.insert("@oneOf".to_string(), serde_json::Value::Array(oneof_classes));
             }
         }
         map
