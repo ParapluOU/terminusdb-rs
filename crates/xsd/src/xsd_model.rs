@@ -438,6 +438,36 @@ impl XsdModel {
                         map.insert(local_name.to_lowercase(), class_name);
                     }
                 }
+
+                // Map child elements to their types (for choice elements and nested types)
+                // This is important for elements like <creditCard> -> CreditCardType
+                // But we must be careful not to override existing mappings because:
+                // 1. Root elements take precedence
+                // 2. Some element names appear with different types in different contexts
+                if let Some(children) = &ct.child_elements {
+                    for child in children {
+                        let child_name = child.name.split('}').last().unwrap_or(&child.name);
+                        let child_key = child_name.to_lowercase();
+
+                        // Skip if already mapped (root elements and earlier mappings take precedence)
+                        if map.contains_key(&child_key) {
+                            continue;
+                        }
+
+                        // Skip XSD primitive types - they don't need class mappings
+                        if child.element_type.contains("http://www.w3.org/2001/XMLSchema") {
+                            continue;
+                        }
+
+                        let type_name = child.element_type.split('}').last().unwrap_or(&child.element_type);
+                        let class_name = type_name.to_pascal_case();
+
+                        // Only add if we have a schema for this type
+                        if self.find_schema(&class_name).is_some() {
+                            map.insert(child_key, class_name);
+                        }
+                    }
+                }
             }
         }
 
