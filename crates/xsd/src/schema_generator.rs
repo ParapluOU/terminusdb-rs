@@ -123,7 +123,10 @@ impl XsdToSchemaGenerator {
                 );
                 let derived_class = derived_local_name.to_pascal_case();
 
-                base_to_derived.entry(base_class).or_default().push(derived_class);
+                // Skip self-inheritance (element with same name as its base type)
+                if base_class != derived_class {
+                    base_to_derived.entry(base_class).or_default().push(derived_class);
+                }
             }
         }
 
@@ -879,6 +882,13 @@ impl XsdToSchemaGenerator {
 
             if base_is_simple_type {
                 // Simple type bases don't become class inheritance
+                vec![]
+            } else if base_class == class_id {
+                // Self-inheritance: This can happen when an element has an anonymous
+                // complexType that extends a named complexType with the same name.
+                // For example: <element name="inline"> with anonymous type extending
+                // <complexType name="inline">. Both get class name "Inline", but we
+                // can't have Inline inherit from itself. Skip this inheritance.
                 vec![]
             } else {
                 vec![base_class]

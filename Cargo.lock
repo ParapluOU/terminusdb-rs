@@ -2807,9 +2807,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "schemas"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "schemas-akoma-ntoso",
+ "schemas-bits",
+ "schemas-core",
+ "schemas-dita",
+ "schemas-dita-lce",
+ "schemas-dita13",
+ "schemas-docbook",
+ "schemas-jats",
+ "schemas-niso-sts",
+ "schemas-spl",
+ "schemas-tei",
+]
+
+[[package]]
+name = "schemas-akoma-ntoso"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-bits"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
 name = "schemas-core"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#fa841c82c620473853d11ca033dc2c191da2091e"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
 dependencies = [
  "include_dir",
  "thiserror 2.0.17",
@@ -2818,7 +2854,7 @@ dependencies = [
 [[package]]
 name = "schemas-dita"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#fa841c82c620473853d11ca033dc2c191da2091e"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2827,7 +2863,34 @@ dependencies = [
 [[package]]
 name = "schemas-dita-lce"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#fa841c82c620473853d11ca033dc2c191da2091e"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-dita13"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-docbook"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-jats"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2836,7 +2899,25 @@ dependencies = [
 [[package]]
 name = "schemas-niso-sts"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#fa841c82c620473853d11ca033dc2c191da2091e"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-spl"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+dependencies = [
+ "include_dir",
+ "schemas-core",
+]
+
+[[package]]
+name = "schemas-tei"
+version = "0.1.0"
+source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -3573,6 +3654,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "heck 0.5.0",
+ "schemas",
  "schemas-dita",
  "schemas-dita-lce",
  "schemas-niso-sts",
@@ -4641,7 +4723,7 @@ dependencies = [
 [[package]]
 name = "xmlschema"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/xmlschema-rs#4589a1076ccffdabaa0a033fe9f59527fa6513c8"
+source = "git+https://github.com/parapluou/xmlschema-rs#02023902d1b9cadf0fdaf2a791c7f1de13bd7a23"
 dependencies = [
  "base64 0.21.7",
  "chrono",

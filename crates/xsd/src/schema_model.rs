@@ -178,15 +178,20 @@ impl XsdSchema {
     /// # Arguments
     ///
     /// * `path` - Path to the XSD schema file
-    /// * `catalog_path` - Optional path to XML catalog file for URN resolution (currently unused)
+    /// * `catalog_path` - Optional path to XML catalog file for URN resolution.
+    ///   The catalog maps URN-based schemaLocation values (like those used in DITA 1.3)
+    ///   to actual file paths.
     pub fn from_xsd_file(
         path: impl AsRef<Path>,
-        _catalog_path: Option<impl AsRef<Path>>,
+        catalog_path: Option<impl AsRef<Path>>,
     ) -> crate::Result<Self> {
         let path = path.as_ref();
 
-        // Parse the schema using xmlschema-rs
-        let rust_schema = RustXsdSchema::from_file(path)?;
+        // Parse the schema using xmlschema-rs with optional catalog support
+        let rust_schema = RustXsdSchema::from_file_with_catalog(
+            path,
+            catalog_path.as_ref().map(|p| p.as_ref()),
+        )?;
 
         // Extract data from the parsed schema, including imports
         Self::from_rust_schema_with_imports(&rust_schema, path)

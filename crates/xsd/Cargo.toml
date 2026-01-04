@@ -38,6 +38,8 @@ schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs", version = 
 [dev-dependencies]
 schemas-dita = { git = "https://github.com/parapluou/schemas-rs" }
 schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs" }
+# Full schemas bundle for testing problematic schemas
+schemas = { git = "https://github.com/parapluou/schemas-rs", features = ["full"] }
 tempfile.workspace = true
 terminusdb-bin = { path = "../bin" }
 terminusdb-client = { path = "../client" }
