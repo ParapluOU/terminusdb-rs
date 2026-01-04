@@ -399,3 +399,54 @@ fn test_dita13_catalog_structure() {
     eprintln!("Root catalog: {} bytes", root_content.len());
     eprintln!("Base catalog: {} bytes", base_content.len());
 }
+
+/// Test: DITA 1.3 schema insertion into TerminusDB (in-memory).
+///
+/// This tests the full pipeline: parse XSD with catalog -> generate TDB schemas -> insert.
+#[tokio::test]
+async fn test_dita13_schema_insertion() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    Dita13::write_to_directory(temp_dir.path()).expect("Failed to write schema");
+
+    let catalog_path = temp_dir.path().join("catalog.xml");
+    let entry_point = temp_dir.path().join("base/xsd/basetopic.xsd");
+
+    eprintln!("\n=== Testing DITA 1.3 Schema Insertion into TerminusDB ===");
+
+    // Parse the schema with catalog support
+    let model = XsdModel::from_file(&entry_point, Some(&catalog_path))?;
+
+    eprintln!("Schema parsed with {} types", model.schemas().len());
+
+    // Start isolated TerminusDB server (in-memory)
+    let server = TerminusDBServer::test().await?;
+    let client = server.client().await?;
+
+    // Create database
+    client.ensure_database("test_dita13").await?;
+
+    // Try to insert schemas
+    let spec = BranchSpec::new("test_dita13");
+    let args = DocumentInsertArgs::from(spec);
+    let context = model.context().clone();
+    let schemas = model.schemas().to_vec();
+
+    eprintln!("Inserting {} schemas into TerminusDB...", schemas.len());
+
+    let result = client
+        .insert_schema_with_context(context, schemas, args)
+        .await;
+
+    match result {
+        Ok(_) => {
+            eprintln!("✓ DITA 1.3 schemas inserted successfully into TerminusDB!");
+        }
+        Err(e) => {
+            eprintln!("✗ Schema insertion failed:");
+            eprintln!("  Error: {}", e);
+            return Err(e.into());
+        }
+    }
+
+    Ok(())
+}
