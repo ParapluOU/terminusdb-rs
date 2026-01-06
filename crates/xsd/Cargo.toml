@@ -9,7 +9,8 @@ authors.workspace = true
 
 [dependencies]
 # Pure Rust XSD/XML Schema library (replaces Python xmlschema)
-xmlschema = { git = "https://github.com/parapluou/xmlschema-rs" }
+# Using local submodule for development (contains iterative include processing fix)
+xmlschema = { path = "../../../xmlschema-rs" }
 
 # JSON serialization for dumping parsed schemas
 serde = { workspace = true }

@@ -8,7 +8,7 @@
 //! This test file attempts to parse and insert these schemas to capture
 //! the specific error messages and verify the failure modes.
 
-use schemas::{AkomaNtoso30, Dita13, DocBook51, SchemaBundle, TeiP5};
+use schemas::{AkomaNtoso30, Dita13, DocBook51, SchemaBundle, Spl, TeiP5};
 use std::path::PathBuf;
 use tempfile::TempDir;
 use terminusdb_bin::TerminusDBServer;
@@ -440,6 +440,117 @@ async fn test_dita13_schema_insertion() -> anyhow::Result<()> {
     match result {
         Ok(_) => {
             eprintln!("✓ DITA 1.3 schemas inserted successfully into TerminusDB!");
+        }
+        Err(e) => {
+            eprintln!("✗ Schema insertion failed:");
+            eprintln!("  Error: {}", e);
+            return Err(e.into());
+        }
+    }
+
+    Ok(())
+}
+
+/// Test: FDA SPL (Structured Product Labeling) schema parsing.
+///
+/// SPL is used for pharmaceutical package inserts (prescription/OTC drug labels).
+/// This is an HL7 standard adopted by the FDA.
+///
+/// Note: SPL schema is large and requires ~256MB stack to parse without overflow.
+#[test]
+fn test_spl_schema_parsing() {
+    let bundle = Spl;
+    let (_temp_dir, entry_point) = extract_schema(&bundle, "SPL.xsd");
+
+    eprintln!("\n=== Testing FDA SPL Schema Parsing ===");
+    eprintln!("Entry point: {:?}", entry_point);
+
+    assert!(
+        entry_point.exists(),
+        "Entry point file should exist: {:?}",
+        entry_point
+    );
+
+    // SPL is large - spawn parsing in a thread with 256MB stack
+    let entry_point_clone = entry_point.clone();
+    let handle = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024) // 256MB stack
+        .name("spl-parser".to_string())
+        .spawn(move || XsdModel::from_file(&entry_point_clone, None::<&str>))
+        .expect("Failed to spawn parser thread");
+
+    let result = handle.join().expect("Parser thread panicked");
+
+    match result {
+        Ok(model) => {
+            eprintln!("✓ Schema parsed successfully!");
+            eprintln!("  Namespace: {}", model.context().schema);
+            eprintln!("  Schema count: {}", model.schemas().len());
+
+            // SPL should have many schemas from the HL7 CDA/RIM model
+            assert!(
+                model.schemas().len() > 10,
+                "Expected >10 schemas from SPL, got {}",
+                model.schemas().len()
+            );
+        }
+        Err(e) => {
+            eprintln!("✗ Schema parsing failed:");
+            eprintln!("  Error: {}", e);
+            panic!("SPL parsing should succeed: {}", e);
+        }
+    }
+}
+
+/// Test: FDA SPL schema insertion into TerminusDB (in-memory).
+///
+/// This tests the full pipeline: parse SPL XSD -> generate TDB schemas -> insert.
+/// Note: SPL parsing requires 256MB stack.
+#[tokio::test]
+async fn test_spl_schema_insertion() -> anyhow::Result<()> {
+    let bundle = Spl;
+    let (_temp_dir, entry_point) = extract_schema(&bundle, "SPL.xsd");
+
+    eprintln!("\n=== Testing FDA SPL Schema Insertion into TerminusDB ===");
+
+    // SPL is large - spawn parsing in a thread with 256MB stack
+    let entry_point_clone = entry_point.clone();
+    let parse_result = tokio::task::spawn_blocking(move || {
+        let handle = std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024) // 256MB stack
+            .name("spl-parser".to_string())
+            .spawn(move || XsdModel::from_file(&entry_point_clone, None::<&str>))
+            .expect("Failed to spawn parser thread");
+        handle.join().expect("Parser thread panicked")
+    })
+    .await?;
+
+    let model = parse_result?;
+
+    eprintln!("Schema parsed with {} types", model.schemas().len());
+
+    // Start isolated TerminusDB server (in-memory)
+    let server = TerminusDBServer::test().await?;
+    let client = server.client().await?;
+
+    // Create database
+    client.ensure_database("test_spl").await?;
+
+    // Try to insert schemas
+    let spec = BranchSpec::new("test_spl");
+    let args = DocumentInsertArgs::from(spec);
+    let context = model.context().clone();
+    let schemas = model.schemas().to_vec();
+
+    eprintln!("Inserting {} schemas into TerminusDB...", schemas.len());
+
+    let result = client
+        .insert_schema_with_context(context, schemas, args)
+        .await;
+
+    match result {
+        Ok(_) => {
+            eprintln!("✓ SPL schemas inserted successfully into TerminusDB!");
         }
         Err(e) => {
             eprintln!("✗ Schema insertion failed:");

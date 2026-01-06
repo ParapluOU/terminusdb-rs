@@ -206,8 +206,6 @@ impl XsdSchema {
             FormDefault::Unqualified => "unqualified".to_string(),
         });
 
-        let base_dir = path.parent().unwrap_or(Path::new("."));
-
         // Extract root elements from main schema
         let mut root_elements = Vec::new();
         for (qname, elem) in schema.elements() {
@@ -247,54 +245,53 @@ impl XsdSchema {
 
         // Process imported schemas to extract their elements and types
         // This ensures elements from external namespaces (MathML, XInclude, TBX, etc.) are available
+        //
+        // We use the already-loaded import.schema from the XsdSchema parsing, rather than
+        // re-parsing (which would cause stack overflow on deeply nested schemas like SPL).
         for (_ns, import) in &schema.imports {
-            if let Some(location) = &import.location {
-                let import_path = base_dir.join(location);
-                if import_path.exists() {
-                    if let Ok(imported_schema) = RustXsdSchema::from_file(&import_path) {
-                        // Extract elements from imported schema
-                        for (qname, elem) in imported_schema.elements() {
-                            let element = Self::extract_element(&qname.to_string(), elem, &imported_schema);
-                            root_elements.push(element);
-                        }
+            // Use the already-loaded schema if available
+            if let Some(imported_schema) = &import.schema {
+                // Extract elements from imported schema
+                for (qname, elem) in imported_schema.elements() {
+                    let element = Self::extract_element(&qname.to_string(), elem, imported_schema);
+                    root_elements.push(element);
+                }
 
-                        // Extract types from imported schema
-                        for (qname, global_type) in imported_schema.types() {
-                            match global_type {
-                                GlobalType::Complex(ct) => {
-                                    let complex = Self::extract_complex_type(&qname.to_string(), ct, &imported_schema);
-                                    complex_types.push(complex);
-                                }
-                                GlobalType::Simple(st) => {
-                                    let simple = Self::extract_simple_type(&qname.to_string(), st);
-                                    simple_types.push(simple);
-                                }
-                            }
+                // Extract types from imported schema
+                for (qname, global_type) in imported_schema.types() {
+                    match global_type {
+                        GlobalType::Complex(ct) => {
+                            let complex = Self::extract_complex_type(&qname.to_string(), ct, imported_schema);
+                            complex_types.push(complex);
                         }
-
-                        // Extract anonymous complex types from imported elements
-                        for (qname, elem) in imported_schema.elements() {
-                            if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
-                                if ct.name.is_none() {
-                                    let elem_name = &qname.local_name;
-                                    let mut complex = Self::extract_complex_type(elem_name, ct, &imported_schema);
-                                    complex.is_anonymous = true;
-                                    complex.element_name = Some(elem_name.to_string());
-                                    complex_types.push(complex);
-                                }
-                            }
+                        GlobalType::Simple(st) => {
+                            let simple = Self::extract_simple_type(&qname.to_string(), st);
+                            simple_types.push(simple);
                         }
-
-                        // Extract LOCAL elements from groups
-                        // Some schemas (like MathML) define elements inside groups, not as global elements
-                        // e.g., the `semantics` element is defined inside the `semantics` group
-                        Self::extract_local_elements_from_groups(
-                            &imported_schema,
-                            &mut root_elements,
-                            &mut complex_types,
-                        );
                     }
                 }
+
+                // Extract anonymous complex types from imported elements
+                for (qname, elem) in imported_schema.elements() {
+                    if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
+                        if ct.name.is_none() {
+                            let elem_name = &qname.local_name;
+                            let mut complex = Self::extract_complex_type(elem_name, ct, imported_schema);
+                            complex.is_anonymous = true;
+                            complex.element_name = Some(elem_name.to_string());
+                            complex_types.push(complex);
+                        }
+                    }
+                }
+
+                // Extract LOCAL elements from groups
+                // Some schemas (like MathML) define elements inside groups, not as global elements
+                // e.g., the `semantics` element is defined inside the `semantics` group
+                Self::extract_local_elements_from_groups(
+                    imported_schema,
+                    &mut root_elements,
+                    &mut complex_types,
+                );
             }
         }
 
