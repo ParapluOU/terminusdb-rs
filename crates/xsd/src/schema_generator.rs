@@ -182,7 +182,7 @@ impl XsdToSchemaGenerator {
         let schemas = self.generate(xsd_schema)?;
 
         // Derive TerminusDB schema namespace from XSD target namespace
-        let schema_ns = match &xsd_schema.target_namespace {
+        let raw_ns = match &xsd_schema.target_namespace {
             Some(ns) => {
                 // Ensure namespace ends with # or / for proper IRI formation
                 if ns.ends_with('#') || ns.ends_with('/') {
@@ -193,6 +193,10 @@ impl XsdToSchemaGenerator {
             }
             None => self.namespace.clone(),
         };
+
+        // Transform non-HTTP(S) namespaces (like URN) to valid HTTP URIs
+        // TerminusDB requires HTTP(S) URIs for @base and @schema prefixes
+        let schema_ns = Self::normalize_namespace_to_uri(&raw_ns);
 
         // Derive base namespace for instance data
         let base_ns = schema_ns
@@ -207,6 +211,51 @@ impl XsdToSchemaGenerator {
         };
 
         Ok((context, schemas))
+    }
+
+    /// Normalize a namespace URI to a valid HTTP(S) URI for TerminusDB.
+    ///
+    /// TerminusDB requires HTTP(S) URIs for `@base` and `@schema` context prefixes.
+    /// Non-HTTP namespaces (URN, custom schemes) are transformed to:
+    /// `https://paraplu.io/xsd/{scheme}/{path}#`
+    ///
+    /// # Examples
+    ///
+    /// - `http://example.com/ns#` → unchanged
+    /// - `https://example.com/ns/` → unchanged
+    /// - `urn:hl7-org:v3#` → `https://paraplu.io/xsd/urn/hl7-org/v3#`
+    /// - `urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#` → `https://paraplu.io/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#`
+    fn normalize_namespace_to_uri(ns: &str) -> String {
+        // HTTP(S) URIs are valid as-is
+        if ns.starts_with("http://") || ns.starts_with("https://") {
+            return ns.to_string();
+        }
+
+        // Extract the suffix (# or /) to preserve it
+        let (suffix, ns_without_suffix) = if ns.ends_with('#') {
+            ("#", &ns[..ns.len() - 1])
+        } else if ns.ends_with('/') {
+            ("/", &ns[..ns.len() - 1])
+        } else {
+            ("#", ns)
+        };
+
+        // Parse the namespace to extract scheme and path
+        // URN format: urn:namespace:path -> scheme=urn, path=namespace/path
+        // Other: scheme:path -> scheme=scheme, path=path
+        let (scheme, path) = if let Some(colon_pos) = ns_without_suffix.find(':') {
+            let scheme = &ns_without_suffix[..colon_pos];
+            let rest = &ns_without_suffix[colon_pos + 1..];
+            (scheme, rest)
+        } else {
+            // No scheme found, treat entire thing as path
+            ("unknown", ns_without_suffix)
+        };
+
+        // Convert colons in path to slashes for URL compatibility
+        let url_path = path.replace(':', "/");
+
+        format!("https://paraplu.io/xsd/{}/{}{}", scheme, url_path, suffix)
     }
 
     /// Generate TerminusDB schemas from explicit entry-point XSD files.
@@ -1277,5 +1326,68 @@ impl XsdToSchemaGenerator {
 impl Default for XsdToSchemaGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_namespace_http_unchanged() {
+        // HTTP URIs should pass through unchanged
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("http://example.com/ns#"),
+            "http://example.com/ns#"
+        );
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("https://example.com/ns/"),
+            "https://example.com/ns/"
+        );
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("http://www.w3.org/2001/XMLSchema#"),
+            "http://www.w3.org/2001/XMLSchema#"
+        );
+    }
+
+    #[test]
+    fn test_normalize_namespace_urn_transformed() {
+        // URN namespaces should be transformed to HTTPS URIs
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("urn:hl7-org:v3#"),
+            "https://paraplu.io/xsd/urn/hl7-org/v3#"
+        );
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#"),
+            "https://paraplu.io/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#"
+        );
+    }
+
+    #[test]
+    fn test_normalize_namespace_preserves_suffix() {
+        // Should preserve # suffix
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("urn:test:ns#"),
+            "https://paraplu.io/xsd/urn/test/ns#"
+        );
+        // Should preserve / suffix
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("urn:test:ns/"),
+            "https://paraplu.io/xsd/urn/test/ns/"
+        );
+        // Should add # if no suffix
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("urn:test:ns"),
+            "https://paraplu.io/xsd/urn/test/ns#"
+        );
+    }
+
+    #[test]
+    fn test_normalize_namespace_custom_scheme() {
+        // Other custom schemes should also be transformed
+        assert_eq!(
+            XsdToSchemaGenerator::normalize_namespace_to_uri("custom:my:namespace#"),
+            "https://paraplu.io/xsd/custom/my/namespace#"
+        );
     }
 }
