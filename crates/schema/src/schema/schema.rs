@@ -363,7 +363,8 @@ pub enum Schema {
     // }
     Enum {
         id: ID,
-        // todo: base
+        /// Namespace base for multi-namespace support (e.g., XSD-derived schemas)
+        base: Option<String>,
         values: Vec<URI>,
 
         documentation: Option<ClassDocumentation>,
@@ -471,9 +472,8 @@ impl Schema {
         match self {
             Schema::Class { base, .. } => base.as_ref(),
             Schema::OneOfClass { base, .. } => base.as_ref(),
-            // Schema::Enum { base, .. } => {}
+            Schema::Enum { base, .. } => base.as_ref(),
             Schema::TaggedUnion { base, .. } => base.as_ref(),
-            _ => None,
         }
     }
 
@@ -564,6 +564,7 @@ impl Schema {
         match self {
             Schema::Class { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
             Schema::OneOfClass { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
+            Schema::Enum { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
             Schema::TaggedUnion { base: Some(b), .. } if b.contains("://") => Some(b.as_str()),
             _ => None,
         }
@@ -746,8 +747,41 @@ impl Schema {
 
                 serde_json::Value::Object(map)
             }
-            // For other schema types, just use the regular to_json
-            _ => self.to_json(),
+            Schema::Enum {
+                id,
+                base,
+                values,
+                documentation,
+            } => {
+                let mut map = serde_json::Map::new();
+
+                map.insert("@type".to_string(), "Enum".to_string().into());
+
+                // Use fully-qualified ID if namespace is present
+                if let Some(ns) = namespace {
+                    map.insert("@id".to_string(), format!("{}{}", ns, id).into());
+                } else {
+                    map.insert("@id".to_string(), id.clone().into());
+                }
+
+                map.insert(
+                    "@value".to_string(),
+                    values
+                        .iter()
+                        .map(|s| Value::from(s.clone()))
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
+
+                // Add documentation if available
+                if let Some(doc) = documentation {
+                    map.insert("comment".to_string(), doc.comment.clone().into());
+                }
+
+                serde_json::Value::Object(map)
+            }
+            // For OneOfClass, use the regular to_json (rare case, not from XSD)
+            Schema::OneOfClass { .. } => self.to_json(),
         }
     }
 }
@@ -812,7 +846,10 @@ impl ToJson for Schema {
                 id,
                 values: value,
                 documentation,
+                ..
             } => {
+                // Note: base is intentionally unused here - to_map() produces short names,
+                // relying on Context for expansion. Use to_namespaced_json() for fully-qualified names.
                 map.insert("@type".to_string(), "Enum".to_string().into());
                 map.insert("@id".to_string(), id.clone().into());
                 map.insert(
@@ -996,6 +1033,7 @@ pub trait ToTDBSchema {
             }
             SchemaType::SchemaTypeEnum => Schema::Enum {
                 id: Self::id().expect("id for Enum not defined in ToTDBSchema"),
+                base: Self::base(),
                 values: Self::values().unwrap(),
                 documentation: Self::documentation(),
             },
@@ -1180,6 +1218,7 @@ fn test_schema_enum_json() {
     // example from https://terminusdb.com/docs/index/terminusx-db/reference-guides/schema#code-an-example-of-an-enum-class
     let schema = Schema::Enum {
         id: "PrimaryColour".to_string(),
+        base: None,
         values: vec!["Red".to_string(), "Blue".to_string(), "Yellow".to_string()],
         documentation: None,
     };

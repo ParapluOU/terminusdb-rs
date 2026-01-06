@@ -260,8 +260,12 @@ impl super::client::TerminusDBHttpClient {
         );
 
         // Convert to JSON values - context first, then schemas
+        // Use to_namespaced_json() to fully qualify class references in properties
+        // and inheritance when a namespace base is present (e.g., XSD-derived schemas).
+        // This is necessary because TerminusDB doesn't expand short class names using
+        // the Context's @schema - it uses them literally, defaulting to terminusdb:///schema#.
         let context_json = context.to_json();
-        let schema_jsons: Vec<_> = schemas.iter().map(|s| s.to_json()).collect();
+        let schema_jsons: Vec<_> = schemas.iter().map(|s| s.to_namespaced_json()).collect();
 
         // Combine into a single batch - context must be first
         let mut all_docs: Vec<&serde_json::Value> = Vec::with_capacity(1 + schemas.len());

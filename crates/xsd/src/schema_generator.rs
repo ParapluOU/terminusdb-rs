@@ -204,13 +204,80 @@ impl XsdToSchemaGenerator {
             .replace("/schema/", "/data/");
 
         let context = Context {
-            schema: schema_ns,
+            schema: schema_ns.clone(),
             base: base_ns,
             xsd: Some("http://www.w3.org/2001/XMLSchema#".to_string()),
             documentation: None,
         };
 
+        // Update schemas to use the normalized namespace in their base field.
+        // This is necessary because to_namespaced_json() checks for :// in base
+        // to determine if namespace qualification is needed.
+        let schemas = schemas
+            .into_iter()
+            .map(|schema| Self::update_schema_namespace(schema, &schema_ns))
+            .collect();
+
         Ok((context, schemas))
+    }
+
+    /// Update a schema's namespace (base) field to use the normalized namespace.
+    fn update_schema_namespace(schema: Schema, normalized_ns: &str) -> Schema {
+        match schema {
+            Schema::Class {
+                id,
+                base: _,
+                key,
+                documentation,
+                subdocument,
+                r#abstract,
+                inherits,
+                unfoldable,
+                properties,
+            } => Schema::Class {
+                id,
+                base: Some(normalized_ns.to_string()),
+                key,
+                documentation,
+                subdocument,
+                r#abstract,
+                inherits,
+                unfoldable,
+                properties,
+            },
+            Schema::TaggedUnion {
+                id,
+                base: _,
+                key,
+                r#abstract,
+                documentation,
+                subdocument,
+                properties,
+                unfoldable,
+            } => Schema::TaggedUnion {
+                id,
+                base: Some(normalized_ns.to_string()),
+                key,
+                r#abstract,
+                documentation,
+                subdocument,
+                properties,
+                unfoldable,
+            },
+            Schema::Enum {
+                id,
+                base: _,
+                values,
+                documentation,
+            } => Schema::Enum {
+                id,
+                base: Some(normalized_ns.to_string()),
+                values,
+                documentation,
+            },
+            // OneOfClass doesn't have a base field that needs updating
+            other => other,
+        }
     }
 
     /// Normalize a namespace URI to a valid HTTP(S) URI for TerminusDB.
@@ -1027,9 +1094,9 @@ impl XsdToSchemaGenerator {
             for restriction in restrictions {
                 if let Restriction::Enumeration { values } = restriction {
                     // Generate Schema::Enum for enumeration types
-                    // Note: Schema::Enum doesn't support base/namespace yet (TODO in schema crate)
                     return Ok(Some(Schema::Enum {
                         id: type_id,
+                        base: namespace.clone(), // Use XSD namespace for multi-namespace support
                         documentation: None,
                         values: values.clone(),
                     }));
