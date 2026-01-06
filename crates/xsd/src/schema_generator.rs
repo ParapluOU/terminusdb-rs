@@ -217,14 +217,14 @@ impl XsdToSchemaGenerator {
     ///
     /// TerminusDB requires HTTP(S) URIs for `@base` and `@schema` context prefixes.
     /// Non-HTTP namespaces (URN, custom schemes) are transformed to:
-    /// `https://paraplu.io/xsd/{scheme}/{path}#`
+    /// `https://paraplu.cloud/xsd/{scheme}/{path}#`
     ///
     /// # Examples
     ///
     /// - `http://example.com/ns#` → unchanged
     /// - `https://example.com/ns/` → unchanged
-    /// - `urn:hl7-org:v3#` → `https://paraplu.io/xsd/urn/hl7-org/v3#`
-    /// - `urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#` → `https://paraplu.io/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#`
+    /// - `urn:hl7-org:v3#` → `https://paraplu.cloud/xsd/urn/hl7-org/v3#`
+    /// - `urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#` → `https://paraplu.cloud/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#`
     fn normalize_namespace_to_uri(ns: &str) -> String {
         // HTTP(S) URIs are valid as-is
         if ns.starts_with("http://") || ns.starts_with("https://") {
@@ -255,7 +255,7 @@ impl XsdToSchemaGenerator {
         // Convert colons in path to slashes for URL compatibility
         let url_path = path.replace(':', "/");
 
-        format!("https://paraplu.io/xsd/{}/{}{}", scheme, url_path, suffix)
+        format!("https://paraplu.cloud/xsd/{}/{}{}", scheme, url_path, suffix)
     }
 
     /// Generate TerminusDB schemas from explicit entry-point XSD files.
@@ -1355,11 +1355,11 @@ mod tests {
         // URN namespaces should be transformed to HTTPS URIs
         assert_eq!(
             XsdToSchemaGenerator::normalize_namespace_to_uri("urn:hl7-org:v3#"),
-            "https://paraplu.io/xsd/urn/hl7-org/v3#"
+            "https://paraplu.cloud/xsd/urn/hl7-org/v3#"
         );
         assert_eq!(
             XsdToSchemaGenerator::normalize_namespace_to_uri("urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#"),
-            "https://paraplu.io/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#"
+            "https://paraplu.cloud/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#"
         );
     }
 
@@ -1368,17 +1368,17 @@ mod tests {
         // Should preserve # suffix
         assert_eq!(
             XsdToSchemaGenerator::normalize_namespace_to_uri("urn:test:ns#"),
-            "https://paraplu.io/xsd/urn/test/ns#"
+            "https://paraplu.cloud/xsd/urn/test/ns#"
         );
         // Should preserve / suffix
         assert_eq!(
             XsdToSchemaGenerator::normalize_namespace_to_uri("urn:test:ns/"),
-            "https://paraplu.io/xsd/urn/test/ns/"
+            "https://paraplu.cloud/xsd/urn/test/ns/"
         );
         // Should add # if no suffix
         assert_eq!(
             XsdToSchemaGenerator::normalize_namespace_to_uri("urn:test:ns"),
-            "https://paraplu.io/xsd/urn/test/ns#"
+            "https://paraplu.cloud/xsd/urn/test/ns#"
         );
     }
 
@@ -1387,7 +1387,7 @@ mod tests {
         // Other custom schemes should also be transformed
         assert_eq!(
             XsdToSchemaGenerator::normalize_namespace_to_uri("custom:my:namespace#"),
-            "https://paraplu.io/xsd/custom/my/namespace#"
+            "https://paraplu.cloud/xsd/custom/my/namespace#"
         );
     }
 }
