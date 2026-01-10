@@ -11,6 +11,7 @@ members = [
     "crates/relation/derive",
     "crates/schema",
     "crates/schema/derive",
+    "crates/terminusdb",
     "crates/test",
     "crates/test/macros",
     "crates/types",

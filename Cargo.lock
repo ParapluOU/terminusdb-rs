@@ -2809,7 +2809,7 @@ dependencies = [
 [[package]]
 name = "schemas"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "schemas-akoma-ntoso",
  "schemas-bits",
@@ -2827,7 +2827,7 @@ dependencies = [
 [[package]]
 name = "schemas-akoma-ntoso"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "schemas-bits"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2845,7 +2845,7 @@ dependencies = [
 [[package]]
 name = "schemas-core"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "thiserror 2.0.17",
@@ -2854,7 +2854,7 @@ dependencies = [
 [[package]]
 name = "schemas-dita"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2863,7 +2863,7 @@ dependencies = [
 [[package]]
 name = "schemas-dita-lce"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2872,7 +2872,7 @@ dependencies = [
 [[package]]
 name = "schemas-dita13"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2881,7 +2881,7 @@ dependencies = [
 [[package]]
 name = "schemas-docbook"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2890,7 +2890,7 @@ dependencies = [
 [[package]]
 name = "schemas-jats"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2899,7 +2899,7 @@ dependencies = [
 [[package]]
 name = "schemas-niso-sts"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2908,7 +2908,7 @@ dependencies = [
 [[package]]
 name = "schemas-spl"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -2917,7 +2917,7 @@ dependencies = [
 [[package]]
 name = "schemas-tei"
 version = "0.1.0"
-source = "git+https://github.com/parapluou/schemas-rs#db7456c735294c13572128457f7a553ae2abeb1d"
+source = "git+https://github.com/parapluou/schemas-rs#95d4fc93b658c52ed7e9e6f191acb597e779a5f3"
 dependencies = [
  "include_dir",
  "schemas-core",
@@ -3329,6 +3329,16 @@ dependencies = [
  "once_cell",
  "rustix 1.1.3",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "terminusdb"
+version = "0.1.0"
+dependencies = [
+ "terminusdb-bin",
+ "terminusdb-client",
+ "terminusdb-schema",
+ "terminusdb-types",
 ]
 
 [[package]]
@@ -4723,6 +4733,7 @@ dependencies = [
 [[package]]
 name = "xmlschema"
 version = "0.1.0"
+source = "git+https://github.com/ParapluOU/xmlschema-rs.git?branch=main#c3c155af45fbb986792e65b59508d627d87764ab"
 dependencies = [
  "base64 0.21.7",
  "chrono",

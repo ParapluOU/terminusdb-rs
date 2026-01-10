@@ -1,0 +1,16 @@
+[package]
+name = "terminusdb"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Unified re-exports for TerminusDB Rust client - a single import for the most important types"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+terminusdb-client = { path = "../client" }
+terminusdb-schema = { path = "../schema" }
+terminusdb-types = { path = "../types" }
+terminusdb-bin = { path = "../bin" }
