@@ -42,6 +42,7 @@ pub mod insert_result;
 pub mod instance;
 pub mod log;
 pub mod merge_branch;
+pub mod open;
 pub mod organization;
 pub mod query;
 pub mod remote;
@@ -84,6 +85,9 @@ pub use role::{Permission, Role};
 pub use terminusdb_schema::TerminusDBModel;
 pub use url_builder::UrlBuilder;
 pub use user::User;
+
+// Re-export database opening types
+pub use open::{compute_schema_hash, OpenDatabaseError, OpenedDatabase, SchemaState};
 
 // Re-export commonly used types
 pub type EntityID = String;

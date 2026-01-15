@@ -13,6 +13,35 @@ use {
 
 /// Database administration methods for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
+    /// Check if a database exists by name.
+    ///
+    /// This queries the list of databases and checks if any database
+    /// has a matching name (extracted from the path).
+    ///
+    /// # Arguments
+    /// * `db_name` - The name of the database to check
+    ///
+    /// # Returns
+    /// `true` if the database exists, `false` otherwise
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::TerminusDBHttpClient;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// if client.database_exists("mydb").await? {
+    ///     println!("Database exists");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn database_exists(&self, db_name: &str) -> anyhow::Result<bool> {
+        let databases = self.list_databases_simple().await?;
+        Ok(databases
+            .iter()
+            .any(|db| db.database_name().as_deref() == Some(db_name)))
+    }
+
     /// Ensures a database exists, creating it if it doesn't exist.
     ///
     /// This function will create a new database with the given name if it doesn't already exist.

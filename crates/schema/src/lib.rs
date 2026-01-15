@@ -102,6 +102,90 @@ macro_rules! schemas {
     };
 }
 
+/// Convenience macro for creating a `Vec<Box<dyn ToTDBInstances>>` from multiple instances.
+///
+/// This macro simplifies seeding operations by automatically boxing each instance.
+/// Each expression must implement `ToTDBInstances + Sized + 'static`.
+///
+/// # Examples
+/// ```rust,ignore
+/// use terminusdb_schema::{tdbinstances, ToTDBInstances};
+///
+/// let user = User { name: "Admin".into(), email: "admin@example.com".into() };
+/// let projects = vec![
+///     Project { title: "Alpha".into(), active: true },
+///     Project { title: "Beta".into(), active: false },
+/// ];
+///
+/// // Without macro (verbose):
+/// let instances = vec![
+///     Box::new(user) as Box<dyn ToTDBInstances>,
+///     Box::new(projects) as Box<dyn ToTDBInstances>,
+/// ];
+///
+/// // With macro (clean):
+/// let instances = tdbinstances![user, projects];
+///
+/// // Use with open_database seeder:
+/// client.open_database::<(User, Project), _>("mydb", Some(|| {
+///     tdbinstances![
+///         User { name: "Admin".into(), email: "admin@example.com".into() },
+///         vec![project1, project2],
+///     ]
+/// })).await?;
+/// ```
+#[macro_export]
+macro_rules! tdbinstances {
+    ($($expr:expr),* $(,)?) => {
+        vec![
+            $(
+                <_ as $crate::ToTDBInstances>::boxed($expr),
+            )*
+        ]
+    };
+}
+
+/// Convenience macro for creating a seeder closure for `open_database`.
+///
+/// This macro wraps instances in a `Some(|| { ... })` closure structure,
+/// eliminating boilerplate when calling `open_database`.
+///
+/// # Examples
+/// ```rust,ignore
+/// use terminusdb_schema::tdbseeder;
+///
+/// // Without macro (verbose):
+/// client.open_database::<(User, Project), _>("mydb", Some(|| {
+///     vec![
+///         Box::new(user) as Box<dyn ToTDBInstances>,
+///         Box::new(projects) as Box<dyn ToTDBInstances>,
+///     ]
+/// })).await?;
+///
+/// // With macro (clean):
+/// client.open_database::<(User, Project), _>("mydb", tdbseeder![
+///     user,
+///     projects,
+/// ]).await?;
+///
+/// // Complex example with inline construction:
+/// client.open_database::<(User, Project), _>("mydb", tdbseeder![
+///     User { name: "Admin".into(), email: "admin@example.com".into() },
+///     vec![
+///         Project { title: "Alpha".into(), active: true },
+///         Project { title: "Beta".into(), active: false },
+///     ],
+/// ]).await?;
+/// ```
+#[macro_export]
+macro_rules! tdbseeder {
+    ($($expr:expr),* $(,)?) => {
+        Some(|| {
+            $crate::tdbinstances![$($expr),*]
+        })
+    };
+}
+
 /// Trait for converting tuples of types into vectors of schemas.
 ///
 /// This trait is implemented for tuples up to 20 elements, where each element

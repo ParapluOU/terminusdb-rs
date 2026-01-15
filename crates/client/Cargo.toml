@@ -40,6 +40,7 @@ url = "2.5.2"
 derive-getters = { workspace = true }
 pseudonym.workspace = true
 base64 = "0.22.1"
+thiserror.workspace = true
 
 # Add reqwest as an dependency for non-wasm targets
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
