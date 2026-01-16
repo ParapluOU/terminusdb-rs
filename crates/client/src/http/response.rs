@@ -33,6 +33,14 @@ fn extract_json_from_malformed_response(text: &str) -> Option<&str> {
     None
 }
 
+/// Check if response text is the TerminusDB "Still Loading" HTML page.
+///
+/// This page is returned when the server is still starting up and
+/// synchronizing its backing store. It's not an error but a transient state.
+fn is_server_loading_html(text: &str) -> bool {
+    text.trim_start().starts_with("<!DOCTYPE html>") && text.contains("Still loading")
+}
+
 /// Response parsing methods for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
     #[cfg(not(target_arch = "wasm32"))]
@@ -48,6 +56,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         res: Response,
     ) -> anyhow::Result<T> {
+        use crate::err::ServerNotReadyError;
         use tap::TapFallible;
 
         // let full = res.bytes().await?;
@@ -59,6 +68,12 @@ impl super::client::TerminusDBHttpClient {
         //     })?;
 
         let full = res.text().await.context("failed to parse response text")?;
+
+        // Detect TerminusDB "Still Loading" page - server is starting up
+        if is_server_loading_html(&full) {
+            tracing::debug!("Server is still loading (synchronizing backing store)");
+            return Err(ServerNotReadyError.into());
+        }
 
         // Handle malformed responses where HTTP headers are embedded in the body.
         // When normal parsing fails, try to extract JSON after a blank line (header/body separator).
@@ -117,6 +132,12 @@ impl super::client::TerminusDBHttpClient {
         );
 
         let full = res.text().await.context("failed to parse response text")?;
+
+        // Detect TerminusDB "Still Loading" page - server is starting up
+        if is_server_loading_html(&full) {
+            tracing::debug!("Server is still loading (synchronizing backing store)");
+            return Err(crate::err::ServerNotReadyError.into());
+        }
 
         // Handle malformed responses where HTTP headers are embedded in the body.
         // When normal parsing fails, try to extract JSON after a blank line (header/body separator).
@@ -217,5 +238,40 @@ Content-type: application/json; charset=UTF-8
 
         let extracted = extract_json_from_malformed_response(garbage);
         assert!(extracted.is_none());
+    }
+
+    #[test]
+    fn test_is_server_loading_html_detects_loading_page() {
+        let loading_html = r#"<!DOCTYPE html>
+<html>
+<head>
+<title>Still Loading</title>
+
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+
+</head>
+<body>
+
+<h1>Still loading</h1>
+
+<p>
+TerminusDB is still synchronizing backing store</p>
+</body>
+</html>"#;
+
+        assert!(is_server_loading_html(loading_html));
+    }
+
+    #[test]
+    fn test_is_server_loading_html_rejects_json() {
+        let json = r#"{"@type":"api:Response","api:status":"ok"}"#;
+        assert!(!is_server_loading_html(json));
+    }
+
+    #[test]
+    fn test_is_server_loading_html_rejects_other_html() {
+        // HTML that isn't the loading page
+        let other_html = "<!DOCTYPE html><html><body>Not loading</body></html>";
+        assert!(!is_server_loading_html(other_html));
     }
 }
