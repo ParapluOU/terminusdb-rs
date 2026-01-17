@@ -418,6 +418,41 @@ impl TerminusDBHttpClient {
         self.parse_response(res).await
     }
 
+    /// Check server info without logging errors.
+    ///
+    /// Use this for health checks where errors are expected during startup.
+    /// Same as `info()` but without the `err` attribute on instrument,
+    /// so connection refused and other expected errors don't spam logs.
+    #[instrument(
+        name = "terminus.client.try_info",
+        skip(self),
+        fields(
+            endpoint = %self.endpoint,
+            org = %self.org
+        )
+    )]
+    pub async fn try_info(&self) -> anyhow::Result<Info> {
+        let uri = self.build_url().endpoint("info").build();
+        debug!(
+            "📡 Making HTTP request to TerminusDB info endpoint: {}",
+            &uri
+        );
+
+        // Acquire concurrency permit for read operations
+        let _permit = self.acquire_read_permit().await;
+
+        let res = self
+            .http
+            .get(uri.clone())
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context(format!("failed to parse response for {}", &uri))?;
+
+        debug!("📨 Received response from TerminusDB, parsing...");
+        self.try_parse_response(res).await
+    }
+
     #[instrument(
         name = "terminus.client.is_running",
         skip(self),

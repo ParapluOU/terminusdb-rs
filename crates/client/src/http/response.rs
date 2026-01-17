@@ -57,7 +57,6 @@ impl super::client::TerminusDBHttpClient {
         res: Response,
     ) -> anyhow::Result<T> {
         use crate::err::ServerNotReadyError;
-        use tap::TapFallible;
 
         // let full = res.bytes().await?;
 
@@ -77,16 +76,14 @@ impl super::client::TerminusDBHttpClient {
 
         // Handle malformed responses where HTTP headers are embedded in the body.
         // When normal parsing fails, try to extract JSON after a blank line (header/body separator).
+        // Note: #[instrument(..., err)] already logs errors, so no explicit error! call needed.
         let json = serde_json::from_str::<serde_json::Value>(&full)
             .or_else(|original_err| {
                 extract_json_from_malformed_response(&full)
                     .and_then(|json_str| serde_json::from_str(json_str).ok())
                     .ok_or(original_err)
             })
-            .context("failed to parse response as JSON")
-            .tap_err(|e| {
-                tracing::error!("failed to parse response text as JSON ({:?}): {}", e, full);
-            })?;
+            .context("failed to parse response as JSON")?;
 
         trace!("[TerminusDBHttpClient] response: {:#?}", &json);
         // eprintln!("parsed response: {:#?}", &json);
@@ -165,6 +162,57 @@ impl super::client::TerminusDBHttpClient {
                     r,
                     terminusdb_data_version,
                 ))
+            }
+            ApiResponse::Error(err) => return Err(err.into()),
+        }
+    }
+
+    /// Parse response without logging errors.
+    ///
+    /// Use this for health checks where errors are expected during startup.
+    /// Same as `parse_response()` but without the `err` attribute on instrument
+    /// and without explicit error logging.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[instrument(
+        name = "terminus.response.try_parse",
+        skip(self, res),
+        fields(
+            response_type = std::any::type_name::<T>()
+        )
+    )]
+    pub(crate) async fn try_parse_response<T: DeserializeOwned + Debug>(
+        &self,
+        res: Response,
+    ) -> anyhow::Result<T> {
+        use crate::err::ServerNotReadyError;
+
+        let full = res.text().await.context("failed to parse response text")?;
+
+        // Detect TerminusDB "Still Loading" page - server is starting up
+        if is_server_loading_html(&full) {
+            tracing::debug!("Server is still loading (synchronizing backing store)");
+            return Err(ServerNotReadyError.into());
+        }
+
+        // Handle malformed responses where HTTP headers are embedded in the body.
+        let json = serde_json::from_str::<serde_json::Value>(&full)
+            .or_else(|original_err| {
+                extract_json_from_malformed_response(&full)
+                    .and_then(|json_str| serde_json::from_str(json_str).ok())
+                    .ok_or(original_err)
+            })
+            .context("failed to parse response as JSON")?;
+
+        trace!("[TerminusDBHttpClient] response: {:#?}", &json);
+
+        let response_has_error_prop = json.get("api:error").is_some();
+        let err = format!("failed to deserialize into ApiResponse: {:#?}", &json);
+        let res: ApiResponse<T> = serde_json::from_value(json).context(err.clone())?;
+
+        match res {
+            ApiResponse::Success(r) => {
+                assert!(!response_has_error_prop, "{}", err);
+                Ok(r)
             }
             ApiResponse::Error(err) => return Err(err.into()),
         }

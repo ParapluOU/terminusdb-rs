@@ -559,7 +559,8 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
                 continue;
             }
         };
-        match client.info().await {
+        // Use try_info() to avoid logging expected errors during startup
+        match client.try_info().await {
             Ok(_) => {
                 eprintln!("[terminusdb-bin] Server is ready!");
                 // Put stderr back
