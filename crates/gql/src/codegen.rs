@@ -454,4 +454,68 @@ mod tests {
         assert!(rust_code.contains("pub name"), "ProjectFilter should have name field");
         assert!(rust_code.contains("pub active"), "ProjectFilter should have active field");
     }
+
+    #[test]
+    fn test_generate_filter_with_relations() {
+        use crate::generate_gql_schema;
+        use terminusdb_schema::{Key, Property, Schema, ToTDBSchemas};
+
+        struct RelationModels;
+        impl ToTDBSchemas for RelationModels {
+            fn to_schemas() -> Vec<Schema> {
+                vec![
+                    Schema::Class {
+                        id: "Project".to_string(),
+                        base: None,
+                        key: Key::Lexical(vec!["name".to_string()]),
+                        documentation: None,
+                        subdocument: false,
+                        r#abstract: false,
+                        inherits: vec![],
+                        unfoldable: false,
+                        properties: vec![Property {
+                            name: "name".to_string(),
+                            r#type: None,
+                            class: "xsd:string".to_string(),
+                        }],
+                    },
+                    Schema::Class {
+                        id: "Ticket".to_string(),
+                        base: None,
+                        key: Key::Lexical(vec!["title".to_string()]),
+                        documentation: None,
+                        subdocument: false,
+                        r#abstract: false,
+                        inherits: vec![],
+                        unfoldable: false,
+                        properties: vec![
+                            Property {
+                                name: "title".to_string(),
+                                r#type: None,
+                                class: "xsd:string".to_string(),
+                            },
+                            Property {
+                                name: "project".to_string(),
+                                r#type: None,
+                                class: "Project".to_string(),
+                            },
+                        ],
+                    },
+                ]
+            }
+        }
+
+        let sdl = generate_gql_schema::<RelationModels>();
+        let rust_code = generate_filter_types(&sdl).unwrap();
+
+        // Struct names are sanitized (Ticket_Filter -> TicketFilter)
+        assert!(rust_code.contains("struct TicketFilter"), "Should have TicketFilter");
+        assert!(rust_code.contains("struct ProjectFilter"), "Should have ProjectFilter");
+
+        // TicketFilter should have project field referencing ProjectFilter
+        assert!(
+            rust_code.contains("project : Option < ProjectFilter"),
+            "TicketFilter should have project: Option<ProjectFilter>"
+        );
+    }
 }

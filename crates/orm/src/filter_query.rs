@@ -127,8 +127,10 @@ where
 
         // Add filter if present
         if let Some(filter) = &self.filter {
-            let filter_json = serde_json::to_string(filter).unwrap_or_default();
-            args.push(format!("filter: {}", filter_json));
+            // Convert filter to JSON, then to GraphQL object syntax
+            let filter_json = serde_json::to_value(filter).unwrap_or_default();
+            let filter_gql = json_to_graphql(&filter_json);
+            args.push(format!("filter: {}", filter_gql));
         }
 
         // Add limit if present
@@ -235,6 +237,30 @@ where
     }
 }
 
+/// Convert a JSON value to GraphQL object literal syntax.
+///
+/// GraphQL object literals don't quote keys, but JSON does.
+/// This converts `{"name": {"eq": "test"}}` to `{name: {eq: "test"}}`.
+fn json_to_graphql(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_graphql).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(obj) => {
+            let fields: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, json_to_graphql(v)))
+                .collect();
+            format!("{{{}}}", fields.join(", "))
+        }
+    }
+}
+
 /// Extract IDs from a GraphQL filter query response.
 fn extract_ids_from_response(data: &serde_json::Value, type_name: &str) -> Vec<String> {
     let mut ids = Vec::new();
@@ -315,5 +341,41 @@ mod tests {
 
         let ids = extract_ids_from_response(&response, "Project");
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_json_to_graphql() {
+        let json = serde_json::json!({
+            "name": {
+                "eq": "Test Project"
+            },
+            "active": true
+        });
+
+        let gql = json_to_graphql(&json);
+        // Should not have quoted keys
+        assert!(!gql.contains("\"name\""), "Keys should not be quoted");
+        assert!(!gql.contains("\"eq\""), "Keys should not be quoted");
+        assert!(!gql.contains("\"active\""), "Keys should not be quoted");
+        // But string values should still be quoted
+        assert!(gql.contains("\"Test Project\""), "String values should be quoted");
+        // Boolean should not be quoted
+        assert!(gql.contains("active: true"), "Booleans should not be quoted");
+    }
+
+    #[test]
+    fn test_json_to_graphql_nested() {
+        let json = serde_json::json!({
+            "project": {
+                "name": {
+                    "startsWith": "Alpha"
+                }
+            }
+        });
+
+        let gql = json_to_graphql(&json);
+        assert!(gql.contains("project: {"), "Should have unquoted nested key");
+        assert!(gql.contains("name: {"), "Should have unquoted nested key");
+        assert!(gql.contains("startsWith: \"Alpha\""), "Should have unquoted key with quoted value");
     }
 }

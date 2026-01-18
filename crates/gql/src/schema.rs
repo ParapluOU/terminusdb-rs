@@ -565,4 +565,74 @@ mod tests {
         assert!(sdl.contains("scalar BigInt"), "Should contain custom scalars");
         assert!(sdl.contains("input StringFilter"), "Should contain StringFilter");
     }
+
+    #[test]
+    fn test_generate_sdl_with_relations() {
+        let schemas = vec![
+            Schema::Class {
+                id: "Project".to_string(),
+                base: None,
+                key: Key::Lexical(vec!["name".to_string()]),
+                documentation: None,
+                subdocument: false,
+                r#abstract: false,
+                inherits: vec![],
+                unfoldable: false,
+                properties: vec![
+                    Property {
+                        name: "name".to_string(),
+                        r#type: None,
+                        class: "xsd:string".to_string(),
+                    },
+                ],
+            },
+            Schema::Class {
+                id: "Ticket".to_string(),
+                base: None,
+                key: Key::Lexical(vec!["title".to_string()]),
+                documentation: None,
+                subdocument: false,
+                r#abstract: false,
+                inherits: vec![],
+                unfoldable: false,
+                properties: vec![
+                    Property {
+                        name: "title".to_string(),
+                        r#type: None,
+                        class: "xsd:string".to_string(),
+                    },
+                    // Edge relation to Project
+                    Property {
+                        name: "project".to_string(),
+                        r#type: None,
+                        class: "Project".to_string(),
+                    },
+                    // Optional self-reference
+                    Property {
+                        name: "parent".to_string(),
+                        r#type: Some(TypeFamily::Optional),
+                        class: "Ticket".to_string(),
+                    },
+                ],
+            },
+        ];
+
+        let frames = schemas_vec_to_allframes(&schemas);
+        let sdl = allframes_to_sdl(&frames);
+
+        println!("=== Generated SDL with relations ===\n{}", sdl);
+
+        // Should have Ticket type with project field
+        assert!(sdl.contains("type Ticket"), "Should contain Ticket type");
+        assert!(sdl.contains("project: Project"), "Ticket should have project field");
+        assert!(sdl.contains("parent: Ticket"), "Ticket should have parent field");
+
+        // Should have Ticket_Filter with project filter
+        assert!(sdl.contains("input Ticket_Filter"), "Should contain Ticket_Filter");
+
+        // Check if relation filters are included
+        let has_project_filter = sdl.contains("project: Project_Filter")
+            || sdl.contains("project: CollectionFilter_Project");
+        println!("Has project filter in Ticket_Filter: {}", has_project_filter);
+    }
 }
