@@ -17,6 +17,7 @@
 //! ```
 
 mod client;
+mod filter_query;
 mod graphql_query;
 mod multi_fetch;
 mod query;
@@ -33,6 +34,7 @@ pub mod prelude;
 pub mod testing;
 
 pub use client::{ClientAlreadyInitializedError, ClientProvider, GlobalClient, OrmClient};
+pub use filter_query::{FilterExt, FilterQuery};
 pub use graphql_query::{parse_id_response, IdQueryBuilder, IdQueryResult, RelationPath};
 pub use multi_fetch::{fetch_by_ids, fetch_by_ids_default, FetchBuilder, MultiTypeFetch};
 pub use query::{ModelExt, ModelQuery, OrmModel, RelationDirection, RelationSpec};
@@ -54,6 +56,7 @@ pub use resolver::RelationResolver;
 
 // Re-export commonly used types from dependencies
 pub use terminusdb_client::{BranchSpec, GetOpts, TerminusDBHttpClient};
+pub use terminusdb_gql::TdbGQLModel;
 pub use terminusdb_relation::{RelationField, RelationFrom, RelationTo};
 pub use terminusdb_schema::{
     json::InstanceFromJson, EntityIDFor, FromTDBInstance, Instance, TdbLazy, TerminusDBModel,

@@ -4,6 +4,7 @@ members = [
     "crates/bin",
     "crates/cli",
     "crates/client",
+    "crates/gql",
     "crates/manager",
     "crates/mcp-server",
     "crates/orm",
@@ -91,4 +92,8 @@ categories = ["database", "api-bindings"]
 [profile.release]
 opt-level = 3
 lto = true
-codegen-units = 1 
+codegen-units = 1
+
+[patch.crates-io]
+# Use git version of terminus-store to match terminusdb-community's requirements
+terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store", rev = "1c44c026028220c22c0ebf41ccc4708a7f38799f" }

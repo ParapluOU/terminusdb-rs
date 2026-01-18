@@ -22,6 +22,8 @@ pub use crate::{
     HasMany, HasManyField, HasOne, HasOneField, IdQueryBuilder, IdQueryResult, ModelExt,
     ModelQuery, MultiTypeFetch, OrmClient, OrmModel, OrmResult, RelationDirection, RelationPath,
     RelationSpec, ReverseRelation,
+    // Filter query types
+    FilterExt, FilterQuery, TdbGQLModel,
     // Resolver types (GraphQL-based relation resolution)
     generate_graphql_query, BatchResolver, GraphQLRelationQuery, LoadStrategy, QueryPlan,
     RelationPlan, RelationResolution, RelationSelection, ResolvedRelations,

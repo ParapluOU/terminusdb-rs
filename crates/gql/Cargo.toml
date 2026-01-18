@@ -1,0 +1,26 @@
+[package]
+name = "terminusdb-gql"
+version = "0.1.0"
+edition = "2021"
+description = "GraphQL schema generation for TerminusDB models"
+
+[dependencies]
+# Local dependencies
+terminusdb-schema = { path = "../schema" }
+
+# TerminusDB community crate (from ParapluOU fork)
+terminusdb-community = { git = "https://github.com/ParapluOU/terminusdb.git", branch = "main" }
+
+# Juniper - same version as terminusdb-community
+juniper = { git = "https://github.com/terminusdb-labs/juniper.git", tag = "juniper-v0.15.11-p1" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+graphql-parser = "0.4.1"
+quote.workspace = true
+proc-macro2.workspace = true
