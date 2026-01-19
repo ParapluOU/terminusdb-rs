@@ -23,7 +23,7 @@ pub use crate::{
     ModelQuery, MultiTypeFetch, OrmClient, OrmModel, OrmResult, RelationBuilder, RelationDirection,
     RelationOpts, RelationPath, RelationSpec, ReverseRelation,
     // Filter query types
-    FilterExt, FilterQuery, MultiFilterQuery, TdbGQLModel,
+    FilterExt, FilterQuery, TdbGQLModel,
     // Composable query types
     ComposedQuery, ComposedResult, IntoQueryPart, Orm, QueryEntry,
     // Resolver types (GraphQL-based relation resolution)
