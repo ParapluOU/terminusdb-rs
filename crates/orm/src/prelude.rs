@@ -21,9 +21,7 @@ pub use crate::{
     BelongsTo, BelongsToField, ClientProvider, FetchBuilder, ForwardRelation, GlobalClient,
     HasMany, HasManyField, HasOne, HasOneField, IdQueryBuilder, IdQueryResult, ModelExt,
     ModelQuery, MultiTypeFetch, OrmClient, OrmModel, OrmResult, RelationBuilder, RelationDirection,
-    RelationOpts, RelationPath, RelationSpec, ReverseRelation,
-    // Filter query types
-    FilterExt, FilterQuery, TdbGQLModel,
+    RelationOpts, RelationPath, RelationSpec, ReverseRelation, TdbGQLModel,
     // Composable query types
     ComposedQuery, ComposedResult, IntoQueryPart, Orm, QueryEntry,
     // Resolver types (GraphQL-based relation resolution)

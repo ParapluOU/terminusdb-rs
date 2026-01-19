@@ -1,4 +1,4 @@
-//! Integration tests for FilterQuery with relation filters.
+//! Integration tests for ModelExt::query() with relation filters.
 //!
 //! Tests the complete flow: Schema → GraphQL Filter → Query Execution
 
@@ -173,7 +173,7 @@ async fn test_filter_query_execution(client: _, spec: _) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let results = TestTicket::filter(filter)
+    let results = TestTicket::query(filter)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -196,7 +196,7 @@ async fn test_filter_query_execution(client: _, spec: _) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let alpha_tickets = TestTicket::filter(filter_by_project)
+    let alpha_tickets = TestTicket::query(filter_by_project)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -221,7 +221,7 @@ async fn test_filter_query_execution(client: _, spec: _) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let filtered = TestTicket::filter(combined_filter)
+    let filtered = TestTicket::query(combined_filter)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -260,7 +260,7 @@ async fn test_filter_query_no_matches(client: _, spec: _) -> anyhow::Result<()> 
         ..Default::default()
     };
 
-    let results = TestProject::filter(filter)
+    let results = TestProject::query(filter)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -288,7 +288,7 @@ async fn test_filter_query_all(client: _, spec: _) -> anyhow::Result<()> {
     }
 
     // Query all with limit
-    let results = TestProject::all()
+    let results = TestProject::query_all()
         .with_client(&client)
         .limit(3)
         .execute(&spec)
@@ -297,7 +297,7 @@ async fn test_filter_query_all(client: _, spec: _) -> anyhow::Result<()> {
     assert_eq!(results.len(), 3, "Should return 3 projects with limit");
 
     // Query all without limit
-    let all_results = TestProject::all()
+    let all_results = TestProject::query_all()
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -457,7 +457,7 @@ async fn test_tdblazy_nested_filter_execution(client: _, spec: _) -> anyhow::Res
         ..Default::default()
     };
 
-    let alice_articles = Article::filter(filter_by_alice)
+    let alice_articles = Article::query(filter_by_alice)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -485,7 +485,7 @@ async fn test_tdblazy_nested_filter_execution(client: _, spec: _) -> anyhow::Res
         ..Default::default()
     };
 
-    let rust_articles = Article::filter(rust_by_alice)
+    let rust_articles = Article::query(rust_by_alice)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -509,7 +509,7 @@ async fn test_tdblazy_nested_filter_execution(client: _, spec: _) -> anyhow::Res
         ..Default::default()
     };
 
-    let bob_articles = Article::filter(filter_by_bob)
+    let bob_articles = Article::query(filter_by_bob)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -600,7 +600,7 @@ async fn test_not_filter_for_absent_field(client: _, spec: _) -> anyhow::Result<
         ..Default::default()
     };
 
-    let assigned_tasks = Task::filter(filter_has_assignee)
+    let assigned_tasks = Task::query(filter_has_assignee)
         .with_client(&client)
         .execute(&spec)
         .await?;
@@ -622,7 +622,7 @@ async fn test_not_filter_for_absent_field(client: _, spec: _) -> anyhow::Result<
         ..Default::default()
     };
 
-    let unassigned_tasks = Task::filter(filter_no_assignee)
+    let unassigned_tasks = Task::query(filter_no_assignee)
         .with_client(&client)
         .execute(&spec)
         .await?;

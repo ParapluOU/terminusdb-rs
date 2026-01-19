@@ -38,9 +38,34 @@ use terminusdb_schema::{
     ToTDBSchema,
 };
 
-use crate::filter_query::json_to_graphql;
 use crate::relations::{ForwardRelation, ReverseRelation};
 use crate::{result::OrmResult, ClientProvider, GlobalClient, MultiTypeFetch, TdbGQLModel};
+
+/// Convert a JSON value to GraphQL object literal syntax.
+///
+/// GraphQL object literals don't quote keys, but JSON does.
+/// This converts `{"name": {"eq": "test"}}` to `{name: {eq: "test"}}`.
+pub(crate) fn json_to_graphql(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => {
+            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_graphql).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(obj) => {
+            let fields: Vec<String> = obj
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, json_to_graphql(v)))
+                .collect();
+            format!("{{{}}}", fields.join(", "))
+        }
+    }
+}
 
 /// Options for loading a relation with filtering/pagination.
 ///
