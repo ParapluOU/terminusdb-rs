@@ -64,6 +64,8 @@ struct TypeQuery {
     limit: Option<i32>,
     /// Offset for pagination for this type
     offset: Option<i32>,
+    /// OrderBy clause serialized to GraphQL object syntax (if any)
+    order_by: Option<String>,
 }
 
 impl TypeQuery {
@@ -73,6 +75,9 @@ impl TypeQuery {
 
         if let Some(filter) = &self.filter_gql {
             args.push(format!("filter: {}", filter));
+        }
+        if let Some(order_by) = &self.order_by {
+            args.push(format!("orderBy: {}", order_by));
         }
         if let Some(limit) = self.limit {
             args.push(format!("limit: {}", limit));
@@ -93,7 +98,7 @@ impl TypeQuery {
 
 /// Builder for a single type within a multi-filter query.
 ///
-/// Allows setting type-specific options like limit and offset.
+/// Allows setting type-specific options like limit, offset, and ordering.
 pub struct TypeQueryBuilder<'a, T, C>
 where
     T: OrmModel + TdbGQLModel + ToSchemaClass,
@@ -104,6 +109,7 @@ where
     filter: Option<T::Filter>,
     limit: Option<i32>,
     offset: Option<i32>,
+    order_by: Option<String>,
     _phantom: PhantomData<T>,
 }
 
@@ -125,6 +131,26 @@ where
         self
     }
 
+    /// Set ordering for this type query using a typed ordering struct.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use paraplu_services::filters::{TicketOrdering, Ordering};
+    ///
+    /// let ordering = TicketOrdering {
+    ///     sort_order: Some(Ordering::Asc),
+    ///     ..Default::default()
+    /// };
+    /// query.query_builder::<Ticket>(filter)
+    ///     .order_by(ordering)
+    ///     .done();
+    /// ```
+    pub fn order_by<O: Serialize>(mut self, order_by: O) -> Self {
+        let order_json = serde_json::to_value(&order_by).unwrap_or_default();
+        self.order_by = Some(json_to_graphql(&order_json));
+        self
+    }
+
     /// Finalize this type query and return to the parent builder.
     pub fn done(self) -> &'a mut MultiFilterQuery<C> {
         let filter_gql = self.filter.map(|f| {
@@ -137,6 +163,7 @@ where
             filter_gql,
             limit: self.limit,
             offset: self.offset,
+            order_by: self.order_by,
         });
 
         self.parent
@@ -217,6 +244,7 @@ impl<C: ClientProvider> MultiFilterQuery<C> {
             filter_gql: Some(filter_gql),
             limit: None,
             offset: None,
+            order_by: None,
         });
 
         self
@@ -238,6 +266,7 @@ impl<C: ClientProvider> MultiFilterQuery<C> {
             filter_gql: None,
             limit: None,
             offset: None,
+            order_by: None,
         });
 
         self
@@ -269,6 +298,93 @@ impl<C: ClientProvider> MultiFilterQuery<C> {
             filter_gql: Some(filter_gql),
             limit: None,
             offset: None,
+            order_by: None,
+        });
+
+        self
+    }
+
+    /// Add a type query with an explicit filter type and pagination (no TdbGQLModel needed).
+    ///
+    /// Use this when the model doesn't implement TdbGQLModel and you need pagination.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use paraplu_services::filters::ProjectFilter;
+    ///
+    /// let mut query = MultiFilterQuery::new();
+    /// query.query_with_filter_paginated::<Project, _>(project_filter, Some(100), Some(0));
+    /// ```
+    pub fn query_with_filter_paginated<T, F>(
+        &mut self,
+        filter: F,
+        limit: Option<i32>,
+        offset: Option<i32>,
+    ) -> &mut Self
+    where
+        T: OrmModel + ToSchemaClass,
+        F: Serialize,
+    {
+        let type_name = T::to_class();
+        let filter_json = serde_json::to_value(&filter).unwrap_or_default();
+        let filter_gql = json_to_graphql(&filter_json);
+
+        self.queries.push(TypeQuery {
+            type_name,
+            filter_gql: Some(filter_gql),
+            limit,
+            offset,
+            order_by: None,
+        });
+
+        self
+    }
+
+    /// Add a type query with an explicit filter type, pagination, and ordering (no TdbGQLModel needed).
+    ///
+    /// # Example
+    /// ```ignore
+    /// use paraplu_services::filters::{ContactLogFilter, ContactLogOrdering, Ordering};
+    ///
+    /// let mut query = MultiFilterQuery::new();
+    /// let ordering = ContactLogOrdering {
+    ///     follow_up_date: Some(Ordering::Asc),
+    ///     ..Default::default()
+    /// };
+    /// query.query_with_filter_ordered::<ContactLog, _, _>(
+    ///     log_filter,
+    ///     Some(50),
+    ///     Some(0),
+    ///     Some(ordering),
+    /// );
+    /// ```
+    pub fn query_with_filter_ordered<T, F, O>(
+        &mut self,
+        filter: F,
+        limit: Option<i32>,
+        offset: Option<i32>,
+        order_by: Option<O>,
+    ) -> &mut Self
+    where
+        T: OrmModel + ToSchemaClass,
+        F: Serialize,
+        O: Serialize,
+    {
+        let type_name = T::to_class();
+        let filter_json = serde_json::to_value(&filter).unwrap_or_default();
+        let filter_gql = json_to_graphql(&filter_json);
+
+        let order_by_gql = order_by.map(|o| {
+            let order_json = serde_json::to_value(&o).unwrap_or_default();
+            json_to_graphql(&order_json)
+        });
+
+        self.queries.push(TypeQuery {
+            type_name,
+            filter_gql: Some(filter_gql),
+            limit,
+            offset,
+            order_by: order_by_gql,
         });
 
         self
@@ -290,6 +406,7 @@ impl<C: ClientProvider> MultiFilterQuery<C> {
             filter_gql: None,
             limit: None,
             offset: None,
+            order_by: None,
         });
 
         self
@@ -317,6 +434,7 @@ impl<C: ClientProvider> MultiFilterQuery<C> {
             filter: Some(filter),
             limit: None,
             offset: None,
+            order_by: None,
             _phantom: PhantomData,
         }
     }
@@ -333,6 +451,7 @@ impl<C: ClientProvider> MultiFilterQuery<C> {
             filter: None,
             limit: None,
             offset: None,
+            order_by: None,
             _phantom: PhantomData,
         }
     }
@@ -463,6 +582,7 @@ mod tests {
             filter_gql: None,
             limit: None,
             offset: None,
+            order_by: None,
         };
 
         let fragment = query.build_fragment();
@@ -476,6 +596,7 @@ mod tests {
             filter_gql: Some("{name: {eq: \"Test\"}}".to_string()),
             limit: None,
             offset: None,
+            order_by: None,
         };
 
         let fragment = query.build_fragment();
@@ -492,6 +613,7 @@ mod tests {
             filter_gql: Some("{status: {eq: \"open\"}}".to_string()),
             limit: Some(100),
             offset: Some(50),
+            order_by: None,
         };
 
         let fragment = query.build_fragment();

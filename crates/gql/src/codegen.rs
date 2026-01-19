@@ -26,7 +26,10 @@
 //! }
 //! ```
 
-use graphql_parser::schema::{parse_schema, Definition, Document, InputObjectType, Type, TypeDefinition as GqlTypeDefinition};
+use graphql_parser::schema::{
+    parse_schema, Definition, Document, EnumType, InputObjectType, Type,
+    TypeDefinition as GqlTypeDefinition,
+};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::collections::HashSet;
@@ -59,7 +62,7 @@ pub fn generate_filter_types(sdl: &str) -> Result<String, String> {
 fn generate_from_document(doc: &Document<String>) -> TokenStream {
     let mut generated = Vec::new();
 
-    // Collect all input type names for reference resolution
+    // Collect all type names for reference resolution
     let input_type_names: HashSet<_> = doc
         .definitions
         .iter()
@@ -72,10 +75,29 @@ fn generate_from_document(doc: &Document<String>) -> TokenStream {
         })
         .collect();
 
-    // Generate structs for input types (filters)
+    let enum_names: HashSet<_> = doc
+        .definitions
+        .iter()
+        .filter_map(|def| {
+            if let Definition::TypeDefinition(GqlTypeDefinition::Enum(e)) = def {
+                Some(e.name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Generate enums (like Ordering)
+    for def in &doc.definitions {
+        if let Definition::TypeDefinition(GqlTypeDefinition::Enum(e)) = def {
+            generated.push(generate_enum(e));
+        }
+    }
+
+    // Generate structs for input types (filters and ordering)
     for def in &doc.definitions {
         if let Definition::TypeDefinition(GqlTypeDefinition::InputObject(input)) = def {
-            generated.push(generate_input_object(input, &input_type_names));
+            generated.push(generate_input_object(input, &input_type_names, &enum_names));
         }
     }
 
@@ -86,8 +108,103 @@ fn generate_from_document(doc: &Document<String>) -> TokenStream {
     }
 }
 
+/// Generate a Rust enum for a GraphQL enum type.
+fn generate_enum(e: &EnumType<String>) -> TokenStream {
+    let enum_name = sanitize_type_name(&e.name);
+    let enum_ident = Ident::new(&enum_name, Span::call_site());
+
+    let variants: Vec<TokenStream> = e
+        .values
+        .iter()
+        .map(|v| {
+            let variant_name = &v.name;
+            let rust_variant_name = sanitize_enum_variant(variant_name);
+            let variant_ident = Ident::new(&rust_variant_name, Span::call_site());
+
+            // Add serde rename if the name changed
+            if rust_variant_name != *variant_name {
+                quote! {
+                    #[serde(rename = #variant_name)]
+                    #variant_ident,
+                }
+            } else {
+                quote! {
+                    #variant_ident,
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+        pub enum #enum_ident {
+            #(#variants)*
+        }
+    }
+}
+
+/// Sanitize an enum variant name to be a valid Rust identifier.
+/// Converts to PascalCase and handles reserved keywords.
+fn sanitize_enum_variant(name: &str) -> String {
+    // Handle reserved Rust keywords
+    let rust_name = match name {
+        "in" => "In",
+        "notin" => "NotIn",
+        "type" => "Type",
+        "self" => "Self_",
+        "super" => "Super",
+        "crate" => "Crate",
+        "mod" => "Mod",
+        "fn" => "Fn",
+        "let" => "Let",
+        "const" => "Const",
+        "static" => "Static",
+        "mut" => "Mut",
+        "ref" => "Ref",
+        "match" => "Match",
+        "if" => "If",
+        "else" => "Else",
+        "loop" => "Loop",
+        "while" => "While",
+        "for" => "For",
+        "break" => "Break",
+        "continue" => "Continue",
+        "return" => "Return",
+        "true" => "True",
+        "false" => "False",
+        _ => {
+            // Convert to PascalCase
+            return to_pascal_case(name);
+        }
+    };
+    rust_name.to_string()
+}
+
+/// Convert a string to PascalCase.
+fn to_pascal_case(s: &str) -> String {
+    // Handle already PascalCase names
+    if s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) && !s.contains('_') {
+        return s.to_string();
+    }
+
+    // Split by underscores and capitalize each word
+    s.split('_')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect()
+}
+
 /// Generate a Rust struct for a GraphQL input object type.
-fn generate_input_object(input: &InputObjectType<String>, known_inputs: &HashSet<String>) -> TokenStream {
+fn generate_input_object(
+    input: &InputObjectType<String>,
+    known_inputs: &HashSet<String>,
+    known_enums: &HashSet<String>,
+) -> TokenStream {
     let struct_name = sanitize_type_name(&input.name);
     let struct_ident = Ident::new(&struct_name, Span::call_site());
 
@@ -107,7 +224,8 @@ fn generate_input_object(input: &InputObjectType<String>, known_inputs: &HashSet
             let rust_field_name = sanitize_field_name_with_conflicts(field_name, &sanitized_names);
             let field_ident = Ident::new(&rust_field_name, Span::call_site());
 
-            let field_type = graphql_type_to_rust(&field.value_type, known_inputs, &struct_name);
+            let field_type =
+                graphql_type_to_rust(&field.value_type, known_inputs, known_enums, &struct_name);
 
             // Add serde rename if the field name was sanitized or starts with underscore
             let serde_attr = if rust_field_name != *field_name {
@@ -135,21 +253,23 @@ fn generate_input_object(input: &InputObjectType<String>, known_inputs: &HashSet
 fn graphql_type_to_rust(
     ty: &Type<String>,
     known_inputs: &HashSet<String>,
+    known_enums: &HashSet<String>,
     current_struct: &str,
 ) -> TokenStream {
     match ty {
         Type::NamedType(name) => {
-            let rust_type = graphql_scalar_to_rust(name, known_inputs, current_struct);
+            let rust_type = graphql_scalar_to_rust(name, known_inputs, known_enums, current_struct);
             // All filter fields are optional
             quote! { Option<#rust_type> }
         }
         Type::NonNullType(inner) => {
             // For non-null, we still wrap in Option for filter inputs
             // (filters are typically all optional)
-            graphql_type_to_rust(inner, known_inputs, current_struct)
+            graphql_type_to_rust(inner, known_inputs, known_enums, current_struct)
         }
         Type::ListType(inner) => {
-            let inner_type = graphql_type_to_rust_unwrapped(inner, known_inputs, current_struct);
+            let inner_type =
+                graphql_type_to_rust_unwrapped(inner, known_inputs, known_enums, current_struct);
             quote! { Option<Vec<#inner_type>> }
         }
     }
@@ -159,13 +279,19 @@ fn graphql_type_to_rust(
 fn graphql_type_to_rust_unwrapped(
     ty: &Type<String>,
     known_inputs: &HashSet<String>,
+    known_enums: &HashSet<String>,
     current_struct: &str,
 ) -> TokenStream {
     match ty {
-        Type::NamedType(name) => graphql_scalar_to_rust(name, known_inputs, current_struct),
-        Type::NonNullType(inner) => graphql_type_to_rust_unwrapped(inner, known_inputs, current_struct),
+        Type::NamedType(name) => {
+            graphql_scalar_to_rust(name, known_inputs, known_enums, current_struct)
+        }
+        Type::NonNullType(inner) => {
+            graphql_type_to_rust_unwrapped(inner, known_inputs, known_enums, current_struct)
+        }
         Type::ListType(inner) => {
-            let inner_type = graphql_type_to_rust_unwrapped(inner, known_inputs, current_struct);
+            let inner_type =
+                graphql_type_to_rust_unwrapped(inner, known_inputs, known_enums, current_struct);
             quote! { Vec<#inner_type> }
         }
     }
@@ -175,6 +301,7 @@ fn graphql_type_to_rust_unwrapped(
 fn graphql_scalar_to_rust(
     name: &str,
     known_inputs: &HashSet<String>,
+    known_enums: &HashSet<String>,
     current_struct: &str,
 ) -> TokenStream {
     match name {
@@ -183,19 +310,19 @@ fn graphql_scalar_to_rust(
         "Float" => quote! { f64 },
         "Boolean" => quote! { bool },
         "ID" => quote! { String },
-        "BigInt" => quote! { String }, // BigInt as string
+        "BigInt" => quote! { String },   // BigInt as string
         "BigFloat" => quote! { String }, // BigFloat as string
         "DateTime" => quote! { String }, // DateTime as ISO string
         "JSON" => quote! { serde_json::Value },
         _ => {
-            // It's a custom type - check if it's a known input type
+            // It's a custom type - check if it's a known input or enum type
             let rust_name = sanitize_type_name(name);
             let type_ident = Ident::new(&rust_name, Span::call_site());
 
             // For self-referential types (like _not: ProjectFilter), use Box
             if rust_name == current_struct {
                 quote! { Box<#type_ident> }
-            } else if known_inputs.contains(name) {
+            } else if known_inputs.contains(name) || known_enums.contains(name) {
                 quote! { #type_ident }
             } else {
                 // Unknown type, treat as String
@@ -344,7 +471,10 @@ mod tests {
     fn test_sanitize_type_name() {
         assert_eq!(sanitize_type_name("Project_Filter"), "ProjectFilter");
         assert_eq!(sanitize_type_name("StringFilter"), "StringFilter");
-        assert_eq!(sanitize_type_name("Project_Collection_Filter"), "ProjectCollectionFilter");
+        assert_eq!(
+            sanitize_type_name("Project_Collection_Filter"),
+            "ProjectCollectionFilter"
+        );
     }
 
     #[test]
@@ -362,10 +492,16 @@ mod tests {
         assert_eq!(sanitize_field_name_with_conflicts("_and", &existing), "and");
 
         // Conflict - uses tdb_ prefix
-        assert_eq!(sanitize_field_name_with_conflicts("_id", &existing), "tdb_id");
+        assert_eq!(
+            sanitize_field_name_with_conflicts("_id", &existing),
+            "tdb_id"
+        );
 
         // Regular field - unchanged
-        assert_eq!(sanitize_field_name_with_conflicts("name", &existing), "name");
+        assert_eq!(
+            sanitize_field_name_with_conflicts("name", &existing),
+            "name"
+        );
     }
 
     #[test]
@@ -387,8 +523,14 @@ mod tests {
 
         // Should have both id and tdb_id fields
         assert!(code.contains("pub id"), "Should contain id field");
-        assert!(code.contains("pub tdb_id"), "Should contain tdb_id field (from _id to avoid conflict)");
-        assert!(code.contains(r#"rename = "_id""#), "Should have serde rename for tdb_id");
+        assert!(
+            code.contains("pub tdb_id"),
+            "Should contain tdb_id field (from _id to avoid conflict)"
+        );
+        assert!(
+            code.contains(r#"rename = "_id""#),
+            "Should have serde rename for tdb_id"
+        );
     }
 
     #[test]
@@ -407,10 +549,19 @@ mod tests {
 
         let code = generate_filter_types(sdl).unwrap();
 
-        assert!(code.contains("struct StringFilter"), "Should contain StringFilter struct");
-        assert!(code.contains("struct ProjectFilter"), "Should contain ProjectFilter struct");
+        assert!(
+            code.contains("struct StringFilter"),
+            "Should contain StringFilter struct"
+        );
+        assert!(
+            code.contains("struct ProjectFilter"),
+            "Should contain ProjectFilter struct"
+        );
         assert!(code.contains("pub eq"), "Should contain eq field");
-        assert!(code.contains("pub id"), "Should contain id field (sanitized from _id)");
+        assert!(
+            code.contains("pub id"),
+            "Should contain id field (sanitized from _id)"
+        );
     }
 
     #[test]
@@ -426,8 +577,11 @@ mod tests {
         let code = generate_filter_types(sdl).unwrap();
 
         // Self-referential _not should use Box
-        assert!(code.contains("Box < ProjectFilter >") || code.contains("Box<ProjectFilter>"),
-            "Should use Box for self-referential _not field. Generated code: {}", code);
+        assert!(
+            code.contains("Box < ProjectFilter >") || code.contains("Box<ProjectFilter>"),
+            "Should use Box for self-referential _not field. Generated code: {}",
+            code
+        );
     }
 
     #[test]
@@ -439,7 +593,8 @@ mod tests {
 
         assert!(
             impls.contains("impl terminusdb_gql :: TdbGQLModel for crate :: models :: Project"),
-            "Should contain Project impl. Generated:\n{}", impls
+            "Should contain Project impl. Generated:\n{}",
+            impls
         );
         assert!(
             impls.contains("type Filter = ProjectFilter"),
@@ -462,6 +617,8 @@ mod tests {
 
         // Define test schemas
         struct TestModels;
+
+        // @claude todo: we should never manually implement ToSchema. just derive TerminusDBModel
         impl ToTDBSchemas for TestModels {
             fn to_schemas() -> Vec<Schema> {
                 vec![
@@ -501,19 +658,43 @@ mod tests {
         let sdl = generate_gql_schema::<TestModels>();
 
         // Verify SDL contains expected types
-        assert!(sdl.contains("type Project"), "SDL should contain Project type");
-        assert!(sdl.contains("input Project_Filter"), "SDL should contain Project_Filter");
-        assert!(sdl.contains("enum Status"), "SDL should contain Status enum");
+        assert!(
+            sdl.contains("type Project"),
+            "SDL should contain Project type"
+        );
+        assert!(
+            sdl.contains("input Project_Filter"),
+            "SDL should contain Project_Filter"
+        );
+        assert!(
+            sdl.contains("enum Status"),
+            "SDL should contain Status enum"
+        );
 
         // Generate Rust code from SDL
         let rust_code = generate_filter_types(&sdl).unwrap();
 
         // Verify generated Rust code
-        assert!(rust_code.contains("struct ProjectFilter"), "Should generate ProjectFilter");
-        assert!(rust_code.contains("struct StringFilter"), "Should generate StringFilter");
-        assert!(rust_code.contains("struct BooleanFilter"), "Should generate BooleanFilter");
-        assert!(rust_code.contains("pub name"), "ProjectFilter should have name field");
-        assert!(rust_code.contains("pub active"), "ProjectFilter should have active field");
+        assert!(
+            rust_code.contains("struct ProjectFilter"),
+            "Should generate ProjectFilter"
+        );
+        assert!(
+            rust_code.contains("struct StringFilter"),
+            "Should generate StringFilter"
+        );
+        assert!(
+            rust_code.contains("struct BooleanFilter"),
+            "Should generate BooleanFilter"
+        );
+        assert!(
+            rust_code.contains("pub name"),
+            "ProjectFilter should have name field"
+        );
+        assert!(
+            rust_code.contains("pub active"),
+            "ProjectFilter should have active field"
+        );
     }
 
     #[test]
@@ -522,6 +703,8 @@ mod tests {
         use terminusdb_schema::{Key, Property, Schema, ToTDBSchemas};
 
         struct RelationModels;
+
+        // @claude todo: we should never manually implement ToSchema. just derive TerminusDBModel
         impl ToTDBSchemas for RelationModels {
             fn to_schemas() -> Vec<Schema> {
                 vec![
@@ -570,13 +753,110 @@ mod tests {
         let rust_code = generate_filter_types(&sdl).unwrap();
 
         // Struct names are sanitized (Ticket_Filter -> TicketFilter)
-        assert!(rust_code.contains("struct TicketFilter"), "Should have TicketFilter");
-        assert!(rust_code.contains("struct ProjectFilter"), "Should have ProjectFilter");
+        assert!(
+            rust_code.contains("struct TicketFilter"),
+            "Should have TicketFilter"
+        );
+        assert!(
+            rust_code.contains("struct ProjectFilter"),
+            "Should have ProjectFilter"
+        );
 
         // TicketFilter should have project field referencing ProjectFilter
         assert!(
             rust_code.contains("project : Option < ProjectFilter"),
             "TicketFilter should have project: Option<ProjectFilter>"
         );
+    }
+
+    #[test]
+    fn test_generate_enum_types() {
+        let sdl = r#"
+            enum Ordering {
+                Asc
+                Desc
+            }
+
+            input Project_Ordering {
+                name: Ordering
+                created_at: Ordering
+            }
+        "#;
+
+        let code = generate_filter_types(sdl).unwrap();
+
+        // Should generate Ordering enum
+        assert!(
+            code.contains("pub enum Ordering"),
+            "Should contain Ordering enum"
+        );
+        assert!(code.contains("Asc"), "Should contain Asc variant");
+        assert!(code.contains("Desc"), "Should contain Desc variant");
+
+        // Should generate ordering struct with Ordering fields
+        assert!(
+            code.contains("struct ProjectOrdering"),
+            "Should contain ProjectOrdering struct"
+        );
+        assert!(
+            code.contains("name : Option < Ordering"),
+            "ProjectOrdering should have name: Option<Ordering>. Code: {}",
+            code
+        );
+    }
+
+    #[test]
+    fn test_generate_enum_with_keywords() {
+        let sdl = r#"
+            enum FilterOperator {
+                equals
+                notequals
+                in
+                notin
+            }
+        "#;
+
+        let code = generate_filter_types(sdl).unwrap();
+
+        // Should handle reserved keyword 'in'
+        assert!(
+            code.contains("pub enum FilterOperator"),
+            "Should contain FilterOperator enum"
+        );
+        assert!(
+            code.contains("Equals"),
+            "Should contain Equals variant (from equals)"
+        );
+        assert!(
+            code.contains("Notequals"),
+            "Should contain Notequals variant"
+        );
+        assert!(code.contains("In"), "Should contain In variant (from 'in')");
+        assert!(
+            code.contains("NotIn"),
+            "Should contain NotIn variant (from notin)"
+        );
+        assert!(
+            code.contains(r#"rename = "in""#),
+            "Should rename In back to 'in'"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_enum_variant() {
+        // PascalCase stays the same
+        assert_eq!(sanitize_enum_variant("Asc"), "Asc");
+        assert_eq!(sanitize_enum_variant("Desc"), "Desc");
+
+        // lowercase becomes PascalCase
+        assert_eq!(sanitize_enum_variant("equals"), "Equals");
+        assert_eq!(sanitize_enum_variant("space"), "Space");
+
+        // snake_case becomes PascalCase
+        assert_eq!(sanitize_enum_variant("not_equals"), "NotEquals");
+
+        // Keywords are handled
+        assert_eq!(sanitize_enum_variant("in"), "In");
+        assert_eq!(sanitize_enum_variant("notin"), "NotIn");
     }
 }

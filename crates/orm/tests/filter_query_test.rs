@@ -511,3 +511,130 @@ async fn test_tdblazy_nested_filter_execution(client: _, spec: _) -> anyhow::Res
 
     Ok(())
 }
+
+// ============================================================================
+// Test _not filter for absent/null optional fields
+// ============================================================================
+
+#[derive(Debug, Clone, Default, TerminusDBModel)]
+#[tdb(key = "Lexical")]
+pub struct Task {
+    pub title: String,
+    /// Optional assignee - can be None (absent)
+    pub assignee: Option<TdbLazy<Author>>,
+}
+
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct TaskFilter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<StringFilter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<AuthorFilter>,
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "_not", skip_serializing_if = "Option::is_none")]
+    pub not: Option<Box<TaskFilter>>,
+    #[serde(rename = "_and", skip_serializing_if = "Option::is_none")]
+    pub and: Option<Vec<Box<TaskFilter>>>,
+    #[serde(rename = "_or", skip_serializing_if = "Option::is_none")]
+    pub or: Option<Vec<Box<TaskFilter>>>,
+}
+
+impl TdbGQLModel for Task {
+    type Filter = TaskFilter;
+}
+
+/// Test that _not filter can find records where an optional relation is absent/null
+#[db_test(db = "not_filter_null_check")]
+async fn test_not_filter_for_absent_field(client: _, spec: _) -> anyhow::Result<()> {
+    // Insert schemas
+    let args = DocumentInsertArgs::from(spec.clone());
+    client.insert_entity_schema::<Author>(args).await?;
+
+    let args = DocumentInsertArgs::from(spec.clone());
+    client.insert_entity_schema::<Task>(args).await?;
+
+    // Create an assignee
+    let alice = Author {
+        name: "Alice".to_string(),
+    };
+    let args = DocumentInsertArgs::from(spec.clone());
+    client.insert_instance(&alice, args.clone()).await?;
+
+    // Create tasks - some with assignee, some without
+    let task1 = Task {
+        title: "Task with assignee".to_string(),
+        assignee: Some(TdbLazy::new_data(alice.clone())?),
+    };
+    let task2 = Task {
+        title: "Unassigned task 1".to_string(),
+        assignee: None,
+    };
+    let task3 = Task {
+        title: "Unassigned task 2".to_string(),
+        assignee: None,
+    };
+    let task4 = Task {
+        title: "Another assigned task".to_string(),
+        assignee: Some(TdbLazy::new_data(alice.clone())?),
+    };
+
+    let args = DocumentInsertArgs::from(spec.clone());
+    client.insert_instance(&task1, args.clone()).await?;
+    client.insert_instance(&task2, args.clone()).await?;
+    client.insert_instance(&task3, args.clone()).await?;
+    client.insert_instance(&task4, args.clone()).await?;
+
+    // Test 1: Filter for tasks WITH an assignee (any assignee)
+    let filter_has_assignee = TaskFilter {
+        assignee: Some(AuthorFilter::default()),
+        ..Default::default()
+    };
+
+    let assigned_tasks = Task::filter(filter_has_assignee)
+        .with_client(&client)
+        .execute(&spec)
+        .await?;
+
+    println!("Tasks with assignee: {}", assigned_tasks.len());
+    assert_eq!(
+        assigned_tasks.len(),
+        2,
+        "Should find 2 tasks with assignee"
+    );
+
+    // Test 2: Filter for tasks WITHOUT an assignee using _not
+    // The pattern: _not(assignee: any) gives us tasks where assignee is absent
+    let filter_no_assignee = TaskFilter {
+        not: Some(Box::new(TaskFilter {
+            assignee: Some(AuthorFilter::default()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    let unassigned_tasks = Task::filter(filter_no_assignee)
+        .with_client(&client)
+        .execute(&spec)
+        .await?;
+
+    println!("Tasks without assignee: {}", unassigned_tasks.len());
+    assert_eq!(
+        unassigned_tasks.len(),
+        2,
+        "Should find 2 tasks without assignee using _not filter"
+    );
+
+    // Verify the unassigned tasks have the expected titles
+    let unassigned_titles: Vec<_> = unassigned_tasks.iter().map(|t| &t.title).collect();
+    assert!(
+        unassigned_titles.contains(&&"Unassigned task 1".to_string()),
+        "Should contain 'Unassigned task 1'"
+    );
+    assert!(
+        unassigned_titles.contains(&&"Unassigned task 2".to_string()),
+        "Should contain 'Unassigned task 2'"
+    );
+
+    Ok(())
+}
