@@ -232,6 +232,13 @@ pub trait TDBEnum: Sized {
     fn from_tdb_value(s: &str) -> Option<Self>;
 }
 
+// Blanket implementation: any ToTDBSchema automatically implements ToTDBSchemas
+impl<T: ToTDBSchema> ToTDBSchemas for T {
+    fn to_schemas() -> Vec<crate::Schema> {
+        T::to_schema_tree()
+    }
+}
+
 // Macro to generate ToTDBSchemas implementations for tuples
 macro_rules! impl_to_tdb_schemas_for_tuple {
     // Base case for single element tuple
@@ -291,6 +298,45 @@ impl_to_tdb_schemas_for_tuple!(
 );
 impl_to_tdb_schemas_for_tuple!(
     T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24, T25
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24, T25, T26
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24, T25, T26, T27
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24, T25, T26, T27, T28
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24, T25, T26, T27, T28, T29
+);
+impl_to_tdb_schemas_for_tuple!(
+    T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21,
+    T22, T23, T24, T25, T26, T27, T28, T29, T30
 );
 
 #[test]

@@ -91,12 +91,20 @@ fn generate_input_object(input: &InputObjectType<String>, known_inputs: &HashSet
     let struct_name = sanitize_type_name(&input.name);
     let struct_ident = Ident::new(&struct_name, Span::call_site());
 
+    // First pass: collect all sanitized field names to detect conflicts
+    let sanitized_names: HashSet<String> = input
+        .fields
+        .iter()
+        .filter(|f| !f.name.starts_with('_')) // Only non-underscore fields
+        .map(|f| sanitize_field_name(&f.name))
+        .collect();
+
     let fields: Vec<TokenStream> = input
         .fields
         .iter()
         .map(|field| {
             let field_name = &field.name;
-            let rust_field_name = sanitize_field_name(field_name);
+            let rust_field_name = sanitize_field_name_with_conflicts(field_name, &sanitized_names);
             let field_ident = Ident::new(&rust_field_name, Span::call_site());
 
             let field_type = graphql_type_to_rust(&field.value_type, known_inputs, &struct_name);
@@ -223,6 +231,22 @@ fn sanitize_field_name(name: &str) -> String {
     }
 }
 
+/// Sanitize a field name while avoiding conflicts with existing field names.
+/// If removing the underscore would cause a conflict, prefix with "tdb_".
+fn sanitize_field_name_with_conflicts(name: &str, existing_names: &HashSet<String>) -> String {
+    if name.starts_with('_') {
+        let stripped = name.trim_start_matches('_');
+        // If the stripped name conflicts with an existing field, use "tdb_" prefix
+        if existing_names.contains(stripped) {
+            format!("tdb_{}", stripped)
+        } else {
+            stripped.to_string()
+        }
+    } else {
+        name.to_string()
+    }
+}
+
 /// Configuration for a single model's filter generation.
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
@@ -328,6 +352,43 @@ mod tests {
         assert_eq!(sanitize_field_name("_id"), "id");
         assert_eq!(sanitize_field_name("_and"), "and");
         assert_eq!(sanitize_field_name("name"), "name");
+    }
+
+    #[test]
+    fn test_sanitize_field_name_with_conflicts() {
+        let existing: HashSet<String> = ["id", "name"].iter().map(|s| s.to_string()).collect();
+
+        // No conflict - strips underscore
+        assert_eq!(sanitize_field_name_with_conflicts("_and", &existing), "and");
+
+        // Conflict - uses tdb_ prefix
+        assert_eq!(sanitize_field_name_with_conflicts("_id", &existing), "tdb_id");
+
+        // Regular field - unchanged
+        assert_eq!(sanitize_field_name_with_conflicts("name", &existing), "name");
+    }
+
+    #[test]
+    fn test_generate_filter_with_id_conflict() {
+        // Test case where model has both `id` field and `_id` field
+        let sdl = r#"
+            input StringFilter {
+                eq: String
+            }
+
+            input UserFilter {
+                id: StringFilter
+                _id: ID
+                name: StringFilter
+            }
+        "#;
+
+        let code = generate_filter_types(sdl).unwrap();
+
+        // Should have both id and tdb_id fields
+        assert!(code.contains("pub id"), "Should contain id field");
+        assert!(code.contains("pub tdb_id"), "Should contain tdb_id field (from _id to avoid conflict)");
+        assert!(code.contains(r#"rename = "_id""#), "Should have serde rename for tdb_id");
     }
 
     #[test]

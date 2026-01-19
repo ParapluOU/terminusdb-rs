@@ -20,6 +20,7 @@ mod client;
 mod filter_query;
 mod graphql_query;
 mod multi_fetch;
+mod multi_filter_query;
 mod query;
 mod relations;
 mod resolver;
@@ -37,6 +38,7 @@ pub use client::{ClientAlreadyInitializedError, ClientProvider, GlobalClient, Or
 pub use filter_query::{FilterExt, FilterQuery};
 pub use graphql_query::{parse_id_response, IdQueryBuilder, IdQueryResult, RelationPath};
 pub use multi_fetch::{fetch_by_ids, fetch_by_ids_default, FetchBuilder, MultiTypeFetch};
+pub use multi_filter_query::MultiFilterQuery;
 pub use query::{ModelExt, ModelQuery, OrmModel, RelationDirection, RelationSpec};
 pub use relations::{
     BelongsTo, BelongsToField, DefaultField, ForwardRelation, HasMany, HasManyField, HasOne,
