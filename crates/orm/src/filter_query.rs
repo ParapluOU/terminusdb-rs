@@ -241,7 +241,7 @@ where
 ///
 /// GraphQL object literals don't quote keys, but JSON does.
 /// This converts `{"name": {"eq": "test"}}` to `{name: {eq: "test"}}`.
-fn json_to_graphql(value: &serde_json::Value) -> String {
+pub fn json_to_graphql(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),

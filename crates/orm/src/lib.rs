@@ -39,7 +39,7 @@ pub use filter_query::{FilterExt, FilterQuery};
 pub use graphql_query::{parse_id_response, IdQueryBuilder, IdQueryResult, RelationPath};
 pub use multi_fetch::{fetch_by_ids, fetch_by_ids_default, FetchBuilder, MultiTypeFetch};
 pub use multi_filter_query::MultiFilterQuery;
-pub use query::{ModelExt, ModelQuery, OrmModel, RelationDirection, RelationSpec};
+pub use query::{ModelExt, ModelQuery, OrmModel, RelationBuilder, RelationDirection, RelationOpts, RelationSpec};
 pub use relations::{
     BelongsTo, BelongsToField, DefaultField, ForwardRelation, HasMany, HasManyField, HasOne,
     HasOneField, ReverseRelation,

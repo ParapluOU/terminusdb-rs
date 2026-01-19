@@ -73,13 +73,19 @@ pub struct TestTicketFilter {
     pub or: Option<Vec<Box<TestTicketFilter>>>,
 }
 
+// Simple stub ordering type for tests
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StubOrdering;
+
 // Implement TdbGQLModel to link models to their filter types
 impl TdbGQLModel for TestProject {
     type Filter = TestProjectFilter;
+    type Ordering = StubOrdering;
 }
 
 impl TdbGQLModel for TestTicket {
     type Filter = TestTicketFilter;
+    type Ordering = StubOrdering;
 }
 
 /// Test that filter query builds correct GraphQL query string
@@ -343,10 +349,12 @@ pub struct ArticleFilter {
 
 impl TdbGQLModel for Author {
     type Filter = AuthorFilter;
+    type Ordering = StubOrdering;
 }
 
 impl TdbGQLModel for Article {
     type Filter = ArticleFilter;
+    type Ordering = StubOrdering;
 }
 
 /// Test that TdbLazy relations get nested filter types (not StringFilter)
@@ -542,6 +550,7 @@ pub struct TaskFilter {
 
 impl TdbGQLModel for Task {
     type Filter = TaskFilter;
+    type Ordering = StubOrdering;
 }
 
 /// Test that _not filter can find records where an optional relation is absent/null

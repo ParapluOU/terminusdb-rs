@@ -103,6 +103,7 @@ fn generate_from_document(doc: &Document<String>) -> TokenStream {
 
     quote! {
         use serde::{Deserialize, Serialize};
+        use bon::Builder;
 
         #(#generated)*
     }
@@ -242,7 +243,8 @@ fn generate_input_object(
         .collect();
 
     quote! {
-        #[derive(Default, Clone, Debug, Serialize, Deserialize)]
+        #[derive(Default, Clone, Debug, Serialize, Deserialize, bon::Builder)]
+        #[builder(on(_, into), finish_fn = build)]
         pub struct #struct_ident {
             #(#fields)*
         }
@@ -416,9 +418,11 @@ impl ModelConfig {
 /// ```ignore
 /// impl terminusdb_gql::TdbGQLModel for crate::models::Project {
 ///     type Filter = ProjectFilter;
+///     type Ordering = ProjectOrdering;
 /// }
 /// impl terminusdb_gql::TdbGQLModel for crate::models::Ticket {
 ///     type Filter = TicketFilter;
+///     type Ordering = TicketOrdering;
 /// }
 /// ```
 pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
@@ -427,6 +431,9 @@ pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
         .map(|(name, path)| {
             let filter_name = format!("{}Filter", name);
             let filter_ident = Ident::new(&filter_name, Span::call_site());
+
+            let ordering_name = format!("{}Ordering", name);
+            let ordering_ident = Ident::new(&ordering_name, Span::call_site());
 
             // Parse the path as a token stream
             let path_tokens: TokenStream = path.parse().unwrap_or_else(|_| {
@@ -437,6 +444,7 @@ pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
             quote! {
                 impl terminusdb_gql::TdbGQLModel for #path_tokens {
                     type Filter = #filter_ident;
+                    type Ordering = #ordering_ident;
                 }
             }
         })
@@ -601,12 +609,20 @@ mod tests {
             "Should have ProjectFilter as Filter type"
         );
         assert!(
+            impls.contains("type Ordering = ProjectOrdering"),
+            "Should have ProjectOrdering as Ordering type"
+        );
+        assert!(
             impls.contains("impl terminusdb_gql :: TdbGQLModel for my_crate :: Ticket"),
             "Should contain Ticket impl"
         );
         assert!(
             impls.contains("type Filter = TicketFilter"),
             "Should have TicketFilter as Filter type"
+        );
+        assert!(
+            impls.contains("type Ordering = TicketOrdering"),
+            "Should have TicketOrdering as Ordering type"
         );
     }
 

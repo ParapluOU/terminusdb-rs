@@ -31,8 +31,10 @@ pub use terminusdb_community::graphql::naming;
 /// Trait for models that have generated GraphQL filter types.
 ///
 /// This trait is implemented for models that have corresponding
-/// Filter input types generated from the GraphQL schema.
+/// Filter and Ordering input types generated from the GraphQL schema.
 pub trait TdbGQLModel: terminusdb_schema::TerminusDBModel {
     /// The generated filter type for this model.
     type Filter: Default + Clone;
+    /// The generated ordering type for this model.
+    type Ordering: Default + Clone;
 }

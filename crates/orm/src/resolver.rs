@@ -644,8 +644,29 @@ fn write_relation_spec(
         }
     };
 
-    // Write the field selection
-    query.push_str(&format!("{}{} {{\n", indent_str, field_name));
+    // Build arguments string for filter, limit, offset, orderBy
+    let mut args = Vec::new();
+    if let Some(filter) = &rel.filter_gql {
+        args.push(format!("filter: {}", filter));
+    }
+    if let Some(limit) = rel.limit {
+        args.push(format!("limit: {}", limit));
+    }
+    if let Some(offset) = rel.offset {
+        args.push(format!("offset: {}", offset));
+    }
+    if let Some(order_by) = &rel.order_by_gql {
+        args.push(format!("orderBy: {}", order_by));
+    }
+
+    let args_str = if args.is_empty() {
+        String::new()
+    } else {
+        format!("({})", args.join(", "))
+    };
+
+    // Write the field selection with optional arguments
+    query.push_str(&format!("{}{}{} {{\n", indent_str, field_name, args_str));
 
     // Always include _id
     let nested_indent = " ".repeat(indent + 2);
@@ -818,6 +839,10 @@ mod tests {
                         via_field: Some("author_id".to_string()),
                     },
                     children: Vec::new(),
+                    filter_gql: None,
+                    limit: None,
+                    offset: None,
+                    order_by_gql: None,
                 },
                 resolution: RelationResolution::Reverse {
                     target_field: Some("author_id".to_string()),
@@ -831,6 +856,10 @@ mod tests {
                         field_name: "profile_id".to_string(),
                     },
                     children: Vec::new(),
+                    filter_gql: None,
+                    limit: None,
+                    offset: None,
+                    order_by_gql: None,
                 },
                 resolution: RelationResolution::Forward {
                     source_field: "profile_id".to_string(),
@@ -865,6 +894,10 @@ mod tests {
                 via_field: Some("writer".to_string()),
             },
             children: Vec::new(),
+            filter_gql: None,
+            limit: None,
+            offset: None,
+            order_by_gql: None,
         }];
 
         let query = build_graphql_from_relation_specs("Writer", &["Writer/123".to_string()], &relations);
@@ -888,6 +921,10 @@ mod tests {
                     via_field: Some("writer".to_string()),
                 },
                 children: Vec::new(),
+                filter_gql: None,
+                limit: None,
+                offset: None,
+                order_by_gql: None,
             },
             RelationSpec {
                 target_type_id: TypeId::of::<()>(),
@@ -902,7 +939,15 @@ mod tests {
                         via_field: Some("comment".to_string()),
                     },
                     children: Vec::new(),
+                    filter_gql: None,
+                    limit: None,
+                    offset: None,
+                    order_by_gql: None,
                 }],
+                filter_gql: None,
+                limit: None,
+                offset: None,
+                order_by_gql: None,
             },
         ];
 
@@ -948,5 +993,78 @@ mod tests {
         assert!(ids.contains(&"Comment/1".to_string()));
         assert!(ids.contains(&"Reply/1".to_string()));
         assert!(ids.contains(&"Reply/2".to_string()));
+    }
+
+    #[test]
+    fn test_build_graphql_from_relation_specs_with_options() {
+        use crate::query::RelationDirection;
+        use std::any::TypeId;
+
+        // Test that filter, limit, offset, and orderBy are correctly emitted
+        let relations = vec![RelationSpec {
+            target_type_id: TypeId::of::<()>(),
+            target_type_name: "Ticket".to_string(),
+            direction: RelationDirection::Reverse {
+                via_field: Some("project".to_string()),
+            },
+            children: Vec::new(),
+            filter_gql: Some("{status: {eq: \"open\"}}".to_string()),
+            limit: Some(10),
+            offset: Some(5),
+            order_by_gql: Some("{created_at: Desc}".to_string()),
+        }];
+
+        let query =
+            build_graphql_from_relation_specs("Project", &["Project/123".to_string()], &relations);
+
+        println!("Generated query with options:\n{}", query);
+
+        // Check that all options are present
+        assert!(query.contains("Project(id: \"Project/123\")"));
+        assert!(
+            query.contains("_project_of_Ticket("),
+            "Should have opening paren for args"
+        );
+        assert!(
+            query.contains("filter: {status: {eq: \"open\"}}"),
+            "Should have filter arg"
+        );
+        assert!(query.contains("limit: 10"), "Should have limit arg");
+        assert!(query.contains("offset: 5"), "Should have offset arg");
+        assert!(
+            query.contains("orderBy: {created_at: Desc}"),
+            "Should have orderBy arg"
+        );
+    }
+
+    #[test]
+    fn test_build_graphql_from_relation_specs_with_partial_options() {
+        use crate::query::RelationDirection;
+        use std::any::TypeId;
+
+        // Test with only limit (no filter, offset, or orderBy)
+        let relations = vec![RelationSpec {
+            target_type_id: TypeId::of::<()>(),
+            target_type_name: "Comment".to_string(),
+            direction: RelationDirection::Reverse {
+                via_field: Some("post".to_string()),
+            },
+            children: Vec::new(),
+            filter_gql: None,
+            limit: Some(5),
+            offset: None,
+            order_by_gql: None,
+        }];
+
+        let query =
+            build_graphql_from_relation_specs("Post", &["Post/456".to_string()], &relations);
+
+        println!("Generated query with partial options:\n{}", query);
+
+        // Check that only limit is present
+        assert!(query.contains("_post_of_Comment(limit: 5)"));
+        assert!(!query.contains("filter:"));
+        assert!(!query.contains("offset:"));
+        assert!(!query.contains("orderBy:"));
     }
 }
