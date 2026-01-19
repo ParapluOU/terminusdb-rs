@@ -17,6 +17,7 @@
 //! ```
 
 mod client;
+mod compose;
 mod filter_query;
 mod graphql_query;
 mod multi_fetch;
@@ -35,11 +36,15 @@ pub mod prelude;
 pub mod testing;
 
 pub use client::{ClientAlreadyInitializedError, ClientProvider, GlobalClient, OrmClient};
+pub use compose::{ComposedQuery, ComposedResult, Orm};
 pub use filter_query::{FilterExt, FilterQuery};
 pub use graphql_query::{parse_id_response, IdQueryBuilder, IdQueryResult, RelationPath};
 pub use multi_fetch::{fetch_by_ids, fetch_by_ids_default, FetchBuilder, MultiTypeFetch};
 pub use multi_filter_query::MultiFilterQuery;
-pub use query::{ModelExt, ModelQuery, OrmModel, RelationBuilder, RelationDirection, RelationOpts, RelationSpec};
+pub use query::{
+    IntoQueryPart, ModelExt, ModelQuery, OrmModel, QueryEntry, RelationBuilder, RelationDirection,
+    RelationOpts, RelationSpec,
+};
 pub use relations::{
     BelongsTo, BelongsToField, DefaultField, ForwardRelation, HasMany, HasManyField, HasOne,
     HasOneField, ReverseRelation,

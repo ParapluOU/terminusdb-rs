@@ -509,25 +509,101 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
     {
         ModelQuery::new(std::iter::once(id.into()))
     }
+
+    /// Create a filter-based query (type-safe via TdbGQLModel).
+    ///
+    /// This is the entry point for composable queries that can be combined
+    /// with `Orm::and()`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let query = Project::query(ProjectFilter {
+    ///     status: Some(eq("active")),
+    ///     ..Default::default()
+    /// }).limit(10).order_by(ProjectOrdering { name: Some(Ordering::Asc), ..Default::default() });
+    /// ```
+    fn query(filter: Self::Filter) -> ModelQuery<Self, GlobalClient>
+    where
+        Self: TdbGQLModel + Sized,
+        Self::Filter: Serialize,
+    {
+        ModelQuery::query(filter)
+    }
+
+    /// Query all records of this type as a composable query.
+    ///
+    /// This is the composable equivalent of `FilterExt::all()`. Use this when
+    /// you need to combine multiple queries via `Orm::and()`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let query = Label::query_all().limit(100);
+    /// let result = Orm::and(project_query, query).execute(&spec).await?;
+    /// ```
+    fn query_all() -> ModelQuery<Self, GlobalClient>
+    where
+        Self: TdbGQLModel + Sized,
+    {
+        ModelQuery::all()
+    }
 }
 
 // Blanket implementation for all OrmModel types
 impl<T: OrmModel + ToSchemaClass> ModelExt for T {}
 
+/// A type-erased query entry for multi-model composition.
+///
+/// This captures all the information needed to generate a GraphQL query fragment
+/// for a single model type, including nested relations.
+#[derive(Debug, Clone)]
+pub struct QueryEntry {
+    /// The GraphQL type name (root model).
+    pub type_name: String,
+    /// Filter serialized to GraphQL syntax.
+    pub filter_gql: Option<String>,
+    /// Maximum number of results.
+    pub limit: Option<i32>,
+    /// Skip first N results.
+    pub offset: Option<i32>,
+    /// Ordering serialized to GraphQL syntax.
+    pub order_by_gql: Option<String>,
+    /// Nested relation specs (from with/with_opts).
+    pub relations: Vec<RelationSpec>,
+}
+
+/// Trait for queries that can be composed into a multi-query.
+///
+/// This enables type erasure so that `ModelQuery<Project>` and `ModelQuery<Ticket>`
+/// can be combined into a single composed query.
+pub trait IntoQueryPart {
+    /// Convert this query into a type-erased QueryEntry.
+    fn into_query_entry(self) -> QueryEntry;
+}
+
 /// A query builder for loading models with their relations.
 ///
-/// Created via `Model::find_all()` or `Model::find()`.
+/// Created via `Model::find_all()`, `Model::find()`, `Model::query()`, or `Model::all()`.
 pub struct ModelQuery<T: OrmModel, C: ClientProvider = GlobalClient> {
-    /// The primary IDs to fetch
-    primary_ids: Vec<String>,
-    /// Relations to load (forward or reverse)
-    with_relations: Vec<RelationSpec>,
-    /// Get options
-    opts: GetOpts,
-    /// Client to use
-    client: C,
-    /// Marker for the primary type
-    _phantom: PhantomData<T>,
+    /// The primary IDs to fetch (for ID-based queries).
+    pub(crate) primary_ids: Vec<String>,
+    /// Relations to load (forward or reverse).
+    pub(crate) with_relations: Vec<RelationSpec>,
+    /// Get options.
+    pub(crate) opts: GetOpts,
+    /// Client to use.
+    pub(crate) client: C,
+    /// Marker for the primary type.
+    pub(crate) _phantom: PhantomData<T>,
+
+    // Filter-based query fields (for composable queries):
+    /// Filter serialized to GraphQL syntax.
+    pub(crate) filter_gql: Option<String>,
+    /// Maximum number of results.
+    pub(crate) limit: Option<i32>,
+    /// Skip first N results.
+    pub(crate) offset: Option<i32>,
+    /// Ordering serialized to GraphQL syntax.
+    pub(crate) order_by_gql: Option<String>,
 }
 
 impl<T: OrmModel> ModelQuery<T, GlobalClient> {
@@ -539,6 +615,63 @@ impl<T: OrmModel> ModelQuery<T, GlobalClient> {
             opts: GetOpts::default(),
             client: GlobalClient,
             _phantom: PhantomData,
+            filter_gql: None,
+            limit: None,
+            offset: None,
+            order_by_gql: None,
+        }
+    }
+}
+
+impl<T: OrmModel + TdbGQLModel + ToSchemaClass> ModelQuery<T, GlobalClient> {
+    /// Create a query with a filter (type-safe via TdbGQLModel).
+    ///
+    /// This creates a filter-based query for use with composable queries.
+    /// The filter type is constrained to `T::Filter`.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let query = Project::query(ProjectFilter {
+    ///     status: Some(eq("active")),
+    ///     ..Default::default()
+    /// });
+    /// ```
+    pub fn query(filter: T::Filter) -> Self
+    where
+        T::Filter: Serialize,
+    {
+        let filter_json = serde_json::to_value(&filter).unwrap_or_default();
+        let filter_gql = json_to_graphql(&filter_json);
+        Self {
+            primary_ids: Vec::new(),
+            with_relations: Vec::new(),
+            opts: GetOpts::default(),
+            client: GlobalClient,
+            _phantom: PhantomData,
+            filter_gql: Some(filter_gql),
+            limit: None,
+            offset: None,
+            order_by_gql: None,
+        }
+    }
+
+    /// Query all records of this type (no filter).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let all_labels = Label::all();
+    /// ```
+    pub fn all() -> Self {
+        Self {
+            primary_ids: Vec::new(),
+            with_relations: Vec::new(),
+            opts: GetOpts::default(),
+            client: GlobalClient,
+            _phantom: PhantomData,
+            filter_gql: None,
+            limit: None,
+            offset: None,
+            order_by_gql: None,
         }
     }
 }
@@ -552,7 +685,23 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
             opts: self.opts,
             client,
             _phantom: PhantomData,
+            filter_gql: self.filter_gql,
+            limit: self.limit,
+            offset: self.offset,
+            order_by_gql: self.order_by_gql,
         }
+    }
+
+    /// Set the maximum number of results (for filter-based queries).
+    pub fn limit(mut self, limit: i32) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    /// Set the offset for pagination (for filter-based queries).
+    pub fn offset(mut self, offset: i32) -> Self {
+        self.offset = Some(offset);
+        self
     }
 
     /// Load related entities via a forward relation (HasMany/HasOne on self).
@@ -851,6 +1000,11 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         self
     }
 
+    /// Check if this is a filter-based query (vs ID-based).
+    pub fn is_filter_query(&self) -> bool {
+        self.filter_gql.is_some() || (self.primary_ids.is_empty() && self.limit.is_some())
+    }
+
     /// Get the primary IDs being queried.
     pub fn ids(&self) -> &[String] {
         &self.primary_ids
@@ -1009,6 +1163,50 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         result.get_one::<T>()?.ok_or_else(|| {
             anyhow::anyhow!("No {} found for the given ID", std::any::type_name::<T>())
         })
+    }
+}
+
+/// Additional methods for queries on TdbGQLModel types.
+impl<T, C> ModelQuery<T, C>
+where
+    T: OrmModel + TdbGQLModel,
+    C: ClientProvider,
+{
+    /// Set the ordering for results (type-safe via TdbGQLModel).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let query = Project::query(filter)
+    ///     .order_by(ProjectOrdering {
+    ///         name: Some(Ordering::Asc),
+    ///         ..Default::default()
+    ///     });
+    /// ```
+    pub fn order_by(mut self, order_by: T::Ordering) -> Self
+    where
+        T::Ordering: Serialize,
+    {
+        let order_json = serde_json::to_value(&order_by).unwrap_or_default();
+        self.order_by_gql = Some(json_to_graphql(&order_json));
+        self
+    }
+}
+
+/// Implementation of IntoQueryPart for ModelQuery.
+impl<T, C> IntoQueryPart for ModelQuery<T, C>
+where
+    T: OrmModel + ToSchemaClass,
+    C: ClientProvider,
+{
+    fn into_query_entry(self) -> QueryEntry {
+        QueryEntry {
+            type_name: T::to_class(),
+            filter_gql: self.filter_gql,
+            limit: self.limit,
+            offset: self.offset,
+            order_by_gql: self.order_by_gql,
+            relations: self.with_relations,
+        }
     }
 }
 

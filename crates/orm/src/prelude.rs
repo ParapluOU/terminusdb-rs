@@ -24,6 +24,8 @@ pub use crate::{
     RelationOpts, RelationPath, RelationSpec, ReverseRelation,
     // Filter query types
     FilterExt, FilterQuery, MultiFilterQuery, TdbGQLModel,
+    // Composable query types
+    ComposedQuery, ComposedResult, IntoQueryPart, Orm, QueryEntry,
     // Resolver types (GraphQL-based relation resolution)
     generate_graphql_query, BatchResolver, GraphQLRelationQuery, LoadStrategy, QueryPlan,
     RelationPlan, RelationResolution, RelationSelection, ResolvedRelations,

@@ -613,7 +613,7 @@ pub fn build_graphql_from_relation_specs(
 }
 
 /// Recursively write a RelationSpec to a GraphQL query string.
-fn write_relation_spec(
+pub(crate) fn write_relation_spec(
     query: &mut String,
     rel: &RelationSpec,
     parent_type: &str,
