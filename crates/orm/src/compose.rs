@@ -183,10 +183,27 @@ impl Default for ComposedQuery<GlobalClient> {
 
 impl<C: ClientProvider> ComposedQuery<C> {
     /// Create a new composed query with a specific client.
-    pub fn with_client(client: C) -> Self {
+    pub fn new_with_client(client: C) -> Self {
         Self {
             entries: Vec::new(),
             opts: GetOpts::default(),
+            client,
+        }
+    }
+
+    /// Use a specific client instead of the global one.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = Orm::and(project_query, label_query)
+    ///     .with_client(&*db.client)
+    ///     .execute(&spec)
+    ///     .await?;
+    /// ```
+    pub fn with_client<C2: ClientProvider>(self, client: C2) -> ComposedQuery<C2> {
+        ComposedQuery {
+            entries: self.entries,
+            opts: self.opts,
             client,
         }
     }
@@ -218,6 +235,22 @@ impl<C: ClientProvider> ComposedQuery<C> {
     /// Enable unfolding of nested documents.
     pub fn unfold(mut self) -> Self {
         self.opts.unfold = true;
+        self
+    }
+
+    /// Set a timeout for document fetching operations.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = Orm::combine()
+    ///     .add(Project::query(filter))
+    ///     .with_timeout(std::time::Duration::from_secs(60))
+    ///     .with_client(&client)
+    ///     .execute(&spec)
+    ///     .await?;
+    /// ```
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.opts.timeout = Some(timeout);
         self
     }
 

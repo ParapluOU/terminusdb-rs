@@ -4,7 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 use terminusdb_client::DocumentInsertArgs;
-use terminusdb_gql::TdbGQLModel;
 use terminusdb_orm::prelude::*;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::TerminusDBModel;
@@ -77,16 +76,12 @@ pub struct TestTicketFilter {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StubOrdering;
 
-// Implement TdbGQLModel to link models to their filter types
-impl TdbGQLModel for TestProject {
-    type Filter = TestProjectFilter;
-    type Ordering = StubOrdering;
-}
+// Implement TdbGQLFilter/TdbGQLOrdering to link filters to their models
+impl TdbGQLFilter<TestProject> for TestProjectFilter {}
+impl TdbGQLOrdering<TestProject> for StubOrdering {}
 
-impl TdbGQLModel for TestTicket {
-    type Filter = TestTicketFilter;
-    type Ordering = StubOrdering;
-}
+impl TdbGQLFilter<TestTicket> for TestTicketFilter {}
+impl TdbGQLOrdering<TestTicket> for StubOrdering {}
 
 /// Test that filter query builds correct GraphQL query string
 #[test]
@@ -347,15 +342,11 @@ pub struct ArticleFilter {
     pub id: Option<String>,
 }
 
-impl TdbGQLModel for Author {
-    type Filter = AuthorFilter;
-    type Ordering = StubOrdering;
-}
+impl TdbGQLFilter<Author> for AuthorFilter {}
+impl TdbGQLOrdering<Author> for StubOrdering {}
 
-impl TdbGQLModel for Article {
-    type Filter = ArticleFilter;
-    type Ordering = StubOrdering;
-}
+impl TdbGQLFilter<Article> for ArticleFilter {}
+impl TdbGQLOrdering<Article> for StubOrdering {}
 
 /// Test that TdbLazy relations get nested filter types (not StringFilter)
 #[db_test(db = "tdblazy_filter_schema")]
@@ -548,10 +539,8 @@ pub struct TaskFilter {
     pub or: Option<Vec<Box<TaskFilter>>>,
 }
 
-impl TdbGQLModel for Task {
-    type Filter = TaskFilter;
-    type Ordering = StubOrdering;
-}
+impl TdbGQLFilter<Task> for TaskFilter {}
+impl TdbGQLOrdering<Task> for StubOrdering {}
 
 /// Test that _not filter can find records where an optional relation is absent/null
 #[db_test(db = "not_filter_null_check")]

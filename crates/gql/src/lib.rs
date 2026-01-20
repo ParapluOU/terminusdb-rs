@@ -19,7 +19,7 @@ pub mod codegen;
 mod frames;
 mod schema;
 
-pub use codegen::{generate_all, generate_filter_types, generate_model_impls, ModelConfig};
+pub use codegen::{generate_all, generate_filter_impls, generate_filter_types, ModelConfig};
 pub use frames::{schemas_to_allframes, schemas_vec_to_allframes};
 pub use schema::{allframes_to_sdl, generate_gql_schema};
 
@@ -28,13 +28,5 @@ pub use terminusdb_community::graphql::frame::{AllFrames, TypeDefinition};
 pub use terminusdb_community::graphql::filter;
 pub use terminusdb_community::graphql::naming;
 
-/// Trait for models that have generated GraphQL filter types.
-///
-/// This trait is implemented for models that have corresponding
-/// Filter and Ordering input types generated from the GraphQL schema.
-pub trait TdbGQLModel: terminusdb_schema::TerminusDBModel {
-    /// The generated filter type for this model.
-    type Filter: Default + Clone;
-    /// The generated ordering type for this model.
-    type Ordering: Default + Clone;
-}
+// Re-export filter/ordering traits from terminusdb-schema
+pub use terminusdb_schema::{TdbGQLFilter, TdbGQLOrdering};

@@ -39,7 +39,8 @@ use terminusdb_schema::{
 };
 
 use crate::relations::{ForwardRelation, ReverseRelation};
-use crate::{result::OrmResult, ClientProvider, GlobalClient, MultiTypeFetch, TdbGQLModel};
+use crate::{result::OrmResult, ClientProvider, GlobalClient, MultiTypeFetch};
+use terminusdb_schema::{TdbGQLFilter, TdbGQLOrdering};
 
 /// Convert a JSON value to GraphQL object literal syntax.
 ///
@@ -69,58 +70,52 @@ pub(crate) fn json_to_graphql(value: &serde_json::Value) -> String {
 
 /// Options for loading a relation with filtering/pagination.
 ///
-/// The type parameter `M` is the model type being loaded, which determines
-/// the available filter and ordering types through `TdbGQLModel::Filter`
-/// and `TdbGQLModel::Ordering`.
+/// The type parameters `F` and `O` are the filter and ordering types.
+/// These are constrained via `TdbGQLFilter<M>` and `TdbGQLOrdering<M>` bounds
+/// at the call site to ensure type safety.
 ///
 /// # Example
 /// ```ignore
 /// use terminusdb_orm::prelude::*;
 ///
 /// let result = Project::find(id)
-///     .with_opts::<Ticket>(RelationOpts::<Ticket>::new()
+///     .with_opts::<Ticket, _, _>(RelationOpts::new()
 ///         .filter(TicketFilter { status: Some(eq("open")), ..Default::default() })
 ///         .limit(5)
 ///         .order_by(TicketOrdering { created_at: Some(Ordering::Desc), ..Default::default() }))
 ///     .execute(&spec)
 ///     .await?;
 /// ```
-#[derive(Debug, Clone)]
-pub struct RelationOpts<M: TdbGQLModel> {
-    /// Filter to apply to the relation (typed to M::Filter).
-    pub filter: Option<M::Filter>,
+#[derive(Debug, Clone, Default)]
+pub struct RelationOpts<F = (), O = ()> {
+    /// Filter to apply to the relation.
+    pub filter: Option<F>,
     /// Maximum number of related entities to load.
     pub limit: Option<i32>,
     /// Skip first N related entities.
     pub offset: Option<i32>,
-    /// Ordering for related entities (typed to M::Ordering).
-    pub order_by: Option<M::Ordering>,
+    /// Ordering for related entities.
+    pub order_by: Option<O>,
 }
 
-impl<M: TdbGQLModel> Default for RelationOpts<M> {
-    fn default() -> Self {
-        Self {
-            filter: None,
-            limit: None,
-            offset: None,
-            order_by: None,
-        }
-    }
-}
-
-impl<M: TdbGQLModel> RelationOpts<M> {
+impl RelationOpts<(), ()> {
     /// Create new empty relation options.
     pub fn new() -> Self {
         Self::default()
     }
+}
 
+impl<F, O> RelationOpts<F, O> {
     /// Set the filter for this relation.
     ///
-    /// The filter type is constrained to be the generated filter type
-    /// for model M (i.e., `M::Filter` from `TdbGQLModel`).
-    pub fn filter(mut self, filter: M::Filter) -> Self {
-        self.filter = Some(filter);
-        self
+    /// Returns a new `RelationOpts` with the filter type set.
+    pub fn filter<F2>(self, filter: F2) -> RelationOpts<F2, O> {
+        RelationOpts {
+            filter: Some(filter),
+            limit: self.limit,
+            offset: self.offset,
+            order_by: self.order_by,
+        }
     }
 
     /// Set the maximum number of related entities to load.
@@ -137,18 +132,21 @@ impl<M: TdbGQLModel> RelationOpts<M> {
 
     /// Set the ordering for related entities.
     ///
-    /// The ordering type is constrained to be the generated ordering type
-    /// for model M (i.e., `M::Ordering` from `TdbGQLModel`).
-    pub fn order_by(mut self, order_by: M::Ordering) -> Self {
-        self.order_by = Some(order_by);
-        self
+    /// Returns a new `RelationOpts` with the ordering type set.
+    pub fn order_by<O2>(self, order_by: O2) -> RelationOpts<F, O2> {
+        RelationOpts {
+            filter: self.filter,
+            limit: self.limit,
+            offset: self.offset,
+            order_by: Some(order_by),
+        }
     }
 
     /// Convert filter and order_by to GraphQL strings for query generation.
     pub(crate) fn to_gql_strings(&self) -> (Option<String>, Option<String>)
     where
-        M::Filter: Serialize,
-        M::Ordering: Serialize,
+        F: Serialize,
+        O: Serialize,
     {
         let filter_gql = self.filter.as_ref().map(|f| {
             let json = serde_json::to_value(f).unwrap_or_default();
@@ -267,18 +265,19 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
 
     /// Add a reverse relation with options (filter, limit, offset, order_by).
     ///
-    /// The filter and ordering types are type-checked against the model R.
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
     ///
     /// # Example
     /// ```ignore
-    /// b.with_opts::<Reply>(RelationOpts::<Reply>::new().limit(5).filter(reply_filter))
+    /// b.with_opts::<Reply, _, _>(RelationOpts::new().limit(5).filter(reply_filter))
     /// ```
-    pub fn with_opts<R>(mut self, opts: RelationOpts<R>) -> Self
+    pub fn with_opts<R, F, O>(mut self, opts: RelationOpts<F, O>) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
+        R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<Parent>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.relations.push(RelationSpec {
@@ -320,21 +319,22 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
 
     /// Add a reverse relation via a specific field with options.
     ///
-    /// The filter and ordering types are type-checked against the model R.
-    pub fn with_via_opts<R, F>(mut self, opts: RelationOpts<R>) -> Self
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
+    pub fn with_via_opts<R, Field, F, O>(mut self, opts: RelationOpts<F, O>) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
-        F: RelationField + 'static,
-        R: ReverseRelation<Parent, F>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        R: OrmModel + ToSchemaClass + 'static,
+        Field: RelationField + 'static,
+        R: ReverseRelation<Parent, Field>,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
             direction: RelationDirection::Reverse {
-                via_field: Some(F::field_name().to_string()),
+                via_field: Some(Field::field_name().to_string()),
             },
             children: Vec::new(),
             filter_gql,
@@ -369,21 +369,22 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
 
     /// Add a forward relation with options (filter, limit, offset, order_by).
     ///
-    /// The filter and ordering types are type-checked against the model R.
-    pub fn with_field_opts<R, F>(mut self, opts: RelationOpts<R>) -> Self
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
+    pub fn with_field_opts<R, Field, F, O>(mut self, opts: RelationOpts<F, O>) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
-        F: RelationField + 'static,
-        Parent: ForwardRelation<R, F>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        R: OrmModel + ToSchemaClass + 'static,
+        Field: RelationField + 'static,
+        Parent: ForwardRelation<R, Field>,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
             direction: RelationDirection::Forward {
-                field_name: F::field_name().to_string(),
+                field_name: Field::field_name().to_string(),
             },
             children: Vec::new(),
             filter_gql,
@@ -419,21 +420,22 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
 
     /// Add a nested relation with options and further nesting.
     ///
-    /// The filter and ordering types are type-checked against the model R.
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
     ///
     /// # Example
     /// ```ignore
-    /// b.with_nested_opts::<Reply>(
-    ///     RelationOpts::<Reply>::new().limit(5),
+    /// b.with_nested_opts::<Reply, _, _>(
+    ///     RelationOpts::new().limit(5).filter(reply_filter),
     ///     |b| b.with::<Like>()
     /// )
     /// ```
-    pub fn with_nested_opts<R, B>(mut self, opts: RelationOpts<R>, builder_fn: B) -> Self
+    pub fn with_nested_opts<R, F, O, B>(mut self, opts: RelationOpts<F, O>, builder_fn: B) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
+        R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<Parent>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
         B: FnOnce(RelationBuilder<R>) -> RelationBuilder<R>,
     {
         let nested_builder = builder_fn(RelationBuilder::new());
@@ -535,7 +537,7 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
         ModelQuery::new(std::iter::once(id.into()))
     }
 
-    /// Create a filter-based query (type-safe via TdbGQLModel).
+    /// Create a filter-based query (type-safe via TdbGQLFilter).
     ///
     /// This is the entry point for composable queries that can be combined
     /// with `Orm::and()`.
@@ -547,10 +549,10 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
     ///     ..Default::default()
     /// }).limit(10).order_by(ProjectOrdering { name: Some(Ordering::Asc), ..Default::default() });
     /// ```
-    fn query(filter: Self::Filter) -> ModelQuery<Self, GlobalClient>
+    fn query<F>(filter: F) -> ModelQuery<Self, GlobalClient>
     where
-        Self: TdbGQLModel + Sized,
-        Self::Filter: Serialize,
+        Self: Sized,
+        F: TdbGQLFilter<Self> + Serialize,
     {
         ModelQuery::query(filter)
     }
@@ -567,7 +569,7 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
     /// ```
     fn query_all() -> ModelQuery<Self, GlobalClient>
     where
-        Self: TdbGQLModel + Sized,
+        Self: Sized,
     {
         ModelQuery::all()
     }
@@ -648,11 +650,11 @@ impl<T: OrmModel> ModelQuery<T, GlobalClient> {
     }
 }
 
-impl<T: OrmModel + TdbGQLModel + ToSchemaClass> ModelQuery<T, GlobalClient> {
-    /// Create a query with a filter (type-safe via TdbGQLModel).
+impl<T: OrmModel + ToSchemaClass> ModelQuery<T, GlobalClient> {
+    /// Create a query with a filter (type-safe via TdbGQLFilter).
     ///
     /// This creates a filter-based query for use with composable queries.
-    /// The filter type is constrained to `T::Filter`.
+    /// The filter type is constrained via `TdbGQLFilter<T>`.
     ///
     /// # Example
     /// ```ignore
@@ -661,9 +663,9 @@ impl<T: OrmModel + TdbGQLModel + ToSchemaClass> ModelQuery<T, GlobalClient> {
     ///     ..Default::default()
     /// });
     /// ```
-    pub fn query(filter: T::Filter) -> Self
+    pub fn query<F>(filter: F) -> Self
     where
-        T::Filter: Serialize,
+        F: TdbGQLFilter<T> + Serialize,
     {
         let filter_json = serde_json::to_value(&filter).unwrap_or_default();
         let filter_gql = json_to_graphql(&filter_json);
@@ -729,6 +731,21 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         self
     }
 
+    /// Set a timeout for the query execution.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let result = Company::query_all()
+    ///     .with_timeout(std::time::Duration::from_secs(60))
+    ///     .with_client(&client)
+    ///     .execute(&spec)
+    ///     .await?;
+    /// ```
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.opts.timeout = Some(timeout);
+        self
+    }
+
     /// Load related entities via a forward relation (HasMany/HasOne on self).
     ///
     /// This requires self to have a field pointing to the target type.
@@ -767,21 +784,22 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
 
     /// Load related entities via a forward relation with options (filter, limit, offset, order_by).
     ///
-    /// The filter and ordering types are type-checked against the model R.
-    pub fn with_field_opts<R, F>(mut self, opts: RelationOpts<R>) -> Self
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
+    pub fn with_field_opts<R, Field, F, O>(mut self, opts: RelationOpts<F, O>) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
-        F: RelationField + 'static,
-        T: ForwardRelation<R, F>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        R: OrmModel + ToSchemaClass + 'static,
+        Field: RelationField + 'static,
+        T: ForwardRelation<R, Field>,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.with_relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
             direction: RelationDirection::Forward {
-                field_name: F::field_name().to_string(),
+                field_name: Field::field_name().to_string(),
             },
             children: Vec::new(),
             filter_gql,
@@ -831,21 +849,22 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
 
     /// Load related entities via a reverse relation with options (filter, limit, offset, order_by).
     ///
-    /// The filter and ordering types are type-checked against the model R.
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
     ///
     /// # Example
     /// ```ignore
     /// let query = Comment::find_all(ids)
-    ///     .with_opts::<Reply>(RelationOpts::<Reply>::new()
+    ///     .with_opts::<Reply, _, _>(RelationOpts::new()
     ///         .filter(ReplyFilter { ... })
     ///         .limit(5));
     /// ```
-    pub fn with_opts<R>(mut self, opts: RelationOpts<R>) -> Self
+    pub fn with_opts<R, F, O>(mut self, opts: RelationOpts<F, O>) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
+        R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<T>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.with_relations.push(RelationSpec {
@@ -900,21 +919,22 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
 
     /// Load related entities via a specific reverse relation field with options.
     ///
-    /// The filter and ordering types are type-checked against the model R.
-    pub fn with_via_opts<R, F>(mut self, opts: RelationOpts<R>) -> Self
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
+    pub fn with_via_opts<R, Field, F, O>(mut self, opts: RelationOpts<F, O>) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
-        F: RelationField + 'static,
-        R: ReverseRelation<T, F>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        R: OrmModel + ToSchemaClass + 'static,
+        Field: RelationField + 'static,
+        R: ReverseRelation<T, Field>,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.with_relations.push(RelationSpec {
             target_type_id: TypeId::of::<R>(),
             target_type_name: R::to_class(),
             direction: RelationDirection::Reverse {
-                via_field: Some(F::field_name().to_string()),
+                via_field: Some(Field::field_name().to_string()),
             },
             children: Vec::new(),
             filter_gql,
@@ -977,23 +997,24 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
 
     /// Load related entities with nested relations and options.
     ///
-    /// The filter and ordering types are type-checked against the model R.
+    /// The filter and ordering types are type-checked against the model R
+    /// via `TdbGQLFilter<R>` and `TdbGQLOrdering<R>` bounds.
     ///
     /// # Example
     /// ```ignore
     /// Writer::find(&id)
-    ///     .with_nested_opts::<Comment>(
-    ///         RelationOpts::<Comment>::new().limit(5),
+    ///     .with_nested_opts::<Comment, _, _>(
+    ///         RelationOpts::new().limit(5).filter(comment_filter),
     ///         |b| b.with::<Reply>()
     ///     )
     ///     .execute(&spec).await?;
     /// ```
-    pub fn with_nested_opts<R, B>(mut self, opts: RelationOpts<R>, builder_fn: B) -> Self
+    pub fn with_nested_opts<R, F, O, B>(mut self, opts: RelationOpts<F, O>, builder_fn: B) -> Self
     where
-        R: OrmModel + ToSchemaClass + TdbGQLModel + 'static,
+        R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<T>,
-        R::Filter: Serialize,
-        R::Ordering: Serialize,
+        F: TdbGQLFilter<R> + Serialize,
+        O: TdbGQLOrdering<R> + Serialize,
         B: FnOnce(RelationBuilder<R>) -> RelationBuilder<R>,
     {
         let nested_builder = builder_fn(RelationBuilder::new());
@@ -1191,13 +1212,13 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
     }
 }
 
-/// Additional methods for queries on TdbGQLModel types.
+/// Additional methods for queries with ordering.
 impl<T, C> ModelQuery<T, C>
 where
-    T: OrmModel + TdbGQLModel,
+    T: OrmModel,
     C: ClientProvider,
 {
-    /// Set the ordering for results (type-safe via TdbGQLModel).
+    /// Set the ordering for results (type-safe via TdbGQLOrdering).
     ///
     /// # Example
     /// ```ignore
@@ -1207,9 +1228,9 @@ where
     ///         ..Default::default()
     ///     });
     /// ```
-    pub fn order_by(mut self, order_by: T::Ordering) -> Self
+    pub fn order_by<O>(mut self, order_by: O) -> Self
     where
-        T::Ordering: Serialize,
+        O: TdbGQLOrdering<T> + Serialize,
     {
         let order_json = serde_json::to_value(&order_by).unwrap_or_default();
         self.order_by_gql = Some(json_to_graphql(&order_json));

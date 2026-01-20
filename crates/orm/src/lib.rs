@@ -59,9 +59,8 @@ pub use resolver::RelationResolver;
 
 // Re-export commonly used types from dependencies
 pub use terminusdb_client::{BranchSpec, GetOpts, TerminusDBHttpClient};
-pub use terminusdb_gql::TdbGQLModel;
 pub use terminusdb_relation::{RelationField, RelationFrom, RelationTo};
 pub use terminusdb_schema::{
-    json::InstanceFromJson, EntityIDFor, FromTDBInstance, Instance, TdbLazy, TerminusDBModel,
-    ToSchemaClass, ToTDBSchema,
+    json::InstanceFromJson, EntityIDFor, FromTDBInstance, Instance, TdbGQLFilter, TdbGQLOrdering,
+    TdbLazy, TerminusDBModel, ToSchemaClass, ToTDBSchema,
 };

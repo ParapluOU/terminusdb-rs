@@ -13,6 +13,7 @@
 pub use context::*;
 pub use document::*;
 pub use fvec::*;
+pub use gql::*;
 pub use instance::*;
 pub use primitive::*;
 pub use schema::*;
@@ -36,6 +37,7 @@ mod r#impl;
 mod context;
 mod document;
 mod fvec;
+mod gql;
 mod id;
 mod iri;
 mod instance;

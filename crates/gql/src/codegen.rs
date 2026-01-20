@@ -5,7 +5,7 @@
 //! # Usage in build.rs
 //!
 //! ```ignore
-//! use terminusdb_gql::{generate_gql_schema, generate_filter_types, generate_model_impls};
+//! use terminusdb_gql::{generate_gql_schema, generate_filter_types, generate_filter_impls};
 //! use std::fs;
 //!
 //! fn main() {
@@ -14,10 +14,11 @@
 //!     // Generate filter struct definitions
 //!     let filters = generate_filter_types(&sdl).unwrap();
 //!
-//!     // Generate trait impls - provide model names and their paths
-//!     let impls = generate_model_impls(&[
-//!         ("Project", "crate::models::Project"),
-//!         ("Ticket", "crate::models::Ticket"),
+//!     // Generate TdbGQLFilter/TdbGQLOrdering trait impls
+//!     // These connect filters to their model types
+//!     let impls = generate_filter_impls(&[
+//!         ("Project", "my_domain::Project"),
+//!         ("Ticket", "my_domain::Ticket"),
 //!     ]);
 //!
 //!     let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -395,11 +396,11 @@ impl ModelConfig {
     }
 }
 
-/// Generate TdbGQLModel trait implementations for the given models.
+/// Generate TdbGQLFilter and TdbGQLOrdering trait implementations for the given models.
 ///
-/// This function generates impl blocks that connect each model to its
-/// corresponding filter type. The filter type name is derived from the
-/// model name using the convention `{ModelName}Filter`.
+/// This function generates impl blocks that connect each filter/ordering type to its
+/// corresponding model. The filter and ordering type names are derived from the
+/// model name using the conventions `{ModelName}Filter` and `{ModelName}Ordering`.
 ///
 /// # Arguments
 ///
@@ -408,7 +409,7 @@ impl ModelConfig {
 /// # Example
 ///
 /// ```ignore
-/// let impls = generate_model_impls(&[
+/// let impls = generate_filter_impls(&[
 ///     ("Project", "crate::models::Project"),
 ///     ("Ticket", "crate::models::Ticket"),
 /// ]);
@@ -416,19 +417,15 @@ impl ModelConfig {
 ///
 /// This generates:
 /// ```ignore
-/// impl terminusdb_gql::TdbGQLModel for crate::models::Project {
-///     type Filter = ProjectFilter;
-///     type Ordering = ProjectOrdering;
-/// }
-/// impl terminusdb_gql::TdbGQLModel for crate::models::Ticket {
-///     type Filter = TicketFilter;
-///     type Ordering = TicketOrdering;
-/// }
+/// impl terminusdb_schema::TdbGQLFilter<crate::models::Project> for ProjectFilter {}
+/// impl terminusdb_schema::TdbGQLOrdering<crate::models::Project> for ProjectOrdering {}
+/// impl terminusdb_schema::TdbGQLFilter<crate::models::Ticket> for TicketFilter {}
+/// impl terminusdb_schema::TdbGQLOrdering<crate::models::Ticket> for TicketOrdering {}
 /// ```
-pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
+pub fn generate_filter_impls(models: &[(&str, &str)]) -> String {
     let impls: Vec<TokenStream> = models
         .iter()
-        .map(|(name, path)| {
+        .flat_map(|(name, path)| {
             let filter_name = format!("{}Filter", name);
             let filter_ident = Ident::new(&filter_name, Span::call_site());
 
@@ -441,12 +438,14 @@ pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
                 quote! { #ident }
             });
 
-            quote! {
-                impl terminusdb_gql::TdbGQLModel for #path_tokens {
-                    type Filter = #filter_ident;
-                    type Ordering = #ordering_ident;
-                }
-            }
+            vec![
+                quote! {
+                    impl terminusdb_schema::TdbGQLFilter<#path_tokens> for #filter_ident {}
+                },
+                quote! {
+                    impl terminusdb_schema::TdbGQLOrdering<#path_tokens> for #ordering_ident {}
+                },
+            ]
         })
         .collect();
 
@@ -457,17 +456,25 @@ pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
     tokens.to_string()
 }
 
-/// Generate both filter types and model impls from SDL.
+/// Deprecated: Use `generate_filter_impls` instead.
+///
+/// This function is kept for backwards compatibility but will be removed in a future version.
+#[deprecated(since = "0.2.0", note = "Use generate_filter_impls instead")]
+pub fn generate_model_impls(models: &[(&str, &str)]) -> String {
+    generate_filter_impls(models)
+}
+
+/// Generate both filter types and filter/ordering trait impls from SDL.
 ///
 /// This is a convenience function that combines `generate_filter_types` and
-/// `generate_model_impls` into a single call.
+/// `generate_filter_impls` into a single call.
 ///
 /// # Returns
 ///
-/// A tuple of (filter_types_code, model_impls_code).
+/// A tuple of (filter_types_code, filter_impls_code).
 pub fn generate_all(sdl: &str, models: &[(&str, &str)]) -> Result<(String, String), String> {
     let filters = generate_filter_types(sdl)?;
-    let impls = generate_model_impls(models);
+    let impls = generate_filter_impls(models);
     Ok((filters, impls))
 }
 
@@ -593,36 +600,34 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_model_impls() {
-        let impls = generate_model_impls(&[
+    fn test_generate_filter_impls() {
+        let impls = generate_filter_impls(&[
             ("Project", "crate::models::Project"),
             ("Ticket", "my_crate::Ticket"),
         ]);
 
+        // Check TdbGQLFilter impls
         assert!(
-            impls.contains("impl terminusdb_gql :: TdbGQLModel for crate :: models :: Project"),
-            "Should contain Project impl. Generated:\n{}",
+            impls.contains("impl terminusdb_schema :: TdbGQLFilter < crate :: models :: Project > for ProjectFilter"),
+            "Should contain ProjectFilter impl. Generated:\n{}",
             impls
         );
         assert!(
-            impls.contains("type Filter = ProjectFilter"),
-            "Should have ProjectFilter as Filter type"
+            impls.contains("impl terminusdb_schema :: TdbGQLFilter < my_crate :: Ticket > for TicketFilter"),
+            "Should contain TicketFilter impl. Generated:\n{}",
+            impls
+        );
+
+        // Check TdbGQLOrdering impls
+        assert!(
+            impls.contains("impl terminusdb_schema :: TdbGQLOrdering < crate :: models :: Project > for ProjectOrdering"),
+            "Should contain ProjectOrdering impl. Generated:\n{}",
+            impls
         );
         assert!(
-            impls.contains("type Ordering = ProjectOrdering"),
-            "Should have ProjectOrdering as Ordering type"
-        );
-        assert!(
-            impls.contains("impl terminusdb_gql :: TdbGQLModel for my_crate :: Ticket"),
-            "Should contain Ticket impl"
-        );
-        assert!(
-            impls.contains("type Filter = TicketFilter"),
-            "Should have TicketFilter as Filter type"
-        );
-        assert!(
-            impls.contains("type Ordering = TicketOrdering"),
-            "Should have TicketOrdering as Ordering type"
+            impls.contains("impl terminusdb_schema :: TdbGQLOrdering < my_crate :: Ticket > for TicketOrdering"),
+            "Should contain TicketOrdering impl. Generated:\n{}",
+            impls
         );
     }
 
