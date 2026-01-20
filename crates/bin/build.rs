@@ -69,11 +69,6 @@ fn main() {
             temp_dir.display()
         );
 
-        // Clean existing directory if it exists
-        if temp_dir.exists() {
-            let _ = fs::remove_dir_all(&temp_dir);
-        }
-
         if let Err(e) = clone_terminusdb(&version, &temp_dir) {
             panic!("Failed to clone TerminusDB: {}", e);
         }
@@ -412,6 +407,48 @@ fn install_swipl_local(platform: Platform, deps_dir: &Path) -> Result<PathBuf, S
 }
 
 fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
+    // If destination already exists, try to update it instead of cloning fresh
+    if dest.exists() {
+        let git_dir = dest.join(".git");
+        if git_dir.exists() {
+            println!("cargo:warning=TerminusDB directory already exists, updating...");
+
+            // Fetch the latest
+            let fetch_status = Command::new("git")
+                .args(&["fetch", "--depth=1", "origin", version])
+                .current_dir(dest)
+                .status()
+                .map_err(|e| format!("Failed to run git fetch: {}", e))?;
+
+            if fetch_status.success() {
+                // Checkout the version
+                let checkout_status = Command::new("git")
+                    .args(&["checkout", "FETCH_HEAD"])
+                    .current_dir(dest)
+                    .status()
+                    .map_err(|e| format!("Failed to run git checkout: {}", e))?;
+
+                if checkout_status.success() {
+                    println!("cargo:warning=Successfully updated TerminusDB");
+                    return Ok(());
+                }
+            }
+
+            // If fetch/checkout failed, try to remove and re-clone
+            println!("cargo:warning=Git update failed, attempting fresh clone...");
+        }
+
+        // Remove existing directory
+        if let Err(e) = fs::remove_dir_all(dest) {
+            return Err(format!(
+                "Failed to remove existing directory at {}: {}. \
+                 Please manually delete it and retry.",
+                dest.display(),
+                e
+            ));
+        }
+    }
+
     println!("cargo:warning=Cloning TerminusDB repository...");
 
     let status = Command::new("git")
