@@ -18,7 +18,38 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use uuid::Uuid;
-// todo: needs unit tests
+
+/// Convenience macro that expands to `EntityIDFor<Self>`.
+///
+/// This macro enables auto-detection of the `id_field` when used on a field named `id`.
+/// The derive macro recognizes this pattern and automatically sets the id_field.
+///
+/// # Example
+/// ```ignore
+/// use terminusdb_schema_derive::TerminusDBModel;
+/// use terminusdb_schema::PrimaryKey;
+///
+/// #[derive(TerminusDBModel)]
+/// struct Person {
+///     id: PrimaryKey!(),  // Expands to EntityIDFor<Self>, auto-detected as id_field
+///     name: String,
+/// }
+/// ```
+///
+/// This is equivalent to:
+/// ```ignore
+/// #[derive(TerminusDBModel)]
+/// struct Person {
+///     id: EntityIDFor<Self>,  // Also auto-detected
+///     name: String,
+/// }
+/// ```
+#[macro_export]
+macro_rules! PrimaryKey {
+    () => {
+        $crate::EntityIDFor<Self>
+    };
+}
 
 #[derive(Debug)]
 pub struct EntityIDFor<T: ToTDBSchema> {

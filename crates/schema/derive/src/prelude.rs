@@ -39,3 +39,36 @@ pub fn is_phantom_data_type(ty: &syn::Type) -> bool {
     }
     false
 }
+
+/// Check if a type is EntityIDFor<Self> specifically
+/// This is used for auto-detection of id_field
+pub fn is_entity_id_for_self(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(typepath) = ty {
+        if let Some(segment) = typepath.path.segments.last() {
+            if segment.ident == "EntityIDFor" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(syn::Type::Path(inner_path)) = arg {
+                            if let Some(ident) = inner_path.path.get_ident() {
+                                return ident == "Self";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a type is PrimaryKey!() macro invocation
+/// This is used for auto-detection of id_field
+pub fn is_primary_key_type(ty: &syn::Type) -> bool {
+    // Check for PrimaryKey!() macro invocation
+    if let syn::Type::Macro(type_macro) = ty {
+        if let Some(segment) = type_macro.mac.path.segments.last() {
+            return segment.ident == "PrimaryKey";
+        }
+    }
+    false
+}

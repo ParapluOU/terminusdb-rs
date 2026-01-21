@@ -4,6 +4,7 @@ mod entity_id_test;
 mod enum_simple_test;
 mod enum_union_test;
 mod from_instance_test;
+mod id_field_auto_detect_test;
 mod id_field_validation_test;
 mod instance_test;
 mod integration_test;

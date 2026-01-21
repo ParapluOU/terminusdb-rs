@@ -4,6 +4,36 @@ use crate::schema::generate_totdbschema_impl;
 #[cfg(feature = "generic-derive")]
 use std::collections::HashMap;
 
+/// Auto-detect id_field if not explicitly specified.
+///
+/// Rules:
+/// 1. If id_field is already specified, return it unchanged
+/// 2. Look for a field named "id"
+/// 3. Check if that field has type EntityIDFor<Self> or PrimaryKey
+/// 4. If found, return Some("id"), otherwise return None
+fn auto_detect_id_field(fields_named: &FieldsNamed, opts: &TDBModelOpts) -> Option<String> {
+    // If explicitly specified, use that
+    if opts.id_field.is_some() {
+        return opts.id_field.clone();
+    }
+
+    // Look for a field named "id"
+    for field in &fields_named.named {
+        if let Some(ident) = &field.ident {
+            if ident == "id" {
+                // Check if it's EntityIDFor<Self> or PrimaryKey
+                if crate::prelude::is_entity_id_for_self(&field.ty)
+                    || crate::prelude::is_primary_key_type(&field.ty)
+                {
+                    return Some("id".to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Validate that id_field exists when specified and has the correct type for the key strategy
 fn validate_id_field_type(
     fields_named: &FieldsNamed,
@@ -59,6 +89,22 @@ pub fn implement_for_struct(
     opts: &TDBModelOpts,
 ) -> proc_macro2::TokenStream {
     let struct_name = &input.ident;
+
+    // Auto-detect id_field if not explicitly specified
+    let effective_opts = match &data_struct.fields {
+        Fields::Named(fields_named) => {
+            let detected_id_field = auto_detect_id_field(fields_named, opts);
+            if detected_id_field != opts.id_field {
+                let mut new_opts = opts.clone();
+                new_opts.id_field = detected_id_field;
+                new_opts
+            } else {
+                opts.clone()
+            }
+        }
+        _ => opts.clone(),
+    };
+    let opts = &effective_opts;
 
     // Generate class name that includes generic parameters
     let class_name = if let Some(explicit_class) = &opts.class_name {
