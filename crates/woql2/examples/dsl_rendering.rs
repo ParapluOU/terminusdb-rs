@@ -14,19 +14,19 @@ fn main() {
                     subject: NodeValue::Variable("Person".to_string()),
                     predicate: NodeValue::Node("rdf:type".to_string()),
                     object: Value::Node("@schema:Person".to_string()),
-                    graph: GraphType::Instance,
+                    graph: Some(GraphType::Instance),
                 }),
                 Query::Triple(Triple {
                     subject: NodeValue::Variable("Person".to_string()),
                     predicate: NodeValue::Node("@schema:name".to_string()),
                     object: Value::Variable("Name".to_string()),
-                    graph: GraphType::Instance,
+                    graph: Some(GraphType::Instance),
                 }),
                 Query::Triple(Triple {
                     subject: NodeValue::Variable("Person".to_string()),
                     predicate: NodeValue::Node("@schema:age".to_string()),
                     object: Value::Variable("Age".to_string()),
-                    graph: GraphType::Instance,
+                    graph: Some(GraphType::Instance),
                 }),
                 Query::Greater(Greater {
                     left: DataValue::Variable("Age".to_string()),
@@ -58,7 +58,7 @@ fn main() {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:name".to_string()),
         object: Value::Variable("Name".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     };
     println!("Triple: {}", triple);
     

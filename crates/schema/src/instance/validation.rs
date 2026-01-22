@@ -621,6 +621,7 @@ mod tests {
     fn test_enum_validation() {
         let schema = Schema::Enum {
             id: "Status".to_string(),
+            base: None,
             values: vec!["active".to_string(), "inactive".to_string()],
             documentation: None,
         };

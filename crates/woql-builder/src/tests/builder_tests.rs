@@ -1014,7 +1014,7 @@ fn test_add_triple() {
             assert!(
                 matches!(add_q.object, Woql2Value::Data(XSDAnySimpleType::Integer(i)) if i == 123)
             );
-            assert_eq!(add_q.graph, GraphType::Instance);
+            assert_eq!(add_q.graph, Some(GraphType::Instance));
         }
         _ => panic!("Expected AddTriple query, found {:?}", final_query),
     }
@@ -1040,7 +1040,7 @@ fn test_delete_triple() {
             assert!(matches!(del_q.subject, NodeValue::Variable(v) if v == "S"));
             assert!(matches!(del_q.predicate, NodeValue::Variable(v) if v == "P"));
             assert!(matches!(del_q.object, Woql2Value::Variable(v) if v == "O"));
-            assert_eq!(del_q.graph, GraphType::Instance);
+            assert_eq!(del_q.graph, Some(GraphType::Instance));
         }
         _ => panic!("Expected DeleteTriple query, found {:?}", final_query),
     }
@@ -1494,7 +1494,7 @@ fn test_added_triple() {
             assert!(matches!(added_q.subject, NodeValue::Variable(v) if v == "S"));
             assert!(matches!(added_q.predicate, NodeValue::Node(n) if n == "prop:pred"));
             assert!(matches!(added_q.object, Woql2Value::Variable(v) if v == "O"));
-            assert_eq!(added_q.graph, GraphType::Instance);
+            assert_eq!(added_q.graph, Some(GraphType::Instance));
         }
         _ => panic!("Expected AddedTriple query, found {:?}", final_query),
     }

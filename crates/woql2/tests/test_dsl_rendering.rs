@@ -10,7 +10,7 @@ fn test_simple_triple_rendering() {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:name".to_string()),
         object: Value::Variable("Name".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     };
     
     let dsl = Query::Triple(triple).to_dsl();
@@ -23,14 +23,14 @@ fn test_and_query_rendering() {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("rdf:type".to_string()),
         object: Value::Node("@schema:Person".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     });
     
     let triple2 = Query::Triple(Triple {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:age".to_string()),
         object: Value::Variable("Age".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     });
     
     let and_query = Query::And(And {
@@ -50,7 +50,7 @@ fn test_select_query_rendering() {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:name".to_string()),
         object: Value::Variable("Name".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     });
     
     let select = Query::Select(Select {
@@ -81,7 +81,7 @@ fn test_nested_query_rendering() {
                 subject: NodeValue::Variable("Person".to_string()),
                 predicate: NodeValue::Node("@schema:age".to_string()),
                 object: Value::Variable("Age".to_string()),
-                graph: GraphType::Instance,
+                graph: Some(GraphType::Instance),
             }),
             Query::Greater(Greater {
                 left: DataValue::Variable("Age".to_string()),
@@ -97,7 +97,7 @@ fn test_nested_query_rendering() {
                 subject: NodeValue::Variable("Person".to_string()),
                 predicate: NodeValue::Node("@schema:isAdult".to_string()),
                 object: Value::Data(XSDAnySimpleType::Boolean(true)),
-                graph: GraphType::Instance,
+                graph: Some(GraphType::Instance),
             }),
         ],
     });
@@ -115,7 +115,7 @@ fn test_optional_rendering() {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:nickname".to_string()),
         object: Value::Variable("Nickname".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     });
     
     let opt = Query::WoqlOptional(WoqlOptional {

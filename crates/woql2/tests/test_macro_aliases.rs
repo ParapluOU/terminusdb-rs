@@ -22,8 +22,8 @@ fn test_triple_alias() {
     let q2 = t!(var!(x), "rdf:type", "Person");
     
     // Test with graph parameter
-    let q3 = triple!(var!(x), "name", var!(name), terminusdb_schema::GraphType::Instance);
-    let q4 = t!(var!(x), "name", var!(name), terminusdb_schema::GraphType::Instance);
+    let q3 = triple!(var!(x), "name", var!(name), Some(terminusdb_schema::GraphType::Instance));
+    let q4 = t!(var!(x), "name", var!(name), Some(terminusdb_schema::GraphType::Instance));
     
     // All should be Triple queries
     assert!(matches!(q1, query::Query::Triple(_)));

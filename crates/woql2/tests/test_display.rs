@@ -10,7 +10,7 @@ fn test_display_simple_triple() {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:name".to_string()),
         object: Value::Variable("Name".to_string()),
-        graph: GraphType::Instance,
+        graph: Some(GraphType::Instance),
     };
     
     // Test Display directly on Triple
@@ -43,7 +43,7 @@ fn test_display_complex_query() {
                     subject: NodeValue::Variable("Person".to_string()),
                     predicate: NodeValue::Node("@schema:name".to_string()),
                     object: Value::Variable("Name".to_string()),
-                    graph: GraphType::Instance,
+                    graph: Some(GraphType::Instance),
                 }),
                 Query::Greater(Greater {
                     left: DataValue::Variable("Age".to_string()),
@@ -65,13 +65,13 @@ fn test_display_format_integration() {
                 subject: NodeValue::Variable("X".to_string()),
                 predicate: NodeValue::Node("rdf:type".to_string()),
                 object: Value::Node("@schema:Person".to_string()),
-                graph: GraphType::Instance,
+                graph: Some(GraphType::Instance),
             }),
             Query::Triple(Triple {
                 subject: NodeValue::Variable("X".to_string()),
                 predicate: NodeValue::Node("@schema:age".to_string()),
                 object: Value::Variable("Age".to_string()),
-                graph: GraphType::Instance,
+                graph: Some(GraphType::Instance),
             }),
         ],
     });

@@ -251,6 +251,7 @@ mod tests {
             schema,
             Schema::Enum {
                 id: "SimpleEnum".to_string(),
+                base: None,
                 documentation: None,
                 values: vec!["red".to_string(), "green".to_string(), "blue".to_string()],
             }

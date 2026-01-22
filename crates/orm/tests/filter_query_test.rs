@@ -613,7 +613,7 @@ async fn test_not_filter_for_absent_field(client: _, spec: _) -> anyhow::Result<
 
     let unassigned_tasks = Task::query(filter_no_assignee)
         .with_client(&client)
-        .execute(&spec)
+        .execute_primary(&spec)
         .await?;
 
     println!("Tasks without assignee: {}", unassigned_tasks.len());
