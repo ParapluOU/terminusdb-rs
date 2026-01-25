@@ -1,7 +1,8 @@
 use crate::{
-    json::InstancePropertyFromJson, EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue,
-    Property, RelationValue, Schema, TdbLazy, ToInstanceProperty, ToSchemaClass, ToSchemaProperty,
-    ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
+    json::InstancePropertyFromJson, EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance,
+    InstanceProperty, Primitive, PrimitiveValue, Property, RelationValue, Schema, TdbLazy,
+    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances,
+    ToTDBSchema, TypeFamily,
 };
 use anyhow::{anyhow, bail};
 use std::collections::HashSet;
@@ -25,7 +26,7 @@ impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Vec<T> {
     default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         // Check if T is a subdocument type
         let is_subdocument = T::to_schema().is_subdocument();
-        
+
         InstanceProperty::Relations(
             self.into_iter()
                 .map(|item| {
@@ -464,7 +465,10 @@ impl<T: ToTDBSchema> FromInstanceProperty for Vec<EntityIDFor<T>> {
                             targets.push(EntityIDFor::new_unchecked(s)?);
                         }
                         _ => {
-                            bail!("Expected PrimitiveValue::String for EntityIDFor, got: {:#?}", primitive)
+                            bail!(
+                                "Expected PrimitiveValue::String for EntityIDFor, got: {:#?}",
+                                primitive
+                            )
                         }
                     }
                 }
@@ -474,4 +478,3 @@ impl<T: ToTDBSchema> FromInstanceProperty for Vec<EntityIDFor<T>> {
         }
     }
 }
-

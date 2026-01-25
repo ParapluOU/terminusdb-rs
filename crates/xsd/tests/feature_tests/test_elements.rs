@@ -23,8 +23,8 @@ use terminusdb_xsd::XsdModel;
 /// Validates: Element parsed → Schema generated → Class exists
 #[test]
 fn test_feature_global_element() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -44,8 +44,8 @@ fn test_feature_global_element() {
 /// Validates: Parse XML → Instances → Insert into TDB
 #[tokio::test]
 async fn test_feature_global_element_insertion() -> anyhow::Result<()> {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
     let valid_schemas = filter_valid_schemas(schemas);
@@ -88,8 +88,8 @@ async fn test_feature_global_element_insertion() -> anyhow::Result<()> {
 /// Validates: Child elements become class properties
 #[test]
 fn test_feature_local_element_in_sequence() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -110,8 +110,8 @@ fn test_feature_local_element_in_sequence() {
 /// Validates: title is required in topic
 #[test]
 fn test_feature_required_element() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -131,8 +131,8 @@ fn test_feature_required_element() {
 /// Validates: shortdesc is optional in topic
 #[test]
 fn test_feature_optional_element() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -155,8 +155,8 @@ fn test_feature_optional_element() {
 /// Validates: Unbounded elements have array cardinality
 #[test]
 fn test_feature_unbounded_element() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -187,8 +187,8 @@ fn test_feature_unbounded_element() {
 /// Validates: Schemas contain classes with id-like attributes
 #[test]
 fn test_feature_required_attribute() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -222,8 +222,8 @@ fn test_feature_required_attribute() {
 /// Validates: Optional attributes become optional properties
 #[test]
 fn test_feature_optional_attribute() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -244,8 +244,8 @@ fn test_feature_optional_attribute() {
 /// Validates: ID attributes map to xsd:ID or string
 #[test]
 fn test_feature_id_attribute_type() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -272,8 +272,8 @@ fn test_feature_id_attribute_type() {
 /// Validates: <standard> element generates class
 #[test]
 fn test_feature_niso_global_element() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 
@@ -291,5 +291,8 @@ fn test_feature_niso_global_element() {
         }
         _ => false,
     });
-    assert!(has_standard, "NISO-STS should have standard-related classes");
+    assert!(
+        has_standard,
+        "NISO-STS should have standard-related classes"
+    );
 }

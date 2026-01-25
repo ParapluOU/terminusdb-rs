@@ -1,10 +1,13 @@
 //! Collaboration operations (fetch, push, pull, clone)
 
 use {
-    crate::{TerminusDBAdapterError, debug::{OperationEntry, OperationType}},
+    crate::{
+        debug::{OperationEntry, OperationType},
+        TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Serialize, Deserialize},
+    serde::{Deserialize, Serialize},
     serde_json::json,
     std::time::Instant,
 };
@@ -23,7 +26,7 @@ pub struct CloneRequest {
 /// Encodes username and password as Basic Auth header value
 /// Returns a string in the format: "Basic <base64(username:password)>"
 fn encode_basic_auth(username: &str, password: &str) -> String {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     let credentials = format!("{}:{}", username, password);
     let encoded = STANDARD.encode(credentials.as_bytes());
     format!("Basic {}", encoded)
@@ -87,8 +90,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("fetch".to_string()),
-            format!("/api/fetch/{}", path)
-        ).with_context(None, None);
+            format!("/api/fetch/{}", path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -111,7 +115,8 @@ impl super::client::TerminusDBHttpClient {
         });
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
-        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
+        let request =
+            request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
 
         let res = request
             .body(body.to_string())
@@ -124,22 +129,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("fetch operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("fetch failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully fetched from remote in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully fetched from remote in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -192,8 +200,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("push".to_string()),
-            format!("/api/push/{}", path)
-        ).with_context(None, None);
+            format!("/api/push/{}", path),
+        )
+        .with_context(None, None);
 
         let mut body = json!({
             "remote": remote_url
@@ -219,7 +228,8 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
-        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
+        let request =
+            request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
 
         let res = request
             .body(body.to_string())
@@ -232,22 +242,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("push operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("push failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully pushed to remote in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully pushed to remote in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -308,8 +321,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("pull".to_string()),
-            format!("/api/pull/{}", path)
-        ).with_context(None, None);
+            format!("/api/pull/{}", path),
+        )
+        .with_context(None, None);
 
         let mut body = json!({
             "remote": remote_url,
@@ -337,7 +351,8 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
-        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
+        let request =
+            request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(900)));
 
         let res = request
             .body(body.to_string())
@@ -350,22 +365,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("pull operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("pull failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully pulled from remote in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully pulled from remote in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -420,7 +438,8 @@ impl super::client::TerminusDBHttpClient {
         timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("clone")
             .add_path(organization)
             .add_path(database)
@@ -430,8 +449,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("clone".to_string()),
-            format!("/api/clone/{}/{}", organization, database)
-        ).with_context(Some(database.to_string()), None);
+            format!("/api/clone/{}/{}", organization, database),
+        )
+        .with_context(Some(database.to_string()), None);
 
         let clone_req = CloneRequest {
             remote_url: remote_url.to_string(),
@@ -455,7 +475,8 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Apply timeout: use provided timeout or default to 1 hour for full database clone
-        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(3600)));
+        let request =
+            request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(3600)));
 
         let res = request
             .json(&clone_req)
@@ -468,22 +489,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("clone operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("clone failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully cloned repository in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully cloned repository in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }

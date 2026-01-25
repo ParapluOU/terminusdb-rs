@@ -200,7 +200,7 @@ fn test_simple_enum_lowercase_deserialization() {
 
     // Test another variant
     let json_green_lower = json!({
-        "@id": "Color/4", 
+        "@id": "Color/4",
         "@type": "Color",
         "green": null  // lowercase
     });

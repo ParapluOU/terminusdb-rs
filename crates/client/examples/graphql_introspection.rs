@@ -9,17 +9,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Create client connected to local TerminusDB
     let client = TerminusDBHttpClient::local_node().await;
-    
+
     // Database name to introspect (adjust as needed)
-    let database = "admin";  // Using the default admin database
-    
+    let database = "admin"; // Using the default admin database
+
     println!("Fetching GraphQL schema for database: {}", database);
-    
+
     // Method 1: Using the convenience introspect_schema method
     match client.introspect_schema(database, None, None).await {
         Ok(schema) => {
             println!("\n✅ Schema introspection successful!");
-            
+
             // Pretty print a preview of the schema
             let pretty = serde_json::to_string_pretty(&schema)?;
             let preview_len = pretty.len().min(1000);
@@ -34,9 +34,9 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("Make sure TerminusDB is running and the database exists.");
         }
     }
-    
+
     println!("\n----------------------------------------\n");
-    
+
     // Method 2: Using a custom GraphQL query
     let custom_query = r#"
         query {
@@ -51,18 +51,21 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     "#;
-    
+
     println!("Running custom GraphQL query...");
-    
+
     let request = GraphQLRequest::new(custom_query);
-    match client.execute_graphql::<serde_json::Value>(database, None, request, None).await {
+    match client
+        .execute_graphql::<serde_json::Value>(database, None, request, None)
+        .await
+    {
         Ok(response) => {
             if let Some(data) = response.data {
                 println!("\n✅ Custom query successful!");
                 println!("Query type info:");
                 println!("{}", serde_json::to_string_pretty(&data)?);
             }
-            
+
             if let Some(errors) = response.errors {
                 println!("\n⚠️  GraphQL errors:");
                 for error in errors {
@@ -74,6 +77,6 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("\n❌ Error executing custom query: {}", e);
         }
     }
-    
+
     Ok(())
 }

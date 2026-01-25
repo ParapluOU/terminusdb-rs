@@ -1,4 +1,4 @@
-use terminusdb_client::{TerminusDBHttpClient, BranchSpec};
+use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -10,7 +10,9 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Testing JavaScript WOQL syntax: {}", js_query);
 
-    let result = client.query_string::<serde_json::Value>(Some(spec), js_query, None).await?;
+    let result = client
+        .query_string::<serde_json::Value>(Some(spec), js_query, None)
+        .await?;
 
     println!("Query succeeded!");
     println!("Result: {}", serde_json::to_string_pretty(&result)?);

@@ -83,13 +83,23 @@ fn filter_valid_schemas(schemas: &[Schema]) -> Vec<Schema> {
     schemas
         .iter()
         .filter(|s| {
-            if let Schema::Class { id, properties, inherits, .. } = s {
-                let undefined_props: Vec<_> = properties.iter()
-                    .filter(|p| !p.class.starts_with("xsd:") && !p.class.starts_with("sys:") && !defined.contains(&p.class))
+            if let Schema::Class {
+                id,
+                properties,
+                inherits,
+                ..
+            } = s
+            {
+                let undefined_props: Vec<_> = properties
+                    .iter()
+                    .filter(|p| {
+                        !p.class.starts_with("xsd:")
+                            && !p.class.starts_with("sys:")
+                            && !defined.contains(&p.class)
+                    })
                     .collect();
-                let undefined_inherits: Vec<_> = inherits.iter()
-                    .filter(|i| !defined.contains(*i))
-                    .collect();
+                let undefined_inherits: Vec<_> =
+                    inherits.iter().filter(|i| !defined.contains(*i)).collect();
 
                 let all_props_defined = undefined_props.is_empty();
                 let all_inherits_defined = undefined_inherits.is_empty();
@@ -121,7 +131,11 @@ fn filter_valid_schemas(schemas: &[Schema]) -> Vec<Schema> {
 #[test]
 fn test_niso_fixtures_exist() {
     let dir = fixtures_dir();
-    assert!(dir.exists(), "NISO fixtures directory should exist at {:?}", dir);
+    assert!(
+        dir.exists(),
+        "NISO fixtures directory should exist at {:?}",
+        dir
+    );
 
     let rfc8142 = dir.join("rfc8142.xml");
     let niso_standard = dir.join("niso-sts-standard.xml");
@@ -142,7 +156,10 @@ fn test_count_niso_files() {
         println!("    - {}", file.file_name().unwrap().to_string_lossy());
     }
 
-    assert!(xml_files.len() >= 2, "Expected at least 2 NISO-STS sample files");
+    assert!(
+        xml_files.len() >= 2,
+        "Expected at least 2 NISO-STS sample files"
+    );
 }
 
 // ============================================================================
@@ -153,8 +170,8 @@ fn test_count_niso_files() {
 fn test_niso_xsd_model_loads() {
     let xsd_path = niso_sts_xsd_path();
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load NISO-STS model");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load NISO-STS model");
 
     let stats = model.stats();
     println!("NISO-STS XsdModel loaded:");
@@ -164,7 +181,10 @@ fn test_niso_xsd_model_loads() {
     println!("  Simple types: {}", stats.total_simple_types);
     println!("  Root elements: {}", stats.total_root_elements);
 
-    assert!(stats.tdb_schema_count > 100, "NISO-STS should generate many schemas");
+    assert!(
+        stats.tdb_schema_count > 100,
+        "NISO-STS should generate many schemas"
+    );
 }
 
 #[test]
@@ -181,7 +201,16 @@ fn test_niso_has_expected_schemas() {
     }
 
     // Check for expected NISO-STS elements
-    let expected_elements = ["Standard", "Front", "Body", "Back", "Sec", "P", "Title", "NonNormativeExample"];
+    let expected_elements = [
+        "Standard",
+        "Front",
+        "Body",
+        "Back",
+        "Sec",
+        "P",
+        "Title",
+        "NonNormativeExample",
+    ];
     for expected in expected_elements {
         let found = class_names.iter().any(|n| n.contains(expected));
         if found {
@@ -200,19 +229,26 @@ fn test_check_raw_xmlschema_elements() {
     use xmlschema::validators::XsdSchema as RustXsdSchema;
 
     // Load raw xmlschema directly to see all elements and their namespaces
-    let rust_schema = RustXsdSchema::from_file(&niso_sts_xsd_path())
-        .expect("Failed to load raw schema");
+    let rust_schema =
+        RustXsdSchema::from_file(&niso_sts_xsd_path()).expect("Failed to load raw schema");
 
     println!("=== Raw xmlschema elements with namespaces ===\n");
 
     // Collect namespaces from all elements
     let mut namespaces: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut elements_by_ns: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut elements_by_ns: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
 
     for (qname, _elem) in rust_schema.elements() {
-        let ns = qname.namespace.clone().unwrap_or_else(|| "(no namespace)".to_string());
+        let ns = qname
+            .namespace
+            .clone()
+            .unwrap_or_else(|| "(no namespace)".to_string());
         namespaces.insert(ns.clone());
-        elements_by_ns.entry(ns).or_default().push(qname.local_name.clone());
+        elements_by_ns
+            .entry(ns)
+            .or_default()
+            .push(qname.local_name.clone());
     }
 
     println!("Namespaces in schema elements:");
@@ -287,7 +323,10 @@ fn test_check_raw_xmlschema_elements() {
                                     xmlschema::validators::GlobalType::Simple(_) => "simple",
                                     xmlschema::validators::GlobalType::Complex(_) => "complex",
                                 };
-                                println!("    type: {} ({}) (ns: {:?})", qname.local_name, type_kind, qname.namespace);
+                                println!(
+                                    "    type: {} ({}) (ns: {:?})",
+                                    qname.local_name, type_kind, qname.namespace
+                                );
                             }
 
                             // Check for semantics element
@@ -296,15 +335,21 @@ fn test_check_raw_xmlschema_elements() {
                                 if qname.local_name.to_lowercase().contains("semant") {
                                     // Check if it has anonymous type
                                     let type_name = match &elem.element_type {
-                                        xmlschema::validators::ElementType::Complex(ct) => {
-                                            ct.name.clone().map(|n| n.local_name.clone()).unwrap_or_else(|| "(anonymous)".to_string())
-                                        }
-                                        xmlschema::validators::ElementType::Simple(st) => {
-                                            st.name().map(|n| n.local_name.clone()).unwrap_or_else(|| "(anonymous simple)".to_string())
-                                        }
-                                        _ => "(other)".to_string()
+                                        xmlschema::validators::ElementType::Complex(ct) => ct
+                                            .name
+                                            .clone()
+                                            .map(|n| n.local_name.clone())
+                                            .unwrap_or_else(|| "(anonymous)".to_string()),
+                                        xmlschema::validators::ElementType::Simple(st) => st
+                                            .name()
+                                            .map(|n| n.local_name.clone())
+                                            .unwrap_or_else(|| "(anonymous simple)".to_string()),
+                                        _ => "(other)".to_string(),
                                     };
-                                    println!("    Found: {} (ns: {:?}) type={}", qname.local_name, qname.namespace, type_name);
+                                    println!(
+                                        "    Found: {} (ns: {:?}) type={}",
+                                        qname.local_name, qname.namespace, type_name
+                                    );
                                 }
                             }
 
@@ -313,7 +358,10 @@ fn test_check_raw_xmlschema_elements() {
                             for (qname, _) in imported.elements() {
                                 let name_lower = qname.local_name.to_lowercase();
                                 if name_lower.contains("implied") || name_lower.contains("mrow") {
-                                    println!("    Found: {} (ns: {:?})", qname.local_name, qname.namespace);
+                                    println!(
+                                        "    Found: {} (ns: {:?})",
+                                        qname.local_name, qname.namespace
+                                    );
                                 }
                             }
                         }
@@ -331,14 +379,14 @@ fn test_check_raw_xmlschema_elements() {
 
 #[test]
 fn test_check_groups_local_elements() {
-    use xmlschema::validators::{XsdSchema as RustXsdSchema, GroupParticle};
+    use xmlschema::validators::{GroupParticle, XsdSchema as RustXsdSchema};
 
     // Load the MathML schema directly to check groups and their local elements
     let base_dir = niso_sts_xsd_path().parent().unwrap().to_path_buf();
     let mathml_path = base_dir.join("standard-modules/mathml3/mathml3-common.xsd");
 
-    let mathml_schema = RustXsdSchema::from_file(&mathml_path)
-        .expect("Failed to load MathML schema");
+    let mathml_schema =
+        RustXsdSchema::from_file(&mathml_path).expect("Failed to load MathML schema");
 
     println!("=== Checking MathML groups for local elements ===\n");
 
@@ -359,31 +407,24 @@ fn test_check_groups_local_elements() {
                             // This is a LOCAL element definition!
                             println!(
                                 "{}  LOCAL ELEMENT: {:?} (has decl, type: {:?})",
-                                indent,
-                                elem_particle.name.local_name,
-                                decl.name
+                                indent, elem_particle.name.local_name, decl.name
                             );
                         } else if elem_particle.element_ref.is_some() {
                             println!(
                                 "{}  element ref: {:?} -> {:?}",
-                                indent,
-                                elem_particle.name.local_name,
-                                elem_particle.element_ref
+                                indent, elem_particle.name.local_name, elem_particle.element_ref
                             );
                         } else {
                             println!(
                                 "{}  element: {:?} (no decl, no ref)",
-                                indent,
-                                elem_particle.name.local_name
+                                indent, elem_particle.name.local_name
                             );
                         }
                     }
                     GroupParticle::Group(nested_group) => {
                         println!(
                             "{}  nested group: {:?} (model: {:?})",
-                            indent,
-                            nested_group.name,
-                            nested_group.model
+                            indent, nested_group.name, nested_group.model
                         );
                         extract_local_elements(&nested_group.particles, &format!("{}  ", indent));
                     }
@@ -426,7 +467,14 @@ fn test_check_missing_elements() {
         .expect("Failed to load NISO-STS model");
 
     // Check for specific missing elements that cause filtering
-    let missing = ["Math", "Include", "LicenseRef", "TermEntry", "EntailedTerm", "FreeToRead"];
+    let missing = [
+        "Math",
+        "Include",
+        "LicenseRef",
+        "TermEntry",
+        "EntailedTerm",
+        "FreeToRead",
+    ];
 
     println!("=== Checking for missing elements in XSD model ===\n");
 
@@ -448,7 +496,10 @@ fn test_check_missing_elements() {
         for ct in &xsd_schema.complex_types {
             for m in &missing {
                 if ct.name.eq_ignore_ascii_case(m) {
-                    println!("  {} (base: {:?}, anonymous: {})", ct.name, ct.base_type, ct.is_anonymous);
+                    println!(
+                        "  {} (base: {:?}, anonymous: {})",
+                        ct.name, ct.base_type, ct.is_anonymous
+                    );
                 }
             }
         }
@@ -489,7 +540,10 @@ fn test_check_missing_elements() {
                 for child in children {
                     for m in &missing {
                         if child.element_type.eq_ignore_ascii_case(m) {
-                            println!("  {}.{} has type '{}'", ct.name, child.name, child.element_type);
+                            println!(
+                                "  {}.{} has type '{}'",
+                                ct.name, child.name, child.element_type
+                            );
                         }
                     }
                 }
@@ -525,9 +579,16 @@ fn test_check_missing_elements() {
     for xsd_schema in model.xsd_schemas() {
         for elem in &xsd_schema.root_elements {
             let name_lower = elem.name.to_lowercase();
-            if name_lower.contains("math") || name_lower.contains("include") ||
-               name_lower.contains("term") || name_lower.contains("license") {
-                println!("  {} (type: {:?})", elem.name, elem.type_info.as_ref().map(|t| &t.qualified_name));
+            if name_lower.contains("math")
+                || name_lower.contains("include")
+                || name_lower.contains("term")
+                || name_lower.contains("license")
+            {
+                println!(
+                    "  {} (type: {:?})",
+                    elem.name,
+                    elem.type_info.as_ref().map(|t| &t.qualified_name)
+                );
             }
         }
     }
@@ -547,7 +608,10 @@ fn test_parse_rfc8142_file() {
 
     match model.parse_xml_to_instances(&xml) {
         Ok(instances) => {
-            println!("✓ Successfully parsed rfc8142.xml to {} instances", instances.len());
+            println!(
+                "✓ Successfully parsed rfc8142.xml to {} instances",
+                instances.len()
+            );
             for inst in &instances {
                 println!("  - Type: {}", inst.schema.class_name());
             }
@@ -569,7 +633,10 @@ fn test_parse_niso_standard_file() {
 
     match model.parse_xml_to_instances(&xml) {
         Ok(instances) => {
-            println!("✓ Successfully parsed niso-sts-standard.xml to {} instances", instances.len());
+            println!(
+                "✓ Successfully parsed niso-sts-standard.xml to {} instances",
+                instances.len()
+            );
             for inst in &instances {
                 println!("  - Type: {}", inst.schema.class_name());
             }
@@ -606,7 +673,11 @@ fn test_parse_all_niso_samples() {
 
         match model.parse_xml_to_instances(&xml) {
             Ok(instances) => {
-                println!("✓ {} -> {} instances", file.file_name().unwrap().to_string_lossy(), instances.len());
+                println!(
+                    "✓ {} -> {} instances",
+                    file.file_name().unwrap().to_string_lossy(),
+                    instances.len()
+                );
                 success_count += 1;
             }
             Err(e) => {
@@ -629,7 +700,10 @@ fn test_parse_all_niso_samples() {
     }
 
     // Expect at least the RFC sample to parse successfully
-    assert!(success_count >= 1, "At least one NISO-STS sample should parse");
+    assert!(
+        success_count >= 1,
+        "At least one NISO-STS sample should parse"
+    );
 }
 
 // ============================================================================
@@ -685,7 +759,10 @@ fn debug_addr_line_child_elements() {
             if ct.name == "addr-line" || ct.name.contains("AddrLine") {
                 println!("Found complex type: {:?}", ct.name);
                 println!("  mixed: {}", ct.mixed);
-                println!("  child_elements count: {:?}", ct.child_elements.as_ref().map(|c| c.len()));
+                println!(
+                    "  child_elements count: {:?}",
+                    ct.child_elements.as_ref().map(|c| c.len())
+                );
                 if let Some(ref children) = ct.child_elements {
                     println!("  Child elements:");
                     for child in children {
@@ -707,12 +784,21 @@ fn debug_addr_line_child_elements() {
             }
         }
         // Check Institution class
-        if let Schema::Class { id, properties, subdocument, .. } = schema {
+        if let Schema::Class {
+            id,
+            properties,
+            subdocument,
+            ..
+        } = schema
+        {
             if id == "Institution" {
                 println!("\nInstitution Class:");
                 println!("  subdocument: {}", subdocument);
                 for prop in properties {
-                    println!("  - {} : {} (type: {:?})", prop.name, prop.class, prop.r#type);
+                    println!(
+                        "  - {} : {} (type: {:?})",
+                        prop.name, prop.class, prop.r#type
+                    );
                 }
             }
             // Also check Email schema
@@ -720,12 +806,14 @@ fn debug_addr_line_child_elements() {
                 println!("\nEmail Class:");
                 println!("  subdocument: {}", subdocument);
                 for prop in properties {
-                    println!("  - {} : {} (type: {:?})", prop.name, prop.class, prop.r#type);
+                    println!(
+                        "  - {} : {} (type: {:?})",
+                        prop.name, prop.class, prop.r#type
+                    );
                 }
             }
         }
     }
-
 }
 
 /// Full NISO-STS integration test with RFC8142 sample document
@@ -749,47 +837,55 @@ async fn test_full_niso_flow_with_rfc8142() -> anyhow::Result<()> {
 
     match parse_result {
         Ok(instances) => {
-            println!("Step 2: Successfully parsed RFC8142 to {} instances", instances.len());
+            println!(
+                "Step 2: Successfully parsed RFC8142 to {} instances",
+                instances.len()
+            );
 
             // Step 3: Insert into TerminusDB
             let server = TerminusDBServer::test_instance().await?;
 
-            server.with_tmp_db("test_niso_full_flow", |client, spec| {
-                let schemas = filter_valid_schemas(model.schemas()).clone();
-                let insts = instances.clone();
-                async move {
-                    let args = DocumentInsertArgs::from(spec.clone());
+            server
+                .with_tmp_db("test_niso_full_flow", |client, spec| {
+                    let schemas = filter_valid_schemas(model.schemas()).clone();
+                    let insts = instances.clone();
+                    async move {
+                        let args = DocumentInsertArgs::from(spec.clone());
 
-                    // Insert schemas
-                    if !schemas.is_empty() {
-                        client.insert_schema_instances(schemas.clone(), args.clone()).await?;
-                        println!("Step 3a: Inserted {} schemas", schemas.len());
-                    }
-
-                    // Insert instances
-                    if !insts.is_empty() {
-                        use terminusdb_schema::json::ToJson;
-                        println!("Step 3b: Inserting {} instances", insts.len());
-
-                        // Debug: dump full instance JSON to file for inspection
-                        if let Some(first) = insts.first() {
-                            let json = serde_json::to_string_pretty(&first.to_json())?;
-                            println!("First instance:\n{}", &json[..json.len().min(2000)]);
-
-                            // Write full JSON to temp file for inspection
-                            let debug_path = std::env::temp_dir().join("niso_instance_debug.json");
-                            std::fs::write(&debug_path, &json)?;
-                            println!("Full instance JSON written to: {:?}", debug_path);
+                        // Insert schemas
+                        if !schemas.is_empty() {
+                            client
+                                .insert_schema_instances(schemas.clone(), args.clone())
+                                .await?;
+                            println!("Step 3a: Inserted {} schemas", schemas.len());
                         }
 
-                        let instance_refs: Vec<_> = insts.iter().collect();
-                        let result = client.insert_documents(instance_refs, args).await?;
-                        println!("✓ Successfully inserted {} documents", result.len());
-                    }
+                        // Insert instances
+                        if !insts.is_empty() {
+                            use terminusdb_schema::json::ToJson;
+                            println!("Step 3b: Inserting {} instances", insts.len());
 
-                    Ok(())
-                }
-            }).await?;
+                            // Debug: dump full instance JSON to file for inspection
+                            if let Some(first) = insts.first() {
+                                let json = serde_json::to_string_pretty(&first.to_json())?;
+                                println!("First instance:\n{}", &json[..json.len().min(2000)]);
+
+                                // Write full JSON to temp file for inspection
+                                let debug_path =
+                                    std::env::temp_dir().join("niso_instance_debug.json");
+                                std::fs::write(&debug_path, &json)?;
+                                println!("Full instance JSON written to: {:?}", debug_path);
+                            }
+
+                            let instance_refs: Vec<_> = insts.iter().collect();
+                            let result = client.insert_documents(instance_refs, args).await?;
+                            println!("✓ Successfully inserted {} documents", result.len());
+                        }
+
+                        Ok(())
+                    }
+                })
+                .await?;
         }
         Err(e) => {
             println!("Step 2: XML parsing failed: {}", e);
@@ -812,8 +908,14 @@ fn debug_niso_schema_structure() {
     // Print schemas related to Standard and ReleaseDate
     for schema in model.schemas() {
         if let Schema::Class { id, properties, .. } = schema {
-            if id == "Standard" || id == "ReleaseDate" || id.contains("DateType")
-                || id == "Body" || id == "Front" || id == "Back" || id == "Sec" {
+            if id == "Standard"
+                || id == "ReleaseDate"
+                || id.contains("DateType")
+                || id == "Body"
+                || id == "Front"
+                || id == "Back"
+                || id == "Sec"
+            {
                 println!("Schema: {}", id);
                 for prop in properties {
                     println!("  - {} : {}", prop.name, prop.class);
@@ -826,18 +928,34 @@ fn debug_niso_schema_structure() {
     // Debug: check the raw complex types from XSD schemas
     for xsd in model.xsd_schemas() {
         // Check for non-normative-example in complex_types
-        let has_nne = xsd.complex_types.iter().any(|ct| ct.name.contains("non-normative-example") || ct.name == "NonNormativeExample");
-        println!("XSD {} has NonNormativeExample: {}", xsd.schema_location.as_deref().unwrap_or("unknown"), has_nne);
+        let has_nne = xsd.complex_types.iter().any(|ct| {
+            ct.name.contains("non-normative-example") || ct.name == "NonNormativeExample"
+        });
+        println!(
+            "XSD {} has NonNormativeExample: {}",
+            xsd.schema_location.as_deref().unwrap_or("unknown"),
+            has_nne
+        );
 
         for ct in &xsd.complex_types {
-            if ct.name.contains("body") || ct.name.contains("Body")
-                || ct.name.contains("standard") || ct.name.contains("Standard")
-                || ct.name.contains("non-normative") || ct.name.contains("NonNormative") {
+            if ct.name.contains("body")
+                || ct.name.contains("Body")
+                || ct.name.contains("standard")
+                || ct.name.contains("Standard")
+                || ct.name.contains("non-normative")
+                || ct.name.contains("NonNormative")
+            {
                 println!("Complex type: {:?}", ct.name);
                 println!("  qualified_name: {:?}", ct.qualified_name);
                 println!("  content_model: {:?}", ct.content_model);
-                println!("  attributes: {}", ct.attributes.as_ref().map_or(0, |a| a.len()));
-                println!("  child_elements: {:?}", ct.child_elements.as_ref().map(|c| c.len()));
+                println!(
+                    "  attributes: {}",
+                    ct.attributes.as_ref().map_or(0, |a| a.len())
+                );
+                println!(
+                    "  child_elements: {:?}",
+                    ct.child_elements.as_ref().map(|c| c.len())
+                );
                 if let Some(ref children) = ct.child_elements {
                     for child in children.iter().take(10) {
                         println!("    - {} : {:?}", child.name, child.element_type);
@@ -860,7 +978,10 @@ fn debug_niso_schema_structure() {
                 if let Some(ref type_info) = elem.type_info {
                     println!("  type name: {:?}", type_info.name);
                     println!("  content_model: {:?}", type_info.content_model);
-                    println!("  child_elements: {:?}", type_info.child_elements.as_ref().map(|c| c.len()));
+                    println!(
+                        "  child_elements: {:?}",
+                        type_info.child_elements.as_ref().map(|c| c.len())
+                    );
                     if let Some(ref children) = type_info.child_elements {
                         for child in children.iter().take(10) {
                             println!("    - {} : {:?}", child.name, child.element_type);
@@ -874,21 +995,28 @@ fn debug_niso_schema_structure() {
 
     // Deep-dive into xmlschema-rs structure for body element
     println!("\n--- Direct XMLSchema-rs inspection for 'body' ---");
-    use xmlschema::validators::XsdSchema as RustXsdSchema;
-    use xmlschema::validators::{ComplexContent, GroupParticle};
     use schemas_niso_sts::{NisoSts, SchemaBundle};
     use tempfile::TempDir;
+    use xmlschema::validators::XsdSchema as RustXsdSchema;
+    use xmlschema::validators::{ComplexContent, GroupParticle};
 
     let dir = TempDir::new().unwrap();
     NisoSts::write_to_directory(dir.path()).unwrap();
-    let xsd_path = dir.path().join("NISO-STS-extended-1-MathML3-XSD/NISO-STS-extended-1-mathml3.xsd");
+    let xsd_path = dir
+        .path()
+        .join("NISO-STS-extended-1-MathML3-XSD/NISO-STS-extended-1-mathml3.xsd");
 
     let raw_schema = RustXsdSchema::from_file(&xsd_path).unwrap();
 
     // Search for non-normative-example element definition in XSD files
     println!("\n--- Searching for 'non-normative-example' in XSD files ---");
     let grep_output = std::process::Command::new("grep")
-        .args(["-r", "-n", "non-normative-example", dir.path().to_str().unwrap()])
+        .args([
+            "-r",
+            "-n",
+            "non-normative-example",
+            dir.path().to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     let grep_str = String::from_utf8_lossy(&grep_output.stdout);
@@ -920,7 +1048,9 @@ fn debug_niso_schema_structure() {
             }
         }
     }
-    let has_nne = raw_schema.elements().any(|(qname, _)| qname.local_name == "non-normative-example");
+    let has_nne = raw_schema
+        .elements()
+        .any(|(qname, _)| qname.local_name == "non-normative-example");
     println!("Is global element: {}", has_nne);
 
     // List first 50 global elements
@@ -947,7 +1077,13 @@ fn debug_niso_schema_structure() {
                     println!("{}Element: {:?}", indent, ep.name.local_name);
                 }
                 GroupParticle::Group(g) => {
-                    println!("{}Group({:?}, {} particles, ref={:?})", indent, g.model, g.particles.len(), g.group_ref);
+                    println!(
+                        "{}Group({:?}, {} particles, ref={:?})",
+                        indent,
+                        g.model,
+                        g.particles.len(),
+                        g.group_ref
+                    );
                     collect_elements(&g.particles, elements, depth + 1);
                 }
                 GroupParticle::Any(a) => {
@@ -996,13 +1132,15 @@ fn test_compare_niso_and_dita_schemas() {
     let dita_dir = TempDir::new().expect("Failed to create temp dir");
     Dita12::write_to_directory(dita_dir.path()).expect("Failed to extract DITA schemas");
 
-    let dita_path = dita_dir.path().join("xsd1.2-url/technicalContent/xsd/ditabase.xsd");
+    let dita_path = dita_dir
+        .path()
+        .join("xsd1.2-url/technicalContent/xsd/ditabase.xsd");
     let niso_path = niso_sts_xsd_path();
 
-    let dita_model = XsdModel::from_file(&dita_path, None::<&str>)
-        .expect("Failed to load DITA model");
-    let niso_model = XsdModel::from_file(&niso_path, None::<&str>)
-        .expect("Failed to load NISO model");
+    let dita_model =
+        XsdModel::from_file(&dita_path, None::<&str>).expect("Failed to load DITA model");
+    let niso_model =
+        XsdModel::from_file(&niso_path, None::<&str>).expect("Failed to load NISO model");
 
     let dita_stats = dita_model.stats();
     let niso_stats = niso_model.stats();
@@ -1010,12 +1148,30 @@ fn test_compare_niso_and_dita_schemas() {
     println!("Schema Comparison - DITA vs NISO-STS:");
     println!("");
     println!("                    DITA      NISO-STS");
-    println!("  TDB schemas:     {:>5}       {:>5}", dita_stats.tdb_schema_count, niso_stats.tdb_schema_count);
-    println!("  Complex types:   {:>5}       {:>5}", dita_stats.total_complex_types, niso_stats.total_complex_types);
-    println!("  Simple types:    {:>5}       {:>5}", dita_stats.total_simple_types, niso_stats.total_simple_types);
-    println!("  Root elements:   {:>5}       {:>5}", dita_stats.total_root_elements, niso_stats.total_root_elements);
+    println!(
+        "  TDB schemas:     {:>5}       {:>5}",
+        dita_stats.tdb_schema_count, niso_stats.tdb_schema_count
+    );
+    println!(
+        "  Complex types:   {:>5}       {:>5}",
+        dita_stats.total_complex_types, niso_stats.total_complex_types
+    );
+    println!(
+        "  Simple types:    {:>5}       {:>5}",
+        dita_stats.total_simple_types, niso_stats.total_simple_types
+    );
+    println!(
+        "  Root elements:   {:>5}       {:>5}",
+        dita_stats.total_root_elements, niso_stats.total_root_elements
+    );
 
     // Both should generate significant schemas
-    assert!(dita_stats.tdb_schema_count > 100, "DITA should generate many schemas");
-    assert!(niso_stats.tdb_schema_count > 100, "NISO-STS should generate many schemas");
+    assert!(
+        dita_stats.tdb_schema_count > 100,
+        "DITA should generate many schemas"
+    );
+    assert!(
+        niso_stats.tdb_schema_count > 100,
+        "NISO-STS should generate many schemas"
+    );
 }

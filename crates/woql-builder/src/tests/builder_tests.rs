@@ -444,10 +444,9 @@ fn test_triple_and_eq() {
 #[test]
 fn test_eq_with_nodes() {
     // eq actually accepts WoqlValue, which includes nodes, so this should work
-    let builder = WoqlBuilder::new()
-        .eq(node("doc:a"), node("doc:b"));
+    let builder = WoqlBuilder::new().eq(node("doc:a"), node("doc:b"));
     let query = builder.finalize();
-    
+
     match query {
         Woql2Query::Equals(eq_q) => {
             assert!(matches!(&eq_q.left, Woql2Value::Node(n) if n == "doc:a"));
@@ -730,7 +729,9 @@ fn test_join() {
         Woql2Query::Join(join_q) => {
             // join expects a list, but the variable conversion will fail at runtime
             // This test now checks that the list was created from the variable
-            assert!(matches!(&join_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList"));
+            assert!(
+                matches!(&join_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList")
+            );
             assert!(matches!(join_q.separator, DataValue::Variable(v) if v == "Separator"));
             assert!(matches!(join_q.result_string, DataValue::Variable(v) if v == "Result"));
         }
@@ -745,7 +746,9 @@ fn test_concat() {
     let final_query = builder.finalize();
     match final_query {
         Woql2Query::Concatenate(concat_q) => {
-            assert!(matches!(concat_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList"));
+            assert!(
+                matches!(concat_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList")
+            );
             assert!(matches!(concat_q.result_string, DataValue::Variable(v) if v == "Result"));
         }
         _ => panic!("Expected Concatenate query, found {:?}", final_query),
@@ -760,7 +763,9 @@ fn test_concatenate_alias() {
     let final_query = builder.finalize();
     match final_query {
         Woql2Query::Concatenate(concat_q) => {
-            assert!(matches!(concat_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList"));
+            assert!(
+                matches!(concat_q.list, ListOrVariable::Variable(DataValue::Variable(v)) if v == "InputList")
+            );
             assert!(matches!(concat_q.result_string, DataValue::Variable(v) if v == "Result"));
         }
         _ => panic!(
@@ -773,11 +778,15 @@ fn test_concatenate_alias() {
 #[test]
 fn test_concat_with_list_literal() {
     let result_var = Var::new("Result");
-    
+
     // Test with list() helper function
     let builder = WoqlBuilder::new().concat(
-        list(vec![string_literal("Hello"), string_literal(" "), string_literal("World")]), 
-        result_var.clone()
+        list(vec![
+            string_literal("Hello"),
+            string_literal(" "),
+            string_literal("World"),
+        ]),
+        result_var.clone(),
     );
     let final_query = builder.finalize();
     match final_query {
@@ -786,9 +795,15 @@ fn test_concat_with_list_literal() {
             match &concat_q.list {
                 ListOrVariable::List(items) => {
                     assert_eq!(items.len(), 3);
-                    assert!(matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Hello"));
-                    assert!(matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == " "));
-                    assert!(matches!(&items[2], DataValue::Data(XSDAnySimpleType::String(s)) if s == "World"));
+                    assert!(
+                        matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Hello")
+                    );
+                    assert!(
+                        matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == " ")
+                    );
+                    assert!(
+                        matches!(&items[2], DataValue::Data(XSDAnySimpleType::String(s)) if s == "World")
+                    );
                 }
                 _ => panic!("Expected list literal, found {:?}", concat_q.list),
             }
@@ -796,25 +811,30 @@ fn test_concat_with_list_literal() {
         }
         _ => panic!("Expected Concatenate query, found {:?}", final_query),
     }
-    
+
     // Test with Vec conversion
     let builder2 = WoqlBuilder::new().concat(
-        vec![string_literal("Foo"), string_literal("Bar")], 
-        result_var.clone()
+        vec![string_literal("Foo"), string_literal("Bar")],
+        result_var.clone(),
     );
     let final_query2 = builder2.finalize();
     match final_query2 {
-        Woql2Query::Concatenate(concat_q) => {
-            match &concat_q.list {
-                ListOrVariable::List(items) => {
-                    assert_eq!(items.len(), 2);
-                    assert!(matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Foo"));
-                    assert!(matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Bar"));
-                }
-                _ => panic!("Expected list literal from vec, found {:?}", concat_q.list),
+        Woql2Query::Concatenate(concat_q) => match &concat_q.list {
+            ListOrVariable::List(items) => {
+                assert_eq!(items.len(), 2);
+                assert!(
+                    matches!(&items[0], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Foo")
+                );
+                assert!(
+                    matches!(&items[1], DataValue::Data(XSDAnySimpleType::String(s)) if s == "Bar")
+                );
             }
-        }
-        _ => panic!("Expected Concatenate query from vec, found {:?}", final_query2),
+            _ => panic!("Expected list literal from vec, found {:?}", concat_q.list),
+        },
+        _ => panic!(
+            "Expected Concatenate query from vec, found {:?}",
+            final_query2
+        ),
     }
 }
 
@@ -1572,14 +1592,15 @@ fn test_nested_limit_and_clauses() {
 
 #[test]
 fn test_datetime_comparisons() {
-    use crate::value::{datetime_literal, date_literal, time_literal};
-    
+    use crate::value::{date_literal, datetime_literal, time_literal};
+
     // Test DateTime comparison
-    let (event_time_var, cutoff_time) = (vars!("EventTime"), datetime_literal("2025-08-19T00:00:00Z"));
+    let (event_time_var, cutoff_time) =
+        (vars!("EventTime"), datetime_literal("2025-08-19T00:00:00Z"));
     let builder = WoqlBuilder::new()
         .triple("event123", "hasTimestamp", event_time_var.clone())
         .greater(event_time_var.clone(), cutoff_time.clone());
-    
+
     let query = builder.finalize();
     match query {
         Woql2Query::And(and_q) => {
@@ -1587,7 +1608,9 @@ fn test_datetime_comparisons() {
             // Check that the second query is a Greater comparison
             match &and_q.and[1] {
                 Woql2Query::Greater(greater_q) => {
-                    assert!(matches!(&greater_q.left, DataValue::Variable(ref v) if v == "EventTime"));
+                    assert!(
+                        matches!(&greater_q.left, DataValue::Variable(ref v) if v == "EventTime")
+                    );
                     assert!(matches!(
                         &greater_q.right,
                         DataValue::Data(XSDAnySimpleType::DateTime(_))
@@ -1598,13 +1621,13 @@ fn test_datetime_comparisons() {
         }
         _ => panic!("Expected And query, found {:?}", query),
     }
-    
+
     // Test Date comparison
     let (birth_date_var, reference_date) = (vars!("BirthDate"), date_literal("2000-01-01"));
     let builder2 = WoqlBuilder::new()
         .triple("person123", "birthDate", birth_date_var.clone())
         .less(birth_date_var.clone(), reference_date.clone());
-    
+
     let query2 = builder2.finalize();
     match query2 {
         Woql2Query::And(and_q) => {
@@ -1623,13 +1646,13 @@ fn test_datetime_comparisons() {
         }
         _ => panic!("Expected And query, found {:?}", query2),
     }
-    
+
     // Test Time comparison with equals
     let (start_time_var, target_time) = (vars!("StartTime"), time_literal("14:30:00"));
     let builder3 = WoqlBuilder::new()
         .triple("meeting123", "startTime", start_time_var.clone())
         .eq(start_time_var.clone(), target_time.clone());
-    
+
     let query3 = builder3.finalize();
     match query3 {
         Woql2Query::And(and_q) => {

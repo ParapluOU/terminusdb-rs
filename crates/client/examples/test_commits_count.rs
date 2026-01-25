@@ -1,4 +1,4 @@
-use terminusdb_client::{TerminusDBHttpClient, BranchSpec};
+use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

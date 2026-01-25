@@ -9,9 +9,7 @@ mod tests {
     use terminusdb_woql_builder::prelude::*;
 
     /// Test model for query count testing
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct CountTestModel {
         id: EntityIDFor<Self>,

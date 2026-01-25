@@ -3,13 +3,13 @@
 //! This test verifies the fix for the issue where a model with `id: EntityIDFor<Self>`
 //! would generate self-referential relation traits that conflict.
 
-use terminusdb_schema_derive::TerminusDBModel;
-use terminusdb_schema::{EntityIDFor, TdbLazy, ToTDBInstance};
+use serde::{Deserialize, Serialize};
 use terminusdb_relation::BelongsTo;
-use serde::{Serialize, Deserialize};
+use terminusdb_schema::{EntityIDFor, TdbLazy, ToTDBInstance};
+use terminusdb_schema_derive::TerminusDBModel;
 
 // Required for TerminusDBModel derive to work
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 
 /// Model with self-referential EntityIDFor - this used to cause conflicting impls
 #[derive(TerminusDBModel, Debug, Clone)]
@@ -85,12 +85,16 @@ mod tests {
         };
 
         // BelongsTo with Option<EntityIDFor<Self>>
-        let parent_id: Option<&EntityIDFor<OptionalSelfRef>> =
-            <OptionalSelfRef as BelongsTo<OptionalSelfRef, OptionalSelfRefFields::ParentId>>::parent_id(&model_with);
+        let parent_id: Option<&EntityIDFor<OptionalSelfRef>> = <OptionalSelfRef as BelongsTo<
+            OptionalSelfRef,
+            OptionalSelfRefFields::ParentId,
+        >>::parent_id(&model_with);
         assert!(parent_id.is_some());
 
-        let no_parent: Option<&EntityIDFor<OptionalSelfRef>> =
-            <OptionalSelfRef as BelongsTo<OptionalSelfRef, OptionalSelfRefFields::ParentId>>::parent_id(&model_without);
+        let no_parent: Option<&EntityIDFor<OptionalSelfRef>> = <OptionalSelfRef as BelongsTo<
+            OptionalSelfRef,
+            OptionalSelfRefFields::ParentId,
+        >>::parent_id(&model_without);
         assert!(no_parent.is_none());
 
         println!("Option<EntityIDFor<Self>> works correctly");
@@ -104,8 +108,10 @@ mod tests {
         };
 
         // BelongsTo should work for EntityIDFor<OtherModel>
-        let parent_id: Option<&EntityIDFor<Parent>> =
-            <ChildWithEntityId as BelongsTo<Parent, ChildWithEntityIdFields::ParentId>>::parent_id(&child);
+        let parent_id: Option<&EntityIDFor<Parent>> = <ChildWithEntityId as BelongsTo<
+            Parent,
+            ChildWithEntityIdFields::ParentId,
+        >>::parent_id(&child);
 
         assert!(parent_id.is_some());
         // EntityIDFor includes class prefix
@@ -116,7 +122,7 @@ mod tests {
 
     #[test]
     fn test_tdblazy_self_ref_generates_relations() {
-        use terminusdb_relation::{ForwardRelation, ReverseRelation, DefaultField};
+        use terminusdb_relation::{DefaultField, ForwardRelation, ReverseRelation};
 
         // TdbLazy<Self> SHOULD generate ForwardRelation and ReverseRelation
         // This is a compile-time check - if it compiles, the traits are generated

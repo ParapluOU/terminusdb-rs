@@ -8,12 +8,14 @@
 //! - XSD types → TerminusDB types (xsd:string, xsd:integer, etc.)
 
 use terminusdb_schema::{Key, Property, Schema, TypeFamily};
-use terminusdb_xsd::schema_model::XsdSchema;
 use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use terminusdb_xsd::schema_model::XsdSchema;
 
 /// Helper to find a schema by class name
 fn find_class<'a>(schemas: &'a [Schema], name: &str) -> Option<&'a Schema> {
-    schemas.iter().find(|s| matches!(s, Schema::Class { id, .. } if id == name))
+    schemas
+        .iter()
+        .find(|s| matches!(s, Schema::Class { id, .. } if id == name))
 }
 
 /// Helper to get properties from a Schema::Class
@@ -35,9 +37,12 @@ fn find_property<'a>(props: &'a [Property], name: &str) -> Option<&'a Property> 
 
 #[test]
 fn test_simple_book_schema_generates_classes() {
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
-    let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>)
-        .expect("Failed to parse simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
+    let xsd_schema =
+        XsdSchema::from_xsd_file(xsd_path, None::<&str>).expect("Failed to parse simple_book.xsd");
 
     // Debug: print complex types
     eprintln!("\n=== XSD Complex Types ===");
@@ -56,7 +61,9 @@ fn test_simple_book_schema_generates_classes() {
     }
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
     // Debug: print generated schemas
     eprintln!("\n=== Generated Schemas ===");
@@ -70,15 +77,25 @@ fn test_simple_book_schema_generates_classes() {
     }
 
     // Should generate BookType and PersonType classes
-    assert!(schemas.len() >= 2, "Expected at least 2 schemas, got {}", schemas.len());
+    assert!(
+        schemas.len() >= 2,
+        "Expected at least 2 schemas, got {}",
+        schemas.len()
+    );
 
     // Find BookType class
     let book_type = find_class(&schemas, "BookType");
-    assert!(book_type.is_some(), "BookType class not found. Available: {:?}",
-        schemas.iter().filter_map(|s| match s {
-            Schema::Class { id, .. } => Some(id.as_str()),
-            _ => None,
-        }).collect::<Vec<_>>());
+    assert!(
+        book_type.is_some(),
+        "BookType class not found. Available: {:?}",
+        schemas
+            .iter()
+            .filter_map(|s| match s {
+                Schema::Class { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
 
     // Find PersonType class
     let person_type = find_class(&schemas, "PersonType");
@@ -87,7 +104,10 @@ fn test_simple_book_schema_generates_classes() {
 
 #[test]
 fn test_book_type_has_correct_attributes() {
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
     let generator = XsdToSchemaGenerator::new();
@@ -99,17 +119,27 @@ fn test_book_type_has_correct_attributes() {
     // Check isbn attribute (required)
     let isbn = find_property(props, "isbn").expect("isbn property not found");
     assert_eq!(isbn.class, "xsd:string");
-    assert!(isbn.r#type.is_none(), "Required attribute should have no type family");
+    assert!(
+        isbn.r#type.is_none(),
+        "Required attribute should have no type family"
+    );
 
     // Check edition attribute (optional)
     let edition = find_property(props, "edition").expect("edition property not found");
     assert_eq!(edition.class, "xsd:integer");
-    assert_eq!(edition.r#type, Some(TypeFamily::Optional), "Optional attribute should have Optional type");
+    assert_eq!(
+        edition.r#type,
+        Some(TypeFamily::Optional),
+        "Optional attribute should have Optional type"
+    );
 }
 
 #[test]
 fn test_book_type_has_correct_child_elements() {
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
     let generator = XsdToSchemaGenerator::new();
@@ -123,20 +153,29 @@ fn test_book_type_has_correct_child_elements() {
     // complexity in analyzing XSD choice/sequence combinations. See schema_generator.rs:982-987
     let title = find_property(props, "title").expect("title property not found");
     assert_eq!(title.class, "xsd:string");
-    assert_eq!(title.r#type, Some(TypeFamily::Optional),
-        "Single element is currently treated as Optional");
+    assert_eq!(
+        title.r#type,
+        Some(TypeFamily::Optional),
+        "Single element is currently treated as Optional"
+    );
 
     // Check author element (required, unbounded) - should be a Set
     let author = find_property(props, "author").expect("author property not found");
     assert_eq!(author.class, "PersonType");
-    assert!(matches!(author.r#type, Some(TypeFamily::Set(_))),
-        "Unbounded element should have Set type, got {:?}", author.r#type);
+    assert!(
+        matches!(author.r#type, Some(TypeFamily::Set(_))),
+        "Unbounded element should have Set type, got {:?}",
+        author.r#type
+    );
 
     // Check publisher element (optional, single)
     let publisher = find_property(props, "publisher").expect("publisher property not found");
     assert_eq!(publisher.class, "xsd:string");
-    assert_eq!(publisher.r#type, Some(TypeFamily::Optional),
-        "Optional element should have Optional type");
+    assert_eq!(
+        publisher.r#type,
+        Some(TypeFamily::Optional),
+        "Optional element should have Optional type"
+    );
 
     // Check year element (optional, single)
     let year = find_property(props, "year").expect("year property not found");
@@ -146,7 +185,10 @@ fn test_book_type_has_correct_child_elements() {
 
 #[test]
 fn test_person_type_has_correct_structure() {
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
     let generator = XsdToSchemaGenerator::new();
@@ -178,16 +220,27 @@ fn test_person_type_has_correct_structure() {
 #[test]
 fn test_catalog_schema_generates_all_types() {
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
-    let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>)
-        .expect("Failed to parse catalog.xsd");
+    let xsd_schema =
+        XsdSchema::from_xsd_file(xsd_path, None::<&str>).expect("Failed to parse catalog.xsd");
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
     // Should generate CatalogType, ProductType, CategoryType
-    assert!(find_class(&schemas, "CatalogType").is_some(), "CatalogType not found");
-    assert!(find_class(&schemas, "ProductType").is_some(), "ProductType not found");
-    assert!(find_class(&schemas, "CategoryType").is_some(), "CategoryType not found");
+    assert!(
+        find_class(&schemas, "CatalogType").is_some(),
+        "CatalogType not found"
+    );
+    assert!(
+        find_class(&schemas, "ProductType").is_some(),
+        "ProductType not found"
+    );
+    assert!(
+        find_class(&schemas, "CategoryType").is_some(),
+        "CategoryType not found"
+    );
 }
 
 #[test]
@@ -203,19 +256,31 @@ fn test_product_type_various_xsd_types() {
 
     // Check various XSD type mappings
     let price = find_property(props, "price").expect("price not found");
-    assert_eq!(price.class, "xsd:decimal", "xs:decimal should map to xsd:decimal");
+    assert_eq!(
+        price.class, "xsd:decimal",
+        "xs:decimal should map to xsd:decimal"
+    );
 
     let quantity = find_property(props, "quantity").expect("quantity not found");
-    assert_eq!(quantity.class, "xsd:integer", "xs:integer should map to xsd:integer");
+    assert_eq!(
+        quantity.class, "xsd:integer",
+        "xs:integer should map to xsd:integer"
+    );
 
     let in_stock = find_property(props, "inStock").expect("inStock not found");
-    assert_eq!(in_stock.class, "xsd:boolean", "xs:boolean should map to xsd:boolean");
+    assert_eq!(
+        in_stock.class, "xsd:boolean",
+        "xs:boolean should map to xsd:boolean"
+    );
 
     // tags is unbounded string
     let tags = find_property(props, "tags").expect("tags not found");
     assert_eq!(tags.class, "xsd:string");
     // Since minOccurs=0 and maxOccurs=unbounded, it should be Optional (or Set)
-    assert!(tags.r#type.is_some(), "Unbounded optional element should have a type family");
+    assert!(
+        tags.r#type.is_some(),
+        "Unbounded optional element should have a type family"
+    );
 }
 
 #[test]
@@ -231,7 +296,10 @@ fn test_category_type_self_reference() {
 
     // subcategory is a self-reference to CategoryType
     let subcategory = find_property(props, "subcategory").expect("subcategory not found");
-    assert_eq!(subcategory.class, "CategoryType", "Self-referencing type should use PascalCase class name");
+    assert_eq!(
+        subcategory.class, "CategoryType",
+        "Self-referencing type should use PascalCase class name"
+    );
 }
 
 // ============================================================================
@@ -243,20 +311,37 @@ fn test_generated_schemas_use_correct_key_strategy() {
     // Key strategy:
     // - Documents (named types, non-subdocuments) use ValueHash for content-based addressing
     // - Subdocuments (anonymous types) use Random to avoid TerminusDB insertion failures
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
     let generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     for schema in &schemas {
-        if let Schema::Class { key, id, subdocument, .. } = schema {
+        if let Schema::Class {
+            key,
+            id,
+            subdocument,
+            ..
+        } = schema
+        {
             if *subdocument {
-                assert_eq!(*key, Key::Random,
-                    "Subdocument class {} should use Random key strategy", id);
+                assert_eq!(
+                    *key,
+                    Key::Random,
+                    "Subdocument class {} should use Random key strategy",
+                    id
+                );
             } else {
-                assert_eq!(*key, Key::ValueHash,
-                    "Document class {} should use ValueHash key strategy", id);
+                assert_eq!(
+                    *key,
+                    Key::ValueHash,
+                    "Document class {} should use ValueHash key strategy",
+                    id
+                );
             }
         }
     }
@@ -269,7 +354,10 @@ fn test_namespace_preserved_in_base_for_multi_namespace_support() {
     // 2. Fully-qualified URIs allow multiple schemas with same class names to coexist
     //    (e.g., "http://example.com/book#DocumentType" vs "http://example.com/library#DocumentType")
     // 3. Instance @type uses fully-qualified URI to match the correct schema
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
     let generator = XsdToSchemaGenerator::new();
@@ -277,7 +365,10 @@ fn test_namespace_preserved_in_base_for_multi_namespace_support() {
 
     let book_type = find_class(&schemas, "BookType").expect("BookType not found");
     if let Schema::Class { base, .. } = book_type {
-        assert!(base.is_some(), "Namespace should be preserved in base for multi-namespace support");
+        assert!(
+            base.is_some(),
+            "Namespace should be preserved in base for multi-namespace support"
+        );
         assert!(
             base.as_ref().unwrap().contains("example.com"),
             "Base should contain original namespace"
@@ -293,15 +384,20 @@ fn test_namespace_preserved_in_base_for_multi_namespace_support() {
 fn test_xsd_model_from_file() {
     use terminusdb_xsd::XsdModel;
 
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
-    let model = XsdModel::from_file(xsd_path, None::<&str>)
-        .expect("Failed to load XsdModel");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
+    let model = XsdModel::from_file(xsd_path, None::<&str>).expect("Failed to load XsdModel");
 
     let schemas = model.schemas();
     assert!(!schemas.is_empty(), "XsdModel should generate schemas");
 
     let stats = model.stats();
-    assert!(stats.total_complex_types >= 2, "Should have at least 2 complex types");
+    assert!(
+        stats.total_complex_types >= 2,
+        "Should have at least 2 complex types"
+    );
 }
 
 #[test]
@@ -309,22 +405,32 @@ fn test_xsd_model_class_names() {
     use terminusdb_xsd::XsdModel;
 
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
-    let model = XsdModel::from_file(xsd_path, None::<&str>)
-        .expect("Failed to load XsdModel");
+    let model = XsdModel::from_file(xsd_path, None::<&str>).expect("Failed to load XsdModel");
 
     let class_names = model.class_names();
-    assert!(class_names.contains(&"CatalogType"), "Should contain CatalogType");
-    assert!(class_names.contains(&"ProductType"), "Should contain ProductType");
-    assert!(class_names.contains(&"CategoryType"), "Should contain CategoryType");
+    assert!(
+        class_names.contains(&"CatalogType"),
+        "Should contain CatalogType"
+    );
+    assert!(
+        class_names.contains(&"ProductType"),
+        "Should contain ProductType"
+    );
+    assert!(
+        class_names.contains(&"CategoryType"),
+        "Should contain CategoryType"
+    );
 }
 
 #[test]
 fn test_xsd_model_find_schema() {
     use terminusdb_xsd::XsdModel;
 
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
-    let model = XsdModel::from_file(xsd_path, None::<&str>)
-        .expect("Failed to load XsdModel");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
+    let model = XsdModel::from_file(xsd_path, None::<&str>).expect("Failed to load XsdModel");
 
     let book_schema = model.find_schema("BookType");
     assert!(book_schema.is_some(), "Should find BookType schema");
@@ -352,8 +458,8 @@ fn test_list_types_generate_type_family_list() {
     // XML instance: <scores>1 2 3 4 5</scores> (space-separated values)
 
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/list_types.xsd");
-    let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>)
-        .expect("Failed to parse list_types.xsd");
+    let xsd_schema =
+        XsdSchema::from_xsd_file(xsd_path, None::<&str>).expect("Failed to parse list_types.xsd");
 
     // Verify xs:list types have variety=List
     eprintln!("\n=== XSD Simple Types ===");
@@ -369,16 +475,21 @@ fn test_list_types_generate_type_family_list() {
     }
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
     // Find DataContainer class
-    let data_container = find_class(&schemas, "DataContainer")
-        .expect("DataContainer class not found");
+    let data_container =
+        find_class(&schemas, "DataContainer").expect("DataContainer class not found");
     let props = get_properties(data_container).expect("No properties");
 
     // scores uses an xs:list type - should have TypeFamily::List
     let scores = find_property(props, "scores").expect("scores property not found");
-    eprintln!("scores property: class={}, type={:?}", scores.class, scores.r#type);
+    eprintln!(
+        "scores property: class={}, type={:?}",
+        scores.class, scores.r#type
+    );
     assert_eq!(
         scores.r#type,
         Some(TypeFamily::List),
@@ -387,11 +498,17 @@ fn test_list_types_generate_type_family_list() {
 
     // tags uses an optional xs:list type - should have TypeFamily::Optional with List inner
     let tags = find_property(props, "tags").expect("tags property not found");
-    eprintln!("tags property: class={}, type={:?}", tags.class, tags.r#type);
+    eprintln!(
+        "tags property: class={}, type={:?}",
+        tags.class, tags.r#type
+    );
     // Optional list type - since it has minOccurs=0, it's Optional
     // The underlying type is List but the cardinality makes it Optional
     assert!(
-        matches!(tags.r#type, Some(TypeFamily::Optional) | Some(TypeFamily::List)),
+        matches!(
+            tags.r#type,
+            Some(TypeFamily::Optional) | Some(TypeFamily::List)
+        ),
         "Optional xs:list type should be Optional or List. Got {:?}",
         tags.r#type
     );
@@ -399,7 +516,10 @@ fn test_list_types_generate_type_family_list() {
     // items uses maxOccurs="unbounded" - should be Set (NOT List)
     let items = find_property(props, "items").expect("items property not found");
     assert!(
-        matches!(items.r#type, Some(TypeFamily::Set(_)) | Some(TypeFamily::Optional)),
+        matches!(
+            items.r#type,
+            Some(TypeFamily::Set(_)) | Some(TypeFamily::Optional)
+        ),
         "Unbounded elements should use Set or Optional, not List. Got {:?}",
         items.r#type
     );
@@ -417,9 +537,11 @@ fn test_context_uses_target_namespace() {
     // This should become context.schema = "http://example.com/book#"
     use terminusdb_xsd::XsdModel;
 
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
-    let model = XsdModel::from_file(xsd_path, None::<&str>)
-        .expect("Failed to load XsdModel");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
+    let model = XsdModel::from_file(xsd_path, None::<&str>).expect("Failed to load XsdModel");
 
     let context = model.context();
 
@@ -450,7 +572,10 @@ fn test_with_namespace_overrides_context() {
     // Verify that with_namespace() updates both namespace and context.schema
     use terminusdb_xsd::XsdModel;
 
-    let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let xsd_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let model = XsdModel::from_file(xsd_path, None::<&str>)
         .expect("Failed to load XsdModel")
         .with_namespace("http://custom.org/schema#");
@@ -458,8 +583,7 @@ fn test_with_namespace_overrides_context() {
     let context = model.context();
 
     assert_eq!(
-        context.schema,
-        "http://custom.org/schema#",
+        context.schema, "http://custom.org/schema#",
         "with_namespace() should update context.schema"
     );
 
@@ -476,13 +600,16 @@ fn test_different_xsd_get_different_namespaces() {
     // This is the core of the multi-schema solution
     use terminusdb_xsd::XsdModel;
 
-    let book_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/simple_book.xsd");
+    let book_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/simple_book.xsd"
+    );
     let catalog_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
 
-    let book_model = XsdModel::from_file(book_path, None::<&str>)
-        .expect("Failed to load book model");
-    let catalog_model = XsdModel::from_file(catalog_path, None::<&str>)
-        .expect("Failed to load catalog model");
+    let book_model =
+        XsdModel::from_file(book_path, None::<&str>).expect("Failed to load book model");
+    let catalog_model =
+        XsdModel::from_file(catalog_path, None::<&str>).expect("Failed to load catalog model");
 
     let book_ns = book_model.namespace();
     let catalog_ns = catalog_model.namespace();

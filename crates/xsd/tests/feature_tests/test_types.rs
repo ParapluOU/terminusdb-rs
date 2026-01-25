@@ -21,8 +21,8 @@ use terminusdb_xsd::XsdModel;
 /// Validates: Named types become classes
 #[test]
 fn test_feature_named_complex_type() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -54,8 +54,8 @@ fn test_feature_named_complex_type() {
 /// Validates: Anonymous types named after parent element
 #[test]
 fn test_feature_anonymous_complex_type() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -84,8 +84,8 @@ fn test_feature_anonymous_complex_type() {
 /// Validates: String properties map to xsd:string
 #[test]
 fn test_feature_simple_type_string() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -114,8 +114,8 @@ fn test_feature_simple_type_string() {
 /// Validates: ID attributes map to xsd:ID
 #[test]
 fn test_feature_simple_type_id() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -144,8 +144,8 @@ fn test_feature_simple_type_id() {
 /// Validates: NMTOKEN attributes properly typed
 #[test]
 fn test_feature_simple_type_nmtoken() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -175,8 +175,8 @@ fn test_feature_simple_type_nmtoken() {
 /// Validates: Enumerations become Enum schemas
 #[test]
 fn test_feature_enumeration_restriction() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -207,8 +207,8 @@ fn test_feature_enumeration_restriction() {
 /// Validates: Enum values match XSD enumeration facets
 #[test]
 fn test_feature_enum_values() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -270,8 +270,8 @@ fn test_feature_xs_list_type() {
 /// Validates: NISO-STS types generate correctly
 #[test]
 fn test_feature_niso_types() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 

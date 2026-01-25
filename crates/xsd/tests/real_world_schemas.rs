@@ -281,7 +281,10 @@ fn test_dita_directory_generation() {
         .generate_from_directory(&dita_dir, None::<&str>)
         .expect("Failed to generate from DITA directory");
 
-    println!("Generated {} unique schemas from DITA directory", schemas.len());
+    println!(
+        "Generated {} unique schemas from DITA directory",
+        schemas.len()
+    );
 
     // Should deduplicate common types
     assert!(
@@ -292,9 +295,7 @@ fn test_dita_directory_generation() {
 
 #[test]
 fn test_niso_directory_generation() {
-    let niso_dir = NISO_DIR
-        .path()
-        .join("NISO-STS-extended-1-MathML3-XSD");
+    let niso_dir = NISO_DIR.path().join("NISO-STS-extended-1-MathML3-XSD");
 
     let generator = XsdToSchemaGenerator::new();
 

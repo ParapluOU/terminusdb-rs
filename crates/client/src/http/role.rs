@@ -1,10 +1,13 @@
 //! Role management operations
 
 use {
-    crate::{TerminusDBAdapterError, debug::{OperationEntry, OperationType}},
+    crate::{
+        debug::{OperationEntry, OperationType},
+        TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Serialize, Deserialize},
+    serde::{Deserialize, Serialize},
     serde_json::json,
     std::time::Instant,
 };
@@ -101,8 +104,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("create_role".to_string()),
-            "/api/role".to_string()
-        ).with_context(None, None);
+            "/api/role".to_string(),
+        )
+        .with_context(None, None);
 
         let request = CreateRoleRequest {
             id: role_id.to_string(),
@@ -128,18 +132,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("create role operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("create role failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -170,10 +174,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn get_role(
-        &self,
-        role_id: &str,
-    ) -> anyhow::Result<Role> {
+    pub async fn get_role(&self, role_id: &str) -> anyhow::Result<Role> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("role").add_path(role_id).build();
 
@@ -181,8 +182,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("get_role".to_string()),
-            format!("/api/role/{}", role_id)
-        ).with_context(None, None);
+            format!("/api/role/{}", role_id),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
@@ -200,18 +202,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("get role operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("get role failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<Role>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -262,8 +264,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("update_role".to_string()),
-            format!("/api/role/{}", role_id)
-        ).with_context(None, None);
+            format!("/api/role/{}", role_id),
+        )
+        .with_context(None, None);
 
         let request = UpdateRoleRequest {
             name: name.map(String::from),
@@ -288,18 +291,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("update role operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("update role failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -330,10 +333,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn delete_role(
-        &self,
-        role_id: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn delete_role(&self, role_id: &str) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("role").add_path(role_id).build();
 
@@ -341,8 +341,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("delete_role".to_string()),
-            format!("/api/role/{}", role_id)
-        ).with_context(None, None);
+            format!("/api/role/{}", role_id),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -360,18 +361,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("delete role operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("delete role failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -391,11 +392,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Ok(())
     /// # }
     /// ```
-    #[instrument(
-        name = "terminus.role.list",
-        skip(self),
-        err
-    )]
+    #[instrument(name = "terminus.role.list", skip(self), err)]
     pub async fn list_roles(&self) -> anyhow::Result<Vec<Role>> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("role").build();
@@ -404,8 +401,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("list_roles".to_string()),
-            "/api/role".to_string()
-        ).with_context(None, None);
+            "/api/role".to_string(),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
@@ -423,22 +421,26 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("list roles operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("list roles failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<Vec<Role>>(res).await?;
-        
+
         operation = operation.success(Some(response.len()), duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully listed {} roles in {:?}", response.len(), start_time.elapsed());
+        debug!(
+            "Successfully listed {} roles in {:?}",
+            response.len(),
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -473,7 +475,8 @@ impl super::client::TerminusDBHttpClient {
         role_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("user")
             .add_path(user_id)
             .endpoint("role")
@@ -484,8 +487,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("grant_role".to_string()),
-            format!("/api/user/{}/role/{}", user_id, role_id)
-        ).with_context(None, None);
+            format!("/api/user/{}/role/{}", user_id, role_id),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -503,18 +507,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("grant role operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("grant role failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -553,7 +557,8 @@ impl super::client::TerminusDBHttpClient {
         role_id: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("user")
             .add_path(user_id)
             .endpoint("role")
@@ -564,8 +569,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("revoke_role".to_string()),
-            format!("/api/user/{}/role/{}", user_id, role_id)
-        ).with_context(None, None);
+            format!("/api/user/{}/role/{}", user_id, role_id),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -583,18 +589,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("revoke role operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("revoke role failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 

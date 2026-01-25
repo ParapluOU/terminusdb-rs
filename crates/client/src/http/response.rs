@@ -238,10 +238,7 @@ Content-type: application/json; charset=UTF-8
 
         assert_eq!(parsed["@type"], "api:GetDocumentErrorResponse");
         assert_eq!(parsed["api:error"]["@type"], "api:DocumentNotFound");
-        assert_eq!(
-            parsed["api:error"]["api:document_id"],
-            "AwsDBUser/system"
-        );
+        assert_eq!(parsed["api:error"]["api:document_id"], "AwsDBUser/system");
     }
 
     #[test]

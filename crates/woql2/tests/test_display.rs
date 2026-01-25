@@ -1,8 +1,8 @@
-use terminusdb_woql2::prelude::*;
-use terminusdb_woql2::query::{Query, And};
-use terminusdb_woql2::triple::Triple;
-use terminusdb_woql2::value::{Value, NodeValue};
 use terminusdb_schema::GraphType;
+use terminusdb_woql2::prelude::*;
+use terminusdb_woql2::query::{And, Query};
+use terminusdb_woql2::triple::Triple;
+use terminusdb_woql2::value::{NodeValue, Value};
 
 #[test]
 fn test_display_simple_triple() {
@@ -12,23 +12,29 @@ fn test_display_simple_triple() {
         object: Value::Variable("Name".to_string()),
         graph: Some(GraphType::Instance),
     };
-    
+
     // Test Display directly on Triple
-    assert_eq!(triple.to_string(), r#"triple($Person, "@schema:name", $Name)"#);
-    
+    assert_eq!(
+        triple.to_string(),
+        r#"triple($Person, "@schema:name", $Name)"#
+    );
+
     // Test Display on Query enum
     let query = Query::Triple(triple);
-    assert_eq!(query.to_string(), r#"triple($Person, "@schema:name", $Name)"#);
+    assert_eq!(
+        query.to_string(),
+        r#"triple($Person, "@schema:name", $Name)"#
+    );
 }
 
 #[test]
 fn test_display_values() {
     let var = Value::Variable("Test".to_string());
     assert_eq!(var.to_string(), "$Test");
-    
+
     let node = NodeValue::Node("@schema:Person".to_string());
     assert_eq!(node.to_string(), r#""@schema:Person""#);
-    
+
     let data = DataValue::Variable("Count".to_string());
     assert_eq!(data.to_string(), "$Count");
 }
@@ -52,8 +58,9 @@ fn test_display_complex_query() {
             ],
         })),
     };
-    
-    let expected = r#"select([$Name, $Age], and(triple($Person, "@schema:name", $Name), greater($Age, 18)))"#;
+
+    let expected =
+        r#"select([$Name, $Age], and(triple($Person, "@schema:name", $Name), greater($Age, 18)))"#;
     assert_eq!(select.to_string(), expected);
 }
 
@@ -75,11 +82,11 @@ fn test_display_format_integration() {
             }),
         ],
     });
-    
+
     // Test with format! macro
     let formatted = format!("Query: {}", query);
     assert!(formatted.starts_with("Query: and("));
-    
+
     // Test with println! (won't actually print during tests)
     let output = format!("{}", query);
     assert!(output.contains("triple($X"));
@@ -88,10 +95,14 @@ fn test_display_format_integration() {
 #[test]
 fn test_display_arithmetic() {
     let expr = ArithmeticExpression::Plus(Plus {
-        left: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable("A".to_string()))),
-        right: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable("B".to_string()))),
+        left: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable(
+            "A".to_string(),
+        ))),
+        right: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable(
+            "B".to_string(),
+        ))),
     });
-    
+
     assert_eq!(expr.to_string(), "plus($A, $B)");
 }
 
@@ -100,12 +111,12 @@ fn test_display_path_pattern() {
     let pattern = PathPattern::Predicate(PathPredicate {
         predicate: Some("@schema:knows".to_string()),
     });
-    
+
     assert_eq!(pattern.to_string(), r#"pred("@schema:knows")"#);
-    
+
     let star_pattern = PathPattern::Star(PathStar {
         star: Box::new(pattern),
     });
-    
+
     assert_eq!(star_pattern.to_string(), r#"star(pred("@schema:knows"))"#);
 }

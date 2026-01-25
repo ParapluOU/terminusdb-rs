@@ -23,7 +23,7 @@ use terminusdb_schema::{EntityIDFor, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Required for the derive macro
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 
 use terminusdb_orm::prelude::GraphQLRelationQuery;
 use terminusdb_test::test as db_test;
@@ -311,9 +311,7 @@ async fn test_forward_relation_limitation(client: _, spec: _) -> anyhow::Result<
     }
 
     // If we got here without errors, the test failed
-    Err(anyhow::anyhow!(
-        "Expected query to fail, but it succeeded"
-    ))
+    Err(anyhow::anyhow!("Expected query to fail, but it succeeded"))
 }
 
 /// Test that auto-generated reverse fields don't exist for EntityIDFor.
@@ -376,9 +374,7 @@ async fn test_reverse_field_limitation(client: _, spec: _) -> anyhow::Result<()>
                 println!("  - {}", error.message);
             }
             // Verify we got the expected error about unknown field
-            let has_expected_error = errors
-                .iter()
-                .any(|e| e.message.contains("Unknown field"));
+            let has_expected_error = errors.iter().any(|e| e.message.contains("Unknown field"));
             assert!(
                 has_expected_error,
                 "Expected error about unknown field '_author_id_of_Article'"
@@ -389,7 +385,5 @@ async fn test_reverse_field_limitation(client: _, spec: _) -> anyhow::Result<()>
     }
 
     // If we got here without errors, the test failed
-    Err(anyhow::anyhow!(
-        "Expected query to fail, but it succeeded"
-    ))
+    Err(anyhow::anyhow!("Expected query to fail, but it succeeded"))
 }

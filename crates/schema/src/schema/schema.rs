@@ -4,8 +4,8 @@ use crate::*;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeSet, HashSet};
 use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::File;
 use std::io::Write;
 
@@ -831,10 +831,8 @@ impl ToJson for Schema {
                 }
                 if !inherits.is_empty() {
                     // Use short names for inherits - Context will expand
-                    let inherits_vals: Vec<Value> = inherits
-                        .iter()
-                        .map(|s| Value::String(s.clone()))
-                        .collect();
+                    let inherits_vals: Vec<Value> =
+                        inherits.iter().map(|s| Value::String(s.clone())).collect();
                     map.insert("@inherits".to_string(), inherits_vals.into());
                 }
                 // Use SHORT property names - Context @schema will expand them
@@ -945,10 +943,8 @@ impl ToJson for Schema {
                 }
                 if !inherits.is_empty() {
                     // Use short names for inherits - Context will expand
-                    let inherits_vals: Vec<Value> = inherits
-                        .iter()
-                        .map(|s| Value::String(s.clone()))
-                        .collect();
+                    let inherits_vals: Vec<Value> =
+                        inherits.iter().map(|s| Value::String(s.clone())).collect();
                     map.insert("@inherits".to_string(), inherits_vals.into());
                 }
                 // Use SHORT property names - Context will expand them
@@ -966,7 +962,10 @@ impl ToJson for Schema {
                         serde_json::Value::Object(class_map)
                     })
                     .collect();
-                map.insert("@oneOf".to_string(), serde_json::Value::Array(oneof_classes));
+                map.insert(
+                    "@oneOf".to_string(),
+                    serde_json::Value::Array(oneof_classes),
+                );
             }
         }
         map

@@ -177,9 +177,7 @@ fn test_fetch_builder() {
 /// Test FetchBuilder with unfold
 #[test]
 fn test_fetch_builder_with_unfold() {
-    let builder = FetchBuilder::new()
-        .add_id("Type/1")
-        .unfold();
+    let builder = FetchBuilder::new().add_id("Type/1").unfold();
 
     assert_eq!(builder.len(), 1);
 }
@@ -187,8 +185,7 @@ fn test_fetch_builder_with_unfold() {
 /// Test RelationPath construction
 #[test]
 fn test_relation_path() {
-    let path = RelationPath::new("parent")
-        .with_nested(RelationPath::new("grandparent"));
+    let path = RelationPath::new("parent").with_nested(RelationPath::new("grandparent"));
 
     let selection = path.build_selection();
     assert!(selection.contains("parent"));

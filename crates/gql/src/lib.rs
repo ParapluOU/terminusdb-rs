@@ -24,8 +24,8 @@ pub use frames::{schemas_to_allframes, schemas_vec_to_allframes};
 pub use schema::{allframes_to_sdl, generate_gql_schema};
 
 // Re-export key types from terminusdb-community
-pub use terminusdb_community::graphql::frame::{AllFrames, TypeDefinition};
 pub use terminusdb_community::graphql::filter;
+pub use terminusdb_community::graphql::frame::{AllFrames, TypeDefinition};
 pub use terminusdb_community::graphql::naming;
 
 // Re-export filter/ordering traits from terminusdb-schema

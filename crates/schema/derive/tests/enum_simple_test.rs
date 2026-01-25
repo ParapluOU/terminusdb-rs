@@ -27,7 +27,7 @@ pub enum Status {
 
 #[derive(TerminusDBModel, Debug, Clone)]
 pub struct Comment {
-    status: Status
+    status: Status,
 }
 
 // #[cfg(test)]
@@ -114,21 +114,45 @@ fn test_tdbenum_multiword_variants() {
     assert_eq!(variants.len(), 6);
 
     // Test to_tdb_value() produces lowercase
-    assert_eq!(ImportStatus::LocallyCreated.to_tdb_value(), "locallycreated");
+    assert_eq!(
+        ImportStatus::LocallyCreated.to_tdb_value(),
+        "locallycreated"
+    );
     assert_eq!(ImportStatus::MetadataOnly.to_tdb_value(), "metadataonly");
-    assert_eq!(ImportStatus::ImportInProgress.to_tdb_value(), "importinprogress");
+    assert_eq!(
+        ImportStatus::ImportInProgress.to_tdb_value(),
+        "importinprogress"
+    );
     assert_eq!(ImportStatus::FullyImported.to_tdb_value(), "fullyimported");
     assert_eq!(ImportStatus::XmlNotFound.to_tdb_value(), "xmlnotfound");
     assert_eq!(ImportStatus::ImportFailed.to_tdb_value(), "importfailed");
 
     // Test from_tdb_value() correctly parses lowercase back to variants
     // This was the original bug - "fullyimported" -> "Fullyimported" (wrong) instead of "FullyImported"
-    assert_eq!(ImportStatus::from_tdb_value("locallycreated"), Some(ImportStatus::LocallyCreated));
-    assert_eq!(ImportStatus::from_tdb_value("metadataonly"), Some(ImportStatus::MetadataOnly));
-    assert_eq!(ImportStatus::from_tdb_value("importinprogress"), Some(ImportStatus::ImportInProgress));
-    assert_eq!(ImportStatus::from_tdb_value("fullyimported"), Some(ImportStatus::FullyImported));
-    assert_eq!(ImportStatus::from_tdb_value("xmlnotfound"), Some(ImportStatus::XmlNotFound));
-    assert_eq!(ImportStatus::from_tdb_value("importfailed"), Some(ImportStatus::ImportFailed));
+    assert_eq!(
+        ImportStatus::from_tdb_value("locallycreated"),
+        Some(ImportStatus::LocallyCreated)
+    );
+    assert_eq!(
+        ImportStatus::from_tdb_value("metadataonly"),
+        Some(ImportStatus::MetadataOnly)
+    );
+    assert_eq!(
+        ImportStatus::from_tdb_value("importinprogress"),
+        Some(ImportStatus::ImportInProgress)
+    );
+    assert_eq!(
+        ImportStatus::from_tdb_value("fullyimported"),
+        Some(ImportStatus::FullyImported)
+    );
+    assert_eq!(
+        ImportStatus::from_tdb_value("xmlnotfound"),
+        Some(ImportStatus::XmlNotFound)
+    );
+    assert_eq!(
+        ImportStatus::from_tdb_value("importfailed"),
+        Some(ImportStatus::ImportFailed)
+    );
 
     // Test round-trip
     for variant in ImportStatus::variants() {
@@ -150,7 +174,8 @@ fn test_multiword_enum_json_deserialization() {
     let json = serde_json::json!("fullyimported");
 
     // This should work now (previously failed with serde error)
-    let instance = ImportStatus::instance_from_json(json).expect("Should deserialize multiword enum");
+    let instance =
+        ImportStatus::instance_from_json(json).expect("Should deserialize multiword enum");
 
     // Verify the enum value is correct by checking the instance properties
     assert!(instance.is_enum());

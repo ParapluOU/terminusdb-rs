@@ -14,9 +14,7 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Test model for merge branch testing
-#[derive(
-    Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-)]
+#[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
 struct TestPerson {
     id: EntityIDFor<Self>,
@@ -26,7 +24,10 @@ struct TestPerson {
 
 /// Helper to create a unique database name
 fn unique_db_name() -> String {
-    format!("test_merge_{}", uuid::Uuid::new_v4().to_string().replace("-", "_"))
+    format!(
+        "test_merge_{}",
+        uuid::Uuid::new_v4().to_string().replace("-", "_")
+    )
 }
 
 #[tokio::test]
@@ -130,7 +131,10 @@ async fn test_with_merge_branch_error_rollback() -> anyhow::Result<()> {
                 ..Default::default()
             },
             |branch_client| async move {
-                eprintln!("[TEST] Inside closure, branch spec = {:?}", branch_client.spec());
+                eprintln!(
+                    "[TEST] Inside closure, branch spec = {:?}",
+                    branch_client.spec()
+                );
 
                 // Insert data on temp branch
                 let person2 = TestPerson {

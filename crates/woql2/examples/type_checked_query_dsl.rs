@@ -26,9 +26,9 @@ struct Company {
 
 fn main() {
     println!("Type-checked Query DSL Examples\n");
-    
+
     // Example 1: Simple type-checked query
-    let person_query = query!{{
+    let person_query = query! {{
         Person {
             id = data!("person123"),
             name = v!(name),
@@ -36,12 +36,12 @@ fn main() {
         }
         greater!(v!(age), data!(18))
     }};
-    
+
     println!("Person query (type-checked):");
     println!("{}\n", person_query.to_dsl());
-    
+
     // Example 2: Multiple types with relationships
-    let company_query = query!{{
+    let company_query = query! {{
         Company {
             id = v!(CompanyId),
             name = v!(CompanyName),
@@ -55,12 +55,12 @@ fn main() {
         }
         greater!(v!(Year), data!(2000))
     }};
-    
+
     println!("Company-Person relationship query:");
     println!("{}\n", company_query.to_dsl());
-    
+
     // Example 3: Select query with type checking
-    let select_query = query!{{
+    let select_query = query! {{
         select [CompanyName, CeoName] {
             Company {
                 id = v!(CompanyId),
@@ -73,17 +73,17 @@ fn main() {
             }
         }
     }};
-    
+
     println!("Select query (returns company and CEO names):");
     println!("{}\n", select_query.to_dsl());
-    
+
     // The following would fail to compile if uncommented:
     // let bad_query = query!{{
     //     Person {
     //         nam = v!(name)  // Error: no field `nam` on type `Person`
     //     }
     // }};
-    
+
     println!("Key benefits of type-checked queries:");
     println!("1. Compile-time verification of property names");
     println!("2. IDE autocomplete for model fields");

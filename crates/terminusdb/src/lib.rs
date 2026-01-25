@@ -81,7 +81,7 @@ pub use terminusdb_client::ChangeListener;
 
 /// Changeset event types
 #[cfg(not(target_arch = "wasm32"))]
-pub use terminusdb_client::{ChangesetEvent, ChangesetCommitInfo, DocumentChange, MetadataInfo};
+pub use terminusdb_client::{ChangesetCommitInfo, ChangesetEvent, DocumentChange, MetadataInfo};
 
 /// Insert result enum (Inserted or AlreadyExists)
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,16 +137,16 @@ pub use terminusdb_schema::TdbIRI;
 pub use terminusdb_schema::TDBEnum;
 
 /// JSON conversion traits
-pub use terminusdb_schema::{ToJson, InstanceFromJson};
+pub use terminusdb_schema::{InstanceFromJson, ToJson};
 
 /// Primitive type support
 pub use terminusdb_schema::{Primitive, PrimitiveValue};
 
 /// Schema class mapping traits
-pub use terminusdb_schema::{ToSchemaClass, ToMaybeTDBSchema};
+pub use terminusdb_schema::{ToMaybeTDBSchema, ToSchemaClass};
 
 /// Instance property conversion traits
-pub use terminusdb_schema::{ToInstanceProperty, FromInstanceProperty};
+pub use terminusdb_schema::{FromInstanceProperty, ToInstanceProperty};
 
 /// Multiple schema generation
 pub use terminusdb_schema::ToTDBSchemas;

@@ -37,7 +37,9 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
                 id: EntityIDFor::new("test_event").unwrap(),
                 name: "Test Event".to_string(),
                 event_date: "2025-01-01".to_string(),
-                event_time: DateTime::parse_from_rfc3339("2025-01-01T14:30:00Z").unwrap().with_timezone(&Utc),
+                event_time: DateTime::parse_from_rfc3339("2025-01-01T14:30:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
             };
 
             println!("\nInserting event with DateTime: {}", event.event_time);
@@ -59,14 +61,24 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
                 .finalize();
 
             let json_query = query.to_json();
-            let results: WOQLResult<HashMap<String, serde_json::Value>> =
-                client.query_raw(Some(spec.clone()), json_query, None).await?;
+            let results: WOQLResult<HashMap<String, serde_json::Value>> = client
+                .query_raw(Some(spec.clone()), json_query, None)
+                .await?;
 
             println!("\nQuery results:");
             for binding in &results.bindings {
-                println!("  ID: {}", binding.get("ID").and_then(|v| v.as_str()).unwrap_or("?"));
-                println!("  Name: {}", binding.get("Name").and_then(|v| v.as_str()).unwrap_or("?"));
-                println!("  Date: {}", binding.get("Date").and_then(|v| v.as_str()).unwrap_or("?"));
+                println!(
+                    "  ID: {}",
+                    binding.get("ID").and_then(|v| v.as_str()).unwrap_or("?")
+                );
+                println!(
+                    "  Name: {}",
+                    binding.get("Name").and_then(|v| v.as_str()).unwrap_or("?")
+                );
+                println!(
+                    "  Date: {}",
+                    binding.get("Date").and_then(|v| v.as_str()).unwrap_or("?")
+                );
                 println!("  Time: {:?}", binding.get("Time"));
             }
 
@@ -82,9 +94,13 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
                 .select(vec![id1.clone()])
                 .finalize();
 
-            let results1: WOQLResult<HashMap<String, serde_json::Value>> =
-                client.query_raw(Some(spec.clone()), query1.to_json(), None).await?;
-            println!("  Found {} results with ISO 8601 comparison", results1.bindings.len());
+            let results1: WOQLResult<HashMap<String, serde_json::Value>> = client
+                .query_raw(Some(spec.clone()), query1.to_json(), None)
+                .await?;
+            println!(
+                "  Found {} results with ISO 8601 comparison",
+                results1.bindings.len()
+            );
 
             // Test 2: Compare with full RFC3339 (offset format)
             println!("\n2. DateTime literal (RFC3339 offset format):");
@@ -95,9 +111,13 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
                 .select(vec![id2.clone()])
                 .finalize();
 
-            let results2: WOQLResult<HashMap<String, serde_json::Value>> =
-                client.query_raw(Some(spec.clone()), query2.to_json(), None).await?;
-            println!("  Found {} results with RFC3339 offset comparison", results2.bindings.len());
+            let results2: WOQLResult<HashMap<String, serde_json::Value>> = client
+                .query_raw(Some(spec.clone()), query2.to_json(), None)
+                .await?;
+            println!(
+                "  Found {} results with RFC3339 offset comparison",
+                results2.bindings.len()
+            );
 
             // Test 3: Compare with datetime literal (another format)
             println!("\n3. DateTime literal (different timestamp):");
@@ -109,11 +129,17 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
                 .finalize();
 
             let json3 = query3.to_json();
-            println!("  Query JSON: {}", serde_json::to_string_pretty(&json3).unwrap());
+            println!(
+                "  Query JSON: {}",
+                serde_json::to_string_pretty(&json3).unwrap()
+            );
 
             let results3: WOQLResult<HashMap<String, serde_json::Value>> =
                 client.query_raw(Some(spec.clone()), json3, None).await?;
-            println!("  Found {} results with datetime literal", results3.bindings.len());
+            println!(
+                "  Found {} results with datetime literal",
+                results3.bindings.len()
+            );
 
             Ok(())
         })

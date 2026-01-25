@@ -1,10 +1,10 @@
 //! Relation trait implementation generation for TerminusDBModel derive macro
 
-use proc_macro2::TokenStream;
-use quote::{quote, format_ident};
-use syn::{FieldsNamed, Type, GenericArgument, PathArguments};
 use heck::AsUpperCamelCase;
-use std::collections::{HashSet, HashMap};
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use std::collections::HashMap;
+use syn::{FieldsNamed, GenericArgument, PathArguments, Type};
 
 /// Detect the crate context and generate appropriate module paths
 fn get_woql_path() -> TokenStream {
@@ -201,7 +201,6 @@ fn analyze_field_for_entity_id(field: &syn::Field) -> Option<EntityIdFieldInfo> 
     // Vec<EntityIDFor<T>> does NOT get BelongsTo - no single parent ID
     None
 }
-
 
 /// Generate RelationTo implementations for ALL struct fields
 ///

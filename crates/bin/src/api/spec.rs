@@ -286,7 +286,9 @@ mod tests {
         let spec = DbSpec::new("admin", "mydb").graph(GraphType::Instance);
         assert_eq!(spec.to_string(), "admin/mydb/local/branch/main/instance");
 
-        let spec = DbSpec::new("admin", "mydb").branch("dev").graph(GraphType::Schema);
+        let spec = DbSpec::new("admin", "mydb")
+            .branch("dev")
+            .graph(GraphType::Schema);
         assert_eq!(spec.to_string(), "admin/mydb/local/branch/dev/schema");
     }
 }

@@ -22,14 +22,14 @@
 //! # Ok::<(), std::io::Error>(())
 //! ```
 
-mod spec;
-mod types;
-mod options;
 mod client;
 mod commands;
+mod options;
+mod spec;
+mod types;
 
 // Re-export public API
-pub use spec::{DbSpec, GraphSpec, BranchSpec, CommitSpec, GraphType};
-pub use types::{Author, Message, RoleAction, RdfFormat, ScopeType, CommitType};
-pub use options::*;
 pub use client::TerminusDB;
+pub use options::*;
+pub use spec::{BranchSpec, CommitSpec, DbSpec, GraphSpec, GraphType};
+pub use types::{Author, CommitType, Message, RdfFormat, RoleAction, ScopeType};

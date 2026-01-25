@@ -342,8 +342,8 @@ pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServe
                 path.clone()
             }
             None => {
-                let path = std::env::temp_dir()
-                    .join(format!("terminusdb-server-{}", std::process::id()));
+                let path =
+                    std::env::temp_dir().join(format!("terminusdb-server-{}", std::process::id()));
                 std::fs::create_dir_all(&path)?;
                 path
             }
@@ -456,8 +456,7 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
     let pid = child.id();
     eprintln!(
         "[terminusdb-bin] test_instance: Server spawned with PID: {} on port {}",
-        pid,
-        port
+        pid, port
     );
 
     // Store the PID so the atexit handler can kill it
@@ -536,10 +535,7 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
                                 // Kill the process since it's in a bad state
                                 let _ = child.kill();
                                 let _ = child.wait();
-                                anyhow::bail!(
-                                    "Server failed to start: {}",
-                                    stderr_buffer.trim()
-                                );
+                                anyhow::bail!("Server failed to start: {}", stderr_buffer.trim());
                             }
                         }
                     }
@@ -631,10 +627,8 @@ mod tests {
     #[tokio::test]
     async fn test_memory_mode_no_disk_writes() -> anyhow::Result<()> {
         // Create a fresh temp directory that we'll monitor for writes
-        let test_dir = std::env::temp_dir().join(format!(
-            "terminusdb-memory-test-{}",
-            std::process::id()
-        ));
+        let test_dir =
+            std::env::temp_dir().join(format!("terminusdb-memory-test-{}", std::process::id()));
         if test_dir.exists() {
             std::fs::remove_dir_all(&test_dir)?;
         }
@@ -695,9 +689,12 @@ mod tests {
 
         // Verify it exists
         let databases = client.list_databases_simple().await?;
-        let found = databases
-            .iter()
-            .any(|db| db.path.as_ref().map(|p| p.contains("test_ensure_db")).unwrap_or(false));
+        let found = databases.iter().any(|db| {
+            db.path
+                .as_ref()
+                .map(|p| p.contains("test_ensure_db"))
+                .unwrap_or(false)
+        });
         assert!(found, "Database should exist after ensure_database");
 
         // Cleanup

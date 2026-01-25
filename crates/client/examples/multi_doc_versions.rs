@@ -30,10 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Suppose we have document IDs and their commit IDs we want to retrieve
     let queries = vec![
-        (
-            "doc123",
-            vec!["commit_abc".into(), "commit_def".into()],
-        ),
+        ("doc123", vec!["commit_abc".into(), "commit_def".into()]),
         ("doc456", vec!["commit_ghi".into()]),
         (
             "doc789",

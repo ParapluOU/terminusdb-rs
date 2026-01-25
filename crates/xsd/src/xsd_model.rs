@@ -337,7 +337,8 @@ impl XsdModel {
     /// structure doesn't match the generated schemas.
     pub fn parse_xml_to_instances(&self, xml: &str) -> ParseResult<Vec<Instance>> {
         // First parse to JSON
-        let json = self.parse_xml_to_json(xml)
+        let json = self
+            .parse_xml_to_json(xml)
             .map_err(|e| crate::xml_parser::XmlParseError::parse(e.to_string()))?;
 
         // Build element-to-class mapping from XSD schemas
@@ -350,17 +351,13 @@ impl XsdModel {
 
     /// Get statistics about the model.
     pub fn stats(&self) -> XsdModelStats {
-        let total_complex_types: usize = self.xsd_schemas.iter()
-            .map(|s| s.complex_types.len())
-            .sum();
+        let total_complex_types: usize =
+            self.xsd_schemas.iter().map(|s| s.complex_types.len()).sum();
 
-        let total_simple_types: usize = self.xsd_schemas.iter()
-            .map(|s| s.simple_types.len())
-            .sum();
+        let total_simple_types: usize = self.xsd_schemas.iter().map(|s| s.simple_types.len()).sum();
 
-        let total_root_elements: usize = self.xsd_schemas.iter()
-            .map(|s| s.root_elements.len())
-            .sum();
+        let total_root_elements: usize =
+            self.xsd_schemas.iter().map(|s| s.root_elements.len()).sum();
 
         XsdModelStats {
             xsd_schema_count: self.xsd_schemas.len(),
@@ -409,7 +406,11 @@ impl XsdModel {
 
                 if let Some(type_info) = &elem.type_info {
                     // Check if this is a named type or anonymous type
-                    if let Some(type_qname) = type_info.name.as_ref().or(type_info.qualified_name.as_ref()) {
+                    if let Some(type_qname) = type_info
+                        .name
+                        .as_ref()
+                        .or(type_info.qualified_name.as_ref())
+                    {
                         // Named type - use type name
                         let type_name = type_qname.split('}').last().unwrap_or(type_qname);
                         let class_name = type_name.to_pascal_case();
@@ -455,11 +456,18 @@ impl XsdModel {
                         }
 
                         // Skip XSD primitive types - they don't need class mappings
-                        if child.element_type.contains("http://www.w3.org/2001/XMLSchema") {
+                        if child
+                            .element_type
+                            .contains("http://www.w3.org/2001/XMLSchema")
+                        {
                             continue;
                         }
 
-                        let type_name = child.element_type.split('}').last().unwrap_or(&child.element_type);
+                        let type_name = child
+                            .element_type
+                            .split('}')
+                            .last()
+                            .unwrap_or(&child.element_type);
                         let class_name = type_name.to_pascal_case();
 
                         // Only add if we have a schema for this type

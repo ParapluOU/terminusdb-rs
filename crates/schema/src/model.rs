@@ -1,4 +1,6 @@
-use crate::{EntityIDFor, FromTDBInstance, InstanceFromJson, ToTDBInstance, ToSchemaClass, ToTDBSchema};
+use crate::{
+    EntityIDFor, FromTDBInstance, InstanceFromJson, ToSchemaClass, ToTDBInstance, ToTDBSchema,
+};
 
 pub trait TerminusDBModel:
     ToTDBInstance + FromTDBInstance + InstanceFromJson + ToSchemaClass + Clone + std::fmt::Debug

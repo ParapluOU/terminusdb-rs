@@ -9,7 +9,7 @@ use terminusdb_client::DocumentInsertArgs;
 use terminusdb_schema::{TdbLazy, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 
 use terminusdb_test::test as db_test;
 
@@ -70,12 +70,18 @@ async fn test_tdblazy_schema_creates_link(client: _, spec: _) -> anyhow::Result<
 
     if let Some(errors) = &response.errors {
         if !errors.is_empty() {
-            return Err(anyhow::anyhow!("GraphQL introspection failed: {:?}", errors));
+            return Err(anyhow::anyhow!(
+                "GraphQL introspection failed: {:?}",
+                errors
+            ));
         }
     }
 
     let data = response.data.ok_or_else(|| anyhow::anyhow!("No data"))?;
-    println!("Schema introspection: {}", serde_json::to_string_pretty(&data)?);
+    println!(
+        "Schema introspection: {}",
+        serde_json::to_string_pretty(&data)?
+    );
 
     // Check if 'writer' field type is Writer (linked document) not String
     let fields = data
@@ -92,7 +98,11 @@ async fn test_tdblazy_schema_creates_link(client: _, spec: _) -> anyhow::Result<
     let field_type = writer_field
         .pointer("/type/name")
         .and_then(|t| t.as_str())
-        .or_else(|| writer_field.pointer("/type/ofType/name").and_then(|t| t.as_str()));
+        .or_else(|| {
+            writer_field
+                .pointer("/type/ofType/name")
+                .and_then(|t| t.as_str())
+        });
 
     println!("writer field type: {:?}", field_type);
 
@@ -174,14 +184,21 @@ async fn test_tdblazy_forward_relation(client: _, spec: _) -> anyhow::Result<()>
     println!("Response: {}", serde_json::to_string_pretty(&data)?);
 
     // Verify forward relation worked
-    let posts = data.get("BlogPost").and_then(|v| v.as_array())
+    let posts = data
+        .get("BlogPost")
+        .and_then(|v| v.as_array())
         .ok_or_else(|| anyhow::anyhow!("Expected BlogPost array"))?;
 
-    let writer_data = posts[0].get("writer")
+    let writer_data = posts[0]
+        .get("writer")
         .ok_or_else(|| anyhow::anyhow!("Expected writer field"))?;
 
     let writer_name = writer_data.get("name").and_then(|n| n.as_str());
-    assert_eq!(writer_name, Some("Alice"), "Expected writer name to be Alice");
+    assert_eq!(
+        writer_name,
+        Some("Alice"),
+        "Expected writer name to be Alice"
+    );
 
     println!("SUCCESS: Forward relation traversal works with TdbLazy!");
     Ok(())
@@ -198,7 +215,9 @@ async fn test_tdblazy_reverse_relation(client: _, spec: _) -> anyhow::Result<()>
     client.insert_entity_schema::<BlogPost>(args).await?;
 
     // Insert writer
-    let writer = Writer { name: "Bob".to_string() };
+    let writer = Writer {
+        name: "Bob".to_string(),
+    };
     let args = DocumentInsertArgs::from(spec.clone());
     let writer_result = client.save_instance(&writer, args).await?;
     let writer_id = writer_result.root_id;
@@ -251,10 +270,14 @@ async fn test_tdblazy_reverse_relation(client: _, spec: _) -> anyhow::Result<()>
     println!("Response: {}", serde_json::to_string_pretty(&data)?);
 
     // Verify reverse relation worked
-    let writers = data.get("Writer").and_then(|v| v.as_array())
+    let writers = data
+        .get("Writer")
+        .and_then(|v| v.as_array())
         .ok_or_else(|| anyhow::anyhow!("Expected Writer array"))?;
 
-    let posts = writers[0].get("_writer_of_BlogPost").and_then(|v| v.as_array())
+    let posts = writers[0]
+        .get("_writer_of_BlogPost")
+        .and_then(|v| v.as_array())
         .ok_or_else(|| anyhow::anyhow!("Expected _writer_of_BlogPost array"))?;
 
     assert_eq!(posts.len(), 3, "Expected 3 posts via reverse relation");
@@ -287,7 +310,9 @@ async fn test_orm_with_relation_loads_children(client: _, spec: _) -> anyhow::Re
     client.insert_entity_schema::<BlogPost>(args).await?;
 
     // Insert writer
-    let writer = Writer { name: "Alice".to_string() };
+    let writer = Writer {
+        name: "Alice".to_string(),
+    };
     let args = DocumentInsertArgs::from(spec.clone());
     let writer_result = client.save_instance(&writer, args).await?;
     let writer_id = writer_result.root_id.clone();

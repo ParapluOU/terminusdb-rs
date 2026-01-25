@@ -8,8 +8,8 @@
 
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::DocumentInsertArgs;
-use terminusdb_schema::{json::ToJson, Schema, ToTDBInstance, ToMaybeTDBSchema};
-use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
+use terminusdb_schema::{json::ToJson, Schema, ToMaybeTDBSchema, ToTDBInstance};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use terminusdb_xsd::XsdModel;
 
 // Reference model using derive - this is known to work
@@ -74,8 +74,13 @@ async fn test_derived_model_insertion() -> anyhow::Result<()> {
                 let schemas = TestDocDerived::to_schema_tree();
                 let schema = schemas.first().expect("Should have at least one schema");
                 let schema_json = schema.to_json();
-                eprintln!("Derived schema: {}", serde_json::to_string_pretty(&schema_json)?);
-                client.insert_documents(vec![&schema_json], args.clone().as_schema()).await?;
+                eprintln!(
+                    "Derived schema: {}",
+                    serde_json::to_string_pretty(&schema_json)?
+                );
+                client
+                    .insert_documents(vec![&schema_json], args.clone().as_schema())
+                    .await?;
                 eprintln!("Inserted derived schema successfully");
 
                 // Create an instance
@@ -87,7 +92,10 @@ async fn test_derived_model_insertion() -> anyhow::Result<()> {
 
                 // Get the instance JSON using ToTDBInstance trait
                 let instance_json = instance.to_json();
-                eprintln!("Derived instance: {}", serde_json::to_string_pretty(&instance_json)?);
+                eprintln!(
+                    "Derived instance: {}",
+                    serde_json::to_string_pretty(&instance_json)?
+                );
 
                 // Insert the instance using create_instance (the proper method)
                 let result = client.create_instance(&instance, args.clone()).await;
@@ -219,13 +227,19 @@ async fn test_insert_schema_with_context() -> anyhow::Result<()> {
 
                 // Debug: show what schemas look like
                 for (i, schema) in schemas.iter().enumerate() {
-                    eprintln!("Schema {}: {}", i, serde_json::to_string_pretty(&schema.to_json())?);
+                    eprintln!(
+                        "Schema {}: {}",
+                        i,
+                        serde_json::to_string_pretty(&schema.to_json())?
+                    );
                 }
 
                 // Insert schemas (without context - use default namespace)
                 let schema_jsons: Vec<_> = schemas.iter().map(|s| s.to_json()).collect();
                 let schema_refs: Vec<_> = schema_jsons.iter().collect();
-                let result = client.insert_documents(schema_refs, args.clone().as_schema()).await?;
+                let result = client
+                    .insert_documents(schema_refs, args.clone().as_schema())
+                    .await?;
                 eprintln!("Inserted {} schema documents", result.len());
 
                 // Insert an instance parsed from XML
@@ -241,7 +255,11 @@ async fn test_insert_schema_with_context() -> anyhow::Result<()> {
 
                 // Debug: show instance JSON
                 for (i, inst) in instances.iter().enumerate() {
-                    eprintln!("Instance {}: {}", i, serde_json::to_string_pretty(&inst.to_json())?);
+                    eprintln!(
+                        "Instance {}: {}",
+                        i,
+                        serde_json::to_string_pretty(&inst.to_json())?
+                    );
                 }
 
                 // Insert instances using POST method (not PUT with create)
@@ -307,16 +325,17 @@ async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
                     .map(|s| s.to_namespaced_json())
                     .collect();
                 for (i, json) in library_schema_jsons.iter().enumerate() {
-                    eprintln!("Library schema {}: {}", i, serde_json::to_string_pretty(json)?);
+                    eprintln!(
+                        "Library schema {}: {}",
+                        i,
+                        serde_json::to_string_pretty(json)?
+                    );
                 }
                 let library_schema_refs: Vec<_> = library_schema_jsons.iter().collect();
                 let library_result = client
                     .insert_documents(library_schema_refs, args.clone().as_schema())
                     .await?;
-                eprintln!(
-                    "Inserted {} library schema documents",
-                    library_result.len()
-                );
+                eprintln!("Inserted {} library schema documents", library_result.len());
 
                 // Now insert instances from both namespaces
                 eprintln!("\n=== Inserting book instance ===");
@@ -337,12 +356,14 @@ async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
                     .map(|inst| inst.to_namespaced_json())
                     .collect();
                 for (i, json) in book_instance_jsons.iter().enumerate() {
-                    eprintln!("Book instance {}: {}", i, serde_json::to_string_pretty(json)?);
+                    eprintln!(
+                        "Book instance {}: {}",
+                        i,
+                        serde_json::to_string_pretty(json)?
+                    );
                 }
                 let book_json_refs: Vec<_> = book_instance_jsons.iter().collect();
-                client
-                    .post_documents(book_json_refs, args.clone())
-                    .await?;
+                client.post_documents(book_json_refs, args.clone()).await?;
                 eprintln!("Inserted book instance");
 
                 eprintln!("\n=== Inserting library instance ===");
@@ -362,7 +383,11 @@ async fn test_insert_multiple_namespaces_same_database() -> anyhow::Result<()> {
                     .map(|inst| inst.to_namespaced_json())
                     .collect();
                 for (i, json) in library_instance_jsons.iter().enumerate() {
-                    eprintln!("Library instance {}: {}", i, serde_json::to_string_pretty(json)?);
+                    eprintln!(
+                        "Library instance {}: {}",
+                        i,
+                        serde_json::to_string_pretty(json)?
+                    );
                 }
                 let library_json_refs: Vec<_> = library_instance_jsons.iter().collect();
                 client

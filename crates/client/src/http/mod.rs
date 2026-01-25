@@ -64,22 +64,22 @@ pub mod concurrency_limiter;
 // Re-export main types and traits
 pub use branch_client::BranchClient;
 pub use change_listener::ChangeListener;
-pub use changeset::{ChangesetEvent, ChangesetCommitInfo, DocumentChange, MetadataInfo};
+pub use changeset::{ChangesetCommitInfo, ChangesetEvent, DocumentChange, MetadataInfo};
 pub use client::TerminusDBHttpClient;
+#[cfg(not(target_arch = "wasm32"))]
+pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use document::DeleteOpts;
-pub use merge_branch::MergeBranchOptions;
-pub use graphql::{GraphQLRequest, GraphQLResponse, GraphQLError};
+pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
 pub use helpers::{
     dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema,
     format_id,
 };
 pub use insert_result::InsertInstanceResult;
+pub use merge_branch::MergeBranchOptions;
 pub use organization::{
     Capability, Organization, OrganizationDatabase, OrganizationResponse, OrganizationUser,
     Role as OrganizationRole, UserRoleRequest,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use remote::{RemoteConfig, RemoteInfo};
 pub use role::{Permission, Role};
 pub use terminusdb_schema::TerminusDBModel;
@@ -108,12 +108,12 @@ impl TDBInsertInstanceResult {
             TDBInsertInstanceResult::AlreadyExists(id) => id,
         }
     }
-    
+
     /// Parse the ID into a TdbIRI
     pub fn get_iri(&self) -> anyhow::Result<terminusdb_schema::TdbIRI> {
         terminusdb_schema::TdbIRI::parse(self.id())
     }
-    
+
     /// Extract the type name and ID parts
     /// Returns (type_name, id)
     pub fn get_parts(&self) -> anyhow::Result<(String, String)> {

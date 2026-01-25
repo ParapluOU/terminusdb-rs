@@ -22,8 +22,8 @@ use terminusdb_xsd::XsdModel;
 /// Validates: Extended type inherits from base
 #[test]
 fn test_feature_type_extension() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -50,14 +50,20 @@ fn test_feature_type_extension() {
 /// Validates: Child type has parent + additional properties
 #[test]
 fn test_feature_extension_adds_properties() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
     // Find a type with inheritance and check it has properties
     for schema in schemas {
-        if let Schema::Class { id, inherits, properties, .. } = schema {
+        if let Schema::Class {
+            id,
+            inherits,
+            properties,
+            ..
+        } = schema
+        {
             if !inherits.is_empty() && !properties.is_empty() {
                 println!(
                     "Type '{}' extends {:?} and adds {} properties",
@@ -81,8 +87,8 @@ fn test_feature_extension_adds_properties() {
 /// Validates: Base simple type + added attributes
 #[test]
 fn test_feature_simple_content_extension() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -94,9 +100,9 @@ fn test_feature_simple_content_extension() {
             let has_text_value = properties
                 .iter()
                 .any(|p| (p.name == "value" || p.name == "text") && p.class == "xsd:string");
-            let has_attrs = properties.iter().any(|p| {
-                p.name != "value" && p.name != "text" && p.class.starts_with("xsd:")
-            });
+            let has_attrs = properties
+                .iter()
+                .any(|p| p.name != "value" && p.name != "text" && p.class.starts_with("xsd:"));
 
             if has_text_value && has_attrs {
                 simple_extensions.push(id.clone());
@@ -121,8 +127,8 @@ fn test_feature_simple_content_extension() {
 /// Validates: Restricted types subset base type
 #[test]
 fn test_feature_type_restriction() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -151,8 +157,8 @@ fn test_feature_type_restriction() {
 /// Validates: Pattern-based restrictions handled
 #[test]
 fn test_feature_pattern_restriction() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -190,8 +196,8 @@ fn test_feature_pattern_restriction() {
 /// Validates: Wildcard elements handled
 #[test]
 fn test_feature_xs_any_wildcard() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -212,10 +218,7 @@ fn test_feature_xs_any_wildcard() {
         }
     }
 
-    println!(
-        "Potential xs:any handling: {:?}",
-        any_candidates
-    );
+    println!("Potential xs:any handling: {:?}", any_candidates);
 
     // Also check for classes that might handle foreign content
     if let Some(foreign) = find_class(schemas, "Foreign") {
@@ -230,8 +233,8 @@ fn test_feature_xs_any_wildcard() {
 /// Validates: Wildcard attributes handled
 #[test]
 fn test_feature_xs_any_attribute() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -254,7 +257,10 @@ fn test_feature_xs_any_attribute() {
         }
     }
 
-    println!("Potential xs:anyAttribute handling: {:?}", any_attr_candidates);
+    println!(
+        "Potential xs:anyAttribute handling: {:?}",
+        any_attr_candidates
+    );
 }
 
 // ============================================================================
@@ -268,8 +274,8 @@ fn test_feature_xs_any_attribute() {
 /// Validates: Union types handled
 #[test]
 fn test_feature_xs_union() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 
@@ -311,8 +317,8 @@ fn test_feature_xs_union() {
 /// Validates: Child inherits parent properties
 #[test]
 fn test_feature_single_inheritance() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -399,8 +405,8 @@ fn test_feature_multi_level_inheritance() {
 /// Validates: Content from multiple sources combined
 #[test]
 fn test_feature_multiple_groups() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -411,8 +417,14 @@ fn test_feature_multiple_groups() {
     for schema in schemas {
         if let Schema::Class { id, properties, .. } = schema {
             // Types with many properties from different "domains"
-            let xsd_props = properties.iter().filter(|p| p.class.starts_with("xsd:")).count();
-            let class_props = properties.iter().filter(|p| !p.class.starts_with("xsd:")).count();
+            let xsd_props = properties
+                .iter()
+                .filter(|p| p.class.starts_with("xsd:"))
+                .count();
+            let class_props = properties
+                .iter()
+                .filter(|p| !p.class.starts_with("xsd:"))
+                .count();
 
             if xsd_props > 3 && class_props > 3 {
                 diverse_types.push((id.clone(), xsd_props, class_props));
@@ -437,8 +449,8 @@ fn test_feature_multiple_groups() {
 /// Validates: OneOfClass or TaggedUnion generated
 #[test]
 fn test_feature_tagged_union() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -447,10 +459,18 @@ fn test_feature_tagged_union() {
     for schema in schemas {
         match schema {
             Schema::OneOfClass { id, properties, .. } => {
-                union_types.push(format!("OneOfClass '{}' with {} properties", id, properties.len()));
+                union_types.push(format!(
+                    "OneOfClass '{}' with {} properties",
+                    id,
+                    properties.len()
+                ));
             }
             Schema::TaggedUnion { id, properties, .. } => {
-                union_types.push(format!("TaggedUnion '{}' with {} properties", id, properties.len()));
+                union_types.push(format!(
+                    "TaggedUnion '{}' with {} properties",
+                    id,
+                    properties.len()
+                ));
             }
             _ => {}
         }
@@ -470,8 +490,8 @@ fn test_feature_tagged_union() {
 /// Validates: MathML types properly integrated
 #[test]
 fn test_feature_mathml_integration() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 
@@ -504,8 +524,8 @@ fn test_feature_mathml_integration() {
 /// Validates: Cross-namespace references resolved
 #[test]
 fn test_feature_complex_namespaces() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 

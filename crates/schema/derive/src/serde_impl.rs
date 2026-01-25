@@ -10,10 +10,7 @@ use crate::prelude::*;
 /// # Arguments
 /// * `input` - The derive input for the type
 /// * `is_simple_enum` - Whether this is a simple enum (all unit variants)
-pub fn generate_serde_impls(
-    input: &DeriveInput,
-    is_simple_enum: bool,
-) -> proc_macro2::TokenStream {
+pub fn generate_serde_impls(input: &DeriveInput, is_simple_enum: bool) -> proc_macro2::TokenStream {
     let serialize_impl = generate_serialize_impl(input);
     let deserialize_impl = generate_deserialize_impl(input, is_simple_enum);
 

@@ -133,10 +133,11 @@ mod tests {
         assert!(expected_response["result"]["content"].is_array());
         let content = &expected_response["result"]["content"][0];
         assert_eq!(content["type"], "text");
-        
+
         // Parse the JSON text content to verify structure
         if let Some(text) = content["text"].as_str() {
-            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert!(parsed["databases"].is_array());
             assert!(parsed["count"].is_number());
         }
@@ -242,7 +243,10 @@ mod tests {
         });
 
         assert_eq!(request["params"]["name"], "get_document");
-        assert_eq!(request["params"]["arguments"]["document_id"], "Person/12345");
+        assert_eq!(
+            request["params"]["arguments"]["document_id"],
+            "Person/12345"
+        );
     }
 
     #[test]
@@ -317,7 +321,8 @@ mod tests {
 
         // Parse the JSON text content to verify document structure
         if let Some(text) = content["text"].as_str() {
-            let document: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let document: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert!(document["@id"].is_string());
             assert!(document["@type"].is_string());
         }
@@ -344,7 +349,8 @@ mod tests {
 
         // Parse the JSON text content to verify structure with headers
         if let Some(text) = content["text"].as_str() {
-            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert!(parsed["document"].is_object());
             assert!(parsed["commit_id"].is_string());
             assert!(parsed["metadata"].is_object());
@@ -369,7 +375,10 @@ mod tests {
 
         assert!(error_response["error"].is_object());
         assert_eq!(error_response["error"]["code"], -32000);
-        assert!(error_response["error"]["data"]["details"].as_str().unwrap().contains("does not exist"));
+        assert!(error_response["error"]["data"]["details"]
+            .as_str()
+            .unwrap()
+            .contains("does not exist"));
     }
 
     #[test]
@@ -407,7 +416,10 @@ mod tests {
         });
 
         assert_eq!(request["params"]["arguments"]["action"], "enable");
-        assert_eq!(request["params"]["arguments"]["log_path"], "/tmp/test_queries.log");
+        assert_eq!(
+            request["params"]["arguments"]["log_path"],
+            "/tmp/test_queries.log"
+        );
     }
 
     #[test]
@@ -431,7 +443,10 @@ mod tests {
         assert_eq!(request["params"]["arguments"]["action"], "view");
         assert_eq!(request["params"]["arguments"]["limit"], "50");
         assert_eq!(request["params"]["arguments"]["offset"], "10");
-        assert_eq!(request["params"]["arguments"]["operation_type_filter"], "query");
+        assert_eq!(
+            request["params"]["arguments"]["operation_type_filter"],
+            "query"
+        );
         assert_eq!(request["params"]["arguments"]["success_filter"], true);
     }
 
@@ -453,10 +468,11 @@ mod tests {
 
         assert!(response["result"]["content"].is_array());
         let content = &response["result"]["content"][0];
-        
+
         // Parse the JSON text content to verify structure
         if let Some(text) = content["text"].as_str() {
-            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert!(parsed["entries"].is_array());
             assert!(parsed["pagination"].is_object());
             assert!(parsed["pagination"]["total"].is_number());
@@ -482,10 +498,11 @@ mod tests {
 
         assert!(response["result"]["content"].is_array());
         let content = &response["result"]["content"][0];
-        
+
         // Parse the JSON text content to verify structure
         if let Some(text) = content["text"].as_str() {
-            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert!(parsed["enabled"].is_boolean());
             assert!(parsed["message"].is_string());
         }
@@ -515,8 +532,14 @@ mod tests {
 
         assert_eq!(request["params"]["name"], "insert_document");
         assert!(request["params"]["arguments"]["document"].is_object());
-        assert_eq!(request["params"]["arguments"]["document"]["@id"], "Person/123");
-        assert_eq!(request["params"]["arguments"]["document"]["@type"], "Person");
+        assert_eq!(
+            request["params"]["arguments"]["document"]["@id"],
+            "Person/123"
+        );
+        assert_eq!(
+            request["params"]["arguments"]["document"]["@type"],
+            "Person"
+        );
         assert_eq!(request["params"]["arguments"]["database"], "test_db");
     }
 
@@ -554,7 +577,13 @@ mod tests {
 
         assert_eq!(request["params"]["name"], "insert_documents");
         assert!(request["params"]["arguments"]["documents"].is_array());
-        assert_eq!(request["params"]["arguments"]["documents"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            request["params"]["arguments"]["documents"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(request["params"]["arguments"]["branch"], "feature");
         assert_eq!(request["params"]["arguments"]["force"], true);
     }
@@ -583,7 +612,10 @@ mod tests {
 
         assert_eq!(request["params"]["name"], "replace_document");
         assert!(request["params"]["arguments"]["document"].is_object());
-        assert_eq!(request["params"]["arguments"]["document"]["name"], "Alice Updated");
+        assert_eq!(
+            request["params"]["arguments"]["document"]["name"],
+            "Alice Updated"
+        );
     }
 
     #[test]
@@ -604,10 +636,11 @@ mod tests {
 
         assert!(response["result"]["content"].is_array());
         let content = &response["result"]["content"][0];
-        
+
         // Parse the JSON text content to verify structure
         if let Some(text) = content["text"].as_str() {
-            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert_eq!(parsed["status"], "success");
             assert!(parsed["results"].is_object());
             assert!(parsed["commit_id"].is_string());
@@ -632,10 +665,11 @@ mod tests {
 
         assert!(response["result"]["content"].is_array());
         let content = &response["result"]["content"][0];
-        
+
         // Parse the JSON text content to verify structure
         if let Some(text) = content["text"].as_str() {
-            let parsed: serde_json::Value = serde_json::from_str(text).expect("Should be valid JSON");
+            let parsed: serde_json::Value =
+                serde_json::from_str(text).expect("Should be valid JSON");
             assert_eq!(parsed["status"], "success");
             assert_eq!(parsed["total_documents"], 2);
             assert!(parsed["results"].is_object());

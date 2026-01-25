@@ -9,9 +9,7 @@ mod tests {
     use terminusdb_woql_builder::prelude::*;
 
     /// Test model for experimenting with instance versions
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     struct Person {
         name: String,
         age: i32,
@@ -155,7 +153,9 @@ mod tests {
                     serde_json::to_string_pretty(&json_query)?
                 );
 
-                let result: WOQLResult = client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!("Query result: {:?}", result);
 
                 // Check if we got results
@@ -221,7 +221,9 @@ mod tests {
                     serde_json::to_string_pretty(&json_query)?
                 );
 
-                let result: WOQLResult = client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!("Query result: {:?}", result);
 
                 // Analyze results
@@ -493,8 +495,9 @@ mod tests {
                     serde_json::to_string_pretty(&json_query)?
                 );
 
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!("Query 1 result: {} bindings", result.bindings.len());
                 for (i, binding) in result.bindings.iter().enumerate() {
                     println!("  Binding {}: {:?}", i, binding);
@@ -509,8 +512,9 @@ mod tests {
                     .finalize();
 
                 let json_query = query.to_instance(None).to_json();
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!("Query 2 result: {} bindings", result.bindings.len());
                 for (i, binding) in result.bindings.iter().enumerate() {
                     println!("  Binding {}: {:?}", i, binding);
@@ -526,8 +530,9 @@ mod tests {
                     .finalize();
 
                 let json_query = query.to_instance(None).to_json();
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!("Query 3 result: {} bindings", result.bindings.len());
                 for (i, binding) in result.bindings.iter().enumerate() {
                     println!("  Binding {}: {:?}", i, binding);
@@ -542,8 +547,9 @@ mod tests {
                     .finalize();
 
                 let json_query = query.to_instance(None).to_json();
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!("Query 4 result: {} bindings", result.bindings.len());
                 for (i, binding) in result.bindings.iter().enumerate() {
                     println!("  Binding {}: {:?}", i, binding);
@@ -634,13 +640,16 @@ mod tests {
                 }
 
                 if history.is_empty() {
-                    println!("Note: History is empty - this may indicate history endpoint behavior");
+                    println!(
+                        "Note: History is empty - this may indicate history endpoint behavior"
+                    );
                     return Ok(());
                 }
 
                 // Test Step 2: Query each commit manually to verify data exists
                 println!("\n=== Step 2: Manual WOQL queries per commit ===");
-                let commit_ids: Vec<String> = history.iter().map(|e| e.identifier.to_string()).collect();
+                let commit_ids: Vec<String> =
+                    history.iter().map(|e| e.identifier.to_string()).collect();
 
                 for (i, commit_id) in commit_ids.iter().enumerate() {
                     println!("Querying commit {} ({})", i + 1, commit_id);
@@ -738,8 +747,9 @@ mod tests {
                     .finalize();
 
                 let json_query = query.to_instance(None).to_json();
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!(
                     "Results without commit collection: {} bindings",
                     result.bindings.len()
@@ -762,8 +772,9 @@ mod tests {
                 let json_query = query.to_instance(None).to_json();
                 println!("Query JSON: {}", serde_json::to_string_pretty(&json_query)?);
 
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!(
                     "Results with commit collection: {} bindings",
                     result.bindings.len()
@@ -781,8 +792,9 @@ mod tests {
                     .finalize();
 
                 let json_query = query.to_instance(None).to_json();
-                let result: WOQLResult<HashMap<String, serde_json::Value>> =
-                    client.query_raw(Some(spec.clone()), json_query, None).await?;
+                let result: WOQLResult<HashMap<String, serde_json::Value>> = client
+                    .query_raw(Some(spec.clone()), json_query, None)
+                    .await?;
                 println!(
                     "Available graphs/collections: {} bindings",
                     result.bindings.len()

@@ -15,7 +15,7 @@ fn main() {
                 Ok(q) => println!("\n✓ Successfully deserialized: {:?}", q),
                 Err(e) => eprintln!("\n✗ Deserialization error: {:?}", e),
             }
-        },
+        }
         Err(e) => {
             eprintln!("✗ Parse error: {}", e);
             std::process::exit(1);

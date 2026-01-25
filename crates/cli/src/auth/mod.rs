@@ -32,8 +32,9 @@ pub fn get_profile_credentials(profile_name: &str) -> Result<ResolvedCredentials
     let service = profile.keyring_service();
     let username = profile.keyring_username(profile_name);
 
-    let password = get_password(&service, &username)
-        .context("Failed to retrieve password from keyring. Try logging in again with 'tdb login'")?;
+    let password = get_password(&service, &username).context(
+        "Failed to retrieve password from keyring. Try logging in again with 'tdb login'",
+    )?;
 
     Ok(ResolvedCredentials {
         host: profile.host.clone(),
@@ -62,8 +63,7 @@ pub fn save_profile_with_password(
     let service = profile.keyring_service();
     let username = profile.keyring_username(profile_name);
 
-    store_password(&service, &username, password)
-        .context("Failed to store password in keyring")?;
+    store_password(&service, &username, password).context("Failed to store password in keyring")?;
 
     // Save profile to config
     let mut config = load_config()?;

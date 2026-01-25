@@ -613,7 +613,9 @@ mod tests {
             impls
         );
         assert!(
-            impls.contains("impl terminusdb_schema :: TdbGQLFilter < my_crate :: Ticket > for TicketFilter"),
+            impls.contains(
+                "impl terminusdb_schema :: TdbGQLFilter < my_crate :: Ticket > for TicketFilter"
+            ),
             "Should contain TicketFilter impl. Generated:\n{}",
             impls
         );

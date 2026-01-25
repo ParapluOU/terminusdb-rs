@@ -42,9 +42,9 @@
 use terminusdb_orm::prelude::*;
 
 // Required for TerminusDBModel derive
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 #[allow(unused_imports)]
-use terminusdb_schema::{ToTDBInstance, TdbLazy};
+use terminusdb_schema::{TdbLazy, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 
 use serde::{Deserialize, Serialize};
@@ -124,8 +124,7 @@ mod one_to_one {
 
         // Forward: User -> Profile via Profile.user
         // This is actually a reverse lookup (find Profile where user = this user)
-        let query = User::find(user_id)
-            .with::<Profile>(); // Loads the user's profile
+        let query = User::find(user_id).with::<Profile>(); // Loads the user's profile
 
         assert_eq!(query.relations().len(), 1);
     }
@@ -136,8 +135,7 @@ mod one_to_one {
         let profile_id = EntityIDFor::<Profile>::new("profile1").unwrap();
 
         // Forward: Profile -> User via profile.user field
-        let query = Profile::find(profile_id)
-            .with_field::<User, ProfileFields::User>();
+        let query = Profile::find(profile_id).with_field::<User, ProfileFields::User>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
@@ -162,8 +160,7 @@ mod one_to_many {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
         // Reverse: Find all Posts where author = this user
-        let query = User::find(user_id)
-            .with::<Post>();
+        let query = User::find(user_id).with::<Post>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
@@ -181,8 +178,7 @@ mod one_to_many {
         let post_id = EntityIDFor::<Post>::new("post1").unwrap();
 
         // Forward: Post -> User via post.author field
-        let query = Post::find(post_id)
-            .with_field::<User, PostFields::Author>();
+        let query = Post::find(post_id).with_field::<User, PostFields::Author>();
 
         assert_eq!(query.relations().len(), 1);
     }
@@ -194,8 +190,7 @@ mod one_to_many {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
         // Reverse with specific field: Find Comments where author = this user
-        let query = User::find(user_id)
-            .with_via::<Comment, CommentFields::Author>();
+        let query = User::find(user_id).with_via::<Comment, CommentFields::Author>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
@@ -220,8 +215,7 @@ mod many_to_many {
         let post_id = EntityIDFor::<Post>::new("post1").unwrap();
 
         // Forward: Post -> Tags via post.tags field (Vec<TdbLazy<Tag>>)
-        let query = Post::find(post_id)
-            .with_field::<Tag, PostFields::Tags>();
+        let query = Post::find(post_id).with_field::<Tag, PostFields::Tags>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
@@ -240,8 +234,7 @@ mod many_to_many {
 
         // Reverse: Find all Posts where tags contains this tag
         // This requires the ORM to understand Vec<TdbLazy<T>> as a many-to-many
-        let query = Tag::find(tag_id)
-            .with::<Post>(); // Should find Posts that reference this Tag
+        let query = Tag::find(tag_id).with::<Post>(); // Should find Posts that reference this Tag
 
         assert_eq!(query.relations().len(), 1);
     }
@@ -260,8 +253,7 @@ mod self_referential {
         let user_id = EntityIDFor::<User>::new("user1").unwrap();
 
         // Forward: User -> User via manager field
-        let query = User::find(user_id)
-            .with_field::<User, UserFields::Manager>();
+        let query = User::find(user_id).with_field::<User, UserFields::Manager>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
@@ -279,8 +271,7 @@ mod self_referential {
         let manager_id = EntityIDFor::<User>::new("manager1").unwrap();
 
         // Reverse: Find all Users where manager = this user
-        let query = User::find(manager_id)
-            .with_via::<User, UserFields::Manager>();
+        let query = User::find(manager_id).with_via::<User, UserFields::Manager>();
 
         assert_eq!(query.relations().len(), 1);
         match &query.relations()[0].direction {
@@ -319,9 +310,7 @@ mod nested_relations {
         //     .with::<Post>(|posts| posts.with::<Comment>());
 
         // For now, verify we can at least chain multiple top-level relations
-        let query = User::find(user_id)
-            .with::<Post>()
-            .with::<Comment>(); // Comments authored by user (not nested)
+        let query = User::find(user_id).with::<Post>().with::<Comment>(); // Comments authored by user (not nested)
 
         assert_eq!(query.relations().len(), 2);
     }
@@ -333,8 +322,7 @@ mod nested_relations {
         let comment_id = EntityIDFor::<Comment>::new("comment1").unwrap();
 
         // Find all comments whose parent_comment = this comment
-        let query = Comment::find(comment_id)
-            .with_via::<Comment, CommentFields::ParentComment>();
+        let query = Comment::find(comment_id).with_via::<Comment, CommentFields::ParentComment>();
 
         assert_eq!(query.relations().len(), 1);
     }
@@ -357,8 +345,7 @@ mod batch_loading {
         ];
 
         // Should generate efficient batch query, not N+1 queries
-        let query = User::find_all(user_ids)
-            .with::<Post>();
+        let query = User::find_all(user_ids).with::<Post>();
 
         assert_eq!(query.len(), 3);
         assert_eq!(query.relations().len(), 1);

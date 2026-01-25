@@ -83,9 +83,13 @@ impl ComposedResult {
     /// let archived_projects = result.part(1)?.get::<Project>()?;
     /// ```
     pub fn part(&self, index: usize) -> anyhow::Result<&OrmResult> {
-        self.parts
-            .get(index)
-            .ok_or_else(|| anyhow::anyhow!("Part index {} out of bounds (have {} parts)", index, self.parts.len()))
+        self.parts.get(index).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Part index {} out of bounds (have {} parts)",
+                index,
+                self.parts.len()
+            )
+        })
     }
 
     /// Number of query parts.

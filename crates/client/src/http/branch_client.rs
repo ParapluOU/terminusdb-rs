@@ -6,18 +6,14 @@
 
 use {
     super::{
-        client::TerminusDBHttpClient,
-        document::DeleteOpts,
-        InsertInstanceResult,
-        TDBInsertInstanceResult,
-        TerminusDBModel,
+        client::TerminusDBHttpClient, document::DeleteOpts, InsertInstanceResult,
+        TDBInsertInstanceResult, TerminusDBModel,
     },
     crate::{
-        CommitId,
         document::{DocumentInsertArgs, GetOpts},
         result::ResponseWithHeaders,
         spec::BranchSpec,
-        TDBInstanceDeserializer,
+        CommitId, TDBInstanceDeserializer,
     },
     std::{collections::HashMap, fmt::Debug, time::Duration},
     terminusdb_schema::{InstanceFromJson, ToTDBInstance, ToTDBSchema},
@@ -220,7 +216,9 @@ impl BranchClient {
         mut args: DocumentInsertArgs,
     ) -> anyhow::Result<(InsertInstanceResult, CommitId)> {
         args.spec = self.working_spec.clone();
-        self.client.insert_instance_with_commit_id(model, args).await
+        self.client
+            .insert_instance_with_commit_id(model, args)
+            .await
     }
 
     /// Insert multiple instances
@@ -309,12 +307,8 @@ impl BranchClient {
     }
 
     /// Count instances of a type
-    pub async fn count_instances<T: ToTDBSchema>(
-        &self,
-    ) -> anyhow::Result<usize> {
-        self.client
-            .count_instances::<T>(&self.working_spec)
-            .await
+    pub async fn count_instances<T: ToTDBSchema>(&self) -> anyhow::Result<usize> {
+        self.client.count_instances::<T>(&self.working_spec).await
     }
 
     // =========================================================================

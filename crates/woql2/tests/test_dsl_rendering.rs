@@ -1,8 +1,8 @@
-use terminusdb_woql2::prelude::*;
-use terminusdb_woql2::query::{Query, And, Or, Not};
-use terminusdb_woql2::triple::Triple;
-use terminusdb_woql2::value::{Value, NodeValue, ListOrVariable};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
+use terminusdb_woql2::prelude::*;
+use terminusdb_woql2::query::{And, Not, Or, Query};
+use terminusdb_woql2::triple::Triple;
+use terminusdb_woql2::value::{ListOrVariable, NodeValue, Value};
 
 #[test]
 fn test_simple_triple_rendering() {
@@ -12,7 +12,7 @@ fn test_simple_triple_rendering() {
         object: Value::Variable("Name".to_string()),
         graph: Some(GraphType::Instance),
     };
-    
+
     let dsl = Query::Triple(triple).to_dsl();
     assert_eq!(dsl, r#"triple($Person, "@schema:name", $Name)"#);
 }
@@ -25,18 +25,18 @@ fn test_and_query_rendering() {
         object: Value::Node("@schema:Person".to_string()),
         graph: Some(GraphType::Instance),
     });
-    
+
     let triple2 = Query::Triple(Triple {
         subject: NodeValue::Variable("Person".to_string()),
         predicate: NodeValue::Node("@schema:age".to_string()),
         object: Value::Variable("Age".to_string()),
         graph: Some(GraphType::Instance),
     });
-    
+
     let and_query = Query::And(And {
         and: vec![triple1, triple2],
     });
-    
+
     let dsl = and_query.to_dsl();
     assert_eq!(
         dsl,
@@ -52,14 +52,17 @@ fn test_select_query_rendering() {
         object: Value::Variable("Name".to_string()),
         graph: Some(GraphType::Instance),
     });
-    
+
     let select = Query::Select(Select {
         variables: vec!["Name".to_string()],
         query: Box::new(triple),
     });
-    
+
     let dsl = select.to_dsl();
-    assert_eq!(dsl, r#"select([$Name], triple($Person, "@schema:name", $Name))"#);
+    assert_eq!(
+        dsl,
+        r#"select([$Name], triple($Person, "@schema:name", $Name))"#
+    );
 }
 
 #[test]
@@ -68,7 +71,7 @@ fn test_comparison_rendering() {
         left: DataValue::Variable("Age".to_string()),
         right: DataValue::Data(XSDAnySimpleType::Float(18.0)),
     });
-    
+
     let dsl = greater.to_dsl();
     assert_eq!(dsl, "greater($Age, 18)");
 }
@@ -89,7 +92,7 @@ fn test_nested_query_rendering() {
             }),
         ],
     });
-    
+
     let or_query = Query::Or(Or {
         or: vec![
             inner_and,
@@ -101,7 +104,7 @@ fn test_nested_query_rendering() {
             }),
         ],
     });
-    
+
     let dsl = or_query.to_dsl();
     assert_eq!(
         dsl,
@@ -117,13 +120,16 @@ fn test_optional_rendering() {
         object: Value::Variable("Nickname".to_string()),
         graph: Some(GraphType::Instance),
     });
-    
+
     let opt = Query::WoqlOptional(WoqlOptional {
         query: Box::new(triple),
     });
-    
+
     let dsl = opt.to_dsl();
-    assert_eq!(dsl, r#"opt(triple($Person, "@schema:nickname", $Nickname))"#);
+    assert_eq!(
+        dsl,
+        r#"opt(triple($Person, "@schema:nickname", $Nickname))"#
+    );
 }
 
 #[test]
@@ -136,7 +142,7 @@ fn test_path_rendering() {
         object: Value::Variable("Friend".to_string()),
         path: None,
     });
-    
+
     let dsl = path.to_dsl();
     assert_eq!(dsl, r#"path($Person, pred("@schema:knows"), $Friend)"#);
 }
@@ -144,15 +150,19 @@ fn test_path_rendering() {
 #[test]
 fn test_eval_arithmetic_rendering() {
     let expr = ArithmeticExpression::Plus(Plus {
-        left: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable("X".to_string()))),
-        right: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable("Y".to_string()))),
+        left: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable(
+            "X".to_string(),
+        ))),
+        right: Box::new(ArithmeticExpression::Value(ArithmeticValue::Variable(
+            "Y".to_string(),
+        ))),
     });
-    
+
     let eval = Query::Eval(Eval {
         expression: expr,
         result_value: ArithmeticValue::Variable("Sum".to_string()),
     });
-    
+
     let dsl = eval.to_dsl();
     assert_eq!(dsl, "eval(plus($X, $Y), $Sum)");
 }
@@ -163,7 +173,7 @@ fn test_string_operations_rendering() {
         list: ListOrVariable::Variable(DataValue::Variable("Parts".to_string())),
         result_string: DataValue::Variable("Result".to_string()),
     });
-    
+
     let dsl = concat.to_dsl();
     assert_eq!(dsl, "concat($Parts, $Result)");
 }
@@ -174,7 +184,7 @@ fn test_document_operations_rendering() {
         identifier: NodeValue::Node("Person/john-doe".to_string()),
         document: Value::Variable("PersonData".to_string()),
     });
-    
+
     let dsl = read.to_dsl();
     assert_eq!(dsl, r#"read_document("Person/john-doe", $PersonData)"#);
 }

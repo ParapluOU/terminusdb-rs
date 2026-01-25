@@ -1,10 +1,10 @@
 //! Structured results for instance insertion operations
 
 use crate::{CommitId, TDBInsertInstanceResult, VersionedEntityIDFor};
+use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ops::Deref;
 use terminusdb_schema::{EntityIDFor, TdbIRI, ToTDBSchema};
-use anyhow::anyhow;
 
 /// Result of inserting an instance with sub-entities
 #[derive(Debug, Clone)]
@@ -78,12 +78,12 @@ impl InsertInstanceResult {
     pub fn root_ref<T: ToTDBSchema>(&self) -> anyhow::Result<EntityIDFor<T>> {
         EntityIDFor::new_unchecked(&self.root_id)
     }
-    
+
     /// Get the parsed IRI for the root instance
     pub fn get_root_iri(&self) -> anyhow::Result<TdbIRI> {
         TdbIRI::parse(&self.root_id)
     }
-    
+
     /// Extract the type name and ID from the root instance
     /// Returns (type_name, id)
     pub fn root_ref_parts(&self) -> anyhow::Result<(String, String)> {
@@ -105,7 +105,8 @@ impl InsertInstanceResult {
     /// println!("Person {} at commit {}", versioned_ref.id, versioned_ref.version);
     /// ```
     pub fn root_versioned_ref<T: ToTDBSchema>(&self) -> anyhow::Result<VersionedEntityIDFor<T>> {
-        let commit_id = self.extract_commit_id()
+        let commit_id = self
+            .extract_commit_id()
             .ok_or_else(|| anyhow!("No commit ID in insert result"))?;
 
         let entity_id = self.root_ref::<T>()?;
@@ -129,8 +130,11 @@ impl InsertInstanceResult {
     /// // Get all Company entities (just the root in this case)
     /// let company_refs: Vec<VersionedEntityIDFor<Company>> = result.0.all_versioned_refs()?;
     /// ```
-    pub fn all_versioned_refs<T: ToTDBSchema>(&self) -> anyhow::Result<Vec<VersionedEntityIDFor<T>>> {
-        let commit_id = self.extract_commit_id()
+    pub fn all_versioned_refs<T: ToTDBSchema>(
+        &self,
+    ) -> anyhow::Result<Vec<VersionedEntityIDFor<T>>> {
+        let commit_id = self
+            .extract_commit_id()
             .ok_or_else(|| anyhow!("No commit ID in insert result"))?;
 
         let mut refs = Vec::new();

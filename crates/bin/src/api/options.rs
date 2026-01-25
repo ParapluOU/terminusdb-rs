@@ -2,8 +2,8 @@
 //!
 //! Each command has a corresponding options struct with defaults matching the CLI.
 
-use super::types::{Author, Message, RdfFormat, ScopeType};
 use super::spec::GraphType;
+use super::types::{Author, Message, RdfFormat, ScopeType};
 
 // ============================================================================
 // Common Options

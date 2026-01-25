@@ -89,7 +89,9 @@ async fn try_poll_node(state: &AppState, node: &NodeConfig) -> Result<NodeStatus
 
                     for db in &databases {
                         // Get the database path string, preferring path over name
-                        let db_path_str = db.path.as_ref()
+                        let db_path_str = db
+                            .path
+                            .as_ref()
                             .or(db.name.as_ref())
                             .map(|s| s.as_str())
                             .unwrap_or("");
@@ -148,7 +150,12 @@ async fn try_poll_node(state: &AppState, node: &NodeConfig) -> Result<NodeStatus
                         }
                     }
 
-                    Ok(NodeStatus::online(node.id.clone(), database_count, db_infos, remotes))
+                    Ok(NodeStatus::online(
+                        node.id.clone(),
+                        database_count,
+                        db_infos,
+                        remotes,
+                    ))
                 }
                 Err(_) => {
                     // Can reach node but cannot list databases (auth issue?)
@@ -186,7 +193,9 @@ async fn try_poll_node_parallel(state: &AppState, node: &NodeConfig) -> Result<N
 
                             async move {
                                 // Get the database path string, preferring path over name
-                                let db_path_str = db.path.as_ref()
+                                let db_path_str = db
+                                    .path
+                                    .as_ref()
                                     .or(db.name.as_ref())
                                     .map(|s| s.as_str())
                                     .unwrap_or("");
@@ -240,7 +249,8 @@ async fn try_poll_node_parallel(state: &AppState, node: &NodeConfig) -> Result<N
                                     verbose: false,
                                 };
                                 let last_modified = match client.log(&spec, log_opts).await {
-                                    Ok(commits) => commits.first()
+                                    Ok(commits) => commits
+                                        .first()
                                         .map(|c| c.timestamp.to_string())
                                         .unwrap_or_else(|| "Unknown".to_string()),
                                     Err(_) => "Unknown".to_string(),
@@ -294,7 +304,12 @@ async fn try_poll_node_parallel(state: &AppState, node: &NodeConfig) -> Result<N
                         all_remotes.extend(result.1);
                     }
 
-                    Ok(NodeStatus::online(node.id.clone(), database_count, db_infos, all_remotes))
+                    Ok(NodeStatus::online(
+                        node.id.clone(),
+                        database_count,
+                        db_infos,
+                        all_remotes,
+                    ))
                 }
                 Err(_) => {
                     // Can reach node but cannot list databases (auth issue?)

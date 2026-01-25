@@ -40,8 +40,8 @@ pub fn derive_instance_from_json_impl(input: DeriveInput) -> Result<TokenStream,
         Data::Struct(data_struct) => {
             // Handle struct implementation
             implement_instance_from_json_for_struct(
-                type_name, 
-                data_struct, 
+                type_name,
+                data_struct,
                 &opts,
                 #[cfg(feature = "generic-derive")]
                 &input.generics,
@@ -72,22 +72,26 @@ fn implement_instance_from_json_for_struct(
     struct_name: &Ident,
     data_struct: &syn::DataStruct,
     opts: &TDBModelOpts,
-    #[cfg(feature = "generic-derive")]
-    generics: &syn::Generics,
+    #[cfg(feature = "generic-derive")] generics: &syn::Generics,
 ) -> Result<TokenStream, syn::Error> {
     // Extract generic parameters
     #[cfg(feature = "generic-derive")]
     let (impl_generics, ty_generics, where_clause) = {
         if !generics.params.is_empty() {
             let (syn_impl_generics, syn_ty_generics, syn_where_clause) = generics.split_for_impl();
-            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, syn_where_clause.cloned())
+            (
+                quote! { #syn_impl_generics },
+                quote! { #syn_ty_generics },
+                syn_where_clause.cloned(),
+            )
         } else {
-            (quote!{}, quote!{}, None)
+            (quote! {}, quote! {}, None)
         }
     };
-    
+
     #[cfg(not(feature = "generic-derive"))]
-    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None::<syn::WhereClause>);
+    let (impl_generics, ty_generics, where_clause) =
+        (quote! {}, quote! {}, None::<syn::WhereClause>);
     // For generics, we need to use the schema name which includes generic parameters
     let expected_type_name_expr = {
         #[cfg(feature = "generic-derive")]
@@ -181,7 +185,6 @@ fn implement_instance_from_json_for_simple_enum(
     data_enum: &DataEnum,
     opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
-
     let variant_matchers = data_enum
         .variants
         .iter()
@@ -274,7 +277,6 @@ fn implement_instance_from_json_for_tagged_enum(
     data_enum: &DataEnum,
     opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
-
     // Build a list of type checks for variant-to-union deserialization
     // We only generate type checks for variants where the inner type is likely a custom struct type
     // (not a primitive like String, i32, bool, or standard types)
@@ -339,7 +341,7 @@ fn implement_instance_from_json_for_tagged_enum(
         let variant_ident = &variant.ident;
         let variant_name_str = variant_ident.to_string();
         let variant_name_lower = variant_name_str.to_lowercase();
-        
+
         match &variant.fields {
             // Unit variant
             Fields::Unit => {
@@ -374,7 +376,7 @@ fn implement_instance_from_json_for_tagged_enum(
 
                         let mut properties = std::collections::BTreeMap::new();
                         properties.insert(#variant_name_lower.to_string(), property);
-                        
+
                         return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
@@ -389,12 +391,12 @@ fn implement_instance_from_json_for_tagged_enum(
             Fields::Unnamed(fields) => {
                 // Get the variant struct name (used for virtual structs)
                 let variant_struct_name = format!("{}{}", enum_name, variant_name_str);
-                
+
                 quote! {
                     if let Some(Value::Array(nested_values)) = json_map.remove(#variant_name_lower) {
                         // Create a virtual struct instance representing the tuple variant
                         let mut sub_properties = std::collections::BTreeMap::new();
-                        
+
                         // Process each field in the array
                         for (i, value) in nested_values.iter().enumerate() {
                             sub_properties.insert(
@@ -402,7 +404,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                 terminusdb_schema::deserialize_property(value.clone())?
                             );
                         }
-                        
+
                         let mut properties = std::collections::BTreeMap::new();
                         properties.insert(
                             #variant_name_lower.to_string(),
@@ -428,7 +430,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                 )
                             )
                         );
-                        
+
                         return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
@@ -443,11 +445,11 @@ fn implement_instance_from_json_for_tagged_enum(
             Fields::Named(fields_named) => {
                 // Get the variant struct name (used for virtual structs)
                 let variant_struct_name = format!("{}{}", enum_name, variant_name_str);
-                
+
                 quote! {
                     if let Some(Value::Object(mut nested_map)) = json_map.remove(#variant_name_lower) {
                         let mut sub_properties = std::collections::BTreeMap::new();
-                        
+
                         // Process each field in the object
                         for (key, value) in nested_map {
                             sub_properties.insert(
@@ -455,7 +457,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                 terminusdb_schema::deserialize_property(value)?
                             );
                         }
-                        
+
                         let mut properties = std::collections::BTreeMap::new();
                         properties.insert(
                             #variant_name_lower.to_string(),
@@ -481,7 +483,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                 )
                             )
                         );
-                        
+
                         return ::core::result::Result::Ok(terminusdb_schema::Instance {
                             id,
                             schema: <#enum_name as terminusdb_schema::ToTDBSchema>::to_schema(),
@@ -554,7 +556,7 @@ fn generate_field_deserializers(
         if crate::prelude::is_phantom_data_type(&field.ty) {
             continue;
         }
-        
+
         let field_ident = field.ident.as_ref().ok_or_else(|| {
             syn::Error::new_spanned(field, "InstanceFromJson requires named fields")
         })?;
@@ -563,7 +565,11 @@ fn generate_field_deserializers(
         let json_key_name = field_opts.name.unwrap_or_else(|| field_ident.to_string());
 
         // Check if this field is the id_field
-        let is_id_field = opts.id_field.as_ref().map(|id_field| id_field == &field_ident.to_string()).unwrap_or(false);
+        let is_id_field = opts
+            .id_field
+            .as_ref()
+            .map(|id_field| id_field == &field_ident.to_string())
+            .unwrap_or(false);
 
         // Use property_from_maybe_json for all fields, letting the trait implementation
         // handle the differences between Option and non-Option types

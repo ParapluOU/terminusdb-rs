@@ -4,7 +4,12 @@ use {
     crate::*,
     ::tracing::debug,
     serde_json::Value,
-    std::{collections::HashSet, fs::{self, File}, io::Write, path::PathBuf},
+    std::{
+        collections::HashSet,
+        fs::{self, File},
+        io::Write,
+        path::PathBuf,
+    },
     terminusdb_schema::{Instance, ToJson, ToTDBInstance, ToTDBSchema},
 };
 

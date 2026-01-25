@@ -34,9 +34,7 @@ fn test_graphql_id_query_with_relations() {
 fn test_graphql_nested_relations() {
     let query = IdQueryBuilder::new("Comment")
         .filter_by_ids(["Comment/1"])
-        .with_relation_path(
-            RelationPath::new("replies").with_nested(RelationPath::new("author")),
-        )
+        .with_relation_path(RelationPath::new("replies").with_nested(RelationPath::new("author")))
         .build();
 
     assert!(query.contains("replies"));

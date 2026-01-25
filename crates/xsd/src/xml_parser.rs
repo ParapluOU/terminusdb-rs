@@ -204,10 +204,7 @@ impl<'a> XmlToInstanceParser<'a> {
     /// ```
     ///
     /// The element name is converted to PascalCase to find the matching schema class.
-    pub fn json_to_instances(
-        &self,
-        json: &serde_json::Value,
-    ) -> ParseResult<Vec<Instance>> {
+    pub fn json_to_instances(&self, json: &serde_json::Value) -> ParseResult<Vec<Instance>> {
         let mut instances = Vec::new();
         let mut errors = Vec::new();
 
@@ -280,7 +277,9 @@ impl<'a> XmlToInstanceParser<'a> {
             .or(type_hint)
             .ok_or_else(|| {
                 // Try to infer from the first key that looks like an element name
-                let first_key = obj.keys().find(|k| !k.starts_with('@') && !k.starts_with('$'));
+                let first_key = obj
+                    .keys()
+                    .find(|k| !k.starts_with('@') && !k.starts_with('$'));
                 XmlParseError::invalid_structure(format!(
                     "Cannot determine type for object. Keys: {:?}",
                     first_key
@@ -338,8 +337,12 @@ impl<'a> XmlToInstanceParser<'a> {
 
             // Skip dtd-version and similar DTD-related attributes
             // Also skip xml:lang which becomes "lang" after prefix stripping
-            if key == "dtd-version" || key == "@dtd-version"
-                || key == "lang" || key == "@lang" || key == "xml:lang" {
+            if key == "dtd-version"
+                || key == "@dtd-version"
+                || key == "lang"
+                || key == "@lang"
+                || key == "xml:lang"
+            {
                 continue;
             }
 
@@ -429,7 +432,11 @@ impl<'a> XmlToInstanceParser<'a> {
         let mut instance_props = BTreeMap::new();
 
         // Collect text content and child elements
-        let mut text_content = obj.get("$").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let mut text_content = obj
+            .get("$")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let mut subs: Vec<RelationValue> = Vec::new();
 
         for (key, value) in obj {
@@ -462,7 +469,10 @@ impl<'a> XmlToInstanceParser<'a> {
                 };
 
                 // Only add if it's a known property on the parent (not `content`)
-                if parent_props.iter().any(|p| p.name == property_name && property_name != "content") {
+                if parent_props
+                    .iter()
+                    .any(|p| p.name == property_name && property_name != "content")
+                {
                     let instance_prop = self.json_value_to_property(value, &property_name)?;
                     instance_props.insert(property_name, instance_prop);
                 }
@@ -658,7 +668,10 @@ impl<'a> XmlToInstanceParser<'a> {
     /// Find mixed content property in inherited classes.
     ///
     /// Returns the base schema and mixed content class name if found.
-    fn find_inherited_mixed_content<'b>(&'b self, schema: &'b Schema) -> Option<(&'b Schema, String)> {
+    fn find_inherited_mixed_content<'b>(
+        &'b self,
+        schema: &'b Schema,
+    ) -> Option<(&'b Schema, String)> {
         let inherits = match schema {
             Schema::Class { inherits, .. } => inherits,
             _ => return None,
@@ -768,13 +781,11 @@ impl<'a> XmlToInstanceParser<'a> {
         match value {
             serde_json::Value::Null => Ok(InstanceProperty::Primitive(PrimitiveValue::Null)),
 
-            serde_json::Value::Bool(b) => {
-                Ok(InstanceProperty::Primitive(PrimitiveValue::Bool(*b)))
-            }
+            serde_json::Value::Bool(b) => Ok(InstanceProperty::Primitive(PrimitiveValue::Bool(*b))),
 
-            serde_json::Value::Number(n) => {
-                Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n.clone())))
-            }
+            serde_json::Value::Number(n) => Ok(InstanceProperty::Primitive(
+                PrimitiveValue::Number(n.clone()),
+            )),
 
             serde_json::Value::String(s) => {
                 // Check if this field should be a complex type (has a schema)
@@ -785,7 +796,8 @@ impl<'a> XmlToInstanceParser<'a> {
 
                     if let Some(mixed_class) = mixed_content_class {
                         // This is a mixed content type - build MixedContent instance with the text
-                        let inst = self.build_simple_mixed_content_instance(schema, &mixed_class, s)?;
+                        let inst =
+                            self.build_simple_mixed_content_instance(schema, &mixed_class, s)?;
                         Ok(InstanceProperty::Relation(RelationValue::One(inst)))
                     } else {
                         // Regular complex type - wrap the text in an Instance with _text property
@@ -805,7 +817,9 @@ impl<'a> XmlToInstanceParser<'a> {
                     }
                 } else {
                     // No schema found - treat as primitive string
-                    Ok(InstanceProperty::Primitive(PrimitiveValue::String(s.clone())))
+                    Ok(InstanceProperty::Primitive(PrimitiveValue::String(
+                        s.clone(),
+                    )))
                 }
             }
 
@@ -931,7 +945,9 @@ fn to_pascal_case(s: &str) -> String {
 /// - Removes xsi: prefixed attributes (xsi:schemaLocation, xsi:noNamespaceSchemaLocation)
 /// - Renames @id to id (TerminusDB uses @id specially for document IDs)
 /// - Renames other @-prefixed attributes to remove the prefix
-fn filter_xml_attributes(obj: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+fn filter_xml_attributes(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
     obj.iter()
         .filter(|(key, _)| {
             !key.starts_with("xmlns:")
@@ -960,9 +976,7 @@ fn filter_xml_attributes(obj: &serde_json::Map<String, serde_json::Value>) -> se
 /// Recursively filter XML attributes from any JSON value
 fn filter_xml_attributes_value(value: &serde_json::Value) -> serde_json::Value {
     match value {
-        serde_json::Value::Object(obj) => {
-            serde_json::Value::Object(filter_xml_attributes(obj))
-        }
+        serde_json::Value::Object(obj) => serde_json::Value::Object(filter_xml_attributes(obj)),
         serde_json::Value::Array(arr) => {
             serde_json::Value::Array(arr.iter().map(filter_xml_attributes_value).collect())
         }
@@ -1011,30 +1025,28 @@ mod tests {
     use terminusdb_schema::{Key, Property, TypeFamily};
 
     fn create_test_schema() -> Vec<Schema> {
-        vec![
-            Schema::Class {
-                id: "Person".to_string(),
-                base: None,
-                key: Key::ValueHash,
-                documentation: None,
-                subdocument: false,
-                r#abstract: false,
-                inherits: vec![],
-                unfoldable: false,
-                properties: vec![
-                    Property {
-                        name: "name".to_string(),
-                        r#type: None,
-                        class: "xsd:string".to_string(),
-                    },
-                    Property {
-                        name: "age".to_string(),
-                        r#type: Some(TypeFamily::Optional),
-                        class: "xsd:integer".to_string(),
-                    },
-                ],
-            },
-        ]
+        vec![Schema::Class {
+            id: "Person".to_string(),
+            base: None,
+            key: Key::ValueHash,
+            documentation: None,
+            subdocument: false,
+            r#abstract: false,
+            inherits: vec![],
+            unfoldable: false,
+            properties: vec![
+                Property {
+                    name: "name".to_string(),
+                    r#type: None,
+                    class: "xsd:string".to_string(),
+                },
+                Property {
+                    name: "age".to_string(),
+                    r#type: Some(TypeFamily::Optional),
+                    class: "xsd:integer".to_string(),
+                },
+            ],
+        }]
     }
 
     #[test]

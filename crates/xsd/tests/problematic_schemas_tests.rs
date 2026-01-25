@@ -383,11 +383,7 @@ fn test_dita13_catalog_structure() {
     );
 
     // Check for common DITA domain URNs in base catalog
-    let expected_patterns = [
-        "deliveryTargetAttDomain",
-        "basetopic.xsd",
-        "commonElement",
-    ];
+    let expected_patterns = ["deliveryTargetAttDomain", "basetopic.xsd", "commonElement"];
 
     for pattern in &expected_patterns {
         if base_content.contains(pattern) {
@@ -609,10 +605,10 @@ fn test_spl_diamond_inheritance_investigation() {
 
     // Find the problematic types and their inheritance chain
     let types_of_interest = vec![
-        "EivlEvent",  // The failing class
-        "CE",         // Parent
-        "CD",         // Grandparent
-        "ANY",        // Root
+        "EivlEvent", // The failing class
+        "CE",        // Parent
+        "CD",        // Grandparent
+        "ANY",       // Root
     ];
 
     eprintln!("=== Schemas in Inheritance Chain ===\n");
@@ -628,14 +624,25 @@ fn test_spl_diamond_inheritance_investigation() {
             if normalized_name == normalized_target || name == *type_name {
                 eprintln!("--- {} ---", name);
                 eprintln!("Raw JSON (to_json):");
-                eprintln!("{}\n", serde_json::to_string_pretty(&schema.to_json()).unwrap());
+                eprintln!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&schema.to_json()).unwrap()
+                );
 
                 // Also show namespaced version
                 eprintln!("Namespaced JSON (to_namespaced_json):");
-                eprintln!("{}\n", serde_json::to_string_pretty(&schema.to_namespaced_json()).unwrap());
+                eprintln!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&schema.to_namespaced_json()).unwrap()
+                );
 
                 // Show inheritance if it's a Class
-                if let terminusdb_schema::Schema::Class { inherits, properties, .. } = schema {
+                if let terminusdb_schema::Schema::Class {
+                    inherits,
+                    properties,
+                    ..
+                } = schema
+                {
                     eprintln!("  @inherits: {:?}", inherits);
                     eprintln!("  Properties:");
                     for prop in properties {
@@ -655,7 +662,13 @@ fn test_spl_diamond_inheritance_investigation() {
     eprintln!("\n=== All Schemas with 'code' Property ===\n");
 
     for schema in model.schemas() {
-        if let terminusdb_schema::Schema::Class { id, properties, inherits, .. } = schema {
+        if let terminusdb_schema::Schema::Class {
+            id,
+            properties,
+            inherits,
+            ..
+        } = schema
+        {
             let has_code = properties.iter().any(|p| p.name.to_lowercase() == "code");
             if has_code {
                 eprintln!("Class: {} (inherits: {:?})", id, inherits);
@@ -693,13 +706,11 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
         r#abstract: true,
         inherits: vec![],
         unfoldable: false,
-        properties: vec![
-            Property {
-                name: "nullFlavor".to_string(),
-                class: "xsd:string".to_string(),
-                r#type: None,
-            },
-        ],
+        properties: vec![Property {
+            name: "nullFlavor".to_string(),
+            class: "xsd:string".to_string(),
+            r#type: None,
+        }],
     };
 
     // Cs enum - used as the type for 'code' in CD and CE
@@ -714,7 +725,10 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
     let timing_event_enum = Schema::Enum {
         id: "TimingEvent".to_string(),
         base: Some("https://test.example.com/diamond#".to_string()),
-        values: vec!["BEFORE_BREAKFAST".to_string(), "AFTER_BREAKFAST".to_string()],
+        values: vec![
+            "BEFORE_BREAKFAST".to_string(),
+            "AFTER_BREAKFAST".to_string(),
+        ],
         documentation: None,
     };
 
@@ -729,7 +743,7 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
         unfoldable: false,
         properties: vec![
             Property {
-                name: "code".to_string(),  // First definition of 'code' with type Cs
+                name: "code".to_string(), // First definition of 'code' with type Cs
                 class: "Cs".to_string(),
                 r#type: None,
             },
@@ -750,13 +764,11 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
         r#abstract: false,
         inherits: vec!["CD".to_string()],
         unfoldable: false,
-        properties: vec![
-            Property {
-                name: "code".to_string(),  // Redefinition of 'code' with same type Cs
-                class: "Cs".to_string(),
-                r#type: None,
-            },
-        ],
+        properties: vec![Property {
+            name: "code".to_string(), // Redefinition of 'code' with same type Cs
+            class: "Cs".to_string(),
+            r#type: None,
+        }],
     };
 
     let eivl_event_schema = Schema::Class {
@@ -768,21 +780,29 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
         r#abstract: false,
         inherits: vec!["CE".to_string()],
         unfoldable: false,
-        properties: vec![
-            Property {
-                name: "code".to_string(),  // Redefinition with DIFFERENT type TimingEvent
-                class: "TimingEvent".to_string(),
-                r#type: None,
-            },
-        ],
+        properties: vec![Property {
+            name: "code".to_string(), // Redefinition with DIFFERENT type TimingEvent
+            class: "TimingEvent".to_string(),
+            r#type: None,
+        }],
     };
 
-    let schemas = vec![any_schema, cs_enum, timing_event_enum, cd_schema, ce_schema, eivl_event_schema];
+    let schemas = vec![
+        any_schema,
+        cs_enum,
+        timing_event_enum,
+        cd_schema,
+        ce_schema,
+        eivl_event_schema,
+    ];
 
     // Print schemas for inspection
     for schema in &schemas {
         eprintln!("Schema {}:", schema.class_name());
-        eprintln!("{}\n", serde_json::to_string_pretty(&schema.to_namespaced_json()).unwrap());
+        eprintln!(
+            "{}\n",
+            serde_json::to_string_pretty(&schema.to_namespaced_json()).unwrap()
+        );
     }
 
     let context = Context {
@@ -824,10 +844,14 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
                 eprintln!("✓ Confirmed: This is the diamond property violation error");
                 eprintln!("\nExplanation:");
                 eprintln!("  TerminusDB doesn't allow a property to be defined multiple times");
-                eprintln!("  in an inheritance chain. In XSD, restrictions can redefine attributes,");
+                eprintln!(
+                    "  in an inheritance chain. In XSD, restrictions can redefine attributes,"
+                );
                 eprintln!("  but in TerminusDB's class model, this creates ambiguity.");
                 eprintln!("\nPossible solutions:");
-                eprintln!("  1. Don't generate properties for restricted attributes (inherit them)");
+                eprintln!(
+                    "  1. Don't generate properties for restricted attributes (inherit them)"
+                );
                 eprintln!("  2. Flatten the inheritance hierarchy");
                 eprintln!("  3. Only define properties at the first occurrence in the hierarchy");
 

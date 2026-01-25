@@ -1,19 +1,15 @@
-use crate::{Instance, InstanceProperty, PrimitiveValue, RelationValue, Schema, SetCardinality, TypeFamily};
+use crate::{
+    Instance, InstanceProperty, PrimitiveValue, RelationValue, Schema, SetCardinality, TypeFamily,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Errors that can occur during instance validation against a schema
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationError {
     /// Property exists in instance but not defined in schema
-    UnknownProperty {
-        property: String,
-        class: String,
-    },
+    UnknownProperty { property: String, class: String },
     /// Required property missing from instance
-    MissingProperty {
-        property: String,
-        class: String,
-    },
+    MissingProperty { property: String, class: String },
     /// Property type doesn't match schema (e.g., primitive vs relation)
     PropertyTypeMismatch {
         property: String,
@@ -50,10 +46,7 @@ pub enum ValidationError {
         errors: Vec<ValidationError>,
     },
     /// Schema mismatch between instance.schema and actual data
-    SchemaMismatch {
-        expected: String,
-        actual: String,
-    },
+    SchemaMismatch { expected: String, actual: String },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -63,28 +56,80 @@ impl std::fmt::Display for ValidationError {
                 write!(f, "Unknown property '{}' for class '{}'", property, class)
             }
             ValidationError::MissingProperty { property, class } => {
-                write!(f, "Missing required property '{}' for class '{}'", property, class)
+                write!(
+                    f,
+                    "Missing required property '{}' for class '{}'",
+                    property, class
+                )
             }
-            ValidationError::PropertyTypeMismatch { property, expected, actual } => {
-                write!(f, "Property '{}': expected {}, got {}", property, expected, actual)
+            ValidationError::PropertyTypeMismatch {
+                property,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "Property '{}': expected {}, got {}",
+                    property, expected, actual
+                )
             }
-            ValidationError::InvalidEnumValue { class, value, valid_values } => {
-                write!(f, "Invalid enum value '{}' for enum '{}'. Valid values: {:?}", value, class, valid_values)
+            ValidationError::InvalidEnumValue {
+                class,
+                value,
+                valid_values,
+            } => {
+                write!(
+                    f,
+                    "Invalid enum value '{}' for enum '{}'. Valid values: {:?}",
+                    value, class, valid_values
+                )
             }
-            ValidationError::SetCardinalityViolation { property, constraint, actual_count } => {
-                write!(f, "Property '{}': set cardinality {} violated (actual count: {})", property, constraint, actual_count)
+            ValidationError::SetCardinalityViolation {
+                property,
+                constraint,
+                actual_count,
+            } => {
+                write!(
+                    f,
+                    "Property '{}': set cardinality {} violated (actual count: {})",
+                    property, constraint, actual_count
+                )
             }
-            ValidationError::ArrayDimensionMismatch { property, expected_dimensions, actual } => {
-                write!(f, "Property '{}': expected {}-dimensional array, got {}", property, expected_dimensions, actual)
+            ValidationError::ArrayDimensionMismatch {
+                property,
+                expected_dimensions,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "Property '{}': expected {}-dimensional array, got {}",
+                    property, expected_dimensions, actual
+                )
             }
-            ValidationError::TypeFamilyMismatch { property, expected_family, actual } => {
-                write!(f, "Property '{}': expected type family {}, got {}", property, expected_family, actual)
+            ValidationError::TypeFamilyMismatch {
+                property,
+                expected_family,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "Property '{}': expected type family {}, got {}",
+                    property, expected_family, actual
+                )
             }
             ValidationError::NestedInstanceError { property, errors } => {
-                write!(f, "Property '{}': nested validation errors: {:?}", property, errors)
+                write!(
+                    f,
+                    "Property '{}': nested validation errors: {:?}",
+                    property, errors
+                )
             }
             ValidationError::SchemaMismatch { expected, actual } => {
-                write!(f, "Schema mismatch: expected '{}', instance has '{}'", expected, actual)
+                write!(
+                    f,
+                    "Schema mismatch: expected '{}', instance has '{}'",
+                    expected, actual
+                )
             }
         }
     }
@@ -271,7 +316,12 @@ fn validate_property(
                 validate_relation_value(rel, prop_name, errors);
             }
         }
-        (Some(TypeFamily::List), _) if !matches!(instance_prop, InstanceProperty::Primitive(_) | InstanceProperty::Relation(_)) => {
+        (Some(TypeFamily::List), _)
+            if !matches!(
+                instance_prop,
+                InstanceProperty::Primitive(_) | InstanceProperty::Relation(_)
+            ) =>
+        {
             // Single values are not allowed for List
             errors.push(ValidationError::TypeFamilyMismatch {
                 property: prop_name.clone(),
@@ -290,7 +340,12 @@ fn validate_property(
                 validate_relation_value(rel, prop_name, errors);
             }
         }
-        (Some(TypeFamily::Set(_)), _) if !matches!(instance_prop, InstanceProperty::Primitive(_) | InstanceProperty::Relation(_)) => {
+        (Some(TypeFamily::Set(_)), _)
+            if !matches!(
+                instance_prop,
+                InstanceProperty::Primitive(_) | InstanceProperty::Relation(_)
+            ) =>
+        {
             errors.push(ValidationError::TypeFamilyMismatch {
                 property: prop_name.clone(),
                 expected_family: "Set".to_string(),
@@ -344,9 +399,9 @@ fn validate_property_type(
     let expected_class = &property.class;
 
     // Check if it's a primitive type
-    let is_primitive_class = expected_class.starts_with("xsd:") ||
-                            expected_class == "xdd:json" ||
-                            expected_class == "sys:Unit";
+    let is_primitive_class = expected_class.starts_with("xsd:")
+        || expected_class == "xdd:json"
+        || expected_class == "sys:Unit";
 
     match (is_primitive_class, instance_prop) {
         (true, InstanceProperty::Primitive(_)) | (true, InstanceProperty::Primitives(_)) => {
@@ -430,7 +485,8 @@ fn validate_relation_value(
 ) {
     match rel_value {
         RelationValue::One(nested_instance) => {
-            if let Err(nested_errors) = validate_instance(nested_instance, &nested_instance.schema) {
+            if let Err(nested_errors) = validate_instance(nested_instance, &nested_instance.schema)
+            {
                 errors.push(ValidationError::NestedInstanceError {
                     property: prop_name.to_string(),
                     errors: nested_errors,
@@ -439,7 +495,9 @@ fn validate_relation_value(
         }
         RelationValue::More(nested_instances) => {
             for nested_instance in nested_instances {
-                if let Err(nested_errors) = validate_instance(nested_instance, &nested_instance.schema) {
+                if let Err(nested_errors) =
+                    validate_instance(nested_instance, &nested_instance.schema)
+                {
                     errors.push(ValidationError::NestedInstanceError {
                         property: prop_name.to_string(),
                         errors: nested_errors,
@@ -474,7 +532,7 @@ impl InstanceValidation for Instance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Property, Schema, Instance, InstanceProperty, PrimitiveValue, Key};
+    use crate::{Instance, InstanceProperty, Key, PrimitiveValue, Property, Schema};
 
     #[test]
     fn test_valid_simple_class() {
@@ -502,8 +560,14 @@ mod tests {
         };
 
         let mut properties = BTreeMap::new();
-        properties.insert("name".to_string(), InstanceProperty::Primitive(PrimitiveValue::String("Alice".to_string())));
-        properties.insert("age".to_string(), InstanceProperty::Primitive(PrimitiveValue::Number(30.into())));
+        properties.insert(
+            "name".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String("Alice".to_string())),
+        );
+        properties.insert(
+            "age".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::Number(30.into())),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -527,13 +591,11 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "name".to_string(),
-                    r#type: None,
-                    class: "xsd:string".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "name".to_string(),
+                r#type: None,
+                class: "xsd:string".to_string(),
+            }],
         };
 
         let instance = Instance {
@@ -567,7 +629,10 @@ mod tests {
         };
 
         let mut properties = BTreeMap::new();
-        properties.insert("unknown".to_string(), InstanceProperty::Primitive(PrimitiveValue::String("value".to_string())));
+        properties.insert(
+            "unknown".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String("value".to_string())),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -596,13 +661,11 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "nickname".to_string(),
-                    r#type: Some(TypeFamily::Optional),
-                    class: "xsd:string".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "nickname".to_string(),
+                r#type: Some(TypeFamily::Optional),
+                class: "xsd:string".to_string(),
+            }],
         };
 
         let instance = Instance {
@@ -628,7 +691,10 @@ mod tests {
 
         // Valid enum - property key is the variant name, value is Unit
         let mut properties = BTreeMap::new();
-        properties.insert("active".to_string(), InstanceProperty::Primitive(PrimitiveValue::Unit));
+        properties.insert(
+            "active".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::Unit),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -642,7 +708,10 @@ mod tests {
 
         // Invalid enum value - variant name doesn't exist in schema
         let mut properties = BTreeMap::new();
-        properties.insert("invalid".to_string(), InstanceProperty::Primitive(PrimitiveValue::Unit));
+        properties.insert(
+            "invalid".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::Unit),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -654,7 +723,10 @@ mod tests {
 
         let result = validate_instance(&instance, &schema);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err()[0], ValidationError::InvalidEnumValue { .. }));
+        assert!(matches!(
+            result.unwrap_err()[0],
+            ValidationError::InvalidEnumValue { .. }
+        ));
     }
 
     #[test]
@@ -668,20 +740,19 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "members".to_string(),
-                    r#type: Some(TypeFamily::Set(SetCardinality::Min(2))),
-                    class: "xsd:string".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "members".to_string(),
+                r#type: Some(TypeFamily::Set(SetCardinality::Min(2))),
+                class: "xsd:string".to_string(),
+            }],
         };
 
         // Too few members
         let mut properties = BTreeMap::new();
-        properties.insert("members".to_string(), InstanceProperty::Primitives(vec![
-            PrimitiveValue::String("Alice".to_string()),
-        ]));
+        properties.insert(
+            "members".to_string(),
+            InstanceProperty::Primitives(vec![PrimitiveValue::String("Alice".to_string())]),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -693,7 +764,10 @@ mod tests {
 
         let result = validate_instance(&instance, &schema);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err()[0], ValidationError::SetCardinalityViolation { .. }));
+        assert!(matches!(
+            result.unwrap_err()[0],
+            ValidationError::SetCardinalityViolation { .. }
+        ));
     }
 
     #[test]
@@ -707,21 +781,22 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "items".to_string(),
-                    r#type: Some(TypeFamily::List),
-                    class: "xsd:string".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "items".to_string(),
+                r#type: Some(TypeFamily::List),
+                class: "xsd:string".to_string(),
+            }],
         };
 
         // Valid list
         let mut properties = BTreeMap::new();
-        properties.insert("items".to_string(), InstanceProperty::Primitives(vec![
-            PrimitiveValue::String("Item 1".to_string()),
-            PrimitiveValue::String("Item 2".to_string()),
-        ]));
+        properties.insert(
+            "items".to_string(),
+            InstanceProperty::Primitives(vec![
+                PrimitiveValue::String("Item 1".to_string()),
+                PrimitiveValue::String("Item 2".to_string()),
+            ]),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -745,20 +820,19 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "name".to_string(),
-                    r#type: None,
-                    class: "xsd:string".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "name".to_string(),
+                r#type: None,
+                class: "xsd:string".to_string(),
+            }],
         };
 
         // Provide a relation where a primitive is expected
         let mut properties = BTreeMap::new();
-        properties.insert("name".to_string(), InstanceProperty::Relation(
-            RelationValue::ExternalReference("User/123".to_string())
-        ));
+        properties.insert(
+            "name".to_string(),
+            InstanceProperty::Relation(RelationValue::ExternalReference("User/123".to_string())),
+        );
 
         let instance = Instance {
             schema: schema.clone(),
@@ -770,7 +844,10 @@ mod tests {
 
         let result = validate_instance(&instance, &schema);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err()[0], ValidationError::PropertyTypeMismatch { .. }));
+        assert!(matches!(
+            result.unwrap_err()[0],
+            ValidationError::PropertyTypeMismatch { .. }
+        ));
     }
 
     #[test]
@@ -785,13 +862,11 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "street".to_string(),
-                    r#type: None,
-                    class: "xsd:string".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "street".to_string(),
+                r#type: None,
+                class: "xsd:string".to_string(),
+            }],
         };
 
         let person_schema = Schema::Class {
@@ -803,13 +878,11 @@ mod tests {
             r#abstract: false,
             inherits: vec![],
             unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "address".to_string(),
-                    r#type: None,
-                    class: "Address".to_string(),
-                },
-            ],
+            properties: vec![Property {
+                name: "address".to_string(),
+                r#type: None,
+                class: "Address".to_string(),
+            }],
         };
 
         // Create a nested address instance that's missing the required street property
@@ -822,9 +895,10 @@ mod tests {
         };
 
         let mut properties = BTreeMap::new();
-        properties.insert("address".to_string(), InstanceProperty::Relation(
-            RelationValue::One(nested_instance)
-        ));
+        properties.insert(
+            "address".to_string(),
+            InstanceProperty::Relation(RelationValue::One(nested_instance)),
+        );
 
         let instance = Instance {
             schema: person_schema.clone(),
@@ -838,7 +912,10 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(matches!(errors[0], ValidationError::NestedInstanceError { .. }));
+        assert!(matches!(
+            errors[0],
+            ValidationError::NestedInstanceError { .. }
+        ));
     }
 
     #[test]
@@ -868,9 +945,10 @@ mod tests {
 
         // Instance with unknown property and missing required properties
         let mut properties = BTreeMap::new();
-        properties.insert("unknown_field".to_string(), InstanceProperty::Primitive(
-            PrimitiveValue::String("value".to_string())
-        ));
+        properties.insert(
+            "unknown_field".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String("value".to_string())),
+        );
 
         let instance = Instance {
             schema: schema.clone(),

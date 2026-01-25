@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use rust_mcp_sdk::macros::{mcp_tool, JsonSchema};
 use rust_mcp_sdk::schema::{
     schema_utils::CallToolError, CallToolRequest, CallToolResult, Implementation, InitializeResult,
-    ListToolsRequest, ListToolsResult, RpcError, TextContent, ServerCapabilities,
+    ListToolsRequest, ListToolsResult, RpcError, ServerCapabilities, TextContent,
 };
 use rust_mcp_sdk::{
     mcp_server::{server_runtime, ServerHandler},
@@ -15,12 +15,12 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
-use terminusdb_bin::{TerminusDBServer, ServerOptions, start_server};
-use terminusdb_client::{BranchSpec, TerminusDBHttpClient, GetOpts, DocumentInsertArgs};
+use terminusdb_bin::{start_server, ServerOptions, TerminusDBServer};
 use terminusdb_client::debug::QueryLogEntry;
-use terminusdb_woql2::prelude::{Query, FromTDBInstance};
+use terminusdb_client::{BranchSpec, DocumentInsertArgs, GetOpts, TerminusDBHttpClient};
+use terminusdb_woql2::prelude::{FromTDBInstance, Query};
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber;
 use url::Url;
 
@@ -204,7 +204,6 @@ pub struct GetDocumentTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<ConnectionConfig>,
 }
-
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[mcp_tool(
@@ -650,7 +649,7 @@ impl TerminusDBMcpHandler {
 
         // Start with defaults/environment variables (these will now read from the updated environment)
         let base_config = ConnectionConfig::default();
-        
+
         // Merge request values with base config (request values take precedence)
         let config = ConnectionConfig {
             host: request.host.unwrap_or(base_config.host),
@@ -712,29 +711,42 @@ impl TerminusDBMcpHandler {
             let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
             // Check if this is a mutating query (author or message provided)
-            let response: terminusdb_client::WOQLResult<serde_json::Value> = if request.author.is_some() || request.message.is_some() {
-                // Mutating query - use query_mut_string (a wrapper we'll need to add)
-                let author = request.author.unwrap_or_else(|| "system".to_string());
-                let message = request.message.unwrap_or_else(|| "execute query".to_string());
+            let response: terminusdb_client::WOQLResult<serde_json::Value> =
+                if request.author.is_some() || request.message.is_some() {
+                    // Mutating query - use query_mut_string (a wrapper we'll need to add)
+                    let author = request.author.unwrap_or_else(|| "system".to_string());
+                    let message = request
+                        .message
+                        .unwrap_or_else(|| "execute query".to_string());
 
-                info!("Executing mutating query with author: {}, message: {}", author, message);
+                    info!(
+                        "Executing mutating query with author: {}, message: {}",
+                        author, message
+                    );
 
-                // Parse query using the client's existing logic, then call query_mut
-                let query = if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&request.query) {
-                    // Try parsing as JSON-LD
-                    Query::from_json(json_value)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse JSON-LD query: {}", e))?
+                    // Parse query using the client's existing logic, then call query_mut
+                    let query = if let Ok(json_value) =
+                        serde_json::from_str::<serde_json::Value>(&request.query)
+                    {
+                        // Try parsing as JSON-LD
+                        Query::from_json(json_value)
+                            .map_err(|e| anyhow::anyhow!("Failed to parse JSON-LD query: {}", e))?
+                    } else {
+                        // Try parsing as JS syntax using woql-js
+                        terminusdb_woql_js::parse_js_woql_to_query(&request.query).map_err(|e| {
+                            anyhow::anyhow!("Failed to parse JavaScript syntax: {}", e)
+                        })?
+                    };
+
+                    client
+                        .query_mut(branch_spec, query, author, message)
+                        .await?
                 } else {
-                    // Try parsing as JS syntax using woql-js
-                    terminusdb_woql_js::parse_js_woql_to_query(&request.query)
-                        .map_err(|e| anyhow::anyhow!("Failed to parse JavaScript syntax: {}", e))?
+                    // Read-only query - use existing query_string
+                    client
+                        .query_string(Some(branch_spec), &request.query, timeout)
+                        .await?
                 };
-
-                client.query_mut(branch_spec, query, author, message).await?
-            } else {
-                // Read-only query - use existing query_string
-                client.query_string(Some(branch_spec), &request.query, timeout).await?
-            };
 
             Ok(serde_json::to_value(&response)?)
         } else {
@@ -747,16 +759,16 @@ impl TerminusDBMcpHandler {
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // List databases with default options (not verbose, no branches)
         let databases = client.list_databases_simple().await?;
-        
+
         // Convert to a more structured format for the MCP response
         let database_list: Vec<serde_json::Value> = databases
             .into_iter()
             .map(|db| {
                 let mut obj = serde_json::Map::new();
-                
+
                 // Extract database name and organization first (they use references)
                 if let Some(name) = db.database_name() {
                     obj.insert("name".to_string(), serde_json::Value::String(name));
@@ -764,12 +776,12 @@ impl TerminusDBMcpHandler {
                 if let Some(org) = db.organization() {
                     obj.insert("organization".to_string(), serde_json::Value::String(org));
                 }
-                
+
                 // Always include path if available
                 if let Some(path) = db.path {
                     obj.insert("path".to_string(), serde_json::Value::String(path));
                 }
-                
+
                 // Include other fields if available
                 if let Some(id) = db.id {
                     obj.insert("id".to_string(), serde_json::Value::String(id));
@@ -780,11 +792,11 @@ impl TerminusDBMcpHandler {
                 if let Some(state) = db.state {
                     obj.insert("state".to_string(), serde_json::Value::String(state));
                 }
-                
+
                 serde_json::Value::Object(obj)
             })
             .collect();
-        
+
         Ok(serde_json::json!({
             "databases": database_list,
             "count": database_list.len()
@@ -821,8 +833,9 @@ impl TerminusDBMcpHandler {
         // Convert timeout from seconds to Duration if provided
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
-        let response: terminusdb_client::WOQLResult<serde_json::Value> =
-            client.query_string(Some(branch_spec), schema_query, timeout).await?;
+        let response: terminusdb_client::WOQLResult<serde_json::Value> = client
+            .query_string(Some(branch_spec), schema_query, timeout)
+            .await?;
         Ok(serde_json::to_value(&response)?)
     }
 
@@ -866,10 +879,10 @@ impl TerminusDBMcpHandler {
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Reset the database using the client method
         client.reset_database(&request.database).await?;
-        
+
         Ok(serde_json::json!({
             "status": "success",
             "message": format!("Database '{}' has been reset successfully", request.database),
@@ -882,15 +895,15 @@ impl TerminusDBMcpHandler {
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         if config.database.is_none() {
             return Err(anyhow::anyhow!("Database must be specified"));
         }
-        
+
         let db = config.database.unwrap();
         let branch_spec = match &config.commit_ref {
             Some(commit_id) => BranchSpec::with_commit(&db, commit_id.as_str()),
-            None => BranchSpec::with_branch(&db, &config.branch)
+            None => BranchSpec::with_branch(&db, &config.branch),
         };
 
         // Format document ID if type_name is provided
@@ -898,7 +911,7 @@ impl TerminusDBMcpHandler {
             Some(type_name) if !request.document_id.contains('/') => {
                 format!("{}/{}", type_name, request.document_id)
             }
-            _ => request.document_id.clone()
+            _ => request.document_id.clone(),
         };
 
         let opts = GetOpts::default()
@@ -906,7 +919,9 @@ impl TerminusDBMcpHandler {
             .with_as_list(request.as_list);
 
         if request.include_headers {
-            let result = client.get_document_with_headers(&formatted_id, &branch_spec, opts).await?;
+            let result = client
+                .get_document_with_headers(&formatted_id, &branch_spec, opts)
+                .await?;
             Ok(serde_json::json!({
                 "document": *result,
                 "commit_id": result.extract_commit_id(),
@@ -918,7 +933,9 @@ impl TerminusDBMcpHandler {
                 }
             }))
         } else {
-            let document = client.get_document(&formatted_id, &branch_spec, opts).await?;
+            let document = client
+                .get_document(&formatted_id, &branch_spec, opts)
+                .await?;
             Ok(document)
         }
     }
@@ -926,14 +943,14 @@ impl TerminusDBMcpHandler {
     async fn handle_query_log(&self, request: QueryLogTool) -> Result<serde_json::Value> {
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         let action = request.action.as_str();
         match action {
             "status" => {
                 let enabled = client.is_query_log_enabled().await;
                 // Query log path is not directly accessible from client
                 let path: Option<String> = None;
-                
+
                 Ok(serde_json::json!({
                     "enabled": enabled,
                     "log_path": path,
@@ -944,13 +961,15 @@ impl TerminusDBMcpHandler {
                     }
                 }))
             }
-            
+
             "enable" => {
-                let path = request.log_path.as_deref()
+                let path = request
+                    .log_path
+                    .as_deref()
                     .unwrap_or("/tmp/terminusdb_queries.log");
-                
+
                 client.enable_query_log(path).await?;
-                
+
                 Ok(serde_json::json!({
                     "status": "success",
                     "enabled": true,
@@ -958,40 +977,45 @@ impl TerminusDBMcpHandler {
                     "message": format!("Query logging enabled to: {}", path)
                 }))
             }
-            
+
             "disable" => {
                 client.disable_query_log().await;
-                
+
                 Ok(serde_json::json!({
-                    "status": "success", 
+                    "status": "success",
                     "enabled": false,
                     "message": "Query logging disabled"
                 }))
             }
-            
+
             "rotate" => {
                 // TODO: Fix Send trait issue in client rotate_query_log
                 // client.rotate_query_log().await?;
-                
-                Err(anyhow::anyhow!("Query log rotation is temporarily unavailable due to client implementation"))?
+
+                Err(anyhow::anyhow!(
+                    "Query log rotation is temporarily unavailable due to client implementation"
+                ))?
             }
-            
+
             "view" => {
                 // For now, we'll use the default path or the one from request
-                let path = request.log_path.as_deref()
+                let path = request
+                    .log_path
+                    .as_deref()
                     .unwrap_or("/tmp/terminusdb_queries.log");
-                
+
                 // Read the log file
-                let content = tokio::fs::read_to_string(&path).await
+                let content = tokio::fs::read_to_string(&path)
+                    .await
                     .map_err(|e| anyhow::anyhow!("Failed to read log file: {}", e))?;
-                
+
                 // Parse log entries
                 let mut entries: Vec<QueryLogEntry> = Vec::new();
                 for line in content.lines() {
                     if line.trim().is_empty() {
                         continue;
                     }
-                    
+
                     match serde_json::from_str::<QueryLogEntry>(line) {
                         Ok(entry) => entries.push(entry),
                         Err(e) => {
@@ -999,37 +1023,36 @@ impl TerminusDBMcpHandler {
                         }
                     }
                 }
-                
+
                 // Apply filters
                 let mut filtered = entries;
-                
+
                 // Filter by operation type
                 if let Some(op_type) = &request.operation_type_filter {
                     filtered.retain(|e| e.operation_type == *op_type);
                 }
-                
+
                 // Filter by success status
                 if let Some(success) = request.success_filter {
                     filtered.retain(|e| e.success == success);
                 }
-                
+
                 // Sort by timestamp (newest first)
                 filtered.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-                
+
                 // Apply pagination
-                let limit = request.limit
+                let limit = request
+                    .limit
                     .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(20);
-                let offset = request.offset
+                let offset = request
+                    .offset
                     .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(0);
-                
+
                 let total = filtered.len();
-                let paginated: Vec<_> = filtered.into_iter()
-                    .skip(offset)
-                    .take(limit)
-                    .collect();
-                
+                let paginated: Vec<_> = filtered.into_iter().skip(offset).take(limit).collect();
+
                 Ok(serde_json::json!({
                     "entries": paginated,
                     "pagination": {
@@ -1040,116 +1063,142 @@ impl TerminusDBMcpHandler {
                     }
                 }))
             }
-            _ => Err(anyhow::anyhow!("Invalid action: {}. Must be one of: status, enable, disable, rotate, view", action))?
+            _ => Err(anyhow::anyhow!(
+                "Invalid action: {}. Must be one of: status, enable, disable, rotate, view",
+                action
+            ))?,
         }
     }
 
-    async fn handle_insert_document(&self, request: InsertDocumentTool) -> Result<serde_json::Value> {
+    async fn handle_insert_document(
+        &self,
+        request: InsertDocumentTool,
+    ) -> Result<serde_json::Value> {
         // Validate document has required fields
         if !request.document.is_object() {
             return Err(anyhow::anyhow!("Document must be a JSON object"));
         }
-        
+
         let doc_obj = request.document.as_object().unwrap();
         if !doc_obj.contains_key("@id") || !doc_obj.contains_key("@type") {
-            return Err(anyhow::anyhow!("Document must contain @id and @type fields"));
+            return Err(anyhow::anyhow!(
+                "Document must contain @id and @type fields"
+            ));
         }
-        
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Set database in config
         let mut config = config;
         config.database = Some(request.database.clone());
-        
+
         // Create branch spec
         let branch_spec = BranchSpec::with_branch(
             &request.database,
-            &request.branch.unwrap_or_else(|| "main".to_string())
+            &request.branch.unwrap_or_else(|| "main".to_string()),
         );
-        
+
         // Create insert args
         let args = DocumentInsertArgs {
             spec: branch_spec,
-            message: request.message.unwrap_or_else(|| "insert document".to_string()),
+            message: request
+                .message
+                .unwrap_or_else(|| "insert document".to_string()),
             author: request.author.unwrap_or_else(|| "system".to_string()),
             force: request.force,
             ..Default::default()
         };
-        
+
         // Insert the document
         let doc_vec = vec![&request.document];
         let result = client.insert_documents(doc_vec, args).await?;
-        
+
         // Extract results
         let mut response = serde_json::json!({
             "status": "success",
             "database": request.database,
             "results": {}
         });
-        
+
         if let Some(results_map) = response.get_mut("results").and_then(|v| v.as_object_mut()) {
             for (id, insert_result) in result.iter() {
                 let status = match insert_result {
                     terminusdb_client::TDBInsertInstanceResult::Inserted(_) => "inserted",
-                    terminusdb_client::TDBInsertInstanceResult::AlreadyExists(_) => "already_exists",
+                    terminusdb_client::TDBInsertInstanceResult::AlreadyExists(_) => {
+                        "already_exists"
+                    }
                 };
-                results_map.insert(id.clone(), serde_json::json!({
-                    "id": id,
-                    "status": status
-                }));
+                results_map.insert(
+                    id.clone(),
+                    serde_json::json!({
+                        "id": id,
+                        "status": status
+                    }),
+                );
             }
         }
-        
+
         // Add commit ID if available
         if let Some(commit_id) = result.extract_commit_id() {
             response["commit_id"] = serde_json::Value::String(commit_id.to_string());
         }
-        
+
         Ok(response)
     }
 
-    async fn handle_insert_documents(&self, request: InsertDocumentsTool) -> Result<serde_json::Value> {
+    async fn handle_insert_documents(
+        &self,
+        request: InsertDocumentsTool,
+    ) -> Result<serde_json::Value> {
         // Validate all documents have required fields
         for (idx, doc) in request.documents.iter().enumerate() {
             if !doc.is_object() {
-                return Err(anyhow::anyhow!("Document at index {} must be a JSON object", idx));
+                return Err(anyhow::anyhow!(
+                    "Document at index {} must be a JSON object",
+                    idx
+                ));
             }
-            
+
             let doc_obj = doc.as_object().unwrap();
             if !doc_obj.contains_key("@id") || !doc_obj.contains_key("@type") {
-                return Err(anyhow::anyhow!("Document at index {} must contain @id and @type fields", idx));
+                return Err(anyhow::anyhow!(
+                    "Document at index {} must contain @id and @type fields",
+                    idx
+                ));
             }
         }
-        
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Set database in config
         let mut config = config;
         config.database = Some(request.database.clone());
-        
+
         // Create branch spec
         let branch_spec = BranchSpec::with_branch(
             &request.database,
-            &request.branch.unwrap_or_else(|| "main".to_string())
+            &request.branch.unwrap_or_else(|| "main".to_string()),
         );
-        
+
         // Create insert args
         let args = DocumentInsertArgs {
             spec: branch_spec,
-            message: request.message.unwrap_or_else(|| "insert documents".to_string()),
+            message: request
+                .message
+                .unwrap_or_else(|| "insert documents".to_string()),
             author: request.author.unwrap_or_else(|| "system".to_string()),
             force: request.force,
             ..Default::default()
         };
-        
+
         // Convert documents to references
         let doc_refs: Vec<&serde_json::Value> = request.documents.iter().collect();
-        
+
         // Insert the documents
         let result = client.insert_documents(doc_refs, args).await?;
-        
+
         // Build response
         let mut response = serde_json::json!({
             "status": "success",
@@ -1157,79 +1206,89 @@ impl TerminusDBMcpHandler {
             "total_documents": request.documents.len(),
             "results": {}
         });
-        
+
         let mut inserted_count = 0;
         let mut already_exists_count = 0;
-        
+
         if let Some(results_map) = response.get_mut("results").and_then(|v| v.as_object_mut()) {
             for (id, insert_result) in result.iter() {
                 let status = match insert_result {
                     terminusdb_client::TDBInsertInstanceResult::Inserted(_) => {
                         inserted_count += 1;
                         "inserted"
-                    },
+                    }
                     terminusdb_client::TDBInsertInstanceResult::AlreadyExists(_) => {
                         already_exists_count += 1;
                         "already_exists"
-                    },
+                    }
                 };
-                results_map.insert(id.clone(), serde_json::json!({
-                    "id": id,
-                    "status": status
-                }));
+                results_map.insert(
+                    id.clone(),
+                    serde_json::json!({
+                        "id": id,
+                        "status": status
+                    }),
+                );
             }
         }
-        
+
         response["summary"] = serde_json::json!({
             "inserted": inserted_count,
             "already_exists": already_exists_count
         });
-        
+
         // Add commit ID if available
         if let Some(commit_id) = result.extract_commit_id() {
             response["commit_id"] = serde_json::Value::String(commit_id.to_string());
         }
-        
+
         Ok(response)
     }
 
-    async fn handle_replace_document(&self, request: ReplaceDocumentTool) -> Result<serde_json::Value> {
+    async fn handle_replace_document(
+        &self,
+        request: ReplaceDocumentTool,
+    ) -> Result<serde_json::Value> {
         // Validate document has required fields
         if !request.document.is_object() {
             return Err(anyhow::anyhow!("Document must be a JSON object"));
         }
-        
+
         let doc_obj = request.document.as_object().unwrap();
         if !doc_obj.contains_key("@id") || !doc_obj.contains_key("@type") {
-            return Err(anyhow::anyhow!("Document must contain @id and @type fields"));
+            return Err(anyhow::anyhow!(
+                "Document must contain @id and @type fields"
+            ));
         }
-        
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Set database in config
         let mut config = config;
         config.database = Some(request.database.clone());
-        
+
         // Create branch spec
         let branch_spec = BranchSpec::with_branch(
             &request.database,
-            &request.branch.unwrap_or_else(|| "main".to_string())
+            &request.branch.unwrap_or_else(|| "main".to_string()),
         );
-        
+
         // Create insert args
         let args = DocumentInsertArgs {
             spec: branch_spec,
-            message: request.message.unwrap_or_else(|| "replace document".to_string()),
+            message: request
+                .message
+                .unwrap_or_else(|| "replace document".to_string()),
             author: request.author.unwrap_or_else(|| "system".to_string()),
             force: false, // Never force for replace operation
             ..Default::default()
         };
-        
+
         // Use put_documents which requires document to exist
         let doc_vec = vec![&request.document];
         let result = client.put_documents(doc_vec, args).await?;
-        
+
         // Extract results
         let mut response = serde_json::json!({
             "status": "success",
@@ -1237,47 +1296,47 @@ impl TerminusDBMcpHandler {
             "operation": "replace",
             "results": {}
         });
-        
+
         if let Some(results_map) = response.get_mut("results").and_then(|v| v.as_object_mut()) {
             for (id, _) in result.iter() {
-                results_map.insert(id.clone(), serde_json::json!({
-                    "id": id,
-                    "status": "replaced"
-                }));
+                results_map.insert(
+                    id.clone(),
+                    serde_json::json!({
+                        "id": id,
+                        "status": "replaced"
+                    }),
+                );
             }
         }
-        
+
         // Add commit ID if available
         if let Some(commit_id) = result.extract_commit_id() {
             response["commit_id"] = serde_json::Value::String(commit_id.to_string());
         }
-        
+
         Ok(response)
     }
 
     async fn handle_delete_classes(&self, request: DeleteClassesTool) -> Result<serde_json::Value> {
         info!("Deleting classes: {:?}", request.class_names);
-        
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Create branch spec
         let branch_name = request.branch.as_deref().unwrap_or("main");
-        let branch_spec = BranchSpec::with_branch(
-            &request.database,
-            branch_name
-        );
-        
+        let branch_spec = BranchSpec::with_branch(&request.database, branch_name);
+
         // For each class, we need to delete all its schema triples
         // This includes the class definition itself and all its properties
         let mut deleted_classes = Vec::new();
         let mut errors = Vec::new();
-        
+
         for class_name in &request.class_names {
             // Build a WOQL query to delete all triples where the subject is the class
             // or where the domain is the class (for properties)
             let class_uri = format!("@schema:{}", class_name);
-            
+
             // Create a JSON-LD query to delete all schema triples for this class
             let delete_query = json!({
                 "@type": "And",
@@ -1335,7 +1394,7 @@ impl TerminusDBMcpHandler {
                     }
                 ]
             });
-            
+
             // First, find all the triples to delete
             let _find_query = json!({
                 "@type": "And",
@@ -1393,9 +1452,16 @@ impl TerminusDBMcpHandler {
                     }
                 ]
             });
-            
+
             // Execute the deletion query
-            match client.query_string::<serde_json::Value>(Some(branch_spec.clone()), &serde_json::to_string(&delete_query)?, None).await {
+            match client
+                .query_string::<serde_json::Value>(
+                    Some(branch_spec.clone()),
+                    &serde_json::to_string(&delete_query)?,
+                    None,
+                )
+                .await
+            {
                 Ok(_) => {
                     deleted_classes.push(class_name.clone());
                     info!("Successfully deleted class: {}", class_name);
@@ -1407,7 +1473,7 @@ impl TerminusDBMcpHandler {
                 }
             }
         }
-        
+
         let response = if errors.is_empty() {
             serde_json::json!({
                 "status": "success",
@@ -1426,13 +1492,13 @@ impl TerminusDBMcpHandler {
                 "branch": branch_name
             })
         };
-        
+
         Ok(response)
     }
 
     async fn handle_squash(&self, request: SquashTool) -> Result<serde_json::Value> {
         info!("Squashing commits for path: {}", request.path);
-        
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
@@ -1440,17 +1506,18 @@ impl TerminusDBMcpHandler {
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
         // Execute the squash operation
-        match client.squash(&request.path, &request.author, &request.message, timeout).await {
-            Ok(response) => {
-                Ok(serde_json::json!({
-                    "status": "success",
-                    "path": request.path,
-                    "new_commit": response.commit,
-                    "old_commit": response.old_commit,
-                    "api_status": format!("{:?}", response.status),
-                    "message": format!("Successfully squashed commits. New commit: {}", response.commit)
-                }))
-            }
+        match client
+            .squash(&request.path, &request.author, &request.message, timeout)
+            .await
+        {
+            Ok(response) => Ok(serde_json::json!({
+                "status": "success",
+                "path": request.path,
+                "new_commit": response.commit,
+                "old_commit": response.old_commit,
+                "api_status": format!("{:?}", response.status),
+                "message": format!("Successfully squashed commits. New commit: {}", response.commit)
+            })),
             Err(e) => {
                 error!("Failed to squash commits: {}", e);
                 Err(anyhow::anyhow!("Failed to squash commits: {}", e))
@@ -1459,23 +1526,27 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_reset(&self, request: ResetTool) -> Result<serde_json::Value> {
-        info!("Resetting branch {} to {}", request.branch_path, request.commit_descriptor);
-        
+        info!(
+            "Resetting branch {} to {}",
+            request.branch_path, request.commit_descriptor
+        );
+
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
-        
+
         // Execute the reset operation
-        match client.reset(&request.branch_path, &request.commit_descriptor).await {
-            Ok(response) => {
-                Ok(serde_json::json!({
-                    "status": "success",
-                    "branch_path": request.branch_path,
-                    "commit_descriptor": request.commit_descriptor,
-                    "api_response": response,
-                    "message": format!("Successfully reset branch {} to {}", 
-                        request.branch_path, request.commit_descriptor)
-                }))
-            }
+        match client
+            .reset(&request.branch_path, &request.commit_descriptor)
+            .await
+        {
+            Ok(response) => Ok(serde_json::json!({
+                "status": "success",
+                "branch_path": request.branch_path,
+                "commit_descriptor": request.commit_descriptor,
+                "api_response": response,
+                "message": format!("Successfully reset branch {} to {}",
+                    request.branch_path, request.commit_descriptor)
+            })),
             Err(e) => {
                 error!("Failed to reset branch: {}", e);
                 Err(anyhow::anyhow!("Failed to reset branch: {}", e))
@@ -1494,14 +1565,12 @@ impl TerminusDBMcpHandler {
 
         // Execute the optimize operation
         match client.optimize(&request.path, timeout).await {
-            Ok(response) => {
-                Ok(serde_json::json!({
-                    "status": "success",
-                    "path": request.path,
-                    "api_response": response,
-                    "message": format!("Successfully optimized database at path: {}", request.path)
-                }))
-            }
+            Ok(response) => Ok(serde_json::json!({
+                "status": "success",
+                "path": request.path,
+                "api_response": response,
+                "message": format!("Successfully optimized database at path: {}", request.path)
+            })),
             Err(e) => {
                 error!("Failed to optimize database: {}", e);
                 Err(anyhow::anyhow!("Failed to optimize database: {}", e))
@@ -1509,8 +1578,14 @@ impl TerminusDBMcpHandler {
         }
     }
 
-    async fn handle_get_graphql_schema(&self, request: GetGraphQLSchemaTool) -> Result<serde_json::Value> {
-        info!("Retrieving GraphQL schema for database: {}", request.database);
+    async fn handle_get_graphql_schema(
+        &self,
+        request: GetGraphQLSchemaTool,
+    ) -> Result<serde_json::Value> {
+        info!(
+            "Retrieving GraphQL schema for database: {}",
+            request.database
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
@@ -1522,16 +1597,21 @@ impl TerminusDBMcpHandler {
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
         // Introspect the GraphQL schema
-        let schema = client.introspect_schema(&request.database, branch, timeout).await?;
+        let schema = client
+            .introspect_schema(&request.database, branch, timeout)
+            .await?;
 
         // Determine output path
-        let output_path = request.output_path.unwrap_or_else(|| "./schema.json".to_string());
+        let output_path = request
+            .output_path
+            .unwrap_or_else(|| "./schema.json".to_string());
 
         // Convert schema to pretty JSON string
         let schema_json = serde_json::to_string_pretty(&schema)?;
 
         // Write to file
-        tokio::fs::write(&output_path, &schema_json).await
+        tokio::fs::write(&output_path, &schema_json)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to write schema to file: {}", e))?;
 
         // Get file size for reporting
@@ -1553,13 +1633,19 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_clone(&self, request: CloneTool) -> Result<serde_json::Value> {
-        info!("Cloning repository: {} to {}/{}", request.remote_url, request.organization, request.database);
+        info!(
+            "Cloning repository: {} to {}/{}",
+            request.remote_url, request.organization, request.database
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
         // Prepare remote authentication if provided
-        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+        let remote_auth = match (
+            request.remote_username.as_deref(),
+            request.remote_password.as_deref(),
+        ) {
             (Some(username), Some(password)) => Some((username, password)),
             _ => None,
         };
@@ -1567,15 +1653,17 @@ impl TerminusDBMcpHandler {
         // Convert timeout from seconds to Duration if provided
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
-        let result = client.clone_repository(
-            &request.organization,
-            &request.database,
-            &request.remote_url,
-            request.label.as_deref(),
-            request.comment.as_deref(),
-            remote_auth,
-            timeout,
-        ).await?;
+        let result = client
+            .clone_repository(
+                &request.organization,
+                &request.database,
+                &request.remote_url,
+                request.label.as_deref(),
+                request.comment.as_deref(),
+                remote_auth,
+                timeout,
+            )
+            .await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1588,13 +1676,19 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_fetch(&self, request: FetchTool) -> Result<serde_json::Value> {
-        info!("Fetching from remote: {} into path: {}", request.remote_url, request.path);
+        info!(
+            "Fetching from remote: {} into path: {}",
+            request.remote_url, request.path
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
         // Prepare remote authentication if provided
-        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+        let remote_auth = match (
+            request.remote_username.as_deref(),
+            request.remote_password.as_deref(),
+        ) {
             (Some(username), Some(password)) => Some((username, password)),
             _ => None,
         };
@@ -1602,13 +1696,15 @@ impl TerminusDBMcpHandler {
         // Convert timeout from seconds to Duration if provided
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
-        let result = client.fetch(
-            &request.path,
-            &request.remote_url,
-            request.remote_branch.as_deref(),
-            remote_auth,
-            timeout,
-        ).await?;
+        let result = client
+            .fetch(
+                &request.path,
+                &request.remote_url,
+                request.remote_branch.as_deref(),
+                remote_auth,
+                timeout,
+            )
+            .await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1621,13 +1717,19 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_push(&self, request: PushTool) -> Result<serde_json::Value> {
-        info!("Pushing from path: {} to remote: {}", request.path, request.remote_url);
+        info!(
+            "Pushing from path: {} to remote: {}",
+            request.path, request.remote_url
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
         // Prepare remote authentication if provided
-        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+        let remote_auth = match (
+            request.remote_username.as_deref(),
+            request.remote_password.as_deref(),
+        ) {
             (Some(username), Some(password)) => Some((username, password)),
             _ => None,
         };
@@ -1635,13 +1737,15 @@ impl TerminusDBMcpHandler {
         // Convert timeout from seconds to Duration if provided
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
-        let result = client.push(
-            &request.path,
-            &request.remote_url,
-            request.remote_branch.as_deref(),
-            remote_auth,
-            timeout,
-        ).await?;
+        let result = client
+            .push(
+                &request.path,
+                &request.remote_url,
+                request.remote_branch.as_deref(),
+                remote_auth,
+                timeout,
+            )
+            .await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1654,13 +1758,19 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_pull(&self, request: PullTool) -> Result<serde_json::Value> {
-        info!("Pulling into path: {} from remote: {}", request.path, request.remote_url);
+        info!(
+            "Pulling into path: {} from remote: {}",
+            request.path, request.remote_url
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
         // Prepare remote authentication if provided
-        let remote_auth = match (request.remote_username.as_deref(), request.remote_password.as_deref()) {
+        let remote_auth = match (
+            request.remote_username.as_deref(),
+            request.remote_password.as_deref(),
+        ) {
             (Some(username), Some(password)) => Some((username, password)),
             _ => None,
         };
@@ -1668,15 +1778,17 @@ impl TerminusDBMcpHandler {
         // Convert timeout from seconds to Duration if provided
         let timeout = request.timeout_seconds.map(std::time::Duration::from_secs);
 
-        let result = client.pull(
-            &request.path,
-            &request.remote_url,
-            request.remote_branch.as_deref(),
-            &request.author,
-            &request.message,
-            remote_auth,
-            timeout,
-        ).await?;
+        let result = client
+            .pull(
+                &request.path,
+                &request.remote_url,
+                request.remote_branch.as_deref(),
+                &request.author,
+                &request.message,
+                remote_auth,
+                timeout,
+            )
+            .await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1708,13 +1820,18 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_add_remote(&self, request: AddRemoteTool) -> Result<serde_json::Value> {
-        info!("Adding remote at path: {} with URL: {}", request.path, request.remote_url);
+        info!(
+            "Adding remote at path: {} with URL: {}",
+            request.path, request.remote_url
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
         let (db_path, remote_name) = Self::split_remote_path(&request.path)?;
-        let result = client.add_remote(db_path, remote_name, &request.remote_url).await?;
+        let result = client
+            .add_remote(db_path, remote_name, &request.remote_url)
+            .await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1743,13 +1860,18 @@ impl TerminusDBMcpHandler {
     }
 
     async fn handle_update_remote(&self, request: UpdateRemoteTool) -> Result<serde_json::Value> {
-        info!("Updating remote at path: {} with new URL: {}", request.path, request.remote_url);
+        info!(
+            "Updating remote at path: {} with new URL: {}",
+            request.path, request.remote_url
+        );
 
         let config = self.get_connection_config(request.connection).await;
         let client = Self::create_client(&config).await?;
 
         let (db_path, remote_name) = Self::split_remote_path(&request.path)?;
-        let result = client.update_remote(db_path, remote_name, &request.remote_url).await?;
+        let result = client
+            .update_remote(db_path, remote_name, &request.remote_url)
+            .await?;
 
         Ok(serde_json::json!({
             "status": "success",
@@ -1777,11 +1899,17 @@ impl TerminusDBMcpHandler {
         }))
     }
 
-    async fn handle_start_local_server(&self, request: StartLocalServerTool) -> Result<serde_json::Value> {
+    async fn handle_start_local_server(
+        &self,
+        request: StartLocalServerTool,
+    ) -> Result<serde_json::Value> {
         // Generate server ID if not provided
         let server_id = request.server_id.unwrap_or_else(|| {
             use std::time::{SystemTime, UNIX_EPOCH};
-            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             format!("server_{}", ts)
         });
 
@@ -1791,7 +1919,10 @@ impl TerminusDBMcpHandler {
         {
             let servers = self.managed_servers.read().await;
             if servers.contains_key(&server_id) {
-                return Err(anyhow::anyhow!("Server with ID '{}' is already running", server_id));
+                return Err(anyhow::anyhow!(
+                    "Server with ID '{}' is already running",
+                    server_id
+                ));
             }
         }
 
@@ -1806,7 +1937,8 @@ impl TerminusDBMcpHandler {
         };
 
         // Start the server
-        let server = start_server(opts).await
+        let server = start_server(opts)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to start server: {}", e))?;
 
         // Get connection info - TerminusDB always runs on localhost:6363
@@ -1816,11 +1948,14 @@ impl TerminusDBMcpHandler {
         // Store server handle with connection info
         {
             let mut servers = self.managed_servers.write().await;
-            servers.insert(server_id.clone(), ManagedServer {
-                server: Arc::new(server),
-                url: url.clone(),
-                password: password.clone(),
-            });
+            servers.insert(
+                server_id.clone(),
+                ManagedServer {
+                    server: Arc::new(server),
+                    url: url.clone(),
+                    password: password.clone(),
+                },
+            );
         }
 
         // Auto-configure connection if requested
@@ -1846,7 +1981,10 @@ impl TerminusDBMcpHandler {
         }))
     }
 
-    async fn handle_stop_local_server(&self, request: StopLocalServerTool) -> Result<serde_json::Value> {
+    async fn handle_stop_local_server(
+        &self,
+        request: StopLocalServerTool,
+    ) -> Result<serde_json::Value> {
         info!("Stopping local server with ID: {}", request.server_id);
 
         let mut servers = self.managed_servers.write().await;
@@ -1869,24 +2007,31 @@ impl TerminusDBMcpHandler {
                     }
                 }))
             }
-            None => {
-                Err(anyhow::anyhow!("Server with ID '{}' not found", request.server_id))
-            }
+            None => Err(anyhow::anyhow!(
+                "Server with ID '{}' not found",
+                request.server_id
+            )),
         }
     }
 
-    async fn handle_list_local_servers(&self, _request: ListLocalServersTool) -> Result<serde_json::Value> {
+    async fn handle_list_local_servers(
+        &self,
+        _request: ListLocalServersTool,
+    ) -> Result<serde_json::Value> {
         info!("Listing local servers");
 
         let servers = self.managed_servers.read().await;
 
-        let server_list: Vec<_> = servers.iter().map(|(id, managed)| {
-            serde_json::json!({
-                "server_id": id,
-                "url": managed.url,
-                "status": "running"
+        let server_list: Vec<_> = servers
+            .iter()
+            .map(|(id, managed)| {
+                serde_json::json!({
+                    "server_id": id,
+                    "url": managed.url,
+                    "status": "running"
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(serde_json::json!({
             "servers": server_list,
@@ -2703,34 +2848,41 @@ mod tests {
                 "and": []
             }
         });
-        
+
         let mut json_value = original_json.clone();
-        
+
         // Check if needs wrapping
-        let needs_wrapping = json_value.get("@type")
+        let needs_wrapping = json_value
+            .get("@type")
             .and_then(|t| t.as_str())
             .map(|t| t != "Query")
             .unwrap_or(false);
-            
+
         assert!(needs_wrapping);
-        
+
         // Apply wrapping
         if let Some(query_type) = json_value.get("@type").and_then(|t| t.as_str()) {
             let mut wrapper = serde_json::Map::new();
-            wrapper.insert("@type".to_string(), serde_json::Value::String("Query".to_string()));
+            wrapper.insert(
+                "@type".to_string(),
+                serde_json::Value::String("Query".to_string()),
+            );
             wrapper.insert(query_type.to_lowercase(), json_value);
             json_value = serde_json::Value::Object(wrapper);
         }
-        
+
         // Verify the wrapped structure
-        assert_eq!(json_value.get("@type").and_then(|v| v.as_str()), Some("Query"));
+        assert_eq!(
+            json_value.get("@type").and_then(|v| v.as_str()),
+            Some("Query")
+        );
         assert!(json_value.get("select").is_some());
-        
+
         // The wrapped JSON should now be ready for deserialization
         // Note: The actual deserialization may still fail due to how FromTDBInstance
         // handles abstract tagged unions, but the wrapping structure is correct
     }
-    
+
     #[test]
     fn test_complex_woql_query_json_ld() {
         // This test verifies that complex JSON-LD queries can be handled
@@ -2878,29 +3030,41 @@ mod tests {
 
         // Test that the JSON can be used directly without wrapping or deserialization
         let json_string = serde_json::to_string(&query_json).unwrap();
-        
+
         // Simulate what execute_woql does - parse the JSON string
         let parsed_json = serde_json::from_str::<serde_json::Value>(&json_string).unwrap();
-        
+
         // Verify that the JSON has the expected structure
-        assert_eq!(parsed_json.get("@type").and_then(|v| v.as_str()), Some("Select"));
+        assert_eq!(
+            parsed_json.get("@type").and_then(|v| v.as_str()),
+            Some("Select")
+        );
         assert!(parsed_json.get("variables").is_some());
         assert!(parsed_json.get("query").is_some());
-        
+
         // Verify the nested structure
         let query_obj = parsed_json.get("query").unwrap();
         assert_eq!(query_obj.get("@type").and_then(|v| v.as_str()), Some("And"));
-        
+
         let and_array = query_obj.get("and").and_then(|v| v.as_array()).unwrap();
         assert_eq!(and_array.len(), 2);
-        
+
         // First element should be an OrderBy
-        assert_eq!(and_array[0].get("@type").and_then(|v| v.as_str()), Some("OrderBy"));
-        
+        assert_eq!(
+            and_array[0].get("@type").and_then(|v| v.as_str()),
+            Some("OrderBy")
+        );
+
         // Second element should be a ReadDocument
-        assert_eq!(and_array[1].get("@type").and_then(|v| v.as_str()), Some("ReadDocument"));
-        
+        assert_eq!(
+            and_array[1].get("@type").and_then(|v| v.as_str()),
+            Some("ReadDocument")
+        );
+
         // The JSON should be ready to send to the API without any transformation
-        println!("JSON-LD query ready for API: {}", serde_json::to_string_pretty(&parsed_json).unwrap())
+        println!(
+            "JSON-LD query ready for API: {}",
+            serde_json::to_string_pretty(&parsed_json).unwrap()
+        )
     }
 }

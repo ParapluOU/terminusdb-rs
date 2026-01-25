@@ -25,14 +25,14 @@
 ///     name: String,
 ///     age: i32,
 /// }
-/// 
+///
 /// // Compile-time checked property access
 /// let prop_name = field!(Person:name); // Returns "name"
 /// let prop_age = field!(Person:age);   // Returns "age"
-/// 
+///
 /// // Use in queries
 /// let q = triple!(var!(x), field!(Person:name), var!(n));
-/// 
+///
 /// // Automatically used by query DSL for type checking
 /// let dsl_query = query!{{
 ///     Person {
@@ -41,7 +41,7 @@
 ///     }
 /// }};
 /// ```
-/// 
+///
 /// The field! macro will fail to compile if:
 /// - The model type doesn't exist
 /// - The field doesn't exist on the model
@@ -59,7 +59,7 @@ macro_rules! field {
                 let _ = &m.$field;
             }
         };
-        
+
         // After verification passes, return the field name as a string
         stringify!($field)
     }};
@@ -1183,37 +1183,30 @@ macro_rules! parse_node_pattern {
     // Pattern: m:M.field
     ($var:ident : $node:ident . $field:ident) => {
         (
-            $crate::path_builder::PathStart::new()
-                .variable::<$node>(stringify!($var)),
-            Some(stringify!($field))
+            $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)),
+            Some(stringify!($field)),
         )
     };
-    
+
     // Pattern: M.field
     ($node:ident . $field:ident) => {
         (
-            $crate::path_builder::PathStart::new()
-                .node::<$node>(),
-            Some(stringify!($field))
+            $crate::path_builder::PathStart::new().node::<$node>(),
+            Some(stringify!($field)),
         )
     };
-    
+
     // Pattern: m:M
     ($var:ident : $node:ident) => {
         (
-            $crate::path_builder::PathStart::new()
-                .variable::<$node>(stringify!($var)),
-            None
+            $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)),
+            None,
         )
     };
-    
+
     // Pattern: M
     ($node:ident) => {
-        (
-            $crate::path_builder::PathStart::new()
-                .node::<$node>(),
-            None
-        )
+        ($crate::path_builder::PathStart::new().node::<$node>(), None)
     };
 }
 
@@ -1244,7 +1237,10 @@ macro_rules! lexical_key {
     ($base:expr, $key_list:expr, $uri:expr) => {
         $crate::query::Query::LexicalKey($crate::misc::LexicalKey {
             base: $crate::macros::into_data_value($base),
-            key_list: $key_list.into_iter().map(|v| $crate::macros::into_data_value(v)).collect(),
+            key_list: $key_list
+                .into_iter()
+                .map(|v| $crate::macros::into_data_value(v))
+                .collect(),
             uri: $crate::macros::into_node_value($uri),
         })
     };
@@ -1262,7 +1258,10 @@ macro_rules! hash_key {
     ($base:expr, $key_list:expr, $uri:expr) => {
         $crate::query::Query::HashKey($crate::misc::HashKey {
             base: $crate::macros::into_data_value($base),
-            key_list: $key_list.into_iter().map(|v| $crate::macros::into_data_value(v)).collect(),
+            key_list: $key_list
+                .into_iter()
+                .map(|v| $crate::macros::into_data_value(v))
+                .collect(),
             uri: $crate::macros::into_node_value($uri),
         })
     };
@@ -1458,8 +1457,12 @@ macro_rules! plus {
     ($left:expr, $right:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Plus($crate::expression::Plus {
-                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
-                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+                left: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($left)
+                )),
+                right: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($right)
+                )),
             }),
             $result
         )
@@ -1478,8 +1481,12 @@ macro_rules! minus {
     ($left:expr, $right:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Minus($crate::expression::Minus {
-                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
-                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+                left: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($left)
+                )),
+                right: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($right)
+                )),
             }),
             $result
         )
@@ -1498,8 +1505,12 @@ macro_rules! times {
     ($left:expr, $right:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Times($crate::expression::Times {
-                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
-                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+                left: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($left)
+                )),
+                right: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($right)
+                )),
             }),
             $result
         )
@@ -1518,8 +1529,12 @@ macro_rules! divide {
     ($left:expr, $right:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Divide($crate::expression::Divide {
-                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
-                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+                left: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($left)
+                )),
+                right: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($right)
+                )),
             }),
             $result
         )
@@ -1538,8 +1553,12 @@ macro_rules! div {
     ($left:expr, $right:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Div($crate::expression::Div {
-                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
-                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+                left: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($left)
+                )),
+                right: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($right)
+                )),
             }),
             $result
         )
@@ -1558,8 +1577,12 @@ macro_rules! exp {
     ($left:expr, $right:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Exp($crate::expression::Exp {
-                left: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($left))),
-                right: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($right))),
+                left: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($left)
+                )),
+                right: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($right)
+                )),
             }),
             $result
         )
@@ -1578,7 +1601,9 @@ macro_rules! floor {
     ($argument:expr, $result:expr) => {
         eval!(
             $crate::expression::ArithmeticExpression::Floor($crate::expression::Floor {
-                argument: Box::new($crate::expression::ArithmeticExpression::Value($crate::macros::into_arithmetic_value($argument))),
+                argument: Box::new($crate::expression::ArithmeticExpression::Value(
+                    $crate::macros::into_arithmetic_value($argument)
+                )),
             }),
             $result
         )
@@ -2072,25 +2097,25 @@ macro_rules! call {
 /// ```
 /// # use terminusdb_woql2::*;
 /// use terminusdb_woql2::order::{Order, OrderTemplate};
-/// 
+///
 /// // Original syntax with OrderTemplate
 /// let q1 = order_by!(
 ///     [OrderTemplate { variable: "name".to_string(), order: Order::Asc }],
 ///     triple!(var!(x), "name", var!(name))
 /// );
-/// 
+///
 /// // Tuple syntax with variables
 /// let q2 = order_by!(
 ///     [(var!(name), Order::Asc), (var!(age), Order::Desc)],
 ///     triple!(var!(x), "name", var!(name))
 /// );
-/// 
+///
 /// // Tuple syntax with string literals
 /// let q3 = order_by!(
 ///     [("name", Order::Asc), ("age", Order::Desc)],
 ///     triple!(var!(x), "name", var!(name))
 /// );
-/// 
+///
 /// // Arrow syntax
 /// let q4 = order_by!(
 ///     [name => Order::Asc, age => Order::Desc],
@@ -2181,7 +2206,6 @@ macro_rules! dictionary {
         })
     };
 }
-
 
 // Helper functions for conversion
 pub use self::conversion::*;
@@ -2481,49 +2505,51 @@ mod conversion {
             self.into_data_value().into_list_or_variable()
         }
     }
-    
-    impl<T> IntoListOrVariable for Vec<T> 
-    where 
-        T: IntoDataValue
+
+    impl<T> IntoListOrVariable for Vec<T>
+    where
+        T: IntoDataValue,
     {
         fn into_list_or_variable(self) -> ListOrVariable {
-            let data_values: Vec<DataValue> = self.into_iter()
+            let data_values: Vec<DataValue> = self
+                .into_iter()
                 .map(|item| item.into_data_value())
                 .collect();
             ListOrVariable::List(data_values)
         }
     }
-    
+
     // Also implement IntoDataValue for Vec<T> to support member! macro
     impl<T> IntoDataValue for Vec<T>
     where
-        T: IntoDataValue
+        T: IntoDataValue,
     {
         fn into_data_value(self) -> DataValue {
-            let data_values: Vec<DataValue> = self.into_iter()
+            let data_values: Vec<DataValue> = self
+                .into_iter()
                 .map(|item| item.into_data_value())
                 .collect();
             DataValue::List(data_values)
         }
     }
-    
+
     // Trait for converting to select! arguments
     pub trait IntoSelectArg {
         fn into_select_arg(self) -> String;
     }
-    
+
     impl IntoSelectArg for String {
         fn into_select_arg(self) -> String {
             self
         }
     }
-    
+
     impl IntoSelectArg for &str {
         fn into_select_arg(self) -> String {
             self.to_string()
         }
     }
-    
+
     impl IntoSelectArg for Value {
         fn into_select_arg(self) -> String {
             match self {
@@ -2532,7 +2558,7 @@ mod conversion {
             }
         }
     }
-    
+
     impl IntoSelectArg for &Value {
         fn into_select_arg(self) -> String {
             match self {
@@ -2553,18 +2579,18 @@ mod conversion {
 /// # use terminusdb_woql2::from_path;
 /// // Unlimited length chains:
 /// let query = from_path!(User > Post > Comment > Like > ...);
-/// 
+///
 /// // Mixed directions:
 /// let query = from_path!(User > Post < Comment > Like);
-/// 
+///
 /// // Custom variables:
 /// let query = from_path!(u:User > p:Post > c:Comment);
-/// 
+///
 /// // Field access:
 /// let query = from_path!(User.posts > Post.comments > Comment);
 /// ```
 ///
-/// # Implementation Notes  
+/// # Implementation Notes
 /// - Uses truly recursive macro patterns for unlimited chains
 /// - Supports all relation types and custom variables
 /// - Zero-cost abstraction - compiles to efficient WOQL
@@ -2577,176 +2603,176 @@ macro_rules! from_path {
     ($node:ident) => {
         $crate::path_builder::PathStart::new().node::<$node>().finalize()
     };
-    
+
     // Custom variable
     ($var:ident : $node:ident) => {
         $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)).finalize()
     };
-    
+
     // === STARTING PATTERNS - Parse first node and delegate ===
     // NOTE: More specific patterns must come first to avoid greedy matching
-    
+
     // Start with var:node.field > target (field implies direction)
     ($var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
-    
-    // Start with node.field > target (field implies direction)  
+
+    // Start with node.field > target (field implies direction)
     ($node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $crate::path_builder::PathStart::new().node::<$node>().field(stringify!($field)), $($rest)+)
     };
-    
+
     // Start with custom variable
     ($var:ident : $node:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain $crate::path_builder::PathStart::new().variable::<$node>(stringify!($var)), $dir $($rest)+)
     };
-    
+
     // Start with simple node (must be last - most general)
     ($node:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain $crate::path_builder::PathStart::new().node::<$node>(), $dir $($rest)+)
     };
-    
+
     // === CHAIN BUILDING - Recursive patterns ===
     // NOTE: More specific patterns must come before less specific ones
-    
+
     // Terminal: > var:Node.field
     (@chain $builder:expr, > $var:ident : $node:ident . $field:ident) => {
         $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)).finalize()
     };
-    
+
     // Terminal: < var:Node.field
     (@chain $builder:expr, < $var:ident : $node:ident . $field:ident) => {
         $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)).finalize()
     };
-    
+
     // Terminal: > Node.field (terminal - no more tokens)
     (@chain $builder:expr, > $node:ident . $field:ident) => {
         $builder.forward().node::<$node>().finalize()
     };
-    
+
     // Terminal: < Node.field (terminal - no more tokens)
     (@chain $builder:expr, < $node:ident . $field:ident) => {
         $builder.backward().node::<$node>().finalize()
     };
-    
+
     // Terminal: > var:Node
     (@chain $builder:expr, > $var:ident : $node:ident) => {
         $builder.forward().variable::<$node>(stringify!($var)).finalize()
     };
-    
+
     // Terminal: < var:Node
     (@chain $builder:expr, < $var:ident : $node:ident) => {
         $builder.backward().variable::<$node>(stringify!($var)).finalize()
     };
-    
+
     // Terminal: > Node
     (@chain $builder:expr, > $node:ident) => {
         $builder.forward().node::<$node>().finalize()
     };
-    
+
     // Terminal: < Node
     (@chain $builder:expr, < $node:ident) => {
         $builder.backward().node::<$node>().finalize()
     };
-    
+
     // Continue: > var:Node.field then more
     (@chain $builder:expr, > $var:ident : $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain_field $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: < var:Node.field then more
     (@chain $builder:expr, < $var:ident : $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain_field $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: > Node.field then more
     (@chain $builder:expr, > $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain_field $builder.forward().node::<$node>().field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: < Node.field then more
     (@chain $builder:expr, < $node:ident . $field:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain_field $builder.backward().node::<$node>().field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: > var:Node then more
     (@chain $builder:expr, > $var:ident : $node:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain $builder.forward().variable::<$node>(stringify!($var)), $dir $($rest)+)
     };
-    
+
     // Continue: < var:Node then more
     (@chain $builder:expr, < $var:ident : $node:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain $builder.backward().variable::<$node>(stringify!($var)), $dir $($rest)+)
     };
-    
+
     // Continue: > Node.field > (field in middle of chain)
     (@chain $builder:expr, > $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $builder.forward().node::<$node>().field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: < Node.field > (field in middle of chain)
     (@chain $builder:expr, < $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $builder.backward().node::<$node>().field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: > var:Node.field > (field in middle of chain)
     (@chain $builder:expr, > $var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $builder.forward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: < var:Node.field > (field in middle of chain)
     (@chain $builder:expr, < $var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $builder.backward().variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: > Node then more
     (@chain $builder:expr, > $node:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain $builder.forward().node::<$node>(), $dir $($rest)+)
     };
-    
+
     // Continue: < Node then more
     (@chain $builder:expr, < $node:ident $dir:tt $($rest:tt)+) => {
         from_path!(@chain $builder.backward().node::<$node>(), $dir $($rest)+)
     };
-    
+
     // === FIELD CHAIN BUILDING - For paths that started with or contain fields ===
     // Fields already have implicit forward direction, so no > or < prefix
-    
+
     // Terminal: field -> Node
     (@chain_field $builder:expr, $node:ident) => {
         $builder.node::<$node>().finalize()
     };
-    
+
     // Terminal: field -> var:Node
     (@chain_field $builder:expr, $var:ident : $node:ident) => {
         $builder.variable::<$node>(stringify!($var)).finalize()
     };
-    
+
     // Continue: field -> Node > more
     (@chain_field $builder:expr, $node:ident > $($rest:tt)+) => {
         from_path!(@chain $builder.node::<$node>(), > $($rest)+)
     };
-    
+
     // Continue: field -> Node < more
     (@chain_field $builder:expr, $node:ident < $($rest:tt)+) => {
         from_path!(@chain $builder.node::<$node>(), < $($rest)+)
     };
-    
+
     // Continue: field -> var:Node > more
     (@chain_field $builder:expr, $var:ident : $node:ident > $($rest:tt)+) => {
         from_path!(@chain $builder.variable::<$node>(stringify!($var)), > $($rest)+)
     };
-    
+
     // Continue: field -> var:Node < more
     (@chain_field $builder:expr, $var:ident : $node:ident < $($rest:tt)+) => {
         from_path!(@chain $builder.variable::<$node>(stringify!($var)), < $($rest)+)
     };
-    
+
     // Continue: field -> Node.field > more
     (@chain_field $builder:expr, $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $builder.node::<$node>().field(stringify!($field)), $($rest)+)
     };
-    
+
     // Continue: field -> var:Node.field > more
     (@chain_field $builder:expr, $var:ident : $node:ident . $field:ident > $($rest:tt)+) => {
         from_path!(@chain_field $builder.variable::<$node>(stringify!($var)).field(stringify!($field)), $($rest)+)
@@ -2768,7 +2794,10 @@ impl IntoOrderTemplate for (crate::value::Value, crate::order::Order) {
     fn into_order_template(self) -> crate::order::OrderTemplate {
         let variable = match self.0 {
             crate::value::Value::Variable(var) => var,
-            _ => panic!("Only Value::Variable can be used in order_by!. Got: {:?}", self.0),
+            _ => panic!(
+                "Only Value::Variable can be used in order_by!. Got: {:?}",
+                self.0
+            ),
         };
         crate::order::OrderTemplate {
             variable,
@@ -2781,7 +2810,10 @@ impl IntoOrderTemplate for (&crate::value::Value, crate::order::Order) {
     fn into_order_template(self) -> crate::order::OrderTemplate {
         let variable = match self.0 {
             crate::value::Value::Variable(var) => var.clone(),
-            _ => panic!("Only Value::Variable can be used in order_by!. Got: {:?}", self.0),
+            _ => panic!(
+                "Only Value::Variable can be used in order_by!. Got: {:?}",
+                self.0
+            ),
         };
         crate::order::OrderTemplate {
             variable,

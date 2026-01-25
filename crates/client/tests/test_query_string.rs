@@ -7,11 +7,11 @@ mod tests {
         // Test that we can detect JSON-LD vs DSL format
         let json_query = r#"{"@type": "Select", "variables": ["Subject"]}"#;
         assert!(serde_json::from_str::<serde_json::Value>(json_query).is_ok());
-        
+
         let dsl_query = r#"select([$Subject], triple($Subject, "rdf:type", "owl:Class"))"#;
         assert!(serde_json::from_str::<serde_json::Value>(dsl_query).is_err());
     }
-    
+
     #[test]
     fn test_json_ld_format_detection() {
         // Test various JSON-LD formats
@@ -20,7 +20,7 @@ mod tests {
             r#"{"@type": "And", "and": []}"#,
             r#"{"@type": "Triple", "subject": {"@type": "NodeValue", "variable": "S"}}"#,
         ];
-        
+
         for json in valid_json {
             assert!(
                 serde_json::from_str::<serde_json::Value>(json).is_ok(),
@@ -29,8 +29,8 @@ mod tests {
             );
         }
     }
-    
-    #[test] 
+
+    #[test]
     fn test_dsl_format_detection() {
         // Test various DSL formats that should NOT parse as JSON
         let dsl_queries = vec![
@@ -38,7 +38,7 @@ mod tests {
             r#"and(triple($S, $P, $O), greater($O, 5))"#,
             r#"opt(triple($X, "rdfs:label", $Label))"#,
         ];
-        
+
         for dsl in dsl_queries {
             assert!(
                 serde_json::from_str::<serde_json::Value>(dsl).is_err(),

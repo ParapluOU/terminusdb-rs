@@ -439,10 +439,7 @@ impl ToJson for Instance {
         // This allows Context to handle all namespace resolution
 
         // class type name - use short name, Context will expand
-        map.insert(
-            "@type".to_string(),
-            self.schema.class_name().clone().into(),
-        );
+        map.insert("@type".to_string(), self.schema.class_name().clone().into());
 
         // insert id if we have one
         if let Some(id) = self.id.clone() {

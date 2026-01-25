@@ -135,8 +135,9 @@ type SharedSemaphore = Arc<Semaphore>;
 /// This ensures that multiple client instances connecting to the same host
 /// share the same semaphores, providing coordinated concurrency limiting across
 /// all clients.
-static GLOBAL_SEMAPHORES: Lazy<DashMap<String, (Option<SharedSemaphore>, Option<SharedSemaphore>)>> =
-    Lazy::new(DashMap::new);
+static GLOBAL_SEMAPHORES: Lazy<
+    DashMap<String, (Option<SharedSemaphore>, Option<SharedSemaphore>)>,
+> = Lazy::new(DashMap::new);
 
 /// Get or create semaphores for a given host
 ///

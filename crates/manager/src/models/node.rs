@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use terminusdb_schema::*;
-use terminusdb_schema_derive::{TerminusDBModel, FromTDBInstance};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Configuration for a TerminusDB instance node
 #[derive(Debug, Clone, TerminusDBModel, FromTDBInstance)]

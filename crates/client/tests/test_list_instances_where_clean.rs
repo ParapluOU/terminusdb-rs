@@ -139,7 +139,10 @@ mod tests {
 
                 // Test 2: Count by different category
                 let furniture_count = client
-                    .count_instances_where::<Product, _, _, _>(&spec, vec![("category", "Furniture")])
+                    .count_instances_where::<Product, _, _, _>(
+                        &spec,
+                        vec![("category", "Furniture")],
+                    )
                     .await?;
                 assert_eq!(furniture_count, 2, "Should have 2 furniture items");
 

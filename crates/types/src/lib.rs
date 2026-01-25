@@ -96,7 +96,10 @@ impl DatabasePath {
             return Err(PathError::EmptyComponent);
         }
 
-        Ok(Self { organization, database })
+        Ok(Self {
+            organization,
+            database,
+        })
     }
 
     /// Parse from a string like "admin/mydb"
@@ -233,11 +236,7 @@ pub struct ResourcePath {
 
 impl ResourcePath {
     /// Create a new ResourcePath
-    pub fn new(
-        database_path: DatabasePath,
-        location: Location,
-        resource: ResourceType,
-    ) -> Self {
+    pub fn new(database_path: DatabasePath, location: Location, resource: ResourceType) -> Self {
         Self {
             database_path,
             location,
@@ -268,10 +267,12 @@ impl ResourcePath {
             match parts[3] {
                 "_meta" => ResourceType::Meta,
                 "_commits" => ResourceType::Commits,
-                _ => return Err(PathError::InvalidResourcePath(format!(
-                    "Invalid resource type '{}'",
-                    parts[3]
-                ))),
+                _ => {
+                    return Err(PathError::InvalidResourcePath(format!(
+                        "Invalid resource type '{}'",
+                        parts[3]
+                    )))
+                }
             }
         } else if parts.len() >= 5 {
             // branch/name, commit/id, remote/name
@@ -279,10 +280,12 @@ impl ResourcePath {
                 "branch" => ResourceType::Branch(parts[4..].join("/")),
                 "commit" => ResourceType::Commit(parts[4..].join("/")),
                 "remote" => ResourceType::Remote(parts[4..].join("/")),
-                _ => return Err(PathError::InvalidResourcePath(format!(
-                    "Invalid resource type '{}'",
-                    parts[3]
-                ))),
+                _ => {
+                    return Err(PathError::InvalidResourcePath(format!(
+                        "Invalid resource type '{}'",
+                        parts[3]
+                    )))
+                }
             }
         } else {
             return Err(PathError::InvalidResourcePath(format!(
@@ -329,7 +332,11 @@ impl FromStr for ResourcePath {
 
 impl fmt::Display for ResourcePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}/{}", self.database_path, self.location, self.resource)
+        write!(
+            f,
+            "{}/{}/{}",
+            self.database_path, self.location, self.resource
+        )
     }
 }
 

@@ -19,48 +19,48 @@ impl RelationField for DefaultField {
 }
 
 /// Forward relation: Self has a relation to Target
-/// 
+///
 /// This trait is automatically implemented by the TerminusDBModel derive macro
 /// for each relation field. The where constraints are checked at method call time.
 pub trait RelationTo<Target, Field = DefaultField> {
     /// INTERNAL: Unchecked constraint generation for derive macro use only
     /// This method has no where bounds and should not be called directly by users
     fn _constraints_with_vars_unchecked(source_var: &str, target_var: &str) -> Query;
-    
+
     /// Generate WOQL constraints with custom variable names
     /// This is the public API with proper type safety checks
     fn constraints_with_vars(source_var: &str, target_var: &str) -> Query
-    where 
+    where
         Self: TerminusDBModel,
         Target: TerminusDBModel,
         Field: RelationField,
     {
         Self::_constraints_with_vars_unchecked(source_var, target_var)
     }
-    
+
     /// Generate WOQL constraints using schema names as variables
     /// Default implementation that calls constraints_with_vars
-    fn constraints() -> Query 
-    where 
+    fn constraints() -> Query
+    where
         Self: TerminusDBModel,
         Target: TerminusDBModel,
         Field: RelationField,
     {
         Self::constraints_with_vars(
             &<Self as terminusdb_schema::ToSchemaClass>::to_class(),
-            &<Target as terminusdb_schema::ToSchemaClass>::to_class()
+            &<Target as terminusdb_schema::ToSchemaClass>::to_class(),
         )
     }
 }
 
 /// Reverse relation: Target has a relation to Self
-/// 
+///
 /// This trait is automatically implemented for any type that has a RelationTo implementation
 pub trait RelationFrom<Target, Field = DefaultField> {
     /// INTERNAL: Unchecked constraint generation for derive macro use only
     /// This method has no where bounds and should not be called directly by users
     fn _constraints_with_vars_unchecked(source_var: &str, target_var: &str) -> Query;
-    
+
     /// Generate WOQL constraints with custom variable names
     /// Note the reversed variable order compared to RelationTo
     fn constraints_with_vars(source_var: &str, target_var: &str) -> Query
@@ -71,9 +71,9 @@ pub trait RelationFrom<Target, Field = DefaultField> {
     {
         Self::_constraints_with_vars_unchecked(source_var, target_var)
     }
-    
+
     /// Generate WOQL constraints using schema names as variables
-    fn constraints() -> Query 
+    fn constraints() -> Query
     where
         Self: TerminusDBModel,
         Target: TerminusDBModel,
@@ -81,7 +81,7 @@ pub trait RelationFrom<Target, Field = DefaultField> {
     {
         Self::constraints_with_vars(
             &<Self as terminusdb_schema::ToSchemaClass>::to_class(),
-            &<Target as terminusdb_schema::ToSchemaClass>::to_class()
+            &<Target as terminusdb_schema::ToSchemaClass>::to_class(),
         )
     }
 }
@@ -95,7 +95,9 @@ where
 {
     fn _constraints_with_vars_unchecked(source_var: &str, target_var: &str) -> Query {
         // Delegate to the RelationTo implementation with swapped variables
-        <Source as RelationTo<Target, Field>>::_constraints_with_vars_unchecked(target_var, source_var)
+        <Source as RelationTo<Target, Field>>::_constraints_with_vars_unchecked(
+            target_var, source_var,
+        )
     }
 }
 
@@ -105,17 +107,22 @@ pub fn basic_relation_constraints<Source, Target>(
     source_var: &str,
     target_var: &str,
     is_optional: bool,
-) -> Query 
-where 
+) -> Query
+where
     Source: TerminusDBModel,
     Target: TerminusDBModel,
 {
     let constraint = terminusdb_woql2::and!(
-        terminusdb_woql2::triple!(terminusdb_woql2::var!(source_var), field_name, terminusdb_woql2::var!(target_var)).into(),
+        terminusdb_woql2::triple!(
+            terminusdb_woql2::var!(source_var),
+            field_name,
+            terminusdb_woql2::var!(target_var)
+        )
+        .into(),
         terminusdb_woql2::type_!(terminusdb_woql2::var!(source_var), Source).into(),
         terminusdb_woql2::type_!(terminusdb_woql2::var!(target_var), Target).into()
     );
-    
+
     if is_optional {
         terminusdb_woql2::optional!(constraint)
     } else {
@@ -136,11 +143,12 @@ pub fn generate_relation_constraints(
     let source_variable = Value::Variable(source_var.to_string());
     let target_variable = Value::Variable(target_var.to_string());
     let constraint = terminusdb_woql2::and!(
-        terminusdb_woql2::triple!(source_variable.clone(), field_name, target_variable.clone()).into(),
+        terminusdb_woql2::triple!(source_variable.clone(), field_name, target_variable.clone())
+            .into(),
         terminusdb_woql2::type_!(source_variable.clone(), source_type).into(),
         terminusdb_woql2::type_!(target_variable, target_type).into()
     );
-    
+
     if is_optional {
         terminusdb_woql2::optional!(constraint)
     } else {
@@ -270,25 +278,12 @@ mod tests {
     #[test]
     fn test_generate_relation_constraints() {
         // Test basic relation constraint generation
-        let query = generate_relation_constraints(
-            "posts",
-            "User",
-            "Post",
-            "u",
-            "p",
-            false
-        );
+        let query = generate_relation_constraints("posts", "User", "Post", "u", "p", false);
         println!("Generated query: {:?}", query);
 
         // Test optional relation
-        let optional_query = generate_relation_constraints(
-            "manager",
-            "User",
-            "User",
-            "u1",
-            "u2",
-            true
-        );
+        let optional_query =
+            generate_relation_constraints("manager", "User", "User", "u1", "u2", true);
         println!("Generated optional query: {:?}", optional_query);
     }
 

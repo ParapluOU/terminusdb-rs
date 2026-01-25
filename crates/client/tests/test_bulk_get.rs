@@ -65,7 +65,7 @@ mod tests {
             .with_minimized(false)
             .with_unfold(true)
             .with_count(10);
-        
+
         assert!(!opts.minimized, "minimized should be false");
         assert!(opts.unfold, "unfold should be true");
         assert_eq!(opts.count, Some(10), "count should be 10");

@@ -149,7 +149,9 @@ mod test_instance_if_exists {
             .with_tmp_db("test_inst_found", |client, spec| async move {
                 // Insert schema
                 let args = DocumentInsertArgs::from(spec.clone());
-                let _ = client.insert_entity_schema::<TestPerson>(args.clone()).await;
+                let _ = client
+                    .insert_entity_schema::<TestPerson>(args.clone())
+                    .await;
 
                 // Insert a test instance
                 let person = TestPerson {

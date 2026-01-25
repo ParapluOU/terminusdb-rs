@@ -135,7 +135,10 @@ mod test_open_database {
             )
             .await?;
 
-        assert!(!second_result.was_created, "Database should not be newly created");
+        assert!(
+            !second_result.was_created,
+            "Database should not be newly created"
+        );
         assert!(!second_result.was_seeded, "Seeder should not run on reopen");
 
         // Verify only the first user exists (seeder didn't run twice)
@@ -225,7 +228,10 @@ mod test_open_database {
 
         // Different schemas should produce different hashes
         let hash3 = compute_schema_hash::<(TestProject,)>();
-        assert_ne!(hash1, hash3, "Different schemas should produce different hashes");
+        assert_ne!(
+            hash1, hash3,
+            "Different schemas should produce different hashes"
+        );
 
         // Order shouldn't matter (due to sorting)
         let hash_ab = compute_schema_hash::<(TestUser, TestProject)>();
@@ -243,22 +249,25 @@ mod test_open_database {
 
         // Open with multiple schemas and seed both
         let result = client
-            .open_database::<(TestUser, TestProject), _>(&db_name, tdbseeder![
-                TestUser {
-                    name: "User1".to_string(),
-                    email: "user1@test.com".to_string(),
-                },
-                vec![
-                    TestProject {
-                        title: "Project A".to_string(),
-                        active: true,
+            .open_database::<(TestUser, TestProject), _>(
+                &db_name,
+                tdbseeder![
+                    TestUser {
+                        name: "User1".to_string(),
+                        email: "user1@test.com".to_string(),
                     },
-                    TestProject {
-                        title: "Project B".to_string(),
-                        active: false,
-                    },
+                    vec![
+                        TestProject {
+                            title: "Project A".to_string(),
+                            active: true,
+                        },
+                        TestProject {
+                            title: "Project B".to_string(),
+                            active: false,
+                        },
+                    ],
                 ],
-            ])
+            )
             .await?;
 
         assert!(result.was_created);
@@ -434,9 +443,7 @@ mod test_open_database {
 
         // Retrieve and verify actual data
         // Verify companies with nested subdocuments
-        let companies: Vec<Company> = client
-            .list_instances::<Company>(&spec, None, None)
-            .await?;
+        let companies: Vec<Company> = client.list_instances::<Company>(&spec, None, None).await?;
         assert_eq!(companies.len(), 2);
 
         // Find TechCorp and verify nested data
@@ -460,9 +467,8 @@ mod test_open_database {
         assert!(startup.contact.is_none());
 
         // Verify employees
-        let retrieved_employees: Vec<Employee> = client
-            .list_instances::<Employee>(&spec, None, None)
-            .await?;
+        let retrieved_employees: Vec<Employee> =
+            client.list_instances::<Employee>(&spec, None, None).await?;
         assert_eq!(retrieved_employees.len(), 3);
 
         let alice = retrieved_employees

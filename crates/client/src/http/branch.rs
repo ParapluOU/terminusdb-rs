@@ -1,7 +1,10 @@
 //! Branch management operations
 
 use {
-    crate::{CommitInfo, SquashResponse, TerminusDBAdapterError, debug::{OperationEntry, OperationType, QueryLogEntry}},
+    crate::{
+        debug::{OperationEntry, OperationType, QueryLogEntry},
+        CommitInfo, SquashResponse, TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde_json::json,
@@ -12,8 +15,8 @@ use {
 impl super::client::TerminusDBHttpClient {
     /// Squashes a commit history into a single commit.
     ///
-    /// This operation creates a new unattached commit containing the squashed data. 
-    /// This commit can be queried directly, or be assigned to a particular branch 
+    /// This operation creates a new unattached commit containing the squashed data.
+    /// This commit can be queried directly, or be assigned to a particular branch
     /// using the reset endpoint.
     ///
     /// # Arguments
@@ -62,10 +65,9 @@ impl super::client::TerminusDBHttpClient {
         debug!("POST {}", &uri);
 
         // Create operation entry
-        let mut operation = OperationEntry::new(
-            OperationType::Squash,
-            format!("/api/squash/{}", path)
-        ).with_context(None, None);
+        let mut operation =
+            OperationEntry::new(OperationType::Squash, format!("/api/squash/{}", path))
+                .with_context(None, None);
 
         // Create the commit info
         let commit_info = CommitInfo {
@@ -83,7 +85,8 @@ impl super::client::TerminusDBHttpClient {
             .header("Content-Type", "application/json");
 
         // Apply timeout: use provided timeout or default to 8 hours for squash operations
-        let request = request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(28800)));
+        let request =
+            request.timeout(timeout.unwrap_or_else(|| std::time::Duration::from_secs(28800)));
 
         let res = request
             .body(
@@ -101,15 +104,19 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("squash operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("squash failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation.clone());
-            
+
             // Log to query log if enabled
-            let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+            let logger_opt = self
+                .query_logger
+                .read()
+                .ok()
+                .and_then(|guard| guard.clone());
             if let Some(logger) = logger_opt {
                 let log_entry = QueryLogEntry {
                     timestamp: chrono::Utc::now(),
@@ -129,17 +136,21 @@ impl super::client::TerminusDBHttpClient {
                 };
                 logger.log(log_entry).await;
             }
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<SquashResponse>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation.clone());
-        
+
         // Log to query log if enabled
-        let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+        let logger_opt = self
+            .query_logger
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
         if let Some(logger) = logger_opt {
             let log_entry = QueryLogEntry {
                 timestamp: chrono::Utc::now(),
@@ -162,8 +173,14 @@ impl super::client::TerminusDBHttpClient {
             logger.log(log_entry).await;
         }
 
-        debug!("Successfully squashed commits in {:?}", start_time.elapsed());
-        debug!("New commit: {}, Old commit: {}", response.commit, response.old_commit);
+        debug!(
+            "Successfully squashed commits in {:?}",
+            start_time.elapsed()
+        );
+        debug!(
+            "New commit: {}, Old commit: {}",
+            response.commit, response.old_commit
+        );
 
         Ok(response)
     }
@@ -213,7 +230,9 @@ impl super::client::TerminusDBHttpClient {
         debug!("Starting squash and reset for {}", path);
 
         // Step 1: Squash the branch
-        let squash_result = self.squash(path, author, message, None).await
+        let squash_result = self
+            .squash(path, author, message, None)
+            .await
             .context("failed to squash branch")?;
 
         // Step 2: Extract the new commit ID
@@ -222,10 +241,15 @@ impl super::client::TerminusDBHttpClient {
         debug!("Squash created commit: {}", new_commit);
 
         // Step 3: Reset the branch to the new commit
-        let reset_result = self.reset(path, &new_commit).await
+        let reset_result = self
+            .reset(path, &new_commit)
+            .await
             .context("failed to reset branch to squashed commit")?;
 
-        debug!("Successfully squashed and reset branch in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully squashed and reset branch in {:?}",
+            start_time.elapsed()
+        );
 
         // Return a combined result
         Ok(json!({
@@ -237,7 +261,7 @@ impl super::client::TerminusDBHttpClient {
 
     /// Resets a branch to a specific commit.
     ///
-    /// This operation sets the branch HEAD to the specified commit. The commit can be 
+    /// This operation sets the branch HEAD to the specified commit. The commit can be
     /// specified as either a commit path or another branch path.
     ///
     /// # Arguments
@@ -275,15 +299,20 @@ impl super::client::TerminusDBHttpClient {
         commit_descriptor: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("reset").add_path(branch_path).build();
+        let uri = self
+            .build_url()
+            .endpoint("reset")
+            .add_path(branch_path)
+            .build();
 
         debug!("POST {}", &uri);
 
         // Create operation entry
         let mut operation = OperationEntry::new(
             OperationType::Other("reset".to_string()),
-            format!("/api/reset/{}", branch_path)
-        ).with_context(None, None);
+            format!("/api/reset/{}", branch_path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -308,18 +337,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("reset operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("reset failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -333,7 +362,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Arguments
     /// * `branch_path` - Path where the new branch will be created (e.g., "admin/mydb/local/branch/feature")
     /// * `origin` - Source branch or commit to branch from (e.g., "admin/mydb/local/branch/main")
-    /// 
+    ///
     /// # Example
     /// ```rust,no_run
     /// # use terminusdb_client::*;
@@ -361,14 +390,19 @@ impl super::client::TerminusDBHttpClient {
         origin: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("branch").add_path(branch_path).build();
+        let uri = self
+            .build_url()
+            .endpoint("branch")
+            .add_path(branch_path)
+            .build();
 
         debug!("POST {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("create_branch".to_string()),
-            format!("/api/branch/{}", branch_path)
-        ).with_context(None, None);
+            format!("/api/branch/{}", branch_path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -393,18 +427,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("create branch operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("create branch failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -435,19 +469,21 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn delete_branch(
-        &self,
-        branch_path: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn delete_branch(&self, branch_path: &str) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("branch").add_path(branch_path).build();
+        let uri = self
+            .build_url()
+            .endpoint("branch")
+            .add_path(branch_path)
+            .build();
 
         debug!("DELETE {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("delete_branch".to_string()),
-            format!("/api/branch/{}", branch_path)
-        ).with_context(None, None);
+            format!("/api/branch/{}", branch_path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -465,18 +501,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("delete branch operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("delete branch failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -503,7 +539,7 @@ impl super::client::TerminusDBHttpClient {
     /// let client = TerminusDBHttpClient::local_node().await;
     /// client.rebase(
     ///     "admin/mydb/local/branch/feature",
-    ///     "admin/mydb/local/branch/main", 
+    ///     "admin/mydb/local/branch/main",
     ///     "admin",
     ///     "Rebase feature onto main"
     /// ).await?;
@@ -529,14 +565,19 @@ impl super::client::TerminusDBHttpClient {
         message: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("rebase").add_path(branch_path).build();
+        let uri = self
+            .build_url()
+            .endpoint("rebase")
+            .add_path(branch_path)
+            .build();
 
         debug!("POST {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("rebase".to_string()),
-            format!("/api/rebase/{}", branch_path)
-        ).with_context(None, None);
+            format!("/api/rebase/{}", branch_path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -563,18 +604,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("rebase operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("rebase failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 

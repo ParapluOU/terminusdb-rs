@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example api_demo --release
 
-use terminusdb_bin::api::{TerminusDB, DbSpec, ServeOptions, DbCreateOptions, DocInsertOptions};
+use terminusdb_bin::api::{DbCreateOptions, DbSpec, DocInsertOptions, ServeOptions, TerminusDB};
 
 fn main() -> std::io::Result<()> {
     let client = TerminusDB::new();
@@ -38,13 +38,18 @@ fn main() -> std::io::Result<()> {
     println!("3. Running a query...");
     let query = "triple(X, rdf:type, Person)";
     // client.query(spec.clone(), query, Default::default())?;
-    println!("   Would execute: query admin/testdb/local/branch/main '{}' ...\n", query);
+    println!(
+        "   Would execute: query admin/testdb/local/branch/main '{}' ...\n",
+        query
+    );
 
     // Example 4: Clone from remote
     println!("4. Cloning from remote...");
     let clone_spec = DbSpec::new("admin", "cloned_db");
     // client.git().clone("https://cloud.terminusdb.com/team/database", Some(clone_spec), Default::default())?;
-    println!("   Would execute: clone https://cloud.terminusdb.com/team/database admin/cloned_db ...\n");
+    println!(
+        "   Would execute: clone https://cloud.terminusdb.com/team/database admin/cloned_db ...\n"
+    );
 
     // Example 5: Using builder pattern for specs
     println!("5. Using builder pattern for complex specs...");

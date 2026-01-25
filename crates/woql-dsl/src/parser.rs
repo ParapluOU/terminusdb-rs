@@ -299,7 +299,7 @@ fn parse_path_pattern(input: ParseInput) -> NomResult<PathPattern> {
                 parse_path_pattern,
                 ws(char(')')),
             )),
-            |pattern| PathPattern::Star(PathStar { 
+            |pattern| PathPattern::Star(PathStar {
                 star: Box::new(pattern),
             }),
         ),
@@ -309,7 +309,7 @@ fn parse_path_pattern(input: ParseInput) -> NomResult<PathPattern> {
                 parse_path_pattern,
                 ws(char(')')),
             )),
-            |pattern| PathPattern::Plus(PathPlus { 
+            |pattern| PathPattern::Plus(PathPlus {
                 plus: Box::new(pattern),
             }),
         ),
@@ -319,7 +319,7 @@ fn parse_path_pattern(input: ParseInput) -> NomResult<PathPattern> {
                 separated_list1(ws(char(',')), parse_path_pattern),
                 ws(char(')')),
             )),
-            |patterns| PathPattern::Sequence(PathSequence { 
+            |patterns| PathPattern::Sequence(PathSequence {
                 sequence: patterns,
             }),
         ),
@@ -329,7 +329,7 @@ fn parse_path_pattern(input: ParseInput) -> NomResult<PathPattern> {
                 separated_list1(ws(char(',')), parse_path_pattern),
                 ws(char(')')),
             )),
-            |patterns| PathPattern::Or(PathOr { 
+            |patterns| PathPattern::Or(PathOr {
                 or: patterns,
             }),
         ),
@@ -350,7 +350,7 @@ fn parse_vars_statement(input: ParseInput) -> NomResult<Query> {
         separated_list1(ws(char(',')), parse_variable),
         ws(char(')')),
     )(input)?;
-    
+
     // Continue parsing the rest of the query after vars declaration
     let (input, _) = multispace0(input)?;
     parse_query(input)
@@ -358,7 +358,7 @@ fn parse_vars_statement(input: ParseInput) -> NomResult<Query> {
 
 fn parse_query_function(input: ParseInput) -> NomResult<Query> {
     let (input, (name, args)) = parse_function_call(input)?;
-    
+
     let query = match name {
         "triple" => parse_triple_args(args),
         "and" => parse_and_args(args),
@@ -397,7 +397,7 @@ fn parse_query_function(input: ParseInput) -> NomResult<Query> {
             nom::error::ErrorKind::Tag,
         ))),
     }?;
-    
+
     Ok((input, query))
 }
 
@@ -409,7 +409,7 @@ fn parse_triple_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let subject = match &args[0] {
         ParsedArg::Value(Value::Variable(v)) => NodeValue::Variable(v.clone()),
         ParsedArg::Value(Value::Node(n)) => NodeValue::Node(n.clone()),
@@ -418,7 +418,7 @@ fn parse_triple_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let predicate = match &args[1] {
         ParsedArg::Value(Value::Variable(v)) => NodeValue::Variable(v.clone()),
         ParsedArg::Value(Value::Node(n)) => NodeValue::Node(n.clone()),
@@ -428,7 +428,7 @@ fn parse_triple_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let object = match &args[2] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -436,7 +436,7 @@ fn parse_triple_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let graph = if args.len() == 4 {
         match &args[3] {
             ParsedArg::Value(Value::Data(XSDAnySimpleType::String(s))) => {
@@ -451,7 +451,7 @@ fn parse_triple_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
     } else {
         GraphType::Instance
     };
-    
+
     Ok(Query::Triple(Triple {
         subject,
         predicate,
@@ -495,7 +495,7 @@ fn parse_not_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     match &args[0] {
         ParsedArg::Query(q) => Ok(Query::Not(Not { query: Box::new(q.clone()) })),
         _ => Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -512,7 +512,7 @@ fn parse_select_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let variables = match &args[0] {
         ParsedArg::ValueList(values) => {
             let mut vars = Vec::new();
@@ -532,7 +532,7 @@ fn parse_select_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let query = match &args[1] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -540,7 +540,7 @@ fn parse_select_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Select(Select {
         variables,
         query: Box::new(query),
@@ -554,7 +554,7 @@ fn parse_distinct_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let variables = match &args[0] {
         ParsedArg::ValueList(values) => {
             let mut vars = Vec::new();
@@ -574,7 +574,7 @@ fn parse_distinct_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let query = match &args[1] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -582,7 +582,7 @@ fn parse_distinct_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Distinct(Distinct {
         variables,
         query: Box::new(query),
@@ -596,7 +596,7 @@ fn parse_limit_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let limit = match &args[0] {
         ParsedArg::Value(Value::Data(XSDAnySimpleType::Float(n))) => *n as i64,
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -604,7 +604,7 @@ fn parse_limit_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let query = match &args[1] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -612,7 +612,7 @@ fn parse_limit_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Limit(Limit {
         limit: limit as u64,
         query: Box::new(query),
@@ -626,7 +626,7 @@ fn parse_start_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let start = match &args[0] {
         ParsedArg::Value(Value::Data(XSDAnySimpleType::Float(n))) => *n as i64,
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -634,7 +634,7 @@ fn parse_start_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let query = match &args[1] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -642,7 +642,7 @@ fn parse_start_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Start(Start {
         start: start as u64,
         query: Box::new(query),
@@ -656,7 +656,7 @@ fn parse_order_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let ordering = match &args[0] {
         ParsedArg::OrderTemplate(templates) => templates.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -664,7 +664,7 @@ fn parse_order_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let query = match &args[1] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -672,7 +672,7 @@ fn parse_order_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::OrderBy(OrderBy {
         ordering,
         query: Box::new(query),
@@ -686,7 +686,7 @@ fn parse_group_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let template = match &args[0] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -694,7 +694,7 @@ fn parse_group_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let group_by = match &args[1] {
         ParsedArg::ValueList(values) => {
             let mut vars = Vec::new();
@@ -714,7 +714,7 @@ fn parse_group_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let grouped_value = match &args[2] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -722,7 +722,7 @@ fn parse_group_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let query = match &args[3] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -730,7 +730,7 @@ fn parse_group_by_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseEr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::GroupBy(GroupBy {
         template,
         group_by,
@@ -746,7 +746,7 @@ fn parse_greater_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErr
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let left = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -761,7 +761,7 @@ fn parse_greater_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let right = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -776,7 +776,7 @@ fn parse_greater_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Greater(Greater { left, right }))
 }
 
@@ -787,7 +787,7 @@ fn parse_less_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let left = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -802,7 +802,7 @@ fn parse_less_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let right = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -817,7 +817,7 @@ fn parse_less_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Less(Less { left, right }))
 }
 
@@ -828,7 +828,7 @@ fn parse_equals_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let left = match &args[0] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -836,7 +836,7 @@ fn parse_equals_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let right = match &args[1] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -844,7 +844,7 @@ fn parse_equals_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Equals(Equals { left, right }))
 }
 
@@ -855,7 +855,7 @@ fn parse_eval_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let expression = match &args[0] {
         ParsedArg::ArithmeticExpr(expr) => expr.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -863,7 +863,7 @@ fn parse_eval_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let result_value = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => ArithmeticValue::Variable(var.clone()),
@@ -878,7 +878,7 @@ fn parse_eval_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Eval(Eval {
         expression,
         result_value,
@@ -892,7 +892,7 @@ fn parse_path_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let subject = match &args[0] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -900,7 +900,7 @@ fn parse_path_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let pattern = match &args[1] {
         ParsedArg::PathPattern(p) => p.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -908,7 +908,7 @@ fn parse_path_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let object = match &args[2] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -916,7 +916,7 @@ fn parse_path_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let path = if args.len() == 4 {
         match &args[3] {
             ParsedArg::Value(v) => Some(v.clone()),
@@ -925,7 +925,7 @@ fn parse_path_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
     } else {
         None
     };
-    
+
     Ok(Query::Path(Path {
         subject,
         pattern,
@@ -941,7 +941,7 @@ fn parse_read_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Verb
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let id = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -956,7 +956,7 @@ fn parse_read_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Verb
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let document = match &args[1] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -964,7 +964,7 @@ fn parse_read_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Verb
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::ReadDocument(ReadDocument {
         identifier: id,
         document,
@@ -978,7 +978,7 @@ fn parse_insert_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let document = match &args[0] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -986,7 +986,7 @@ fn parse_insert_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let identifier = if args.len() == 2 {
         match &args[1] {
             ParsedArg::Value(v) => match v {
@@ -999,7 +999,7 @@ fn parse_insert_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
     } else {
         None
     };
-    
+
     Ok(Query::InsertDocument(InsertDocument {
         document,
         identifier,
@@ -1013,7 +1013,7 @@ fn parse_update_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let document = match &args[0] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -1021,7 +1021,7 @@ fn parse_update_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let identifier = if args.len() == 2 {
         match &args[1] {
             ParsedArg::Value(v) => match v {
@@ -1034,7 +1034,7 @@ fn parse_update_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
     } else {
         None
     };
-    
+
     Ok(Query::UpdateDocument(UpdateDocument { document, identifier }))
 }
 
@@ -1045,7 +1045,7 @@ fn parse_delete_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let identifier = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -1060,7 +1060,7 @@ fn parse_delete_document_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Ve
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::DeleteDocument(DeleteDocument { identifier }))
 }
 
@@ -1071,7 +1071,7 @@ fn parse_count_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let query = match &args[0] {
         ParsedArg::Query(q) => q.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -1079,7 +1079,7 @@ fn parse_count_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let count = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1094,7 +1094,7 @@ fn parse_count_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Count(Count {
         query: Box::new(query),
         count,
@@ -1108,7 +1108,7 @@ fn parse_sum_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let list = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1129,7 +1129,7 @@ fn parse_sum_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let result = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1144,7 +1144,7 @@ fn parse_sum_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Sum(Sum {
         list,
         result,
@@ -1158,7 +1158,7 @@ fn parse_concat_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let list = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1187,7 +1187,7 @@ fn parse_concat_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let result_string = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1202,7 +1202,7 @@ fn parse_concat_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Concatenate(Concatenate { list: list.into(), result_string }))
 }
 
@@ -1213,7 +1213,7 @@ fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseE
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let string = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1228,7 +1228,7 @@ fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseE
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let before = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1243,7 +1243,7 @@ fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseE
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let length = match &args[2] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1258,7 +1258,7 @@ fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseE
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let after = match &args[3] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1273,7 +1273,7 @@ fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseE
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let substring = match &args[4] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1288,7 +1288,7 @@ fn parse_substring_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseE
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Substring(Substring {
         string,
         before,
@@ -1305,7 +1305,7 @@ fn parse_trim_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let untrimmed = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1320,7 +1320,7 @@ fn parse_trim_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let trimmed = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1335,7 +1335,7 @@ fn parse_trim_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Trim(Trim { untrimmed, trimmed }))
 }
 
@@ -1346,7 +1346,7 @@ fn parse_upper_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let mixed = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1361,7 +1361,7 @@ fn parse_upper_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let upper = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1376,7 +1376,7 @@ fn parse_upper_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Upper(Upper { mixed, upper }))
 }
 
@@ -1387,7 +1387,7 @@ fn parse_lower_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let mixed = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1402,7 +1402,7 @@ fn parse_lower_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let lower = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1417,7 +1417,7 @@ fn parse_lower_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Lower(Lower { mixed, lower }))
 }
 
@@ -1428,7 +1428,7 @@ fn parse_regexp_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let string = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1443,7 +1443,7 @@ fn parse_regexp_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let pattern = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => DataValue::Variable(var.clone()),
@@ -1458,7 +1458,7 @@ fn parse_regexp_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let result = match &args[2] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => Some(DataValue::Variable(var.clone())),
@@ -1466,7 +1466,7 @@ fn parse_regexp_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
         },
         _ => None,
     };
-    
+
     Ok(Query::Regexp(Regexp {
         pattern,
         string,
@@ -1481,7 +1481,7 @@ fn parse_isa_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let element = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -1496,7 +1496,7 @@ fn parse_isa_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let r#type = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -1512,7 +1512,7 @@ fn parse_isa_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::IsA(IsA { element, type_of: r#type }))
 }
 
@@ -1523,7 +1523,7 @@ fn parse_type_of_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErr
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let value = match &args[0] {
         ParsedArg::Value(v) => v.clone(),
         _ => return Err(nom::Err::Error(VerboseError::from_error_kind(
@@ -1531,7 +1531,7 @@ fn parse_type_of_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let type_uri = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -1546,7 +1546,7 @@ fn parse_type_of_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErr
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::TypeOf(TypeOf { value, type_uri }))
 }
 
@@ -1557,7 +1557,7 @@ fn parse_subsumption_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Verbos
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     let parent = match &args[0] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -1572,7 +1572,7 @@ fn parse_subsumption_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Verbos
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     let child = match &args[1] {
         ParsedArg::Value(v) => match v {
             Value::Variable(var) => NodeValue::Variable(var.clone()),
@@ -1587,7 +1587,7 @@ fn parse_subsumption_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<Verbos
             nom::error::ErrorKind::Tag,
         ))),
     };
-    
+
     Ok(Query::Subsumption(Subsumption { parent, child }))
 }
 
@@ -1598,10 +1598,10 @@ fn parse_opt_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseError<&
             nom::error::ErrorKind::Count,
         )));
     }
-    
+
     match &args[0] {
-        ParsedArg::Query(q) => Ok(Query::WoqlOptional(WoqlOptional { 
-            query: Box::new(q.clone()) 
+        ParsedArg::Query(q) => Ok(Query::WoqlOptional(WoqlOptional {
+            query: Box::new(q.clone())
         })),
         _ => Err(nom::Err::Error(VerboseError::from_error_kind(
             "",
@@ -1624,7 +1624,7 @@ mod tests {
     fn test_parse_simple_triple() {
         let dsl = r#"triple($Person, "@schema:name", $Name)"#;
         let query = parse_woql_dsl(dsl).unwrap();
-        
+
         match query {
             Query::Triple(t) => {
                 assert_eq!(t.subject, NodeValue::Variable("Person".to_string()));
@@ -1645,7 +1645,7 @@ select(
 )
 "#;
         let query = parse_woql_dsl(dsl).unwrap();
-        
+
         match query {
             Query::Select(s) => {
                 assert_eq!(s.variables, vec!["Name"]);

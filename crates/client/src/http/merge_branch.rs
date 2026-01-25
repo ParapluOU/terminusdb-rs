@@ -87,14 +87,9 @@ impl TerminusDBHttpClient {
 
         // 2. Build paths
         let target_branch = spec.branch.as_deref().unwrap_or("main");
-        let origin_path = format!(
-            "{}/{}/local/branch/{}",
-            self.org, spec.db, target_branch
-        );
-        let temp_branch_path = format!(
-            "{}/{}/local/branch/{}",
-            self.org, spec.db, temp_branch_name
-        );
+        let origin_path = format!("{}/{}/local/branch/{}", self.org, spec.db, target_branch);
+        let temp_branch_path =
+            format!("{}/{}/local/branch/{}", self.org, spec.db, temp_branch_name);
 
         debug!(
             "Creating temporary branch {} from {}",
@@ -150,10 +145,7 @@ impl TerminusDBHttpClient {
                     .merge_message
                     .unwrap_or_else(|| "Merge from temporary branch".to_string());
 
-                debug!(
-                    "Rebasing {} onto {}",
-                    temp_branch_path, origin_path
-                );
+                debug!("Rebasing {} onto {}", temp_branch_path, origin_path);
 
                 let rebase_result = self
                     .rebase(

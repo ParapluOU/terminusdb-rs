@@ -1,8 +1,8 @@
-use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{TerminusDBHttpClient, DocumentInsertArgs, BranchSpec};
-use terminusdb_woql2::*;
-use terminusdb_woql2::query::{NamedParametricQuery, Query};
 use serde_json::{json, Value};
+use terminusdb_bin::TerminusDBServer;
+use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
+use terminusdb_woql2::query::{NamedParametricQuery, Query};
+use terminusdb_woql2::*;
 
 #[tokio::test]
 async fn test_insert_npq_raw() -> anyhow::Result<()> {
@@ -35,7 +35,10 @@ async fn test_insert_npq_raw() -> anyhow::Result<()> {
 
                     // Convert call to JSON and try to execute it
                     let call_json: Value = serde_json::to_value(&call_query)?;
-                    println!("Call as JSON: {}", serde_json::to_string_pretty(&call_json)?);
+                    println!(
+                        "Call as JSON: {}",
+                        serde_json::to_string_pretty(&call_json)?
+                    );
 
                     // Note: We'd need to execute this through the query endpoint
                     // For now, just demonstrate the structure is correct
@@ -65,7 +68,10 @@ async fn test_insert_npq_raw() -> anyhow::Result<()> {
                     // Create a call with arguments
                     let call_with_args = call!("find_by_type", [node!("Person")]);
                     let call_json: Value = serde_json::to_value(&call_with_args)?;
-                    println!("\nCall with args as JSON: {}", serde_json::to_string_pretty(&call_json)?);
+                    println!(
+                        "\nCall with args as JSON: {}",
+                        serde_json::to_string_pretty(&call_json)?
+                    );
                 }
                 Err(e) => {
                     println!("Failed to insert parametric NPQ: {:?}", e);

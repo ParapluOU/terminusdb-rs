@@ -1,10 +1,13 @@
 //! User management operations
 
 use {
-    crate::{TerminusDBAdapterError, debug::{OperationEntry, OperationType}},
+    crate::{
+        debug::{OperationEntry, OperationType},
+        TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Serialize, Deserialize},
+    serde::{Deserialize, Serialize},
     serde_json::json,
     std::time::Instant,
 };
@@ -94,8 +97,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("create_user".to_string()),
-            "/api/user".to_string()
-        ).with_context(None, None);
+            "/api/user".to_string(),
+        )
+        .with_context(None, None);
 
         let request = CreateUserRequest {
             id: user_id.to_string(),
@@ -122,18 +126,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("create user operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("create user failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -164,10 +168,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn get_user(
-        &self,
-        user_id: &str,
-    ) -> anyhow::Result<User> {
+    pub async fn get_user(&self, user_id: &str) -> anyhow::Result<User> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("user").add_path(user_id).build();
 
@@ -175,8 +176,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("get_user".to_string()),
-            format!("/api/user/{}", user_id)
-        ).with_context(None, None);
+            format!("/api/user/{}", user_id),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
@@ -194,18 +196,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("get user operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("get user failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<User>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -260,8 +262,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("update_user".to_string()),
-            format!("/api/user/{}", user_id)
-        ).with_context(None, None);
+            format!("/api/user/{}", user_id),
+        )
+        .with_context(None, None);
 
         let request = UpdateUserRequest {
             name: name.map(String::from),
@@ -287,18 +290,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("update user operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("update user failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -329,10 +332,7 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn delete_user(
-        &self,
-        user_id: &str,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn delete_user(&self, user_id: &str) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("user").add_path(user_id).build();
 
@@ -340,8 +340,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("delete_user".to_string()),
-            format!("/api/user/{}", user_id)
-        ).with_context(None, None);
+            format!("/api/user/{}", user_id),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -359,18 +360,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("delete user operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("delete user failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -390,11 +391,7 @@ impl super::client::TerminusDBHttpClient {
     /// # Ok(())
     /// # }
     /// ```
-    #[instrument(
-        name = "terminus.user.list",
-        skip(self),
-        err
-    )]
+    #[instrument(name = "terminus.user.list", skip(self), err)]
     pub async fn list_users(&self) -> anyhow::Result<Vec<User>> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("user").build();
@@ -403,8 +400,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("list_users".to_string()),
-            "/api/user".to_string()
-        ).with_context(None, None);
+            "/api/user".to_string(),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
@@ -422,22 +420,26 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("list users operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("list users failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<Vec<User>>(res).await?;
-        
+
         operation = operation.success(Some(response.len()), duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully listed {} users in {:?}", response.len(), start_time.elapsed());
+        debug!(
+            "Successfully listed {} users in {:?}",
+            response.len(),
+            start_time.elapsed()
+        );
 
         Ok(response)
     }

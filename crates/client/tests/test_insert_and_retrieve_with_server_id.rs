@@ -63,8 +63,9 @@ async fn test_insert_and_retrieve_lexical_key() -> Result<()> {
                 ..Default::default()
             };
 
-            let (retrieved_user, commit_id) =
-                client.insert_instance_and_retrieve(&user, args.clone()).await?;
+            let (retrieved_user, commit_id) = client
+                .insert_instance_and_retrieve(&user, args.clone())
+                .await?;
 
             // Verify the ID was populated
             assert!(retrieved_user.id.is_some());
@@ -179,8 +180,9 @@ async fn test_insert_and_retrieve_multiple() -> Result<()> {
                 ..Default::default()
             };
 
-            let (retrieved_users, commit_id) =
-                client.insert_instances_and_retrieve(users.clone(), args).await?;
+            let (retrieved_users, commit_id) = client
+                .insert_instances_and_retrieve(users.clone(), args)
+                .await?;
 
             // Verify we got the same number of users back
             assert_eq!(retrieved_users.len(), users.len());
@@ -244,8 +246,9 @@ async fn test_mixed_key_strategies() -> Result<()> {
                 email: "mixed@example.com".to_string(),
                 name: "Mixed Test".to_string(),
             };
-            let (retrieved_user, _) =
-                client.insert_instance_and_retrieve(&user, args.clone()).await?;
+            let (retrieved_user, _) = client
+                .insert_instance_and_retrieve(&user, args.clone())
+                .await?;
             assert!(retrieved_user.id.is_some());
 
             // Test hash key
@@ -254,8 +257,9 @@ async fn test_mixed_key_strategies() -> Result<()> {
                 content: "Hash content".to_string(),
                 version: 42,
             };
-            let (retrieved_doc, _) =
-                client.insert_instance_and_retrieve(&doc, args.clone()).await?;
+            let (retrieved_doc, _) = client
+                .insert_instance_and_retrieve(&doc, args.clone())
+                .await?;
             assert!(retrieved_doc.id.is_some());
 
             // Test random key - for random keys, we need to provide an ID
@@ -266,19 +270,14 @@ async fn test_mixed_key_strategies() -> Result<()> {
             };
             // For random key, we need to generate an ID before insertion
             entity.id.__set_from_server(EntityIDFor::random());
-            let (retrieved_entity, _) =
-                client.insert_instance_and_retrieve(&entity, args.clone()).await?;
+            let (retrieved_entity, _) = client
+                .insert_instance_and_retrieve(&entity, args.clone())
+                .await?;
             assert!(retrieved_entity.id.is_some());
 
-            println!(
-                "Lexical ID: {}",
-                retrieved_user.id.as_ref().unwrap().id()
-            );
+            println!("Lexical ID: {}", retrieved_user.id.as_ref().unwrap().id());
             println!("Hash ID: {}", retrieved_doc.id.as_ref().unwrap().id());
-            println!(
-                "Random ID: {}",
-                retrieved_entity.id.as_ref().unwrap().id()
-            );
+            println!("Random ID: {}", retrieved_entity.id.as_ref().unwrap().id());
 
             Ok(())
         })
@@ -309,7 +308,9 @@ async fn test_insert_and_retrieve_error_cases() -> Result<()> {
                 email: "error@example.com".to_string(),
                 name: "Error Test".to_string(),
             };
-            let (_, _) = client.insert_instance_and_retrieve(&user, args.clone()).await?;
+            let (_, _) = client
+                .insert_instance_and_retrieve(&user, args.clone())
+                .await?;
 
             // Try to insert and retrieve - insertion should work
             let new_user = LexicalUser {
@@ -319,7 +320,9 @@ async fn test_insert_and_retrieve_error_cases() -> Result<()> {
             };
 
             // This should succeed because it's a new insert
-            let result = client.insert_instance_and_retrieve(&new_user, args.clone()).await;
+            let result = client
+                .insert_instance_and_retrieve(&new_user, args.clone())
+                .await;
             assert!(result.is_ok());
 
             // Test with non-existent branch

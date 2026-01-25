@@ -346,34 +346,26 @@ mod tests {
         // This mimics the user's ActivityEvent use case
 
         // Define separate model structs
-        #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
-        )]
+        #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
         struct EventUserLogin {
             user_id: String,
             timestamp: String,
         }
 
-        #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
-        )]
+        #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
         struct EventUserLogout {
             user_id: String,
             timestamp: String,
         }
 
-        #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
-        )]
+        #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
         struct EventPublicationCreated {
             publication_id: String,
             title: String,
         }
 
         // Define enum that wraps these separate models
-        #[derive(
-            TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq,
-        )]
+        #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
         enum ActivityEvent {
             UserLogin(EventUserLogin),
             UserLogout(EventUserLogout),

@@ -42,7 +42,11 @@ mod tests {
         let datetime = result.unwrap();
         // Allow for small floating-point rounding (122 or 123 are both acceptable)
         let millis = datetime.timestamp_millis() % 1000;
-        assert!(millis >= 122 && millis <= 124, "Expected ~123ms, got {}", millis);
+        assert!(
+            millis >= 122 && millis <= 124,
+            "Expected ~123ms, got {}",
+            millis
+        );
     }
 
     #[test]

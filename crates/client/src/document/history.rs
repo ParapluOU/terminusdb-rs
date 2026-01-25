@@ -1,8 +1,8 @@
 //! Document history types and operations
 
+use crate::CommitId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::CommitId;
 
 /// Parameters for querying document history
 #[derive(Debug, Clone, Serialize, Default)]

@@ -168,9 +168,7 @@ fn is_outdated(path: &Path) -> std::io::Result<bool> {
 pub fn run_terminusdb(args: &[&str]) -> std::io::Result<ExitStatus> {
     let binary_path = extract_binary()?;
 
-    Command::new(binary_path)
-        .args(args)
-        .status()
+    Command::new(binary_path).args(args).status()
 }
 
 /// Runs TerminusDB with the given arguments and inherits all I/O streams.
@@ -187,7 +185,10 @@ mod tests {
     #[test]
     fn test_binary_embedded() {
         assert!(!TERMINUSDB_BINARY.is_empty(), "Binary should be embedded");
-        assert!(TERMINUSDB_BINARY.len() > 1000, "Binary should be reasonably sized");
+        assert!(
+            TERMINUSDB_BINARY.len() > 1000,
+            "Binary should be reasonably sized"
+        );
     }
 
     #[test]

@@ -44,13 +44,16 @@ mod tests {
 
         assert_eq!(request["params"]["name"], "check_server_status");
         // Empty arguments should use default connection config
-        assert!(request["params"]["arguments"].as_object().unwrap().is_empty());
+        assert!(request["params"]["arguments"]
+            .as_object()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn test_expected_response_format() {
         // Test the expected response format for different scenarios
-        
+
         // Server running response
         let running_response = json!({
             "status": "running",
@@ -60,29 +63,29 @@ mod tests {
                 "storage": "memory"
             }
         });
-        
+
         assert_eq!(running_response["status"], "running");
         assert_eq!(running_response["connected"], true);
         assert!(running_response["server_info"].is_object());
-        
+
         // Server offline response
         let offline_response = json!({
             "status": "offline",
             "connected": false,
             "error": "Server is not responding"
         });
-        
+
         assert_eq!(offline_response["status"], "offline");
         assert_eq!(offline_response["connected"], false);
         assert!(offline_response["error"].is_string());
-        
+
         // Server error response
         let error_response = json!({
             "status": "error",
             "connected": false,
             "error": "Server responded but info request failed: connection refused"
         });
-        
+
         assert_eq!(error_response["status"], "error");
         assert_eq!(error_response["connected"], false);
         assert!(error_response["error"].is_string());

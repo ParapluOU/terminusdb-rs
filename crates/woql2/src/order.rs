@@ -5,9 +5,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Represents Enum "Order"
 /// Specifies the ordering direction (ascending or descending).
-#[derive(
-    TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Eq, Hash,
-)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Eq, Hash)]
 #[tdb(rename_all = "lowercase")]
 pub enum Order {
     /// Ascending order.

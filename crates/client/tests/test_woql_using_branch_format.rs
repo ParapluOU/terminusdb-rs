@@ -153,10 +153,7 @@ mod tests {
             .with_tmp_db("test_branch_format", |client, spec| async move {
                 // Insert schema
                 let args = DocumentInsertArgs::from(spec.clone());
-                client
-                    .insert_entity_schema::<PersonWithId>(args)
-                    .await
-                    .ok();
+                client.insert_entity_schema::<PersonWithId>(args).await.ok();
 
                 let fixed_id = &format!(
                     "test_branch_format_{}",

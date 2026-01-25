@@ -8,7 +8,7 @@ fn main() {
         Ok(q) => {
             println!("✓ Successfully parsed JavaScript WOQL syntax!");
             println!("Query: {:?}", q);
-        },
+        }
         Err(e) => {
             eprintln!("✗ Error: {}", e);
             std::process::exit(1);

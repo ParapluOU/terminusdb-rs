@@ -141,7 +141,6 @@ struct TestPrimaryKeyWithId {
 
 #[test]
 fn test_primary_key_macro_with_id() {
-    let id: EntityIDFor<TestPrimaryKeyWithId> =
-        EntityIDFor::new_unchecked("custom-123").unwrap();
+    let id: EntityIDFor<TestPrimaryKeyWithId> = EntityIDFor::new_unchecked("custom-123").unwrap();
     assert_eq!(id.id(), "custom-123");
 }

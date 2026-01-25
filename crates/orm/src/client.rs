@@ -70,9 +70,9 @@ impl OrmClient {
     /// # Panics
     /// Panics if `OrmClient::init()` has not been called.
     pub fn get() -> &'static TerminusDBHttpClient {
-        GLOBAL_CLIENT.get().expect(
-            "ORM client not initialized. Call OrmClient::init() before using ORM features.",
-        )
+        GLOBAL_CLIENT
+            .get()
+            .expect("ORM client not initialized. Call OrmClient::init() before using ORM features.")
     }
 
     /// Try to get a reference to the global client.

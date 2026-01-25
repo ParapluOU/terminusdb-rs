@@ -1,5 +1,4 @@
 /// Module for rendering WOQL queries to DSL syntax
-
 use std::fmt;
 
 /// Trait for rendering WOQL queries to DSL syntax
@@ -34,7 +33,7 @@ fn render_list_value<T: ToDSL>(items: &[T]) -> String {
 }
 
 // Implementations for value types
-use crate::value::{Value, NodeValue, DataValue, ListOrVariable};
+use crate::value::{DataValue, ListOrVariable, NodeValue, Value};
 use terminusdb_schema::XSDAnySimpleType;
 
 impl ToDSL for Value {
@@ -103,7 +102,7 @@ impl ToDSL for XSDAnySimpleType {
 }
 
 // Implementations for Query types
-use crate::query::{Query, And, Or, Not, True, Eval, Path};
+use crate::query::{And, Eval, Not, Or, Path, Query, True};
 use crate::triple::Triple;
 use terminusdb_schema::GraphType;
 
@@ -156,12 +155,12 @@ impl ToDSL for Triple {
             self.predicate.to_dsl(),
             self.object.to_dsl(),
         ];
-        
+
         // Only add graph parameter if it's not the default (Instance)
         if self.graph != Some(GraphType::Instance) {
             args.push(escape_string(&format!("{:?}", self.graph).to_lowercase()));
         }
-        
+
         render_function("triple", &args)
     }
 }
@@ -193,18 +192,20 @@ impl ToDSL for True {
 }
 
 // Import more types as needed
-use crate::control::{Select, Distinct, WoqlOptional};
-use crate::misc::{Limit, Start, Count};
-use crate::order::{OrderBy, GroupBy, OrderTemplate, Order};
-use crate::compare::{Greater, Less, Equals, IsA, TypeOf, Subsumption};
 use crate::collection::Sum;
-use crate::string::{Concatenate, Substring, Trim, Upper, Lower, Regexp, Join};
-use crate::document::{ReadDocument, InsertDocument, UpdateDocument, DeleteDocument};
+use crate::compare::{Equals, Greater, IsA, Less, Subsumption, TypeOf};
+use crate::control::{Distinct, Select, WoqlOptional};
+use crate::document::{DeleteDocument, InsertDocument, ReadDocument, UpdateDocument};
+use crate::misc::{Count, Limit, Start};
+use crate::order::{GroupBy, Order, OrderBy, OrderTemplate};
+use crate::string::{Concatenate, Join, Lower, Regexp, Substring, Trim, Upper};
 
 impl ToDSL for Select {
     fn to_dsl(&self) -> String {
-        let vars = format!("[{}]", 
-            self.variables.iter()
+        let vars = format!(
+            "[{}]",
+            self.variables
+                .iter()
                 .map(|v| format!("${}", v))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -215,8 +216,10 @@ impl ToDSL for Select {
 
 impl ToDSL for Distinct {
     fn to_dsl(&self) -> String {
-        let vars = format!("[{}]", 
-            self.variables.iter()
+        let vars = format!(
+            "[{}]",
+            self.variables
+                .iter()
                 .map(|v| format!("${}", v))
                 .collect::<Vec<_>>()
                 .join(", ")
@@ -256,18 +259,23 @@ impl ToDSL for OrderTemplate {
 
 impl ToDSL for GroupBy {
     fn to_dsl(&self) -> String {
-        let group_vars = format!("[{}]", 
-            self.group_by.iter()
+        let group_vars = format!(
+            "[{}]",
+            self.group_by
+                .iter()
                 .map(|v| format!("${}", v))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        render_function("group_by", &[
-            group_vars,
-            self.template.to_dsl(),
-            self.grouped_value.to_dsl(),
-            self.query.to_dsl()
-        ])
+        render_function(
+            "group_by",
+            &[
+                group_vars,
+                self.template.to_dsl(),
+                self.grouped_value.to_dsl(),
+                self.query.to_dsl(),
+            ],
+        )
     }
 }
 
@@ -309,19 +317,29 @@ impl ToDSL for Concatenate {
 
 impl ToDSL for Join {
     fn to_dsl(&self) -> String {
-        render_function("join", &[self.list.to_dsl(), self.separator.to_dsl(), self.result_string.to_dsl()])
+        render_function(
+            "join",
+            &[
+                self.list.to_dsl(),
+                self.separator.to_dsl(),
+                self.result_string.to_dsl(),
+            ],
+        )
     }
 }
 
 impl ToDSL for Substring {
     fn to_dsl(&self) -> String {
-        render_function("substring", &[
-            self.string.to_dsl(),
-            self.before.to_dsl(),
-            self.length.to_dsl(),
-            self.after.to_dsl(),
-            self.substring.to_dsl()
-        ])
+        render_function(
+            "substring",
+            &[
+                self.string.to_dsl(),
+                self.before.to_dsl(),
+                self.length.to_dsl(),
+                self.after.to_dsl(),
+                self.substring.to_dsl(),
+            ],
+        )
     }
 }
 
@@ -379,7 +397,10 @@ impl ToDSL for WoqlOptional {
 
 impl ToDSL for ReadDocument {
     fn to_dsl(&self) -> String {
-        render_function("read_document", &[self.identifier.to_dsl(), self.document.to_dsl()])
+        render_function(
+            "read_document",
+            &[self.identifier.to_dsl(), self.document.to_dsl()],
+        )
     }
 }
 
@@ -410,11 +431,14 @@ impl ToDSL for DeleteDocument {
 }
 
 // Arithmetic expressions and path patterns need special handling
-use crate::expression::{ArithmeticExpression, ArithmeticValue, Plus, Minus, Times, Div};
+use crate::expression::{ArithmeticExpression, ArithmeticValue, Div, Minus, Plus, Times};
 
 impl ToDSL for Eval {
     fn to_dsl(&self) -> String {
-        render_function("eval", &[self.expression.to_dsl(), self.result_value.to_dsl()])
+        render_function(
+            "eval",
+            &[self.expression.to_dsl(), self.result_value.to_dsl()],
+        )
     }
 }
 
@@ -422,10 +446,18 @@ impl ToDSL for ArithmeticExpression {
     fn to_dsl(&self) -> String {
         match self {
             ArithmeticExpression::Value(val) => val.to_dsl(),
-            ArithmeticExpression::Plus(plus) => render_function("plus", &[plus.left.to_dsl(), plus.right.to_dsl()]),
-            ArithmeticExpression::Minus(minus) => render_function("minus", &[minus.left.to_dsl(), minus.right.to_dsl()]),
-            ArithmeticExpression::Times(times) => render_function("times", &[times.left.to_dsl(), times.right.to_dsl()]),
-            ArithmeticExpression::Div(div) => render_function("div", &[div.left.to_dsl(), div.right.to_dsl()]),
+            ArithmeticExpression::Plus(plus) => {
+                render_function("plus", &[plus.left.to_dsl(), plus.right.to_dsl()])
+            }
+            ArithmeticExpression::Minus(minus) => {
+                render_function("minus", &[minus.left.to_dsl(), minus.right.to_dsl()])
+            }
+            ArithmeticExpression::Times(times) => {
+                render_function("times", &[times.left.to_dsl(), times.right.to_dsl()])
+            }
+            ArithmeticExpression::Div(div) => {
+                render_function("div", &[div.left.to_dsl(), div.right.to_dsl()])
+            }
             _ => format!("// TODO: arithmetic {:?}", self),
         }
     }
@@ -441,7 +473,9 @@ impl ToDSL for ArithmeticValue {
 }
 
 // Path patterns
-use crate::path::{PathPattern, PathPredicate, InversePathPredicate, PathStar, PathPlus, PathSequence, PathOr};
+use crate::path::{
+    InversePathPredicate, PathOr, PathPattern, PathPlus, PathPredicate, PathSequence, PathStar,
+};
 
 impl ToDSL for Path {
     fn to_dsl(&self) -> String {

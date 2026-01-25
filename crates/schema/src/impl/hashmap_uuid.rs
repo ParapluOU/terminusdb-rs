@@ -29,7 +29,12 @@ impl<T: Serialize + DeserializeOwned> From<HashMap<Uuid, T>> for PrimitiveValue 
     fn from(map: HashMap<Uuid, T>) -> Self {
         let json_value = Value::Object(
             map.into_iter()
-                .map(|(k, v)| (k.to_string(), serde_json::to_value(v).unwrap_or(Value::Null)))
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        serde_json::to_value(v).unwrap_or(Value::Null),
+                    )
+                })
                 .collect(),
         );
         Self::Object(json_value)
@@ -48,7 +53,9 @@ impl<Parent, T: Serialize + DeserializeOwned> ToInstanceProperty<Parent> for Has
     }
 }
 
-impl<Parent, T: Serialize + DeserializeOwned> InstancePropertyFromJson<Parent> for HashMap<Uuid, T> {
+impl<Parent, T: Serialize + DeserializeOwned> InstancePropertyFromJson<Parent>
+    for HashMap<Uuid, T>
+{
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
         let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
@@ -64,17 +71,15 @@ impl<T: Serialize + DeserializeOwned> FromInstanceProperty for HashMap<Uuid, T> 
             for (key_str, value) in map.iter() {
                 let uuid = Uuid::parse_str(key_str)
                     .map_err(|e| anyhow!("Invalid UUID key '{}': {}", key_str, e))?;
-                let typed_value: T = serde_json::from_value(value.clone())
-                    .map_err(|e| anyhow!("Failed to deserialize value for key '{}': {}", key_str, e))?;
+                let typed_value: T = serde_json::from_value(value.clone()).map_err(|e| {
+                    anyhow!("Failed to deserialize value for key '{}': {}", key_str, e)
+                })?;
                 result.insert(uuid, typed_value);
             }
 
             Ok(result)
         } else {
-            Err(anyhow::anyhow!(
-                "Expected Object primitive, got {:?}",
-                prop
-            ))
+            Err(anyhow::anyhow!("Expected Object primitive, got {:?}", prop))
         }
     }
 }
@@ -141,7 +146,10 @@ mod tests {
 
         let restored_map = result.unwrap();
         assert_eq!(restored_map.len(), 2);
-        assert_eq!(restored_map.get(&uuid1), Some(&Value::String("value1".to_string())));
+        assert_eq!(
+            restored_map.get(&uuid1),
+            Some(&Value::String("value1".to_string()))
+        );
         assert_eq!(restored_map.get(&uuid2), Some(&Value::Number(42.into())));
     }
 

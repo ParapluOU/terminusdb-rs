@@ -1,8 +1,8 @@
 // Import items from the crate root
-use crate::value::{list, string_literal, Var, WoqlInput, IntoWoql2}; // Import list and other helpers
+use crate::value::{list, string_literal, IntoWoql2, Var, WoqlInput}; // Import list and other helpers
 use crate::vars; // Import the macro
-use terminusdb_woql2::prelude::{DataValue, Value as Woql2Value};
 use terminusdb_schema::XSDAnySimpleType;
+use terminusdb_woql2::prelude::{DataValue, Value as Woql2Value};
 
 #[test]
 fn test_vars_macro() {
@@ -113,7 +113,7 @@ fn test_nested_lists() {
     let inner1 = list(vec!["a", "b"]);
     let inner2 = list(vec!["c", "d"]);
     let nested = list(vec![inner1, inner2]);
-    
+
     match nested {
         WoqlInput::List(outer) => {
             assert_eq!(outer.len(), 2);
@@ -137,7 +137,7 @@ fn test_list_into_woql2_value() {
     // Test conversion to Woql2Value
     let list = list(vec![string_literal("Hello"), string_literal("World")]);
     let woql2_value = list.into_woql2_value();
-    
+
     match woql2_value {
         Woql2Value::List(items) => {
             assert_eq!(items.len(), 2);
@@ -155,7 +155,7 @@ fn test_list_into_woql2_data_value() {
     // Test conversion to DataValue
     let list = list(vec![string_literal("foo"), string_literal("bar")]);
     let data_value = list.into_woql2_data_value();
-    
+
     match data_value {
         DataValue::List(items) => {
             assert_eq!(items.len(), 2);
@@ -172,12 +172,12 @@ fn test_list_into_woql2_data_value() {
 fn test_list_with_mixed_types() {
     // Test list with mixed data types
     let mixed = list(vec![
-        WoqlInput::from("hello"),        // Node
-        WoqlInput::from(42),             // Integer
-        WoqlInput::from(true),           // Boolean
+        WoqlInput::from("hello"),       // Node
+        WoqlInput::from(42),            // Integer
+        WoqlInput::from(true),          // Boolean
         WoqlInput::from(Var::new("X")), // Variable
     ]);
-    
+
     match mixed {
         WoqlInput::List(items) => {
             assert_eq!(items.len(), 4);

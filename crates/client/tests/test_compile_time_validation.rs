@@ -1,9 +1,9 @@
 #![cfg(test)]
 
+use serde::{Deserialize, Serialize};
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
-use serde::{Deserialize, Serialize};
 
 // This should compile successfully - ServerIDFor with lexical key
 #[derive(Clone, Debug, Default, TerminusDBModel)]
@@ -31,7 +31,7 @@ pub struct ValidRandomModel {
 }
 
 // The following would fail at compile time (commented out to allow tests to run):
-// 
+//
 // #[derive(Clone, Debug, Default, TerminusDBModel)]
 // #[tdb(key = "lexical", key_fields = "email", id_field = "id")]
 // pub struct InvalidLexicalModel {

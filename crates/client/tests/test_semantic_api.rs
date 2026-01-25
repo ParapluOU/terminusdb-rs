@@ -8,9 +8,7 @@ mod tests {
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
     /// Test model for semantic API testing
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct SemanticTestModel {
         id: EntityIDFor<Self>,

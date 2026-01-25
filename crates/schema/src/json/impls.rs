@@ -52,7 +52,9 @@ macro_rules! impl_int_deserialization {
                         if let Ok(i) = s.parse::<i64>() {
                             if i >= <$ty>::MIN as i64 && i <= <$ty>::MAX as i64 {
                                 if let Ok(n) = serde_json::Number::from_str(&s) {
-                                    return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
+                                    return Ok(InstanceProperty::Primitive(
+                                        PrimitiveValue::Number(n),
+                                    ));
                                 }
                             }
                             return Err(anyhow!(
@@ -185,7 +187,7 @@ impl<T, Parent> InstancePropertyFromJson<Parent> for PhantomData<T> {
         // PhantomData always returns Unit regardless of input
         Ok(InstanceProperty::Primitive(PrimitiveValue::Unit))
     }
-    
+
     fn property_from_maybe_json(json: Option<Value>) -> Result<InstanceProperty> {
         // PhantomData always returns Unit regardless of input
         Ok(InstanceProperty::Primitive(PrimitiveValue::Unit))

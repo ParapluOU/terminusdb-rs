@@ -14,13 +14,16 @@
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::DocumentInsertArgs;
 use terminusdb_schema::{Schema, TypeFamily};
-use terminusdb_xsd::schema_model::XsdSchema;
 use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use terminusdb_xsd::schema_model::XsdSchema;
 use terminusdb_xsd::XsdModel;
 
 /// Path to the choice_types.xsd fixture
 fn choice_xsd_path() -> &'static str {
-    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/choice_types.xsd")
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/choice_types.xsd"
+    )
 }
 
 /// Helper to find a schema by class name
@@ -34,7 +37,9 @@ fn find_class<'a>(schemas: &'a [Schema], name: &str) -> Option<&'a Schema> {
 
 /// Helper to find a TaggedUnion by name
 fn find_tagged_union<'a>(schemas: &'a [Schema], name: &str) -> Option<&'a Schema> {
-    schemas.iter().find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == name))
+    schemas
+        .iter()
+        .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == name))
 }
 
 /// Helper to check if a schema is a TaggedUnion
@@ -52,23 +57,50 @@ fn test_choice_xsd_loads_successfully() {
         .expect("Failed to parse choice_types.xsd");
 
     // Should have all complex types (XSD uses camelCase, schema generator converts to PascalCase)
-    let type_names: Vec<&str> = xsd_schema.complex_types.iter()
+    let type_names: Vec<&str> = xsd_schema
+        .complex_types
+        .iter()
         .map(|ct| ct.name.as_str())
         .collect();
 
     eprintln!("Complex types found: {:?}", type_names);
 
     // XsdSchema stores original XSD names (camelCase)
-    assert!(type_names.iter().any(|n| n.contains("document") || n.contains("Document")),
-        "documentType/DocumentType not found in {:?}", type_names);
-    assert!(type_names.iter().any(|n| n.contains("article") || n.contains("Article")),
-        "articleType/ArticleType not found in {:?}", type_names);
-    assert!(type_names.iter().any(|n| n.contains("report") || n.contains("Report")),
-        "reportType/ReportType not found in {:?}", type_names);
-    assert!(type_names.iter().any(|n| n.contains("memo") || n.contains("Memo")),
-        "memoType/MemoType not found in {:?}", type_names);
-    assert!(type_names.iter().any(|n| n.contains("payment") || n.contains("Payment")),
-        "paymentType/PaymentType not found in {:?}", type_names);
+    assert!(
+        type_names
+            .iter()
+            .any(|n| n.contains("document") || n.contains("Document")),
+        "documentType/DocumentType not found in {:?}",
+        type_names
+    );
+    assert!(
+        type_names
+            .iter()
+            .any(|n| n.contains("article") || n.contains("Article")),
+        "articleType/ArticleType not found in {:?}",
+        type_names
+    );
+    assert!(
+        type_names
+            .iter()
+            .any(|n| n.contains("report") || n.contains("Report")),
+        "reportType/ReportType not found in {:?}",
+        type_names
+    );
+    assert!(
+        type_names
+            .iter()
+            .any(|n| n.contains("memo") || n.contains("Memo")),
+        "memoType/MemoType not found in {:?}",
+        type_names
+    );
+    assert!(
+        type_names
+            .iter()
+            .any(|n| n.contains("payment") || n.contains("Payment")),
+        "paymentType/PaymentType not found in {:?}",
+        type_names
+    );
 }
 
 #[test]
@@ -77,7 +109,9 @@ fn test_choice_generates_tagged_union() {
         .expect("Failed to parse choice_types.xsd");
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
     // Debug: print all schemas
     eprintln!("\n=== Generated Schemas ===");
@@ -103,8 +137,7 @@ fn test_choice_generates_tagged_union() {
     }
 
     // DocumentType should have a property that references a TaggedUnion for the choice
-    let doc_type = find_class(&schemas, "DocumentType")
-        .expect("DocumentType not found");
+    let doc_type = find_class(&schemas, "DocumentType").expect("DocumentType not found");
 
     if let Schema::Class { properties, .. } = doc_type {
         // Should have title, footer, id, and a choice property
@@ -120,7 +153,8 @@ fn test_choice_generates_tagged_union() {
         // At least one representation of choice should exist
         assert!(
             has_article || has_report || has_memo,
-            "Choice elements not found in DocumentType. Properties: {:?}", prop_names
+            "Choice elements not found in DocumentType. Properties: {:?}",
+            prop_names
         );
     }
 }
@@ -131,10 +165,11 @@ fn test_choice_elements_are_optional() {
         .expect("Failed to parse choice_types.xsd");
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
-    let doc_type = find_class(&schemas, "DocumentType")
-        .expect("DocumentType not found");
+    let doc_type = find_class(&schemas, "DocumentType").expect("DocumentType not found");
 
     if let Schema::Class { properties, .. } = doc_type {
         // In xs:choice, each element is mutually exclusive - only one can appear
@@ -146,7 +181,8 @@ fn test_choice_elements_are_optional() {
                 assert!(
                     prop.r#type == Some(TypeFamily::Optional) || prop.r#type.is_none(),
                     "Choice element '{}' should be optional, got {:?}",
-                    prop.name, prop.r#type
+                    prop.name,
+                    prop.r#type
                 );
             }
         }
@@ -159,7 +195,9 @@ fn test_repeating_choice_generates_set() {
         .expect("Failed to parse choice_types.xsd");
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
     // MixedContentType has choice with maxOccurs="unbounded"
     let mixed_type = find_class(&schemas, "MixedContentType");
@@ -187,10 +225,11 @@ fn test_payment_type_has_payment_method_choice() {
         .expect("Failed to parse choice_types.xsd");
 
     let generator = XsdToSchemaGenerator::new();
-    let schemas = generator.generate(&xsd_schema).expect("Failed to generate schemas");
+    let schemas = generator
+        .generate(&xsd_schema)
+        .expect("Failed to generate schemas");
 
-    let payment_type = find_class(&schemas, "PaymentType")
-        .expect("PaymentType not found");
+    let payment_type = find_class(&schemas, "PaymentType").expect("PaymentType not found");
 
     if let Schema::Class { properties, .. } = payment_type {
         let prop_names: Vec<&str> = properties.iter().map(|p| p.name.as_str()).collect();
@@ -207,7 +246,8 @@ fn test_payment_type_has_payment_method_choice() {
 
         assert!(
             has_credit_card || has_bank_transfer || has_digital_wallet,
-            "Payment method choice not found. Properties: {:?}", prop_names
+            "Payment method choice not found. Properties: {:?}",
+            prop_names
         );
     }
 }
@@ -218,8 +258,8 @@ fn test_payment_type_has_payment_method_choice() {
 
 #[test]
 fn test_parse_document_with_article_choice() {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <document xmlns="http://example.com/choice" id="doc1">
@@ -245,12 +285,17 @@ fn test_parse_document_with_article_choice() {
                 eprintln!("{}", json);
             }
 
-            assert!(!instances.is_empty(), "Should parse to at least one instance");
+            assert!(
+                !instances.is_empty(),
+                "Should parse to at least one instance"
+            );
 
             // Check the structure has article
             let first = &instances[0];
-            assert!(first.has_property("article") || first.has_property("title"),
-                "Instance should have article or title property");
+            assert!(
+                first.has_property("article") || first.has_property("title"),
+                "Instance should have article or title property"
+            );
         }
         Err(e) => {
             eprintln!("Parse error: {}", e);
@@ -262,8 +307,8 @@ fn test_parse_document_with_article_choice() {
 
 #[test]
 fn test_parse_document_with_report_choice() {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <document xmlns="http://example.com/choice" id="doc2">
@@ -285,7 +330,10 @@ fn test_parse_document_with_report_choice() {
                 eprintln!("{}", json);
             }
 
-            assert!(!instances.is_empty(), "Should parse to at least one instance");
+            assert!(
+                !instances.is_empty(),
+                "Should parse to at least one instance"
+            );
         }
         Err(e) => {
             eprintln!("Parse error (report): {}", e);
@@ -295,8 +343,8 @@ fn test_parse_document_with_report_choice() {
 
 #[test]
 fn test_parse_document_with_memo_choice() {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <document xmlns="http://example.com/choice" id="doc3">
@@ -319,7 +367,10 @@ fn test_parse_document_with_memo_choice() {
                 eprintln!("{}", json);
             }
 
-            assert!(!instances.is_empty(), "Should parse to at least one instance");
+            assert!(
+                !instances.is_empty(),
+                "Should parse to at least one instance"
+            );
         }
         Err(e) => {
             eprintln!("Parse error (memo): {}", e);
@@ -329,8 +380,8 @@ fn test_parse_document_with_memo_choice() {
 
 #[test]
 fn test_parse_payment_with_credit_card() {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <payment xmlns="http://example.com/choice">
@@ -353,7 +404,10 @@ fn test_parse_payment_with_credit_card() {
                 eprintln!("{}", json);
             }
 
-            assert!(!instances.is_empty(), "Should parse to at least one instance");
+            assert!(
+                !instances.is_empty(),
+                "Should parse to at least one instance"
+            );
         }
         Err(e) => {
             eprintln!("Parse error (payment): {}", e);
@@ -363,8 +417,8 @@ fn test_parse_payment_with_credit_card() {
 
 #[test]
 fn test_parse_payment_with_bank_transfer() {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <payment xmlns="http://example.com/choice">
@@ -386,7 +440,10 @@ fn test_parse_payment_with_bank_transfer() {
                 eprintln!("{}", json);
             }
 
-            assert!(!instances.is_empty(), "Should parse to at least one instance");
+            assert!(
+                !instances.is_empty(),
+                "Should parse to at least one instance"
+            );
         }
         Err(e) => {
             eprintln!("Parse error (bank transfer): {}", e);
@@ -396,8 +453,8 @@ fn test_parse_payment_with_bank_transfer() {
 
 #[test]
 fn test_parse_contact_with_optional_choice() {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     // Contact with email (one choice)
     let xml_with_email = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -446,8 +503,8 @@ fn test_parse_contact_with_optional_choice() {
 
 #[tokio::test]
 async fn test_choice_full_flow_document_with_article() -> anyhow::Result<()> {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <document xmlns="http://example.com/choice" id="article-doc">
@@ -476,36 +533,41 @@ async fn test_choice_full_flow_document_with_article() -> anyhow::Result<()> {
     // Step 3: Insert into TerminusDB
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_choice_article", |client, spec| {
-        let schemas = schemas.clone();
-        let insts = instances.clone();
-        async move {
-            let args = DocumentInsertArgs::from(spec.clone());
+    server
+        .with_tmp_db("test_choice_article", |client, spec| {
+            let schemas = schemas.clone();
+            let insts = instances.clone();
+            async move {
+                let args = DocumentInsertArgs::from(spec.clone());
 
-            // Insert schemas
-            client.insert_schema_instances(schemas.clone(), args.clone()).await?;
-            eprintln!("Step 3a: Inserted schemas");
+                // Insert schemas
+                client
+                    .insert_schema_instances(schemas.clone(), args.clone())
+                    .await?;
+                eprintln!("Step 3a: Inserted schemas");
 
-            // Insert instances
-            let instance_refs: Vec<_> = insts.iter().collect();
-            let result = client.insert_documents(instance_refs, args).await?;
-            eprintln!("Step 3b: Inserted {} documents", result.len());
+                // Insert instances
+                let instance_refs: Vec<_> = insts.iter().collect();
+                let result = client.insert_documents(instance_refs, args).await?;
+                eprintln!("Step 3b: Inserted {} documents", result.len());
 
-            Ok(())
-        }
-    }).await?;
+                Ok(())
+            }
+        })
+        .await?;
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_choice_full_flow_payment_methods() -> anyhow::Result<()> {
-    let model = XsdModel::from_file(choice_xsd_path(), None::<&str>)
-        .expect("Failed to load XSD model");
+    let model =
+        XsdModel::from_file(choice_xsd_path(), None::<&str>).expect("Failed to load XSD model");
 
     // Test with different payment methods
     let payments = vec![
-        (r#"<?xml version="1.0" encoding="UTF-8"?>
+        (
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <payment xmlns="http://example.com/choice">
     <amount>150.00</amount>
     <currency>USD</currency>
@@ -514,8 +576,11 @@ async fn test_choice_full_flow_payment_methods() -> anyhow::Result<()> {
         <expiryDate>06/26</expiryDate>
         <cvv>999</cvv>
     </creditCard>
-</payment>"#, "credit card"),
-        (r#"<?xml version="1.0" encoding="UTF-8"?>
+</payment>"#,
+            "credit card",
+        ),
+        (
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <payment xmlns="http://example.com/choice">
     <amount>1000.00</amount>
     <currency>GBP</currency>
@@ -523,8 +588,11 @@ async fn test_choice_full_flow_payment_methods() -> anyhow::Result<()> {
         <accountNumber>GB82WEST12345698765432</accountNumber>
         <routingNumber>WESTGB2L</routingNumber>
     </bankTransfer>
-</payment>"#, "bank transfer"),
-        (r#"<?xml version="1.0" encoding="UTF-8"?>
+</payment>"#,
+            "bank transfer",
+        ),
+        (
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <payment xmlns="http://example.com/choice">
     <amount>25.50</amount>
     <currency>EUR</currency>
@@ -532,42 +600,49 @@ async fn test_choice_full_flow_payment_methods() -> anyhow::Result<()> {
         <walletId>wallet-abc123</walletId>
         <provider>PayPal</provider>
     </digitalWallet>
-</payment>"#, "digital wallet"),
+</payment>"#,
+            "digital wallet",
+        ),
     ];
 
     let schemas = model.schemas().to_vec();
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_choice_payments", |client, spec| {
-        let schemas = schemas.clone();
-        let model_ref = &model;
-        let payments_ref = &payments;
-        async move {
-            let args = DocumentInsertArgs::from(spec.clone());
+    server
+        .with_tmp_db("test_choice_payments", |client, spec| {
+            let schemas = schemas.clone();
+            let model_ref = &model;
+            let payments_ref = &payments;
+            async move {
+                let args = DocumentInsertArgs::from(spec.clone());
 
-            // Insert schemas first
-            client.insert_schema_instances(schemas.clone(), args.clone()).await?;
-            eprintln!("Inserted schemas");
+                // Insert schemas first
+                client
+                    .insert_schema_instances(schemas.clone(), args.clone())
+                    .await?;
+                eprintln!("Inserted schemas");
 
-            // Parse and insert each payment type
-            for (xml, payment_type) in payments_ref {
-                eprintln!("\n--- Testing {} payment ---", payment_type);
+                // Parse and insert each payment type
+                for (xml, payment_type) in payments_ref {
+                    eprintln!("\n--- Testing {} payment ---", payment_type);
 
-                match model_ref.parse_xml_to_instances(xml) {
-                    Ok(instances) => {
-                        let instance_refs: Vec<_> = instances.iter().collect();
-                        let result = client.insert_documents(instance_refs, args.clone()).await?;
-                        eprintln!("✓ Inserted {} payment: {} docs", payment_type, result.len());
-                    }
-                    Err(e) => {
-                        eprintln!("✗ Failed to parse {} payment: {}", payment_type, e);
+                    match model_ref.parse_xml_to_instances(xml) {
+                        Ok(instances) => {
+                            let instance_refs: Vec<_> = instances.iter().collect();
+                            let result =
+                                client.insert_documents(instance_refs, args.clone()).await?;
+                            eprintln!("✓ Inserted {} payment: {} docs", payment_type, result.len());
+                        }
+                        Err(e) => {
+                            eprintln!("✗ Failed to parse {} payment: {}", payment_type, e);
+                        }
                     }
                 }
-            }
 
-            Ok(())
-        }
-    }).await?;
+                Ok(())
+            }
+        })
+        .await?;
 
     Ok(())
 }
@@ -588,11 +663,9 @@ fn test_choice_child_elements_extracted() {
             if !children.is_empty() {
                 eprintln!("\n{} ({:?}):", ct.name, ct.content_model);
                 for child in children {
-                    eprintln!("  - {} : {} (min={:?}, max={:?})",
-                        child.name,
-                        child.element_type,
-                        child.min_occurs,
-                        child.max_occurs
+                    eprintln!(
+                        "  - {} : {} (min={:?}, max={:?})",
+                        child.name, child.element_type, child.min_occurs, child.max_occurs
                     );
                 }
             }
@@ -601,21 +674,37 @@ fn test_choice_child_elements_extracted() {
 
     // DocumentType should have choice children (article, report, memo)
     // Note: Complex type names are in Clark notation like {namespace}documentType
-    let doc_type = xsd_schema.complex_types.iter()
+    let doc_type = xsd_schema
+        .complex_types
+        .iter()
         .find(|ct| ct.name.ends_with("documentType"))
         .expect("documentType not found");
 
-    let children = doc_type.child_elements.as_ref()
+    let children = doc_type
+        .child_elements
+        .as_ref()
         .expect("documentType should have child elements");
 
     let child_names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
     eprintln!("\ndocumentType children: {:?}", child_names);
 
     // Should contain the choice elements
-    assert!(child_names.iter().any(|n| n.contains("article") || n.ends_with("article")),
-        "documentType should have article child");
-    assert!(child_names.iter().any(|n| n.contains("report") || n.ends_with("report")),
-        "documentType should have report child");
-    assert!(child_names.iter().any(|n| n.contains("memo") || n.ends_with("memo")),
-        "documentType should have memo child");
+    assert!(
+        child_names
+            .iter()
+            .any(|n| n.contains("article") || n.ends_with("article")),
+        "documentType should have article child"
+    );
+    assert!(
+        child_names
+            .iter()
+            .any(|n| n.contains("report") || n.ends_with("report")),
+        "documentType should have report child"
+    );
+    assert!(
+        child_names
+            .iter()
+            .any(|n| n.contains("memo") || n.ends_with("memo")),
+        "documentType should have memo child"
+    );
 }

@@ -1,19 +1,19 @@
 #![allow(warnings)]
 
 mod args;
+#[cfg(feature = "generic-derive")]
+mod bounds;
 mod enum_simple;
 mod enum_union;
 mod from_instance;
+mod generics;
 mod instance;
 mod json_deserialize;
 mod prelude;
 mod schema;
 mod serde_impl;
 mod r#struct;
-mod generics;
 mod type_name;
-#[cfg(feature = "generic-derive")]
-mod bounds;
 
 use crate::enum_simple::implement_for_simple_enum;
 use crate::enum_union::implement_for_tagged_enum;

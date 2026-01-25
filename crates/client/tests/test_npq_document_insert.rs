@@ -1,8 +1,8 @@
-use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{TerminusDBHttpClient, DocumentInsertArgs, BranchSpec};
-use terminusdb_woql2::*;
-use terminusdb_woql2::query::{NamedParametricQuery, Query};
 use serde_json::{json, Value};
+use terminusdb_bin::TerminusDBServer;
+use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
+use terminusdb_woql2::query::{NamedParametricQuery, Query};
+use terminusdb_woql2::*;
 
 #[tokio::test]
 async fn test_insert_npq_as_document() -> anyhow::Result<()> {
@@ -38,7 +38,14 @@ async fn test_insert_npq_as_document() -> anyhow::Result<()> {
                     });
 
                     // Try executing through query_string
-                    match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&call_json)?, None).await {
+                    match client
+                        .query_string::<Value>(
+                            Some(spec.clone()),
+                            &serde_json::to_string(&call_json)?,
+                            None,
+                        )
+                        .await
+                    {
                         Ok(response) => {
                             println!("Call succeeded! Response: {:?}", response);
                         }
@@ -93,7 +100,14 @@ async fn test_insert_parametric_npq() -> anyhow::Result<()> {
 
                     println!("\nCalling parametric query with args: {:#?}", call_json);
 
-                    match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&call_json)?, None).await {
+                    match client
+                        .query_string::<Value>(
+                            Some(spec.clone()),
+                            &serde_json::to_string(&call_json)?,
+                            None,
+                        )
+                        .await
+                    {
                         Ok(response) => {
                             println!("Parametric call succeeded! Response: {:?}", response);
                         }

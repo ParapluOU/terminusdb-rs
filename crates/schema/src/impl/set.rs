@@ -1,5 +1,9 @@
 use crate::json::InstancePropertyFromJson;
-use crate::{FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily};
+use crate::{
+    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, Property,
+    RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass,
+    ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
+};
 use anyhow::anyhow;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
@@ -56,11 +60,13 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for BTreeSet<T> {
 }
 
 // Implement ToInstanceProperty for Vec<T> where T implements ToTDBInstance
-impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Hash, S> ToInstanceProperty<S> for HashSet<T> {
+impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Hash, S>
+    ToInstanceProperty<S> for HashSet<T>
+{
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         // Check if T is a subdocument type
         let is_subdocument = T::to_schema().is_subdocument();
-        
+
         InstanceProperty::Relations(
             self.into_iter()
                 .map(|item| {
@@ -74,7 +80,7 @@ impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Has
     }
 }
 
-impl<T: Primitive+ToInstanceProperty<S>, S> ToInstanceProperty<S> for HashSet<T> {
+impl<T: Primitive + ToInstanceProperty<S>, S> ToInstanceProperty<S> for HashSet<T> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
     }
@@ -85,7 +91,7 @@ impl<T: Ord + ToTDBInstance, S> ToInstanceProperty<S> for BTreeSet<T> {
     fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
         // Check if T is a subdocument type
         let is_subdocument = T::to_schema().is_subdocument();
-        
+
         InstanceProperty::Relations(
             self.into_iter()
                 .map(|item| {

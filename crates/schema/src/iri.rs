@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail};
 use std::fmt;
 
 /// Represents a parsed TerminusDB IRI with its components
-/// 
+///
 /// TerminusDB uses IRIs to uniquely identify documents. These IRIs can come in several formats:
 /// - Fragment-based: `terminusdb://data#TypeName/id`
 /// - Path-based: `terminusdb:///data/TypeName/id`
@@ -12,19 +12,19 @@ use std::fmt;
 pub struct TdbIRI {
     /// The base URI if present (e.g., "terminusdb://data" or "terminusdb:///data")
     base_uri: Option<String>,
-    
+
     /// Whether this IRI uses fragment-based format (with #)
     is_fragment_based: bool,
-    
+
     /// The complete typed path (e.g., "TypeName/id" or "Parent/id/prop/SubDoc/id")
     typed_path: String,
-    
+
     /// The final type name in the path
     type_name: String,
-    
+
     /// The final ID in the path
     id: String,
-    
+
     /// For subdocuments, the parent path (e.g., "Parent/id/property")
     parent_path: Option<String>,
 }
@@ -36,7 +36,7 @@ impl TdbIRI {
         if !iri_or_id.contains('/') {
             bail!("Invalid IRI format: no type information in '{}'", iri_or_id);
         }
-        
+
         // Handle full IRI with protocol (including underscore format like terminusdb:_//)
         if iri_or_id.contains("://") || iri_or_id.contains(":_//") {
             Self::parse_full_iri(iri_or_id)
@@ -45,7 +45,7 @@ impl TdbIRI {
             Self::parse_typed_path(iri_or_id, None)
         }
     }
-    
+
     /// Parse a full IRI with protocol
     fn parse_full_iri(iri: &str) -> anyhow::Result<Self> {
         if iri.contains('#') {
@@ -54,10 +54,10 @@ impl TdbIRI {
             if parts.len() != 2 {
                 return Err(anyhow!("Invalid fragment-based IRI format: '{}'", iri));
             }
-            
+
             let base_uri = parts[0].to_string();
             let typed_path = parts[1];
-            
+
             let mut iri = Self::parse_typed_path(typed_path, Some(base_uri))?;
             iri.is_fragment_based = true;
             Ok(iri)
@@ -65,49 +65,55 @@ impl TdbIRI {
             // Path-based IRI: terminusdb:///data/TypeName/id
             // Find where the document path starts
             let path_parts: Vec<&str> = iri.split('/').collect();
-            
+
             // Look for the start of the document path (first uppercase component)
             let mut doc_path_start = None;
             for (i, part) in path_parts.iter().enumerate() {
-                if !part.is_empty() 
+                if !part.is_empty()
                     && !part.contains(':')
-                    && part.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+                    && part
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false)
+                {
                     doc_path_start = Some(i);
                     break;
                 }
             }
-            
+
             match doc_path_start {
                 Some(idx) => {
                     let typed_path = path_parts[idx..].join("/");
-                    
+
                     // Extract base URI
-                    let base_end = iri.find(&typed_path)
+                    let base_end = iri
+                        .find(&typed_path)
                         .ok_or_else(|| anyhow!("Failed to extract base URI from '{}'", iri))?;
                     let mut base_uri = &iri[..base_end];
-                    
+
                     // Remove trailing slash
                     if base_uri.ends_with('/') && base_uri.len() > 1 {
-                        base_uri = &base_uri[..base_uri.len()-1];
+                        base_uri = &base_uri[..base_uri.len() - 1];
                     }
-                    
+
                     let mut iri = Self::parse_typed_path(&typed_path, Some(base_uri.to_string()))?;
                     iri.is_fragment_based = false;
                     Ok(iri)
                 }
-                None => Err(anyhow!("Could not find document path in IRI: '{}'", iri))
+                None => Err(anyhow!("Could not find document path in IRI: '{}'", iri)),
             }
         }
     }
-    
+
     /// Parse a typed path (e.g., "TypeName/id" or "Parent/id/prop/SubDoc/id")
     fn parse_typed_path(typed_path: &str, base_uri: Option<String>) -> anyhow::Result<Self> {
         let parts: Vec<&str> = typed_path.split('/').collect();
-        
+
         if parts.len() < 2 {
             return Err(anyhow!("Invalid typed path format: '{}'", typed_path));
         }
-        
+
         // Simple case: TypeName/id
         if parts.len() == 2 {
             Ok(Self {
@@ -123,13 +129,13 @@ impl TdbIRI {
             // The last two parts are the final Type/ID
             let type_idx = parts.len() - 2;
             let id_idx = parts.len() - 1;
-            
+
             let parent_path = if type_idx > 0 {
                 Some(parts[..type_idx].join("/"))
             } else {
                 None
             };
-            
+
             Ok(Self {
                 base_uri,
                 is_fragment_based: false,
@@ -140,37 +146,37 @@ impl TdbIRI {
             })
         }
     }
-    
+
     /// Get the base URI if present
     pub fn base_uri(&self) -> Option<&str> {
         self.base_uri.as_deref()
     }
-    
+
     /// Get the complete typed path (e.g., "TypeName/id")
     pub fn typed_path(&self) -> &str {
         &self.typed_path
     }
-    
+
     /// Get the type name (final type in the path)
     pub fn type_name(&self) -> &str {
         &self.type_name
     }
-    
+
     /// Get the ID (final segment in the path)
     pub fn id(&self) -> &str {
         &self.id
     }
-    
+
     /// Get the parent path for subdocuments
     pub fn parent_path(&self) -> Option<&str> {
         self.parent_path.as_deref()
     }
-    
+
     /// Check if this is a subdocument IRI
     pub fn is_subdocument(&self) -> bool {
         self.parent_path.is_some()
     }
-    
+
     /// Get the full IRI string (reconstructed)
     pub fn to_string(&self) -> String {
         match &self.base_uri {
@@ -181,7 +187,7 @@ impl TdbIRI {
                     format!("{}/{}", base, self.typed_path)
                 }
             }
-            None => self.typed_path.clone()
+            None => self.typed_path.clone(),
         }
     }
 
@@ -221,7 +227,7 @@ impl fmt::Display for TdbIRI {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_simple_typed_id() {
         let iri = TdbIRI::parse("Person/123").unwrap();
@@ -231,7 +237,7 @@ mod tests {
         assert_eq!(iri.base_uri(), None);
         assert!(!iri.is_subdocument());
     }
-    
+
     #[test]
     fn test_parse_fragment_based_iri() {
         let original = "terminusdb://data#Person/456";
@@ -242,7 +248,7 @@ mod tests {
         assert_eq!(iri.base_uri(), Some("terminusdb://data"));
         assert_eq!(iri.to_string(), original);
     }
-    
+
     #[test]
     fn test_parse_path_based_iri() {
         let iri = TdbIRI::parse("terminusdb:///data/Person/789").unwrap();
@@ -252,17 +258,20 @@ mod tests {
         assert_eq!(iri.base_uri(), Some("terminusdb:///data"));
         assert_eq!(iri.to_string(), "terminusdb:///data/Person/789");
     }
-    
+
     #[test]
     fn test_parse_subdocument_path() {
         let iri = TdbIRI::parse("ReviewSession/123/assignments/ReviewAssignment/456").unwrap();
         assert_eq!(iri.type_name(), "ReviewAssignment");
         assert_eq!(iri.id(), "456");
-        assert_eq!(iri.typed_path(), "ReviewSession/123/assignments/ReviewAssignment/456");
+        assert_eq!(
+            iri.typed_path(),
+            "ReviewSession/123/assignments/ReviewAssignment/456"
+        );
         assert_eq!(iri.parent_path(), Some("ReviewSession/123/assignments"));
         assert!(iri.is_subdocument());
     }
-    
+
     #[test]
     fn test_parse_subdocument_fragment_iri() {
         let iri = TdbIRI::parse("terminusdb://data#Parent/123/prop/SubDoc/456").unwrap();
@@ -272,7 +281,7 @@ mod tests {
         assert_eq!(iri.parent_path(), Some("Parent/123/prop"));
         assert!(iri.is_subdocument());
     }
-    
+
     #[test]
     fn test_parse_subdocument_path_iri() {
         let iri = TdbIRI::parse("terminusdb:///data/Parent/123/prop/SubDoc/789").unwrap();
@@ -282,7 +291,7 @@ mod tests {
         assert_eq!(iri.parent_path(), Some("Parent/123/prop"));
         assert!(iri.is_subdocument());
     }
-    
+
     #[test]
     fn test_parse_deeply_nested_subdocument() {
         let iri = TdbIRI::parse("A/1/b/B/2/c/C/3/d/D/4").unwrap();
@@ -291,7 +300,7 @@ mod tests {
         assert_eq!(iri.parent_path(), Some("A/1/b/B/2/c/C/3/d"));
         assert!(iri.is_subdocument());
     }
-    
+
     #[test]
     fn test_parse_terminusdb_underscore_format() {
         // Format seen in the dependent code: "terminusdb:_//data/TypeName/id"
@@ -304,14 +313,17 @@ mod tests {
         // The reconstruction should match original
         assert_eq!(iri.to_string(), original);
     }
-    
+
     #[test]
     fn test_parse_invalid_no_type() {
         let result = TdbIRI::parse("123");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("no type information"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no type information"));
     }
-    
+
     #[test]
     fn test_parse_invalid_no_id() {
         // Empty ID is technically valid in the split, just empty string
@@ -319,7 +331,7 @@ mod tests {
         assert_eq!(iri.type_name(), "Person");
         assert_eq!(iri.id(), "");
     }
-    
+
     #[test]
     fn test_roundtrip_conversion() {
         let iris = vec![

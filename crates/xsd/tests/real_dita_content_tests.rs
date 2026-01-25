@@ -42,7 +42,9 @@ static DITA_DIR: LazyLock<TempDir> = LazyLock::new(|| {
 
 /// Get the path to DITA ditabase.xsd (includes all topic types: topic, concept, task, reference, glossentry)
 fn dita_ditabase_xsd_path() -> PathBuf {
-    DITA_DIR.path().join("xsd1.2-url/technicalContent/xsd/ditabase.xsd")
+    DITA_DIR
+        .path()
+        .join("xsd1.2-url/technicalContent/xsd/ditabase.xsd")
 }
 
 /// Collect all .dita files in a directory recursively
@@ -80,9 +82,16 @@ fn filter_valid_schemas(schemas: &[Schema]) -> Vec<Schema> {
     schemas
         .iter()
         .filter(|s| {
-            if let Schema::Class { properties, inherits, .. } = s {
+            if let Schema::Class {
+                properties,
+                inherits,
+                ..
+            } = s
+            {
                 let all_props_defined = properties.iter().all(|p| {
-                    p.class.starts_with("xsd:") || p.class.starts_with("sys:") || defined.contains(&p.class)
+                    p.class.starts_with("xsd:")
+                        || p.class.starts_with("sys:")
+                        || defined.contains(&p.class)
                 });
                 let all_inherits_defined = inherits.iter().all(|i| defined.contains(i));
                 all_props_defined && all_inherits_defined
@@ -124,11 +133,23 @@ fn test_count_dita_files() {
     println!("  gnostyx-demo: {} files", gnostyx_files.len());
     println!("  dita-test-cases: {} files", test_case_files.len());
     println!("  dita-ot-docs: {} files", dita_ot_files.len());
-    println!("  Total: {} files", gnostyx_files.len() + test_case_files.len() + dita_ot_files.len());
+    println!(
+        "  Total: {} files",
+        gnostyx_files.len() + test_case_files.len() + dita_ot_files.len()
+    );
 
-    assert!(gnostyx_files.len() > 100, "Expected 200+ files in gnostyx-demo");
-    assert!(test_case_files.len() > 100, "Expected 700+ files in dita-test-cases");
-    assert!(dita_ot_files.len() > 100, "Expected 200+ files in dita-ot-docs");
+    assert!(
+        gnostyx_files.len() > 100,
+        "Expected 200+ files in gnostyx-demo"
+    );
+    assert!(
+        test_case_files.len() > 100,
+        "Expected 700+ files in dita-test-cases"
+    );
+    assert!(
+        dita_ot_files.len() > 100,
+        "Expected 200+ files in dita-ot-docs"
+    );
 }
 
 #[test]
@@ -176,7 +197,11 @@ fn test_parse_gnostyx_demo_files() {
         println!("\nFirst {} errors:", errors.len().min(10));
         for (file, err) in &errors {
             let filename = file.file_name().unwrap_or_default().to_string_lossy();
-            println!("  {}: {}", filename, err.chars().take(80).collect::<String>());
+            println!(
+                "  {}: {}",
+                filename,
+                err.chars().take(80).collect::<String>()
+            );
         }
     }
 
@@ -200,7 +225,8 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
     let mut all_instances = Vec::new();
     let mut parse_errors = 0;
 
-    for file in files.iter().take(50) { // Limit to first 50 for speed
+    for file in files.iter().take(50) {
+        // Limit to first 50 for speed
         let xml = match std::fs::read_to_string(file) {
             Ok(content) => content,
             Err(_) => continue,
@@ -212,8 +238,12 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
         }
     }
 
-    println!("Parsed {} instances from {} files ({} parse errors)",
-             all_instances.len(), 50.min(files.len()), parse_errors);
+    println!(
+        "Parsed {} instances from {} files ({} parse errors)",
+        all_instances.len(),
+        50.min(files.len()),
+        parse_errors
+    );
 
     if all_instances.is_empty() {
         println!("No instances to insert, skipping database test");
@@ -221,26 +251,48 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
     }
 
     // Debug: count how many UlClass schemas exist
-    let ul_class_count = model.schemas().iter().filter(|s| matches!(s, Schema::Class { id, .. } if id == "UlClass")).count();
+    let ul_class_count = model
+        .schemas()
+        .iter()
+        .filter(|s| matches!(s, Schema::Class { id, .. } if id == "UlClass"))
+        .count();
     println!("Number of UlClass schemas: {}", ul_class_count);
 
     // Debug: print Ul, Conbody and Fig schema properties and inheritance BEFORE filtering
     for schema in model.schemas() {
-        if let Schema::Class { id, properties, inherits, .. } = schema {
+        if let Schema::Class {
+            id,
+            properties,
+            inherits,
+            ..
+        } = schema
+        {
             if id == "UlClass" {
-                println!("BEFORE FILTER - Schema UlClass: all properties = {:?}",
-                    properties.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+                println!(
+                    "BEFORE FILTER - Schema UlClass: all properties = {:?}",
+                    properties
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>()
+                );
             }
             if id == "Conbody" || id == "ConbodyClass" {
-                println!("BEFORE FILTER - {} inherits = {:?}, properties = {:?}",
+                println!(
+                    "BEFORE FILTER - {} inherits = {:?}, properties = {:?}",
                     id,
                     inherits,
-                    properties.iter().map(|p| format!("{}: {}", p.name, p.class)).collect::<Vec<_>>());
+                    properties
+                        .iter()
+                        .map(|p| format!("{}: {}", p.name, p.class))
+                        .collect::<Vec<_>>()
+                );
             }
             if id == "Fig" || id == "FigClass" {
-                println!("BEFORE FILTER - {} exists with {} properties",
+                println!(
+                    "BEFORE FILTER - {} exists with {} properties",
                     id,
-                    properties.len());
+                    properties.len()
+                );
             }
         }
     }
@@ -256,7 +308,8 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
     println!("Any schema has 'fig' property: {}", has_fig_property);
 
     // Also check if id property type is defined
-    let defined: std::collections::HashSet<String> = model.schemas()
+    let defined: std::collections::HashSet<String> = model
+        .schemas()
         .iter()
         .filter_map(|s| match s {
             Schema::Class { id, .. } => Some(id.clone()),
@@ -266,49 +319,70 @@ async fn test_insert_gnostyx_demo_into_terminusdb() -> anyhow::Result<()> {
         })
         .collect();
     println!("Is 'xsd:ID' in defined? {}", defined.contains("xsd:ID"));
-    println!("Is 'NmtokenType' in defined? {}", defined.contains("NmtokenType"));
+    println!(
+        "Is 'NmtokenType' in defined? {}",
+        defined.contains("NmtokenType")
+    );
 
     // Start TerminusDB and insert
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_gnostyx_demo", |client, spec| {
-        let schemas = filter_valid_schemas(model.schemas());
+    server
+        .with_tmp_db("test_gnostyx_demo", |client, spec| {
+            let schemas = filter_valid_schemas(model.schemas());
 
-        // Debug: check UlClass and Conbody AFTER filtering
-        for schema in &schemas {
-            if let Schema::Class { id, properties, inherits, .. } = schema {
-                if id == "UlClass" {
-                    println!("AFTER FILTER - UlClass all properties = {:?}",
-                        properties.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
-                }
-                if id == "Conbody" || id == "ConbodyClass" {
-                    println!("AFTER FILTER - {} inherits = {:?}, properties = {:?}",
-                        id,
-                        inherits,
-                        properties.iter().map(|p| p.name.as_str()).collect::<Vec<_>>());
+            // Debug: check UlClass and Conbody AFTER filtering
+            for schema in &schemas {
+                if let Schema::Class {
+                    id,
+                    properties,
+                    inherits,
+                    ..
+                } = schema
+                {
+                    if id == "UlClass" {
+                        println!(
+                            "AFTER FILTER - UlClass all properties = {:?}",
+                            properties
+                                .iter()
+                                .map(|p| p.name.as_str())
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    if id == "Conbody" || id == "ConbodyClass" {
+                        println!(
+                            "AFTER FILTER - {} inherits = {:?}, properties = {:?}",
+                            id,
+                            inherits,
+                            properties
+                                .iter()
+                                .map(|p| p.name.as_str())
+                                .collect::<Vec<_>>()
+                        );
+                    }
                 }
             }
-        }
-        let instances = all_instances.clone();
-        async move {
-            let args = DocumentInsertArgs::from(spec.clone());
+            let instances = all_instances.clone();
+            async move {
+                let args = DocumentInsertArgs::from(spec.clone());
 
-            // Insert schemas first
-            println!("Inserting {} schemas...", schemas.len());
-            match client.insert_schema_instances(schemas, args.clone()).await {
-                Ok(_) => println!("Schema insertion successful"),
-                Err(e) => println!("Schema insertion error: {:?}", e),
+                // Insert schemas first
+                println!("Inserting {} schemas...", schemas.len());
+                match client.insert_schema_instances(schemas, args.clone()).await {
+                    Ok(_) => println!("Schema insertion successful"),
+                    Err(e) => println!("Schema insertion error: {:?}", e),
+                }
+
+                // Insert instances
+                println!("Inserting {} instances...", instances.len());
+                let instance_refs: Vec<_> = instances.iter().collect();
+                let result = client.insert_documents(instance_refs, args).await?;
+                println!("Successfully inserted {} documents", result.len());
+
+                Ok(())
             }
-
-            // Insert instances
-            println!("Inserting {} instances...", instances.len());
-            let instance_refs: Vec<_> = instances.iter().collect();
-            let result = client.insert_documents(instance_refs, args).await?;
-            println!("Successfully inserted {} documents", result.len());
-
-            Ok(())
-        }
-    }).await?;
+        })
+        .await?;
 
     Ok(())
 }

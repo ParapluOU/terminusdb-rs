@@ -77,7 +77,7 @@ impl RawQueryable for PaginatedPersonQuery {
     type Result = PersonResult;
 
     fn query(&self) -> Query {
-        use terminusdb_woql2::misc::{Start, Limit};
+        use terminusdb_woql2::misc::{Limit, Start};
 
         let base_query = WoqlBuilder::new()
             .triple(vars!("Person"), "rdf:type", "@schema:Person")
@@ -148,16 +148,16 @@ mod tests {
             Query::Count(_) => {
                 assert!(true, "Count query was preserved");
             }
-            _ => panic!("Expected Count query to be preserved, got {:?}", count_query),
+            _ => panic!(
+                "Expected Count query to be preserved, got {:?}",
+                count_query
+            ),
         }
     }
 
     #[test]
     fn test_query_count_unwraps_pagination() {
-        let query = PaginatedPersonQuery {
-            skip: 10,
-            limit: 5,
-        };
+        let query = PaginatedPersonQuery { skip: 10, limit: 5 };
         let count_query = query.query_count();
 
         // Verify the query is wrapped in Count and pagination is removed
@@ -179,11 +179,11 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
+    use serde::{Deserialize as SerdeDeserialize, Serialize};
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-    use serde::{Deserialize as SerdeDeserialize, Serialize};
 
     #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]

@@ -34,17 +34,14 @@ struct ComplexGeneric<T: Send, U: Send> {
 fn test_phantom_data_fields_are_skipped() {
     // Test that PhantomData fields don't appear in schema
     let schema = <GenericWithPhantom<Tag> as ToTDBSchema>::to_schema();
-    
+
     match schema {
         Schema::Class { properties, .. } => {
             // Should only have 2 properties: id and data
             assert_eq!(properties.len(), 2);
-            
-            let prop_names: Vec<_> = properties
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect();
-            
+
+            let prop_names: Vec<_> = properties.iter().map(|p| p.name.as_str()).collect();
+
             assert!(prop_names.contains(&"id"));
             assert!(prop_names.contains(&"data"));
             assert!(!prop_names.contains(&"_phantom"));
@@ -60,9 +57,9 @@ fn test_phantom_data_instance_generation() {
         data: "test data".to_string(),
         _phantom: PhantomData,
     };
-    
+
     let instance = obj.to_instance(None);
-    
+
     // PhantomData field should not appear in properties
     assert_eq!(instance.properties.len(), 2);
     assert!(instance.properties.contains_key("id"));
@@ -73,17 +70,14 @@ fn test_phantom_data_instance_generation() {
 #[test]
 fn test_multiple_phantom_data_fields() {
     let schema = <ComplexGeneric<Tag, String> as ToTDBSchema>::to_schema();
-    
+
     match schema {
         Schema::Class { properties, .. } => {
             // Should only have 2 properties: id and value
             assert_eq!(properties.len(), 2);
-            
-            let prop_names: Vec<_> = properties
-                .iter()
-                .map(|p| p.name.as_str())
-                .collect();
-            
+
+            let prop_names: Vec<_> = properties.iter().map(|p| p.name.as_str()).collect();
+
             assert!(prop_names.contains(&"id"));
             assert!(prop_names.contains(&"value"));
             assert!(!prop_names.contains(&"_marker_t"));
@@ -98,18 +92,18 @@ fn test_phantom_data_no_bounds_needed() {
     // This test verifies that T in PhantomData<T> doesn't need any trait bounds
     // by using a simple type that doesn't implement TerminusDBModel
     struct SimpleMarker;
-    
+
     #[derive(Debug, Clone, TerminusDBModel)]
     struct WithSimplePhantom {
         id: String,
         _marker: PhantomData<SimpleMarker>,
     }
-    
+
     let obj = WithSimplePhantom {
         id: "test".to_string(),
         _marker: PhantomData,
     };
-    
+
     // Should compile and work even though SimpleMarker has no TerminusDB traits
     let instance = obj.to_instance(None);
     assert_eq!(instance.properties.len(), 1);

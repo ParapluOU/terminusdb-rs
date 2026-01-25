@@ -6,7 +6,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 #[tdb(doc = "Test model for Vec<String>")]
 pub struct VecStringTest {
-    /// Unique identifier  
+    /// Unique identifier
     pub id: String,
 
     /// Name

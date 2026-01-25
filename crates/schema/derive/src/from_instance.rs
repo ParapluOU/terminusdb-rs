@@ -28,7 +28,7 @@ pub(crate) fn derive_from_terminusdb_instance(
                 Fields::Named(fields_named) => {
                     // Generate implementation for struct with named fields
                     implement_from_instance_for_struct(
-                        struct_name, 
+                        struct_name,
                         data_struct,
                         #[cfg(feature = "generic-derive")]
                         &input.generics,
@@ -83,8 +83,7 @@ fn detect_enum_type(data_enum: &DataEnum) -> EnumType {
 fn implement_from_instance_for_struct(
     struct_name: &syn::Ident,
     data_struct: &DataStruct,
-    #[cfg(feature = "generic-derive")]
-    generics: &syn::Generics,
+    #[cfg(feature = "generic-derive")] generics: &syn::Generics,
 ) -> proc_macro2::TokenStream {
     // Extract generic parameters
     #[cfg(feature = "generic-derive")]
@@ -102,20 +101,23 @@ fn implement_from_instance_for_struct(
                 crate::bounds::TraitImplType::FromTDBInstance,
             );
             let predicates = crate::bounds::build_where_predicates(&bounds);
-            let where_clause = crate::bounds::combine_where_clauses(
-                generics.where_clause.as_ref(),
-                predicates,
-            );
-            
+            let where_clause =
+                crate::bounds::combine_where_clauses(generics.where_clause.as_ref(), predicates);
+
             let (syn_impl_generics, syn_ty_generics, _) = generics.split_for_impl();
-            (quote! { #syn_impl_generics }, quote! { #syn_ty_generics }, where_clause)
+            (
+                quote! { #syn_impl_generics },
+                quote! { #syn_ty_generics },
+                where_clause,
+            )
         } else {
-            (quote!{}, quote!{}, None)
+            (quote! {}, quote! {}, None)
         }
     };
-    
+
     #[cfg(not(feature = "generic-derive"))]
-    let (impl_generics, ty_generics, where_clause) = (quote!{}, quote!{}, None::<syn::WhereClause>);
+    let (impl_generics, ty_generics, where_clause) =
+        (quote! {}, quote! {}, None::<syn::WhereClause>);
     // Process named fields
     let (fields_code, field_names) = match &data_struct.fields {
         Fields::Named(fields_named) => {
@@ -454,7 +456,7 @@ fn implement_from_instance_for_tagged_enum(
                     if let Some(prop) = instance.properties.get(#variant_name_str) {
                         if let terminusdb_schema::InstanceProperty::Relation(terminusdb_schema::RelationValue::One(sub_instance)) = prop {
                             #(#field_parsers)*
-                            
+
                             return ::core::result::Result::Ok(#enum_name::#variant_ident { #(#field_names),* });
                         }
                     }

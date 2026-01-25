@@ -10,9 +10,7 @@ mod tests {
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
     /// Test model for header-aware GET operations
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct TestProduct {
         id: EntityIDFor<Self>,
@@ -47,11 +45,7 @@ mod tests {
                 // Retrieve the product with headers
                 let mut deserializer = deserialize::DefaultTDBDeserializer;
                 let result = client
-                    .get_instance_with_headers::<TestProduct>(
-                        "laptop001",
-                        &spec,
-                        &mut deserializer,
-                    )
+                    .get_instance_with_headers::<TestProduct>("laptop001", &spec, &mut deserializer)
                     .await?;
 
                 // Access the product via Deref
@@ -65,7 +59,10 @@ mod tests {
 
                 // Verify we got a commit ID
                 let commit_id = result.extract_commit_id();
-                assert!(commit_id.is_some(), "Expected commit ID in response headers");
+                assert!(
+                    commit_id.is_some(),
+                    "Expected commit ID in response headers"
+                );
 
                 Ok(())
             })
@@ -115,12 +112,7 @@ mod tests {
                 let mut deserializer = deserialize::DefaultTDBDeserializer;
 
                 let result = client
-                    .get_instances_with_headers::<TestProduct>(
-                        ids,
-                        &spec,
-                        opts,
-                        &mut deserializer,
-                    )
+                    .get_instances_with_headers::<TestProduct>(ids, &spec, opts, &mut deserializer)
                     .await?;
 
                 // Access the products via Deref
@@ -143,7 +135,10 @@ mod tests {
 
                 // Verify we got a commit ID
                 let commit_id = result.extract_commit_id();
-                assert!(commit_id.is_some(), "Expected commit ID in response headers");
+                assert!(
+                    commit_id.is_some(),
+                    "Expected commit ID in response headers"
+                );
 
                 Ok(())
             })
@@ -206,7 +201,10 @@ mod tests {
 
                 // Verify we got a commit ID
                 let commit_id = result.extract_commit_id();
-                assert!(commit_id.is_some(), "Expected commit ID in response headers");
+                assert!(
+                    commit_id.is_some(),
+                    "Expected commit ID in response headers"
+                );
 
                 Ok(())
             })

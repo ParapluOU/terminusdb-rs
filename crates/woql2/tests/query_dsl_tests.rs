@@ -21,7 +21,7 @@ struct ReviewSession {
 
 #[allow(dead_code)]
 struct Publication {
-    id: String, 
+    id: String,
     title: String,
     committee: Option<String>,
 }
@@ -69,19 +69,19 @@ struct Committee {
 
 #[test]
 fn test_simple_type_query() {
-    let query = query!{{
+    let query = query! {{
         Person {
             id = data!("person123"),
             name = v!(name),
             age = v!(age)
         }
     }};
-    
+
     // Verify it's an And query with the expected components
     match query {
         Query::And(ref and) => {
             assert_eq!(and.and.len(), 4); // type + id + name + age
-            
+
             // Check type triple
             match &and.and[0] {
                 Query::Triple(t) => {
@@ -90,7 +90,7 @@ fn test_simple_type_query() {
                 }
                 _ => panic!("Expected type triple"),
             }
-            
+
             // Check id triple
             match &and.and[1] {
                 Query::Triple(t) => {
@@ -102,7 +102,7 @@ fn test_simple_type_query() {
         }
         _ => panic!("Expected And query"),
     }
-    
+
     // Verify DSL output
     let dsl = query.to_dsl();
     assert!(dsl.contains("triple($Person, \"rdf:type\", \"@schema:Person\")"));
@@ -113,7 +113,7 @@ fn test_simple_type_query() {
 
 #[test]
 fn test_multiple_types_with_relationships() {
-    let query = query!{{
+    let query = query! {{
         ReviewSession {
             id = data!("session123"),
             publication_id = v!(PublicationId),
@@ -128,12 +128,12 @@ fn test_multiple_types_with_relationships() {
             end = v!(EndDate)
         }
     }};
-    
+
     match query {
         Query::And(ref and) => {
             // Should have: 3 type triples + 3 ReviewSession fields + 2 AwsDBPublication fields + 2 DateRange fields = 10
             assert_eq!(and.and.len(), 10);
-            
+
             // Verify we have type declarations for all three types
             let type_count = and.and.iter().filter(|q| {
                 matches!(q, Query::Triple(t) if matches!(t.predicate, NodeValue::Node(ref s) if s == "rdf:type"))
@@ -146,30 +146,30 @@ fn test_multiple_types_with_relationships() {
 
 #[test]
 fn test_comparisons() {
-    let query = query!{{
+    let query = query! {{
         greater!(v!(age), data!(18)),
         less!(v!(age), data!(65)),
         compare!((v!(score)) >= (data!(80))),
         compare!((v!(score)) <= (data!(100))),
         eq!(v!(x), v!(y))
     }};
-    
+
     match query {
         Query::And(ref and) => {
             assert_eq!(and.and.len(), 5);
-            
+
             // Check greater
             assert!(matches!(&and.and[0], Query::Greater(_)));
-            
+
             // Check less
             assert!(matches!(&and.and[1], Query::Less(_)));
-            
+
             // Check >= (should be Or(Greater, Equals))
             assert!(matches!(&and.and[2], Query::Or(_)));
-            
+
             // Check <= (should be Or(Less, Equals))
             assert!(matches!(&and.and[3], Query::Or(_)));
-            
+
             // Check equals
             assert!(matches!(&and.and[4], Query::Equals(_)));
         }
@@ -179,17 +179,17 @@ fn test_comparisons() {
 
 #[test]
 fn test_function_calls() {
-    let query = query!{{
+    let query = query! {{
         read_doc!(v!(Annotation), v!(AnnotationDoc)),
         insert_doc!(v!(NewDoc)),
         update_doc!(v!(ExistingDoc)),
         delete_doc!(v!(OldDoc))
     }};
-    
+
     match query {
         Query::And(ref and) => {
             assert_eq!(and.and.len(), 4);
-            
+
             assert!(matches!(&and.and[0], Query::ReadDocument(_)));
             assert!(matches!(&and.and[1], Query::InsertDocument(_)));
             assert!(matches!(&and.and[2], Query::UpdateDocument(_)));
@@ -201,7 +201,7 @@ fn test_function_calls() {
 
 #[test]
 fn test_select_query_dsl() {
-    let query = query!{{
+    let query = query! {{
         select [SessionId, PublicationTitle] {
             ReviewSession {
                 id = v!(SessionId),
@@ -213,13 +213,13 @@ fn test_select_query_dsl() {
             }
         }
     }};
-    
+
     match query {
         Query::Select(ref select) => {
             assert_eq!(select.variables.len(), 2);
             assert_eq!(select.variables[0], "SessionId");
             assert_eq!(select.variables[1], "PublicationTitle");
-            
+
             // Verify the inner query
             match &*select.query {
                 Query::And(ref and) => {
@@ -238,12 +238,12 @@ fn test_complex_review_session_query() {
     struct MockContext {
         review_session_id: String,
     }
-    
+
     let ctx = MockContext {
         review_session_id: "session456".to_string(),
     };
-    
-    let query = query!{{
+
+    let query = query! {{
         select [AnnotationDoc] {
             ReviewSession {
                 id = data!(ctx.review_session_id.to_string()),
@@ -274,12 +274,12 @@ fn test_complex_review_session_query() {
             read_doc!(v!(Annotation), v!(AnnotationDoc))
         }
     }};
-    
+
     match query {
         Query::Select(ref select) => {
             assert_eq!(select.variables.len(), 1);
             assert_eq!(select.variables[0], "AnnotationDoc");
-            
+
             match &*select.query {
                 Query::And(ref and) => {
                     // Count the different types of queries
@@ -287,17 +287,21 @@ fn test_complex_review_session_query() {
                         matches!(q, Query::Triple(t) if matches!(t.predicate, NodeValue::Node(ref s) if s == "rdf:type"))
                     }).count();
                     assert_eq!(type_count, 6); // 6 different types
-                    
+
                     // Verify comparisons exist
-                    let comparison_count = and.and.iter().filter(|q| {
-                        matches!(q, Query::Greater(_) | Query::Less(_))
-                    }).count();
+                    let comparison_count = and
+                        .and
+                        .iter()
+                        .filter(|q| matches!(q, Query::Greater(_) | Query::Less(_)))
+                        .count();
                     assert_eq!(comparison_count, 2);
-                    
+
                     // Verify read_doc exists
-                    let read_doc_count = and.and.iter().filter(|q| {
-                        matches!(q, Query::ReadDocument(_))
-                    }).count();
+                    let read_doc_count = and
+                        .and
+                        .iter()
+                        .filter(|q| matches!(q, Query::ReadDocument(_)))
+                        .count();
                     assert_eq!(read_doc_count, 1);
                 }
                 _ => panic!("Expected And query"),
@@ -312,7 +316,7 @@ fn test_field_macro_in_query_dsl() {
     use terminusdb_woql2::field;
     let field_name = field!(Person:name);
     assert_eq!(field_name, "name");
-    
+
     let field_age = field!(Person:age);
     assert_eq!(field_age, "age");
 }
@@ -322,25 +326,25 @@ fn test_method_call_values() {
     struct TestStruct {
         id: String,
     }
-    
+
     impl TestStruct {
         fn get_id(&self) -> String {
             self.id.clone()
         }
     }
-    
+
     let test = TestStruct {
         id: "test123".to_string(),
     };
-    
+
     // This tests that method calls are properly converted to data values
-    let query = query!{{
+    let query = query! {{
         Document {
             id = data!(test.get_id()),
             status = data!("active")
         }
     }};
-    
+
     match query {
         Query::And(ref and) => {
             // Check that the id field has the method call result
@@ -367,32 +371,32 @@ fn test_method_call_values() {
 #[test]
 fn test_mixed_query_styles() {
     // Test that we can mix the new DSL with existing macros
-    let inner_query = query!{{
+    let inner_query = query! {{
         Person {
             id = v!(PersonId),
             age = v!(Age)
         }
         greater!(v!(Age), data!(21))
     }};
-    
+
     // Wrap it with traditional macros
     let full_query = and!(
         inner_query,
         optional!(triple!(var!(Person), "email", var!(Email))),
         not!(triple!(var!(Person), "archived", data!(true)))
     );
-    
+
     // Verify the structure
     match full_query {
         Query::And(ref outer_and) => {
             assert_eq!(outer_and.and.len(), 3);
-            
+
             // First should be our DSL query (which is itself an And)
             assert!(matches!(&outer_and.and[0], Query::And(_)));
-            
+
             // Second should be optional
             assert!(matches!(&outer_and.and[1], Query::WoqlOptional(_)));
-            
+
             // Third should be not
             assert!(matches!(&outer_and.and[2], Query::Not(_)));
         }
@@ -407,7 +411,7 @@ fn test_v_macro() {
         Value::Variable(s) => assert_eq!(s, "PersonId"),
         _ => panic!("Expected Variable"),
     }
-    
+
     let var2 = v!(age);
     match var2 {
         Value::Variable(s) => assert_eq!(s, "age"),
@@ -417,20 +421,20 @@ fn test_v_macro() {
 
 #[test]
 fn test_optional_blocks_in_query() {
-    let query_with_optional = query!{{
+    let query_with_optional = query! {{
         ReviewSession {
             id = v!(SessionId),
             title = v!(Title),
             publication_id = v!(PubId)
         }
-        
+
         optional {
             // Optional publication details
             Publication {
                 id = v!(PubId),
                 title = v!(PubTitle)
             }
-            
+
             optional {
                 // Even more optional - committee info
                 triple!(v!(Publication), field!(Publication:committee), v!(CommitteeId)),
@@ -441,16 +445,18 @@ fn test_optional_blocks_in_query() {
             }
         }
     }};
-    
+
     // Verify structure
     match query_with_optional {
         Query::And(ref and) => {
             // Should have ReviewSession type + fields + optional block
-            let optional_count = and.and.iter().filter(|q| {
-                matches!(q, Query::WoqlOptional(_))
-            }).count();
+            let optional_count = and
+                .and
+                .iter()
+                .filter(|q| matches!(q, Query::WoqlOptional(_)))
+                .count();
             assert_eq!(optional_count, 1);
-            
+
             // Check DSL output contains nested optionals
             let dsl = query_with_optional.to_dsl();
             assert!(dsl.contains("opt("));

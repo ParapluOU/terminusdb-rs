@@ -9,8 +9,8 @@
 //! cargo run --example parse_with_types -- path/to/schema.xsd path/to/catalog.txt
 //! ```
 
-use terminusdb_xsd::{XsdSchema, Result};
 use std::env;
+use terminusdb_xsd::{Result, XsdSchema};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -59,7 +59,8 @@ fn main() -> Result<()> {
     for elem in &schema.root_elements {
         println!("  • {}", elem.name);
         if let Some(ref type_info) = elem.type_info {
-            println!("    Type: {} ({})",
+            println!(
+                "    Type: {} ({})",
                 type_info.name.as_deref().unwrap_or("anonymous"),
                 type_info.category
             );
@@ -67,7 +68,11 @@ fn main() -> Result<()> {
             if let Some(ref attrs) = type_info.attributes {
                 println!("    Attributes: {}", attrs.len());
                 for attr in attrs {
-                    let required = if attr.is_required() { "required" } else { "optional" };
+                    let required = if attr.is_required() {
+                        "required"
+                    } else {
+                        "optional"
+                    };
                     println!("      - {} [{}] ({})", attr.name, attr.attr_type, required);
                 }
             }
@@ -75,9 +80,14 @@ fn main() -> Result<()> {
             if let Some(ref children) = type_info.child_elements {
                 println!("    Child Elements: {}", children.len());
                 for child in children {
-                    let required = if child.is_required() { "required" } else { "optional" };
+                    let required = if child.is_required() {
+                        "required"
+                    } else {
+                        "optional"
+                    };
                     let multiple = if child.is_multiple() { "[]" } else { "" };
-                    println!("      - {}{}: {} ({})",
+                    println!(
+                        "      - {}{}: {} ({})",
                         child.name, multiple, child.element_type, required
                     );
                 }
@@ -90,17 +100,31 @@ fn main() -> Result<()> {
     println!("=== Complex Types ({}) ===", schema.complex_types.len());
 
     // Count named vs anonymous
-    let named_count = schema.complex_types.iter().filter(|t| !t.is_anonymous).count();
-    let anonymous_count = schema.complex_types.iter().filter(|t| t.is_anonymous).count();
+    let named_count = schema
+        .complex_types
+        .iter()
+        .filter(|t| !t.is_anonymous)
+        .count();
+    let anonymous_count = schema
+        .complex_types
+        .iter()
+        .filter(|t| t.is_anonymous)
+        .count();
     if named_count > 0 && anonymous_count > 0 {
-        println!("  Named types: {}, Anonymous types: {}\n", named_count, anonymous_count);
+        println!(
+            "  Named types: {}, Anonymous types: {}\n",
+            named_count, anonymous_count
+        );
     } else if anonymous_count > 0 {
         println!("  All types are anonymous (inline element type definitions)\n");
     }
 
     for ctype in schema.complex_types.iter().take(10) {
         let type_kind = if ctype.is_anonymous {
-            format!("(anonymous, from element '{}')", ctype.element_name.as_deref().unwrap_or("unknown"))
+            format!(
+                "(anonymous, from element '{}')",
+                ctype.element_name.as_deref().unwrap_or("unknown")
+            )
         } else {
             "(named)".to_string()
         };

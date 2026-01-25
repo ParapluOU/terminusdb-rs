@@ -3,8 +3,8 @@
 //! Parse SPL XSD files from smallest to largest to isolate parsing issues.
 
 use schemas::{SchemaBundle, Spl};
-use terminusdb_xsd::XsdModel;
 use std::io::Write;
+use terminusdb_xsd::XsdModel;
 
 /// Helper to print with immediate flush
 fn log(msg: &str) {
@@ -35,7 +35,10 @@ fn test_spl_parse_files_incrementally() {
             continue;
         }
 
-        log(&format!("\n=== Parsing {} ({} lines) ===", file, expected_lines));
+        log(&format!(
+            "\n=== Parsing {} ({} lines) ===",
+            file, expected_lines
+        ));
         let start = std::time::Instant::now();
 
         // Parse directly without thread
@@ -57,7 +60,10 @@ fn test_spl_parse_files_incrementally() {
 
         // If parsing took too long, warn
         if elapsed.as_secs() > 5 {
-            log(&format!("  ⚠ WARNING: Parsing took {:?} - potential infinite loop?", elapsed));
+            log(&format!(
+                "  ⚠ WARNING: Parsing took {:?} - potential infinite loop?",
+                elapsed
+            ));
         }
     }
 }
@@ -82,11 +88,7 @@ fn test_spl_parse_datatypes() {
     match handle.join() {
         Ok(Ok(model)) => {
             let elapsed = start.elapsed();
-            eprintln!(
-                "  ✓ OK: {} schemas in {:?}",
-                model.schemas().len(),
-                elapsed
-            );
+            eprintln!("  ✓ OK: {} schemas in {:?}", model.schemas().len(), elapsed);
         }
         Ok(Err(e)) => {
             eprintln!("  ✗ Parse error: {}", e);
@@ -129,7 +131,12 @@ fn test_spl_include_hierarchy() {
     }
 
     // Find max depth for POCP_MT060000UV.xsd
-    fn find_max_depth(file: &str, includes: &HashMap<String, Vec<String>>, visited: &mut HashSet<String>, depth: usize) -> usize {
+    fn find_max_depth(
+        file: &str,
+        includes: &HashMap<String, Vec<String>>,
+        visited: &mut HashSet<String>,
+        depth: usize,
+    ) -> usize {
         if visited.contains(file) {
             return depth; // Cycle detected
         }
@@ -153,7 +160,10 @@ fn test_spl_include_hierarchy() {
 
     log(&format!("\n=== Include hierarchy for {} ===", target));
     log(&format!("Max include depth: {}", max_depth));
-    log(&format!("Total unique files in include tree: {}", visited.len()));
+    log(&format!(
+        "Total unique files in include tree: {}",
+        visited.len()
+    ));
 
     // Print direct includes
     if let Some(direct) = includes.get(target) {
@@ -161,7 +171,12 @@ fn test_spl_include_hierarchy() {
     }
 
     // Show some problematic deep chains
-    fn print_include_chain(file: &str, includes: &HashMap<String, Vec<String>>, chain: &mut Vec<String>, max_len: usize) -> Option<Vec<String>> {
+    fn print_include_chain(
+        file: &str,
+        includes: &HashMap<String, Vec<String>>,
+        chain: &mut Vec<String>,
+        max_len: usize,
+    ) -> Option<Vec<String>> {
         chain.push(file.to_string());
         if chain.len() > max_len {
             return Some(chain.clone());
@@ -182,7 +197,10 @@ fn test_spl_include_hierarchy() {
     // Find a chain of length 15+ if exists
     let mut chain = Vec::new();
     if let Some(long_chain) = print_include_chain(target, &includes, &mut chain, 15) {
-        log(&format!("\nExample long include chain ({} deep):", long_chain.len()));
+        log(&format!(
+            "\nExample long include chain ({} deep):",
+            long_chain.len()
+        ));
         for (i, f) in long_chain.iter().enumerate() {
             log(&format!("  {}: {}", i, f));
         }
@@ -199,7 +217,9 @@ fn test_spl_raw_xsd_parsing() {
     Spl::write_to_directory(temp_dir.path()).expect("Failed to write schema");
 
     let path = temp_dir.path().join("POCP_MT060000UV.xsd");
-    log(&format!("\n=== Raw XSD parsing for POCP_MT060000UV.xsd ==="));
+    log(&format!(
+        "\n=== Raw XSD parsing for POCP_MT060000UV.xsd ==="
+    ));
 
     let start = std::time::Instant::now();
 
@@ -242,11 +262,7 @@ fn test_spl_parse_vocabulary() {
     match handle.join() {
         Ok(Ok(model)) => {
             let elapsed = start.elapsed();
-            eprintln!(
-                "  ✓ OK: {} schemas in {:?}",
-                model.schemas().len(),
-                elapsed
-            );
+            eprintln!("  ✓ OK: {} schemas in {:?}", model.schemas().len(), elapsed);
         }
         Ok(Err(e)) => {
             eprintln!("  ✗ Parse error: {}", e);

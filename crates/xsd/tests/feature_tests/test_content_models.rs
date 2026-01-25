@@ -20,8 +20,8 @@ use terminusdb_xsd::XsdModel;
 /// Validates: Sequence elements become properties
 #[test]
 fn test_feature_sequence_compositor() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -45,8 +45,8 @@ fn test_feature_sequence_compositor() {
 /// Validates: Properties exist (order is semantic, not enforced in schema)
 #[test]
 fn test_feature_sequence_elements() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -79,8 +79,8 @@ fn test_feature_sequence_elements() {
 /// Validates: Choice alternatives available as properties
 #[test]
 fn test_feature_choice_compositor() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -117,8 +117,8 @@ fn test_feature_choice_compositor() {
 /// Validates: Mixed content types have text handling
 #[test]
 fn test_feature_mixed_content() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -157,8 +157,8 @@ fn test_feature_mixed_content() {
 /// Validates: Text content accessible as property
 #[test]
 fn test_feature_mixed_content_text() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -167,7 +167,10 @@ fn test_feature_mixed_content_text() {
         if let Schema::Class { id, properties, .. } = schema {
             for prop in properties {
                 if prop.name.contains("text") || prop.name == "value" || prop.name == "_content" {
-                    println!("Text-like property: {}.{} (type: {})", id, prop.name, prop.class);
+                    println!(
+                        "Text-like property: {}.{} (type: {})",
+                        id, prop.name, prop.class
+                    );
                 }
             }
         }
@@ -185,8 +188,8 @@ fn test_feature_mixed_content_text() {
 /// Validates: Simple content has value + attribute properties
 #[test]
 fn test_feature_simple_content() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -225,8 +228,8 @@ fn test_feature_simple_content() {
 /// Validates: Empty types have attribute properties only
 #[test]
 fn test_feature_empty_content() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -259,8 +262,8 @@ fn test_feature_empty_content() {
 /// Validates: NISO-STS content models work
 #[test]
 fn test_feature_niso_content_models() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 

@@ -125,7 +125,13 @@ trait ChangedHandler: Send + Sync {
 
 /// Handler for on_added_batch callbacks (fetches multiple documents at once)
 trait AddedBatchHandler: Send + Sync {
-    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts);
+    fn handle(
+        &self,
+        iris: Vec<TdbIRI>,
+        client: TerminusDBHttpClient,
+        spec: BranchSpec,
+        opts: &GetOpts,
+    );
 }
 
 /// Handler for on_changed_batch callbacks (fetches multiple documents at once with change info)
@@ -173,7 +179,10 @@ where
 
         tokio::spawn(async move {
             let mut deserializer = DefaultTDBDeserializer;
-            match client.get_instance_with_opts::<T>(&id, &spec, opts, &mut deserializer).await {
+            match client
+                .get_instance_with_opts::<T>(&id, &spec, opts, &mut deserializer)
+                .await
+            {
                 Ok(instance) => {
                     callback(instance);
                 }
@@ -240,7 +249,10 @@ where
 
         tokio::spawn(async move {
             let mut deserializer = DefaultTDBDeserializer;
-            match client.get_instance_with_opts::<T>(&id, &spec, opts, &mut deserializer).await {
+            match client
+                .get_instance_with_opts::<T>(&id, &spec, opts, &mut deserializer)
+                .await
+            {
                 Ok(instance) => {
                     callback(instance, changed_fields);
                 }
@@ -266,7 +278,13 @@ where
     T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
     F: Fn(Vec<T>) + Send + Sync + 'static,
 {
-    fn handle(&self, iris: Vec<TdbIRI>, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts) {
+    fn handle(
+        &self,
+        iris: Vec<TdbIRI>,
+        client: TerminusDBHttpClient,
+        spec: BranchSpec,
+        opts: &GetOpts,
+    ) {
         let callback = self.callback.clone();
         let ids: Vec<String> = iris.iter().map(|iri| iri.id().to_string()).collect();
         let opts = self.opts.clone();
@@ -281,7 +299,10 @@ where
                     callback(instances);
                 }
                 Err(e) => {
-                    error!("Failed to fetch documents for on_added_batch callback: {}", e);
+                    error!(
+                        "Failed to fetch documents for on_added_batch callback: {}",
+                        e
+                    );
                 }
             }
         });
@@ -425,10 +446,7 @@ impl ChangeListener {
     ///     println!("User added: {} - {}", user.name, user.email);
     /// });
     /// ```
-    pub fn on_added<T>(
-        &self,
-        callback: impl Fn(T) + Send + Sync + 'static,
-    ) -> &Self
+    pub fn on_added<T>(&self, callback: impl Fn(T) + Send + Sync + 'static) -> &Self
     where
         T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
     {
@@ -555,10 +573,7 @@ impl ChangeListener {
     ///     }
     /// });
     /// ```
-    pub fn on_added_batch<T>(
-        &self,
-        callback: impl Fn(Vec<T>) + Send + Sync + 'static,
-    ) -> &Self
+    pub fn on_added_batch<T>(&self, callback: impl Fn(Vec<T>) + Send + Sync + 'static) -> &Self
     where
         T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
     {
@@ -615,7 +630,10 @@ impl ChangeListener {
             .or_insert_with(Vec::new)
             .push(handler);
 
-        debug!("Registered on_changed_batch handler for type: {}", type_name);
+        debug!(
+            "Registered on_changed_batch handler for type: {}",
+            type_name
+        );
         self
     }
 
@@ -652,7 +670,10 @@ impl ChangeListener {
             .or_insert_with(Vec::new)
             .push(handler);
 
-        debug!("Registered on_added_with_opts handler for type: {}", type_name);
+        debug!(
+            "Registered on_added_with_opts handler for type: {}",
+            type_name
+        );
         self
     }
 
@@ -689,7 +710,10 @@ impl ChangeListener {
             .or_insert_with(Vec::new)
             .push(handler);
 
-        debug!("Registered on_changed_with_opts handler for type: {}", type_name);
+        debug!(
+            "Registered on_changed_with_opts handler for type: {}",
+            type_name
+        );
         self
     }
 
@@ -729,7 +753,10 @@ impl ChangeListener {
             .or_insert_with(Vec::new)
             .push(handler);
 
-        debug!("Registered on_added_batch_with_opts handler for type: {}", type_name);
+        debug!(
+            "Registered on_added_batch_with_opts handler for type: {}",
+            type_name
+        );
         self
     }
 
@@ -769,10 +796,12 @@ impl ChangeListener {
             .or_insert_with(Vec::new)
             .push(handler);
 
-        debug!("Registered on_changed_batch_with_opts handler for type: {}", type_name);
+        debug!(
+            "Registered on_changed_batch_with_opts handler for type: {}",
+            type_name
+        );
         self
     }
-
 }
 
 // ===== ChangeListenerInner Implementation =====
@@ -786,9 +815,7 @@ impl ChangeListenerInner {
         let branch = self.spec.branch.as_deref().unwrap_or("main");
         format!(
             "{}/{}/local/branch/{}",
-            self.client.org,
-            self.spec.db,
-            branch
+            self.client.org, self.spec.db, branch
         )
     }
 
@@ -798,7 +825,8 @@ impl ChangeListenerInner {
     pub(crate) async fn dispatch_event(&self, event: ChangesetEvent) -> anyhow::Result<()> {
         // Group changes by type and action for batched processing
         let mut added_by_type: HashMap<String, Vec<TdbIRI>> = HashMap::new();
-        let mut updated_by_type: HashMap<String, Vec<(TdbIRI, HashMap<String, Value>)>> = HashMap::new();
+        let mut updated_by_type: HashMap<String, Vec<(TdbIRI, HashMap<String, Value>)>> =
+            HashMap::new();
         let mut deleted_by_type: HashMap<String, Vec<TdbIRI>> = HashMap::new();
 
         // Classify each change
@@ -865,7 +893,12 @@ impl ChangeListenerInner {
         // Dispatch to on_added handlers (these will fetch the document)
         if let Some(handlers) = registry.added_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(iri.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
+                handler.handle(
+                    iri.clone(),
+                    self.client.clone(),
+                    self.spec.clone(),
+                    &GetOpts::default(),
+                );
             }
         }
     }
@@ -929,8 +962,14 @@ impl ChangeListenerInner {
         }
 
         // Check if we need to fetch documents
-        let needs_individual_fetch = registry.added_handlers.get(type_name).map_or(false, |h| !h.is_empty());
-        let needs_batch_fetch = registry.added_batch_handlers.get(type_name).map_or(false, |h| !h.is_empty());
+        let needs_individual_fetch = registry
+            .added_handlers
+            .get(type_name)
+            .map_or(false, |h| !h.is_empty());
+        let needs_batch_fetch = registry
+            .added_batch_handlers
+            .get(type_name)
+            .map_or(false, |h| !h.is_empty());
 
         if !needs_individual_fetch && !needs_batch_fetch {
             // No handlers need fetching, we're done
@@ -951,7 +990,12 @@ impl ChangeListenerInner {
         // Dispatch to batch handlers
         if let Some(handlers) = registry.added_batch_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(iris.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
+                handler.handle(
+                    iris.clone(),
+                    self.client.clone(),
+                    self.spec.clone(),
+                    &GetOpts::default(),
+                );
             }
         }
 
@@ -959,7 +1003,12 @@ impl ChangeListenerInner {
         if let Some(handlers) = registry.added_handlers.get(type_name) {
             for iri in &iris {
                 for handler in handlers {
-                    handler.handle(iri.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
+                    handler.handle(
+                        iri.clone(),
+                        self.client.clone(),
+                        self.spec.clone(),
+                        &GetOpts::default(),
+                    );
                 }
             }
         }
@@ -987,8 +1036,14 @@ impl ChangeListenerInner {
         }
 
         // Check if we need to fetch documents
-        let needs_individual_fetch = registry.changed_handlers.get(type_name).map_or(false, |h| !h.is_empty());
-        let needs_batch_fetch = registry.changed_batch_handlers.get(type_name).map_or(false, |h| !h.is_empty());
+        let needs_individual_fetch = registry
+            .changed_handlers
+            .get(type_name)
+            .map_or(false, |h| !h.is_empty());
+        let needs_batch_fetch = registry
+            .changed_batch_handlers
+            .get(type_name)
+            .map_or(false, |h| !h.is_empty());
 
         if !needs_individual_fetch && !needs_batch_fetch {
             // No handlers need fetching, we're done
@@ -1009,7 +1064,12 @@ impl ChangeListenerInner {
         // Dispatch to batch handlers
         if let Some(handlers) = registry.changed_batch_handlers.get(type_name) {
             for handler in handlers {
-                handler.handle(items.clone(), self.client.clone(), self.spec.clone(), &GetOpts::default());
+                handler.handle(
+                    items.clone(),
+                    self.client.clone(),
+                    self.spec.clone(),
+                    &GetOpts::default(),
+                );
             }
         }
 

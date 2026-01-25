@@ -8,7 +8,7 @@ use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use terminusdb_woql_builder::prelude::*;
-use terminusdb_woql_builder::value::{datetime_literal, date_literal};
+use terminusdb_woql_builder::value::{date_literal, datetime_literal};
 
 #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
@@ -35,19 +35,25 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
                     id: EntityIDFor::new("event1").unwrap(),
                     name: "Past Event".to_string(),
                     event_date: "2020-01-01".to_string(),
-                    event_time: DateTime::parse_from_rfc3339("2020-01-01T10:00:00Z").unwrap().with_timezone(&Utc),
+                    event_time: DateTime::parse_from_rfc3339("2020-01-01T10:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
                 },
                 Event {
                     id: EntityIDFor::new("event2").unwrap(),
                     name: "Recent Event".to_string(),
                     event_date: "2025-01-01".to_string(),
-                    event_time: DateTime::parse_from_rfc3339("2025-01-01T14:30:00Z").unwrap().with_timezone(&Utc),
+                    event_time: DateTime::parse_from_rfc3339("2025-01-01T14:30:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
                 },
                 Event {
                     id: EntityIDFor::new("event3").unwrap(),
                     name: "Future Event".to_string(),
                     event_date: "2030-12-31".to_string(),
-                    event_time: DateTime::parse_from_rfc3339("2030-12-31T23:59:59Z").unwrap().with_timezone(&Utc),
+                    event_time: DateTime::parse_from_rfc3339("2030-12-31T23:59:59Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
                 },
             ];
 
@@ -68,13 +74,15 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
                 .finalize();
 
             let json_query1 = query1.to_instance(None).to_json();
-            let results1: WOQLResult<HashMap<String, serde_json::Value>> =
-                client.query_raw(Some(spec.clone()), json_query1, None).await?;
+            let results1: WOQLResult<HashMap<String, serde_json::Value>> = client
+                .query_raw(Some(spec.clone()), json_query1, None)
+                .await?;
 
             println!("Query 1 returned {} results", results1.bindings.len());
 
             // Should return event2 and event3
-            let result_ids: Vec<String> = results1.bindings
+            let result_ids: Vec<String> = results1
+                .bindings
                 .iter()
                 .filter_map(|binding| binding.get("EventID")?.as_str().map(|s| s.to_string()))
                 .collect();
@@ -95,13 +103,15 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
                 .finalize();
 
             let json_query2 = query2.to_instance(None).to_json();
-            let results2: WOQLResult<HashMap<String, serde_json::Value>> =
-                client.query_raw(Some(spec.clone()), json_query2, None).await?;
+            let results2: WOQLResult<HashMap<String, serde_json::Value>> = client
+                .query_raw(Some(spec.clone()), json_query2, None)
+                .await?;
 
             println!("Query 2 returned {} results", results2.bindings.len());
 
             // Should return event1 and event2
-            let result_ids2: Vec<String> = results2.bindings
+            let result_ids2: Vec<String> = results2
+                .bindings
                 .iter()
                 .filter_map(|binding| binding.get("EventID2")?.as_str().map(|s| s.to_string()))
                 .collect();
@@ -122,13 +132,15 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
                 .finalize();
 
             let json_query3 = query3.to_instance(None).to_json();
-            let results3: WOQLResult<HashMap<String, serde_json::Value>> =
-                client.query_raw(Some(spec.clone()), json_query3, None).await?;
+            let results3: WOQLResult<HashMap<String, serde_json::Value>> = client
+                .query_raw(Some(spec.clone()), json_query3, None)
+                .await?;
 
             println!("Query 3 returned {} results", results3.bindings.len());
 
             // Should return only event2
-            let result_ids3: Vec<String> = results3.bindings
+            let result_ids3: Vec<String> = results3
+                .bindings
                 .iter()
                 .filter_map(|binding| binding.get("EventID3")?.as_str().map(|s| s.to_string()))
                 .collect();

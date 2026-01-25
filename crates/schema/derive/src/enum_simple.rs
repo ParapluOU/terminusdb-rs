@@ -27,7 +27,7 @@ pub fn implement_for_simple_enum(
     let variant_values = data_enum.variants.iter().map(|variant| {
         let variant_name = &variant.ident;
         let variant_name_str = variant_name.to_string();
-        
+
         // Ensure this is a simple variant without fields
         match &variant.fields {
             Fields::Unit => {
@@ -79,7 +79,7 @@ pub fn implement_for_simple_enum(
         values_impl,
         quote! { SchemaTypeEnum },
         to_schema_tree_impl,
-        (&quote!{}, &quote!{}, &None), // No generics for enums currently
+        (&quote! {}, &quote! {}, &None), // No generics for enums currently
     );
 
     // Generate the body code for the to_instance method for simple enums
@@ -109,10 +109,10 @@ pub fn implement_for_simple_enum(
     // Generate the ToTDBInstance implementation using the simplified wrapper
     let instance_impl = generate_totdbinstance_impl(
         enum_name,
-        instance_body_code, // Pass the generated body code
-        opts.clone(),       // No longer pass Some(data_enum) here
-        (&quote!{}, &quote!{}, &None), // No generics for enums currently
-        None, // No custom ID extraction for simple enums
+        instance_body_code,              // Pass the generated body code
+        opts.clone(),                    // No longer pass Some(data_enum) here
+        (&quote! {}, &quote! {}, &None), // No generics for enums currently
+        None,                            // No custom ID extraction for simple enums
     );
 
     // Generate the implementation for ToSchemaClass trait

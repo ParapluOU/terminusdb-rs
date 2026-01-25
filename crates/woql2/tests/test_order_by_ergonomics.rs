@@ -1,18 +1,24 @@
-use terminusdb_woql2::prelude::*;
 use terminusdb_woql2::order::{Order, OrderTemplate};
-use terminusdb_woql2::{order_by, var, triple};
+use terminusdb_woql2::prelude::*;
+use terminusdb_woql2::{order_by, triple, var};
 
 #[test]
 fn test_order_by_original_syntax() {
     // Test the original OrderTemplate syntax still works
     let query = order_by!(
         [
-            OrderTemplate { variable: "name".to_string(), order: Order::Asc },
-            OrderTemplate { variable: "age".to_string(), order: Order::Desc },
+            OrderTemplate {
+                variable: "name".to_string(),
+                order: Order::Asc
+            },
+            OrderTemplate {
+                variable: "age".to_string(),
+                order: Order::Desc
+            },
         ],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     match query {
         Query::OrderBy(order_by) => {
             assert_eq!(order_by.ordering.len(), 2);
@@ -32,7 +38,7 @@ fn test_order_by_tuple_syntax_with_variables() {
         [(var!(name), Order::Asc), (var!(age), Order::Desc)],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     match query {
         Query::OrderBy(order_by) => {
             assert_eq!(order_by.ordering.len(), 2);
@@ -52,7 +58,7 @@ fn test_order_by_tuple_syntax_with_strings() {
         [("name", Order::Asc), ("age", Order::Desc)],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     match query {
         Query::OrderBy(order_by) => {
             assert_eq!(order_by.ordering.len(), 2);
@@ -72,7 +78,7 @@ fn test_order_by_arrow_syntax() {
         [name => Order::Asc, age => Order::Desc],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     match query {
         Query::OrderBy(order_by) => {
             assert_eq!(order_by.ordering.len(), 2);
@@ -92,12 +98,12 @@ fn test_order_by_single_ordering() {
         [(var!(name), Order::Desc)],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     let query2 = order_by!(
         [name => Order::Desc],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     match (query1, query2) {
         (Query::OrderBy(order_by1), Query::OrderBy(order_by2)) => {
             assert_eq!(order_by1.ordering.len(), 1);
@@ -119,7 +125,7 @@ fn test_order_by_mixed_types() {
         [(name_var, Order::Asc), ("age", Order::Desc)],
         triple!(var!(person), "name", var!(name))
     );
-    
+
     match query {
         Query::OrderBy(order_by) => {
             assert_eq!(order_by.ordering.len(), 2);

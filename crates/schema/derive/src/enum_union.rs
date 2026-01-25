@@ -5,8 +5,8 @@ use crate::instance::{
 use crate::prelude::*;
 use crate::r#struct::process_named_fields;
 use crate::schema::generate_totdbschema_impl;
-use tracing::trace;
 use quote::format_ident;
+use tracing::trace;
 
 /// Check if a type is a known primitive that shouldn't get TaggedUnionVariant
 /// This is a heuristic based on type name matching to filter out standard library primitives
@@ -49,7 +49,6 @@ pub fn implement_for_tagged_enum(
         crate::args::RenameStrategy::None => crate::args::RenameStrategy::Lowercase,
         other => other,
     };
-    
 
     // Process enum variants to generate properties
     let variant_properties = process_enum_variants(data_enum, enum_name, rename_strategy);
@@ -71,7 +70,9 @@ pub fn implement_for_tagged_enum(
     // Extract single-field variant types for schema tree inclusion
     // These are newtype variants that wrap other models (e.g., UserLogin(ActivityEventUserLogin))
     // We filter out known primitives to avoid coherence conflicts
-    let single_field_variant_types = data_enum.variants.iter()
+    let single_field_variant_types = data_enum
+        .variants
+        .iter()
         .filter_map(|variant| {
             match &variant.fields {
                 Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
@@ -84,13 +85,14 @@ pub fn implement_for_tagged_enum(
                         None
                     }
                 }
-                _ => None
+                _ => None,
             }
         })
         .collect::<Vec<_>>();
 
     // Generate to_schema_tree implementation that includes virtual struct schemas
-    let to_schema_tree_impl = if virtual_structs.is_empty() && single_field_variant_types.is_empty() {
+    let to_schema_tree_impl = if virtual_structs.is_empty() && single_field_variant_types.is_empty()
+    {
         // If there are no complex variants, just return the main schema
         quote! {
             fn to_schema_tree() -> Vec<terminusdb_schema::Schema> {
@@ -161,7 +163,7 @@ pub fn implement_for_tagged_enum(
         variant_properties,
         quote! { SchemaTypeTaggedUnion },
         to_schema_tree_impl,
-        (&quote!{}, &quote!{}, &None), // No generics for enums currently
+        (&quote! {}, &quote! {}, &None), // No generics for enums currently
     );
 
     // Generate the body code for the to_instance method based on whether the enum is abstract
@@ -225,9 +227,9 @@ pub fn implement_for_tagged_enum(
     // TaggedUnion ID extraction is handled at runtime in the Instance code
     let instance_impl = generate_totdbinstance_impl(
         enum_name,
-        instance_body_code, // Pass the generated body code
-        opts.clone(),       // No longer pass Some(data_enum) here
-        (&quote!{}, &quote!{}, &None), // No generics for enums currently
+        instance_body_code,              // Pass the generated body code
+        opts.clone(),                    // No longer pass Some(data_enum) here
+        (&quote! {}, &quote! {}, &None), // No generics for enums currently
         None, // No custom ID extraction - handled at Instance level for TaggedUnions
     );
 
@@ -298,7 +300,7 @@ fn process_enum_variants(
         let variant_name = &variant.ident;
         let variant_name_str = variant_name.to_string();
         let variant_name_renamed = rename_strategy.apply(&variant_name_str);
-        
+
         match &variant.fields {
             // For unit variants, use sys:Unit
             Fields::Unit => {
@@ -314,7 +316,7 @@ fn process_enum_variants(
             Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                 let field = fields.unnamed.first().unwrap();
                 let field_ty = &field.ty;
-                
+
                 quote! {
                     {
                         let mut prop = terminusdb_schema::Property {
@@ -329,7 +331,7 @@ fn process_enum_variants(
             // For multi-field variants, create a new class for them
             Fields::Unnamed(_) => {
                 let variant_struct_name = format!("{}{}", enum_name, variant_name);
-                
+
                 quote! {
                     terminusdb_schema::Property {
                         name: #variant_name_renamed.to_string(),
@@ -341,7 +343,7 @@ fn process_enum_variants(
             // For named fields, create a new class for them
             Fields::Named(_) => {
                 let variant_struct_name = format!("{}{}", enum_name, variant_name);
-                
+
                 quote! {
                     terminusdb_schema::Property {
                         name: #variant_name_renamed.to_string(),
@@ -468,7 +470,7 @@ fn generate_virtual_structs(
                             todo!("recursively add subschemas for enum virtual struct" )
                         }
                     },
-                    (&quote!{}, &quote!{}, &None), // No generics for virtual structs
+                    (&quote! {}, &quote! {}, &None), // No generics for virtual structs
                 );
 
                 // Generate the instance implementation
@@ -511,8 +513,8 @@ fn generate_virtual_structs(
                         rename_all: None,
                         key_fields: None,
                     },
-                    (&quote!{}, &quote!{}, &None), // No generics for virtual structs
-                    None, // No custom ID extraction for virtual structs
+                    (&quote! {}, &quote! {}, &None), // No generics for virtual structs
+                    None,                            // No custom ID extraction for virtual structs
                 );
 
                 // Combine the struct definition and implementations
@@ -593,7 +595,8 @@ fn generate_virtual_structs(
                     .filter_map(|field| field.ident.as_ref().map(|ident| ident.clone()))
                     .collect::<Vec<_>>();
 
-                let properties_token = process_named_fields(&dummy_fields, &variant_struct_ident, &quote!{});
+                let properties_token =
+                    process_named_fields(&dummy_fields, &variant_struct_ident, &quote! {});
 
                 // Generate to_schema_tree implementation for the virtual struct
                 let field_types = fields
@@ -659,7 +662,7 @@ fn generate_virtual_structs(
                     properties_token,
                     quote! { SchemaTypeClass },
                     to_schema_tree_impl,
-                    (&quote!{}, &quote!{}, &None), // No generics for virtual structs
+                    (&quote! {}, &quote! {}, &None), // No generics for virtual structs
                 );
 
                 // Generate field conversions for ToTDBInstance

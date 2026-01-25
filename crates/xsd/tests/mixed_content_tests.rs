@@ -62,7 +62,10 @@ fn test_mixed_content_multiple_inline_elements() {
 
     // Navigate to the p element - need to go through properties
     if let Some(props) = topic_value.get("properties") {
-        if let Some(body_prop) = props.as_array().and_then(|arr| arr.iter().find(|p| p.get("name") == Some(&Value::String("body".to_string())))) {
+        if let Some(body_prop) = props.as_array().and_then(|arr| {
+            arr.iter()
+                .find(|p| p.get("name") == Some(&Value::String("body".to_string())))
+        }) {
             println!("\n=== Body property ===");
             println!("{}", serde_json::to_string_pretty(body_prop).unwrap());
         }
@@ -163,7 +166,9 @@ fn test_schema_generates_mixed_content_structure() {
 
             // Find the MixedContent class
             let mixed_content_schema = schemas.iter().find(|s| s.class_name() == &prop.class);
-            if let Some(terminusdb_schema::Schema::Class { id, properties, .. }) = mixed_content_schema {
+            if let Some(terminusdb_schema::Schema::Class { id, properties, .. }) =
+                mixed_content_schema
+            {
                 println!("\n=== {} Schema ===", id);
                 for prop in properties {
                     println!("  {}: {} ({:?})", prop.name, prop.class, prop.r#type);
@@ -173,9 +178,10 @@ fn test_schema_generates_mixed_content_structure() {
     }
 
     // Find the inline union TaggedUnion
-    let inline_unions: Vec<_> = schemas.iter().filter(|s| {
-        s.class_name().ends_with("Inline") && s.is_tagged_union()
-    }).collect();
+    let inline_unions: Vec<_> = schemas
+        .iter()
+        .filter(|s| s.class_name().ends_with("Inline") && s.is_tagged_union())
+        .collect();
 
     println!("\n=== Inline Union TaggedUnions ===");
     for schema in &inline_unions {

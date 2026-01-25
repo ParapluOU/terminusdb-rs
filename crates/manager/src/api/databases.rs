@@ -58,11 +58,19 @@ pub async fn get_database_schema(
                     let model_infos: Vec<ModelInfo> = if let Some(obj) = schema.as_object() {
                         if let Some(data) = obj.get("__schema").and_then(|s| s.as_object()) {
                             if let Some(types) = data.get("types").and_then(|t| t.as_array()) {
-                                types.iter()
+                                types
+                                    .iter()
                                     .filter_map(|type_obj| {
-                                        type_obj.get("name").and_then(|n| n.as_str()).map(|s| s.to_string())
+                                        type_obj
+                                            .get("name")
+                                            .and_then(|n| n.as_str())
+                                            .map(|s| s.to_string())
                                     })
-                                    .filter(|name| !name.starts_with("__") && name != "Query" && name != "Mutation")
+                                    .filter(|name| {
+                                        !name.starts_with("__")
+                                            && name != "Query"
+                                            && name != "Mutation"
+                                    })
                                     .map(|name| ModelInfo {
                                         name: name.clone(),
                                         instance_count: 0, // Will be populated by counting instances
@@ -223,7 +231,10 @@ pub async fn add_remote(
             // Extract just the database name without the organization prefix
             let db_name_only = database.split('/').nth(1).unwrap_or(&database).to_string();
 
-            match client.add_remote(&db_name_only, &request.remote_name, &request.remote_url).await {
+            match client
+                .add_remote(&db_name_only, &request.remote_name, &request.remote_url)
+                .await
+            {
                 Ok(_) => Json(DatabaseResponse {
                     success: true,
                     data: Some(()),

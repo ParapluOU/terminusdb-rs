@@ -40,10 +40,10 @@ mod test_key_validation {
             name: "John".to_string(),
             age: 30,
         };
-        
+
         // Simulate setting an ID (in real usage this might come from deserialization)
         let instance = person.to_instance(Some("custom_id".to_string()));
-        
+
         // This will panic in prepare_instances
         let _instances = vec![instance]
             .into_iter()
@@ -70,9 +70,9 @@ mod test_key_validation {
             email: "test@example.com".to_string(),
             username: "testuser".to_string(),
         };
-        
+
         let instance = user.to_instance(Some("manual_id".to_string()));
-        
+
         // This will panic
         let _instances = vec![instance]
             .into_iter()
@@ -97,9 +97,9 @@ mod test_key_validation {
             title: "Test Document".to_string(),
             content: "Test content".to_string(),
         };
-        
+
         let instance = doc.to_instance(Some("doc_id".to_string()));
-        
+
         // This will panic
         let _instances = vec![instance]
             .into_iter()
@@ -124,9 +124,9 @@ mod test_key_validation {
             name: "Jane".to_string(),
             age: 25,
         };
-        
+
         let instance = person.to_instance(Some("person_123".to_string()));
-        
+
         // This should work fine
         let instances = vec![instance]
             .into_iter()
@@ -142,7 +142,7 @@ mod test_key_validation {
                 i
             })
             .collect::<Vec<_>>();
-        
+
         assert_eq!(instances.len(), 1);
         assert!(instances[0].has_id());
     }
@@ -154,9 +154,9 @@ mod test_key_validation {
             name: "Alice".to_string(),
             age: 28,
         };
-        
+
         let instance = person.to_instance(None); // No ID provided
-        
+
         // This should work fine
         let instances = vec![instance]
             .into_iter()
@@ -172,7 +172,7 @@ mod test_key_validation {
                 i
             })
             .collect::<Vec<_>>();
-        
+
         assert_eq!(instances.len(), 1);
         assert!(!instances[0].has_id());
     }

@@ -117,7 +117,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let subdocs = schemas
         .iter()
-        .filter(|s| matches!(s, terminusdb_schema::Schema::Class { subdocument: true, .. }))
+        .filter(|s| {
+            matches!(
+                s,
+                terminusdb_schema::Schema::Class {
+                    subdocument: true,
+                    ..
+                }
+            )
+        })
         .count();
 
     println!("   Subdocuments: {}", subdocs);

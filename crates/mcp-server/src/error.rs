@@ -4,7 +4,6 @@ pub type McpResult<T> = Result<T, McpError>;
 
 #[derive(Error, Debug)]
 pub enum McpError {
-
     #[error("Client error: {0}")]
     ClientError(String),
 

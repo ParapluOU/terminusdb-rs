@@ -98,7 +98,10 @@ impl SseManager {
             // Remove empty entries
             if listener_list.is_empty() {
                 listeners.remove(resource_path);
-                debug!("Removed empty listener list for resource: {}", resource_path);
+                debug!(
+                    "Removed empty listener list for resource: {}",
+                    resource_path
+                );
             }
         }
     }

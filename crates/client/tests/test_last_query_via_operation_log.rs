@@ -48,8 +48,14 @@ async fn test_last_query_retrieval() -> anyhow::Result<()> {
 
     // Check operation log has both queries
     let operations = client.get_operation_log();
-    let query_operations: Vec<_> = operations.iter()
-        .filter(|op| matches!(op.operation_type, terminusdb_client::debug::OperationType::Query))
+    let query_operations: Vec<_> = operations
+        .iter()
+        .filter(|op| {
+            matches!(
+                op.operation_type,
+                terminusdb_client::debug::OperationType::Query
+            )
+        })
         .collect();
 
     assert!(query_operations.len() >= 2);
@@ -65,8 +71,10 @@ async fn test_query_string_last_query() -> anyhow::Result<()> {
     client.clear_operation_log();
 
     // Execute a query using DSL string
-    let dsl_query = r#"select([$Subject, $Predicate, $Object], triple($Subject, $Predicate, $Object))"#;
-    let _: WOQLResult<serde_json::Value> = client.query_string(Some(spec.clone()), dsl_query).await?;
+    let dsl_query =
+        r#"select([$Subject, $Predicate, $Object], triple($Subject, $Predicate, $Object))"#;
+    let _: WOQLResult<serde_json::Value> =
+        client.query_string(Some(spec.clone()), dsl_query).await?;
 
     // Should have a last query
     let last_query = client.last_query();
@@ -88,8 +96,14 @@ async fn test_query_string_last_query() -> anyhow::Result<()> {
 
     // Should have the parsed query if it was parseable
     let operations = client.get_operation_log();
-    let query_operations: Vec<_> = operations.iter()
-        .filter(|op| matches!(op.operation_type, terminusdb_client::debug::OperationType::Query))
+    let query_operations: Vec<_> = operations
+        .iter()
+        .filter(|op| {
+            matches!(
+                op.operation_type,
+                terminusdb_client::debug::OperationType::Query
+            )
+        })
         .collect();
 
     // Both query_string calls should be logged

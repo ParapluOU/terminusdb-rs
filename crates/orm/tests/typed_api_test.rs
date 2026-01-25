@@ -10,10 +10,10 @@ use terminusdb_orm::prelude::*;
 use terminusdb_test::test as db_test;
 
 // Required for TerminusDBModel derive
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
+use terminusdb_schema::TdbLazy;
 #[allow(unused_imports)]
 use terminusdb_schema::ToTDBInstance;
-use terminusdb_schema::TdbLazy;
 use terminusdb_schema_derive::TerminusDBModel;
 
 use serde::{Deserialize, Serialize};
@@ -95,13 +95,11 @@ fn test_with_chain_compiles() {
     let id = EntityIDFor::<Comment>::new("1").unwrap();
 
     // The full typed API chain - Reply has BelongsTo<Comment> so this is valid
-    let _query = Comment::find_all([id])
-        .with::<Reply>();
+    let _query = Comment::find_all([id]).with::<Reply>();
 
     // Multiple with calls for different related types
     let id2 = EntityIDFor::<Comment>::new("2").unwrap();
-    let _query2 = Comment::find_all([id2])
-        .with::<Reply>();
+    let _query2 = Comment::find_all([id2]).with::<Reply>();
 
     // Note: .with::<Comment>() would NOT compile because Comment doesn't
     // implement ReverseRelation<Comment> (Comment has no BelongsTo<Comment>)
@@ -114,8 +112,7 @@ fn test_with_field_forward_relation() {
 
     // Forward relation: Car has front_wheels and back_wheels fields pointing to Wheel
     // Must specify which field to traverse using CarFields::FieldName
-    let _query = Car::find_all([car_id.clone()])
-        .with_field::<Wheel, CarFields::FrontWheels>();
+    let _query = Car::find_all([car_id.clone()]).with_field::<Wheel, CarFields::FrontWheels>();
 
     // Can load both wheel relations
     let _query2 = Car::find_all([car_id])
@@ -186,9 +183,11 @@ async fn test_comment_find_all_with_reply(client: _, spec: _) -> anyhow::Result<
         .expect("Failed to insert comment2");
 
     // Extract the IDs - need both typed (for queries) and string (for TdbLazy)
-    let comment1_id = result1.root_ref::<Comment>()
+    let comment1_id = result1
+        .root_ref::<Comment>()
         .expect("Should parse comment1 ID");
-    let comment2_id = result2.root_ref::<Comment>()
+    let comment2_id = result2
+        .root_ref::<Comment>()
         .expect("Should parse comment2 ID");
     let comment1_id_str = result1.root_id.clone();
     let comment2_id_str = result2.root_id.clone();
@@ -231,7 +230,8 @@ async fn test_comment_find_all_with_reply(client: _, spec: _) -> anyhow::Result<
         .await
         .expect("Failed to insert reply3");
 
-    let reply3_id = reply3_result.root_ref::<Reply>()
+    let reply3_id = reply3_result
+        .root_ref::<Reply>()
         .expect("Should parse reply3 ID");
 
     println!("Inserted Reply 3: {}", reply3_id);
@@ -356,14 +356,18 @@ async fn test_find_with_bare_id(client: _, spec: _) -> anyhow::Result<()> {
 
     // Create a NEW EntityIDFor from the bare ID - this is the scenario that was buggy
     // Previously, .iri() would return "Comment/{uuid}" instead of "terminusdb:///data/Comment/{uuid}"
-    let reconstructed_id = EntityIDFor::<Comment>::new(bare_id).expect("Should create EntityIDFor from bare ID");
+    let reconstructed_id =
+        EntityIDFor::<Comment>::new(bare_id).expect("Should create EntityIDFor from bare ID");
 
     println!("Reconstructed ID typed(): {}", reconstructed_id.typed());
     println!("Reconstructed ID iri(): {}", reconstructed_id.iri());
 
     // Verify the IRI has the correct format for GraphQL
     assert!(
-        reconstructed_id.iri().to_string().starts_with("terminusdb:///data/"),
+        reconstructed_id
+            .iri()
+            .to_string()
+            .starts_with("terminusdb:///data/"),
         "IRI should start with 'terminusdb:///data/' but got: {}",
         reconstructed_id.iri()
     );
@@ -466,7 +470,11 @@ async fn test_with_default_field_single_relation(client: _, spec: _) -> anyhow::
     let replies: Vec<Reply> = result.get().expect("Should deserialize replies");
     assert_eq!(replies.len(), 2, "Should find exactly two replies");
 
-    println!("Found {} comments and {} replies using .with::<Reply>()", comments.len(), replies.len());
+    println!(
+        "Found {} comments and {} replies using .with::<Reply>()",
+        comments.len(),
+        replies.len()
+    );
     for reply in &replies {
         println!("  Reply: {} by {}", reply.text, reply.author);
     }
@@ -572,7 +580,7 @@ async fn test_relation_query_unfolds_subdocuments(client: _, spec: _) -> anyhow:
     // THE KEY TEST: Query session with related tasks
     // This triggers Phase 2 batch fetch, which should now unfold subdocuments
     let result = Session::find(session_id.clone())
-        .with::<Task>()  // This triggers relation loading (Phase 2)
+        .with::<Task>() // This triggers relation loading (Phase 2)
         .with_client(&client)
         .execute(&spec)
         .await

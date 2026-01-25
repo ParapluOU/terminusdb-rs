@@ -13,16 +13,22 @@ use terminusdb_schema::*;
 use terminusdb_schema_derive::*;
 use terminusdb_woql2::prelude::*;
 
-// Import for primitive value conversion  
-use terminusdb_schema::{Primitive, PrimitiveValue, ToSchemaClass, ToMaybeTDBSchema, FromInstanceProperty, InstanceProperty, ToInstanceProperty, Schema, STRING};
+// Import for primitive value conversion
 use terminusdb_schema::json::InstancePropertyFromJson;
+use terminusdb_schema::{
+    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty,
+    ToMaybeTDBSchema, ToSchemaClass, STRING,
+};
 
-pub use {deserialize::*, document::*, err::*, info::*, r#trait::*, result::*, spec::*, versioned_id::*};
+pub use {
+    deserialize::*, document::*, err::*, info::*, r#trait::*, result::*, spec::*, versioned_id::*,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::*;
 
-
+#[cfg(not(target_arch = "wasm32"))]
+pub mod debug;
 pub mod deserialize;
 mod document;
 mod endpoint;
@@ -37,8 +43,6 @@ pub mod result;
 mod spec;
 mod r#trait;
 pub mod versioned_id;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod debug;
 pub use query::*;
 
 use serde::{Deserialize, Serialize};
@@ -177,7 +181,9 @@ impl FromInstanceProperty for CommitId {
 impl<Parent> InstancePropertyFromJson<Parent> for CommitId {
     fn property_from_json(json: serde_json::Value) -> anyhow::Result<InstanceProperty> {
         match json {
-            serde_json::Value::String(s) => Ok(InstanceProperty::Primitive(PrimitiveValue::String(s))),
+            serde_json::Value::String(s) => {
+                Ok(InstanceProperty::Primitive(PrimitiveValue::String(s)))
+            }
             _ => anyhow::bail!("Expected string for CommitId, got {:?}", json),
         }
     }
@@ -194,24 +200,33 @@ fn test_commit_id_conversions() {
     // Test creating a CommitId
     let commit_id = CommitId::new("abc123");
     assert_eq!(commit_id.as_str(), "abc123");
-    
+
     // Test conversion to PrimitiveValue
     let primitive_value: PrimitiveValue = commit_id.clone().into();
     assert!(matches!(primitive_value, PrimitiveValue::String(s) if s == "abc123"));
-    
+
     // Test ToInstanceProperty
-    let instance_prop = <CommitId as ToInstanceProperty<()>>::to_property(commit_id.clone(), "commit", &Schema::empty_class("Test"));
-    assert!(matches!(instance_prop, InstanceProperty::Primitive(PrimitiveValue::String(s)) if s == "abc123"));
-    
+    let instance_prop = <CommitId as ToInstanceProperty<()>>::to_property(
+        commit_id.clone(),
+        "commit",
+        &Schema::empty_class("Test"),
+    );
+    assert!(
+        matches!(instance_prop, InstanceProperty::Primitive(PrimitiveValue::String(s)) if s == "abc123")
+    );
+
     // Test FromInstanceProperty
     let prop = InstanceProperty::Primitive(PrimitiveValue::String("def456".to_string()));
     let restored = CommitId::from_property(&prop).unwrap();
     assert_eq!(restored.as_str(), "def456");
-    
+
     // Test InstancePropertyFromJson
     let json_val = serde_json::Value::String("xyz789".to_string());
-    let prop_from_json = <CommitId as InstancePropertyFromJson<()>>::property_from_json(json_val).unwrap();
-    assert!(matches!(prop_from_json, InstanceProperty::Primitive(PrimitiveValue::String(s)) if s == "xyz789"));
+    let prop_from_json =
+        <CommitId as InstancePropertyFromJson<()>>::property_from_json(json_val).unwrap();
+    assert!(
+        matches!(prop_from_json, InstanceProperty::Primitive(PrimitiveValue::String(s)) if s == "xyz789")
+    );
 }
 
 pub use self::document::GetOpts;

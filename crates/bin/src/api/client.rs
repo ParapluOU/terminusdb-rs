@@ -1,8 +1,8 @@
 //! Main client for TerminusDB CLI operations.
 
-use super::spec::{DbSpec, GraphSpec, BranchSpec};
+use super::commands::{add_flag, add_option, add_required, execute};
 use super::options::*;
-use super::commands::{execute, add_flag, add_option, add_required};
+use super::spec::{BranchSpec, DbSpec, GraphSpec};
 use std::process::ExitStatus;
 
 /// Main client for TerminusDB operations.
@@ -189,7 +189,11 @@ impl<'a> DocCommands<'a> {
         add_required(&mut args, "--author", options.author.as_ref());
         add_required(&mut args, "--graph-type", options.graph_type.as_str());
         add_flag(&mut args, "--require-migration", options.require_migration);
-        add_flag(&mut args, "--allow-destructive-migration", options.allow_destructive_migration);
+        add_flag(
+            &mut args,
+            "--allow-destructive-migration",
+            options.allow_destructive_migration,
+        );
         add_option(&mut args, "--data", &options.data);
         add_flag(&mut args, "--raw-json", options.raw_json);
         add_flag(&mut args, "--merge-repeats", options.merge_repeats);
@@ -205,7 +209,11 @@ impl<'a> DocCommands<'a> {
         add_required(&mut args, "--author", options.author.as_ref());
         add_required(&mut args, "--graph-type", options.graph_type.as_str());
         add_flag(&mut args, "--require-migration", options.require_migration);
-        add_flag(&mut args, "--allow-destructive-migration", options.allow_destructive_migration);
+        add_flag(
+            &mut args,
+            "--allow-destructive-migration",
+            options.allow_destructive_migration,
+        );
         add_option(&mut args, "--id", &options.id);
         add_option(&mut args, "--type", &options.doc_type);
         add_option(&mut args, "--data", &options.data);
@@ -221,7 +229,11 @@ impl<'a> DocCommands<'a> {
         add_required(&mut args, "--author", options.author.as_ref());
         add_required(&mut args, "--graph-type", options.graph_type.as_str());
         add_flag(&mut args, "--require-migration", options.require_migration);
-        add_flag(&mut args, "--allow-destructive-migration", options.allow_destructive_migration);
+        add_flag(
+            &mut args,
+            "--allow-destructive-migration",
+            options.allow_destructive_migration,
+        );
         add_option(&mut args, "--data", &options.data);
         add_flag(&mut args, "--raw-json", options.raw_json);
         add_flag(&mut args, "--create", options.create);
@@ -265,7 +277,11 @@ pub struct BranchCommands<'a> {
 
 impl<'a> BranchCommands<'a> {
     /// Create a new branch.
-    pub fn create(&self, spec: BranchSpec, options: BranchCreateOptions) -> std::io::Result<ExitStatus> {
+    pub fn create(
+        &self,
+        spec: BranchSpec,
+        options: BranchCreateOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["branch".to_string(), "create".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         if let Some(origin) = &options.origin {
@@ -277,7 +293,11 @@ impl<'a> BranchCommands<'a> {
     }
 
     /// Delete a branch.
-    pub fn delete(&self, spec: BranchSpec, options: BranchDeleteOptions) -> std::io::Result<ExitStatus> {
+    pub fn delete(
+        &self,
+        spec: BranchSpec,
+        options: BranchDeleteOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["branch".to_string(), "delete".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
@@ -309,7 +329,12 @@ impl<'a> GitCommands<'a> {
     }
 
     /// Clone from remote.
-    pub fn clone(&self, uri: &str, db_spec: Option<DbSpec>, options: CloneOptions) -> std::io::Result<ExitStatus> {
+    pub fn clone(
+        &self,
+        uri: &str,
+        db_spec: Option<DbSpec>,
+        options: CloneOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["clone".to_string(), uri.to_string()];
         if let Some(spec) = db_spec {
             args.push(spec.to_string());
@@ -350,7 +375,12 @@ impl<'a> GitCommands<'a> {
     }
 
     /// Rebase branches.
-    pub fn rebase(&self, to: DbSpec, from: DbSpec, options: RebaseOptions) -> std::io::Result<ExitStatus> {
+    pub fn rebase(
+        &self,
+        to: DbSpec,
+        from: DbSpec,
+        options: RebaseOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["rebase".to_string(), to.to_string(), from.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_required(&mut args, "--author", options.author.as_ref());
@@ -369,7 +399,12 @@ pub struct RoleCommands<'a> {
 
 impl<'a> RoleCommands<'a> {
     /// Create a new role.
-    pub fn create(&self, name: &str, actions: Vec<super::types::RoleAction>, options: super::options::RoleCreateOptions) -> std::io::Result<ExitStatus> {
+    pub fn create(
+        &self,
+        name: &str,
+        actions: Vec<super::types::RoleAction>,
+        options: super::options::RoleCreateOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["role".to_string(), "create".to_string(), name.to_string()];
         for action in actions {
             args.push(action.as_str().to_string());
@@ -379,16 +414,33 @@ impl<'a> RoleCommands<'a> {
     }
 
     /// Delete a role.
-    pub fn delete(&self, role_id_or_name: &str, options: super::options::RoleDeleteOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["role".to_string(), "delete".to_string(), role_id_or_name.to_string()];
+    pub fn delete(
+        &self,
+        role_id_or_name: &str,
+        options: super::options::RoleDeleteOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "role".to_string(),
+            "delete".to_string(),
+            role_id_or_name.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_flag(&mut args, "--id", options.id);
         execute(args)
     }
 
     /// Update a role.
-    pub fn update(&self, role_id_or_name: &str, actions: Vec<super::types::RoleAction>, options: super::options::RoleUpdateOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["role".to_string(), "update".to_string(), role_id_or_name.to_string()];
+    pub fn update(
+        &self,
+        role_id_or_name: &str,
+        actions: Vec<super::types::RoleAction>,
+        options: super::options::RoleUpdateOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "role".to_string(),
+            "update".to_string(),
+            role_id_or_name.to_string(),
+        ];
         for action in actions {
             args.push(action.as_str().to_string());
         }
@@ -398,7 +450,11 @@ impl<'a> RoleCommands<'a> {
     }
 
     /// Get role information.
-    pub fn get(&self, role_id_or_name: Option<&str>, options: super::options::RoleGetOptions) -> std::io::Result<ExitStatus> {
+    pub fn get(
+        &self,
+        role_id_or_name: Option<&str>,
+        options: super::options::RoleGetOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["role".to_string(), "get".to_string()];
         if let Some(name) = role_id_or_name {
             args.push(name.to_string());
@@ -421,23 +477,43 @@ pub struct UserCommands<'a> {
 
 impl<'a> UserCommands<'a> {
     /// Create a new user.
-    pub fn create(&self, username: &str, options: super::options::UserCreateOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["user".to_string(), "create".to_string(), username.to_string()];
+    pub fn create(
+        &self,
+        username: &str,
+        options: super::options::UserCreateOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "user".to_string(),
+            "create".to_string(),
+            username.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_option(&mut args, "--password", &options.password);
         execute(args)
     }
 
     /// Delete a user.
-    pub fn delete(&self, user_id_or_name: &str, options: super::options::UserDeleteOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["user".to_string(), "delete".to_string(), user_id_or_name.to_string()];
+    pub fn delete(
+        &self,
+        user_id_or_name: &str,
+        options: super::options::UserDeleteOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "user".to_string(),
+            "delete".to_string(),
+            user_id_or_name.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_flag(&mut args, "--id", options.id);
         execute(args)
     }
 
     /// Get user information.
-    pub fn get(&self, user_id_or_name: Option<&str>, options: super::options::UserGetOptions) -> std::io::Result<ExitStatus> {
+    pub fn get(
+        &self,
+        user_id_or_name: Option<&str>,
+        options: super::options::UserGetOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["user".to_string(), "get".to_string()];
         if let Some(name) = user_id_or_name {
             args.push(name.to_string());
@@ -450,8 +526,16 @@ impl<'a> UserCommands<'a> {
     }
 
     /// Update user password.
-    pub fn password(&self, username: &str, options: super::options::UserPasswordOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["user".to_string(), "password".to_string(), username.to_string()];
+    pub fn password(
+        &self,
+        username: &str,
+        options: super::options::UserPasswordOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "user".to_string(),
+            "password".to_string(),
+            username.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_option(&mut args, "--password", &options.password);
         execute(args)
@@ -469,22 +553,42 @@ pub struct OrganizationCommands<'a> {
 
 impl<'a> OrganizationCommands<'a> {
     /// Create a new organization.
-    pub fn create(&self, name: &str, options: super::options::OrganizationCreateOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["organization".to_string(), "create".to_string(), name.to_string()];
+    pub fn create(
+        &self,
+        name: &str,
+        options: super::options::OrganizationCreateOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "organization".to_string(),
+            "create".to_string(),
+            name.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// Delete an organization.
-    pub fn delete(&self, org_id_or_name: &str, options: super::options::OrganizationDeleteOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["organization".to_string(), "delete".to_string(), org_id_or_name.to_string()];
+    pub fn delete(
+        &self,
+        org_id_or_name: &str,
+        options: super::options::OrganizationDeleteOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "organization".to_string(),
+            "delete".to_string(),
+            org_id_or_name.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_flag(&mut args, "--id", options.id);
         execute(args)
     }
 
     /// Get organization information.
-    pub fn get(&self, org_id_or_name: Option<&str>, options: super::options::OrganizationGetOptions) -> std::io::Result<ExitStatus> {
+    pub fn get(
+        &self,
+        org_id_or_name: Option<&str>,
+        options: super::options::OrganizationGetOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["organization".to_string(), "get".to_string()];
         if let Some(name) = org_id_or_name {
             args.push(name.to_string());
@@ -507,8 +611,19 @@ pub struct CapabilityCommands<'a> {
 
 impl<'a> CapabilityCommands<'a> {
     /// Grant capabilities to a user.
-    pub fn grant(&self, user: &str, scope: &str, roles: Vec<&str>, options: super::options::CapabilityGrantOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["capability".to_string(), "grant".to_string(), user.to_string(), scope.to_string()];
+    pub fn grant(
+        &self,
+        user: &str,
+        scope: &str,
+        roles: Vec<&str>,
+        options: super::options::CapabilityGrantOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "capability".to_string(),
+            "grant".to_string(),
+            user.to_string(),
+            scope.to_string(),
+        ];
         for role in roles {
             args.push(role.to_string());
         }
@@ -518,8 +633,19 @@ impl<'a> CapabilityCommands<'a> {
     }
 
     /// Revoke capabilities from a user.
-    pub fn revoke(&self, user: &str, scope: &str, roles: Vec<&str>, options: super::options::CapabilityRevokeOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["capability".to_string(), "revoke".to_string(), user.to_string(), scope.to_string()];
+    pub fn revoke(
+        &self,
+        user: &str,
+        scope: &str,
+        roles: Vec<&str>,
+        options: super::options::CapabilityRevokeOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "capability".to_string(),
+            "revoke".to_string(),
+            user.to_string(),
+            scope.to_string(),
+        ];
         for role in roles {
             args.push(role.to_string());
         }
@@ -560,16 +686,34 @@ pub struct TriplesCommands<'a> {
 
 impl<'a> TriplesCommands<'a> {
     /// Dump triples from a graph.
-    pub fn dump(&self, graph_spec: GraphSpec, options: super::options::TriplesDumpOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["triples".to_string(), "dump".to_string(), graph_spec.to_string()];
+    pub fn dump(
+        &self,
+        graph_spec: GraphSpec,
+        options: super::options::TriplesDumpOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "triples".to_string(),
+            "dump".to_string(),
+            graph_spec.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_required(&mut args, "--format", options.format.as_str());
         execute(args)
     }
 
     /// Update triples in a graph from a file.
-    pub fn update(&self, graph_spec: GraphSpec, file: &str, options: super::options::TriplesUpdateOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["triples".to_string(), "update".to_string(), graph_spec.to_string(), file.to_string()];
+    pub fn update(
+        &self,
+        graph_spec: GraphSpec,
+        file: &str,
+        options: super::options::TriplesUpdateOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "triples".to_string(),
+            "update".to_string(),
+            graph_spec.to_string(),
+            file.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_required(&mut args, "--message", options.message.as_ref());
         add_required(&mut args, "--author", options.author.as_ref());
@@ -578,8 +722,18 @@ impl<'a> TriplesCommands<'a> {
     }
 
     /// Load triples into a graph from a file.
-    pub fn load(&self, graph_spec: GraphSpec, file: &str, options: super::options::TriplesLoadOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["triples".to_string(), "load".to_string(), graph_spec.to_string(), file.to_string()];
+    pub fn load(
+        &self,
+        graph_spec: GraphSpec,
+        file: &str,
+        options: super::options::TriplesLoadOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "triples".to_string(),
+            "load".to_string(),
+            graph_spec.to_string(),
+            file.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_required(&mut args, "--message", options.message.as_ref());
         add_required(&mut args, "--author", options.author.as_ref());
@@ -599,36 +753,84 @@ pub struct RemoteCommands<'a> {
 
 impl<'a> RemoteCommands<'a> {
     /// Add a remote.
-    pub fn add(&self, spec: DbSpec, remote_name: &str, remote_location: &str, options: super::options::RemoteAddOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["remote".to_string(), "add".to_string(), spec.to_string(), remote_name.to_string(), remote_location.to_string()];
+    pub fn add(
+        &self,
+        spec: DbSpec,
+        remote_name: &str,
+        remote_location: &str,
+        options: super::options::RemoteAddOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "remote".to_string(),
+            "add".to_string(),
+            spec.to_string(),
+            remote_name.to_string(),
+            remote_location.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// Remove a remote.
-    pub fn remove(&self, spec: DbSpec, remote_name: &str, options: super::options::RemoteRemoveOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["remote".to_string(), "remove".to_string(), spec.to_string(), remote_name.to_string()];
+    pub fn remove(
+        &self,
+        spec: DbSpec,
+        remote_name: &str,
+        options: super::options::RemoteRemoveOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "remote".to_string(),
+            "remove".to_string(),
+            spec.to_string(),
+            remote_name.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// Set the URL of a remote.
-    pub fn set_url(&self, spec: DbSpec, remote_name: &str, remote_location: &str, options: super::options::RemoteSetUrlOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["remote".to_string(), "set-url".to_string(), spec.to_string(), remote_name.to_string(), remote_location.to_string()];
+    pub fn set_url(
+        &self,
+        spec: DbSpec,
+        remote_name: &str,
+        remote_location: &str,
+        options: super::options::RemoteSetUrlOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "remote".to_string(),
+            "set-url".to_string(),
+            spec.to_string(),
+            remote_name.to_string(),
+            remote_location.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// Get the URL of a remote.
-    pub fn get_url(&self, spec: DbSpec, remote_name: &str, options: super::options::RemoteGetUrlOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["remote".to_string(), "get-url".to_string(), spec.to_string(), remote_name.to_string()];
+    pub fn get_url(
+        &self,
+        spec: DbSpec,
+        remote_name: &str,
+        options: super::options::RemoteGetUrlOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "remote".to_string(),
+            "get-url".to_string(),
+            spec.to_string(),
+            remote_name.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_required(&mut args, "--remote", &options.remote);
         execute(args)
     }
 
     /// List all remotes.
-    pub fn list(&self, spec: DbSpec, options: super::options::RemoteListOptions) -> std::io::Result<ExitStatus> {
+    pub fn list(
+        &self,
+        spec: DbSpec,
+        options: super::options::RemoteListOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["remote".to_string(), "list".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
@@ -676,14 +878,22 @@ impl TerminusDB {
     }
 
     /// Optimize a database.
-    pub fn optimize(&self, spec: DbSpec, options: super::options::OptimizeOptions) -> std::io::Result<ExitStatus> {
+    pub fn optimize(
+        &self,
+        spec: DbSpec,
+        options: super::options::OptimizeOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["optimize".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// Squash commits.
-    pub fn squash(&self, spec: DbSpec, options: super::options::SquashOptions) -> std::io::Result<ExitStatus> {
+    pub fn squash(
+        &self,
+        spec: DbSpec,
+        options: super::options::SquashOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["squash".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_flag(&mut args, "--json", options.json);
@@ -693,14 +903,22 @@ impl TerminusDB {
     }
 
     /// Rollup commits.
-    pub fn rollup(&self, spec: DbSpec, options: super::options::RollupOptions) -> std::io::Result<ExitStatus> {
+    pub fn rollup(
+        &self,
+        spec: DbSpec,
+        options: super::options::RollupOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["rollup".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// Create a bundle.
-    pub fn bundle(&self, spec: DbSpec, options: super::options::BundleOptions) -> std::io::Result<ExitStatus> {
+    pub fn bundle(
+        &self,
+        spec: DbSpec,
+        options: super::options::BundleOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["bundle".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_option(&mut args, "--output", &options.output);
@@ -708,14 +926,23 @@ impl TerminusDB {
     }
 
     /// Apply a bundle.
-    pub fn unbundle(&self, spec: DbSpec, file: &str, options: super::options::UnbundleOptions) -> std::io::Result<ExitStatus> {
+    pub fn unbundle(
+        &self,
+        spec: DbSpec,
+        file: &str,
+        options: super::options::UnbundleOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["unbundle".to_string(), spec.to_string(), file.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }
 
     /// View commit log.
-    pub fn log(&self, spec: DbSpec, options: super::options::LogOptions) -> std::io::Result<ExitStatus> {
+    pub fn log(
+        &self,
+        spec: DbSpec,
+        options: super::options::LogOptions,
+    ) -> std::io::Result<ExitStatus> {
         let mut args = vec!["log".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_flag(&mut args, "--json", options.json);
@@ -726,8 +953,17 @@ impl TerminusDB {
     }
 
     /// Reset a branch to a specific commit.
-    pub fn reset(&self, branch_spec: BranchSpec, commit_spec: &str, options: super::options::ResetOptions) -> std::io::Result<ExitStatus> {
-        let mut args = vec!["reset".to_string(), branch_spec.to_string(), commit_spec.to_string()];
+    pub fn reset(
+        &self,
+        branch_spec: BranchSpec,
+        commit_spec: &str,
+        options: super::options::ResetOptions,
+    ) -> std::io::Result<ExitStatus> {
+        let mut args = vec![
+            "reset".to_string(),
+            branch_spec.to_string(),
+            commit_spec.to_string(),
+        ];
         add_required(&mut args, "--impersonate", &options.impersonate);
         execute(args)
     }

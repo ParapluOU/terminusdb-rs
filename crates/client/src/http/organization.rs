@@ -650,7 +650,9 @@ impl super::client::TerminusDBHttpClient {
             return Err(anyhow::anyhow!(error_msg));
         }
 
-        let response = self.parse_response::<Vec<OrganizationDatabase>>(res).await?;
+        let response = self
+            .parse_response::<Vec<OrganizationDatabase>>(res)
+            .await?;
 
         operation = operation.success(Some(response.len()), duration_ms);
         self.operation_log.push(operation);

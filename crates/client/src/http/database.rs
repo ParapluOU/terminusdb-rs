@@ -612,7 +612,11 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn optimize(&self, path: &str, timeout: Option<std::time::Duration>) -> anyhow::Result<serde_json::Value> {
+    pub async fn optimize(
+        &self,
+        path: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
         let uri = self.build_url().endpoint("optimize").add_path(path).build();
 
@@ -627,10 +631,7 @@ impl super::client::TerminusDBHttpClient {
         // Acquire concurrency permit for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let mut request = self
-            .http
-            .post(uri)
-            .basic_auth(&self.user, Some(&self.pass));
+        let mut request = self.http.post(uri).basic_auth(&self.user, Some(&self.pass));
 
         // Apply timeout if provided
         if let Some(timeout) = timeout {

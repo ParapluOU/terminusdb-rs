@@ -6,8 +6,8 @@ use crate::{
     ToTDBSchema, URI,
 };
 use anyhow::{anyhow, bail};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::convert::TryInto;
@@ -50,9 +50,11 @@ impl<T: TerminusDBModel> TdbLazy<T> {
     pub fn get(&mut self, client: &impl Client) -> Result<&T, anyhow::Error> {
         if self.data.is_none() {
             // We need an ID to fetch data
-            let id = self.id.as_ref()
+            let id = self
+                .id
+                .as_ref()
                 .ok_or_else(|| anyhow!("Cannot fetch data: TdbLazy has neither data nor ID"))?;
-            
+
             // Fetch the data from the store
             let instance = client.get_instance(&id.typed())?;
             let data = T::from_instance(&instance)?;
@@ -139,7 +141,7 @@ impl<T: TerminusDBModel + Serialize> Serialize for TdbLazy<T> {
             // When only ID is present, serialize the ID
             match &self.id {
                 Some(id) => id.to_string().serialize(serializer),
-                None => serializer.serialize_none()
+                None => serializer.serialize_none(),
             }
         }
     }
@@ -152,20 +154,16 @@ impl<'de, T: TerminusDBModel + DeserializeOwned> Deserialize<'de> for TdbLazy<T>
     {
         // First, deserialize to a generic JSON value
         let value = Value::deserialize(deserializer)?;
-        
+
         match value {
             // If it's a string, treat it as an ID
-            Value::String(id_str) => {
-                EntityIDFor::<T>::new_unchecked(&id_str)
-                    .map(|id| Self::new(Some(id), None))
-                    .map_err(serde::de::Error::custom)
-            }
+            Value::String(id_str) => EntityIDFor::<T>::new_unchecked(&id_str)
+                .map(|id| Self::new(Some(id), None))
+                .map_err(serde::de::Error::custom),
             // Otherwise, try to deserialize it as the full data type
             _ => {
-                let data: T = serde_json::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
-                Self::new_data(data)
-                    .map_err(serde::de::Error::custom)
+                let data: T = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                Self::new_data(data).map_err(serde::de::Error::custom)
             }
         }
     }
@@ -248,16 +246,15 @@ impl<Parent, T: TerminusDBModel> ToInstanceProperty<Parent> for TdbLazy<T> {
             // When loaded, pass the ID if available (it might be None for lexical keys)
             let id = self.id.as_ref().map(|id| id.to_string());
             InstanceProperty::Relation(RelationValue::One(
-                self.data
-                    .as_ref()
-                    .unwrap()
-                    .to_instance(id),
+                self.data.as_ref().unwrap().to_instance(id),
             ))
         } else {
             // When not loaded, we need an ID to reference
             match self.id.as_ref() {
-                Some(id) => InstanceProperty::Relation(RelationValue::ExternalReference(id.to_string())),
-                None => panic!("Cannot convert TdbLazy to property: has neither data nor ID")
+                Some(id) => {
+                    InstanceProperty::Relation(RelationValue::ExternalReference(id.to_string()))
+                }
+                None => panic!("Cannot convert TdbLazy to property: has neither data nor ID"),
             }
         }
     }
@@ -350,7 +347,7 @@ impl<T: TerminusDBModel> ToTDBInstance for TdbLazy<T> {
             // When not loaded, we need an ID to create a reference
             match self.id.as_ref() {
                 Some(ref_id) => Instance::new_reference::<T>(&ref_id.to_string()),
-                None => panic!("Cannot create instance reference: TdbLazy has neither data nor ID")
+                None => panic!("Cannot create instance reference: TdbLazy has neither data nor ID"),
             }
         }
     }
@@ -376,7 +373,7 @@ impl<T: TerminusDBModel> FromTDBInstance for TdbLazy<T> {
             // For references, we need an ID
             match instance.id() {
                 Some(id) => Ok(Self::new(Some(id.try_into()?), None)),
-                None => bail!("Cannot create TdbLazy from reference without ID")
+                None => bail!("Cannot create TdbLazy from reference without ID"),
             }
         } else {
             // For full instances, create from data

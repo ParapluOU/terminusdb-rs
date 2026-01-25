@@ -16,15 +16,15 @@ select(
     )
 )
 "#;
-    
+
     let query = parse_woql_dsl(dsl).unwrap();
-    
+
     match query {
         Query::Select(select) => {
             assert_eq!(select.variables.len(), 2);
             assert_eq!(select.variables[0], "Name");
             assert_eq!(select.variables[1], "Age");
-            
+
             match select.query.as_ref() {
                 Query::And(and) => {
                     assert_eq!(and.and.len(), 4);
@@ -36,7 +36,7 @@ select(
     }
 }
 
-#[test] 
+#[test]
 fn test_nested_query() {
     let dsl = r#"
 or(
@@ -47,9 +47,9 @@ or(
     triple($Person, "@schema:isAdult", true)
 )
 "#;
-    
+
     let query = parse_woql_dsl(dsl).unwrap();
-    
+
     match query {
         Query::Or(or) => {
             assert_eq!(or.or.len(), 2);

@@ -35,11 +35,11 @@ struct AwsDBCommittee {
 
 fn main() {
     // Replicate the original query structure using the new flat syntax
-    let query_dsl = query!{{
-        select [SessionId, PublicationId, OwnerFirstName, OwnerLastName, 
+    let query_dsl = query! {{
+        select [SessionId, PublicationId, OwnerFirstName, OwnerLastName,
                 PublicationTitle, CommitteeId, CommitteeName, CommitteeDescription];
         limit 10;
-        
+
         // Main query body matching the JSON-LD structure
         AwsDBReviewSession {
             id = v!(SessionId),
@@ -47,24 +47,24 @@ fn main() {
             title = v!(SessionTitle),
             publication_id = v!(Publication)
         }
-        
+
         AwsDBPublication {
             id = v!(PublicationId),
             title = v!(PublicationTitle)
         }
-        
+
         // Need to manually add the id matching since the DSL creates separate variables
         triple!(v!(Publication), "@schema:id", v!(PublicationId)),
-        
+
         AwsDBUser {
             id = v!(Owner),
             first_name = v!(OwnerFirstName),
             last_name = v!(OwnerLastName)
         }
-        
+
         optional {
             triple!(v!(Publication), field!(AwsDBPublication:committee), v!(Committee)),
-            
+
             AwsDBCommittee {
                 id = v!(CommitteeId),
                 name = v!(CommitteeName),
@@ -72,10 +72,10 @@ fn main() {
             }
         }
     }};
-    
+
     println!("Generated DSL Query:");
     println!("{}\n", query_dsl.to_dsl());
-    
+
     // Let's check what the structure looks like
     println!("\nAnalysis of generated query vs original:");
     println!("1. ✓ Outer Limit of 10");
@@ -83,7 +83,7 @@ fn main() {
     println!("3. ✓ Type declarations for all 4 types (Session, Publication, User, Committee)");
     println!("4. ✓ All property triples matching the original");
     println!("5. ✓ Optional block for committee information");
-    
+
     println!("\nKey benefits of the flat DSL syntax:");
     println!("- Select and limit as simple statements (SQL-like)");
     println!("- Type names automatically get @schema: prefix");
@@ -91,6 +91,6 @@ fn main() {
     println!("- Optional blocks for conditional data");
     println!("- Much more concise than JSON-LD");
     println!("- Modifiers can be in any order or omitted");
-    
+
     println!("\nThe flat syntax DSL successfully replicates your JSON-LD query!");
 }

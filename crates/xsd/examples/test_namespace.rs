@@ -1,7 +1,9 @@
 //! Test namespace preservation in schema generation.
 
 use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
-use terminusdb_xsd::schema_model::{Cardinality, ChildElement, XsdAttribute, XsdComplexType, XsdSchema};
+use terminusdb_xsd::schema_model::{
+    Cardinality, ChildElement, XsdAttribute, XsdComplexType, XsdSchema,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Testing Namespace Preservation ===\n");
@@ -24,14 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 has_simple_content: false,
                 mixed: false,
                 content_model: Some("XsdGroup".to_string()),
-                attributes: Some(vec![
-                    XsdAttribute {
-                        name: "id".to_string(),
-                        attr_type: "{http://www.w3.org/2001/XMLSchema}string".to_string(),
-                        use_type: "required".to_string(),
-                        default: None,
-                    },
-                ]),
+                attributes: Some(vec![XsdAttribute {
+                    name: "id".to_string(),
+                    attr_type: "{http://www.w3.org/2001/XMLSchema}string".to_string(),
+                    use_type: "required".to_string(),
+                    default: None,
+                }]),
                 child_elements: Some(vec![
                     ChildElement {
                         name: "{http://example.com/book}firstName".to_string(),
@@ -60,14 +60,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 has_simple_content: false,
                 mixed: false,
                 content_model: Some("XsdGroup".to_string()),
-                attributes: Some(vec![
-                    XsdAttribute {
-                        name: "isbn".to_string(),
-                        attr_type: "{http://www.w3.org/2001/XMLSchema}string".to_string(),
-                        use_type: "required".to_string(),
-                        default: None,
-                    },
-                ]),
+                attributes: Some(vec![XsdAttribute {
+                    name: "isbn".to_string(),
+                    attr_type: "{http://www.w3.org/2001/XMLSchema}string".to_string(),
+                    use_type: "required".to_string(),
+                    default: None,
+                }]),
                 child_elements: Some(vec![
                     ChildElement {
                         name: "{http://example.com/book}title".to_string(),
@@ -91,7 +89,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("📖 Created mock XSD schema with namespaces");
-    println!("   Target namespace: {}\n", xsd_schema.target_namespace.as_ref().unwrap());
+    println!(
+        "   Target namespace: {}\n",
+        xsd_schema.target_namespace.as_ref().unwrap()
+    );
 
     // Generate TerminusDB schemas
     let generator = XsdToSchemaGenerator::with_namespace("http://example.com/terminusdb#");

@@ -6,8 +6,12 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
-use terminusdb_community::graphql::frame::{AllFrames, FieldDefinition, FieldKind, GraphQLName, TypeDefinition};
-use terminusdb_community::graphql::naming::{collection_filter_name, enum_filter_name, filter_name};
+use terminusdb_community::graphql::frame::{
+    AllFrames, FieldDefinition, FieldKind, GraphQLName, TypeDefinition,
+};
+use terminusdb_community::graphql::naming::{
+    collection_filter_name, enum_filter_name, filter_name,
+};
 use terminusdb_schema::ToTDBSchemas;
 
 use crate::frames::schemas_to_allframes;
@@ -215,19 +219,45 @@ fn field_type_to_sdl(
 /// Handles both prefixed (xsd:string) and unprefixed (string) forms.
 fn base_type_to_sdl(base_type: &str) -> String {
     match base_type {
-        "xsd:string" | "string" | "xsd:anyURI" | "anyURI" | "xsd:language" | "language"
-        | "xsd:normalizedString" | "normalizedString" | "xsd:token" | "token"
-        | "xsd:NMTOKEN" | "NMTOKEN" | "xsd:Name" | "Name" | "xsd:NCName" | "NCName" => {
-            "String".to_string()
-        }
+        "xsd:string"
+        | "string"
+        | "xsd:anyURI"
+        | "anyURI"
+        | "xsd:language"
+        | "language"
+        | "xsd:normalizedString"
+        | "normalizedString"
+        | "xsd:token"
+        | "token"
+        | "xsd:NMTOKEN"
+        | "NMTOKEN"
+        | "xsd:Name"
+        | "Name"
+        | "xsd:NCName"
+        | "NCName" => "String".to_string(),
         "xsd:boolean" | "boolean" => "Boolean".to_string(),
-        "xsd:integer" | "integer" | "xsd:int" | "int" | "xsd:short" | "short" | "xsd:byte"
-        | "byte" | "xsd:nonNegativeInteger" | "nonNegativeInteger" | "xsd:positiveInteger"
-        | "positiveInteger" | "xsd:nonPositiveInteger" | "nonPositiveInteger"
-        | "xsd:negativeInteger" | "negativeInteger" | "xsd:unsignedInt" | "unsignedInt"
-        | "xsd:unsignedShort" | "unsignedShort" | "xsd:unsignedByte" | "unsignedByte" => {
-            "Int".to_string()
-        }
+        "xsd:integer"
+        | "integer"
+        | "xsd:int"
+        | "int"
+        | "xsd:short"
+        | "short"
+        | "xsd:byte"
+        | "byte"
+        | "xsd:nonNegativeInteger"
+        | "nonNegativeInteger"
+        | "xsd:positiveInteger"
+        | "positiveInteger"
+        | "xsd:nonPositiveInteger"
+        | "nonPositiveInteger"
+        | "xsd:negativeInteger"
+        | "negativeInteger"
+        | "xsd:unsignedInt"
+        | "unsignedInt"
+        | "xsd:unsignedShort"
+        | "unsignedShort"
+        | "xsd:unsignedByte"
+        | "unsignedByte" => "Int".to_string(),
         "xsd:long" | "long" | "xsd:unsignedLong" | "unsignedLong" => "BigInt".to_string(),
         "xsd:float" | "float" | "xsd:double" | "double" => "Float".to_string(),
         "xsd:decimal" | "decimal" => "BigFloat".to_string(),
@@ -242,19 +272,45 @@ fn base_type_to_sdl(base_type: &str) -> String {
 /// Handles both prefixed (xsd:string) and unprefixed (string) forms.
 fn base_type_to_filter_name(base_type: &str) -> Option<String> {
     match base_type {
-        "xsd:string" | "string" | "xsd:anyURI" | "anyURI" | "xsd:language" | "language"
-        | "xsd:normalizedString" | "normalizedString" | "xsd:token" | "token"
-        | "xsd:NMTOKEN" | "NMTOKEN" | "xsd:Name" | "Name" | "xsd:NCName" | "NCName" => {
-            Some("String".to_string())
-        }
+        "xsd:string"
+        | "string"
+        | "xsd:anyURI"
+        | "anyURI"
+        | "xsd:language"
+        | "language"
+        | "xsd:normalizedString"
+        | "normalizedString"
+        | "xsd:token"
+        | "token"
+        | "xsd:NMTOKEN"
+        | "NMTOKEN"
+        | "xsd:Name"
+        | "Name"
+        | "xsd:NCName"
+        | "NCName" => Some("String".to_string()),
         "xsd:boolean" | "boolean" => Some("Boolean".to_string()),
-        "xsd:integer" | "integer" | "xsd:int" | "int" | "xsd:short" | "short" | "xsd:byte"
-        | "byte" | "xsd:nonNegativeInteger" | "nonNegativeInteger" | "xsd:positiveInteger"
-        | "positiveInteger" | "xsd:nonPositiveInteger" | "nonPositiveInteger"
-        | "xsd:negativeInteger" | "negativeInteger" | "xsd:unsignedInt" | "unsignedInt"
-        | "xsd:unsignedShort" | "unsignedShort" | "xsd:unsignedByte" | "unsignedByte" => {
-            Some("Int".to_string())
-        }
+        "xsd:integer"
+        | "integer"
+        | "xsd:int"
+        | "int"
+        | "xsd:short"
+        | "short"
+        | "xsd:byte"
+        | "byte"
+        | "xsd:nonNegativeInteger"
+        | "nonNegativeInteger"
+        | "xsd:positiveInteger"
+        | "positiveInteger"
+        | "xsd:nonPositiveInteger"
+        | "nonPositiveInteger"
+        | "xsd:negativeInteger"
+        | "negativeInteger"
+        | "xsd:unsignedInt"
+        | "unsignedInt"
+        | "xsd:unsignedShort"
+        | "unsignedShort"
+        | "xsd:unsignedByte"
+        | "unsignedByte" => Some("Int".to_string()),
         "xsd:long" | "long" | "xsd:unsignedLong" | "unsignedLong" => Some("BigInt".to_string()),
         "xsd:float" | "float" | "xsd:double" | "double" => Some("Float".to_string()),
         "xsd:decimal" | "decimal" => Some("BigFloat".to_string()),
@@ -453,18 +509,9 @@ fn generate_model_filter(
 
     // Generate collection filter if needed
     let collection_filter_name = collection_filter_name(&gql_name);
-    output.push_str(&format!(
-        "input {} {{\n",
-        collection_filter_name.as_str()
-    ));
-    output.push_str(&format!(
-        "  someHave: {}\n",
-        filter_type_name.as_str()
-    ));
-    output.push_str(&format!(
-        "  allHave: {}\n",
-        filter_type_name.as_str()
-    ));
+    output.push_str(&format!("input {} {{\n", collection_filter_name.as_str()));
+    output.push_str(&format!("  someHave: {}\n", filter_type_name.as_str()));
+    output.push_str(&format!("  allHave: {}\n", filter_type_name.as_str()));
     output.push_str("}\n\n");
 
     output
@@ -559,11 +606,23 @@ mod tests {
 
         // Check that the SDL contains expected elements
         assert!(sdl.contains("type Project"), "Should contain Project type");
-        assert!(sdl.contains("enum Priority"), "Should contain Priority enum");
-        assert!(sdl.contains("input Project_Filter"), "Should contain Project filter");
+        assert!(
+            sdl.contains("enum Priority"),
+            "Should contain Priority enum"
+        );
+        assert!(
+            sdl.contains("input Project_Filter"),
+            "Should contain Project filter"
+        );
         assert!(sdl.contains("type Query"), "Should contain Query type");
-        assert!(sdl.contains("scalar BigInt"), "Should contain custom scalars");
-        assert!(sdl.contains("input StringFilter"), "Should contain StringFilter");
+        assert!(
+            sdl.contains("scalar BigInt"),
+            "Should contain custom scalars"
+        );
+        assert!(
+            sdl.contains("input StringFilter"),
+            "Should contain StringFilter"
+        );
     }
 
     #[test]
@@ -578,13 +637,11 @@ mod tests {
                 r#abstract: false,
                 inherits: vec![],
                 unfoldable: false,
-                properties: vec![
-                    Property {
-                        name: "name".to_string(),
-                        r#type: None,
-                        class: "xsd:string".to_string(),
-                    },
-                ],
+                properties: vec![Property {
+                    name: "name".to_string(),
+                    r#type: None,
+                    class: "xsd:string".to_string(),
+                }],
             },
             Schema::Class {
                 id: "Ticket".to_string(),
@@ -624,15 +681,27 @@ mod tests {
 
         // Should have Ticket type with project field
         assert!(sdl.contains("type Ticket"), "Should contain Ticket type");
-        assert!(sdl.contains("project: Project"), "Ticket should have project field");
-        assert!(sdl.contains("parent: Ticket"), "Ticket should have parent field");
+        assert!(
+            sdl.contains("project: Project"),
+            "Ticket should have project field"
+        );
+        assert!(
+            sdl.contains("parent: Ticket"),
+            "Ticket should have parent field"
+        );
 
         // Should have Ticket_Filter with project filter
-        assert!(sdl.contains("input Ticket_Filter"), "Should contain Ticket_Filter");
+        assert!(
+            sdl.contains("input Ticket_Filter"),
+            "Should contain Ticket_Filter"
+        );
 
         // Check if relation filters are included
         let has_project_filter = sdl.contains("project: Project_Filter")
             || sdl.contains("project: CollectionFilter_Project");
-        println!("Has project filter in Ticket_Filter: {}", has_project_filter);
+        println!(
+            "Has project filter in Ticket_Filter: {}",
+            has_project_filter
+        );
     }
 }

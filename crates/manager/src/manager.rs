@@ -60,16 +60,14 @@ impl TerminusDBManager {
         tracing::info!("Starting local TerminusDB instance on port {}", port);
 
         // Extract the TerminusDB binary
-        let binary_path = extract_binary()
-            .context("Failed to extract TerminusDB binary")?;
+        let binary_path = extract_binary().context("Failed to extract TerminusDB binary")?;
 
         // Get password for spawn command
         let password = self.inner.read().password.clone();
 
         // Get or create data directory
         let data_dir = Self::get_data_dir()?;
-        std::fs::create_dir_all(&data_dir)
-            .context("Failed to create data directory")?;
+        std::fs::create_dir_all(&data_dir).context("Failed to create data directory")?;
 
         // Initialize store if it doesn't exist
         let store_init_marker = data_dir.join(".initialized");
@@ -113,7 +111,10 @@ impl TerminusDBManager {
         // Verify it's accessible
         self.ping().await?;
 
-        tracing::info!("Local TerminusDB instance started successfully on port {}", port);
+        tracing::info!(
+            "Local TerminusDB instance started successfully on port {}",
+            port
+        );
         Ok(())
     }
 
@@ -121,11 +122,9 @@ impl TerminusDBManager {
     fn get_data_dir() -> Result<PathBuf> {
         // Use XDG_DATA_HOME or ~/.local/share on Unix, AppData on Windows
         let base_dir = if cfg!(target_os = "macos") {
-            dirs::data_dir()
-                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         } else {
-            dirs::data_dir()
-                .ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("Could not determine data directory"))?
         };
 
         Ok(base_dir.join("terminusdb-manager").join("storage"))
@@ -169,7 +168,10 @@ impl TerminusDBManager {
     /// Ping the local instance to verify it's accessible
     async fn ping(&self) -> Result<()> {
         let client = self.client().await?;
-        client.info().await.context("Failed to ping local TerminusDB instance")?;
+        client
+            .info()
+            .await
+            .context("Failed to ping local TerminusDB instance")?;
         Ok(())
     }
 

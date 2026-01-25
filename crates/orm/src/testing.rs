@@ -244,9 +244,7 @@ impl Drop for TestDb {
             // but that's OK for tests - the DB will be cleaned up next time
             std::thread::spawn(move || {
                 if let Ok(rt) = tokio::runtime::Runtime::new() {
-                    let _ = rt.block_on(async {
-                        client.delete_database(&db_name).await
-                    });
+                    let _ = rt.block_on(async { client.delete_database(&db_name).await });
                 }
             });
         }

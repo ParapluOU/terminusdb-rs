@@ -1,4 +1,5 @@
-use crate::{BranchSpec, CommitId, TerminusDBAdapterError, err::TypedErrorResponse};
+use crate::{err::TypedErrorResponse, BranchSpec, CommitId, TerminusDBAdapterError};
+use anyhow::anyhow;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -9,9 +10,8 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::iter::FilterMap;
 use std::slice::Iter;
-use terminusdb_woql_builder::prelude::vars;
 use terminusdb_schema::{EntityIDFor, ToTDBSchema};
-use anyhow::anyhow;
+use terminusdb_woql_builder::prelude::vars;
 
 use crate::TerminusDBAdapterError::Serde;
 use crate::*;
@@ -50,9 +50,9 @@ impl<T> ResponseWithHeaders<T> {
     }
 
     pub fn new_with_string(data: T, commit_id: Option<String>) -> Self {
-        Self { 
-            data, 
-            commit_id: commit_id.map(CommitId::from)
+        Self {
+            data,
+            commit_id: commit_id.map(CommitId::from),
         }
     }
 
@@ -135,11 +135,13 @@ impl ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>> {
     pub fn into_versioned_refs<T: ToTDBSchema>(
         self,
     ) -> anyhow::Result<Vec<VersionedEntityIDFor<T>>> {
-        let commit_id = self.extract_commit_id()
+        let commit_id = self
+            .extract_commit_id()
             .ok_or_else(|| anyhow!("No commit ID in response headers"))?;
 
         // Filter: only include IDs that parse successfully as EntityIDFor<T>
-        let refs: Vec<_> = self.data
+        let refs: Vec<_> = self
+            .data
             .into_iter()
             .filter_map(|(id_str, _result)| {
                 EntityIDFor::<T>::new_unchecked(&id_str)
@@ -352,11 +354,13 @@ mod tests {
         let response = ResponseWithHeaders::new(results, Some(CommitId::new("branch:abc123")));
 
         // Extract only Person refs
-        let person_refs: Vec<VersionedEntityIDFor<Person>> = response.clone().into_versioned_refs().unwrap();
+        let person_refs: Vec<VersionedEntityIDFor<Person>> =
+            response.clone().into_versioned_refs().unwrap();
         assert_eq!(person_refs.len(), 2); // Person/123 and Person/789
 
         // Extract only Company refs
-        let company_refs: Vec<VersionedEntityIDFor<Company>> = response.into_versioned_refs().unwrap();
+        let company_refs: Vec<VersionedEntityIDFor<Company>> =
+            response.into_versioned_refs().unwrap();
         assert_eq!(company_refs.len(), 1); // Company/456
     }
 

@@ -1,9 +1,9 @@
-use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{TerminusDBHttpClient, DocumentInsertArgs, BranchSpec};
-use terminusdb_woql2::*;
-use terminusdb_woql2::query::{NamedParametricQuery, Query};
-use terminusdb_schema::ToTDBSchema;
 use serde_json::{json, Value};
+use terminusdb_bin::TerminusDBServer;
+use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
+use terminusdb_schema::ToTDBSchema;
+use terminusdb_woql2::query::{NamedParametricQuery, Query};
+use terminusdb_woql2::*;
 
 #[tokio::test]
 async fn test_insert_named_parametric_query() -> anyhow::Result<()> {
@@ -52,7 +52,14 @@ async fn test_insert_named_parametric_query() -> anyhow::Result<()> {
                         "arguments": []
                     });
 
-                    match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&call_query)?, None).await {
+                    match client
+                        .query_string::<Value>(
+                            Some(spec.clone()),
+                            &serde_json::to_string(&call_query)?,
+                            None,
+                        )
+                        .await
+                    {
                         Ok(result) => println!("Call succeeded! Result: {:?}", result),
                         Err(e) => println!("Call failed: {:?}", e),
                     }
@@ -109,7 +116,14 @@ async fn test_parametric_query_with_params() -> anyhow::Result<()> {
                         "arguments": [{"node": "Person"}]
                     });
 
-                    match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&call_query)?, None).await {
+                    match client
+                        .query_string::<Value>(
+                            Some(spec.clone()),
+                            &serde_json::to_string(&call_query)?,
+                            None,
+                        )
+                        .await
+                    {
                         Ok(result) => println!("Call with params succeeded: {:?}", result),
                         Err(e) => println!("Call with params failed: {:?}", e),
                     }

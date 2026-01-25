@@ -48,7 +48,10 @@ fn main() -> Result<()> {
         println!("  - {}", ct.name);
         if let Some(attrs) = &ct.attributes {
             for attr in attrs {
-                println!("      @{}: {} ({})", attr.name, attr.attr_type, attr.use_type);
+                println!(
+                    "      @{}: {} ({})",
+                    attr.name, attr.attr_type, attr.use_type
+                );
             }
         }
         if let Some(children) = &ct.child_elements {

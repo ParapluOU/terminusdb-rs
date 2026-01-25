@@ -7,10 +7,7 @@
 
 use std::env;
 use xsd_parser::{
-    config::Schema,
-    exec_parser, exec_interpreter,
-    Config,
-    models::meta::MetaTypeVariant,
+    config::Schema, exec_interpreter, exec_parser, models::meta::MetaTypeVariant, Config,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

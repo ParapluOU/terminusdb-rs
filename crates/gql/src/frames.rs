@@ -32,8 +32,8 @@ pub fn schemas_vec_to_allframes(schemas: &[Schema]) -> AllFrames {
     let json_value = schemas_to_frames_json(schemas);
 
     // Deserialize as UncleanAllFrames
-    let unclean: UncleanAllFrames =
-        serde_json::from_value(json_value).expect("Failed to deserialize schemas as UncleanAllFrames");
+    let unclean: UncleanAllFrames = serde_json::from_value(json_value)
+        .expect("Failed to deserialize schemas as UncleanAllFrames");
 
     // Finalize to get AllFrames with all the computed indices
     unclean.finalize()
@@ -414,11 +414,7 @@ mod tests {
             Schema::Enum {
                 id: "Priority".to_string(),
                 base: None,
-                values: vec![
-                    "Low".to_string(),
-                    "Medium".to_string(),
-                    "High".to_string(),
-                ],
+                values: vec!["Low".to_string(), "Medium".to_string(), "High".to_string()],
                 documentation: None,
             },
         ];
@@ -439,7 +435,7 @@ mod tests {
 
     #[test]
     fn test_property_types() {
-        use terminusdb_schema::{Property, TypeFamily, SetCardinality};
+        use terminusdb_schema::{Property, SetCardinality, TypeFamily};
 
         // Test required field
         let required = Property {

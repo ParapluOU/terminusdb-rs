@@ -3,10 +3,10 @@
 // The types would provide specialized ID handling for different key strategies.
 #![cfg(feature = "__disabled_test_lexical_id_models")]
 
+use serde::{Deserialize, Serialize};
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
-use serde::{Serialize, Deserialize};
 
 // Model with LexicalID using lexical key
 #[derive(Clone, Debug, TerminusDBModel)]
@@ -47,10 +47,7 @@ mod tests {
     #[test]
     fn test_hash_id_serialization() {
         let user = UserWithHashID {
-            id: HashID::from_fields(&[
-                ("email", "test@example.com"),
-                ("name", "Test User"),
-            ]),
+            id: HashID::from_fields(&[("email", "test@example.com"), ("name", "Test User")]),
             email: "test@example.com".to_string(),
             name: "Test User".to_string(),
         };

@@ -65,8 +65,7 @@ pub fn save_config(config: &Config) -> Result<()> {
     ensure_config_dir()?;
     let config_path = config_file_path()?;
 
-    let contents = toml::to_string_pretty(config)
-        .context("Failed to serialize config")?;
+    let contents = toml::to_string_pretty(config).context("Failed to serialize config")?;
 
     fs::write(&config_path, contents)
         .with_context(|| format!("Failed to write config file: {:?}", config_path))?;

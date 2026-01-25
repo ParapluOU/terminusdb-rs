@@ -6,7 +6,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 #[derive(TerminusDBModel, FromTDBInstance, Clone, Debug, Default)]
 struct TestUser {
-    name: String
+    name: String,
 }
 
 #[tokio::test]

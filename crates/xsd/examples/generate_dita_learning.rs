@@ -23,7 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let learning_dir = DITA_DIR.path().join("xsd1.2-url/learning/xsd");
 
     if !learning_dir.exists() {
-        eprintln!("ERROR: DITA Learning directory not found: {:?}", learning_dir);
+        eprintln!(
+            "ERROR: DITA Learning directory not found: {:?}",
+            learning_dir
+        );
         return Ok(());
     }
 
@@ -132,7 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn show_schema_stats(schemas: &[terminusdb_schema::Schema], method: &str) {
     println!("\n📊 Schema Statistics ({}):\n", method);
 
-    let mut by_namespace: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut by_namespace: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut subdocs = 0;
 
     for schema in schemas {

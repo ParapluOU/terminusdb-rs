@@ -138,7 +138,12 @@ pub fn format_document_change(
         }
         "updated" => {
             let prefix = if colorize {
-                format!("{} {} {}", "~".yellow().bold(), type_name.bold(), id_display)
+                format!(
+                    "{} {} {}",
+                    "~".yellow().bold(),
+                    type_name.bold(),
+                    id_display
+                )
             } else {
                 format!("~ {} {}", type_name, id)
             };
@@ -206,12 +211,7 @@ pub fn format_commit_header(
 }
 
 /// Format metadata summary
-pub fn format_metadata(
-    added: u64,
-    updated: u64,
-    deleted: u64,
-    colorize: bool,
-) -> String {
+pub fn format_metadata(added: u64, updated: u64, deleted: u64, colorize: bool) -> String {
     let parts: Vec<String> = [
         if added > 0 {
             Some(if colorize {

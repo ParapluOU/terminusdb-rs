@@ -1,6 +1,6 @@
-use terminusdb_schema::{ToTDBSchema, ToTDBInstance, Key};
-use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
+use terminusdb_schema::{Key, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema_derive::TerminusDBModel;
 
 #[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(key = "lexical", key_fields = "first_name,last_name")]
@@ -20,8 +20,11 @@ pub struct ContactWithHashKey {
 
 #[test]
 fn test_lexical_key_with_multiple_fields() {
-    assert_eq!(PersonWithLexicalKey::id(), Some("PersonWithLexicalKey".to_string()));
-    
+    assert_eq!(
+        PersonWithLexicalKey::id(),
+        Some("PersonWithLexicalKey".to_string())
+    );
+
     match PersonWithLexicalKey::key() {
         Key::Lexical(fields) => {
             assert_eq!(fields.len(), 2);
@@ -34,8 +37,11 @@ fn test_lexical_key_with_multiple_fields() {
 
 #[test]
 fn test_hash_key_with_multiple_fields() {
-    assert_eq!(ContactWithHashKey::id(), Some("ContactWithHashKey".to_string()));
-    
+    assert_eq!(
+        ContactWithHashKey::id(),
+        Some("ContactWithHashKey".to_string())
+    );
+
     match ContactWithHashKey::key() {
         Key::Hash(fields) => {
             assert_eq!(fields.len(), 2);
@@ -54,7 +60,7 @@ fn test_lexical_key_fallback_to_id() {
         pub id: String,
         pub name: String,
     }
-    
+
     match DefaultLexicalKey::key() {
         Key::Lexical(fields) => {
             assert_eq!(fields.len(), 1);

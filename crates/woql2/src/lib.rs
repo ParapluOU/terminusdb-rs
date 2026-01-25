@@ -14,8 +14,10 @@ pub mod collection;
 pub mod compare;
 pub mod control;
 pub mod document;
+pub mod dsl;
 pub mod expression;
 pub mod get;
+pub mod macros;
 pub mod misc;
 pub mod order;
 pub mod path;
@@ -23,12 +25,10 @@ pub mod query;
 pub mod string;
 pub mod triple;
 pub mod value;
-pub mod dsl;
-pub mod macros;
 // pub mod macros_refactored;
 // pub mod macros_refactored2;
-pub mod query_dsl;
 pub mod path_builder;
+pub mod query_dsl;
 
 pub mod prelude {
     // Re-export core types
@@ -62,31 +62,77 @@ pub mod prelude {
 
     // Re-export macros
     pub use crate::{
-        var, node_var, node, node_value, data, list, typename,
-        triple, t, and, or, not, select, eq, equals, greater, less,
-        path, limit, eval, read_doc, insert_doc, update_doc, delete_doc,
-        if_then_else,
-        // Shortcut macros
-        type_, id, isa, optional, opt, option, distinct_vars, count_into, cast,
-        sum, concat, member, immediately, link, data_triple,
-        regex, trim, true_, compare,
-        // String operation macros
-        starts_with, ends_with, contains,
-        // Date/time macros
-        today, after, before, in_between, today_in_between,
-        // Query DSL macros
-        query, v, prop, schema_type,
+        after,
+        and,
+        before,
+        cast,
+        compare,
+        concat,
+        contains,
+        count_into,
+        data,
+        data_triple,
+        delete_doc,
+        distinct_vars,
+        ends_with,
+        eq,
+        equals,
+        eval,
         // Type-safe field access
         field,
         // High-level relation traversal
-        from_path
+        from_path,
+        greater,
+        id,
+        if_then_else,
+        immediately,
+        in_between,
+        insert_doc,
+        isa,
+        less,
+        limit,
+        link,
+        list,
+        member,
+        node,
+        node_value,
+        node_var,
+        not,
+        opt,
+        option,
+        optional,
+        or,
+        path,
+        prop,
+        // Query DSL macros
+        query,
+        read_doc,
+        regex,
+        schema_type,
+        select,
+        // String operation macros
+        starts_with,
+        sum,
+        t,
+        // Date/time macros
+        today,
+        today_in_between,
+        trim,
+        triple,
+        true_,
+        // Shortcut macros
+        type_,
+        typename,
+        update_doc,
+        v,
+        var,
     };
 
     // Potentially re-export common traits if needed
     // Removed re-exports for non-existent TdbDataType, TdbDebug, TdbDisplay
     pub use terminusdb_schema::FromTDBInstance;
     pub use terminusdb_schema::ToTDBInstance;
-    
+
     // DSL rendering trait
     pub use super::dsl::ToDSL;
 }

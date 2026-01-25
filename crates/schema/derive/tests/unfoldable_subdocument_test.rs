@@ -1,6 +1,6 @@
-use terminusdb_schema::{Schema, ToTDBSchema, ToTDBInstance, TypeFamily, Key};
-use terminusdb_schema_derive::TerminusDBModel;
 use serde::{Deserialize, Serialize};
+use terminusdb_schema::{Key, Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
+use terminusdb_schema_derive::TerminusDBModel;
 
 #[derive(Debug, Clone, Eq, PartialEq, TerminusDBModel)]
 #[tdb(unfoldable = true, key = "value_hash")]
@@ -17,7 +17,7 @@ pub struct IdAndTitle {
 pub struct ReviewSession {
     #[tdb(subdocument = true)]
     pub document_ids: Vec<IdAndTitle>,
-    
+
     pub session_name: String,
 }
 
@@ -26,25 +26,42 @@ fn test_unfoldable_subdocument_schema() {
     // Test IdAndTitle schema
     let id_and_title_schema = IdAndTitle::to_schema();
     match &id_and_title_schema {
-        Schema::Class { unfoldable, key, subdocument, .. } => {
+        Schema::Class {
+            unfoldable,
+            key,
+            subdocument,
+            ..
+        } => {
             assert!(unfoldable, "IdAndTitle should be unfoldable");
-            assert_eq!(key, &Key::ValueHash, "IdAndTitle should have value_hash key");
-            assert!(!subdocument, "IdAndTitle itself is not marked as subdocument");
+            assert_eq!(
+                key,
+                &Key::ValueHash,
+                "IdAndTitle should have value_hash key"
+            );
+            assert!(
+                !subdocument,
+                "IdAndTitle itself is not marked as subdocument"
+            );
         }
         _ => panic!("IdAndTitle should generate a Class schema"),
     }
-    
+
     // Test ReviewSession schema
     let review_session_schema = ReviewSession::to_schema();
     match &review_session_schema {
-        Schema::Class { unfoldable, properties, .. } => {
+        Schema::Class {
+            unfoldable,
+            properties,
+            ..
+        } => {
             assert!(unfoldable, "ReviewSession should be unfoldable");
-            
+
             // Find the document_ids property
-            let doc_ids_prop = properties.iter()
+            let doc_ids_prop = properties
+                .iter()
                 .find(|p| p.name == "document_ids")
                 .expect("Should have document_ids property");
-            
+
             // Check that it's a set/list type
             assert_eq!(doc_ids_prop.r#type, Some(TypeFamily::List));
             assert_eq!(doc_ids_prop.class, "IdAndTitle");
@@ -68,24 +85,26 @@ fn test_subdocument_instance_generation() {
             },
         ],
     };
-    
+
     // Convert to instance
     let instance = review_session.to_instance(None);
-    
+
     // Check the properties
     assert_eq!(instance.properties.len(), 2, "Should have 2 properties");
-    
+
     // Check document_ids property
-    let doc_ids_prop = instance.properties.get("document_ids")
+    let doc_ids_prop = instance
+        .properties
+        .get("document_ids")
         .expect("Should have document_ids property");
-    
+
     println!("document_ids property type: {:?}", doc_ids_prop);
-    
+
     // For subdocuments in a list, they should be Relations
     match doc_ids_prop {
         terminusdb_schema::InstanceProperty::Relations(relations) => {
             assert_eq!(relations.len(), 2, "Should have 2 subdocuments");
-            
+
             // Each relation should contain a subdocument instance
             for (i, relation) in relations.iter().enumerate() {
                 println!("Relation {}: {:?}", i, relation);
@@ -94,7 +113,7 @@ fn test_subdocument_instance_generation() {
                         // The subdocument flag is in the schema, not the instance
                         // When a field is marked with #[tdb(subdocument=true)], it affects
                         // how the instances are stored (inline vs reference)
-                        
+
                         // Verify schema properties
                         match &sub_instance.schema {
                             Schema::Class { unfoldable, .. } => {
@@ -107,6 +126,9 @@ fn test_subdocument_instance_generation() {
                 }
             }
         }
-        _ => panic!("document_ids should be Relations property, got: {:?}", doc_ids_prop),
+        _ => panic!(
+            "document_ids should be Relations property, got: {:?}",
+            doc_ids_prop
+        ),
     }
 }

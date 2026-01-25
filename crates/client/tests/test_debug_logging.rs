@@ -3,8 +3,8 @@
 // NOTE: These tests use debug module functionality that is not yet fully implemented.
 // They are kept as ignored tests as design documentation for future implementation.
 
-use terminusdb_client::*;
 use tempfile::tempdir;
+use terminusdb_client::*;
 use tokio::fs;
 
 #[tokio::test]

@@ -8,7 +8,11 @@ pub fn generate_totdbschema_impl(
     properties_or_values: proc_macro2::TokenStream,
     schema_type_param: proc_macro2::TokenStream,
     to_schema_tree_impl: proc_macro2::TokenStream,
-    generics: (&proc_macro2::TokenStream, &proc_macro2::TokenStream, &Option<syn::WhereClause>),
+    generics: (
+        &proc_macro2::TokenStream,
+        &proc_macro2::TokenStream,
+        &Option<syn::WhereClause>,
+    ),
 ) -> proc_macro2::TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics;
     // Generate the base implementation

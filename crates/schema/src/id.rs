@@ -868,7 +868,8 @@ mod tests {
 
     #[test]
     fn test_parse_typed_id() {
-        let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new_unchecked("TestEntity/5678").unwrap();
+        let entity_id: EntityIDFor<TestEntity> =
+            EntityIDFor::new_unchecked("TestEntity/5678").unwrap();
         assert_eq!(entity_id.id(), "5678");
         assert_eq!(entity_id.typed(), "TestEntity/5678");
         assert_eq!(entity_id.get_base_uri(), None);
@@ -951,10 +952,7 @@ mod tests {
     fn test_iri_string_convenience_method() {
         let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new("789").unwrap();
         // iri_string() should return the full IRI as a String
-        assert_eq!(
-            entity_id.iri_string(),
-            "terminusdb:///data/TestEntity/789"
-        );
+        assert_eq!(entity_id.iri_string(), "terminusdb:///data/TestEntity/789");
     }
 
     // Test FromFormField implementation
@@ -1239,7 +1237,8 @@ mod tests {
 
         // Test simple subdocument path
         let path = "ReviewSession/e31e8079-6d1a-4ffc-ae85-73b4d298bb3f/review_assignments/ReviewSessionAssignment/IQ79UxtoVR6W0ASI";
-        let entity_id: EntityIDFor<ReviewSessionAssignment> = EntityIDFor::new_unchecked(path).unwrap();
+        let entity_id: EntityIDFor<ReviewSessionAssignment> =
+            EntityIDFor::new_unchecked(path).unwrap();
         assert_eq!(entity_id.id(), "IQ79UxtoVR6W0ASI");
         assert_eq!(entity_id.typed(), path);
         assert_eq!(entity_id.get_base_uri(), None);
@@ -1324,7 +1323,9 @@ mod tests {
 
     #[test]
     fn test_new_variant_accepts_full_path() {
-        let result = EntityIDFor::<TestTaggedUnion>::new_variant::<TestTaggedUnionVariantA>("TestTaggedUnionVariantA/123");
+        let result = EntityIDFor::<TestTaggedUnion>::new_variant::<TestTaggedUnionVariantA>(
+            "TestTaggedUnionVariantA/123",
+        );
         assert!(result.is_ok());
         let entity_id = result.unwrap();
         assert_eq!(entity_id.id(), "123");
@@ -1333,7 +1334,9 @@ mod tests {
 
     #[test]
     fn test_new_variant_with_iri() {
-        let result = EntityIDFor::<TestTaggedUnion>::new_variant::<TestTaggedUnionVariantA>("terminusdb://data#TestTaggedUnionVariantA/789");
+        let result = EntityIDFor::<TestTaggedUnion>::new_variant::<TestTaggedUnionVariantA>(
+            "terminusdb://data#TestTaggedUnionVariantA/789",
+        );
         assert!(result.is_ok());
         let entity_id = result.unwrap();
         assert_eq!(entity_id.id(), "789");
@@ -1367,7 +1370,8 @@ mod tests {
         use crate as terminusdb_schema;
 
         // Test that regular type remapping still works (backward compatibility)
-        let entity_id: EntityIDFor<TestEntity> = EntityIDFor::new_unchecked("TestEntity/123").unwrap();
+        let entity_id: EntityIDFor<TestEntity> =
+            EntityIDFor::new_unchecked("TestEntity/123").unwrap();
 
         // Define another regular type
         #[derive(Clone, Debug, TerminusDBModel)]
@@ -1558,7 +1562,8 @@ mod tests {
         // For nested unions, variants only implement TaggedUnionVariant for their direct parent union.
         // InnerVariantA implements TaggedUnionVariant<InnerUnion>, but NOT TaggedUnionVariant<OuterUnion>.
         // So you must use the InnerUnion type when creating IDs with new_variant().
-        let entity_id = EntityIDFor::<InnerUnion>::new_variant::<InnerVariantA>("test-id-a").unwrap();
+        let entity_id =
+            EntityIDFor::<InnerUnion>::new_variant::<InnerVariantA>("test-id-a").unwrap();
         assert_eq!(entity_id.id(), "test-id-a");
         assert_eq!(entity_id.typed(), "InnerVariantA/test-id-a");
 

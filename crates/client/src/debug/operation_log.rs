@@ -166,13 +166,7 @@ impl OperationLog {
     /// Get the most recent N entries
     pub fn get_recent(&self, n: usize) -> Vec<OperationEntry> {
         if let Ok(entries) = self.entries.read() {
-            entries
-                .iter()
-                .rev()
-                .take(n)
-                .rev()
-                .cloned()
-                .collect()
+            entries.iter().rev().take(n).rev().cloned().collect()
         } else {
             Vec::new()
         }
@@ -213,7 +207,8 @@ impl OperationLog {
     /// Get the last query operation
     pub fn get_last_query(&self) -> Option<Query> {
         if let Ok(entries) = self.entries.read() {
-            entries.iter()
+            entries
+                .iter()
                 .rev()
                 .find(|entry| matches!(entry.operation_type, OperationType::Query))
                 .and_then(|entry| entry.query.clone())
@@ -239,10 +234,7 @@ mod tests {
 
         // Add 4 entries to a log with max size 3
         for i in 0..4 {
-            let entry = OperationEntry::new(
-                OperationType::Query,
-                format!("query_{}", i),
-            );
+            let entry = OperationEntry::new(OperationType::Query, format!("query_{}", i));
             log.push(entry);
         }
 

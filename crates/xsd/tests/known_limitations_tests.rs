@@ -102,7 +102,13 @@ fn test_union_types_generate_tagged_union() {
     );
 
     // Verify the TaggedUnion has the expected structure
-    if let Schema::TaggedUnion { id, properties, subdocument, .. } = tagged_union.unwrap() {
+    if let Schema::TaggedUnion {
+        id,
+        properties,
+        subdocument,
+        ..
+    } = tagged_union.unwrap()
+    {
         assert_eq!(id, "StringOrNumber");
         assert!(subdocument, "Union types should be subdocuments");
 
@@ -112,12 +118,20 @@ fn test_union_types_generate_tagged_union() {
         // Find string variant
         let string_prop = properties.iter().find(|p| p.class == "xsd:string");
         assert!(string_prop.is_some(), "Should have xsd:string variant");
-        assert_eq!(string_prop.unwrap().name, "string", "String variant tag should be 'string'");
+        assert_eq!(
+            string_prop.unwrap().name,
+            "string",
+            "String variant tag should be 'string'"
+        );
 
         // Find integer variant
         let integer_prop = properties.iter().find(|p| p.class == "xsd:integer");
         assert!(integer_prop.is_some(), "Should have xsd:integer variant");
-        assert_eq!(integer_prop.unwrap().name, "integer", "Integer variant tag should be 'integer'");
+        assert_eq!(
+            integer_prop.unwrap().name,
+            "integer",
+            "Integer variant tag should be 'integer'"
+        );
     } else {
         panic!("Expected TaggedUnion schema");
     }

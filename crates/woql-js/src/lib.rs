@@ -38,9 +38,9 @@
 //!
 //! This is different from the Rust DSL syntax which uses `$` for variables.
 
+use anyhow::{Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
-use anyhow::{Context, Result};
 use terminusdb_woql2::prelude::FromTDBInstance;
 
 // Embed the bundled JavaScript at compile time
@@ -87,7 +87,8 @@ pub fn parse_js_woql(query: &str) -> Result<serde_json::Value> {
         .context("Failed to write bundled script to temporary file")?;
 
     // Flush to ensure all data is written
-    temp_file.flush()
+    temp_file
+        .flush()
         .context("Failed to flush temporary file")?;
 
     // Spawn the Node.js process with the bundled script
@@ -122,11 +123,10 @@ pub fn parse_js_woql(query: &str) -> Result<serde_json::Value> {
     }
 
     // Parse the JSON-LD output
-    let stdout = String::from_utf8(output.stdout)
-        .context("Node.js output is not valid UTF-8")?;
+    let stdout = String::from_utf8(output.stdout).context("Node.js output is not valid UTF-8")?;
 
-    let json_ld: serde_json::Value = serde_json::from_str(&stdout)
-        .context("Failed to parse JSON-LD output from Node.js")?;
+    let json_ld: serde_json::Value =
+        serde_json::from_str(&stdout).context("Failed to parse JSON-LD output from Node.js")?;
 
     Ok(json_ld)
 }
@@ -161,8 +161,9 @@ pub fn parse_js_woql(query: &str) -> Result<serde_json::Value> {
 pub fn parse_js_woql_to_query(query: &str) -> Result<terminusdb_woql2::query::Query> {
     let json_ld = parse_js_woql(query)?;
 
-    let woql_query: terminusdb_woql2::query::Query = terminusdb_woql2::query::Query::from_json(json_ld)
-        .context("Failed to deserialize JSON-LD into terminusdb_woql2::Query")?;
+    let woql_query: terminusdb_woql2::query::Query =
+        terminusdb_woql2::query::Query::from_json(json_ld)
+            .context("Failed to deserialize JSON-LD into terminusdb_woql2::Query")?;
 
     Ok(woql_query)
 }
@@ -176,7 +177,11 @@ mod tests {
     fn test_simple_triple() {
         let query = r#"triple("v:Subject", "v:Predicate", "v:Object")"#;
         let result = parse_js_woql(query);
-        assert!(result.is_ok(), "Failed to parse simple triple: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse simple triple: {:?}",
+            result.err()
+        );
 
         let json_ld = result.unwrap();
         assert!(json_ld.is_object());
@@ -193,7 +198,11 @@ mod tests {
             )
         "#;
         let result = parse_js_woql(query);
-        assert!(result.is_ok(), "Failed to parse select query: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse select query: {:?}",
+            result.err()
+        );
 
         let json_ld = result.unwrap();
         assert!(json_ld.is_object());
@@ -215,7 +224,11 @@ mod tests {
             )
         "#;
         let result = parse_js_woql(query);
-        assert!(result.is_ok(), "Failed to parse complex query: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse complex query: {:?}",
+            result.err()
+        );
 
         let json_ld = result.unwrap();
         assert!(json_ld.is_object());
@@ -227,7 +240,11 @@ mod tests {
     fn test_parse_to_query() {
         let query = r#"triple("v:S", "v:P", "v:O")"#;
         let result = parse_js_woql_to_query(query);
-        assert!(result.is_ok(), "Failed to parse to Query: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse to Query: {:?}",
+            result.err()
+        );
 
         let woql_query = result.unwrap();
         match woql_query {

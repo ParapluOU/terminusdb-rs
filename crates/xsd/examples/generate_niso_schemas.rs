@@ -19,9 +19,7 @@ static NISO_DIR: LazyLock<TempDir> = LazyLock::new(|| {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== NISO-STS Schema Generation ===\n");
 
-    let niso_dir = NISO_DIR
-        .path()
-        .join("NISO-STS-extended-1-MathML3-XSD");
+    let niso_dir = NISO_DIR.path().join("NISO-STS-extended-1-MathML3-XSD");
 
     if !niso_dir.exists() {
         eprintln!("ERROR: NISO schema directory not found: {:?}", niso_dir);
@@ -87,7 +85,11 @@ fn test_explicit_entry_points(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/niso_schemas.json");
 
     std::fs::write(&output_path, json_str)?;
-    println!("   Exported {} schemas to: {:?}", schemas.len(), output_path);
+    println!(
+        "   Exported {} schemas to: {:?}",
+        schemas.len(),
+        output_path
+    );
 
     Ok(())
 }
@@ -96,7 +98,8 @@ fn show_schema_stats(schemas: &[terminusdb_schema::Schema]) {
     println!("\n{}", "=".repeat(60));
     println!("\n📊 Schema Statistics:\n");
 
-    let mut by_namespace: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut by_namespace: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut subdocs = 0;
 
     for schema in schemas {

@@ -12,7 +12,11 @@ pub fn generate_totdbinstance_impl(
     // struct/enum level derive arguments
     args: TDBModelOpts,
     // Generic parameters
-    generics: (&proc_macro2::TokenStream, &proc_macro2::TokenStream, &Option<syn::WhereClause>),
+    generics: (
+        &proc_macro2::TokenStream,
+        &proc_macro2::TokenStream,
+        &Option<syn::WhereClause>,
+    ),
     // Optional custom ID extraction code (for TaggedUnions)
     custom_optid: Option<proc_macro2::TokenStream>,
 ) -> proc_macro2::TokenStream {
@@ -58,31 +62,33 @@ pub fn generate_totdbinstance_impl(
         #[cfg(feature = "generic-derive")]
         {
             let mut predicates = Vec::new();
-            
+
             // Add Send bound for Self
             predicates.push(quote! { Self: Send });
-            
+
             // Add existing where clause predicates if any
             if let Some(ref wc) = where_clause {
-                let existing_predicates = wc.predicates.iter()
+                let existing_predicates = wc
+                    .predicates
+                    .iter()
                     .map(|p| quote! { #p })
                     .collect::<Vec<_>>();
                 predicates.extend(existing_predicates);
             }
-            
+
             if predicates.is_empty() {
                 quote! {}
             } else {
                 quote! { where #(#predicates),* }
             }
         }
-        
+
         #[cfg(not(feature = "generic-derive"))]
         {
             quote! { where Self: Send }
         }
     };
-    
+
     // This now simply wraps the provided instance_body_code within the impl
     quote! {
         impl #impl_generics terminusdb_schema::ToTDBInstance for #type_name #ty_generics #where_clause {
@@ -235,7 +241,7 @@ pub fn process_tagged_enum_for_instance(
         let variant_ident = &variant.ident;
         let variant_name_str = variant_ident.to_string();
         let renamed_variant = rename_strategy.apply(&variant_name_str);
-        
+
         match &variant.fields {
             Fields::Unit => {
                 // Unit variant
@@ -271,12 +277,12 @@ pub fn process_tagged_enum_for_instance(
                     let field_indices: Vec<syn::Index> = (0..fields_unnamed.unnamed.len())
                         .map(syn::Index::from)
                         .collect();
-                    
+
                     // Generate variable names like field_0, field_1, etc.
                     let field_vars = field_indices.iter().enumerate()
                         .map(|(i, _)| format_ident!("field_{}", i))
                         .collect::<Vec<_>>();
-                    
+
                     quote! {
                         #enum_name::#variant_ident(#(ref #field_vars),*) => {
                             properties.insert(
@@ -297,12 +303,12 @@ pub fn process_tagged_enum_for_instance(
                 let field_names: Vec<_> = fields_named.named.iter()
                     .map(|field| field.ident.as_ref().expect("Named fields should have identifiers"))
                     .collect();
-                
+
                 quote! {
                     #enum_name::#variant_ident { #(ref #field_names),* } => {
                         // Create a sub-instance for the struct variant
                         let mut sub_properties = std::collections::BTreeMap::new();
-                        
+
                         #(
                             sub_properties.insert(
                                 stringify!(#field_names).to_string(),
@@ -313,7 +319,7 @@ pub fn process_tagged_enum_for_instance(
                                 )
                             );
                         )*
-                        
+
                         properties.insert(
                             #renamed_variant.to_string(),
                             terminusdb_schema::InstanceProperty::Relation(

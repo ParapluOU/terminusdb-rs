@@ -1,8 +1,8 @@
-use terminusdb_woql2::prelude::*;
-use terminusdb_woql2::query::{Query, And};
-use terminusdb_woql2::triple::Triple;
-use terminusdb_woql2::value::{Value, NodeValue};
 use terminusdb_schema::GraphType;
+use terminusdb_woql2::prelude::*;
+use terminusdb_woql2::query::{And, Query};
+use terminusdb_woql2::triple::Triple;
+use terminusdb_woql2::value::{NodeValue, Value};
 
 fn main() {
     // Create a complex WOQL query
@@ -39,19 +39,20 @@ fn main() {
     // Use Display trait (which internally uses to_dsl())
     println!("Generated DSL using Display trait:");
     println!("{}", query);
-    
+
     // You can also still use to_dsl() directly if needed
     let dsl = query.to_dsl();
     assert_eq!(query.to_string(), dsl);
-    
+
     // Pretty print with line breaks for readability
     println!("\nFormatted DSL:");
-    let formatted = query.to_string()
+    let formatted = query
+        .to_string()
         .replace(", and(", ",\n  and(")
         .replace(", triple(", ",\n    triple(")
         .replace(", greater(", ",\n    greater(");
     println!("{}", formatted);
-    
+
     // Display works on individual components too
     println!("\nIndividual components:");
     let triple = Triple {
@@ -61,7 +62,7 @@ fn main() {
         graph: Some(GraphType::Instance),
     };
     println!("Triple: {}", triple);
-    
+
     let var = Value::Variable("TestVar".to_string());
     println!("Variable: {}", var);
 }

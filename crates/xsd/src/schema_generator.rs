@@ -1,6 +1,9 @@
 //! Runtime TerminusDB Schema Generator from XSD
 
-use crate::schema_model::{Cardinality, ChildElement, Restriction, SimpleTypeVariety, XsdAttribute, XsdComplexType, XsdSchema, XsdSimpleType};
+use crate::schema_model::{
+    Cardinality, ChildElement, Restriction, SimpleTypeVariety, XsdAttribute, XsdComplexType,
+    XsdSchema, XsdSimpleType,
+};
 use crate::Result;
 use heck::ToPascalCase;
 use std::collections::HashMap;
@@ -54,91 +57,118 @@ impl XsdToSchemaGenerator {
         // For example: <xs:element name="payment" type="ch:paymentType"/>
         // - Element name: "payment" -> would give "Payment"
         // - Type name: "paymentType" -> gives "PaymentType" (correct!)
-        let document_root_types: std::collections::HashSet<String> = {
-            use heck::ToPascalCase;
+        let document_root_types: std::collections::HashSet<String> =
+            {
+                use heck::ToPascalCase;
 
-            // First, try to find matches from entry_point_elements
-            let matched_types: std::collections::HashSet<String> = xsd_schema.entry_point_elements
-                .iter()
-                .filter_map(|elem_name| {
-                    // Find the root element by name (case-insensitive match)
-                    let elem_name_lower = elem_name.to_lowercase();
-                    xsd_schema.root_elements.iter().find(|e| {
-                        // Match on local name part (after } if Clark notation)
-                        let local = e.name.split('}').last().unwrap_or(&e.name);
-                        local.to_lowercase() == elem_name_lower
-                    }).and_then(|elem| {
-                        // Get the type name from the element's type_info
-                        elem.type_info.as_ref().and_then(|ti| {
-                            // Use qualified_name or name if available
-                            ti.qualified_name.as_ref().or(ti.name.as_ref()).map(|type_name| {
-                                // Extract local part and convert to PascalCase
-                                let local = type_name.split('}').last().unwrap_or(type_name);
-                                local.to_pascal_case()
+                // First, try to find matches from entry_point_elements
+                let matched_types: std::collections::HashSet<String> = xsd_schema
+                    .entry_point_elements
+                    .iter()
+                    .filter_map(|elem_name| {
+                        // Find the root element by name (case-insensitive match)
+                        let elem_name_lower = elem_name.to_lowercase();
+                        xsd_schema
+                            .root_elements
+                            .iter()
+                            .find(|e| {
+                                // Match on local name part (after } if Clark notation)
+                                let local = e.name.split('}').last().unwrap_or(&e.name);
+                                local.to_lowercase() == elem_name_lower
                             })
-                        })
+                            .and_then(|elem| {
+                                // Get the type name from the element's type_info
+                                elem.type_info.as_ref().and_then(|ti| {
+                                    // Use qualified_name or name if available
+                                    ti.qualified_name.as_ref().or(ti.name.as_ref()).map(
+                                        |type_name| {
+                                            // Extract local part and convert to PascalCase
+                                            let local =
+                                                type_name.split('}').last().unwrap_or(type_name);
+                                            local.to_pascal_case()
+                                        },
+                                    )
+                                })
+                            })
                     })
-                })
-                .collect();
+                    .collect();
 
-            // If no entry_point_elements matched any root elements, fall back to treating
-            // ALL root element types as document roots. This handles custom schemas where
-            // the file name doesn't match any element name (e.g., choice_types.xsd with
-            // elements like "document", "payment", etc.)
-            if matched_types.is_empty() && !xsd_schema.root_elements.is_empty() {
-                xsd_schema.root_elements.iter()
-                    .filter_map(|elem| {
-                        elem.type_info.as_ref().and_then(|ti| {
-                            ti.qualified_name.as_ref().or(ti.name.as_ref()).map(|type_name| {
-                                let local = type_name.split('}').last().unwrap_or(type_name);
-                                local.to_pascal_case()
-                            })
-                        }).or_else(|| {
-                            // For anonymous types, use element name as type name
-                            let local = elem.name.split('}').last().unwrap_or(&elem.name);
-                            Some(local.to_pascal_case())
+                // If no entry_point_elements matched any root elements, fall back to treating
+                // ALL root element types as document roots. This handles custom schemas where
+                // the file name doesn't match any element name (e.g., choice_types.xsd with
+                // elements like "document", "payment", etc.)
+                if matched_types.is_empty() && !xsd_schema.root_elements.is_empty() {
+                    xsd_schema
+                        .root_elements
+                        .iter()
+                        .filter_map(|elem| {
+                            elem.type_info
+                                .as_ref()
+                                .and_then(|ti| {
+                                    ti.qualified_name.as_ref().or(ti.name.as_ref()).map(
+                                        |type_name| {
+                                            let local =
+                                                type_name.split('}').last().unwrap_or(type_name);
+                                            local.to_pascal_case()
+                                        },
+                                    )
+                                })
+                                .or_else(|| {
+                                    // For anonymous types, use element name as type name
+                                    let local = elem.name.split('}').last().unwrap_or(&elem.name);
+                                    Some(local.to_pascal_case())
+                                })
                         })
-                    })
-                    .collect()
-            } else {
-                matched_types
-            }
-        };
+                        .collect()
+                } else {
+                    matched_types
+                }
+            };
 
         // Build a map of base type -> derived types for inheritance tracking.
         // In TerminusDB, @subdocument status is inherited, so if a child is a document root,
         // its parent cannot be a subdocument.
-        let mut base_to_derived: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut base_to_derived: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for complex_type in &xsd_schema.complex_types {
             if let Some(ref base_type) = complex_type.base_type {
                 let (_, base_local_name) = self.parse_clark_notation(base_type);
                 let base_class = base_local_name.to_pascal_case();
 
-                let (_, derived_local_name) = self.parse_clark_notation(
-                    if complex_type.is_anonymous {
-                        complex_type.element_name.as_ref().unwrap_or(&complex_type.name)
+                let (_, derived_local_name) =
+                    self.parse_clark_notation(if complex_type.is_anonymous {
+                        complex_type
+                            .element_name
+                            .as_ref()
+                            .unwrap_or(&complex_type.name)
                     } else {
                         &complex_type.name
-                    }
-                );
+                    });
                 let derived_class = derived_local_name.to_pascal_case();
 
                 // Skip self-inheritance (element with same name as its base type)
                 if base_class != derived_class {
-                    base_to_derived.entry(base_class).or_default().push(derived_class);
+                    base_to_derived
+                        .entry(base_class)
+                        .or_default()
+                        .push(derived_class);
                 }
             }
         }
 
         // Find all types that have document roots in their inheritance tree (direct or transitive).
         // These types cannot be subdocuments because @subdocument is inherited.
-        let mut non_subdocument_types: std::collections::HashSet<String> = document_root_types.clone();
+        let mut non_subdocument_types: std::collections::HashSet<String> =
+            document_root_types.clone();
         let mut changed = true;
         while changed {
             changed = false;
             for (base, derived_list) in &base_to_derived {
                 // If any derived type is non-subdocument, the base must also be non-subdocument
-                if derived_list.iter().any(|d| non_subdocument_types.contains(d)) {
+                if derived_list
+                    .iter()
+                    .any(|d| non_subdocument_types.contains(d))
+                {
                     if non_subdocument_types.insert(base.clone()) {
                         changed = true;
                     }
@@ -322,7 +352,10 @@ impl XsdToSchemaGenerator {
         // Convert colons in path to slashes for URL compatibility
         let url_path = path.replace(':', "/");
 
-        format!("https://paraplu.cloud/xsd/{}/{}{}", scheme, url_path, suffix)
+        format!(
+            "https://paraplu.cloud/xsd/{}/{}{}",
+            scheme, url_path, suffix
+        )
     }
 
     /// Generate TerminusDB schemas from explicit entry-point XSD files.
@@ -358,9 +391,15 @@ impl XsdToSchemaGenerator {
         entry_points: &[impl AsRef<Path>],
         catalog_path: Option<impl AsRef<Path>>,
     ) -> Result<Vec<Schema>> {
-        let entry_paths: Vec<PathBuf> = entry_points.iter().map(|p| p.as_ref().to_path_buf()).collect();
+        let entry_paths: Vec<PathBuf> = entry_points
+            .iter()
+            .map(|p| p.as_ref().to_path_buf())
+            .collect();
 
-        println!("🎯 Processing {} explicit entry point(s):", entry_paths.len());
+        println!(
+            "🎯 Processing {} explicit entry point(s):",
+            entry_paths.len()
+        );
         for entry in &entry_paths {
             println!("   • {:?}", entry.file_name().unwrap_or_default());
         }
@@ -370,12 +409,18 @@ impl XsdToSchemaGenerator {
         let mut errors = Vec::new();
 
         for xsd_file in &entry_paths {
-            print!("\n📖 Parsing {:?}...\n", xsd_file.file_name().unwrap_or_default());
+            print!(
+                "\n📖 Parsing {:?}...\n",
+                xsd_file.file_name().unwrap_or_default()
+            );
 
             match XsdSchema::from_xsd_file(xsd_file, catalog_path.as_ref()) {
                 Ok(xsd_schema) => {
                     println!("   ✓ Loaded (includes all dependencies)");
-                    println!("   Found {} complex types in type tree", xsd_schema.complex_types.len());
+                    println!(
+                        "   Found {} complex types in type tree",
+                        xsd_schema.complex_types.len()
+                    );
 
                     match self.generate(&xsd_schema) {
                         Ok(schemas) => {
@@ -404,8 +449,11 @@ impl XsdToSchemaGenerator {
 
         let deduplicated = self.deduplicate_schemas(all_schemas);
 
-        println!("\n✅ Generated {} unique schemas from {} entry point(s)",
-                 deduplicated.len(), entry_paths.len());
+        println!(
+            "\n✅ Generated {} unique schemas from {} entry point(s)",
+            deduplicated.len(),
+            entry_paths.len()
+        );
 
         Ok(deduplicated)
     }
@@ -439,7 +487,11 @@ impl XsdToSchemaGenerator {
             return Ok(Vec::new());
         }
 
-        println!("📂 Discovered {} XSD files in {:?}", xsd_files.len(), schema_dir);
+        println!(
+            "📂 Discovered {} XSD files in {:?}",
+            xsd_files.len(),
+            schema_dir
+        );
 
         // Identify entry points (complete schemas, not modules)
         let entry_points = self.identify_entry_points(&xsd_files);
@@ -456,8 +508,12 @@ impl XsdToSchemaGenerator {
 
                     // Flat architecture: all scores within 20 points and in "GOOD" range (60-80)
                     if score_range <= 20 && *min_score >= 50 && *max_score <= 90 {
-                        println!("📋 Flat architecture detected (all {} files score {}-{} pts)",
-                                 xsd_files.len(), min_score, max_score);
+                        println!(
+                            "📋 Flat architecture detected (all {} files score {}-{} pts)",
+                            xsd_files.len(),
+                            min_score,
+                            max_score
+                        );
                         println!("   Each schema is independent - parsing all and deduplicating");
                         return self.parse_all_files(&xsd_files, catalog_path.as_ref());
                     }
@@ -479,12 +535,18 @@ impl XsdToSchemaGenerator {
         let mut errors = Vec::new();
 
         for xsd_file in &entry_points {
-            print!("\n📖 Parsing {:?}...\n", xsd_file.file_name().unwrap_or_default());
+            print!(
+                "\n📖 Parsing {:?}...\n",
+                xsd_file.file_name().unwrap_or_default()
+            );
 
             match XsdSchema::from_xsd_file(xsd_file, catalog_path.as_ref()) {
                 Ok(xsd_schema) => {
                     println!("   ✓ Loaded (includes all dependencies)");
-                    println!("   Found {} complex types in type tree", xsd_schema.complex_types.len());
+                    println!(
+                        "   Found {} complex types in type tree",
+                        xsd_schema.complex_types.len()
+                    );
 
                     match self.generate(&xsd_schema) {
                         Ok(schemas) => {
@@ -515,8 +577,11 @@ impl XsdToSchemaGenerator {
         // Deduplicate schemas by class ID
         let deduplicated = self.deduplicate_schemas(all_schemas);
 
-        println!("\n✅ Generated {} unique schemas from {} entry point(s)",
-                 deduplicated.len(), entry_points.len());
+        println!(
+            "\n✅ Generated {} unique schemas from {} entry point(s)",
+            deduplicated.len(),
+            entry_points.len()
+        );
 
         Ok(deduplicated)
     }
@@ -566,9 +631,7 @@ impl XsdToSchemaGenerator {
         file: &Path,
         schema_dir: &Path,
     ) -> Result<EntryPointScore> {
-        let file_name = file.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         let path_str = file.to_str().unwrap_or("");
 
@@ -586,9 +649,9 @@ impl XsdToSchemaGenerator {
         let relative = file.strip_prefix(schema_dir).unwrap_or(file);
         score.depth = relative.components().count().saturating_sub(1);
         score.depth_score = match score.depth {
-            0 => 50,  // Root directory - very likely
-            1 => 20,  // One level down - possible
-            _ => 0,   // Deep nesting - unlikely
+            0 => 50, // Root directory - very likely
+            1 => 20, // One level down - possible
+            _ => 0,  // Deep nesting - unlikely
         };
 
         if score.depth == 0 {
@@ -608,15 +671,20 @@ impl XsdToSchemaGenerator {
             };
 
             if score.include_count >= 5 {
-                score.reasons.push(format!("{} include/import directives", score.include_count));
+                score
+                    .reasons
+                    .push(format!("{} include/import directives", score.include_count));
             }
 
             // Check for entry point indicators in comments
-            if content.contains("entry point") ||
-               content.contains("main schema") ||
-               content.contains("complete schema") {
+            if content.contains("entry point")
+                || content.contains("main schema")
+                || content.contains("complete schema")
+            {
                 score.naming_score += 30;
-                score.reasons.push("Contains entry point annotation".to_string());
+                score
+                    .reasons
+                    .push("Contains entry point annotation".to_string());
             }
         }
 
@@ -628,30 +696,29 @@ impl XsdToSchemaGenerator {
         } else if file_name.starts_with("NISO-STS") && !file_name.contains("-elements") {
             score.naming_score += 25;
             score.reasons.push("NISO-STS main schema".to_string());
-        } else if (file_name.contains("topic") || file_name.contains("map")) &&
-                  !file_name.contains("Mod") {
+        } else if (file_name.contains("topic") || file_name.contains("map"))
+            && !file_name.contains("Mod")
+        {
             score.naming_score += 15;
             score.reasons.push("Document type schema".to_string());
         }
 
         // Negative indicators
-        if file_name.contains("Mod") ||
-           file_name.contains("Grp") ||
-           file_name.contains("Domain") {
+        if file_name.contains("Mod") || file_name.contains("Grp") || file_name.contains("Domain") {
             score.naming_score -= 50;
             score.reasons.push("Module naming pattern".to_string());
         }
 
-        if file_name.contains("-elements") ||
-           file_name.starts_with("module-") ||
-           file_name == "xml.xsd" ||
-           file_name.starts_with("mathml") {
+        if file_name.contains("-elements")
+            || file_name.starts_with("module-")
+            || file_name == "xml.xsd"
+            || file_name.starts_with("mathml")
+        {
             score.naming_score -= 50;
             score.reasons.push("Support module".to_string());
         }
 
-        if path_str.contains("standard-modules/") ||
-           path_str.contains("/modules/") {
+        if path_str.contains("standard-modules/") || path_str.contains("/modules/") {
             score.naming_score -= 40;
             score.reasons.push("In modules directory".to_string());
         }
@@ -672,39 +739,39 @@ impl XsdToSchemaGenerator {
         let mut entry_points = Vec::new();
 
         for file in xsd_files {
-            let file_name = file.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             let path_str = file.to_str().unwrap_or("");
 
             // Skip common module/library files
-            if file_name == "xml.xsd" ||
-               file_name == "ditaarch.xsd" ||
-               file_name.starts_with("mathml") ||
-               file_name.starts_with("module-") ||
-               file_name == "xlink.xsd" {
+            if file_name == "xml.xsd"
+                || file_name == "ditaarch.xsd"
+                || file_name.starts_with("mathml")
+                || file_name.starts_with("module-")
+                || file_name == "xlink.xsd"
+            {
                 continue;
             }
 
             // Skip files in subdirectories that are typically modules
-            if path_str.contains("standard-modules/") ||
-               path_str.contains("/modules/") {
+            if path_str.contains("standard-modules/") || path_str.contains("/modules/") {
                 continue;
             }
 
             // Skip DITA module files
-            if file_name.contains("Mod") ||
-               file_name.contains("Grp") ||
-               file_name.contains("Domain") {
+            if file_name.contains("Mod")
+                || file_name.contains("Grp")
+                || file_name.contains("Domain")
+            {
                 continue;
             }
 
             // Include files that look like complete schemas
             // DITA: base*, topic, map
-            if file_name.starts_with("base") ||
-               (file_name.contains("topic") && !file_name.contains("Mod")) ||
-               (file_name.contains("map") && !file_name.contains("Mod")) {
+            if file_name.starts_with("base")
+                || (file_name.contains("topic") && !file_name.contains("Mod"))
+                || (file_name.contains("map") && !file_name.contains("Mod"))
+            {
                 entry_points.push(file.clone());
                 continue;
             }
@@ -729,21 +796,22 @@ impl XsdToSchemaGenerator {
         let mut errors = Vec::new();
 
         for xsd_file in xsd_files {
-            print!("   Parsing {:?}... ", xsd_file.file_name().unwrap_or_default());
+            print!(
+                "   Parsing {:?}... ",
+                xsd_file.file_name().unwrap_or_default()
+            );
 
             match XsdSchema::from_xsd_file(xsd_file, catalog_path) {
-                Ok(xsd_schema) => {
-                    match self.generate(&xsd_schema) {
-                        Ok(schemas) => {
-                            println!("✓ ({} types)", schemas.len());
-                            all_schemas.extend(schemas);
-                        }
-                        Err(e) => {
-                            println!("✗ (generation error)");
-                            errors.push((xsd_file.clone(), format!("Generation error: {}", e)));
-                        }
+                Ok(xsd_schema) => match self.generate(&xsd_schema) {
+                    Ok(schemas) => {
+                        println!("✓ ({} types)", schemas.len());
+                        all_schemas.extend(schemas);
                     }
-                }
+                    Err(e) => {
+                        println!("✗ (generation error)");
+                        errors.push((xsd_file.clone(), format!("Generation error: {}", e)));
+                    }
+                },
                 Err(e) => {
                     println!("✗ (parse error)");
                     errors.push((xsd_file.clone(), format!("Parse error: {}", e)));
@@ -759,7 +827,11 @@ impl XsdToSchemaGenerator {
         }
 
         let deduplicated = self.deduplicate_schemas(all_schemas);
-        println!("\n✅ Generated {} unique schemas from {} files", deduplicated.len(), xsd_files.len());
+        println!(
+            "\n✅ Generated {} unique schemas from {} files",
+            deduplicated.len(),
+            xsd_files.len()
+        );
 
         Ok(deduplicated)
     }
@@ -771,8 +843,9 @@ impl XsdToSchemaGenerator {
         if !dir.is_dir() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("Not a directory: {:?}", dir)
-            ).into());
+                format!("Not a directory: {:?}", dir),
+            )
+            .into());
         }
 
         for entry in std::fs::read_dir(dir)? {
@@ -798,7 +871,10 @@ impl XsdToSchemaGenerator {
         let mut deduplicated = Vec::new();
 
         for schema in schemas {
-            if let Schema::Class { ref id, ref base, .. } = schema {
+            if let Schema::Class {
+                ref id, ref base, ..
+            } = schema
+            {
                 // Create unique key from namespace + id
                 let key = match base {
                     Some(ns) => format!("{}#{}", ns, id),
@@ -834,16 +910,14 @@ impl XsdToSchemaGenerator {
         complex_types: &[XsdComplexType],
     ) -> Result<Vec<Schema>> {
         // Extract namespace and local name from Clark notation: {namespace}localName
-        let (namespace, local_name) = self.parse_clark_notation(
-            if complex_type.is_anonymous {
-                complex_type
-                    .element_name
-                    .as_ref()
-                    .unwrap_or(&complex_type.name)
-            } else {
-                &complex_type.name
-            }
-        );
+        let (namespace, local_name) = self.parse_clark_notation(if complex_type.is_anonymous {
+            complex_type
+                .element_name
+                .as_ref()
+                .unwrap_or(&complex_type.name)
+        } else {
+            &complex_type.name
+        });
 
         // Convert to PascalCase for TerminusDB class naming convention
         let class_id = local_name.to_pascal_case();
@@ -883,8 +957,8 @@ impl XsdToSchemaGenerator {
             // Mixed content ON BASE CLASS: generate MixedContent structure
             let child_elements = complex_type.child_elements.as_ref().unwrap();
 
-            let (inline_union, mixed_content_class, mixed_content_name) =
-                self.generate_mixed_content_schemas(
+            let (inline_union, mixed_content_class, mixed_content_name) = self
+                .generate_mixed_content_schemas(
                     &class_id,
                     namespace.clone(),
                     child_elements,
@@ -916,7 +990,11 @@ impl XsdToSchemaGenerator {
             // - has_simple_content: explicitly simple content (text only)
             // - mixed with no children: can contain text but no inline elements
             let needs_text_property = complex_type.has_simple_content
-                || (complex_type.mixed && complex_type.child_elements.as_ref().map_or(true, |c| c.is_empty()));
+                || (complex_type.mixed
+                    && complex_type
+                        .child_elements
+                        .as_ref()
+                        .map_or(true, |c| c.is_empty()));
 
             if needs_text_property {
                 // Use the base type's underlying XSD type if it's a simple type
@@ -1056,15 +1134,15 @@ impl XsdToSchemaGenerator {
                     .iter()
                     .map(|member_type| {
                         // Map the member type to a TerminusDB class
-                        let class = self.map_xsd_type_to_tdb_class(member_type)
+                        let class = self
+                            .map_xsd_type_to_tdb_class(member_type)
                             .unwrap_or_else(|_| "xsd:anySimpleType".to_string());
 
                         // Create tag name from the class (lowercase, strip xsd: prefix)
                         let tag_name = if class.starts_with("xsd:") {
                             class.strip_prefix("xsd:").unwrap().to_string()
                         } else {
-                            class.chars().next().unwrap().to_lowercase().to_string()
-                                + &class[1..]
+                            class.chars().next().unwrap().to_lowercase().to_string() + &class[1..]
                         };
 
                         Property {
@@ -1184,7 +1262,9 @@ impl XsdToSchemaGenerator {
                 // Other cases with max > 1 -> Set
                 _ => match max {
                     Some(Cardinality::Unbounded) => Some(TypeFamily::Set(SetCardinality::None)),
-                    Some(Cardinality::Number(n)) if n > 1 => Some(TypeFamily::Set(SetCardinality::None)),
+                    Some(Cardinality::Number(n)) if n > 1 => {
+                        Some(TypeFamily::Set(SetCardinality::None))
+                    }
                     _ => Some(TypeFamily::Optional),
                 },
             }
@@ -1200,8 +1280,12 @@ impl XsdToSchemaGenerator {
             }) {
                 st.item_type.clone().unwrap_or_else(|| {
                     // Fallback: use base_type if available, otherwise xsd:anySimpleType
-                    st.base_type.clone()
-                        .map(|bt| self.map_xsd_type_to_tdb_class(&bt).unwrap_or_else(|_| "xsd:anySimpleType".to_string()))
+                    st.base_type
+                        .clone()
+                        .map(|bt| {
+                            self.map_xsd_type_to_tdb_class(&bt)
+                                .unwrap_or_else(|_| "xsd:anySimpleType".to_string())
+                        })
                         .unwrap_or_else(|| "xsd:anySimpleType".to_string())
                 })
             } else {
@@ -1211,12 +1295,17 @@ impl XsdToSchemaGenerator {
             // For non-list types, first check if it's a simple type and map to its primitive base
             let (_, type_name) = self.parse_clark_notation(&element.element_type);
             if let Some(st) = simple_types.iter().find(|st| {
-                st.name == type_name || st.qualified_name == element.element_type
-                || st.name == element.element_type
+                st.name == type_name
+                    || st.qualified_name == element.element_type
+                    || st.name == element.element_type
             }) {
                 // This is a simple type - map to its base XSD type
-                st.base_type.clone()
-                    .map(|bt| self.map_xsd_type_to_tdb_class(&bt).unwrap_or_else(|_| "xsd:string".to_string()))
+                st.base_type
+                    .clone()
+                    .map(|bt| {
+                        self.map_xsd_type_to_tdb_class(&bt)
+                            .unwrap_or_else(|_| "xsd:string".to_string())
+                    })
                     .unwrap_or_else(|| "xsd:string".to_string())
             } else {
                 self.map_xsd_type_to_tdb_class(&element.element_type)?
@@ -1273,7 +1362,9 @@ impl XsdToSchemaGenerator {
             "long" | "xs:long" | "xsd:long" => "xsd:integer",
             "short" | "xs:short" | "xsd:short" => "xsd:integer",
             "byte" | "xs:byte" | "xsd:byte" => "xsd:integer",
-            "nonNegativeInteger" | "xs:nonNegativeInteger" | "xsd:nonNegativeInteger" => "xsd:integer",
+            "nonNegativeInteger" | "xs:nonNegativeInteger" | "xsd:nonNegativeInteger" => {
+                "xsd:integer"
+            }
             "positiveInteger" | "xs:positiveInteger" | "xsd:positiveInteger" => "xsd:integer",
             "unsignedInt" | "xs:unsignedInt" | "xsd:unsignedInt" => "xsd:integer",
             "decimal" | "xs:decimal" | "xsd:decimal" => "xsd:decimal",
@@ -1386,7 +1477,10 @@ impl XsdToSchemaGenerator {
     /// 2. The type has child elements
     fn should_use_mixed_content(&self, complex_type: &XsdComplexType) -> bool {
         complex_type.mixed
-            && complex_type.child_elements.as_ref().map_or(false, |children| !children.is_empty())
+            && complex_type
+                .child_elements
+                .as_ref()
+                .map_or(false, |children| !children.is_empty())
     }
 }
 
@@ -1425,7 +1519,9 @@ mod tests {
             "https://paraplu.cloud/xsd/urn/hl7-org/v3#"
         );
         assert_eq!(
-            XsdToSchemaGenerator::normalize_namespace_to_uri("urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#"),
+            XsdToSchemaGenerator::normalize_namespace_to_uri(
+                "urn:oasis:names:tc:dita:xsd:topic.xsd:1.3#"
+            ),
             "https://paraplu.cloud/xsd/urn/oasis/names/tc/dita/xsd/topic.xsd/1.3#"
         );
     }

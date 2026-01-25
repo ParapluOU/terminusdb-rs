@@ -13,11 +13,11 @@ fn test_create_named_parametric_query() {
     assert_eq!(query.parameters, vec!["type"]);
 }
 
-#[test] 
+#[test]
 fn test_create_named_parametric_query_multiple_params() {
     // Create a query that finds relationships between two entities
     let query = named_parametric_query!(
-        "find_relationship", 
+        "find_relationship",
         ["subject", "predicate", "object"],
         triple!(var!(subject), var!(predicate), var!(object))
     );

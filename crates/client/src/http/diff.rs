@@ -1,10 +1,13 @@
 //! Diff and patch operations
 
 use {
-    crate::{TerminusDBAdapterError, debug::{OperationEntry, OperationType}},
+    crate::{
+        debug::{OperationEntry, OperationType},
+        TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Serialize, Deserialize},
+    serde::{Deserialize, Serialize},
     serde_json::json,
     std::time::Instant,
 };
@@ -72,8 +75,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("diff".to_string()),
-            "/api/diff".to_string()
-        ).with_context(None, None);
+            "/api/diff".to_string(),
+        )
+        .with_context(None, None);
 
         let mut body = json!({
             "before": before,
@@ -102,22 +106,26 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("diff operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("diff failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<DiffResponse>(res).await?;
-        
+
         operation = operation.success(Some(response.diffs.len()), duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully got diff with {} operations in {:?}", response.diffs.len(), start_time.elapsed());
+        debug!(
+            "Successfully got diff with {} operations in {:?}",
+            response.diffs.len(),
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -170,14 +178,19 @@ impl super::client::TerminusDBHttpClient {
         message: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url().endpoint("patch").add_path(branch_path).build();
+        let uri = self
+            .build_url()
+            .endpoint("patch")
+            .add_path(branch_path)
+            .build();
 
         debug!("POST {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("patch".to_string()),
-            format!("/api/patch/{}", branch_path)
-        ).with_context(None, None);
+            format!("/api/patch/{}", branch_path),
+        )
+        .with_context(None, None);
 
         let patch_request = PatchRequest {
             author: author.to_string(),
@@ -203,22 +216,26 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("patch operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("patch failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(Some(patch.len()), duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully applied patch with {} operations in {:?}", patch.len(), start_time.elapsed());
+        debug!(
+            "Successfully applied patch with {} operations in {:?}",
+            patch.len(),
+            start_time.elapsed()
+        );
 
         Ok(response)
     }

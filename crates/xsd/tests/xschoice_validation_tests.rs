@@ -123,8 +123,8 @@ fn test_xschoice_schema_generation() {
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
     // Load XSD and generate schemas
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     let schemas = model.schemas();
 
@@ -182,8 +182,8 @@ fn test_xschoice_xml_validation_email() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test XML with email choice
     let xml_with_email = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -208,8 +208,8 @@ fn test_xschoice_xml_validation_phone() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test XML with phone choice
     let xml_with_phone = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -234,8 +234,8 @@ fn test_xschoice_xml_validation_both_should_fail() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test XML with BOTH email and phone (invalid for xs:choice)
     let xml_with_both = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -260,8 +260,8 @@ fn test_xschoice_xml_validation_neither_should_fail() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test XML with neither email nor phone (invalid, must choose one)
     let xml_with_neither = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -284,8 +284,8 @@ fn test_xschoice_nested_choice_validation() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test nested choice with email notification
     let xml_email_notification = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -348,8 +348,8 @@ fn test_xschoice_with_maxoccurs_unbounded() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test choice with multiple occurrences (mixing different choice options)
     let xml_mixed_content = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -383,8 +383,8 @@ fn test_xschoice_optional_choice() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let xsd_path = create_xsd_with_choice(temp_dir.path());
 
-    let model = XsdModel::from_file(&xsd_path, None::<&str>)
-        .expect("Failed to load XSD with xs:choice");
+    let model =
+        XsdModel::from_file(&xsd_path, None::<&str>).expect("Failed to load XSD with xs:choice");
 
     // Test optional choice with bio
     let xml_with_bio = r#"<?xml version="1.0" encoding="UTF-8"?>

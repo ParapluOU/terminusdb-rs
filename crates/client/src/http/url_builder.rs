@@ -37,10 +37,8 @@ impl<'a> UrlBuilder<'a> {
             ));
         } else if let Some(branch) = &spec.branch {
             // Include branch in path when explicitly specified
-            self.parts.push(format!(
-                "{}/{}/local/branch/{}",
-                self.org, spec.db, branch
-            ));
+            self.parts
+                .push(format!("{}/{}/local/branch/{}", self.org, spec.db, branch));
         } else {
             // Default: just org/db (uses main branch)
             self.parts.push(format!("{}/{}", self.org, spec.db));
@@ -96,7 +94,13 @@ impl<'a> UrlBuilder<'a> {
     }
 
     /// Add document retrieval query parameters for single document
-    pub fn document_get_params(mut self, id: &str, unfold: bool, as_list: bool, minimized: bool) -> Self {
+    pub fn document_get_params(
+        mut self,
+        id: &str,
+        unfold: bool,
+        as_list: bool,
+        minimized: bool,
+    ) -> Self {
         self.query_params.extend([
             ("id".to_string(), id.to_string()),
             ("unfold".to_string(), unfold.to_string()),

@@ -157,7 +157,7 @@ mod tests {
             limit: 10,
             query: Box::new(inner.clone()),
         });
-        
+
         let unwrapped = with_limit.unwrap_pagination();
         assert_eq!(unwrapped, inner);
     }
@@ -169,7 +169,7 @@ mod tests {
             start: 5,
             query: Box::new(inner.clone()),
         });
-        
+
         let unwrapped = with_start.unwrap_pagination();
         assert_eq!(unwrapped, inner);
     }
@@ -185,7 +185,7 @@ mod tests {
             start: 5,
             query: Box::new(with_limit),
         });
-        
+
         let unwrapped = with_start_and_limit.unwrap_pagination();
         assert_eq!(unwrapped, inner);
     }
@@ -201,7 +201,7 @@ mod tests {
             limit: 10,
             query: Box::new(with_start),
         });
-        
+
         let unwrapped = with_limit_and_start.unwrap_pagination();
         assert_eq!(unwrapped, inner);
     }

@@ -1,6 +1,9 @@
 #![cfg(feature = "generic-derive")]
 
-use terminusdb_schema::{FromTDBInstance, TdbLazy, TerminusDBField, TerminusDBModel as TerminusDBModelTrait, ToJson, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema::{
+    FromTDBInstance, TdbLazy, TerminusDBField, TerminusDBModel as TerminusDBModelTrait, ToJson,
+    ToTDBInstance, ToTDBSchema,
+};
 use terminusdb_schema_derive::TerminusDBModel;
 
 // Test 1: Simple generic struct with one type parameter
@@ -93,8 +96,8 @@ where
     U: TerminusDBModelTrait,
 {
     id: String,
-    regular_field: T,        // T used as regular field - needs TerminusDBField
-    lazy_field: TdbLazy<U>,  // U used in TdbLazy - needs TerminusDBModel
+    regular_field: T,       // T used as regular field - needs TerminusDBField
+    lazy_field: TdbLazy<U>, // U used in TdbLazy - needs TerminusDBModel
 }
 
 // Test 8: Generic enum - commented out as derive macros have limitations with generic enums
@@ -211,7 +214,6 @@ mod tests {
     //     assert!(err_instance.is_enum());
     // }
 
-
     #[test]
     fn test_from_instance_with_generics() {
         let original = Container {
@@ -234,7 +236,7 @@ mod tests {
             name: "Widget".to_string(),
             price: 19.99,
         };
-        
+
         let lazy_container = LazyContainer::<Product> {
             id: "lazy-1".to_string(),
             lazy_value: TdbLazy::from(product),
@@ -257,7 +259,7 @@ mod tests {
             name: "Electronics".to_string(),
             parent: None,
         };
-        
+
         let lazy_category = LazyContainer::<Category> {
             id: "lazy-2".to_string(),
             lazy_value: TdbLazy::from(category),
@@ -271,7 +273,7 @@ mod tests {
         let category_instance = lazy_category.to_instance(None);
         let json = category_instance.to_json();
         let recovered = LazyContainer::<Category>::from_json(json).unwrap();
-        
+
         assert_eq!(recovered.id, lazy_category.id);
         assert_eq!(recovered.description, lazy_category.description);
         // Note: TdbLazy values may not be directly comparable after round trip
@@ -286,7 +288,7 @@ mod tests {
             name: "Widget".to_string(),
             price: 19.99,
         };
-        
+
         let mixed = MixedUsage::<String, Product> {
             id: "mixed-1".to_string(),
             regular_field: "Hello".to_string(),

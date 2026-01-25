@@ -19,11 +19,11 @@ use tempfile::TempDir;
 use terminusdb_schema::Schema;
 
 // Include test modules
+pub mod test_advanced;
+pub mod test_composition;
+pub mod test_content_models;
 pub mod test_elements;
 pub mod test_types;
-pub mod test_content_models;
-pub mod test_composition;
-pub mod test_advanced;
 
 // ============================================================================
 // Lazy Schema Extraction
@@ -135,9 +135,7 @@ pub fn find_enum<'a>(schemas: &'a [Schema], name: &str) -> Option<&'a Schema> {
 /// Check if a class has a property with the given name
 pub fn has_property(schema: &Schema, prop_name: &str) -> bool {
     match schema {
-        Schema::Class { properties, .. } => {
-            properties.iter().any(|p| p.name == prop_name)
-        }
+        Schema::Class { properties, .. } => properties.iter().any(|p| p.name == prop_name),
         _ => false,
     }
 }
@@ -145,11 +143,10 @@ pub fn has_property(schema: &Schema, prop_name: &str) -> bool {
 /// Get property type for a class property
 pub fn get_property_type(schema: &Schema, prop_name: &str) -> Option<String> {
     match schema {
-        Schema::Class { properties, .. } => {
-            properties.iter()
-                .find(|p| p.name == prop_name)
-                .map(|p| p.class.clone())
-        }
+        Schema::Class { properties, .. } => properties
+            .iter()
+            .find(|p| p.name == prop_name)
+            .map(|p| p.class.clone()),
         _ => None,
     }
 }
@@ -157,9 +154,7 @@ pub fn get_property_type(schema: &Schema, prop_name: &str) -> Option<String> {
 /// Get all property names from a class schema
 pub fn get_property_names(schema: &Schema) -> Vec<&str> {
     match schema {
-        Schema::Class { properties, .. } => {
-            properties.iter().map(|p| p.name.as_str()).collect()
-        }
+        Schema::Class { properties, .. } => properties.iter().map(|p| p.name.as_str()).collect(),
         _ => vec![],
     }
 }
@@ -217,7 +212,12 @@ pub fn find_missing_dependencies(schemas: &[Schema]) -> Vec<String> {
     let mut referenced: HashSet<String> = HashSet::new();
 
     for schema in schemas {
-        if let Schema::Class { properties, inherits, .. } = schema {
+        if let Schema::Class {
+            properties,
+            inherits,
+            ..
+        } = schema
+        {
             for prop in properties {
                 // Skip builtins: xsd: primitives and sys: system types
                 if !prop.class.starts_with("xsd:") && !prop.class.starts_with("sys:") {
@@ -240,7 +240,12 @@ pub fn filter_valid_schemas(schemas: &[Schema]) -> Vec<Schema> {
     schemas
         .iter()
         .filter(|s| {
-            if let Schema::Class { properties, inherits, .. } = s {
+            if let Schema::Class {
+                properties,
+                inherits,
+                ..
+            } = s
+            {
                 let props_ok = properties.iter().all(|p| {
                     p.class.starts_with("xsd:")
                         || p.class.starts_with("sys:")
@@ -267,7 +272,10 @@ pub fn assert_class_exists(schemas: &[Schema], name: &str) {
         find_class(schemas, name).is_some(),
         "Expected class '{}' to exist in schemas. Available classes: {:?}",
         name,
-        class_names(schemas).into_iter().take(20).collect::<Vec<_>>()
+        class_names(schemas)
+            .into_iter()
+            .take(20)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -302,8 +310,14 @@ pub fn assert_enum_exists(schemas: &[Schema], name: &str) {
 
 /// Print schema summary for debugging
 pub fn print_schema_summary(schemas: &[Schema]) {
-    let class_count = schemas.iter().filter(|s| matches!(s, Schema::Class { .. })).count();
-    let enum_count = schemas.iter().filter(|s| matches!(s, Schema::Enum { .. })).count();
+    let class_count = schemas
+        .iter()
+        .filter(|s| matches!(s, Schema::Class { .. }))
+        .count();
+    let enum_count = schemas
+        .iter()
+        .filter(|s| matches!(s, Schema::Enum { .. }))
+        .count();
 
     println!("Schema Summary:");
     println!("  Total: {}", schemas.len());
@@ -313,14 +327,29 @@ pub fn print_schema_summary(schemas: &[Schema]) {
 
 /// Print class details for debugging
 pub fn print_class_details(schema: &Schema) {
-    if let Schema::Class { id, properties, inherits, .. } = schema {
+    if let Schema::Class {
+        id,
+        properties,
+        inherits,
+        ..
+    } = schema
+    {
         println!("Class: {}", id);
         if !inherits.is_empty() {
             println!("  Inherits: {:?}", inherits);
         }
         println!("  Properties ({}):", properties.len());
         for prop in properties.iter().take(10) {
-            println!("    - {}: {} ({})", prop.name, prop.class, if prop.r#type.is_some() { "array" } else { "single" });
+            println!(
+                "    - {}: {} ({})",
+                prop.name,
+                prop.class,
+                if prop.r#type.is_some() {
+                    "array"
+                } else {
+                    "single"
+                }
+            );
         }
         if properties.len() > 10 {
             println!("    ... and {} more", properties.len() - 10);

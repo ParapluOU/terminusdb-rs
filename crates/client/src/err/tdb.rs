@@ -69,11 +69,15 @@ impl Display for ApiResponseError {
             ApiResponseError::WOQLSchemaCheckFail(error) => Display::fmt(error, f),
             ApiResponseError::DocumentIdAlreadyExists(error) => Display::fmt(error, f),
             ApiResponseError::UnresolvableAbsoluteDescriptor(error) => Display::fmt(error, f),
-            ApiResponseError::ApiWOQLSyntaxError(error) => write!(f, "WOQL syntax error: {}", error.error_term),
+            ApiResponseError::ApiWOQLSyntaxError(error) => {
+                write!(f, "WOQL syntax error: {}", error.error_term)
+            }
             ApiResponseError::InsertedSubdocumentAsDocument(error) => Display::fmt(error, f),
             ApiResponseError::InternalServerError(error) => Display::fmt(error, f),
             ApiResponseError::BadDescriptorPath(error) => Display::fmt(error, f),
-            ApiResponseError::SameDocumentIdsMutatedInOneTransaction(error) => Display::fmt(error, f),
+            ApiResponseError::SameDocumentIdsMutatedInOneTransaction(error) => {
+                Display::fmt(error, f)
+            }
             ApiResponseError::MissingParameter(error) => Display::fmt(error, f),
             ApiResponseError::IncorrectAuthentication(error) => Display::fmt(error, f),
             ApiResponseError::SubmittedIdDoesNotMatchGeneratedId(error) => Display::fmt(error, f),
@@ -451,7 +455,10 @@ pub struct InsertedSubdocumentAsDocumentError {
 
 impl Display for InsertedSubdocumentAsDocumentError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Attempted to insert a subdocument as a top-level document")
+        write!(
+            f,
+            "Attempted to insert a subdocument as a top-level document"
+        )
     }
 }
 
@@ -463,7 +470,11 @@ pub struct UnresolvableAbsoluteDescriptorError {
 
 impl Display for UnresolvableAbsoluteDescriptorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Could not resolve descriptor: '{}'", self.absolute_descriptor)
+        write!(
+            f,
+            "Could not resolve descriptor: '{}'",
+            self.absolute_descriptor
+        )
     }
 }
 
@@ -643,13 +654,9 @@ fn test_deserialize_unresolvable_absolute_descriptor_error() {
                 _ => panic!("Expected NotFound status"),
             }
 
-            if let Some(ApiResponseError::UnresolvableAbsoluteDescriptor(desc_err)) =
-                err.api_error
+            if let Some(ApiResponseError::UnresolvableAbsoluteDescriptor(desc_err)) = err.api_error
             {
-                assert_eq!(
-                    desc_err.absolute_descriptor,
-                    "admin/test/local/branch/main"
-                );
+                assert_eq!(desc_err.absolute_descriptor, "admin/test/local/branch/main");
             } else {
                 panic!("Expected UnresolvableAbsoluteDescriptor error");
             }
@@ -670,7 +677,6 @@ fn test_deserialize_unresolvable_absolute_descriptor_error() {
         }
     }
 }
-
 
 #[test]
 fn test_deserialize_api_woql_syntax_error() {
@@ -745,10 +751,14 @@ fn test_deserialize_inserted_subdocument_as_document_error() {
 
     match response {
         TypedErrorResponse::InsertDocumentError { error: err, .. } => {
-            if let Some(ApiResponseError::InsertedSubdocumentAsDocument(subdoc_err)) = err.api_error {
+            if let Some(ApiResponseError::InsertedSubdocumentAsDocument(subdoc_err)) = err.api_error
+            {
                 // Check that the document field was properly deserialized
                 assert_eq!(subdoc_err.document["@type"], "IdAndTitle");
-                assert_eq!(subdoc_err.document["id"], "/document/a0bdd8c0-25a8-48b6-b8b9-bebba4cc3fc6");
+                assert_eq!(
+                    subdoc_err.document["id"],
+                    "/document/a0bdd8c0-25a8-48b6-b8b9-bebba4cc3fc6"
+                );
                 assert_eq!(subdoc_err.document["title"], Value::Null);
             } else {
                 panic!("Expected InsertedSubdocumentAsDocument error");
@@ -836,7 +846,10 @@ fn test_deserialize_internal_server_error() {
             if let Some(ApiResponseError::InternalServerError(_)) = err.api_error {
                 // Success - the error was properly deserialized
             } else {
-                panic!("Expected InternalServerError error, got: {:?}", err.api_error);
+                panic!(
+                    "Expected InternalServerError error, got: {:?}",
+                    err.api_error
+                );
             }
         }
         _ => panic!("Expected GenericError variant for api:ErrorResponse"),
@@ -873,7 +886,10 @@ fn test_deserialize_internal_server_error() {
         TypedErrorResponse::GenericError(err) => {
             assert_eq!(err.api_message, "Processing error: rust_error(panic(\"Expected rollup file to have two lines but was unable to skip to the second line\"))");
             assert!(err.api_request_id.is_some());
-            assert_eq!(err.api_request_id.unwrap(), "3dcf65c6-c15e-11f0-a3a9-22dfe8ec24d5");
+            assert_eq!(
+                err.api_request_id.unwrap(),
+                "3dcf65c6-c15e-11f0-a3a9-22dfe8ec24d5"
+            );
 
             if let Some(ApiResponseError::InternalServerError(_)) = err.api_error {
                 // Success
@@ -937,7 +953,10 @@ fn test_deserialize_delete_document_error() {
 
             // Verify request_id is captured
             assert!(err.api_request_id.is_some());
-            assert_eq!(err.api_request_id.unwrap(), "4bc5e800-c4c2-11f0-b9fb-2ebc58a00d09");
+            assert_eq!(
+                err.api_request_id.unwrap(),
+                "4bc5e800-c4c2-11f0-b9fb-2ebc58a00d09"
+            );
         }
         _ => panic!("Expected DeleteDocumentError variant"),
     }
@@ -1046,11 +1065,17 @@ fn test_deserialize_woql_schema_check_failure_error() {
                 assert_eq!(schema_err.witnesses.len(), 1);
                 assert_eq!(schema_err.witnesses[0]["@type"], "instance_not_of_class");
             } else {
-                panic!("Expected WOQLSchemaCheckFail error, got: {:?}", err.api_error);
+                panic!(
+                    "Expected WOQLSchemaCheckFail error, got: {:?}",
+                    err.api_error
+                );
             }
 
             assert!(err.api_request_id.is_some());
-            assert_eq!(err.api_request_id.unwrap(), "91241350-ca20-11f0-971b-03cbaa962789");
+            assert_eq!(
+                err.api_request_id.unwrap(),
+                "91241350-ca20-11f0-971b-03cbaa962789"
+            );
         }
         _ => panic!("Expected WoqlError variant"),
     }
@@ -1101,7 +1126,10 @@ fn test_deserialize_missing_parameter_error() {
             }
 
             assert!(err.api_request_id.is_some());
-            assert_eq!(err.api_request_id.unwrap(), "fd7dc0b6-d022-11f0-89ab-07e4b5282a20");
+            assert_eq!(
+                err.api_request_id.unwrap(),
+                "fd7dc0b6-d022-11f0-89ab-07e4b5282a20"
+            );
         }
         _ => panic!("Expected WoqlError variant"),
     }
@@ -1158,7 +1186,9 @@ fn test_deserialize_submitted_id_does_not_match_generated_id_error() {
                 _ => panic!("Expected Failure status"),
             }
 
-            if let Some(ApiResponseError::SubmittedIdDoesNotMatchGeneratedId(id_err)) = err.api_error {
+            if let Some(ApiResponseError::SubmittedIdDoesNotMatchGeneratedId(id_err)) =
+                err.api_error
+            {
                 assert_eq!(id_err.submitted_id, "terminusdb:///data/test-topic");
                 assert_eq!(
                     id_err.generated_id,
@@ -1167,7 +1197,10 @@ fn test_deserialize_submitted_id_does_not_match_generated_id_error() {
                 assert_eq!(id_err.document["@type"], "Topic");
                 assert_eq!(id_err.document["title"], "Test Topic Title");
             } else {
-                panic!("Expected SubmittedIdDoesNotMatchGeneratedId error, got: {:?}", err.api_error);
+                panic!(
+                    "Expected SubmittedIdDoesNotMatchGeneratedId error, got: {:?}",
+                    err.api_error
+                );
             }
         }
         _ => panic!("Expected ReplaceDocumentError variant"),

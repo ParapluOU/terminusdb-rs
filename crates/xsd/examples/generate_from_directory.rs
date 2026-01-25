@@ -39,7 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "=".repeat(80));
     println!("\n📊 Schema Statistics:\n");
 
-    let mut by_namespace: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut by_namespace: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut subdocs = 0;
 
     for schema in &schemas {
@@ -103,7 +104,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/generated_schemas.json");
 
     std::fs::write(&output_path, json_str)?;
-    println!("   Exported {} schemas to: {:?}", schemas.len(), output_path);
+    println!(
+        "   Exported {} schemas to: {:?}",
+        schemas.len(),
+        output_path
+    );
 
     println!("\n{}", "=".repeat(80));
     println!("\n✅ Complete! Processed entire schema bundle in one operation.\n");

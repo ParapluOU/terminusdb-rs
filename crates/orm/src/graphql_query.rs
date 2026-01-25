@@ -241,16 +241,15 @@ pub async fn execute_id_query(
     timeout: Option<Duration>,
 ) -> anyhow::Result<IdQueryResult> {
     let request = builder.build_request();
-    let relation_fields: Vec<&str> = builder.relations.iter().map(|r| r.field_name.as_str()).collect();
+    let relation_fields: Vec<&str> = builder
+        .relations
+        .iter()
+        .map(|r| r.field_name.as_str())
+        .collect();
 
     let branch = spec.branch.as_deref().unwrap_or("main");
     let response = client
-        .execute_graphql::<serde_json::Value>(
-            &spec.db,
-            Some(branch),
-            request,
-            timeout,
-        )
+        .execute_graphql::<serde_json::Value>(&spec.db, Some(branch), request, timeout)
         .await?;
 
     // Check for errors
@@ -264,7 +263,11 @@ pub async fn execute_id_query(
     }
 
     let data = response.data.unwrap_or(serde_json::Value::Null);
-    Ok(parse_id_response(&data, &builder.root_type, &relation_fields))
+    Ok(parse_id_response(
+        &data,
+        &builder.root_type,
+        &relation_fields,
+    ))
 }
 
 #[cfg(test)]

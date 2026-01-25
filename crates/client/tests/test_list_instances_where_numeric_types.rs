@@ -24,7 +24,9 @@ mod tests {
             .with_tmp_db("test_filter_types", |client, spec| async move {
                 // Insert schema
                 client
-                    .insert_schemas::<(TestItem,)>(DocumentInsertArgs::from(spec.clone()).as_schema())
+                    .insert_schemas::<(TestItem,)>(
+                        DocumentInsertArgs::from(spec.clone()).as_schema(),
+                    )
                     .await
                     .unwrap();
 
@@ -93,7 +95,10 @@ mod tests {
                     "Filter by boolean (active=true): {} results",
                     by_active.len()
                 );
-                println!("Expected 2 items with active=true, got: {}", by_active.len());
+                println!(
+                    "Expected 2 items with active=true, got: {}",
+                    by_active.len()
+                );
                 if by_active.is_empty() {
                     println!("  ❌ Boolean filtering NOT WORKING");
                 }
@@ -103,10 +108,7 @@ mod tests {
                     .list_instances_where(&spec, None, None, vec![("price", 99.99)])
                     .await
                     .unwrap();
-                println!(
-                    "Filter by float (price=99.99): {} results",
-                    by_price.len()
-                );
+                println!("Filter by float (price=99.99): {} results", by_price.len());
                 println!("Expected 2 items with price=99.99, got: {}", by_price.len());
                 if by_price.is_empty() {
                     println!("  ❌ Float filtering NOT WORKING");
@@ -168,7 +170,9 @@ mod tests {
             .with_tmp_db("test_woql_debug", |client, spec| async move {
                 // Insert schema
                 client
-                    .insert_schemas::<(TestItem,)>(DocumentInsertArgs::from(spec.clone()).as_schema())
+                    .insert_schemas::<(TestItem,)>(
+                        DocumentInsertArgs::from(spec.clone()).as_schema(),
+                    )
                     .await
                     .unwrap();
 

@@ -30,52 +30,60 @@ fn new_test_schema(id: &str) -> Schema {
 async fn test_insert() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_insert", |client, spec| async move {
-        let schema = new_test_schema("TestSchema1");
-        let args = DocumentInsertArgs::from(spec.clone()).as_schema();
-        client.insert_document(&schema, args).await?;
-        Ok(())
-    }).await
+    server
+        .with_tmp_db("test_insert", |client, spec| async move {
+            let schema = new_test_schema("TestSchema1");
+            let args = DocumentInsertArgs::from(spec.clone()).as_schema();
+            client.insert_document(&schema, args).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test]
 async fn test_insert_all() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_insert_all", |client, spec| async move {
-        let schema = new_test_schema("TestSchema1");
-        let schema2 = new_test_schema("TestSchema2");
-        let args = DocumentInsertArgs::from(spec.clone()).as_schema();
-        let schemas_to_insert = vec![&schema, &schema2];
-        client.insert_documents(schemas_to_insert, args).await?;
-        Ok(())
-    }).await
+    server
+        .with_tmp_db("test_insert_all", |client, spec| async move {
+            let schema = new_test_schema("TestSchema1");
+            let schema2 = new_test_schema("TestSchema2");
+            let args = DocumentInsertArgs::from(spec.clone()).as_schema();
+            let schemas_to_insert = vec![&schema, &schema2];
+            client.insert_documents(schemas_to_insert, args).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test]
 async fn test_replace1() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_replace1", |client, spec| async move {
-        let schema = new_test_schema("TestSchema1");
-        let args = DocumentInsertArgs::from(spec.clone()).as_schema();
-        client.insert_document(&schema, args).await?;
-        Ok(())
-    }).await
+    server
+        .with_tmp_db("test_replace1", |client, spec| async move {
+            let schema = new_test_schema("TestSchema1");
+            let args = DocumentInsertArgs::from(spec.clone()).as_schema();
+            client.insert_document(&schema, args).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test]
 async fn test_replace_multi() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_replace_multi", |client, spec| async move {
-        let schema = new_test_schema("TestSchema1");
-        let schema2 = new_test_schema("TestSchema2");
-        let args = DocumentInsertArgs::from(spec.clone()).as_schema();
-        let schemas_to_insert = vec![&schema, &schema2];
-        client.insert_documents(schemas_to_insert, args).await?;
-        Ok(())
-    }).await
+    server
+        .with_tmp_db("test_replace_multi", |client, spec| async move {
+            let schema = new_test_schema("TestSchema1");
+            let schema2 = new_test_schema("TestSchema2");
+            let args = DocumentInsertArgs::from(spec.clone()).as_schema();
+            let schemas_to_insert = vec![&schema, &schema2];
+            client.insert_documents(schemas_to_insert, args).await?;
+            Ok(())
+        })
+        .await
 }
 
 #[test]
@@ -310,21 +318,23 @@ fn test_schema_with_id_field() {
 async fn test_reset_database_function() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_reset_db", |client, _spec| async move {
-        // Test that reset_database works on a fresh database
-        let result = client.reset_database("test_reset_db").await;
+    server
+        .with_tmp_db("test_reset_db", |client, _spec| async move {
+            // Test that reset_database works on a fresh database
+            let result = client.reset_database("test_reset_db").await;
 
-        // Should succeed or fail gracefully
-        match result {
-            Ok(_) => println!("reset_database() function works"),
-            Err(e) => println!(
-                "reset_database() function exists but failed (expected): {}",
-                e
-            ),
-        }
+            // Should succeed or fail gracefully
+            match result {
+                Ok(_) => println!("reset_database() function works"),
+                Err(e) => println!(
+                    "reset_database() function exists but failed (expected): {}",
+                    e
+                ),
+            }
 
-        Ok(())
-    }).await
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test]
@@ -334,121 +344,120 @@ async fn test_header_capture_functionality() -> anyhow::Result<()> {
 
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_header_capture", |client, spec| async move {
-        let args = DocumentInsertArgs::from(spec.clone());
+    server
+        .with_tmp_db("test_header_capture", |client, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
 
-        // Insert schema using the type-safe method
-        client
-            .insert_entity_schema::<TestHeaderModel>(args.clone())
-            .await?;
+            // Insert schema using the type-safe method
+            client
+                .insert_entity_schema::<TestHeaderModel>(args.clone())
+                .await?;
 
-        // Step 1: Create original model with explicit ID
-        let test_id = "header_test_instance";
-        let original_model = TestHeaderModel {
-            id: test_id.to_string(),
-            name: "header_test".to_string(),
-            value: 100,
-        };
+            // Step 1: Create original model with explicit ID
+            let test_id = "header_test_instance";
+            let original_model = TestHeaderModel {
+                id: test_id.to_string(),
+                name: "header_test".to_string(),
+                value: 100,
+            };
 
-        // Insert the original model and capture the commit ID via header
-        let insert_result = client
-            .insert_instance(&original_model, args.clone())
-            .await?;
+            // Insert the original model and capture the commit ID via header
+            let insert_result = client
+                .insert_instance(&original_model, args.clone())
+                .await?;
 
-        // Verify that we captured the commit ID from the header
-        let first_commit_id = insert_result.commit_id.as_ref().unwrap().clone();
+            // Verify that we captured the commit ID from the header
+            let first_commit_id = insert_result.commit_id.as_ref().unwrap().clone();
 
-        println!("Original model inserted with ID: {}", test_id);
-        println!("First commit ID captured: {}", first_commit_id);
+            println!("Original model inserted with ID: {}", test_id);
+            println!("First commit ID captured: {}", first_commit_id);
 
-        // Validate commit ID is not empty (the "branch:" prefix is stripped by the client)
-        assert!(
-            !first_commit_id.is_empty(),
-            "Commit ID should not be empty"
-        );
+            // Validate commit ID is not empty (the "branch:" prefix is stripped by the client)
+            assert!(!first_commit_id.is_empty(), "Commit ID should not be empty");
 
-        // Step 2: Modify the model and update it (same ID, different values)
-        let modified_model = TestHeaderModel {
-            id: test_id.to_string(), // Same ID
-            name: "header_test_MODIFIED".to_string(),
-            value: 200,
-        };
+            // Step 2: Modify the model and update it (same ID, different values)
+            let modified_model = TestHeaderModel {
+                id: test_id.to_string(), // Same ID
+                name: "header_test_MODIFIED".to_string(),
+                value: 200,
+            };
 
-        // Force replacement by setting force=true
-        let mut replace_args = args.clone();
-        replace_args.force = true;
+            // Force replacement by setting force=true
+            let mut replace_args = args.clone();
+            replace_args.force = true;
 
-        // Insert with force=true and capture the new commit ID
-        let update_result = client
-            .insert_instance(&modified_model, replace_args)
-            .await?;
-        let second_commit_id = update_result.commit_id.as_ref().unwrap().clone();
+            // Insert with force=true and capture the new commit ID
+            let update_result = client
+                .insert_instance(&modified_model, replace_args)
+                .await?;
+            let second_commit_id = update_result.commit_id.as_ref().unwrap().clone();
 
-        println!("Modified model replaced at same ID: {}", test_id);
-        println!("Second commit ID captured: {}", second_commit_id);
+            println!("Modified model replaced at same ID: {}", test_id);
+            println!("Second commit ID captured: {}", second_commit_id);
 
-        // Verify the commit IDs are different (indicating different commits)
-        assert_ne!(
-            first_commit_id, second_commit_id,
-            "Commit IDs should be different for different commits"
-        );
-
-        // Step 3: Test insert_instance_with_commit_id convenience function
-        let test_model3 = TestHeaderModel {
-            id: "header_test_instance_3".to_string(),
-            name: "header_test_convenience".to_string(),
-            value: 300,
-        };
-
-        let (result, commit_id) = client
-            .insert_instance_with_commit_id(&test_model3, args.clone())
-            .await?;
-
-        println!(
-            "insert_instance_with_commit_id returned: instance_id={}, commit_id={}",
-            result.root_id, commit_id
-        );
-        assert!(
-            !result.root_id.is_empty(),
-            "Instance ID should not be empty"
-        );
-        assert!(!commit_id.is_empty(), "Commit ID should not be empty");
-        // Note: insert_instance_with_commit_id returns just the commit hash (without "branch:" prefix)
-        // This is by design - it extracts the hash for convenience
-        assert!(
-            !commit_id.contains(":"),
-            "Commit ID from insert_instance_with_commit_id should be just the hash"
-        );
-
-        // Step 4: Verify current version retrieval still works
-        // Use the full document ID format: "TypeName/id"
-        let full_doc_id = format!("TestHeaderModel/{}", test_id);
-        let current_version = client
-            .get_document(&full_doc_id, &spec, GetOpts::default())
-            .await?;
-        println!("Current version retrieved successfully");
-
-        // Verify the current version has the modified values
-        if let Some(current_name) = current_version.get("name") {
-            assert_eq!(current_name.as_str().unwrap(), "header_test_MODIFIED");
-            println!(
-                "Current version has correct name: {}",
-                current_name.as_str().unwrap()
+            // Verify the commit IDs are different (indicating different commits)
+            assert_ne!(
+                first_commit_id, second_commit_id,
+                "Commit IDs should be different for different commits"
             );
-        }
 
-        if let Some(current_value) = current_version.get("value") {
-            assert_eq!(current_value.as_i64().unwrap(), 200);
+            // Step 3: Test insert_instance_with_commit_id convenience function
+            let test_model3 = TestHeaderModel {
+                id: "header_test_instance_3".to_string(),
+                name: "header_test_convenience".to_string(),
+                value: 300,
+            };
+
+            let (result, commit_id) = client
+                .insert_instance_with_commit_id(&test_model3, args.clone())
+                .await?;
+
             println!(
-                "Current version has correct value: {}",
-                current_value.as_i64().unwrap()
+                "insert_instance_with_commit_id returned: instance_id={}, commit_id={}",
+                result.root_id, commit_id
             );
-        }
+            assert!(
+                !result.root_id.is_empty(),
+                "Instance ID should not be empty"
+            );
+            assert!(!commit_id.is_empty(), "Commit ID should not be empty");
+            // Note: insert_instance_with_commit_id returns just the commit hash (without "branch:" prefix)
+            // This is by design - it extracts the hash for convenience
+            assert!(
+                !commit_id.contains(":"),
+                "Commit ID from insert_instance_with_commit_id should be just the hash"
+            );
 
-        println!("Header capture functionality test completed successfully!");
+            // Step 4: Verify current version retrieval still works
+            // Use the full document ID format: "TypeName/id"
+            let full_doc_id = format!("TestHeaderModel/{}", test_id);
+            let current_version = client
+                .get_document(&full_doc_id, &spec, GetOpts::default())
+                .await?;
+            println!("Current version retrieved successfully");
 
-        Ok(())
-    }).await
+            // Verify the current version has the modified values
+            if let Some(current_name) = current_version.get("name") {
+                assert_eq!(current_name.as_str().unwrap(), "header_test_MODIFIED");
+                println!(
+                    "Current version has correct name: {}",
+                    current_name.as_str().unwrap()
+                );
+            }
+
+            if let Some(current_value) = current_version.get("value") {
+                assert_eq!(current_value.as_i64().unwrap(), 200);
+                println!(
+                    "Current version has correct value: {}",
+                    current_value.as_i64().unwrap()
+                );
+            }
+
+            println!("Header capture functionality test completed successfully!");
+
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test]
@@ -457,125 +466,118 @@ async fn test_time_travel_functionality() -> anyhow::Result<()> {
 
     let server = TerminusDBServer::test_instance().await?;
 
-    server.with_tmp_db("test_time_travel", |client, spec| async move {
-        let args = DocumentInsertArgs::from(spec.clone());
-        client
-            .insert_entity_schema::<TestHeaderModel>(args.clone())
-            .await?;
+    server
+        .with_tmp_db("test_time_travel", |client, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            client
+                .insert_entity_schema::<TestHeaderModel>(args.clone())
+                .await?;
 
-        // Step 1: Create original model with explicit ID
-        let test_id = "time_travel_test_instance";
-        let original_model = TestHeaderModel {
-            id: test_id.to_string(),
-            name: "original_version".to_string(),
-            value: 100,
-        };
+            // Step 1: Create original model with explicit ID
+            let test_id = "time_travel_test_instance";
+            let original_model = TestHeaderModel {
+                id: test_id.to_string(),
+                name: "original_version".to_string(),
+                value: 100,
+            };
 
-        // Insert original model and capture commit ID
-        let insert_result = client
-            .insert_instance(&original_model, args.clone())
-            .await?;
-        let first_commit_id = insert_result.commit_id.as_ref().unwrap().clone();
+            // Insert original model and capture commit ID
+            let insert_result = client
+                .insert_instance(&original_model, args.clone())
+                .await?;
+            let first_commit_id = insert_result.commit_id.as_ref().unwrap().clone();
 
-        // Extract just the commit hash (remove "branch:" prefix)
-        let first_commit_hash = first_commit_id.split(':').last().unwrap().to_string();
+            // Extract just the commit hash (remove "branch:" prefix)
+            let first_commit_hash = first_commit_id.split(':').last().unwrap().to_string();
 
-        println!(
-            "Original model inserted - commit ID: {}",
-            first_commit_hash
-        );
+            println!("Original model inserted - commit ID: {}", first_commit_hash);
 
-        // Step 2: Modify the model (same ID, different values)
-        let modified_model = TestHeaderModel {
-            id: test_id.to_string(),
-            name: "modified_version".to_string(),
-            value: 200,
-        };
+            // Step 2: Modify the model (same ID, different values)
+            let modified_model = TestHeaderModel {
+                id: test_id.to_string(),
+                name: "modified_version".to_string(),
+                value: 200,
+            };
 
-        // Force replacement
-        let mut replace_args = args.clone();
-        replace_args.force = true;
+            // Force replacement
+            let mut replace_args = args.clone();
+            replace_args.force = true;
 
-        let update_result = client
-            .insert_instance(&modified_model, replace_args)
-            .await?;
-        let second_commit_id = update_result.commit_id.as_ref().unwrap().clone();
-        let second_commit_hash = second_commit_id.split(':').last().unwrap();
+            let update_result = client
+                .insert_instance(&modified_model, replace_args)
+                .await?;
+            let second_commit_id = update_result.commit_id.as_ref().unwrap().clone();
+            let second_commit_hash = second_commit_id.split(':').last().unwrap();
 
-        println!(
-            "Modified model inserted - commit ID: {}",
-            second_commit_hash
-        );
+            println!(
+                "Modified model inserted - commit ID: {}",
+                second_commit_hash
+            );
 
-        // Step 3: Verify current version has modified values
-        // Use the full document ID format
-        let full_doc_id = format!("TestHeaderModel/{}", test_id);
-        let current_version = client
-            .get_document(&full_doc_id, &spec, GetOpts::default())
-            .await?;
-        assert_eq!(
-            current_version.get("name").unwrap().as_str().unwrap(),
-            "modified_version"
-        );
-        assert_eq!(
-            current_version.get("value").unwrap().as_i64().unwrap(),
-            200
-        );
-        println!("Current version verification passed");
+            // Step 3: Verify current version has modified values
+            // Use the full document ID format
+            let full_doc_id = format!("TestHeaderModel/{}", test_id);
+            let current_version = client
+                .get_document(&full_doc_id, &spec, GetOpts::default())
+                .await?;
+            assert_eq!(
+                current_version.get("name").unwrap().as_str().unwrap(),
+                "modified_version"
+            );
+            assert_eq!(current_version.get("value").unwrap().as_i64().unwrap(), 200);
+            println!("Current version verification passed");
 
-        // Step 4: Test time-travel to first commit using BranchSpec.with_commit()
-        // Need to use the database name from the spec
-        let historical_spec = BranchSpec::with_commit(&spec.db, first_commit_hash.clone());
+            // Step 4: Test time-travel to first commit using BranchSpec.with_commit()
+            // Need to use the database name from the spec
+            let historical_spec = BranchSpec::with_commit(&spec.db, first_commit_hash.clone());
 
-        println!(
-            "Attempting time-travel to commit: {}",
-            first_commit_hash
-        );
-        println!("Using BranchSpec: {:?}", historical_spec);
+            println!("Attempting time-travel to commit: {}", first_commit_hash);
+            println!("Using BranchSpec: {:?}", historical_spec);
 
-        // Try to retrieve the document from the historical commit
-        match client
-            .get_document(&full_doc_id, &historical_spec, GetOpts::default())
-            .await
-        {
-            Ok(historical_version) => {
-                println!("Time-travel retrieval successful!");
+            // Try to retrieve the document from the historical commit
+            match client
+                .get_document(&full_doc_id, &historical_spec, GetOpts::default())
+                .await
+            {
+                Ok(historical_version) => {
+                    println!("Time-travel retrieval successful!");
 
-                // Verify we got the original version
-                if let Some(historical_name) = historical_version.get("name") {
-                    let name_str = historical_name.as_str().unwrap();
-                    println!("Historical name: {}", name_str);
-                    assert_eq!(
-                        name_str, "original_version",
-                        "Historical version should have original name"
+                    // Verify we got the original version
+                    if let Some(historical_name) = historical_version.get("name") {
+                        let name_str = historical_name.as_str().unwrap();
+                        println!("Historical name: {}", name_str);
+                        assert_eq!(
+                            name_str, "original_version",
+                            "Historical version should have original name"
+                        );
+                    }
+
+                    if let Some(historical_value) = historical_version.get("value") {
+                        let value_int = historical_value.as_i64().unwrap();
+                        println!("Historical value: {}", value_int);
+                        assert_eq!(
+                            value_int, 100,
+                            "Historical version should have original value"
+                        );
+                    }
+
+                    println!("Time-travel functionality working correctly!");
+                }
+                Err(e) => {
+                    println!("Time-travel retrieval failed: {}", e);
+                    println!("This may indicate that:");
+                    println!("  - The commit reference URL format is incorrect");
+                    println!("  - TerminusDB server doesn't support this commit access pattern");
+                    println!("  - Additional server-side configuration may be needed");
+
+                    // For now, don't fail the test - just report the issue
+                    println!(
+                        "Time-travel test completed with error (feature may need server-side work)"
                     );
                 }
-
-                if let Some(historical_value) = historical_version.get("value") {
-                    let value_int = historical_value.as_i64().unwrap();
-                    println!("Historical value: {}", value_int);
-                    assert_eq!(
-                        value_int, 100,
-                        "Historical version should have original value"
-                    );
-                }
-
-                println!("Time-travel functionality working correctly!");
             }
-            Err(e) => {
-                println!("Time-travel retrieval failed: {}", e);
-                println!("This may indicate that:");
-                println!("  - The commit reference URL format is incorrect");
-                println!("  - TerminusDB server doesn't support this commit access pattern");
-                println!("  - Additional server-side configuration may be needed");
 
-                // For now, don't fail the test - just report the issue
-                println!(
-                    "Time-travel test completed with error (feature may need server-side work)"
-                );
-            }
-        }
-
-        Ok(())
-    }).await
+            Ok(())
+        })
+        .await
 }

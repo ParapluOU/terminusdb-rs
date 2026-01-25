@@ -1,11 +1,11 @@
-use terminusdb_woql2::prelude::*;
 use terminusdb_schema::ToJson;
+use terminusdb_woql2::prelude::*;
 
 fn main() {
     let query = Query::triple(
         node("v:Subject"),
         node("v:Predicate"),
-        value_node("v:Object")
+        value_node("v:Object"),
     );
 
     let json = query.to_instance(None).to_json();

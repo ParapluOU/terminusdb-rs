@@ -2,13 +2,13 @@ use crate::value::{IntoWoql2, Var};
 use terminusdb_schema::{GraphType, ToTDBSchema};
 // Import Query from the prelude
 use terminusdb_woql2::prelude::{
-    DataValue,
     // Import Triple Ops
     AddTriple as Woql2AddTriple,
     AddedTriple as Woql2AddedTriple,
     And as Woql2And,
     Concatenate as Woql2Concatenate,
     Count as Woql2Count,
+    DataValue,
     DeleteDocument as Woql2DeleteDocument,
     DeleteTriple as Woql2DeleteTriple,
     // Import Control Ops
@@ -494,14 +494,17 @@ impl WoqlBuilder {
         R: IntoWoql2,
     {
         let list_data_value = input_list.into_woql2_data_value();
-        
+
         // Convert DataValue to ListOrVariable
         let list_or_var = match list_data_value {
             DataValue::List(items) => ListOrVariable::List(items),
             DataValue::Variable(_) => ListOrVariable::Variable(list_data_value),
-            _ => panic!("join expects a list or variable, but got: {:?}", list_data_value),
+            _ => panic!(
+                "join expects a list or variable, but got: {:?}",
+                list_data_value
+            ),
         };
-        
+
         let join_query = Woql2Query::Join(Woql2Join {
             list: list_or_var,
             separator: separator.into_woql2_data_value(),
@@ -518,14 +521,17 @@ impl WoqlBuilder {
         R: IntoWoql2,
     {
         let list_data_value = input_list.into_woql2_data_value();
-        
+
         // Convert DataValue to ListOrVariable
         let list_or_var = match list_data_value {
             DataValue::List(items) => ListOrVariable::List(items),
             DataValue::Variable(_) => ListOrVariable::Variable(list_data_value),
-            _ => panic!("concatenate expects a list or variable, but got: {:?}", list_data_value),
+            _ => panic!(
+                "concatenate expects a list or variable, but got: {:?}",
+                list_data_value
+            ),
         };
-        
+
         let concat_query = Woql2Query::Concatenate(Woql2Concatenate {
             list: list_or_var,
             result_string: result_string.into_woql2_data_value(),

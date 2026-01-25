@@ -6,7 +6,7 @@
 use terminusdb_orm::prelude::*;
 
 // Required for TerminusDBModel derive
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 use terminusdb_schema::{TdbLazy, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 
@@ -137,7 +137,11 @@ fn test_with_reverse_relation_single_field() {
     match &query.relations()[0].direction {
         RelationDirection::Reverse { via_field } => {
             // Single-field relations now automatically specify the field name
-            assert_eq!(via_field.as_deref(), Some("user"), "with::<T>() should auto-detect single field");
+            assert_eq!(
+                via_field.as_deref(),
+                Some("user"),
+                "with::<T>() should auto-detect single field"
+            );
         }
         _ => panic!("Expected Reverse direction"),
     }
@@ -163,9 +167,7 @@ fn test_with_reverse_relation_multiple_fields() {
 fn test_with_multiple_reverse_relations() {
     // Load both Posts and Comments for a User
     let id = EntityIDFor::<User>::new("user1").unwrap();
-    let query = User::find(id)
-        .with::<Post>()
-        .with::<Comment>();
+    let query = User::find(id).with::<Post>().with::<Comment>();
 
     assert_eq!(query.relations().len(), 2);
 }
@@ -187,8 +189,7 @@ fn test_with_chained_reverse_relations() {
 fn test_with_via_specific_field() {
     // Load only Documents where user is the AUTHOR (not reviewer)
     let id = EntityIDFor::<User>::new("user1").unwrap();
-    let query = User::find(id)
-        .with_via::<Document, DocumentFields::Author>();
+    let query = User::find(id).with_via::<Document, DocumentFields::Author>();
 
     assert_eq!(query.relations().len(), 1);
     match &query.relations()[0].direction {
@@ -203,8 +204,7 @@ fn test_with_via_specific_field() {
 fn test_with_via_different_field() {
     // Load only Documents where user is the REVIEWER
     let id = EntityIDFor::<User>::new("user1").unwrap();
-    let query = User::find(id)
-        .with_via::<Document, DocumentFields::Reviewer>();
+    let query = User::find(id).with_via::<Document, DocumentFields::Reviewer>();
 
     assert_eq!(query.relations().len(), 1);
     match &query.relations()[0].direction {
@@ -235,8 +235,7 @@ fn test_with_via_both_fields_separately() {
 fn test_with_field_forward_relation() {
     // Car has explicit wheel fields - must specify which one
     let id = EntityIDFor::<Car>::new("car1").unwrap();
-    let query = Car::find(id)
-        .with_field::<Wheel, CarFields::FrontLeft>();
+    let query = Car::find(id).with_field::<Wheel, CarFields::FrontLeft>();
 
     assert_eq!(query.relations().len(), 1);
     match &query.relations()[0].direction {
@@ -321,8 +320,8 @@ fn test_mixed_relation_types() {
 #[cfg(feature = "testing")]
 mod integration {
     use super::*;
-    use terminusdb_test::test as db_test;
     use terminusdb_client::DocumentInsertArgs;
+    use terminusdb_test::test as db_test;
 
     #[db_test(db = "orm_reverse_relation_test")]
     async fn test_execute_with_reverse_relation(client: _, spec: _) -> anyhow::Result<()> {
@@ -332,8 +331,12 @@ mod integration {
             ..Default::default()
         };
 
-        client.insert_schema(&User::to_schema(), schema_args.clone()).await?;
-        client.insert_schema(&Post::to_schema(), schema_args.clone()).await?;
+        client
+            .insert_schema(&User::to_schema(), schema_args.clone())
+            .await?;
+        client
+            .insert_schema(&Post::to_schema(), schema_args.clone())
+            .await?;
 
         // Insert a user
         let user = User {
@@ -383,12 +386,22 @@ mod integration {
             ..Default::default()
         };
 
-        client.insert_schema(&User::to_schema(), schema_args.clone()).await?;
-        client.insert_schema(&Document::to_schema(), schema_args.clone()).await?;
+        client
+            .insert_schema(&User::to_schema(), schema_args.clone())
+            .await?;
+        client
+            .insert_schema(&Document::to_schema(), schema_args.clone())
+            .await?;
 
         // Insert two users
-        let alice = User { name: "Alice".to_string(), email: "alice@example.com".to_string() };
-        let bob = User { name: "Bob".to_string(), email: "bob@example.com".to_string() };
+        let alice = User {
+            name: "Alice".to_string(),
+            email: "alice@example.com".to_string(),
+        };
+        let bob = User {
+            name: "Bob".to_string(),
+            email: "bob@example.com".to_string(),
+        };
 
         let alice_result = client.save_instance(&alice, schema_args.clone()).await?;
         let bob_result = client.save_instance(&bob, schema_args.clone()).await?;
@@ -425,7 +438,11 @@ mod integration {
 
         // Verify no docs in result (Alice is not reviewer of any doc)
         let docs2: Vec<Document> = result2.get()?;
-        assert_eq!(docs2.len(), 0, "Expected 0 documents where Alice is reviewer");
+        assert_eq!(
+            docs2.len(),
+            0,
+            "Expected 0 documents where Alice is reviewer"
+        );
         Ok(())
     }
 }

@@ -33,7 +33,7 @@ pub struct PhantomOnlyContainer<T: MyConstraint> {
 
 // Multiple phantom markers
 #[derive(Debug, Clone, TerminusDBModel)]
-pub struct MultiPhantom<T, U, V> 
+pub struct MultiPhantom<T, U, V>
 where
     T: Send,
     U: Clone + Send,
@@ -63,7 +63,7 @@ mod tests {
         // Test schema generation
         let schema = <PhantomOnlyContainer<SimpleMarker> as ToTDBSchema>::to_schema();
         assert_eq!(schema.class_name(), "PhantomOnlyContainer<SimpleMarker>");
-        
+
         // Verify PhantomData field is not in schema
         if let Some(props) = <PhantomOnlyContainer<SimpleMarker> as ToTDBSchema>::properties() {
             assert_eq!(props.len(), 3); // id, count, name (not _phantom)
@@ -72,7 +72,7 @@ mod tests {
             assert!(props.iter().any(|p| p.name == "name"));
             assert!(!props.iter().any(|p| p.name == "_phantom"));
         }
-        
+
         // Test instance generation
         let instance = container.to_instance(None);
         assert_eq!(instance.properties.len(), 3);
@@ -97,10 +97,14 @@ mod tests {
         };
 
         let schema = <MultiPhantom<MarkerA, MarkerB, MarkerC> as ToTDBSchema>::to_schema();
-        assert_eq!(schema.class_name(), "MultiPhantom<MarkerA, MarkerB, MarkerC>");
+        assert_eq!(
+            schema.class_name(),
+            "MultiPhantom<MarkerA, MarkerB, MarkerC>"
+        );
 
         // Only the data field should be in the schema
-        if let Some(props) = <MultiPhantom<MarkerA, MarkerB, MarkerC> as ToTDBSchema>::properties() {
+        if let Some(props) = <MultiPhantom<MarkerA, MarkerB, MarkerC> as ToTDBSchema>::properties()
+        {
             assert_eq!(props.len(), 1);
             assert!(props.iter().any(|p| p.name == "data"));
         }

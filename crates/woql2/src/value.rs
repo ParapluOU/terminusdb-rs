@@ -2,26 +2,19 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use crate::prelude::*;
-use serde::{Serializer, ser::SerializeStruct};
-use terminusdb_schema::{FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty, ToTDBInstance};
-use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
+use serde::{ser::SerializeStruct, Serializer};
 use terminusdb_schema::json::{InstancePropertyFromJson, ToJson};
+use terminusdb_schema::{
+    FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
+    ToTDBInstance,
+};
+use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Helper struct for DictionaryTemplate
 // todo: make key type 'Random'
 /// A representation of a JSON style dictionary, but with free variables. It is similar to an interpolated string in that it is a template with quoted data and substituted values.
-#[derive(
-    TerminusDBModel,
-    FromTDBInstance,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct FieldValuePair {
     /// The field or key of a dictionary value pair
     pub field: String,
@@ -32,17 +25,7 @@ pub struct FieldValuePair {
 // Helper struct for Value::Dictionary
 // todo: make key type 'random'
 /// A representation of a JSON style dictionary, but with free variables. It is similar to an interpolated string in that it is a template with quoted data and substituted values.
-#[derive(
-    TerminusDBModel,
-    FromTDBInstance,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct DictionaryTemplate {
     /// Pairs of Key-Values to be constructed into a dictionary
     pub data: BTreeSet<FieldValuePair>,
@@ -50,17 +33,7 @@ pub struct DictionaryTemplate {
 
 // Represents TaggedUnion "Value"
 /// A variable, node or data point.
-#[derive(
-    TerminusDBModel,
-    FromTDBInstance,
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Ord,
-    PartialOrd,
-)]
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[tdb(class_name = "Value")]
 #[tdb(rename_all = "lowercase")]
 pub enum WoqlValue {
@@ -102,7 +75,6 @@ pub enum DataValue {
     Variable(String),
 }
 
-
 /// Represents either a list of values or a variable that will resolve to a list at runtime.
 /// Used in operations like Concatenate and Join that expect list inputs.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +113,7 @@ impl<Parent> ToInstanceProperty<Parent> for ListOrVariable {
                 var.to_instance(None).to_json()
             }
         };
-        
+
         // Use PrimitiveValue::Object to store the JSON directly
         InstanceProperty::Primitive(terminusdb_schema::PrimitiveValue::Object(json_value))
     }
@@ -152,7 +124,7 @@ impl<Parent> ToSchemaProperty<Parent> for ListOrVariable {
         // ListOrVariable is stored as a JSON string
         Property {
             name: prop_name.to_string(),
-            r#type: None, // No type family needed for primitives
+            r#type: None,                    // No type family needed for primitives
             class: "xsd:string".to_string(), // Store as string
         }
     }

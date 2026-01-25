@@ -3,9 +3,8 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 use terminusdb_client::{
+    deserialize::DefaultTDBDeserializer, BranchSpec, DeleteOpts, DocumentInsertArgs, GetOpts,
     TerminusDBHttpClient,
-    BranchSpec, DocumentInsertArgs, GetOpts, DeleteOpts,
-    deserialize::DefaultTDBDeserializer,
 };
 
 use crate::manager::TerminusDBManager;
@@ -35,7 +34,8 @@ pub struct AppState {
 impl AppState {
     /// Create new application state and initialize
     pub async fn new() -> Result<Self> {
-        let manager = TerminusDBManager::new().await
+        let manager = TerminusDBManager::new()
+            .await
             .context("Failed to start local TerminusDB instance")?;
 
         let state = Self {
@@ -59,7 +59,9 @@ impl AppState {
         // Ensure the metadata database exists
         if !Self::database_exists(&_client, META_DATABASE).await? {
             tracing::info!("Creating metadata database: {}", META_DATABASE);
-            _client.ensure_database(META_DATABASE).await
+            _client
+                .ensure_database(META_DATABASE)
+                .await
                 .context("Failed to create metadata database")?;
 
             // Add the schema for NodeConfig
@@ -69,7 +71,9 @@ impl AppState {
                 ref_commit: None,
             };
 
-            _client.insert_entity_schema::<NodeConfig>(spec.clone().into()).await
+            _client
+                .insert_entity_schema::<NodeConfig>(spec.clone().into())
+                .await
                 .context("Failed to add NodeConfig schema")?;
 
             // Add the default localhost node
@@ -86,11 +90,9 @@ impl AppState {
     /// Check if a database exists
     async fn database_exists(client: &TerminusDBHttpClient, db_path: &str) -> Result<bool> {
         match client.list_databases_simple().await {
-            Ok(databases) => {
-                Ok(databases.iter().any(|db| {
-                    db.path.as_ref().map(|p| p == db_path).unwrap_or(false)
-                }))
-            }
+            Ok(databases) => Ok(databases
+                .iter()
+                .any(|db| db.path.as_ref().map(|p| p == db_path).unwrap_or(false))),
             Err(e) => {
                 tracing::warn!("Failed to list databases: {}", e);
                 Ok(false)
@@ -112,15 +114,15 @@ impl AppState {
         let mut deserializer = DefaultTDBDeserializer;
 
         // Get all NodeConfig instances (empty vec means "get all")
-        match client.get_instances::<NodeConfig>(
-            vec![],
-            &spec,
-            opts,
-            &mut deserializer
-        ).await {
+        match client
+            .get_instances::<NodeConfig>(vec![], &spec, opts, &mut deserializer)
+            .await
+        {
             Ok(mut nodes) => {
                 // Auto-layout nodes that are all at (0, 0)
-                let all_at_origin = nodes.iter().all(|n| n.position_x == 0.0 && n.position_y == 0.0);
+                let all_at_origin = nodes
+                    .iter()
+                    .all(|n| n.position_x == 0.0 && n.position_y == 0.0);
                 if all_at_origin && nodes.len() > 1 {
                     // Arrange in a horizontal grid with spacing
                     const SPACING_X: f64 = 250.0;
@@ -141,7 +143,10 @@ impl AppState {
                 tracing::info!("Loaded {} node configuration(s)", self.nodes.read().len());
             }
             Err(e) => {
-                tracing::warn!("Failed to load nodes from database: {}. Starting with empty cache.", e);
+                tracing::warn!(
+                    "Failed to load nodes from database: {}. Starting with empty cache.",
+                    e
+                );
             }
         }
 
@@ -163,7 +168,9 @@ impl AppState {
         let args = DocumentInsertArgs::from(spec);
 
         // Insert into database
-        client.insert_instance(node, args).await
+        client
+            .insert_instance(node, args)
+            .await
             .context("Failed to persist node to database")?;
 
         // Update in-memory cache
@@ -210,7 +217,9 @@ impl AppState {
         let opts = DeleteOpts::document_only();
 
         // Delete from database
-        client.delete_instance_by_id::<NodeConfig>(id, args, opts).await
+        client
+            .delete_instance_by_id::<NodeConfig>(id, args, opts)
+            .await
             .context("Failed to delete node from database")?;
 
         // Stop the poller for this node
@@ -274,23 +283,21 @@ impl AppState {
         }
 
         // Client not in cache, create a new one
-        let node = self.get_node(node_id)
+        let node = self
+            .get_node(node_id)
             .ok_or_else(|| anyhow::anyhow!("Node not found: {}", node_id))?;
 
-        let url = url::Url::parse(&node.base_url())
-            .context("Invalid node URL")?;
+        let url = url::Url::parse(&node.base_url()).context("Invalid node URL")?;
 
-        let client = TerminusDBHttpClient::new(
-            url,
-            &node.username,
-            &node.password,
-            "admin",
-        ).await?;
+        let client =
+            TerminusDBHttpClient::new(url, &node.username, &node.password, "admin").await?;
 
         let client_arc = Arc::new(client);
 
         // Store in cache
-        self.clients.write().insert(node_id.to_string(), Arc::clone(&client_arc));
+        self.clients
+            .write()
+            .insert(node_id.to_string(), Arc::clone(&client_arc));
 
         tracing::debug!("Created new HTTP client for node: {}", node_id);
 

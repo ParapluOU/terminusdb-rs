@@ -1,7 +1,7 @@
 //! Higher-level query DSL macros for more intuitive WOQL query writing
 //!
 //! This module provides a set of macros that enable writing WOQL queries using a more
-//! natural, declarative syntax. Instead of manually constructing triples and type 
+//! natural, declarative syntax. Instead of manually constructing triples and type
 //! declarations, you can use a syntax that resembles object notation.
 //!
 //! # Overview
@@ -19,7 +19,7 @@
 //!
 //! ```ignore
 //! use terminusdb_woql2::prelude::*;
-//! 
+//!
 //! // Traditional WOQL syntax
 //! let traditional = and!(
 //!     type_!(var!("Person"), "Person"),
@@ -39,7 +39,7 @@
 //!     greater!(v!(age), data!(18))
 //! }};
 //! ```
-//! 
+//!
 //! Note: The model struct `Person` must be in scope for property name verification.
 //!
 //! # Syntax Reference
@@ -96,7 +96,7 @@
 //! ```ignore
 //! query!{{
 //!     Person { name = v!(name) }
-//!     
+//!
 //!     optional {
 //!         // This entire section is optional
 //!         Address { street = v!(street) }
@@ -135,34 +135,34 @@
 //!             publication_id = v!(PublicationId),
 //!             date_range = v!(DateRange)
 //!         }
-//!         
+//!
 //!         // Define DateRange properties
 //!         DateRange {
 //!             start = v!(StartDate),
 //!             end = v!(EndDate)
 //!         }
-//!         
+//!
 //!         // Define Publication
 //!         AwsDBPublication {
 //!             id = v!(PublicationId),
 //!             document_map = v!(DocumentMap)
 //!         }
-//!         
+//!
 //!         // Define relationships and constraints
 //!         AwsDBPublicationMap {
 //!             chunks = v!(Chunk)
 //!         }
-//!         
+//!
 //!         // Annotations linked to chunks
 //!         Annotation {
 //!             document_id = v!(ChunkId),
 //!             timestamp = v!(Timestamp)
 //!         }
-//!         
+//!
 //!         // Time constraints
 //!         greater!(v!(Timestamp), v!(StartDate)),
 //!         less!(v!(Timestamp), v!(EndDate)),
-//!         
+//!
 //!         // Read the full annotation document
 //!         read_doc!(v!(Annotation), v!(AnnotationDoc))
 //!     }
@@ -189,10 +189,10 @@
 //!
 //! ```ignore
 //! struct Person { name: String, age: i32 }
-//! 
+//!
 //! // This compiles successfully
 //! query!{{ Person { name = v!(n) } }}
-//! 
+//!
 //! // This would fail at compile-time:
 //! // query!{{ Person { nam = v!(n) } }}
 //! // Error: no field `nam` on type `Person`
@@ -292,52 +292,52 @@ macro_rules! query {
     ({ select [$($var:ident),* $(,)?] { $($body:tt)* } }) => {
         select!([$($var),*], query!{{ $($body)* }})
     };
-    
+
     // Main entry point - parse modifiers first
     ({ $($body:tt)* }) => {
         query!(@parse_modifiers [] [] $($body)*)
     };
-    
+
     // Parse modifiers - found select statement
     (@parse_modifiers [$($select_vars:ident)*] [$($limit_val:expr)?] select [$($var:ident),* $(,)?] ; $($rest:tt)*) => {
         query!(@parse_modifiers [$($var)*] [$($limit_val)?] $($rest)*)
     };
-    
+
     // Parse modifiers - found limit statement
     (@parse_modifiers [$($select_vars:ident)*] [] limit $limit:expr ; $($rest:tt)*) => {
         query!(@parse_modifiers [$($select_vars)*] [$limit] $($rest)*)
     };
-    
+
     // Parse modifiers - done, now process body and apply modifiers
     (@parse_modifiers [$($select_vars:ident)*] [$($limit_val:expr)?] $($body:tt)*) => {
         query!(@apply_modifiers [$($select_vars)*] [$($limit_val)?] query!(@parse_body [] $($body)*))
     };
-    
+
     // Apply modifiers - both select and limit
     (@apply_modifiers [$($select_vars:ident)+] [$limit_val:expr] $query:expr) => {
         limit!($limit_val, select!([$($select_vars),*], $query))
     };
-    
+
     // Apply modifiers - only select
     (@apply_modifiers [$($select_vars:ident)+] [] $query:expr) => {
         select!([$($select_vars),*], $query)
     };
-    
+
     // Apply modifiers - only limit
     (@apply_modifiers [] [$limit_val:expr] $query:expr) => {
         limit!($limit_val, $query)
     };
-    
+
     // Apply modifiers - neither
     (@apply_modifiers [] [] $query:expr) => {
         $query
     };
-    
+
     // Parse body - accumulate expressions
     (@parse_body [$($acc:expr),*] ) => {
         and!($($acc),*)
     };
-    
+
     // Parse optional block at query level
     (@parse_body [$($acc:expr),*] optional { $($opt_body:tt)* } $($rest:tt)*) => {
         query!(@parse_body [
@@ -345,7 +345,7 @@ macro_rules! query {
             optional!(query!{{ $($opt_body)* }})
         ] $($rest)*)
     };
-    
+
     // Parse type block - simplified approach
     (@parse_body [$($acc:expr),*] $type:ident { $($field:ident = $value:expr),* $(,)? } $($rest:tt)*) => {
         query!(@parse_body [
@@ -354,7 +354,7 @@ macro_rules! query {
             $(query!(@parse_field $type, $field, $value)),*
         ] $($rest)*)
     };
-    
+
     // Parse standalone expressions (comparisons, function calls)
     (@parse_body [$($acc:expr),*] $expr:expr, $($rest:tt)*) => {
         query!(@parse_body [
@@ -362,7 +362,7 @@ macro_rules! query {
             $expr
         ] $($rest)*)
     };
-    
+
     // Parse standalone expression at end
     (@parse_body [$($acc:expr),*] $expr:expr) => {
         query!(@parse_body [
@@ -370,12 +370,12 @@ macro_rules! query {
             $expr
         ])
     };
-    
+
     // Parse field assignment for type blocks
     (@parse_field $type:ident, id, $value:expr) => {
         id!(var!($type), $value)
     };
-    
+
     (@parse_field $type:ident, $field:ident, $value:expr) => {
         triple!(var!($type), field!($type:$field), $value)
     };
@@ -418,7 +418,7 @@ macro_rules! v {
 /// ```ignore
 /// let name_prop = prop!(Person::name);
 /// let age_prop = prop!(Person::age);
-/// 
+///
 /// // Use in queries
 /// triple!(v!(person), prop!(Person::name), v!(name))
 /// ```
@@ -437,7 +437,7 @@ macro_rules! prop {
 /// ```ignore
 /// schema_type!(Person)        // Returns "@schema:Person"
 /// schema_type!(ReviewSession) // Returns "@schema:ReviewSession"
-/// 
+///
 /// // Use in type declarations
 /// type_!(v!(obj), schema_type!(Person))
 /// ```
@@ -451,7 +451,7 @@ macro_rules! schema_type {
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    
+
     // Test model for type-checked queries
     #[allow(dead_code)]
     struct Person {
@@ -459,10 +459,10 @@ mod tests {
         name: String,
         age: i32,
     }
-    
+
     #[test]
     fn test_simple_query_dsl() {
-        let result = query!{{
+        let result = query! {{
             Person {
                 id = data!("person123"),
                 name = v!(name),
@@ -471,11 +471,11 @@ mod tests {
             greater!(v!(age), data!(18)),
             less!(v!(age), data!(65))
         }};
-        
+
         // Verify it's an And query
         assert!(matches!(result, Query::And(_)));
     }
-    
+
     #[test]
     fn test_v_macro() {
         let var = v!(PersonId);
@@ -484,7 +484,7 @@ mod tests {
             _ => panic!("Expected Variable"),
         }
     }
-    
+
     #[test]
     fn test_optional_block_query() {
         // Test model for optional fields
@@ -495,8 +495,8 @@ mod tests {
             author: Option<String>,
             published_date: Option<String>,
         }
-        
-        let result = query!{{
+
+        let result = query! {{
             Document {
                 id = v!(DocId),
                 title = v!(Title)
@@ -506,15 +506,15 @@ mod tests {
                 triple!(v!(Document), field!(Document:published_date), v!(PublishedDate))
             }
         }};
-        
+
         // Should be And(type, id, title, Optional(And(author, published_date)))
         match result {
             Query::And(ref and) => {
                 assert_eq!(and.and.len(), 4); // type, id, title, optional
-                
+
                 // Check that the last element is an optional
                 assert!(matches!(&and.and[3], Query::WoqlOptional(_)));
-                
+
                 // Check the contents of the optional
                 if let Query::WoqlOptional(opt) = &and.and[3] {
                     assert!(matches!(&*opt.query, Query::And(_)));
@@ -523,7 +523,7 @@ mod tests {
             _ => panic!("Expected And query"),
         }
     }
-    
+
     #[test]
     fn test_nested_optional_blocks() {
         // Test model
@@ -533,7 +533,7 @@ mod tests {
             name: String,
             address: Option<String>,
         }
-        
+
         #[allow(dead_code)]
         struct Address {
             id: String,
@@ -541,13 +541,13 @@ mod tests {
             city: String,
             postal_code: Option<String>,
         }
-        
-        let result = query!{{
+
+        let result = query! {{
             Company {
                 id = v!(CompanyId),
                 name = v!(CompanyName)
             }
-            
+
             optional {
                 triple!(v!(Company), field!(Company:address), v!(Address)),
                 Address {
@@ -560,13 +560,13 @@ mod tests {
                 }
             }
         }};
-        
+
         // Verify nested optional structure
         match result {
             Query::And(ref and) => {
                 // Should have type, id, name, and optional block
                 assert_eq!(and.and.len(), 4);
-                
+
                 // Last should be optional
                 if let Query::WoqlOptional(outer_opt) = &and.and[3] {
                     // The outer optional should contain an And
@@ -584,8 +584,8 @@ mod tests {
             _ => panic!("Expected And query"),
         }
     }
-    
-    #[test] 
+
+    #[test]
     fn test_flat_syntax_select_and_limit() {
         // Test model
         #[allow(dead_code)]
@@ -594,18 +594,18 @@ mod tests {
             name: String,
             value: i32,
         }
-        
-        let result = query!{{
+
+        let result = query! {{
             select [Name, Value];
             limit 5;
-            
+
             TestModel {
                 id = v!(TestId),
                 name = v!(Name),
                 value = v!(Value)
             }
         }};
-        
+
         // Should be Limit(Select(And(...)))
         match result {
             Query::Limit(limit) => {
@@ -621,22 +621,22 @@ mod tests {
             _ => panic!("Expected Limit query"),
         }
     }
-    
+
     #[test]
     fn test_flat_syntax_select_only() {
         #[allow(dead_code)]
         struct TestModel {
             name: String,
         }
-        
-        let result = query!{{
+
+        let result = query! {{
             select [Name];
-            
+
             TestModel {
                 name = v!(Name)
             }
         }};
-        
+
         // Should be Select(And(...))
         match result {
             Query::Select(select) => {
@@ -645,22 +645,22 @@ mod tests {
             _ => panic!("Expected Select query"),
         }
     }
-    
+
     #[test]
     fn test_flat_syntax_limit_only() {
         #[allow(dead_code)]
         struct TestModel {
             name: String,
         }
-        
-        let result = query!{{
+
+        let result = query! {{
             limit 10;
-            
+
             TestModel {
                 name = v!(Name)
             }
         }};
-        
+
         // Should be Limit(And(...))
         match result {
             Query::Limit(limit) => {
@@ -670,41 +670,41 @@ mod tests {
             _ => panic!("Expected Limit query"),
         }
     }
-    
+
     #[test]
     fn test_flat_syntax_plain_query() {
         #[allow(dead_code)]
         struct TestModel {
             name: String,
         }
-        
-        let result = query!{{
+
+        let result = query! {{
             TestModel {
                 name = v!(Name)
             }
         }};
-        
+
         // Should be just And(...)
         assert!(matches!(result, Query::And(_)));
     }
-    
+
     #[test]
     fn test_flat_syntax_reverse_order() {
         #[allow(dead_code)]
         struct TestModel {
             name: String,
         }
-        
+
         // Limit first, then select
-        let result = query!{{
+        let result = query! {{
             limit 3;
             select [Name];
-            
+
             TestModel {
                 name = v!(Name)
             }
         }};
-        
+
         // Should still be Limit(Select(And(...)))
         match result {
             Query::Limit(limit) => {

@@ -1,13 +1,21 @@
-use terminusdb_schema::{EntityIDFor, Schema, TaggedUnion, TerminusDBModel, ToTDBInstance, ToTDBSchema};
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel as TerminusDBModelDerive};
 use serde::{Deserialize, Serialize};
+use terminusdb_schema::{
+    EntityIDFor, Schema, TaggedUnion, TerminusDBModel, ToTDBInstance, ToTDBSchema,
+};
+use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel as TerminusDBModelDerive};
 
 /// Test TaggedUnion with multi-field variants that generate virtual structs
 #[derive(Debug, Clone, TerminusDBModelDerive, FromTDBInstance)]
 #[allow(dead_code)]
 pub enum PaymentMethod {
-    CreditCard { card_number: String, cvv: String },
-    BankTransfer { account_number: String, routing_number: String },
+    CreditCard {
+        card_number: String,
+        cvv: String,
+    },
+    BankTransfer {
+        account_number: String,
+        routing_number: String,
+    },
     Cash,
 }
 
@@ -55,7 +63,8 @@ fn test_activity_event_schema() {
     let schemas = ActivityEvent::to_schema_tree();
 
     // Find the TaggedUnion schema
-    let union_schema = schemas.iter()
+    let union_schema = schemas
+        .iter()
         .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == "ActivityEvent"))
         .expect("Should have ActivityEvent TaggedUnion schema");
 
@@ -65,7 +74,10 @@ fn test_activity_event_schema() {
         let user_login_prop = properties.iter().find(|p| p.name == "userlogin").unwrap();
         assert_eq!(user_login_prop.class, "UserLoginEvent");
 
-        let shutdown_prop = properties.iter().find(|p| p.name == "systemshutdown").unwrap();
+        let shutdown_prop = properties
+            .iter()
+            .find(|p| p.name == "systemshutdown")
+            .unwrap();
         assert_eq!(shutdown_prop.class, "ActivityEventSystemShutdown");
     } else {
         panic!("Expected TaggedUnion schema");
@@ -85,7 +97,8 @@ fn test_tagged_union_schema_has_variant_classes() {
     assert!(schemas.len() >= 3); // Union + 2 multi-field variants
 
     // Find the main TaggedUnion schema
-    let union_schema = schemas.iter()
+    let union_schema = schemas
+        .iter()
         .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == "PaymentMethod"))
         .expect("Should have PaymentMethod TaggedUnion schema");
 
@@ -97,7 +110,10 @@ fn test_tagged_union_schema_has_variant_classes() {
         let credit_card = properties.iter().find(|p| p.name == "creditcard").unwrap();
         assert_eq!(credit_card.class, "PaymentMethodCreditCard");
 
-        let bank_transfer = properties.iter().find(|p| p.name == "banktransfer").unwrap();
+        let bank_transfer = properties
+            .iter()
+            .find(|p| p.name == "banktransfer")
+            .unwrap();
         assert_eq!(bank_transfer.class, "PaymentMethodBankTransfer");
 
         let cash = properties.iter().find(|p| p.name == "cash").unwrap();
@@ -198,8 +214,7 @@ fn test_tagged_union_no_id_when_variant_has_no_id() {
 
     // The Instance should have no ID
     assert_eq!(
-        instance.id,
-        None,
+        instance.id, None,
         "TaggedUnion should have no ID when variant has no ID"
     );
 }
@@ -218,8 +233,7 @@ fn test_tagged_union_struct_variant_no_id() {
 
     // Struct variants without id_field should not have an ID
     assert_eq!(
-        instance.id,
-        None,
+        instance.id, None,
         "Struct variant without id_field should have no ID"
     );
 }

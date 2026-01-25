@@ -1,13 +1,13 @@
 #[cfg(feature = "generic-derive")]
 use crate::prelude::*;
 #[cfg(feature = "generic-derive")]
+use quote::quote;
+#[cfg(feature = "generic-derive")]
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "generic-derive")]
 use syn::{
     GenericArgument, GenericParam, Generics, Ident, PathArguments, Type, TypePath, WherePredicate,
 };
-#[cfg(feature = "generic-derive")]
-use quote::quote;
 
 /// Trait implementation types that require different bounds
 #[cfg(feature = "generic-derive")]
@@ -27,14 +27,14 @@ pub fn collect_type_param_bounds(
     struct_name: &Ident,
 ) -> HashMap<Ident, Vec<String>> {
     let mut bounds = HashMap::new();
-    
+
     // Check existing where clause for already-defined bounds
     let existing_model_params = check_existing_model_bounds(generics);
     let existing_field_params = check_existing_field_bounds(generics, struct_name);
     let existing_schema_class_params = check_existing_schema_class_bounds(generics);
-    
+
     // Track which generic params are used in special contexts
-    let mut model_params = HashSet::new();  // Params that need TerminusDBModel
+    let mut model_params = HashSet::new(); // Params that need TerminusDBModel
     let mut entity_params = HashSet::new(); // Params that need ToTDBSchema + ToSchemaClass
 
     // Collect generic parameter names
@@ -81,7 +81,7 @@ pub fn collect_type_param_bounds(
     // Second pass: assign bounds to each generic parameter based on its usage
     for param in &generic_params {
         let param_bounds = bounds.entry(param.clone()).or_insert_with(Vec::new);
-        
+
         // Determine bounds based on special usage contexts
         if model_params.contains(param) {
             // Used in TdbLazy<T> - needs TerminusDBModel + ToSchemaClass
@@ -112,7 +112,7 @@ pub fn collect_type_param_bounds(
                     }
                 }
             }
-            
+
             if used_as_field {
                 let bound = format!(
                     "terminusdb_schema::TerminusDBField<{}>",
@@ -135,7 +135,7 @@ pub fn collect_bounds_for_impl(
     trait_impl: TraitImplType,
 ) -> HashMap<Ident, Vec<String>> {
     let mut bounds = HashMap::new();
-    
+
     // Collect generic parameter names
     let generic_params: HashSet<Ident> = generics
         .params
@@ -173,7 +173,7 @@ pub fn collect_bounds_for_impl(
             if crate::prelude::is_phantom_data_type(&field.ty) {
                 continue;
             }
-            
+
             // Check how the type is used
             analyze_type_usage(
                 &field.ty,
@@ -187,13 +187,19 @@ pub fn collect_bounds_for_impl(
 
     // Add bounds based on the trait we're implementing
     for param in &generic_params {
-        if field_params.contains(param) || model_params.contains(param) || entity_params.contains(param) {
+        if field_params.contains(param)
+            || model_params.contains(param)
+            || entity_params.contains(param)
+        {
             let param_bounds = bounds.entry(param.clone()).or_insert_with(Vec::new);
-            
+
             match trait_impl {
                 TraitImplType::ToTDBSchema => {
                     if field_params.contains(param) {
-                        param_bounds.push(format!("terminusdb_schema::ToSchemaProperty<{}>", struct_name_with_generics));
+                        param_bounds.push(format!(
+                            "terminusdb_schema::ToSchemaProperty<{}>",
+                            struct_name_with_generics
+                        ));
                         param_bounds.push("terminusdb_schema::ToMaybeTDBSchema".to_string());
                     }
                     if model_params.contains(param) {
@@ -207,7 +213,10 @@ pub fn collect_bounds_for_impl(
                 }
                 TraitImplType::ToTDBInstance => {
                     if field_params.contains(param) {
-                        param_bounds.push(format!("terminusdb_schema::ToInstanceProperty<{}>", struct_name_with_generics));
+                        param_bounds.push(format!(
+                            "terminusdb_schema::ToInstanceProperty<{}>",
+                            struct_name_with_generics
+                        ));
                     }
                     if model_params.contains(param) {
                         param_bounds.push("terminusdb_schema::ToTDBInstance".to_string());
@@ -226,7 +235,10 @@ pub fn collect_bounds_for_impl(
                 }
                 TraitImplType::InstanceFromJson => {
                     if field_params.contains(param) {
-                        param_bounds.push(format!("terminusdb_schema::json::InstancePropertyFromJson<{}>", struct_name_with_generics));
+                        param_bounds.push(format!(
+                            "terminusdb_schema::json::InstancePropertyFromJson<{}>",
+                            struct_name_with_generics
+                        ));
                     }
                     if model_params.contains(param) {
                         param_bounds.push("terminusdb_schema::json::InstanceFromJson".to_string());
@@ -255,7 +267,11 @@ fn analyze_type_usage(
                 if last_segment.ident == "TdbLazy" {
                     if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
                         for arg in &args.args {
-                            if let GenericArgument::Type(Type::Path(TypePath { path: inner_path, .. })) = arg {
+                            if let GenericArgument::Type(Type::Path(TypePath {
+                                path: inner_path,
+                                ..
+                            })) = arg
+                            {
                                 if let Some(ident) = inner_path.get_ident() {
                                     if generic_params.contains(ident) {
                                         model_params.insert(ident.clone());
@@ -267,7 +283,11 @@ fn analyze_type_usage(
                 } else if last_segment.ident == "EntityIDFor" {
                     if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
                         for arg in &args.args {
-                            if let GenericArgument::Type(Type::Path(TypePath { path: inner_path, .. })) = arg {
+                            if let GenericArgument::Type(Type::Path(TypePath {
+                                path: inner_path,
+                                ..
+                            })) = arg
+                            {
                                 if let Some(ident) = inner_path.get_ident() {
                                     if generic_params.contains(ident) {
                                         entity_params.insert(ident.clone());
@@ -281,7 +301,13 @@ fn analyze_type_usage(
                     if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
                         for arg in &args.args {
                             if let GenericArgument::Type(inner_ty) = arg {
-                                analyze_type_usage(inner_ty, generic_params, field_params, model_params, entity_params);
+                                analyze_type_usage(
+                                    inner_ty,
+                                    generic_params,
+                                    field_params,
+                                    model_params,
+                                    entity_params,
+                                );
                             }
                         }
                     }
@@ -304,10 +330,13 @@ fn is_generic_param_used_as_field(ty: &Type, param: &Ident) -> bool {
         Type::Path(TypePath { path, .. }) => {
             // Skip special container types
             if let Some(last_segment) = path.segments.last() {
-                if last_segment.ident == "EntityIDFor" || last_segment.ident == "TdbLazy" || last_segment.ident == "PhantomData" {
+                if last_segment.ident == "EntityIDFor"
+                    || last_segment.ident == "TdbLazy"
+                    || last_segment.ident == "PhantomData"
+                {
                     return false;
                 }
-                
+
                 // For other container types (Option, Vec, etc), check inside
                 if last_segment.ident == "Option" || last_segment.ident == "Vec" {
                     if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
@@ -322,7 +351,7 @@ fn is_generic_param_used_as_field(ty: &Type, param: &Ident) -> bool {
                     return false;
                 }
             }
-            
+
             // Check if this is the parameter itself
             if let Some(ident) = path.get_ident() {
                 return ident == param;
@@ -345,11 +374,15 @@ fn identify_special_contexts(
         if let Some(last_segment) = path.segments.last() {
             let is_entity_id_for = last_segment.ident == "EntityIDFor";
             let is_tdb_lazy = last_segment.ident == "TdbLazy";
-                
+
             if is_entity_id_for || is_tdb_lazy {
                 if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
                     for arg in &args.args {
-                        if let GenericArgument::Type(Type::Path(TypePath { path: inner_path, .. })) = arg {
+                        if let GenericArgument::Type(Type::Path(TypePath {
+                            path: inner_path,
+                            ..
+                        })) = arg
+                        {
                             if let Some(ident) = inner_path.get_ident() {
                                 if generic_params.contains(ident) {
                                     if is_entity_id_for {
@@ -366,7 +399,6 @@ fn identify_special_contexts(
         }
     }
 }
-
 
 /// Builds where clause predicates from collected bounds
 #[cfg(feature = "generic-derive")]
@@ -424,7 +456,7 @@ pub fn combine_where_clauses(
 #[cfg(feature = "generic-derive")]
 fn check_existing_model_bounds(generics: &Generics) -> HashSet<Ident> {
     let mut params = HashSet::new();
-    
+
     if let Some(where_clause) = &generics.where_clause {
         for predicate in &where_clause.predicates {
             if let WherePredicate::Type(type_predicate) = predicate {
@@ -444,7 +476,7 @@ fn check_existing_model_bounds(generics: &Generics) -> HashSet<Ident> {
             }
         }
     }
-    
+
     params
 }
 
@@ -452,7 +484,7 @@ fn check_existing_model_bounds(generics: &Generics) -> HashSet<Ident> {
 #[cfg(feature = "generic-derive")]
 fn check_existing_schema_class_bounds(generics: &Generics) -> HashSet<Ident> {
     let mut params = HashSet::new();
-    
+
     if let Some(where_clause) = &generics.where_clause {
         for predicate in &where_clause.predicates {
             if let WherePredicate::Type(type_predicate) = predicate {
@@ -472,7 +504,7 @@ fn check_existing_schema_class_bounds(generics: &Generics) -> HashSet<Ident> {
             }
         }
     }
-    
+
     params
 }
 
@@ -480,7 +512,7 @@ fn check_existing_schema_class_bounds(generics: &Generics) -> HashSet<Ident> {
 #[cfg(feature = "generic-derive")]
 fn check_existing_field_bounds(generics: &Generics, struct_name: &Ident) -> HashSet<Ident> {
     let mut params = HashSet::new();
-    
+
     if let Some(where_clause) = &generics.where_clause {
         for predicate in &where_clause.predicates {
             if let WherePredicate::Type(type_predicate) = predicate {
@@ -500,6 +532,6 @@ fn check_existing_field_bounds(generics: &Generics, struct_name: &Ident) -> Hash
             }
         }
     }
-    
+
     params
 }

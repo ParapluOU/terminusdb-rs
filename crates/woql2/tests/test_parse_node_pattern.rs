@@ -1,5 +1,5 @@
-use terminusdb_woql2::prelude::*;
 use terminusdb_woql2::parse_node_pattern;
+use terminusdb_woql2::prelude::*;
 
 struct User;
 struct Post;
@@ -55,15 +55,15 @@ fn test_parse_node_pattern_in_context() {
     // Test using the pattern in a path-like context
     let (builder1, field1): (_, Option<&str>) = parse_node_pattern!(u:User.posts);
     let (builder2, field2): (_, Option<&str>) = parse_node_pattern!(Post);
-    
+
     // This demonstrates how the macro could be used to build paths
     println!("Node 1 field: {:?}", field1);
     println!("Node 2 field: {:?}", field2);
-    
+
     // Both builders work independently
     let q1 = builder1.finalize();
     let q2 = builder2.finalize();
-    
+
     println!("Query 1: {}", q1.to_dsl());
     println!("Query 2: {}", q2.to_dsl());
 }

@@ -17,11 +17,11 @@ async fn main() -> anyhow::Result<()> {
     // Connect to local TerminusDB instance
     let client = TerminusDBHttpClient::local_node();
     let spec = BranchSpec::from("admin/mydb/main");
-    
+
     // Insert product schema
     let args = DocumentInsertArgs::from(spec.clone());
     client.insert_entity_schema::<Product>(args.clone()).await?;
-    
+
     // Create multiple products
     let products = vec![
         Product {
@@ -40,12 +40,12 @@ async fn main() -> anyhow::Result<()> {
             in_stock: false,
         },
     ];
-    
+
     // Insert all products and get the commit ID
     let (result, commit_id) = client.insert_instances_with_commit_id(products, args).await?;
-    
+
     println!("Successfully inserted {} products in commit {}", result.len(), commit_id);
-    
+
     // Print individual results
     for (id, insert_result) in result.iter() {
         match insert_result {
@@ -57,14 +57,14 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    
+
     // The commit_id can be used for:
     // 1. Auditing - knowing exactly when these instances were created
     // 2. Time travel - retrieving the database state at this specific commit
     // 3. Rollback - reverting to a state before this commit if needed
-    
+
     println!("\nYou can use this commit ID for time travel queries:");
     println!("  let commit_spec = BranchSpec::from(\"admin/mydb/local/commit/{}\");", commit_id);
-    
+
     Ok(())
 }

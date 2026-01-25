@@ -3,14 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use xmlschema::validators::{
-    XsdSchema as RustXsdSchema,
-    FormDefault,
-    GlobalType,
-    Occurs,
-    GroupParticle,
-    XsdComplexType as RustComplexType,
-    ComplexContent,
-    XsdGroup,
+    ComplexContent, FormDefault, GlobalType, GroupParticle, Occurs,
+    XsdComplexType as RustComplexType, XsdGroup, XsdSchema as RustXsdSchema,
 };
 
 /// Deserialize max_occurs where null means Unbounded
@@ -188,10 +182,8 @@ impl XsdSchema {
         let path = path.as_ref();
 
         // Parse the schema using xmlschema-rs with optional catalog support
-        let rust_schema = RustXsdSchema::from_file_with_catalog(
-            path,
-            catalog_path.as_ref().map(|p| p.as_ref()),
-        )?;
+        let rust_schema =
+            RustXsdSchema::from_file_with_catalog(path, catalog_path.as_ref().map(|p| p.as_ref()))?;
 
         // Extract data from the parsed schema, including imports
         Self::from_rust_schema_with_imports(&rust_schema, path)
@@ -261,7 +253,8 @@ impl XsdSchema {
                 for (qname, global_type) in imported_schema.types() {
                     match global_type {
                         GlobalType::Complex(ct) => {
-                            let complex = Self::extract_complex_type(&qname.to_string(), ct, imported_schema);
+                            let complex =
+                                Self::extract_complex_type(&qname.to_string(), ct, imported_schema);
                             complex_types.push(complex);
                         }
                         GlobalType::Simple(st) => {
@@ -276,7 +269,8 @@ impl XsdSchema {
                     if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
                         if ct.name.is_none() {
                             let elem_name = &qname.local_name;
-                            let mut complex = Self::extract_complex_type(elem_name, ct, imported_schema);
+                            let mut complex =
+                                Self::extract_complex_type(elem_name, ct, imported_schema);
                             complex.is_anonymous = true;
                             complex.element_name = Some(elem_name.to_string());
                             complex_types.push(complex);
@@ -296,7 +290,8 @@ impl XsdSchema {
         }
 
         // Infer entry point elements from main schema only
-        let mut entry_point_elements: Vec<String> = schema.elements()
+        let mut entry_point_elements: Vec<String> = schema
+            .elements()
             .filter_map(|(qname, elem)| {
                 if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
                     if ct.name.is_none() {
@@ -335,10 +330,7 @@ impl XsdSchema {
 
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
             // Strip common prefixes like "base" (e.g., "basetopic" → "topic")
-            let name = stem
-                .strip_prefix("base")
-                .unwrap_or(stem)
-                .to_lowercase();
+            let name = stem.strip_prefix("base").unwrap_or(stem).to_lowercase();
 
             // The element name is the file name without prefix
             if !name.is_empty() {
@@ -396,18 +388,18 @@ impl XsdSchema {
                         // If this element particle has element_decl, it's a local element
                         if let Some(elem) = &ep.element_decl {
                             // Extract as a root element
-                            let element = XsdSchema::extract_element(
-                                &ep.name.to_string(),
-                                elem,
-                                schema,
-                            );
+                            let element =
+                                XsdSchema::extract_element(&ep.name.to_string(), elem, schema);
                             root_elements.push(element);
 
                             // Also extract anonymous complex type if present
-                            if let xmlschema::validators::ElementType::Complex(ct) = &elem.element_type {
+                            if let xmlschema::validators::ElementType::Complex(ct) =
+                                &elem.element_type
+                            {
                                 if ct.name.is_none() {
                                     let elem_name = &ep.name.local_name;
-                                    let mut complex = XsdSchema::extract_complex_type(elem_name, ct, schema);
+                                    let mut complex =
+                                        XsdSchema::extract_complex_type(elem_name, ct, schema);
                                     complex.is_anonymous = true;
                                     complex.element_name = Some(elem_name.to_string());
                                     complex_types.push(complex);
@@ -417,7 +409,12 @@ impl XsdSchema {
                     }
                     GroupParticle::Group(nested_group) => {
                         // Recursively process nested groups
-                        extract_from_particles(&nested_group.particles, schema, root_elements, complex_types);
+                        extract_from_particles(
+                            &nested_group.particles,
+                            schema,
+                            root_elements,
+                            complex_types,
+                        );
                     }
                     GroupParticle::Any(_) => {
                         // Wildcards don't have local elements
@@ -439,7 +436,8 @@ impl XsdSchema {
     ) -> XsdTypeInfo {
         match elem_type {
             xmlschema::validators::ElementType::Complex(ct) => {
-                let (child_elements, content_model) = Self::extract_content_model(&ct.content, schema);
+                let (child_elements, content_model) =
+                    Self::extract_content_model(&ct.content, schema);
                 let attributes = Self::extract_attributes(&ct.attributes);
 
                 XsdTypeInfo {
@@ -453,30 +451,26 @@ impl XsdSchema {
                     child_elements: Some(child_elements),
                 }
             }
-            xmlschema::validators::ElementType::Simple(st) => {
-                XsdTypeInfo {
-                    name: st.name().map(|q| q.to_string()),
-                    qualified_name: st.name().map(|q| q.to_string()),
-                    category: "XsdSimpleType".to_string(),
-                    is_complex: false,
-                    is_simple: true,
-                    content_model: None,
-                    attributes: None,
-                    child_elements: None,
-                }
-            }
-            xmlschema::validators::ElementType::Any => {
-                XsdTypeInfo {
-                    name: Some("xs:anyType".to_string()),
-                    qualified_name: Some("{http://www.w3.org/2001/XMLSchema}anyType".to_string()),
-                    category: "XsdAnyType".to_string(),
-                    is_complex: false,
-                    is_simple: false,
-                    content_model: None,
-                    attributes: None,
-                    child_elements: None,
-                }
-            }
+            xmlschema::validators::ElementType::Simple(st) => XsdTypeInfo {
+                name: st.name().map(|q| q.to_string()),
+                qualified_name: st.name().map(|q| q.to_string()),
+                category: "XsdSimpleType".to_string(),
+                is_complex: false,
+                is_simple: true,
+                content_model: None,
+                attributes: None,
+                child_elements: None,
+            },
+            xmlschema::validators::ElementType::Any => XsdTypeInfo {
+                name: Some("xs:anyType".to_string()),
+                qualified_name: Some("{http://www.w3.org/2001/XMLSchema}anyType".to_string()),
+                category: "XsdAnyType".to_string(),
+                is_complex: false,
+                is_simple: false,
+                content_model: None,
+                attributes: None,
+                child_elements: None,
+            },
         }
     }
 
@@ -699,10 +693,9 @@ impl XsdSchema {
 
         // Otherwise extract from the resolved element_type
         match &elem.element_type {
-            xmlschema::validators::ElementType::Simple(st) => {
-                st.qualified_name_string()
-                    .unwrap_or_else(|| "xs:anySimpleType".to_string())
-            }
+            xmlschema::validators::ElementType::Simple(st) => st
+                .qualified_name_string()
+                .unwrap_or_else(|| "xs:anySimpleType".to_string()),
             xmlschema::validators::ElementType::Complex(ct) => {
                 // Try named complex type first
                 if let Some(name) = &ct.name {
@@ -743,8 +736,7 @@ impl XsdSchema {
                 .map(|q| q.to_string())
                 .or_else(|| {
                     // Get the resolved simple type and its qualified name
-                    attr.simple_type()
-                        .and_then(|st| st.qualified_name_string())
+                    attr.simple_type().and_then(|st| st.qualified_name_string())
                 })
                 .unwrap_or_else(|| "xs:string".to_string());
 
@@ -780,22 +772,30 @@ impl XsdSchema {
 
         // Extract other facets
         if let Some(ref len_facet) = facets.length {
-            restrictions.push(Restriction::Length { value: len_facet.value as u32 });
+            restrictions.push(Restriction::Length {
+                value: len_facet.value as u32,
+            });
         }
         if let Some(ref min_len) = facets.min_length {
-            restrictions.push(Restriction::MinLength { value: min_len.value as u32 });
+            restrictions.push(Restriction::MinLength {
+                value: min_len.value as u32,
+            });
         }
         if let Some(ref max_len) = facets.max_length {
-            restrictions.push(Restriction::MaxLength { value: max_len.value as u32 });
+            restrictions.push(Restriction::MaxLength {
+                value: max_len.value as u32,
+            });
         }
         for pattern in &facets.patterns {
-            restrictions.push(Restriction::Pattern { value: pattern.pattern.clone() });
+            restrictions.push(Restriction::Pattern {
+                value: pattern.pattern.clone(),
+            });
         }
 
         // Get base type if this is a restricted type
         // Use SimpleTypeTrait::base_type to disambiguate from TypeValidator::base_type
-        let base_type = SimpleTypeTrait::base_type(st.as_ref())
-            .and_then(|base| base.qualified_name_string());
+        let base_type =
+            SimpleTypeTrait::base_type(st.as_ref()).and_then(|base| base.qualified_name_string());
 
         // Extract variety (Atomic, List, Union)
         let variety = Some(match st.variety() {
@@ -805,8 +805,7 @@ impl XsdSchema {
         });
 
         // Extract item_type for List types
-        let item_type = st.item_type()
-            .and_then(|item| item.qualified_name_string());
+        let item_type = st.item_type().and_then(|item| item.qualified_name_string());
 
         // Extract member_types for Union types
         let member_types = {
@@ -814,9 +813,12 @@ impl XsdSchema {
             if members.is_empty() {
                 None
             } else {
-                Some(members.iter()
-                    .filter_map(|m| m.qualified_name_string())
-                    .collect())
+                Some(
+                    members
+                        .iter()
+                        .filter_map(|m| m.qualified_name_string())
+                        .collect(),
+                )
             }
         };
 
@@ -825,7 +827,11 @@ impl XsdSchema {
             qualified_name: qname.to_string(),
             category: "XsdSimpleType".to_string(),
             base_type,
-            restrictions: if restrictions.is_empty() { None } else { Some(restrictions) },
+            restrictions: if restrictions.is_empty() {
+                None
+            } else {
+                Some(restrictions)
+            },
             variety,
             item_type,
             member_types,
@@ -834,18 +840,12 @@ impl XsdSchema {
 
     /// Get all element names (useful for quick inspection)
     pub fn element_names(&self) -> Vec<&str> {
-        self.root_elements
-            .iter()
-            .map(|e| e.name.as_str())
-            .collect()
+        self.root_elements.iter().map(|e| e.name.as_str()).collect()
     }
 
     /// Get all complex type names
     pub fn complex_type_names(&self) -> Vec<&str> {
-        self.complex_types
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect()
+        self.complex_types.iter().map(|t| t.name.as_str()).collect()
     }
 }
 
@@ -911,7 +911,10 @@ mod tests {
         }"#;
 
         let schema: XsdSchema = serde_json::from_str(json).unwrap();
-        assert_eq!(schema.target_namespace, Some("http://example.com/test".to_string()));
+        assert_eq!(
+            schema.target_namespace,
+            Some("http://example.com/test".to_string())
+        );
     }
 
     #[test]
@@ -1002,7 +1005,10 @@ mod integration_tests {
         let schema: XsdSchema = serde_json::from_str(json).unwrap();
 
         // Verify schema
-        assert_eq!(schema.target_namespace, Some("http://example.com/book".to_string()));
+        assert_eq!(
+            schema.target_namespace,
+            Some("http://example.com/book".to_string())
+        );
         assert_eq!(schema.root_elements.len(), 1);
         assert_eq!(schema.complex_types.len(), 1);
 

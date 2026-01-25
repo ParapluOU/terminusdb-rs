@@ -235,7 +235,9 @@ impl OrmResult {
                 if let Some(s) = v.as_str() {
                     Some(s.to_string())
                 } else if let Some(obj) = v.as_object() {
-                    obj.get("@id").and_then(|id| id.as_str()).map(|s| s.to_string())
+                    obj.get("@id")
+                        .and_then(|id| id.as_str())
+                        .map(|s| s.to_string())
                 } else {
                     None
                 }
@@ -287,7 +289,9 @@ impl OrmResult {
                     if let Some(s) = v.as_str() {
                         Some(s.to_string())
                     } else if let Some(obj) = v.as_object() {
-                        obj.get("@id").and_then(|id| id.as_str()).map(|s| s.to_string())
+                        obj.get("@id")
+                            .and_then(|id| id.as_str())
+                            .map(|s| s.to_string())
                     } else {
                         None
                     }
@@ -318,7 +322,9 @@ impl OrmResult {
                     if let Some(s) = item.as_str() {
                         Some(s.to_string())
                     } else if let Some(obj) = item.as_object() {
-                        obj.get("@id").and_then(|id| id.as_str()).map(|s| s.to_string())
+                        obj.get("@id")
+                            .and_then(|id| id.as_str())
+                            .map(|s| s.to_string())
                     } else {
                         None
                     }

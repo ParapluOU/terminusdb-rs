@@ -1097,7 +1097,8 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
 
         // If no relations, simple fetch
         if self.with_relations.is_empty() {
-            return self.client
+            return self
+                .client
                 .fetch_by_ids(self.primary_ids, spec, self.opts)
                 .await;
         }
@@ -1112,9 +1113,7 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         let mut fetch_opts = self.opts;
         fetch_opts.unfold = true;
 
-        self.client
-            .fetch_by_ids(all_ids, spec, fetch_opts)
-            .await
+        self.client.fetch_by_ids(all_ids, spec, fetch_opts).await
     }
 
     /// Collect all related entity IDs using a single GraphQL query.
@@ -1132,7 +1131,9 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         // IDs can be:
         // - "Writer/123" -> "Writer"
         // - "terminusdb:///data/Writer/123" -> "Writer"
-        let primary_type = self.primary_ids.first()
+        let primary_type = self
+            .primary_ids
+            .first()
             .and_then(|id| {
                 // Handle both short and full URI formats
                 if id.contains("///data/") {
@@ -1153,17 +1154,17 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         );
 
         // Debug: print the generated GraphQL query
-        eprintln!("[ORM DEBUG] Executing relation GraphQL query:\n{}", graphql_query);
+        eprintln!(
+            "[ORM DEBUG] Executing relation GraphQL query:\n{}",
+            graphql_query
+        );
 
         // Execute GraphQL query
         let request = GraphQLRequest::new(&graphql_query);
-        let response = self.client.client()
-            .execute_graphql::<serde_json::Value>(
-                &spec.db,
-                spec.branch.as_deref(),
-                request,
-                None,
-            )
+        let response = self
+            .client
+            .client()
+            .execute_graphql::<serde_json::Value>(&spec.db, spec.branch.as_deref(), request, None)
             .await?;
 
         // Check for errors
@@ -1174,7 +1175,9 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
             }
         }
 
-        let data = response.data.ok_or_else(|| anyhow::anyhow!("No GraphQL data returned"))?;
+        let data = response
+            .data
+            .ok_or_else(|| anyhow::anyhow!("No GraphQL data returned"))?;
 
         // Extract all _id values from the response
         let mut ids = self.primary_ids.clone();

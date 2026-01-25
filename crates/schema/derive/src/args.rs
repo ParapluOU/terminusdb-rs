@@ -63,7 +63,7 @@ pub enum RenameStrategy {
     None,
     /// Convert to lowercase
     Lowercase,
-    /// Convert to UPPERCASE  
+    /// Convert to UPPERCASE
     Uppercase,
     /// Convert to PascalCase
     PascalCase,
@@ -193,7 +193,7 @@ pub struct TDBFieldOpts {
     /// Whether this field is a subdocument
     #[darling(default)]
     pub(crate) subdocument: Option<bool>,
-    
+
     /// Whether this field is the default relation to its target type
     #[darling(default)]
     pub(crate) default_relation: bool,

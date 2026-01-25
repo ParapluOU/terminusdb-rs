@@ -877,18 +877,23 @@ async fn run_clone(
     let parsed_url = Url::parse(&host)?;
     let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
 
-    let auth_creds = remote_auth.as_ref().map(|s| parse_remote_auth(s)).transpose()?;
+    let auth_creds = remote_auth
+        .as_ref()
+        .map(|s| parse_remote_auth(s))
+        .transpose()?;
     let auth = auth_creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
 
-    let result = client.clone_repository(
-        &org,
-        &database,
-        &remote_url,
-        label.as_deref(),
-        comment.as_deref(),
-        auth,
-        None, // timeout
-    ).await?;
+    let result = client
+        .clone_repository(
+            &org,
+            &database,
+            &remote_url,
+            label.as_deref(),
+            comment.as_deref(),
+            auth,
+            None, // timeout
+        )
+        .await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -908,11 +913,16 @@ async fn run_fetch(
     let parsed_url = Url::parse(&host)?;
     let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
 
-    let auth_creds = remote_auth.as_ref().map(|s| parse_remote_auth(s)).transpose()?;
+    let auth_creds = remote_auth
+        .as_ref()
+        .map(|s| parse_remote_auth(s))
+        .transpose()?;
     let auth = auth_creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
 
     let path = format!("{}/{}/local/branch/{}", org, database, branch);
-    let result = client.fetch(&path, &remote_url, Some(&remote_branch), auth, None).await?;
+    let result = client
+        .fetch(&path, &remote_url, Some(&remote_branch), auth, None)
+        .await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -934,19 +944,24 @@ async fn run_pull(
     let parsed_url = Url::parse(&host)?;
     let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
 
-    let auth_creds = remote_auth.as_ref().map(|s| parse_remote_auth(s)).transpose()?;
+    let auth_creds = remote_auth
+        .as_ref()
+        .map(|s| parse_remote_auth(s))
+        .transpose()?;
     let auth = auth_creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
 
     let path = format!("{}/{}/local/branch/{}", org, database, branch);
-    let result = client.pull(
-        &path,
-        &remote_url,
-        remote_branch.as_deref(),
-        &author,
-        &message,
-        auth,
-        None, // timeout
-    ).await?;
+    let result = client
+        .pull(
+            &path,
+            &remote_url,
+            remote_branch.as_deref(),
+            &author,
+            &message,
+            auth,
+            None, // timeout
+        )
+        .await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -966,11 +981,16 @@ async fn run_push(
     let parsed_url = Url::parse(&host)?;
     let client = TerminusDBHttpClient::new(parsed_url, &user, &password, &org).await?;
 
-    let auth_creds = remote_auth.as_ref().map(|s| parse_remote_auth(s)).transpose()?;
+    let auth_creds = remote_auth
+        .as_ref()
+        .map(|s| parse_remote_auth(s))
+        .transpose()?;
     let auth = auth_creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
 
     let path = format!("{}/{}/local/branch/{}", org, database, branch);
-    let result = client.push(&path, &remote_url, remote_branch.as_deref(), auth, None).await?;
+    let result = client
+        .push(&path, &remote_url, remote_branch.as_deref(), auth, None)
+        .await?;
 
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
@@ -1101,7 +1121,11 @@ async fn run_database_info(
     if !res.status().is_success() {
         let status = res.status();
         let error_text = res.text().await?;
-        anyhow::bail!("Failed to get database info (status {}): {}", status, error_text);
+        anyhow::bail!(
+            "Failed to get database info (status {}): {}",
+            status,
+            error_text
+        );
     }
 
     let result: serde_json::Value = res.json().await?;
@@ -1127,7 +1151,11 @@ async fn run_database_list(
     if !res.status().is_success() {
         let status = res.status();
         let error_text = res.text().await?;
-        anyhow::bail!("Failed to list databases (status {}): {}", status, error_text);
+        anyhow::bail!(
+            "Failed to list databases (status {}): {}",
+            status,
+            error_text
+        );
     }
 
     let result: serde_json::Value = res.json().await?;
@@ -1169,7 +1197,11 @@ async fn run_database_delete(
     if !res.status().is_success() {
         let status = res.status();
         let error_text = res.text().await?;
-        anyhow::bail!("Failed to delete database (status {}): {}", status, error_text);
+        anyhow::bail!(
+            "Failed to delete database (status {}): {}",
+            status,
+            error_text
+        );
     }
 
     let result: serde_json::Value = res.json().await?;
@@ -1197,7 +1229,11 @@ async fn run_database_log(
     if !res.status().is_success() {
         let status = res.status();
         let error_text = res.text().await?;
-        anyhow::bail!("Failed to get commit log (status {}): {}", status, error_text);
+        anyhow::bail!(
+            "Failed to get commit log (status {}): {}",
+            status,
+            error_text
+        );
     }
 
     let mut result: Vec<serde_json::Value> = res.json().await?;
@@ -1227,34 +1263,42 @@ async fn run_deploy(
     target_comment: Option<String>,
     skip_create: bool,
 ) -> Result<()> {
-    eprintln!("Starting deployment from {}:{}/{} to {}:{}/{}",
-        source_host, source_org, source_db, target_host, target_org, target_db);
+    eprintln!(
+        "Starting deployment from {}:{}/{} to {}:{}/{}",
+        source_host, source_org, source_db, target_host, target_org, target_db
+    );
 
     // Step 1: Clone source database to target using clone_repository
     eprintln!("\n[1/1] Cloning source database to target...");
 
     let target_url = Url::parse(&target_host)?;
-    let target_client = TerminusDBHttpClient::new(target_url, &target_user, &target_password, &target_org).await?;
+    let target_client =
+        TerminusDBHttpClient::new(target_url, &target_user, &target_password, &target_org).await?;
 
     let source_remote_url = format!("{}/{}/{}", source_host, source_org, source_db);
 
     let label = target_label.as_deref();
     let comment = target_comment.as_deref();
 
-    target_client.clone_repository(
-        &target_org,
-        &target_db,
-        &source_remote_url,
-        label,
-        comment,
-        Some((&source_user, &source_password)),
-        None, // timeout
-    ).await?;
+    target_client
+        .clone_repository(
+            &target_org,
+            &target_db,
+            &source_remote_url,
+            label,
+            comment,
+            Some((&source_user, &source_password)),
+            None, // timeout
+        )
+        .await?;
 
     eprintln!("✓ Successfully cloned database");
 
     eprintln!("\n🎉 Deployment completed successfully!");
-    eprintln!("   Source: {}:{}/{} (branch: {})", source_host, source_org, source_db, source_branch);
+    eprintln!(
+        "   Source: {}:{}/{} (branch: {})",
+        source_host, source_org, source_db, source_branch
+    );
     eprintln!("   Target: {}:{}/{}", target_host, target_org, target_db);
 
     Ok(())
@@ -1271,11 +1315,11 @@ async fn run_changestream(
     color: String,
 ) -> Result<()> {
     // Validate database is provided
-    let db = database.context("Database name is required. Provide via --database or TERMINUSDB_DB env var")?;
+    let db = database
+        .context("Database name is required. Provide via --database or TERMINUSDB_DB env var")?;
 
     // Parse the host URL
-    let url = Url::parse(&host)
-        .context(format!("Invalid TerminusDB host URL: {}", host))?;
+    let url = Url::parse(&host).context(format!("Invalid TerminusDB host URL: {}", host))?;
 
     info!("Connecting to TerminusDB at {}", url);
     info!("Monitoring database: {} (branch: {})", db, branch);
@@ -1295,7 +1339,10 @@ async fn run_changestream(
     // Get the SSE endpoint URL from the client (includes /api prefix)
     let sse_url = client.get_sse_url();
 
-    eprintln!("Streaming changesets from {}/{} (branch: {}). Press Ctrl+C to stop.", org, db, branch);
+    eprintln!(
+        "Streaming changesets from {}/{} (branch: {}). Press Ctrl+C to stop.",
+        org, db, branch
+    );
     info!("SSE endpoint URL: {}", sse_url);
     info!("Authenticating as: {}", user);
     info!("Organization: {}", org);
@@ -1487,9 +1534,7 @@ async fn main() -> Result<()> {
             branch,
             format,
             color,
-        } => {
-            run_changestream(host, user, password, org, database, branch, format, color).await
-        }
+        } => run_changestream(host, user, password, org, database, branch, format, color).await,
         Commands::Remote { command } => match command {
             RemoteCommands::Add {
                 host,
@@ -1568,7 +1613,18 @@ async fn main() -> Result<()> {
             remote_branch,
             remote_auth,
         } => {
-            run_fetch(host, user, password, org, database, branch, remote_url, remote_branch, remote_auth).await
+            run_fetch(
+                host,
+                user,
+                password,
+                org,
+                database,
+                branch,
+                remote_url,
+                remote_branch,
+                remote_auth,
+            )
+            .await
         }
         Commands::Pull {
             host,
@@ -1650,7 +1706,9 @@ async fn main() -> Result<()> {
             branch,
             author,
             message,
-        } => run_squash_and_reset(host, user, password, org, database, branch, author, message).await,
+        } => {
+            run_squash_and_reset(host, user, password, org, database, branch, author, message).await
+        }
         Commands::Deploy {
             source_host,
             source_user,
@@ -1695,7 +1753,10 @@ async fn main() -> Result<()> {
                 label,
                 comment,
                 schema,
-            } => run_database_create(host, user, password, org, database, label, comment, schema).await,
+            } => {
+                run_database_create(host, user, password, org, database, label, comment, schema)
+                    .await
+            }
             DatabaseCommands::Info {
                 host,
                 user,
@@ -1815,7 +1876,10 @@ async fn run_login(profile_name: &str) -> Result<()> {
     auth::save_config(&config)?;
 
     println!();
-    println!("Successfully logged in and set '{}' as active profile", profile_name);
+    println!(
+        "Successfully logged in and set '{}' as active profile",
+        profile_name
+    );
     println!("Credentials saved to system keyring");
 
     Ok(())
@@ -1832,7 +1896,10 @@ async fn run_logout(profile_name: Option<&str>) -> Result<()> {
     // Delete the profile
     auth::delete_profile(&profile_to_logout)?;
 
-    println!("Successfully logged out from profile '{}'", profile_to_logout);
+    println!(
+        "Successfully logged out from profile '{}'",
+        profile_to_logout
+    );
     println!("Credentials removed from system keyring");
 
     Ok(())
@@ -1857,12 +1924,9 @@ async fn run_profile_list() -> Result<()> {
         let is_active = name == &config.settings.active_profile;
         let marker = if is_active { "*" } else { " " };
 
-        println!("{} {} ({}@{} / org: {})",
-            marker,
-            name,
-            profile.user,
-            profile.host,
-            profile.org
+        println!(
+            "{} {} ({}@{} / org: {})",
+            marker, name, profile.user, profile.host, profile.org
         );
 
         if let Some(ref db) = profile.database {
@@ -1884,7 +1948,10 @@ async fn run_profile_set(name: &str) -> Result<()> {
 
     // Verify profile exists
     if !config.profiles.contains_key(name) {
-        anyhow::bail!("Profile '{}' not found. Use 'tdb profile list' to see available profiles.", name);
+        anyhow::bail!(
+            "Profile '{}' not found. Use 'tdb profile list' to see available profiles.",
+            name
+        );
     }
 
     config.set_active(name.to_string());
@@ -1903,7 +1970,8 @@ async fn run_profile_show(name: Option<&str>) -> Result<()> {
         None => &config.settings.active_profile,
     };
 
-    let profile = config.get_profile(profile_name)
+    let profile = config
+        .get_profile(profile_name)
         .with_context(|| format!("Profile '{}' not found", profile_name))?;
 
     println!("Profile: {}", profile_name);
@@ -1941,7 +2009,10 @@ async fn run_profile_delete(name: &str, force: bool) -> Result<()> {
 
     // Confirm deletion unless --force
     if !force {
-        print!("Are you sure you want to delete profile '{}'? (y/N): ", name);
+        print!(
+            "Are you sure you want to delete profile '{}'? (y/N): ",
+            name
+        );
         io::stdout().flush()?;
         let mut response = String::new();
         io::stdin().read_line(&mut response)?;
@@ -2026,16 +2097,14 @@ fn resolve_credentials(
 
     // Fall back to CLI args only (must have all required fields)
     match (cli_host, cli_user, cli_password, cli_org) {
-        (Some(host), Some(user), Some(password), Some(org)) => {
-            Ok(auth::ResolvedCredentials {
-                host,
-                user,
-                password,
-                org,
-                database: cli_database,
-                branch: cli_branch,
-            })
-        }
+        (Some(host), Some(user), Some(password), Some(org)) => Ok(auth::ResolvedCredentials {
+            host,
+            user,
+            password,
+            org,
+            database: cli_database,
+            branch: cli_branch,
+        }),
         _ => {
             anyhow::bail!(
                 "Missing required credentials. Please provide --host, --user, --password, and --org, \

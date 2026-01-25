@@ -30,8 +30,14 @@ mod tests {
 
         // Verify structure
         let admin = admin_org.unwrap();
-        assert!(admin.id.contains("Organization"), "ID should contain 'Organization'");
-        assert_eq!(admin.org_type, "Organization", "@type should be 'Organization'");
+        assert!(
+            admin.id.contains("Organization"),
+            "ID should contain 'Organization'"
+        );
+        assert_eq!(
+            admin.org_type, "Organization",
+            "@type should be 'Organization'"
+        );
 
         println!("Found {} organizations", orgs.len());
         for org in &orgs {
@@ -66,7 +72,10 @@ mod tests {
         let client = server.client().await?;
 
         // Use UUID to avoid conflicts with parallel tests
-        let org_name = format!("test_org_{}", Uuid::new_v4().to_string().split('-').next().unwrap());
+        let org_name = format!(
+            "test_org_{}",
+            Uuid::new_v4().to_string().split('-').next().unwrap()
+        );
 
         // Create organization
         let create_result = client.create_organization(&org_name).await?;
@@ -82,7 +91,10 @@ mod tests {
 
         // Verify it's gone
         let get_result = client.get_organization(&org_name).await;
-        assert!(get_result.is_err(), "Organization should not exist after deletion");
+        assert!(
+            get_result.is_err(),
+            "Organization should not exist after deletion"
+        );
 
         Ok(())
     }
@@ -96,7 +108,10 @@ mod tests {
         // Try to create "admin" which already exists
         let result = client.create_organization("admin").await;
 
-        assert!(result.is_err(), "Creating duplicate organization should fail");
+        assert!(
+            result.is_err(),
+            "Creating duplicate organization should fail"
+        );
         let err = result.unwrap_err();
         println!("Expected error: {}", err);
 
@@ -111,7 +126,10 @@ mod tests {
 
         let result = client.get_organization("nonexistent_org_12345").await;
 
-        assert!(result.is_err(), "Getting non-existent organization should fail");
+        assert!(
+            result.is_err(),
+            "Getting non-existent organization should fail"
+        );
         let err = result.unwrap_err();
         println!("Expected error: {}", err);
 
@@ -162,7 +180,10 @@ mod tests {
         assert!(user.id.contains("User"));
 
         // Admin user should have capabilities
-        assert!(!user.capability.is_empty(), "Admin user should have capabilities");
+        assert!(
+            !user.capability.is_empty(),
+            "Admin user should have capabilities"
+        );
 
         println!("Admin user: {:?}", user);
 
@@ -175,7 +196,9 @@ mod tests {
         let server = TerminusDBServer::test_instance().await?;
         let client = server.client().await?;
 
-        let databases = client.get_organization_user_databases("admin", "admin").await?;
+        let databases = client
+            .get_organization_user_databases("admin", "admin")
+            .await?;
 
         // Admin user should have access to at least the system database
         println!("Found {} databases for admin user", databases.len());
@@ -198,17 +221,22 @@ mod tests {
         let client = server.client().await?;
 
         // Create a test organization
-        let org_name = format!("test_role_org_{}", Uuid::new_v4().to_string().split('-').next().unwrap());
+        let org_name = format!(
+            "test_role_org_{}",
+            Uuid::new_v4().to_string().split('-').next().unwrap()
+        );
         client.create_organization(&org_name).await?;
 
         // Create a role for admin user in the new org
         // Scope is the resource, role is the permission level
-        let result = client.create_user_role(
-            &org_name,
-            "admin",
-            &format!("Organization/{}", org_name),
-            "admin"
-        ).await;
+        let result = client
+            .create_user_role(
+                &org_name,
+                "admin",
+                &format!("Organization/{}", org_name),
+                "admin",
+            )
+            .await;
 
         println!("Create user role result: {:?}", result);
 
@@ -226,16 +254,21 @@ mod tests {
         let client = server.client().await?;
 
         // Create a test organization
-        let org_name = format!("test_remove_org_{}", Uuid::new_v4().to_string().split('-').next().unwrap());
+        let org_name = format!(
+            "test_remove_org_{}",
+            Uuid::new_v4().to_string().split('-').next().unwrap()
+        );
         client.create_organization(&org_name).await?;
 
         // First add admin to the org with a role, then remove
-        let _ = client.create_user_role(
-            &org_name,
-            "admin",
-            &format!("Organization/{}", org_name),
-            "admin"
-        ).await;
+        let _ = client
+            .create_user_role(
+                &org_name,
+                "admin",
+                &format!("Organization/{}", org_name),
+                "admin",
+            )
+            .await;
 
         // Now remove the user from the org
         let result = client.remove_user_from_org(&org_name, "admin").await;

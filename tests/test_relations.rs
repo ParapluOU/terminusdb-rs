@@ -69,10 +69,10 @@ fn test_bidirectional_relations() {
     // Comment has relations to both User and Post
     let user_query = <Comment as RelationTo<User, CommentAuthorRelation>>::constraints();
     let post_query = <Comment as RelationTo<Post, CommentPostRelation>>::constraints();
-    
+
     println!("Comment -> User: {:?}", user_query);
     println!("Comment -> Post: {:?}", post_query);
-    
+
     // And reverse relations should work
     let from_user = <Comment as RelationFrom<User, UserReportsRelation>>::constraints();
     println!("Comment <- User: {:?}", from_user);

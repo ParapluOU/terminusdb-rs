@@ -168,13 +168,13 @@ pub fn implement_for_struct(
 
     // Extract base generics for all impls
     let (base_impl_generics, base_ty_generics, base_where_clause) = input.generics.split_for_impl();
-    
+
     // Generate bounds for each trait implementation if generics are enabled
     #[cfg(feature = "generic-derive")]
     let bounds_for_traits = if !input.generics.params.is_empty() {
         if let Fields::Named(fields_named) = &data_struct.fields {
             let mut trait_bounds = HashMap::new();
-            
+
             // Collect bounds for each trait
             trait_bounds.insert(
                 crate::bounds::TraitImplType::ToTDBSchema,
@@ -183,7 +183,7 @@ pub fn implement_for_struct(
                     &input.generics,
                     struct_name,
                     crate::bounds::TraitImplType::ToTDBSchema,
-                )
+                ),
             );
             trait_bounds.insert(
                 crate::bounds::TraitImplType::ToTDBInstance,
@@ -192,7 +192,7 @@ pub fn implement_for_struct(
                     &input.generics,
                     struct_name,
                     crate::bounds::TraitImplType::ToTDBInstance,
-                )
+                ),
             );
             trait_bounds.insert(
                 crate::bounds::TraitImplType::FromTDBInstance,
@@ -201,7 +201,7 @@ pub fn implement_for_struct(
                     &input.generics,
                     struct_name,
                     crate::bounds::TraitImplType::FromTDBInstance,
-                )
+                ),
             );
             trait_bounds.insert(
                 crate::bounds::TraitImplType::InstanceFromJson,
@@ -210,9 +210,9 @@ pub fn implement_for_struct(
                     &input.generics,
                     struct_name,
                     crate::bounds::TraitImplType::InstanceFromJson,
-                )
+                ),
             );
-            
+
             Some(trait_bounds)
         } else {
             None
@@ -220,15 +220,17 @@ pub fn implement_for_struct(
     } else {
         None
     };
-    
+
     #[cfg(not(feature = "generic-derive"))]
-    let bounds_for_traits: Option<std::collections::HashMap<String, std::collections::HashMap<syn::Ident, Vec<String>>>> = None;
+    let bounds_for_traits: Option<
+        std::collections::HashMap<String, std::collections::HashMap<syn::Ident, Vec<String>>>,
+    > = None;
 
     // For non-generic code, use empty generics
     #[cfg(not(feature = "generic-derive"))]
     let (impl_generics, ty_generics, where_clause) =
         (quote! {}, quote! {}, None::<syn::WhereClause>);
-    
+
     // For generic code, we'll use specific bounds for each impl
     #[cfg(feature = "generic-derive")]
     let (impl_generics, ty_generics, _) = (
@@ -250,10 +252,10 @@ pub fn implement_for_struct(
         } else {
             base_where_clause.cloned()
         };
-        
+
         #[cfg(not(feature = "generic-derive"))]
         let where_clause: Option<syn::WhereClause> = None;
-        
+
         quote! {
             impl #impl_generics terminusdb_schema::ToSchemaClass for #struct_name #ty_generics #where_clause {
                 fn to_class() -> String {
@@ -380,10 +382,10 @@ pub fn implement_for_struct(
         } else {
             base_where_clause.cloned()
         };
-        
+
         #[cfg(not(feature = "generic-derive"))]
         let schema_where_clause: Option<syn::WhereClause> = None;
-        
+
         generate_totdbschema_impl(
             struct_name,
             class_name_expr.clone(),
@@ -430,10 +432,10 @@ pub fn implement_for_struct(
         } else {
             base_where_clause.cloned()
         };
-        
+
         #[cfg(not(feature = "generic-derive"))]
         let instance_where_clause: Option<syn::WhereClause> = None;
-        
+
         generate_totdbinstance_impl(
             struct_name,
             instance_body_code, // Pass the generated body code
@@ -455,7 +457,7 @@ pub fn implement_for_struct(
         &ty_generics,
         &base_where_clause.cloned(),
     );
-    
+
     #[cfg(not(feature = "relations"))]
     let relation_impls = quote! {};
 

@@ -1,14 +1,14 @@
-use terminusdb_schema_derive::TerminusDBModel;
+use serde::{Deserialize, Serialize};
+use terminusdb_relation::{RelationField, RelationTo};
 use terminusdb_schema::{TdbLazy, ToTDBInstance};
-use terminusdb_relation::{RelationTo, RelationField};
-use serde::{Serialize, Deserialize};
+use terminusdb_schema_derive::TerminusDBModel;
 use terminusdb_woql2::prelude::Query;
 
 // Import all WOQL macros that the generated code needs
-use terminusdb_woql2::{triple, type_, var, and, optional};
+use terminusdb_woql2::{and, optional, triple, type_, var};
 
 // Required for TerminusDBModel derive to work
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 
 #[derive(TerminusDBModel, Debug, Clone)]
 #[tdb(key = "random", class_name = "User")]
@@ -36,11 +36,17 @@ mod tests {
         println!("🧪 Testing WOQL generation for String field relations...");
 
         // Test User.name -> String relation (using unchecked method that derive macro generates)
-        let query = <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked("user", "name");
+        let query =
+            <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked(
+                "user", "name",
+            );
         println!("User.name query: {:#?}", query);
 
         // Test Post.title -> String relation
-        let query2 = <Post as RelationTo<String, PostFields::Title>>::_constraints_with_vars_unchecked("post", "title");
+        let query2 =
+            <Post as RelationTo<String, PostFields::Title>>::_constraints_with_vars_unchecked(
+                "post", "title",
+            );
         println!("Post.title query: {:#?}", query2);
 
         println!("✅ String field WOQL generation works!");
@@ -84,13 +90,16 @@ mod tests {
         println!("🔍 Validating WOQL query structure...");
 
         // Generate a query and examine its structure (using unchecked for String field)
-        let query = <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked("u", "n");
+        let query =
+            <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked(
+                "u", "n",
+            );
 
         // The query should be an And query with triple, type constraints
         match query {
             Query::And(_) => {
                 println!("✅ Query is properly structured as And clause");
-            },
+            }
             _ => {
                 println!("❌ Unexpected query structure: {:#?}", query);
                 panic!("Query should be an And clause");
@@ -105,10 +114,18 @@ mod tests {
         println!("🚀 Testing that ALL generated relation types can execute WOQL generation...");
 
         // String fields (using unchecked methods that derive macro generates)
-        let _q1 = <User as RelationTo<String, UserFields::Id>>::_constraints_with_vars_unchecked("u", "id");
-        let _q2 = <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked("u", "name");
-        let _q3 = <Post as RelationTo<String, PostFields::Id>>::_constraints_with_vars_unchecked("p", "id");
-        let _q4 = <Post as RelationTo<String, PostFields::Title>>::_constraints_with_vars_unchecked("p", "title");
+        let _q1 = <User as RelationTo<String, UserFields::Id>>::_constraints_with_vars_unchecked(
+            "u", "id",
+        );
+        let _q2 = <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked(
+            "u", "name",
+        );
+        let _q3 = <Post as RelationTo<String, PostFields::Id>>::_constraints_with_vars_unchecked(
+            "p", "id",
+        );
+        let _q4 = <Post as RelationTo<String, PostFields::Title>>::_constraints_with_vars_unchecked(
+            "p", "title",
+        );
         println!("✅ All String field relations generate WOQL");
 
         // TdbLazy fields (using unchecked since TdbLazy doesn't implement TerminusDBModel)
@@ -130,13 +147,23 @@ mod tests {
     fn test_variable_names_in_generated_woql() {
         println!("🔍 Testing that custom variable names are used in generated WOQL...");
 
-        let query = <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked("custom_user", "custom_name");
+        let query =
+            <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked(
+                "custom_user",
+                "custom_name",
+            );
         println!("Query with custom vars: {:#?}", query);
 
         // The query should contain our custom variable names
         let query_str = format!("{:#?}", query);
-        assert!(query_str.contains("custom_user"), "Query should contain custom source variable");
-        assert!(query_str.contains("custom_name"), "Query should contain custom target variable");
+        assert!(
+            query_str.contains("custom_user"),
+            "Query should contain custom source variable"
+        );
+        assert!(
+            query_str.contains("custom_name"),
+            "Query should contain custom target variable"
+        );
 
         println!("✅ Custom variable names are properly used in generated WOQL!");
     }
@@ -145,16 +172,28 @@ mod tests {
     fn test_field_names_in_generated_woql() {
         println!("🔍 Testing that field names are correctly used in generated WOQL...");
 
-        let query = <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked("u", "n");
+        let query =
+            <User as RelationTo<String, UserFields::Name>>::_constraints_with_vars_unchecked(
+                "u", "n",
+            );
         println!("User.name query: {:#?}", query);
 
         // The query should contain the field name "name"
         let query_str = format!("{:#?}", query);
-        assert!(query_str.contains("name"), "Query should contain the field name 'name'");
+        assert!(
+            query_str.contains("name"),
+            "Query should contain the field name 'name'"
+        );
 
-        let query2 = <Post as RelationTo<String, PostFields::Title>>::_constraints_with_vars_unchecked("p", "t");
+        let query2 =
+            <Post as RelationTo<String, PostFields::Title>>::_constraints_with_vars_unchecked(
+                "p", "t",
+            );
         let query2_str = format!("{:#?}", query2);
-        assert!(query2_str.contains("title"), "Query should contain the field name 'title'");
+        assert!(
+            query2_str.contains("title"),
+            "Query should contain the field name 'title'"
+        );
 
         println!("✅ Field names are correctly embedded in generated WOQL!");
     }

@@ -1,5 +1,5 @@
-use terminusdb_woql_js::{parse_js_woql, parse_js_woql_to_query};
 use terminusdb_woql2::query::Query;
+use terminusdb_woql_js::{parse_js_woql, parse_js_woql_to_query};
 
 /// Test parsing a simple triple query
 #[test]
@@ -65,7 +65,11 @@ fn test_parse_and_query() {
     "#;
 
     let result = parse_js_woql(query);
-    assert!(result.is_ok(), "Failed to parse and query: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse and query: {:?}",
+        result.err()
+    );
 
     let json_ld = result.unwrap();
     assert_eq!(json_ld["@type"], "And");
@@ -83,7 +87,11 @@ fn test_parse_or_query() {
     "#;
 
     let result = parse_js_woql(query);
-    assert!(result.is_ok(), "Failed to parse or query: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Failed to parse or query: {:?}",
+        result.err()
+    );
 
     let json_ld = result.unwrap();
     assert_eq!(json_ld["@type"], "Or");
@@ -186,10 +194,7 @@ fn test_incomplete_query_error() {
     let query = r#"triple(v("S"), v("P")"#; // Missing closing parenthesis
 
     let result = parse_js_woql(query);
-    assert!(
-        result.is_err(),
-        "Expected error for incomplete query"
-    );
+    assert!(result.is_err(), "Expected error for incomplete query");
 }
 
 /// Test parsing with Vars helper (from terminusdb-client-js)

@@ -57,8 +57,8 @@ mod tests {
                 let age_25: Vec<Person> = client
                     .list_instances_where(
                         &spec,
-                        None,             // offset
-                        None,             // limit
+                        None,              // offset
+                        None,              // limit
                         vec![("age", 25)], // filters
                     )
                     .await

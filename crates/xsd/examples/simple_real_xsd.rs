@@ -6,10 +6,10 @@
 //! - Namespace preservation with @base
 //! - Actual TerminusDB schema generation
 
-use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
-use terminusdb_xsd::schema_model::XsdSchema;
 use std::fs;
 use std::path::PathBuf;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use terminusdb_xsd::schema_model::XsdSchema;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Simple Real XSD to TerminusDB Schema Conversion ===\n");

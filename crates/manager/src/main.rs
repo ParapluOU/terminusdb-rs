@@ -1,5 +1,5 @@
-use rocket::{launch, routes, get};
-use terminusdb_manager::{AppState, assets};
+use rocket::{get, launch, routes};
+use terminusdb_manager::{assets, AppState};
 
 /// Serve index.html
 #[get("/")]
@@ -22,7 +22,8 @@ async fn rocket() -> _ {
     tracing::info!("Starting TerminusDB Manager");
 
     // Initialize application state
-    let state = AppState::new().await
+    let state = AppState::new()
+        .await
         .expect("Failed to initialize application state");
 
     // Start per-node pollers for all configured nodes
@@ -32,25 +33,28 @@ async fn rocket() -> _ {
 
     rocket::build()
         .manage(state)
-        .mount("/api", routes![
-            // Node endpoints
-            terminusdb_manager::api::list_nodes,
-            terminusdb_manager::api::create_node,
-            terminusdb_manager::api::update_node,
-            terminusdb_manager::api::delete_node,
-            // Status endpoints
-            terminusdb_manager::api::get_all_statuses,
-            terminusdb_manager::api::get_node_status,
-            // Instance endpoints
-            terminusdb_manager::api::get_local_instance,
-            terminusdb_manager::api::restart_local_instance,
-            // Database endpoints
-            terminusdb_manager::api::list_databases,
-            terminusdb_manager::api::get_database_schema,
-            terminusdb_manager::api::get_database_commits,
-            terminusdb_manager::api::list_remotes,
-            terminusdb_manager::api::add_remote,
-            terminusdb_manager::api::delete_remote,
-        ])
+        .mount(
+            "/api",
+            routes![
+                // Node endpoints
+                terminusdb_manager::api::list_nodes,
+                terminusdb_manager::api::create_node,
+                terminusdb_manager::api::update_node,
+                terminusdb_manager::api::delete_node,
+                // Status endpoints
+                terminusdb_manager::api::get_all_statuses,
+                terminusdb_manager::api::get_node_status,
+                // Instance endpoints
+                terminusdb_manager::api::get_local_instance,
+                terminusdb_manager::api::restart_local_instance,
+                // Database endpoints
+                terminusdb_manager::api::list_databases,
+                terminusdb_manager::api::get_database_schema,
+                terminusdb_manager::api::get_database_commits,
+                terminusdb_manager::api::list_remotes,
+                terminusdb_manager::api::add_remote,
+                terminusdb_manager::api::delete_remote,
+            ],
+        )
         .mount("/", routes![index, files])
 }

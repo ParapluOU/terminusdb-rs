@@ -12,9 +12,7 @@ mod test_unfold_typed_instances_disabled {
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
     // Define test models with relationships
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Address {
         id: EntityIDFor<Self>,
@@ -23,9 +21,7 @@ mod test_unfold_typed_instances_disabled {
         postal_code: String,
     }
 
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id", unfoldable)]
     struct Person {
         id: EntityIDFor<Self>,
@@ -35,9 +31,7 @@ mod test_unfold_typed_instances_disabled {
         address: Option<Address>,
     }
 
-    #[derive(
-        Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance,
-    )]
+    #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
     #[tdb(id_field = "id")]
     struct Company {
         id: EntityIDFor<Self>,
@@ -48,10 +42,7 @@ mod test_unfold_typed_instances_disabled {
         employees: Vec<Person>,
     }
 
-    async fn setup_test_data(
-        client: &TerminusDBHttpClient,
-        spec: &BranchSpec,
-    ) -> Result<()> {
+    async fn setup_test_data(client: &TerminusDBHttpClient, spec: &BranchSpec) -> Result<()> {
         // Add schema
         let args = DocumentInsertArgs::from(spec.clone());
         client.insert_entity_schema::<Address>(args.clone()).await?;
@@ -102,7 +93,9 @@ mod test_unfold_typed_instances_disabled {
         };
 
         client.insert_instance(&home_address, args.clone()).await?;
-        client.insert_instance(&office_address, args.clone()).await?;
+        client
+            .insert_instance(&office_address, args.clone())
+            .await?;
         client.insert_instance(&alice, args.clone()).await?;
         client.insert_instance(&bob, args.clone()).await?;
         client.insert_instance(&company, args).await?;

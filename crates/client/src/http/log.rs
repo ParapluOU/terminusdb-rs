@@ -107,8 +107,13 @@ impl super::client::TerminusDBHttpClient {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub async fn get_latest_commit_id(&self, _spec: &BranchSpec) -> anyhow::Result<crate::CommitId> {
-        Err(anyhow::anyhow!("get_latest_commit_id not implemented for WASM"))
+    pub async fn get_latest_commit_id(
+        &self,
+        _spec: &BranchSpec,
+    ) -> anyhow::Result<crate::CommitId> {
+        Err(anyhow::anyhow!(
+            "get_latest_commit_id not implemented for WASM"
+        ))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

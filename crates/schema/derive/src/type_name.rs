@@ -1,10 +1,10 @@
 /// Helper functions for prettifying type names from std::any::type_name
-/// 
+///
 /// This module provides utilities to convert fully qualified type names
 /// (like "alloc::string::String") into cleaner, more readable forms (like "String").
 
 /// Prettifies a type name from std::any::type_name by removing module paths
-/// 
+///
 /// # Examples
 /// ```ignore
 /// assert_eq!(prettify_type_name("alloc::string::String"), "String");
@@ -16,7 +16,7 @@ pub fn prettify_type_name(full_name: &str) -> String {
     let mut result = String::new();
     let mut chars = full_name.chars().peekable();
     let mut current_segment = String::new();
-    
+
     while let Some(ch) = chars.next() {
         match ch {
             '<' => {
@@ -25,7 +25,7 @@ pub fn prettify_type_name(full_name: &str) -> String {
                 result.push_str(&pretty_base);
                 result.push('<');
                 current_segment.clear();
-                
+
                 // Process generic parameters
                 let generic_params = collect_generic_params(&mut chars);
                 let pretty_params = prettify_generic_params(&generic_params);
@@ -46,12 +46,12 @@ pub fn prettify_type_name(full_name: &str) -> String {
             }
         }
     }
-    
+
     // Handle any remaining segment
     if !current_segment.is_empty() {
         result.push_str(&prettify_simple_type(&current_segment));
     }
-    
+
     result
 }
 
@@ -64,7 +64,7 @@ fn prettify_simple_type(type_name: &str) -> &str {
 fn collect_generic_params(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
     let mut params = String::new();
     let mut depth = 1; // We've already seen the opening '<'
-    
+
     while let Some(ch) = chars.next() {
         match ch {
             '<' => {
@@ -84,7 +84,7 @@ fn collect_generic_params(chars: &mut std::iter::Peekable<std::str::Chars>) -> S
             }
         }
     }
-    
+
     params
 }
 
@@ -93,7 +93,7 @@ fn prettify_generic_params(params: &str) -> String {
     let mut result = String::new();
     let mut current_param = String::new();
     let mut depth = 0;
-    
+
     for ch in params.chars() {
         match ch {
             ',' if depth == 0 => {
@@ -120,7 +120,7 @@ fn prettify_generic_params(params: &str) -> String {
             }
         }
     }
-    
+
     // Don't forget the last parameter
     if !current_param.is_empty() {
         if !result.is_empty() {
@@ -128,14 +128,14 @@ fn prettify_generic_params(params: &str) -> String {
         }
         result.push_str(&prettify_type_name(current_param.trim()));
     }
-    
+
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_simple_types() {
         assert_eq!(prettify_type_name("String"), "String");
@@ -143,23 +143,20 @@ mod tests {
         assert_eq!(prettify_type_name("alloc::string::String"), "String");
         assert_eq!(prettify_type_name("std::vec::Vec"), "Vec");
     }
-    
+
     #[test]
     fn test_generic_types() {
         assert_eq!(
             prettify_type_name("core::option::Option<alloc::string::String>"),
             "Option<String>"
         );
-        assert_eq!(
-            prettify_type_name("alloc::vec::Vec<i32>"),
-            "Vec<i32>"
-        );
+        assert_eq!(prettify_type_name("alloc::vec::Vec<i32>"), "Vec<i32>");
         assert_eq!(
             prettify_type_name("std::collections::HashMap<alloc::string::String, i32>"),
             "HashMap<String, i32>"
         );
     }
-    
+
     #[test]
     fn test_nested_generics() {
         assert_eq!(
@@ -167,7 +164,9 @@ mod tests {
             "Vec<Option<String>>"
         );
         assert_eq!(
-            prettify_type_name("std::collections::HashMap<alloc::string::String, alloc::vec::Vec<i32>>"),
+            prettify_type_name(
+                "std::collections::HashMap<alloc::string::String, alloc::vec::Vec<i32>>"
+            ),
             "HashMap<String, Vec<i32>>"
         );
         assert_eq!(

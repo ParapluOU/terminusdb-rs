@@ -11,9 +11,12 @@ fn test_connect_with_env_file() {
         .args(&["build", "--bin", "terminusdb-mcp"])
         .output()
         .expect("Failed to build MCP server");
-    
+
     if !output.status.success() {
-        panic!("Failed to build MCP server: {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "Failed to build MCP server: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // Start the MCP server as a subprocess
@@ -41,7 +44,9 @@ fn test_connect_with_env_file() {
     // Helper function to read a response
     let read_response = |reader: &mut BufReader<std::process::ChildStdout>| -> serde_json::Value {
         let mut line = String::new();
-        reader.read_line(&mut line).expect("Failed to read response");
+        reader
+            .read_line(&mut line)
+            .expect("Failed to read response");
         println!("Received: {}", line.trim());
         serde_json::from_str(&line).expect("Failed to parse response")
     };
@@ -85,9 +90,10 @@ fn test_connect_with_env_file() {
 
     // Wait for initialize response
     thread::sleep(Duration::from_millis(500));
-    let init_response = rx.recv_timeout(Duration::from_secs(5))
+    let init_response = rx
+        .recv_timeout(Duration::from_secs(5))
         .expect("Timeout waiting for initialize response");
-    
+
     assert_eq!(init_response["id"], 1);
     assert!(init_response["result"].is_object());
 
@@ -107,26 +113,41 @@ fn test_connect_with_env_file() {
 
     // Wait for connect response
     thread::sleep(Duration::from_millis(500));
-    let connect_response = rx.recv_timeout(Duration::from_secs(5))
+    let connect_response = rx
+        .recv_timeout(Duration::from_secs(5))
         .expect("Timeout waiting for connect response");
-    
-    println!("Connect response: {}", serde_json::to_string_pretty(&connect_response).unwrap());
-    
+
+    println!(
+        "Connect response: {}",
+        serde_json::to_string_pretty(&connect_response).unwrap()
+    );
+
     // Check the response
     assert_eq!(connect_response["id"], 2);
-    
+
     if let Some(result) = connect_response.get("result") {
         // Check if the connection was successful
-        if let Some(content) = result.get("content").and_then(|c| c.as_array()).and_then(|arr| arr.first()) {
+        if let Some(content) = result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+        {
             if let Some(text) = content.get("text").and_then(|t| t.as_str()) {
-                let parsed: serde_json::Value = serde_json::from_str(text).expect("Failed to parse content text");
-                
+                let parsed: serde_json::Value =
+                    serde_json::from_str(text).expect("Failed to parse content text");
+
                 // Verify the host is not localhost (should be from env file)
                 if let Some(host) = parsed.get("host").and_then(|h| h.as_str()) {
-                    assert_ne!(host, "http://localhost:6363", "Host should be loaded from env file, not default");
-                    assert_eq!(host, "http://tdb-dev.eastus.azurecontainer.io:6363", "Host should match env file value");
+                    assert_ne!(
+                        host, "http://localhost:6363",
+                        "Host should be loaded from env file, not default"
+                    );
+                    assert_eq!(
+                        host, "http://tdb-dev.eastus.azurecontainer.io:6363",
+                        "Host should match env file value"
+                    );
                 }
-                
+
                 // Verify the user is from env file
                 if let Some(user) = parsed.get("user").and_then(|u| u.as_str()) {
                     assert_eq!(user, "admin", "User should match env file value");
@@ -152,22 +173,37 @@ fn test_connect_with_env_file() {
 
     // Wait for status response
     thread::sleep(Duration::from_millis(500));
-    let status_response = rx.recv_timeout(Duration::from_secs(5))
+    let status_response = rx
+        .recv_timeout(Duration::from_secs(5))
         .expect("Timeout waiting for status response");
-    
-    println!("Status response: {}", serde_json::to_string_pretty(&status_response).unwrap());
-    
+
+    println!(
+        "Status response: {}",
+        serde_json::to_string_pretty(&status_response).unwrap()
+    );
+
     // Check the response
     assert_eq!(status_response["id"], 3);
-    
+
     if let Some(result) = status_response.get("result") {
-        if let Some(content) = result.get("content").and_then(|c| c.as_array()).and_then(|arr| arr.first()) {
+        if let Some(content) = result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+        {
             if let Some(text) = content.get("text").and_then(|t| t.as_str()) {
-                let parsed: serde_json::Value = serde_json::from_str(text).expect("Failed to parse content text");
-                
+                let parsed: serde_json::Value =
+                    serde_json::from_str(text).expect("Failed to parse content text");
+
                 // Verify the server is running
-                assert_eq!(parsed.get("status").and_then(|s| s.as_str()), Some("running"));
-                assert_eq!(parsed.get("connected").and_then(|c| c.as_bool()), Some(true));
+                assert_eq!(
+                    parsed.get("status").and_then(|s| s.as_str()),
+                    Some("running")
+                );
+                assert_eq!(
+                    parsed.get("connected").and_then(|c| c.as_bool()),
+                    Some(true)
+                );
             }
         }
     } else if let Some(error) = status_response.get("error") {
@@ -188,14 +224,18 @@ fn test_connect_with_env_file() {
 
     // Wait for list databases response
     thread::sleep(Duration::from_millis(500));
-    let list_db_response = rx.recv_timeout(Duration::from_secs(5))
+    let list_db_response = rx
+        .recv_timeout(Duration::from_secs(5))
         .expect("Timeout waiting for list databases response");
-    
-    println!("List databases response: {}", serde_json::to_string_pretty(&list_db_response).unwrap());
-    
+
+    println!(
+        "List databases response: {}",
+        serde_json::to_string_pretty(&list_db_response).unwrap()
+    );
+
     // Check the response
     assert_eq!(list_db_response["id"], 4);
-    
+
     // Verify we got a successful response (not checking specific databases as they may vary)
     if let Some(error) = list_db_response.get("error") {
         panic!("List databases request failed with error: {:?}", error);
@@ -211,24 +251,24 @@ fn test_connect_with_env_file() {
 fn test_env_variable_loading() {
     // This test verifies that the environment variables are loaded correctly
     use std::env;
-    
+
     // Save current env vars
     let original_host = env::var("TERMINUSDB_HOST").ok();
     let original_user = env::var("TERMINUSDB_USER").ok();
     let original_pass = env::var("TERMINUSDB_PASS").ok();
-    
+
     // Load the .secrets.env file
     dotenv::from_path(".secrets.env").ok();
-    
+
     // Check that the variables were loaded
     let host = env::var("TERMINUSDB_HOST").expect("TERMINUSDB_HOST should be set");
     let user = env::var("TERMINUSDB_USER").expect("TERMINUSDB_USER should be set");
     let pass = env::var("TERMINUSDB_PASS").expect("TERMINUSDB_PASS should be set");
-    
+
     assert_eq!(host, "http://tdb-dev.eastus.azurecontainer.io:6363");
     assert_eq!(user, "admin");
     assert_eq!(pass, "sdkhgvslivglwiyagvw");
-    
+
     // Restore original env vars
     match original_host {
         Some(val) => env::set_var("TERMINUSDB_HOST", val),

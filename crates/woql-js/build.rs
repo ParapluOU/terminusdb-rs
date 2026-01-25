@@ -10,9 +10,7 @@ fn main() {
     println!("cargo:rerun-if-changed=scripts/package.json");
 
     // Check if Node.js is available
-    let node_check = Command::new("node")
-        .arg("--version")
-        .output();
+    let node_check = Command::new("node").arg("--version").output();
 
     if node_check.is_err() {
         eprintln!("WARNING: Node.js not found. The woql-js crate will not work at runtime.");

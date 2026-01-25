@@ -2,8 +2,8 @@
 
 use std::fmt::Debug;
 use terminusdb_schema::{
-    EntityIDFor, FromTDBInstance, InstanceFromJson, ToTDBInstance, ToTDBSchema,
-    ToSchemaClass, ToJson,
+    EntityIDFor, FromTDBInstance, InstanceFromJson, ToJson, ToSchemaClass, ToTDBInstance,
+    ToTDBSchema,
 };
 use terminusdb_schema_derive::TerminusDBModel;
 
@@ -24,9 +24,16 @@ struct Product {
 
 // Now create a generic model that references another model
 #[derive(Debug, Clone, TerminusDBModel)]
-struct Reference<T> 
+struct Reference<T>
 where
-    T: ToTDBSchema + ToSchemaClass + Debug + Clone + FromTDBInstance + InstanceFromJson + Send + Sync,
+    T: ToTDBSchema
+        + ToSchemaClass
+        + Debug
+        + Clone
+        + FromTDBInstance
+        + InstanceFromJson
+        + Send
+        + Sync,
 {
     id: String,
     referenced_id: EntityIDFor<T>,
@@ -37,7 +44,14 @@ where
 #[derive(Debug, Clone, TerminusDBModel)]
 struct Relation<T>
 where
-    T: ToTDBSchema + ToSchemaClass + Debug + Clone + FromTDBInstance + InstanceFromJson + Send + Sync,
+    T: ToTDBSchema
+        + ToSchemaClass
+        + Debug
+        + Clone
+        + FromTDBInstance
+        + InstanceFromJson
+        + Send
+        + Sync,
 {
     id: String,
     source: EntityIDFor<T>,
@@ -49,7 +63,14 @@ where
 #[derive(Debug, Clone, TerminusDBModel)]
 struct Container<T>
 where
-    T: ToTDBSchema + ToSchemaClass + Debug + Clone + FromTDBInstance + InstanceFromJson + Send + Sync,
+    T: ToTDBSchema
+        + ToSchemaClass
+        + Debug
+        + Clone
+        + FromTDBInstance
+        + InstanceFromJson
+        + Send
+        + Sync,
 {
     id: String,
     name: String,
@@ -72,7 +93,10 @@ mod tests {
         // Test schema generation
         let schema = Reference::<User>::to_schema();
         println!("Schema class name: {:?}", schema.class_name());
-        println!("ToSchemaClass::to_class() = {:?}", Reference::<User>::to_class());
+        println!(
+            "ToSchemaClass::to_class() = {:?}",
+            Reference::<User>::to_class()
+        );
         assert_eq!(schema.class_name(), "Reference<User>");
 
         // Test instance conversion
@@ -83,10 +107,16 @@ mod tests {
 
         // Test JSON round-trip
         let json = instance.to_json();
-        println!("Instance JSON: {}", serde_json::to_string_pretty(&json).unwrap());
+        println!(
+            "Instance JSON: {}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
         let recovered_instance = Reference::<User>::instance_from_json(json.clone()).unwrap();
-        println!("Recovered instance schema: {:?}", recovered_instance.schema.class_name());
-        
+        println!(
+            "Recovered instance schema: {:?}",
+            recovered_instance.schema.class_name()
+        );
+
         // Use from_instance instead of from_json for proper type checking
         let recovered = Reference::<User>::from_instance(&recovered_instance).unwrap();
         assert_eq!(recovered.id, user_ref.id);
@@ -147,10 +177,10 @@ mod tests {
     fn test_schema_generation_includes_referenced_types() {
         // For Reference<User>, the schema tree should include both Reference and User schemas
         let schemas = Reference::<User>::to_schema_tree();
-        
+
         // Should contain at least the Reference schema
         assert!(schemas.iter().any(|s| s.class_name() == "Reference<User>"));
-        
+
         // Note: User schema might not be included if EntityIDFor doesn't trigger schema collection
         // This depends on the ToMaybeTDBSchema implementation for EntityIDFor
     }
@@ -175,7 +205,13 @@ mod tests {
         let product_instance = product_ref.to_instance(None);
 
         // Both use the same schema class name (this is a limitation)
-        assert_eq!(Reference::<User>::to_schema().class_name(), "Reference<User>");
-        assert_eq!(Reference::<Product>::to_schema().class_name(), "Reference<Product>");
+        assert_eq!(
+            Reference::<User>::to_schema().class_name(),
+            "Reference<User>"
+        );
+        assert_eq!(
+            Reference::<Product>::to_schema().class_name(),
+            "Reference<Product>"
+        );
     }
 }

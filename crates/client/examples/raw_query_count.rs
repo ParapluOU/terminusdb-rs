@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
-use terminusdb_client::{RawQueryable, TerminusDBHttpClient, BranchSpec};
+use terminusdb_client::{BranchSpec, RawQueryable, TerminusDBHttpClient};
 use terminusdb_woql2::prelude::Query;
 use terminusdb_woql_builder::{builder::WoqlBuilder, vars};
 
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     match query.count(&client, &spec).await {
         Ok(count) => {
             println!("Found {} books by {}", count, query.author);
-            
+
             // If there are books, fetch them
             if count > 0 {
                 match query.apply(&client, &spec).await {
@@ -87,13 +87,15 @@ async fn main() -> Result<()> {
     println!("\n--- Demonstrating query_count() ---");
     let count_query = query.query_count();
     match count_query {
-        Query::Count(_) => println!("✓ query_count() correctly wraps the query in a Count operation"),
+        Query::Count(_) => {
+            println!("✓ query_count() correctly wraps the query in a Count operation")
+        }
         _ => println!("✗ query_count() did not produce a Count query"),
     }
 
     // Demonstrate pagination unwrapping
     println!("\n--- Demonstrating pagination unwrapping ---");
-    
+
     // Create a paginated query
     use terminusdb_woql2::misc::{Limit, Start};
     let paginated_query = Query::Limit(Limit {
@@ -103,37 +105,40 @@ async fn main() -> Result<()> {
             query: Box::new(query.query()),
         })),
     });
-    
+
     println!("Original query has pagination: Limit(10, Start(5, ...))");
-    
+
     // Create a custom queryable that returns the paginated query
     struct PaginatedQuery {
         query: Query,
     }
     impl RawQueryable for PaginatedQuery {
         type Result = BookInfo;
-        fn query(&self) -> Query { 
-            self.query.clone() 
+        fn query(&self) -> Query {
+            self.query.clone()
         }
-        fn extract_result(&self, _: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
+        fn extract_result(
+            &self,
+            _: HashMap<String, serde_json::Value>,
+        ) -> anyhow::Result<Self::Result> {
             unimplemented!()
         }
     }
-    
-    let paginated = PaginatedQuery { query: paginated_query };
+
+    let paginated = PaginatedQuery {
+        query: paginated_query,
+    };
     let count_query = paginated.query_count();
-    
+
     match count_query {
-        Query::Count(count) => {
-            match &*count.query {
-                Query::Limit(_) | Query::Start(_) => {
-                    println!("✗ Pagination was NOT removed from count query");
-                }
-                _ => {
-                    println!("✓ Pagination was correctly removed from count query");
-                }
+        Query::Count(count) => match &*count.query {
+            Query::Limit(_) | Query::Start(_) => {
+                println!("✗ Pagination was NOT removed from count query");
             }
-        }
+            _ => {
+                println!("✓ Pagination was correctly removed from count query");
+            }
+        },
         _ => println!("✗ query_count() did not produce a Count query"),
     }
 

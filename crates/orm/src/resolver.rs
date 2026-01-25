@@ -303,10 +303,7 @@ impl GraphQLRelationQuery {
     pub fn with_forward(mut self, field_name: impl Into<String>, target_type: &str) -> Self {
         self.relation_selections.push(RelationSelection {
             field_name: field_name.into(),
-            nested_fields: vec![
-                "_id".to_string(),
-                "_type".to_string(),
-            ],
+            nested_fields: vec!["_id".to_string(), "_type".to_string()],
             is_reverse: false,
             path_expression: None,
             children: Vec::new(),
@@ -351,10 +348,7 @@ impl GraphQLRelationQuery {
         // Auto-generated reverse field pattern: _<fieldname>_of_<SourceType>
         self.relation_selections.push(RelationSelection {
             field_name: format!("_{}_of_{}", field, source),
-            nested_fields: vec![
-                "_id".to_string(),
-                "_type".to_string(),
-            ],
+            nested_fields: vec!["_id".to_string(), "_type".to_string()],
             is_reverse: true,
             path_expression: None, // No path needed for auto-generated fields
             children: Vec::new(),
@@ -393,10 +387,7 @@ impl GraphQLRelationQuery {
         let target = target_type.into();
         self.relation_selections.push(RelationSelection {
             field_name: format!("_path_to_{}", target),
-            nested_fields: vec![
-                "_id".to_string(),
-                "_type".to_string(),
-            ],
+            nested_fields: vec!["_id".to_string(), "_type".to_string()],
             is_reverse: true,
             path_expression: Some(path.into()),
             children: Vec::new(),
@@ -437,11 +428,7 @@ impl GraphQLRelationQuery {
         // TerminusDB uses 'id' parameter for filtering, not '_ids'
         // For now, we support single ID lookup
         if ids.len() == 1 {
-            query.push_str(&format!(
-                "  {}(id: \"{}\") {{\n",
-                self.primary_type,
-                ids[0]
-            ));
+            query.push_str(&format!("  {}(id: \"{}\") {{\n", self.primary_type, ids[0]));
         } else {
             // For multiple IDs, we query all and filter client-side
             // (TerminusDB GraphQL doesn't have a built-in _ids filter)
@@ -778,8 +765,7 @@ mod tests {
 
     #[test]
     fn test_graphql_query_with_single_id() {
-        let query = GraphQLRelationQuery::new("User")
-            .build_with_ids(&["User/1".to_string()]);
+        let query = GraphQLRelationQuery::new("User").build_with_ids(&["User/1".to_string()]);
 
         // Single ID uses the id: parameter
         assert!(query.contains("User(id: \"User/1\")"));
@@ -868,11 +854,7 @@ mod tests {
             },
         ];
 
-        let query = generate_graphql_query(
-            "User",
-            &["User/1".to_string()],
-            &plans,
-        );
+        let query = generate_graphql_query("User", &["User/1".to_string()], &plans);
 
         // Single ID uses id: parameter
         assert!(query.contains("User(id: \"User/1\")"));
@@ -900,7 +882,8 @@ mod tests {
             order_by_gql: None,
         }];
 
-        let query = build_graphql_from_relation_specs("Writer", &["Writer/123".to_string()], &relations);
+        let query =
+            build_graphql_from_relation_specs("Writer", &["Writer/123".to_string()], &relations);
 
         assert!(query.contains("Writer(id: \"Writer/123\")"));
         assert!(query.contains("_writer_of_BlogPost {"));
@@ -951,7 +934,8 @@ mod tests {
             },
         ];
 
-        let query = build_graphql_from_relation_specs("Writer", &["Writer/123".to_string()], &relations);
+        let query =
+            build_graphql_from_relation_specs("Writer", &["Writer/123".to_string()], &relations);
 
         println!("Generated query:\n{}", query);
 

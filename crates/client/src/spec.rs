@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::CommitId;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BranchSpec {
@@ -10,7 +10,10 @@ pub struct BranchSpec {
     /// commit reference for time-travel queries (commit ID)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
-    #[serde(deserialize_with = "deserialize_commit_id", serialize_with = "serialize_commit_id")]
+    #[serde(
+        deserialize_with = "deserialize_commit_id",
+        serialize_with = "serialize_commit_id"
+    )]
     pub ref_commit: Option<CommitId>,
 }
 

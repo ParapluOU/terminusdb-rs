@@ -1,6 +1,6 @@
-use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{TerminusDBHttpClient, BranchSpec};
 use serde_json::{json, Value};
+use terminusdb_bin::TerminusDBServer;
+use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 
 #[tokio::test]
 async fn test_insert_npq_with_woql_context() -> anyhow::Result<()> {
@@ -24,10 +24,20 @@ async fn test_insert_npq_with_woql_context() -> anyhow::Result<()> {
                 }
             });
 
-            println!("NPQ with context: {}", serde_json::to_string_pretty(&npq_with_context)?);
+            println!(
+                "NPQ with context: {}",
+                serde_json::to_string_pretty(&npq_with_context)?
+            );
 
             // Try to insert as WOQL query
-            match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&npq_with_context)?, None).await {
+            match client
+                .query_string::<Value>(
+                    Some(spec.clone()),
+                    &serde_json::to_string(&npq_with_context)?,
+                    None,
+                )
+                .await
+            {
                 Ok(result) => {
                     println!("Successfully executed NPQ definition!");
                     println!("Result: {:?}", result);
@@ -65,9 +75,19 @@ async fn test_insert_npq_with_woql_context() -> anyhow::Result<()> {
                 }
             });
 
-            println!("\n\nParametric NPQ with context: {}", serde_json::to_string_pretty(&param_npq_with_context)?);
+            println!(
+                "\n\nParametric NPQ with context: {}",
+                serde_json::to_string_pretty(&param_npq_with_context)?
+            );
 
-            match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&param_npq_with_context)?, None).await {
+            match client
+                .query_string::<Value>(
+                    Some(spec.clone()),
+                    &serde_json::to_string(&param_npq_with_context)?,
+                    None,
+                )
+                .await
+            {
                 Ok(result) => {
                     println!("Successfully executed parametric NPQ definition!");
                     println!("Result: {:?}", result);
@@ -90,7 +110,14 @@ async fn test_insert_npq_with_woql_context() -> anyhow::Result<()> {
             });
 
             println!("\n\nAttempting to call stored query...");
-            match client.query_string::<Value>(Some(spec.clone()), &serde_json::to_string(&call_query)?, None).await {
+            match client
+                .query_string::<Value>(
+                    Some(spec.clone()),
+                    &serde_json::to_string(&call_query)?,
+                    None,
+                )
+                .await
+            {
                 Ok(result) => {
                     println!("Call succeeded! Result: {:?}", result);
                 }

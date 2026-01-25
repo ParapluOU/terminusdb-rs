@@ -21,8 +21,8 @@ use terminusdb_xsd::XsdModel;
 /// Validates: Group content flattened into referencing type
 #[test]
 fn test_feature_group_reference() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -54,8 +54,8 @@ fn test_feature_group_reference() {
 /// Validates: Nested group content resolved
 #[test]
 fn test_feature_nested_group_refs() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -84,8 +84,8 @@ fn test_feature_nested_group_refs() {
 /// Validates: Attribute group content becomes class properties
 #[test]
 fn test_feature_attribute_group() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -122,8 +122,8 @@ fn test_feature_attribute_group() {
 /// Validates: All attribute groups merged into type
 #[test]
 fn test_feature_multiple_attribute_groups() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -159,8 +159,8 @@ fn test_feature_multiple_attribute_groups() {
 /// Validates: Included types available in bundle
 #[test]
 fn test_feature_xs_include() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -189,8 +189,8 @@ fn test_feature_xs_include() {
 /// Validates: All transitively included types available
 #[test]
 fn test_feature_transitive_include() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -218,8 +218,8 @@ fn test_feature_transitive_include() {
 /// Validates: Imported namespace types available
 #[test]
 fn test_feature_xs_import() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 
@@ -231,7 +231,10 @@ fn test_feature_xs_import() {
         .filter(|s| matches!(s, Schema::Class { .. }))
         .count();
 
-    println!("NISO-STS classes (includes imported types): {}", class_count);
+    println!(
+        "NISO-STS classes (includes imported types): {}",
+        class_count
+    );
 
     assert!(
         class_count > 0,
@@ -246,8 +249,8 @@ fn test_feature_xs_import() {
 /// Validates: Types from all namespaces present
 #[test]
 fn test_feature_multi_namespace_import() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 
@@ -353,7 +356,13 @@ fn test_feature_redefine_restriction() {
 
     let mut potential_restrictions = Vec::new();
     for schema in schemas {
-        if let Schema::Class { id, properties, inherits, .. } = schema {
+        if let Schema::Class {
+            id,
+            properties,
+            inherits,
+            ..
+        } = schema
+        {
             // Types with inheritance but few properties might be restrictions
             if !inherits.is_empty() && properties.len() < 3 {
                 potential_restrictions.push((id.clone(), properties.len(), inherits.clone()));
@@ -363,7 +372,10 @@ fn test_feature_redefine_restriction() {
 
     println!(
         "Potential restriction types (few props, has parent): {:?}",
-        potential_restrictions.into_iter().take(10).collect::<Vec<_>>()
+        potential_restrictions
+            .into_iter()
+            .take(10)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -378,8 +390,8 @@ fn test_feature_redefine_restriction() {
 /// Validates: All required modules loaded
 #[test]
 fn test_feature_dita_module_resolution() {
-    let model = XsdModel::from_file(dita_topic_xsd(), None::<&str>)
-        .expect("Failed to load DITA topic XSD");
+    let model =
+        XsdModel::from_file(dita_topic_xsd(), None::<&str>).expect("Failed to load DITA topic XSD");
 
     let schemas = model.schemas();
 
@@ -402,8 +414,8 @@ fn test_feature_dita_module_resolution() {
 /// Validates: All imported namespaces resolved
 #[test]
 fn test_feature_niso_module_resolution() {
-    let model = XsdModel::from_file(niso_sts_xsd(), None::<&str>)
-        .expect("Failed to load NISO-STS XSD");
+    let model =
+        XsdModel::from_file(niso_sts_xsd(), None::<&str>).expect("Failed to load NISO-STS XSD");
 
     let schemas = model.schemas();
 

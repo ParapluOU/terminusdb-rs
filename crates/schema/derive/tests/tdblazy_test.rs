@@ -48,14 +48,14 @@ impl Client for MockClient {
 #[derive(Debug, PartialEq, Clone, TerminusDBModel, FromTDBInstance)]
 struct Activity {
     name: String,
-    description: String
+    description: String,
 }
 
 // Define a simple struct without derivations to avoid ToInstanceProperty errors
 #[derive(Debug, PartialEq, Clone, TerminusDBModel, FromTDBInstance)]
 struct AxiomWithLazy {
     name: String,
-    activity: TdbLazy<Activity>
+    activity: TdbLazy<Activity>,
 }
 
 #[test]
@@ -271,24 +271,24 @@ fn test_tdblazy_transparent_serialization() {
         description: "Writing code".to_string(),
     };
     let lazy_with_data = TdbLazy::from(activity.clone());
-    
+
     let serialized = serde_json::to_string(&lazy_with_data).unwrap();
     // Should serialize as the activity directly, not as a wrapper
     let expected = serde_json::to_string(&activity).unwrap();
     assert_eq!(serialized, expected);
-    
+
     // Should deserialize back to a TdbLazy with data
     let deserialized: TdbLazy<Activity> = serde_json::from_str(&serialized).unwrap();
     assert!(deserialized.is_loaded());
     assert_eq!(deserialized.get_expect().name, "Coding");
     assert_eq!(deserialized.get_expect().description, "Writing code");
-    
+
     // Test 2: Serialize TdbLazy with only ID - should serialize as just the ID string
     let lazy_with_id = TdbLazy::<Activity>::new_id("activity123").unwrap();
     let serialized_id = serde_json::to_string(&lazy_with_id).unwrap();
     // EntityIDFor prepends the type name, so it becomes "Activity/activity123"
     assert_eq!(serialized_id, r#""Activity/activity123""#);
-    
+
     // Should deserialize back to a TdbLazy with ID only
     let deserialized_id: TdbLazy<Activity> = serde_json::from_str(&serialized_id).unwrap();
     assert!(!deserialized_id.is_loaded());

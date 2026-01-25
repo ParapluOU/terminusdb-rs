@@ -6,10 +6,10 @@
 //! - Metadata structures
 //! - Multiple namespaces and references
 
-use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
-use terminusdb_xsd::schema_model::XsdSchema;
 use std::fs;
 use std::path::PathBuf;
+use terminusdb_xsd::schema_generator::XsdToSchemaGenerator;
+use terminusdb_xsd::schema_model::XsdSchema;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== DITA-Inspired Map Schema ===\n");
@@ -169,7 +169,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 println!("{}. Class: {}", i + 1, id);
                 println!("   {}", "-".repeat(60));
-                println!("   @base: {}", base.as_ref().unwrap_or(&"(none)".to_string()));
+                println!(
+                    "   @base: {}",
+                    base.as_ref().unwrap_or(&"(none)".to_string())
+                );
                 println!("   @key: {:?}", key);
                 println!("   @subdocument: {}", subdocument);
 

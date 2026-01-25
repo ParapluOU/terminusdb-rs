@@ -1,10 +1,13 @@
 //! Remote repository management operations
 
 use {
-    crate::{TerminusDBAdapterError, debug::{OperationEntry, OperationType}},
+    crate::{
+        debug::{OperationEntry, OperationType},
+        TerminusDBAdapterError,
+    },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Serialize, Deserialize},
+    serde::{Deserialize, Serialize},
     serde_json::json,
     std::time::Instant,
 };
@@ -70,8 +73,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("add_remote".to_string()),
-            format!("/api/remote/{}", path)
-        ).with_context(None, None);
+            format!("/api/remote/{}", path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -97,18 +101,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("add remote operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("add remote failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -141,13 +145,10 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn get_remote(
-        &self,
-        path: &str,
-        remote_name: &str,
-    ) -> anyhow::Result<RemoteInfo> {
+    pub async fn get_remote(&self, path: &str, remote_name: &str) -> anyhow::Result<RemoteInfo> {
         let start_time = Instant::now();
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("remote")
             .add_path(path)
             .query("remote_name", remote_name)
@@ -157,8 +158,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("get_remote".to_string()),
-            format!("/api/remote/{}?remote_name={}", path, remote_name)
-        ).with_context(None, None);
+            format!("/api/remote/{}?remote_name={}", path, remote_name),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
@@ -176,22 +178,25 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("get remote operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("get remote failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<RemoteInfo>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
-        debug!("Successfully retrieved remote in {:?}", start_time.elapsed());
+        debug!(
+            "Successfully retrieved remote in {:?}",
+            start_time.elapsed()
+        );
 
         Ok(response)
     }
@@ -239,8 +244,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("update_remote".to_string()),
-            format!("/api/remote/{}", path)
-        ).with_context(None, None);
+            format!("/api/remote/{}", path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -266,18 +272,18 @@ impl super::client::TerminusDBHttpClient {
 
         if !res.status().is_success() {
             error!("update remote operation failed with status {}", status);
-            
+
             let error_text = res.text().await?;
             let error_msg = format!("update remote failed: {:#?}", error_text);
-            
+
             operation = operation.failure(error_msg.clone(), duration_ms);
             self.operation_log.push(operation);
-            
+
             return Err(anyhow::anyhow!(error_msg));
         }
 
         let response = self.parse_response::<serde_json::Value>(res).await?;
-        
+
         operation = operation.success(None, duration_ms);
         self.operation_log.push(operation);
 
@@ -309,22 +315,17 @@ impl super::client::TerminusDBHttpClient {
         fields(path = %path),
         err
     )]
-    pub async fn list_remotes(
-        &self,
-        path: &str,
-    ) -> anyhow::Result<Vec<RemoteInfo>> {
+    pub async fn list_remotes(&self, path: &str) -> anyhow::Result<Vec<RemoteInfo>> {
         let start_time = Instant::now();
-        let uri = self.build_url()
-            .endpoint("remote")
-            .add_path(path)
-            .build();
+        let uri = self.build_url().endpoint("remote").add_path(path).build();
 
         debug!("GET {}", &uri);
 
         let mut operation = OperationEntry::new(
             OperationType::Other("list_remotes".to_string()),
-            format!("/api/remote/{}", path)
-        ).with_context(None, None);
+            format!("/api/remote/{}", path),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for read operations
         let _permit = self.acquire_read_permit().await;
@@ -392,7 +393,8 @@ impl super::client::TerminusDBHttpClient {
         remote_name: &str,
     ) -> anyhow::Result<serde_json::Value> {
         let start_time = Instant::now();
-        let uri = self.build_url()
+        let uri = self
+            .build_url()
             .endpoint("remote")
             .add_path(path)
             .query("remote_name", remote_name)
@@ -402,8 +404,9 @@ impl super::client::TerminusDBHttpClient {
 
         let mut operation = OperationEntry::new(
             OperationType::Other("delete_remote".to_string()),
-            format!("/api/remote/{}?remote_name={}", path, remote_name)
-        ).with_context(None, None);
+            format!("/api/remote/{}?remote_name={}", path, remote_name),
+        )
+        .with_context(None, None);
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;

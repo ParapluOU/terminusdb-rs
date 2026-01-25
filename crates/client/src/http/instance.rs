@@ -7,6 +7,7 @@ use super::{
 use crate::{CommitId, DefaultTDBDeserializer, InsertInstanceResult};
 use {
     crate::{
+        debug::{OperationEntry, OperationType, QueryLogEntry},
         document::{
             CommitHistoryEntry, DocumentHistoryParams, DocumentInsertArgs, DocumentType, GetOpts,
         },
@@ -14,7 +15,6 @@ use {
         result::ResponseWithHeaders,
         spec::BranchSpec,
         IntoBoxedTDBInstances, TDBInsertInstanceResult, TDBInstanceDeserializer,
-        debug::{OperationEntry, OperationType, QueryLogEntry},
     },
     ::tracing::{debug, error, instrument, warn},
     anyhow::{anyhow, bail, Context},
@@ -22,7 +22,10 @@ use {
     std::{collections::HashMap, fmt::Debug, time::Instant},
     tap::{Tap, TapFallible},
     terminusdb_schema::GraphType,
-    terminusdb_schema::{EntityIDFor, Instance, Key, ToJson, ToTDBInstance, ToTDBInstances, FromTDBInstance, InstanceFromJson},
+    terminusdb_schema::{
+        EntityIDFor, FromTDBInstance, Instance, InstanceFromJson, Key, ToJson, ToTDBInstance,
+        ToTDBInstances,
+    },
     terminusdb_woql2::prelude::Query as Woql2Query,
     terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
 };
@@ -124,7 +127,12 @@ impl super::client::TerminusDBHttpClient {
             .keys()
             .find(|k| EntityIDFor::<I>::new_unchecked(k).is_ok())
             .cloned()
-            .ok_or_else(|| anyhow!("Could not find root instance ID in operation results; instead:{:?}", res.keys().collect::<Vec<_>>()))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "Could not find root instance ID in operation results; instead:{:?}",
+                    res.keys().collect::<Vec<_>>()
+                )
+            })?;
 
         // Create structured result
         let mut result = crate::InsertInstanceResult::new((*res).clone(), actual_root_id)?;
@@ -221,7 +229,7 @@ impl super::client::TerminusDBHttpClient {
     ///     email: "alice@example.com".to_string(),
     ///     name: "Alice".to_string(),
     /// };
-    /// 
+    ///
     /// let (saved_user, commit_id) = client.insert_instance_and_retrieve(&user, args).await?;
     /// // saved_user.id will now contain the server-generated ID
     /// assert!(saved_user.id.is_some());
@@ -245,25 +253,29 @@ impl super::client::TerminusDBHttpClient {
         I: TerminusDBModel + ToTDBInstance + FromTDBInstance + InstanceFromJson,
     {
         // First, insert the instance and get the result with commit ID
-        let (result, commit_id) = self.insert_instance_with_commit_id(model, args.clone()).await?;
-        
+        let (result, commit_id) = self
+            .insert_instance_with_commit_id(model, args.clone())
+            .await?;
+
         // Extract the root ID from the result
         let id = match &result.root_result {
             TDBInsertInstanceResult::Inserted(id) | TDBInsertInstanceResult::AlreadyExists(id) => {
                 // Extract just the ID part (after the type prefix)
-                id.split('/').last()
+                id.split('/')
+                    .last()
                     .ok_or_else(|| anyhow!("Invalid ID format: {}", id))?
             }
         };
 
         // Create a default deserializer
         let mut deserializer = DefaultTDBDeserializer;
-        
+
         // Retrieve the full instance with server-generated ID populated
-        let retrieved_model = self.get_instance::<I>(id, &args.spec, &mut deserializer)
+        let retrieved_model = self
+            .get_instance::<I>(id, &args.spec, &mut deserializer)
             .await
             .context("Failed to retrieve instance after insertion")?;
-        
+
         Ok((retrieved_model, commit_id))
     }
 
@@ -361,7 +373,7 @@ impl super::client::TerminusDBHttpClient {
     ///         name: "Bob".to_string(),
     ///     },
     /// ];
-    /// 
+    ///
     /// let (saved_users, commit_id) = client.insert_instances_and_retrieve(users, args).await?;
     /// // All saved_users will have their id fields populated
     /// for user in &saved_users {
@@ -387,13 +399,16 @@ impl super::client::TerminusDBHttpClient {
         I: TerminusDBModel + ToTDBInstance + FromTDBInstance + InstanceFromJson + Clone + 'static,
     {
         // First, insert the instances and get the results with commit ID
-        let (result, commit_id) = self.insert_instances_with_commit_id(models.clone(), args.clone()).await?;
-        
+        let (result, commit_id) = self
+            .insert_instances_with_commit_id(models.clone(), args.clone())
+            .await?;
+
         // Extract all IDs from the result
         let mut all_ids: Vec<String> = Vec::new();
         for (id_with_type, insert_result) in result.iter() {
             match insert_result {
-                TDBInsertInstanceResult::Inserted(_) | TDBInsertInstanceResult::AlreadyExists(_) => {
+                TDBInsertInstanceResult::Inserted(_)
+                | TDBInsertInstanceResult::AlreadyExists(_) => {
                     // Extract just the ID part (after the type prefix)
                     if let Some(id) = id_with_type.split('/').last() {
                         all_ids.push(id.to_string());
@@ -401,26 +416,32 @@ impl super::client::TerminusDBHttpClient {
                 }
             }
         }
-        
+
         // Retrieve all instances in a single batch call
         let mut deserializer = DefaultTDBDeserializer;
-        let retrieved_models = match self.get_instances::<I>(
-            all_ids.clone(),
-            &args.spec,
-            GetOpts::default(),
-            &mut deserializer
-        ).await {
+        let retrieved_models = match self
+            .get_instances::<I>(
+                all_ids.clone(),
+                &args.spec,
+                GetOpts::default(),
+                &mut deserializer,
+            )
+            .await
+        {
             Ok(models) => models,
             Err(e) => {
                 // If bulk retrieval fails completely, log and try to return what we can
-                warn!("Bulk retrieval failed, some instances may not have been retrieved: {}", e);
-                
+                warn!(
+                    "Bulk retrieval failed, some instances may not have been retrieved: {}",
+                    e
+                );
+
                 // In case of complete failure, we could fall back to individual retrieval
                 // but for now, we'll just return an empty vec to maintain performance
                 vec![]
             }
         };
-        
+
         // Verify we got the expected number of results
         if retrieved_models.len() != models.len() {
             return Err(anyhow!(
@@ -429,7 +450,7 @@ impl super::client::TerminusDBHttpClient {
                 retrieved_models.len()
             ));
         }
-        
+
         Ok((retrieved_models, commit_id))
     }
 
@@ -609,36 +630,44 @@ impl super::client::TerminusDBHttpClient {
         //     return Ok(result);
         // }
 
-        let operation_type = if has { OperationType::Update } else { OperationType::Insert };
+        let operation_type = if has {
+            OperationType::Update
+        } else {
+            OperationType::Insert
+        };
         let endpoint = format!("/api/db/{}/document/{}", args.spec.db, I::schema_name());
-        
+
         let result = if has {
             self.update_instance(model, args.clone()).await
         } else {
             self.create_instance(model, args.clone()).await
         };
-        
+
         let duration_ms = start_time.elapsed().as_millis() as u64;
-        
+
         // Create operation entry
         let mut operation = OperationEntry::new(operation_type.clone(), endpoint.clone())
             .with_context(Some(args.spec.db.clone()), args.spec.branch.clone());
-        
+
         // Log the operation
         match &result {
             Ok(res) => {
                 let count = res.sub_entities.values().count();
                 operation = operation.success(Some(count), duration_ms);
-                
+
                 // Log to query log if enabled
-                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                let logger_opt = self
+                    .query_logger
+                    .read()
+                    .ok()
+                    .and_then(|guard| guard.clone());
                 if let Some(logger) = logger_opt {
                     let details = serde_json::json!({
                         "entity_type": I::schema_name(),
                         "instance_id": model.instance_id().map(|id| id.id().to_string()),
                         "force": args.force,
                     });
-                    
+
                     let log_entry = QueryLogEntry {
                         timestamp: chrono::Utc::now(),
                         operation_type: operation_type.to_string(),
@@ -656,16 +685,20 @@ impl super::client::TerminusDBHttpClient {
             }
             Err(e) => {
                 operation = operation.failure(e.to_string(), duration_ms);
-                
+
                 // Log to query log if enabled
-                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                let logger_opt = self
+                    .query_logger
+                    .read()
+                    .ok()
+                    .and_then(|guard| guard.clone());
                 if let Some(logger) = logger_opt {
                     let details = serde_json::json!({
                         "entity_type": I::schema_name(),
                         "instance_id": model.instance_id().map(|id| id.id().to_string()),
                         "force": args.force,
                     });
-                    
+
                     let log_entry = QueryLogEntry {
                         timestamp: chrono::Utc::now(),
                         operation_type: operation_type.to_string(),
@@ -682,9 +715,9 @@ impl super::client::TerminusDBHttpClient {
                 }
             }
         }
-        
+
         self.operation_log.push(operation);
-        
+
         result
     }
 
@@ -1116,8 +1149,8 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// #[derive(TerminusDBModel)]
-    /// struct User { 
-    ///     name: String, 
+    /// struct User {
+    ///     name: String,
     ///     age: i32,
     ///     address: Address // This will be unfolded
     /// }
@@ -1315,8 +1348,8 @@ impl super::client::TerminusDBHttpClient {
 
     /// Retrieves and deserializes a strongly-typed model instance if it exists.
     ///
-    /// This method is designed for cases where an instance might not exist and that's 
-    /// an expected scenario (e.g., checking before create). Unlike `get_instance`, 
+    /// This method is designed for cases where an instance might not exist and that's
+    /// an expected scenario (e.g., checking before create). Unlike `get_instance`,
     /// this method returns `None` for non-existent instances without logging errors.
     ///
     /// # Type Parameters
@@ -1621,8 +1654,8 @@ impl super::client::TerminusDBHttpClient {
     /// # Example
     /// ```rust
     /// #[derive(TerminusDBModel)]
-    /// struct User { 
-    ///     name: String, 
+    /// struct User {
+    ///     name: String,
     ///     age: i32,
     ///     address: Address // This will be unfolded
     /// }
@@ -1656,7 +1689,7 @@ impl super::client::TerminusDBHttpClient {
     /// Retrieves and deserializes multiple strongly-typed model instances with full control over options.
     ///
     /// This method accepts a full `GetOpts` structure, allowing complete control over the retrieval
-    /// behavior including unfold, pagination, type filtering, and other options. This is the most 
+    /// behavior including unfold, pagination, type filtering, and other options. This is the most
     /// flexible variant of the get_instances methods and is an alias for the standard get_instances
     /// method, provided for API consistency.
     ///
@@ -1889,7 +1922,7 @@ impl super::client::TerminusDBHttpClient {
     ///
     /// # Arguments
     /// * `instance` - The strongly-typed model instance to delete
-    /// * `args` - Document insertion arguments specifying the database and branch  
+    /// * `args` - Document insertion arguments specifying the database and branch
     /// * `opts` - Delete options controlling the deletion behavior
     ///
     /// # Returns

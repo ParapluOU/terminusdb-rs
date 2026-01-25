@@ -20,20 +20,20 @@ fn main() {
         optional!(triple!(var!(p), field!(Person:email), var!(email))),
         greater!(var!(age), data!(18))
     );
-    
+
     println!("Generated query: {:?}", query);
-    
+
     // The following would fail to compile:
     // let bad_query = triple!(var!(p), field!(Person:nam), var!(n));
     // Error: no field `nam` on type `Person`
-    
+
     // Compare with traditional approach (no compile-time checking):
     let traditional = and!(
         triple!(var!(p), "rdf:type", "Person"),
-        triple!(var!(p), "name", var!(name)),      // Typo here wouldn't be caught
-        triple!(var!(p), "age", var!(age)),        // until runtime
+        triple!(var!(p), "name", var!(name)), // Typo here wouldn't be caught
+        triple!(var!(p), "age", var!(age)),   // until runtime
         triple!(var!(p), "email", var!(email))
     );
-    
+
     println!("Traditional query: {:?}", traditional);
 }

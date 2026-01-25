@@ -214,12 +214,9 @@ impl TerminusDBHttpClient {
         // Create operation entry with the GraphQL query stored in context
         let mut operation = OperationEntry::new(
             OperationType::GraphQL,
-            format!("/graphql/{}/{}/local/branch/{}", self.org, database, branch)
+            format!("/graphql/{}/{}/local/branch/{}", self.org, database, branch),
         )
-        .with_context(
-            Some(database.to_string()),
-            Some(branch.to_string())
-        )
+        .with_context(Some(database.to_string()), Some(branch.to_string()))
         .with_additional_context(request.query.clone());
 
         // Acquire concurrency permit for read operations (GraphQL queries are typically reads)
@@ -268,7 +265,11 @@ impl TerminusDBHttpClient {
                 operation = operation.success(result_count, duration_ms);
 
                 // Log to query log if enabled
-                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                let logger_opt = self
+                    .query_logger
+                    .read()
+                    .ok()
+                    .and_then(|guard| guard.clone());
                 if let Some(logger) = logger_opt {
                     let log_entry = QueryLogEntry {
                         timestamp: chrono::Utc::now(),
@@ -293,7 +294,11 @@ impl TerminusDBHttpClient {
                 operation = operation.failure(e.to_string(), duration_ms);
 
                 // Log to query log if enabled
-                let logger_opt = self.query_logger.read().ok().and_then(|guard| guard.clone());
+                let logger_opt = self
+                    .query_logger
+                    .read()
+                    .ok()
+                    .and_then(|guard| guard.clone());
                 if let Some(logger) = logger_opt {
                     let log_entry = QueryLogEntry {
                         timestamp: chrono::Utc::now(),

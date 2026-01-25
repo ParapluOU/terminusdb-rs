@@ -5,8 +5,7 @@ use keyring::Entry;
 
 /// Store a password in the system keyring
 pub fn store_password(service: &str, username: &str, password: &str) -> Result<()> {
-    let entry = Entry::new(service, username)
-        .context("Failed to create keyring entry")?;
+    let entry = Entry::new(service, username).context("Failed to create keyring entry")?;
 
     entry
         .set_password(password)
@@ -17,8 +16,7 @@ pub fn store_password(service: &str, username: &str, password: &str) -> Result<(
 
 /// Retrieve a password from the system keyring
 pub fn get_password(service: &str, username: &str) -> Result<String> {
-    let entry = Entry::new(service, username)
-        .context("Failed to create keyring entry")?;
+    let entry = Entry::new(service, username).context("Failed to create keyring entry")?;
 
     let password = entry
         .get_password()
@@ -29,8 +27,7 @@ pub fn get_password(service: &str, username: &str) -> Result<String> {
 
 /// Delete a password from the system keyring
 pub fn delete_password(service: &str, username: &str) -> Result<()> {
-    let entry = Entry::new(service, username)
-        .context("Failed to create keyring entry")?;
+    let entry = Entry::new(service, username).context("Failed to create keyring entry")?;
 
     entry
         .delete_credential()

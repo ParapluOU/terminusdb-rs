@@ -10,7 +10,7 @@ use terminusdb_schema_derive::TerminusDBModel;
 use terminusdb_test::test as db_test;
 
 // Required for derive macro
-use terminusdb_schema as terminusdb_schema;
+use terminusdb_schema;
 
 // Test models with relations
 
@@ -174,7 +174,11 @@ async fn test_filter_query_execution(client: _, spec: _) -> anyhow::Result<()> {
         .await?;
 
     println!("Tickets starting with 'Fix': {:?}", results.len());
-    assert_eq!(results.len(), 2, "Should find 2 tickets starting with 'Fix'");
+    assert_eq!(
+        results.len(),
+        2,
+        "Should find 2 tickets starting with 'Fix'"
+    );
 
     // Test 2: Filter tickets by project ID (TerminusDB treats relations as string IDs)
     // Note: TerminusDB stores relation IDs in short form (e.g., "TestProject/abc123")
@@ -595,11 +599,7 @@ async fn test_not_filter_for_absent_field(client: _, spec: _) -> anyhow::Result<
         .await?;
 
     println!("Tasks with assignee: {}", assigned_tasks.len());
-    assert_eq!(
-        assigned_tasks.len(),
-        2,
-        "Should find 2 tasks with assignee"
-    );
+    assert_eq!(assigned_tasks.len(), 2, "Should find 2 tasks with assignee");
 
     // Test 2: Filter for tasks WITHOUT an assignee using _not
     // The pattern: _not(assignee: any) gives us tasks where assignee is absent

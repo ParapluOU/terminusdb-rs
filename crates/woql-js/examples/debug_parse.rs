@@ -12,7 +12,7 @@ fn main() {
                 Ok(q) => println!("\nSuccessfully deserialized: {:?}", q),
                 Err(e) => eprintln!("\nDeserialization error: {}", e),
             }
-        },
+        }
         Err(e) => eprintln!("Parse error: {}", e),
     }
 }
