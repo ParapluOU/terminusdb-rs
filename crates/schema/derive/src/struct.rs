@@ -463,7 +463,7 @@ pub fn implement_for_struct(
 
     // Generate Class marker trait implementation
     let class_marker_impl = quote! {
-        impl #impl_generics terminusdb_schema::Class for #struct_name #ty_generics #where_clause {}
+        impl #impl_generics terminusdb_schema::Class for #struct_name #ty_generics #base_where_clause {}
     };
 
     // Combine all implementations
