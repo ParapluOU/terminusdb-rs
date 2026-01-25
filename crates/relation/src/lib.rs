@@ -1,4 +1,5 @@
 #![feature(specialization)]
+#![allow(incomplete_features)]
 
 //! High-level relation traits and macros for TerminusDB models
 

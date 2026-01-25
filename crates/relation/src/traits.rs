@@ -112,15 +112,13 @@ where
     Source: TerminusDBModel,
     Target: TerminusDBModel,
 {
+    // Use expression pattern in var! macro by adding & to force expr matching
+    let source_v = Value::Variable(source_var.to_string());
+    let target_v = Value::Variable(target_var.to_string());
     let constraint = terminusdb_woql2::and!(
-        terminusdb_woql2::triple!(
-            terminusdb_woql2::var!(source_var),
-            field_name,
-            terminusdb_woql2::var!(target_var)
-        )
-        .into(),
-        terminusdb_woql2::type_!(terminusdb_woql2::var!(source_var), Source).into(),
-        terminusdb_woql2::type_!(terminusdb_woql2::var!(target_var), Target).into()
+        terminusdb_woql2::triple!(source_v.clone(), field_name, target_v.clone()),
+        terminusdb_woql2::type_!(source_v.clone(), Source),
+        terminusdb_woql2::type_!(target_v, Target)
     );
 
     if is_optional {
@@ -142,11 +140,13 @@ pub fn generate_relation_constraints(
     // Create variables directly with the passed names
     let source_variable = Value::Variable(source_var.to_string());
     let target_variable = Value::Variable(target_var.to_string());
+    // Wrap type strings in format!() to force expr pattern matching in type_! macro
+    let source_type_str = format!("@schema:{}", source_type);
+    let target_type_str = format!("@schema:{}", target_type);
     let constraint = terminusdb_woql2::and!(
-        terminusdb_woql2::triple!(source_variable.clone(), field_name, target_variable.clone())
-            .into(),
-        terminusdb_woql2::type_!(source_variable.clone(), source_type).into(),
-        terminusdb_woql2::type_!(target_variable, target_type).into()
+        terminusdb_woql2::triple!(source_variable.clone(), field_name, target_variable.clone()),
+        terminusdb_woql2::triple!(source_variable.clone(), "rdf:type", source_type_str),
+        terminusdb_woql2::triple!(target_variable, "rdf:type", target_type_str)
     );
 
     if is_optional {
@@ -156,9 +156,9 @@ pub fn generate_relation_constraints(
     }
 }
 
-/// Blanket implementations for container types
-/// These allow the derive macro to generate RelationTo for container field types
-/// and let the trait resolver find the appropriate implementation at usage time.
+// Blanket implementations for container types
+// These allow the derive macro to generate RelationTo for container field types
+// and let the trait resolver find the appropriate implementation at usage time.
 
 // Option<T> wraps the relation in WoqlOptional
 impl<T, Target, Field> RelationTo<Target, Field> for Option<T>
