@@ -335,10 +335,6 @@ impl<T: ToTDBSchema> EntityIDFor<T> {
         self.iri.typed_path()
     }
 
-    pub fn to_string(&self) -> String {
-        self.iri.typed_path().to_string()
-    }
-
     pub fn remap<X: ToTDBSchema>(self) -> EntityIDFor<X>
     where
         Self: EntityIDRemap<X>,

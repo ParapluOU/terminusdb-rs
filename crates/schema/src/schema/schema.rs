@@ -45,7 +45,7 @@ fn namespace_property_value(namespace: &str, value: &Value) -> Value {
 }
 
 // todo: the derived serialize and deserialize do not comply with the TerminusDB schema and are only used for RPC calls!
-#[derive(Eq, Debug, Clone, Hash)]
+#[derive(Eq, Debug, Clone)]
 pub enum Schema {
     Class {
         id: ID,
@@ -1171,6 +1171,13 @@ impl PartialEq for Schema {
     fn eq(&self, other: &Self) -> bool {
         // Compare by schema name (ID) which should be unique
         self.class_name() == other.class_name()
+    }
+}
+
+impl std::hash::Hash for Schema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash only by class_name to be consistent with PartialEq
+        self.class_name().hash(state);
     }
 }
 

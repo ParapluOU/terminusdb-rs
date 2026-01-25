@@ -293,10 +293,7 @@ impl Instance {
 
     // todo: fix name as that actually returns the property name, NOT the value
     pub fn enum_value(&self) -> Option<String> {
-        for prop in self.properties.keys() {
-            return prop.clone().into();
-        }
-        None
+        self.properties.keys().next().cloned()
     }
 
     pub fn get_property(&self, key: &str) -> Option<&InstanceProperty> {

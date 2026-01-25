@@ -178,7 +178,7 @@ impl TdbIRI {
     }
 
     /// Get the full IRI string (reconstructed)
-    pub fn to_string(&self) -> String {
+    pub fn to_iri_string(&self) -> String {
         match &self.base_uri {
             Some(base) => {
                 if self.is_fragment_based {
@@ -220,7 +220,7 @@ pub const DEFAULT_DATA_BASE: &str = "terminusdb:///data";
 
 impl fmt::Display for TdbIRI {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.to_iri_string())
     }
 }
 
