@@ -52,6 +52,9 @@
 //! }
 //! ```
 
+// Allow dead code since this is a library with CLI builder patterns where not all methods are always used
+#![allow(dead_code)]
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

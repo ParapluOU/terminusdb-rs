@@ -564,7 +564,7 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
                 return Ok(());
             }
             Err(e) => {
-                if start.elapsed().as_secs() % 5 == 0 {
+                if start.elapsed().as_secs().is_multiple_of(5) {
                     eprintln!(
                         "[terminusdb-bin] Still waiting... ({}s): {:?}",
                         start.elapsed().as_secs(),

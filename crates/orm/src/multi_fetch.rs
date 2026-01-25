@@ -99,7 +99,7 @@ impl MultiTypeFetch for &TerminusDBHttpClient {
         spec: &BranchSpec,
         opts: GetOpts,
     ) -> anyhow::Result<OrmResult> {
-        fetch_by_ids_impl(*self, ids, spec, opts).await
+        fetch_by_ids_impl(self, ids, spec, opts).await
     }
 }
 

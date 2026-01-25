@@ -338,23 +338,21 @@ pub fn generate_relation_impls(
                         }
                     }
                 }
-            } else {
-                if let Some(clause) = where_clause {
-                    quote! {
-                        impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics
-                        #clause
-                        {
-                            fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
-                                Some(&self.#field_ident)
-                            }
+            } else if let Some(clause) = where_clause {
+                quote! {
+                    impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics
+                    #clause
+                    {
+                        fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
+                            Some(&self.#field_ident)
                         }
                     }
-                } else {
-                    quote! {
-                        impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics {
-                            fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
-                                Some(&self.#field_ident)
-                            }
+                }
+            } else {
+                quote! {
+                    impl #impl_generics #relation_path::BelongsTo<#target_type, #marker_path> for #struct_name #ty_generics {
+                        fn parent_id(&self) -> Option<&terminusdb_schema::EntityIDFor<#target_type>> {
+                            Some(&self.#field_ident)
                         }
                     }
                 }

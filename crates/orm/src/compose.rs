@@ -220,6 +220,7 @@ impl<C: ClientProvider> ComposedQuery<C> {
     ///     .add(Project::query(filter))
     ///     .add(Label::all());
     /// ```
+    #[allow(clippy::should_implement_trait)]
     pub fn add<Q: IntoQueryPart>(mut self, query: Q) -> Self {
         self.entries.push(query.into_query_entry());
         self
@@ -294,7 +295,7 @@ impl<C: ClientProvider> ComposedQuery<C> {
         let fragments: Vec<String> = self
             .entries
             .iter()
-            .map(|entry| build_query_entry_fragment(entry))
+            .map(build_query_entry_fragment)
             .collect();
 
         format!("query {{\n{}\n}}", fragments.join("\n"))
@@ -345,7 +346,7 @@ impl<C: ClientProvider> ComposedQuery<C> {
 
         for entry in &self.entries {
             // Extract IDs for this entry (root + nested relations)
-            let mut entry_ids = extract_ids_from_entry(&data, &entry.type_name, &entry.relations);
+            let entry_ids = extract_ids_from_entry(&data, &entry.type_name, &entry.relations);
 
             all_ids.extend(entry_ids.clone());
 

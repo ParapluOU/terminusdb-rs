@@ -29,6 +29,8 @@ terminusdb-bin = { path = "../bin", optional = true }
 default = []
 ## Enable test helpers for integration testing (includes embedded server support)
 testing = ["terminusdb-bin"]
+## Enable debug output for GraphQL queries
+debug-graphql = []
 
 [dev-dependencies]
 tokio = { workspace = true }

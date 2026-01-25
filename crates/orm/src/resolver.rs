@@ -201,6 +201,7 @@ pub trait RelationResolver: Send + Sync {
 /// Batch resolver that executes relations in two phases.
 #[derive(Debug, Clone)]
 pub struct BatchResolver<C> {
+    #[allow(dead_code)]
     client: C,
 }
 
@@ -451,6 +452,7 @@ impl GraphQLRelationQuery {
     }
 
     /// Write a single relation selection to the query string.
+    #[allow(clippy::only_used_in_recursion)]
     fn write_selection(&self, query: &mut String, selection: &RelationSelection, indent: usize) {
         let indent_str = " ".repeat(indent);
 

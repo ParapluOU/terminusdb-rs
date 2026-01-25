@@ -44,7 +44,7 @@ pub fn allframes_to_sdl(frames: &AllFrames) -> String {
     let mut used_base_filters: HashSet<String> = HashSet::new();
 
     // First pass: collect all used base filter types from all class fields
-    for (_, typedef) in &frames.frames {
+    for typedef in frames.frames.values() {
         if let TypeDefinition::Class(c) = typedef {
             for (_, field_def) in c.fields() {
                 if let Some(base) = field_def.base_type() {
@@ -62,7 +62,7 @@ pub fn allframes_to_sdl(frames: &AllFrames) -> String {
     output.push_str("scalar BigFloat\n");
     output.push_str("scalar DateTime\n");
     output.push_str("scalar JSON\n");
-    output.push_str("\n");
+    output.push('\n');
 
     // Generate enum types
     output.push_str("# Enum Types\n");
@@ -539,16 +539,16 @@ fn field_to_filter_type(field_def: &FieldDefinition, frames: &AllFrames) -> Stri
             base_filter.to_string()
         }
     } else if let Some(enum_type) = field_def.enum_type(frames) {
-        let filter_name = enum_filter_name(&enum_type);
+        let filter_name = enum_filter_name(enum_type);
         if is_collection {
             format!("Collection{}", filter_name.as_str())
         } else {
             filter_name.to_string()
         }
     } else if let Some(doc_type) = field_def.document_type(frames) {
-        let filter_name = filter_name(&doc_type);
+        let filter_name = filter_name(doc_type);
         if is_collection {
-            collection_filter_name(&doc_type).to_string()
+            collection_filter_name(doc_type).to_string()
         } else {
             filter_name.to_string()
         }

@@ -1,3 +1,6 @@
+// Allow 3.14 as a test value - it's not meant to be PI
+#![allow(clippy::approx_constant)]
+
 use decimal_rs::Decimal;
 use terminusdb_schema::XSDAnySimpleType;
 

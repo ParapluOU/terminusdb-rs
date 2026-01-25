@@ -105,8 +105,9 @@ impl fmt::Display for RoleAction {
 }
 
 /// RDF serialization format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RdfFormat {
+    #[default]
     Turtle,
 }
 
@@ -118,12 +119,6 @@ impl RdfFormat {
     }
 }
 
-impl Default for RdfFormat {
-    fn default() -> Self {
-        RdfFormat::Turtle
-    }
-}
-
 impl fmt::Display for RdfFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
@@ -131,8 +126,9 @@ impl fmt::Display for RdfFormat {
 }
 
 /// Scope type for capabilities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScopeType {
+    #[default]
     Database,
     Organization,
 }
@@ -146,12 +142,6 @@ impl ScopeType {
     }
 }
 
-impl Default for ScopeType {
-    fn default() -> Self {
-        ScopeType::Database
-    }
-}
-
 impl fmt::Display for ScopeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
@@ -159,8 +149,9 @@ impl fmt::Display for ScopeType {
 }
 
 /// Commit type for apply command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CommitType {
+    #[default]
     Squash,
 }
 
@@ -169,12 +160,6 @@ impl CommitType {
         match self {
             CommitType::Squash => "squash",
         }
-    }
-}
-
-impl Default for CommitType {
-    fn default() -> Self {
-        CommitType::Squash
     }
 }
 

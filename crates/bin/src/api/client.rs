@@ -1,5 +1,8 @@
 //! Main client for TerminusDB CLI operations.
 
+// Allow hidden lifetime parameters in return types - this is intentional for ergonomic API design
+#![allow(mismatched_lifetime_syntaxes)]
+
 use super::commands::{add_flag, add_option, add_required, execute};
 use super::options::*;
 use super::spec::{BranchSpec, DbSpec, GraphSpec};
@@ -245,9 +248,9 @@ impl<'a> DocCommands<'a> {
         let mut args = vec!["doc".to_string(), "get".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_required(&mut args, "--graph-type", options.graph_type.as_str());
-        add_required(&mut args, "--skip", &options.skip.to_string());
+        add_required(&mut args, "--skip", options.skip.to_string());
         if let Some(count) = options.count {
-            add_required(&mut args, "--count", &count.to_string());
+            add_required(&mut args, "--count", count.to_string());
         } else {
             add_required(&mut args, "--count", "unlimited");
         }
@@ -946,8 +949,8 @@ impl TerminusDB {
         let mut args = vec!["log".to_string(), spec.to_string()];
         add_required(&mut args, "--impersonate", &options.impersonate);
         add_flag(&mut args, "--json", options.json);
-        add_required(&mut args, "--start", &options.start.to_string());
-        add_required(&mut args, "--count", &options.count.to_string());
+        add_required(&mut args, "--start", options.start.to_string());
+        add_required(&mut args, "--count", options.count.to_string());
         add_flag(&mut args, "--verbose", options.verbose);
         execute(args)
     }
