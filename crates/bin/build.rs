@@ -266,7 +266,7 @@ fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<Dependency
 fn check_gmp_macos() -> bool {
     // Check if gmp is installed via homebrew
     Command::new("brew")
-        .args(&["list", "gmp"])
+        .args(["list", "gmp"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -327,7 +327,7 @@ fn download_protoc(platform: Platform, deps_dir: &Path) -> Result<PathBuf, Strin
 
     // Download using curl
     let download_status = Command::new("curl")
-        .args(&["-L", "-o", archive_path.to_str().unwrap(), &url])
+        .args(["-L", "-o", archive_path.to_str().unwrap(), &url])
         .status()
         .map_err(|e| format!("Failed to run curl: {}", e))?;
 
@@ -337,7 +337,7 @@ fn download_protoc(platform: Platform, deps_dir: &Path) -> Result<PathBuf, Strin
 
     // Extract using unzip
     let extract_status = Command::new("unzip")
-        .args(&[
+        .args([
             "-q",
             "-o",
             archive_path.to_str().unwrap(),
@@ -414,7 +414,7 @@ fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
 
             // Fetch the latest
             let fetch_status = Command::new("git")
-                .args(&["fetch", "--depth=1", "origin", version])
+                .args(["fetch", "--depth=1", "origin", version])
                 .current_dir(dest)
                 .status()
                 .map_err(|e| format!("Failed to run git fetch: {}", e))?;
@@ -422,7 +422,7 @@ fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
             if fetch_status.success() {
                 // Checkout the version
                 let checkout_status = Command::new("git")
-                    .args(&["checkout", "FETCH_HEAD"])
+                    .args(["checkout", "FETCH_HEAD"])
                     .current_dir(dest)
                     .status()
                     .map_err(|e| format!("Failed to run git checkout: {}", e))?;
@@ -451,7 +451,7 @@ fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
     println!("cargo:warning=Cloning TerminusDB repository...");
 
     let status = Command::new("git")
-        .args(&[
+        .args([
             "clone",
             "--depth=1",
             "--branch",
@@ -488,7 +488,7 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
 
     // Install tus pack
     let status = Command::new("make")
-        .args(&["install-deps"])
+        .args(["install-deps"])
         .current_dir(repo_path)
         .env("PATH", &new_path)
         .status()
