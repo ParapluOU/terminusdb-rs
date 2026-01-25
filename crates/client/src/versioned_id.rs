@@ -23,7 +23,7 @@ use crate::CommitId;
 /// println!("ID: {}", versioned.typed());
 /// println!("Commit: {}", versioned.version);
 /// ```
-#[derive(Debug, Clone, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct VersionedEntityIDFor<T: ToTDBSchema> {
     /// The entity ID
     pub id: EntityIDFor<T>,
@@ -47,13 +47,7 @@ impl<T: ToTDBSchema> Deref for VersionedEntityIDFor<T> {
     }
 }
 
-// PartialEq implementations for convenient comparisons
-impl<T: ToTDBSchema> PartialEq for VersionedEntityIDFor<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.version == other.version
-    }
-}
-
+// Additional PartialEq implementations for convenient comparisons
 impl<T: ToTDBSchema> PartialEq<EntityIDFor<T>> for VersionedEntityIDFor<T> {
     fn eq(&self, other: &EntityIDFor<T>) -> bool {
         &self.id == other
