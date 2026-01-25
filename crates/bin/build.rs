@@ -487,10 +487,13 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
         env::join_paths(&path_dirs).map_err(|e| format!("Failed to build PATH: {}", e))?;
 
     // Install tus pack
+    // Clear RUSTFLAGS to prevent clippy flags from propagating to external TerminusDB build
     let status = Command::new("make")
         .args(["install-deps"])
         .current_dir(repo_path)
         .env("PATH", &new_path)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .status()
         .map_err(|e| format!("Failed to run make install-deps: {}", e))?;
 
@@ -509,10 +512,13 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
     #[cfg(not(target_os = "macos"))]
     let make_args = &["PROFILE=release"];
 
+    // Clear RUSTFLAGS to prevent clippy flags from propagating to external TerminusDB build
     let status = Command::new("make")
         .args(make_args)
         .current_dir(repo_path)
         .env("PATH", &new_path)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .status()
         .map_err(|e| format!("Failed to run make: {}", e))?;
 
