@@ -151,6 +151,7 @@ impl WoqlBuilder {
 
     /// Negates the current query.
     /// Replaces the current builder's query with the NOT query.
+    #[allow(clippy::should_implement_trait)]
     pub fn not(self) -> Self {
         let final_query = self.finalize();
         // Cannot negate True directly in WOQL, maybe return empty/False builder?
@@ -245,7 +246,7 @@ impl WoqlBuilder {
     /// Consumes the builder and returns the constructed WOQL query.
     /// If no operations were added, it returns a `True` query.
     pub fn finalize(self) -> Woql2Query {
-        self.query.unwrap_or_else(|| Woql2Query::True(Woql2True {}))
+        self.query.unwrap_or(Woql2Query::True(Woql2True {}))
     }
 
     fn add_query_component(mut self, component: Woql2Query) -> Self {
