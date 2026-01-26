@@ -1074,12 +1074,14 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
     /// Execute the query and return all results.
     ///
     /// This will:
-    /// 1. If no relations: fetch primary documents directly
-    /// 2. If relations were requested via `.with::<R>()`, `.with_field::<R, F>()`,
+    /// 1. If primary IDs are provided: fetch documents by those IDs
+    /// 2. If no primary IDs (filter-based or "all" query): first run a GraphQL
+    ///    query to discover matching IDs, then fetch those documents
+    /// 3. If relations were requested via `.with::<R>()`, `.with_field::<R, F>()`,
     ///    `.with_via::<R, F>()`, or `.with_nested::<R>(|b| ...)`:
     ///    - Execute ONE GraphQL query to collect all related `_id` values
     ///    - Execute ONE batch fetch to retrieve all documents by ID
-    /// 3. Return an `OrmResult` containing all documents
+    /// 4. Return an `OrmResult` containing all documents
     ///
     /// # Two-Phase Loading (NO N+1)
     ///
@@ -1087,12 +1089,20 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
     /// when relations are requested:
     /// 1. GraphQL query to traverse relations and collect IDs
     /// 2. Batch document fetch by all collected IDs
-    pub async fn execute(self, spec: &BranchSpec) -> anyhow::Result<OrmResult>
+    pub async fn execute(mut self, spec: &BranchSpec) -> anyhow::Result<OrmResult>
     where
         C: MultiTypeFetch + Sync + ClientProvider,
+        T: ToSchemaClass,
     {
+        // If no primary IDs, we need to run a GraphQL query first to find them
+        // This handles both filter-based queries and "query all" scenarios
         if self.primary_ids.is_empty() {
-            return Ok(OrmResult::empty());
+            self.primary_ids = self.discover_primary_ids(spec).await?;
+
+            // If still no IDs after discovery, there are no matching documents
+            if self.primary_ids.is_empty() {
+                return Ok(OrmResult::empty());
+            }
         }
 
         // If no relations, simple fetch
@@ -1114,6 +1124,79 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         fetch_opts.unfold = true;
 
         self.client.fetch_by_ids(all_ids, spec, fetch_opts).await
+    }
+
+    /// Discover primary IDs by executing a GraphQL query.
+    ///
+    /// This is used for filter-based queries and "query all" scenarios where
+    /// we don't have explicit IDs upfront.
+    async fn discover_primary_ids(&self, spec: &BranchSpec) -> anyhow::Result<Vec<String>>
+    where
+        C: ClientProvider,
+        T: ToSchemaClass,
+    {
+        use terminusdb_client::graphql::GraphQLRequest;
+
+        let type_name = T::to_class();
+
+        // Build GraphQL query arguments
+        let mut args = Vec::new();
+        if let Some(filter) = &self.filter_gql {
+            args.push(format!("filter: {}", filter));
+        }
+        if let Some(order_by) = &self.order_by_gql {
+            args.push(format!("orderBy: {}", order_by));
+        }
+        if let Some(limit) = self.limit {
+            args.push(format!("limit: {}", limit));
+        }
+        if let Some(offset) = self.offset {
+            args.push(format!("offset: {}", offset));
+        }
+
+        let args_str = if args.is_empty() {
+            String::new()
+        } else {
+            format!("({})", args.join(", "))
+        };
+
+        // Build the GraphQL query to fetch only _id fields
+        let graphql_query = format!(
+            "query {{\n  {}{} {{\n    _id\n  }}\n}}",
+            type_name, args_str
+        );
+
+        // Execute GraphQL query
+        let request = GraphQLRequest::new(&graphql_query);
+        let response = self
+            .client
+            .client()
+            .execute_graphql::<serde_json::Value>(&spec.db, spec.branch.as_deref(), request, None)
+            .await?;
+
+        // Check for errors
+        if let Some(errors) = &response.errors {
+            if !errors.is_empty() {
+                let error_msgs: Vec<_> = errors.iter().map(|e| e.message.clone()).collect();
+                return Err(anyhow::anyhow!("GraphQL errors: {:?}", error_msgs));
+            }
+        }
+
+        let data = response
+            .data
+            .ok_or_else(|| anyhow::anyhow!("No GraphQL data returned"))?;
+
+        // Extract IDs from the response
+        let mut ids = Vec::new();
+        if let Some(array) = data.get(&type_name).and_then(|v| v.as_array()) {
+            for item in array {
+                if let Some(id) = item.get("_id").and_then(|v| v.as_str()) {
+                    ids.push(id.to_string());
+                }
+            }
+        }
+
+        Ok(ids)
     }
 
     /// Collect all related entity IDs using a single GraphQL query.
