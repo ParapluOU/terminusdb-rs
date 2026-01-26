@@ -289,6 +289,9 @@ impl Drop for TerminusDBServer {
     }
 }
 
+/// Maximum number of retry attempts when port allocation fails due to race conditions.
+const MAX_PORT_RETRIES: usize = 5;
+
 /// Start a TerminusDB server with custom options.
 ///
 /// For testing, prefer `TerminusDBServer::test()` or `TerminusDBServer::test_instance()`.
@@ -321,6 +324,38 @@ impl Drop for TerminusDBServer {
 /// }
 /// ```
 pub async fn start_server(opts: ServerOptions) -> anyhow::Result<TerminusDBServer> {
+    // Retry with different ports in case of race conditions
+    // (port can be taken between find_available_port and server bind)
+    let mut last_error = None;
+    for attempt in 0..MAX_PORT_RETRIES {
+        match start_server_attempt(&opts).await {
+            Ok(server) => return Ok(server),
+            Err(e) => {
+                let err_str = e.to_string();
+                // Check if this is a port-in-use error
+                if err_str.contains("already in use")
+                    || err_str.contains("Address already in use")
+                    || err_str.contains("exit status: 98")
+                {
+                    eprintln!(
+                        "[terminusdb-bin] Port conflict on attempt {}, retrying...",
+                        attempt + 1
+                    );
+                    last_error = Some(e);
+                    // Small delay before retry to let other processes finish binding
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    continue;
+                }
+                // Not a port conflict, fail immediately
+                return Err(e);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to start server after retries")))
+}
+
+/// Internal: Single attempt to start the server.
+async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDBServer> {
     let binary_path = crate::extract_binary()?;
     eprintln!("[terminusdb-bin] Binary path: {:?}", binary_path);
 
