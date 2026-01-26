@@ -11,7 +11,7 @@ pub trait MyConstraint: Clone + Serialize + Send {
 }
 
 // Simple type that implements the user trait but NOT TerminusDB traits
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub struct SimpleMarker;
 
 impl MyConstraint for SimpleMarker {
