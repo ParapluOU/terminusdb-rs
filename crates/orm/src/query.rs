@@ -42,17 +42,36 @@ use crate::relations::{ForwardRelation, ReverseRelation};
 use crate::{result::OrmResult, ClientProvider, GlobalClient, MultiTypeFetch};
 use terminusdb_schema::{TdbGQLFilter, TdbGQLOrdering};
 
+/// Check if a string looks like a GraphQL enum value.
+///
+/// GraphQL enum values from TerminusDB are typically lowercase single words.
+/// This heuristic checks for strings that are all lowercase letters (a-z).
+fn is_likely_enum_value(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())
+}
+
 /// Convert a JSON value to GraphQL object literal syntax.
 ///
 /// GraphQL object literals don't quote keys, but JSON does.
 /// This converts `{"name": {"eq": "test"}}` to `{name: {eq: "test"}}`.
+///
+/// Special handling for enum values: strings that look like GraphQL enums
+/// (all lowercase letters) are output without quotes. This is necessary because
+/// serde serializes Rust enums to strings, but GraphQL expects enum values
+/// to be unquoted.
 pub(crate) fn json_to_graphql(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::String(s) => {
-            format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            // Check if this looks like a GraphQL enum value (all lowercase letters).
+            // Enum values should not be quoted in GraphQL.
+            if is_likely_enum_value(s) {
+                s.clone()
+            } else {
+                format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+            }
         }
         serde_json::Value::Array(arr) => {
             let items: Vec<String> = arr.iter().map(json_to_graphql).collect();

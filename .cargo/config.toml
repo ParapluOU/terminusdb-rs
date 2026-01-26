@@ -1,0 +1,3 @@
+# Run tests single-threaded to avoid TerminusDBServer instance conflicts
+[env]
+RUST_TEST_THREADS = "1"
