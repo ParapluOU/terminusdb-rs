@@ -84,7 +84,7 @@ mod tests {
     use terminusdb_schema::*;
     use terminusdb_schema_derive::TerminusDBModel;
 
-    #[derive(Debug, Clone, TerminusDBModel)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel)]
     struct TestEntity {
         name: String,
     }

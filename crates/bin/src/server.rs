@@ -558,13 +558,29 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
         // Use try_info() to avoid logging expected errors during startup
         match client.try_info().await {
             Ok(_) => {
-                eprintln!("[terminusdb-bin] Server is ready!");
-                // Put stderr back
-                child.stderr = stderr_handle;
-                return Ok(());
+                // Info endpoint responded, but server might still be synchronizing.
+                // Verify with an actual database operation (list_databases is fast).
+                match client.list_databases_simple().await {
+                    Ok(_) => {
+                        eprintln!("[terminusdb-bin] Server is ready!");
+                        // Put stderr back
+                        child.stderr = stderr_handle;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        // Server is still synchronizing, keep waiting
+                        if start.elapsed().as_secs() % 5 == 0 && start.elapsed().as_secs() > 0 {
+                            eprintln!(
+                                "[terminusdb-bin] Still waiting... ({}s): server responding but not ready: {:?}",
+                                start.elapsed().as_secs(),
+                                e
+                            );
+                        }
+                    }
+                }
             }
             Err(e) => {
-                if start.elapsed().as_secs().is_multiple_of(5) {
+                if start.elapsed().as_secs() % 5 == 0 && start.elapsed().as_secs() > 0 {
                     eprintln!(
                         "[terminusdb-bin] Still waiting... ({}s): {:?}",
                         start.elapsed().as_secs(),
