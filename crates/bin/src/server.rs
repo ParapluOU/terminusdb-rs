@@ -569,7 +569,7 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
                     }
                     Err(e) => {
                         // Server is still synchronizing, keep waiting
-                        if start.elapsed().as_secs() % 5 == 0 && start.elapsed().as_secs() > 0 {
+                        if start.elapsed().as_secs().is_multiple_of(5) && start.elapsed().as_secs() > 0 {
                             eprintln!(
                                 "[terminusdb-bin] Still waiting... ({}s): server responding but not ready: {:?}",
                                 start.elapsed().as_secs(),
@@ -580,7 +580,7 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
                 }
             }
             Err(e) => {
-                if start.elapsed().as_secs() % 5 == 0 && start.elapsed().as_secs() > 0 {
+                if start.elapsed().as_secs().is_multiple_of(5) && start.elapsed().as_secs() > 0 {
                     eprintln!(
                         "[terminusdb-bin] Still waiting... ({}s): {:?}",
                         start.elapsed().as_secs(),
