@@ -8,12 +8,24 @@ license = "Apache-2.0"
 repository = "https://github.com/terminusdb/terminusdb-rs"
 publish = false
 
+[features]
+default = ["quickjs"]
+# Use embedded QuickJS runtime (no external dependencies, ~128KB bundle)
+quickjs = ["dep:rquickjs"]
+# Fallback to Node.js subprocess (requires Node.js installed, ~965KB bundle)
+nodejs = ["dep:tempfile"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = "1.0"
 terminusdb-woql2 = { path = "../woql2" }
-tempfile = "3"
+
+# Optional: QuickJS embedded runtime (default)
+rquickjs = { version = "0.11.0", features = ["classes"], optional = true }
+
+# Optional: Node.js subprocess (fallback)
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 

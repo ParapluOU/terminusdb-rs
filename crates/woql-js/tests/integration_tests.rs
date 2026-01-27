@@ -1,9 +1,14 @@
+//! Integration tests for terminusdb-woql-js
+//!
+//! These tests verify that the WOQL JS parser works correctly with various
+//! query types and edge cases. Now that we use QuickJS by default, these
+//! tests no longer require Node.js to be installed.
+
 use terminusdb_woql2::query::Query;
 use terminusdb_woql_js::{parse_js_woql, parse_js_woql_to_query};
 
 /// Test parsing a simple triple query
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_simple_triple() {
     let query = r#"triple("v:Subject", "v:Predicate", "v:Object")"#;
 
@@ -21,7 +26,6 @@ fn test_parse_simple_triple() {
 
 /// Test parsing with WOQL object prefix (as used in dashboard)
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_with_woql_prefix() {
     // Note: The emerge() prelude automatically provides WOQL functions,
     // so we don't need to prefix with WOQL. in the query string
@@ -33,7 +37,6 @@ fn test_parse_with_woql_prefix() {
 
 /// Test parsing a select query
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_select_query() {
     let query = r#"
         select(
@@ -55,7 +58,6 @@ fn test_parse_select_query() {
 
 /// Test parsing an and query
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_and_query() {
     let query = r#"
         and(
@@ -77,7 +79,6 @@ fn test_parse_and_query() {
 
 /// Test parsing an or query
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_or_query() {
     let query = r#"
         or(
@@ -99,7 +100,6 @@ fn test_parse_or_query() {
 
 /// Test parsing a complex query with select, and, and comparisons
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_complex_query() {
     let query = r#"
         select(
@@ -130,7 +130,6 @@ fn test_parse_complex_query() {
 
 /// Test parsing directly to Query type
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_to_query_type() {
     let query = r#"triple("v:S", "v:P", "v:O")"#;
 
@@ -152,7 +151,6 @@ fn test_parse_to_query_type() {
 
 /// Test parsing a select query to Query type
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_select_to_query_type() {
     let query = r#"
         select(
@@ -176,7 +174,6 @@ fn test_parse_select_to_query_type() {
 
 /// Test error handling for invalid syntax
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_invalid_syntax_error() {
     let query = r#"this is not valid WOQL syntax"#;
 
@@ -189,7 +186,6 @@ fn test_invalid_syntax_error() {
 
 /// Test error handling for incomplete query
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_incomplete_query_error() {
     let query = r#"triple(v("S"), v("P")"#; // Missing closing parenthesis
 
@@ -199,7 +195,6 @@ fn test_incomplete_query_error() {
 
 /// Test parsing with Vars helper (from terminusdb-client-js)
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_with_vars_helper() {
     // Variables are strings with v: prefix
     let query = r#"
@@ -212,7 +207,6 @@ fn test_parse_with_vars_helper() {
 
 /// Test parsing path query
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_path_query() {
     let query = r#"
         path(
@@ -233,7 +227,6 @@ fn test_parse_path_query() {
 
 /// Test parsing document operations
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_document_operations() {
     let query = r#"
         and(
@@ -252,13 +245,13 @@ fn test_parse_document_operations() {
 
 /// Test parsing with limit and order_by
 #[test]
-#[ignore] // Requires Node.js and npm dependencies installed
 fn test_parse_with_modifiers() {
+    // order_by uses [variable, "asc"|"desc"] syntax, not asc(variable)
     let query = r#"
         limit(
             10,
             order_by(
-                [asc("v:Name")],
+                ["v:Name", "asc"],
                 triple("v:Person", "@schema:name", "v:Name")
             )
         )

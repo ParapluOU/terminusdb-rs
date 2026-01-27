@@ -6,7 +6,8 @@
   "main": "parse-woql.js",
   "scripts": {
     "parse": "node parse-woql.js",
-    "build": "esbuild parse-woql.js --bundle --platform=node --outfile=parse-woql.bundle.js"
+    "build": "esbuild parse-woql.js --bundle --platform=node --outfile=parse-woql.bundle.js",
+    "build:quickjs": "esbuild parse-woql-quickjs.js --bundle --format=iife --platform=neutral --external:fs --external:https --external:http --external:http2 --external:url --external:crypto --external:zlib --external:stream --external:net --external:tls --external:form-data --external:os --external:path --external:util --external:events --external:assert --external:buffer --external:querystring --external:dns --outfile=parse-woql.quickjs.js"
   },
   "dependencies": {
     "@terminusdb/terminusdb-client": "^11.1.2"

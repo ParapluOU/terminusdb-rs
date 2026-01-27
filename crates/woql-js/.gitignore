@@ -2,5 +2,6 @@
 scripts/node_modules/
 scripts/package-lock.json
 
-# Bundled output
-scripts/parse-woql.bundle.js
+# NOTE: The bundled JS files (parse-woql.bundle.js, parse-woql.quickjs.js)
+# are intentionally committed to the repo to avoid requiring Node.js at build time.
+# Use `just regen` in this directory to regenerate them after updating npm dependencies.

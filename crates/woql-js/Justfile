@@ -1,0 +1,34 @@
+# Justfile for terminusdb-woql-js
+# Run `just regen` to regenerate the bundled JS files after updating npm dependencies
+
+# Default recipe to list available commands
+default:
+    @just --list
+
+# Regenerate all bundled JS files
+regen:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd scripts
+    echo "Installing npm dependencies..."
+    npm install
+    echo "Building Node.js bundle (parse-woql.bundle.js)..."
+    npm run build
+    echo "Building QuickJS bundle (parse-woql.quickjs.js)..."
+    npm run build:quickjs
+    echo ""
+    echo "Bundles regenerated successfully!"
+    echo "  - parse-woql.bundle.js ($(wc -c < parse-woql.bundle.js | xargs) bytes) - for Node.js runtime"
+    echo "  - parse-woql.quickjs.js ($(wc -c < parse-woql.quickjs.js | xargs) bytes) - for QuickJS runtime"
+
+# Check for outdated npm dependencies
+check-outdated:
+    cd scripts && npm outdated || true
+
+# Run tests
+test:
+    cargo test -p terminusdb-woql-js
+
+# Clean generated files (but keep committed bundles)
+clean:
+    cd scripts && rm -rf node_modules
