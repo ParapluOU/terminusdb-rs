@@ -1,0 +1,16 @@
+[package]
+name = "rug"
+version = "1.19.2"
+edition = "2021"
+description = "Pure Rust shim for rug crate, providing Integer backed by num-bigint (enables cross-compilation)"
+license = "LGPL-3.0+"
+
+[features]
+default = ["integer", "rational"]
+integer = []
+rational = []
+
+[dependencies]
+num-bigint = "0.4"
+num-traits = "0.2"
+num-integer = "0.1"

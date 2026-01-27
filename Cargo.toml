@@ -10,6 +10,7 @@ members = [
     "crates/orm",
     "crates/relation",
     "crates/relation/derive",
+    "crates/rug-shim",
     "crates/schema",
     "crates/schema/derive",
     "crates/terminusdb",
@@ -97,3 +98,5 @@ codegen-units = 1
 [patch.crates-io]
 # Use git version of terminus-store to match terminusdb-community's requirements
 terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store" }
+# Use pure Rust rug shim for cross-compilation (replaces GMP-based rug)
+rug = { path = "crates/rug-shim" }
