@@ -176,22 +176,71 @@ impl TerminusDBHttpClient {
         err
     )]
     pub async fn new(mut endpoint: Url, user: &str, pass: &str, org: &str) -> anyhow::Result<Self> {
+        Self::new_with_timeout(endpoint, user, pass, org, None).await
+    }
+
+    /// Creates a new TerminusDB HTTP client with custom connection parameters and timeout.
+    ///
+    /// # Arguments
+    /// * `endpoint` - The TerminusDB server endpoint URL (will have "/api" appended)
+    /// * `user` - Username for authentication
+    /// * `pass` - Password for authentication
+    /// * `org` - Organization name
+    /// * `request_timeout` - Optional request timeout. If None, uses TERMINUSDB_DEFAULT_REQUEST_TIMEOUT
+    ///   env var or defaults to 60 seconds.
+    ///
+    /// # Returns
+    /// A configured client instance
+    ///
+    /// # Example
+    /// ```rust
+    /// use url::Url;
+    /// use std::time::Duration;
+    ///
+    /// // Create a client with a 15-minute timeout for test environments
+    /// let client = TerminusDBHttpClient::new_with_timeout(
+    ///     Url::parse("https://my-terminusdb.com").unwrap(),
+    ///     "my_user",
+    ///     "my_password",
+    ///     "my_org",
+    ///     Some(Duration::from_secs(900))
+    /// ).await?;
+    /// ```
+    #[instrument(
+        name = "terminus.client.new_with_timeout",
+        skip(pass),
+        fields(
+            endpoint = %endpoint,
+            user = %user,
+            org = %org,
+            timeout_secs = ?request_timeout.map(|d| d.as_secs())
+        ),
+        err
+    )]
+    pub async fn new_with_timeout(
+        mut endpoint: Url,
+        user: &str,
+        pass: &str,
+        org: &str,
+        request_timeout: Option<Duration>,
+    ) -> anyhow::Result<Self> {
         let err = format!("Cannot modify segments for endpoint: {}", &endpoint);
 
         endpoint.path_segments_mut().expect(&err).push("api");
 
-        let default_timeout = env::var("TERMINUSDB_DEFAULT_REQUEST_TIMEOUT")
-            .unwrap_or("60".to_string())
-            .parse::<u64>()
-            .unwrap();
+        let timeout = request_timeout.unwrap_or_else(|| {
+            let default_secs = env::var("TERMINUSDB_DEFAULT_REQUEST_TIMEOUT")
+                .unwrap_or("60".to_string())
+                .parse::<u64>()
+                .unwrap_or(60);
+            Duration::from_secs(default_secs)
+        });
 
         let mut client = Self {
             user: user.to_string(),
             pass: pass.to_string(),
             endpoint: endpoint.clone(),
-            http: Client::builder()
-                .timeout(std::time::Duration::from_secs(default_timeout))
-                .build()?,
+            http: Client::builder().timeout(timeout).build()?,
             org: org.to_string(),
             operation_log: OperationLog::default(),
             query_logger: Arc::new(RwLock::new(None)),

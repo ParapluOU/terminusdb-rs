@@ -138,6 +138,41 @@ async fn test_with_models() -> anyhow::Result<()> {
 - No `#[ignore]` needed - tests run automatically with `cargo test`
 - Each test process gets its own server on a unique port via `TERMINUSDB_SERVER_PORT`
 
+**Test Mode Optimizations:**
+
+When using `test_instance()` or `TerminusDBServer::test()`, the server runs in **test mode** which includes:
+- **Reduced workers (2)**: Minimizes resource contention when multiple test processes run in parallel
+- **Long client timeouts (15 minutes)**: Prevents timeouts when tests queue behind resource-constrained servers
+
+These settings can be customized via `ServerOptions`:
+```rust
+use terminusdb_bin::{start_server, ServerOptions};
+use std::time::Duration;
+
+let server = start_server(ServerOptions {
+    memory: true,
+    quiet: true,
+    test_mode: true,                          // Enable test mode defaults
+    workers: Some(4),                          // Override worker count
+    request_timeout: Some(Duration::from_secs(300)), // Override client timeout
+    ..Default::default()
+}).await?;
+```
+
+The client can also be configured independently with custom timeouts:
+```rust
+use terminusdb_client::TerminusDBHttpClient;
+use std::time::Duration;
+
+let client = TerminusDBHttpClient::new_with_timeout(
+    url,
+    "admin",
+    "root",
+    "admin",
+    Some(Duration::from_secs(900)) // 15 minute timeout
+).await?;
+```
+
 ### Important Notes
 
 - Current branch: main

@@ -4368,10 +4368,15 @@ name = "terminusdb-bin"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "libc",
+ "serde",
+ "serde_json",
  "terminusdb-client",
  "terminusdb-schema",
+ "terminusdb-schema-derive",
  "tokio 1.48.0",
+ "tracing",
  "url",
  "uuid 1.19.0",
  "which 6.0.3",

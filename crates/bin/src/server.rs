@@ -86,7 +86,24 @@ pub struct ServerOptions {
     /// Port to listen on. If None, auto-allocates a unique port in memory mode,
     /// or uses 6363 in persistent mode.
     pub port: Option<u16>,
+    /// Enable test mode optimizations (longer timeouts, fewer workers).
+    /// When true, automatically sets sensible defaults for parallel test execution.
+    pub test_mode: bool,
+    /// Number of Prolog workers for the server (default: 8).
+    /// Set lower in test mode to reduce resource contention when running
+    /// multiple server instances in parallel.
+    pub workers: Option<u8>,
+    /// Request timeout for clients created via `client()`.
+    /// If None in test_mode, defaults to 15 minutes.
+    /// If None otherwise, uses TERMINUSDB_DEFAULT_REQUEST_TIMEOUT or 60 seconds.
+    pub request_timeout: Option<Duration>,
 }
+
+/// Default worker count for test mode (reduced to minimize resource contention).
+const TEST_MODE_WORKERS: u8 = 2;
+
+/// Default request timeout for test mode (15 minutes).
+const TEST_MODE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// A running TerminusDB server instance.
 ///
@@ -94,6 +111,8 @@ pub struct ServerOptions {
 pub struct TerminusDBServer {
     child: Option<Child>,
     port: u16,
+    /// Request timeout for clients created via `client()`.
+    request_timeout: Option<Duration>,
 }
 
 /// Shared test server instance (per-process)
@@ -107,7 +126,11 @@ impl TerminusDBServer {
 
     /// Start a new test server with default test settings.
     ///
-    /// Equivalent to `start_server(ServerOptions { memory: true, quiet: true, .. })`.
+    /// Equivalent to `start_server(ServerOptions { memory: true, quiet: true, test_mode: true, .. })`.
+    ///
+    /// Test mode enables:
+    /// - Reduced worker count (2) to minimize resource contention
+    /// - Long client timeouts (15 minutes) for parallel test execution
     ///
     /// # Example
     ///
@@ -126,6 +149,7 @@ impl TerminusDBServer {
         start_server(ServerOptions {
             memory: true,
             quiet: true,
+            test_mode: true,
             ..Default::default()
         })
         .await
@@ -175,8 +199,11 @@ impl TerminusDBServer {
     /// Uses explicit "root" password instead of `local_node()` which reads from
     /// environment variables. Memory mode servers always use "root" password.
     /// Verifies the server is responding before returning.
+    ///
+    /// If the server was started with `test_mode: true`, the client will have
+    /// a 15-minute request timeout to handle resource contention during parallel tests.
     pub async fn client(&self) -> anyhow::Result<TerminusDBHttpClient> {
-        let client = create_test_client(self.port).await?;
+        let client = create_test_client(self.port, self.request_timeout).await?;
         // Verify server is responding
         client.info().await?;
         Ok(client)
@@ -367,6 +394,33 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
     };
     eprintln!("[terminusdb-bin] Using port: {}", port);
 
+    // Determine worker count: explicit > test_mode default > system default (8)
+    let workers = opts.workers.or_else(|| {
+        if opts.test_mode {
+            Some(TEST_MODE_WORKERS)
+        } else {
+            None
+        }
+    });
+    if let Some(w) = workers {
+        eprintln!("[terminusdb-bin] Using {} workers", w);
+    }
+
+    // Determine request timeout for clients
+    let request_timeout = opts.request_timeout.or_else(|| {
+        if opts.test_mode {
+            Some(TEST_MODE_TIMEOUT)
+        } else {
+            None
+        }
+    });
+    if let Some(t) = request_timeout {
+        eprintln!(
+            "[terminusdb-bin] Client request timeout: {} seconds",
+            t.as_secs()
+        );
+    }
+
     // Only set up db_path for persistent (non-memory) mode
     // Memory mode should NOT have TERMINUSDB_SERVER_DB_PATH set, as it would
     // override --memory and cause the server to try opening a disk store
@@ -423,6 +477,11 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
         .stderr(Stdio::piped())
         .env("TERMINUSDB_SERVER_PORT", port.to_string());
 
+    // Set worker count if specified
+    if let Some(w) = workers {
+        cmd.env("TERMINUSDB_SERVER_WORKERS", w.to_string());
+    }
+
     if let Some(ref path) = db_path {
         cmd.current_dir(path);
         cmd.env("TERMINUSDB_SERVER_DB_PATH", path);
@@ -442,6 +501,7 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
     let server = TerminusDBServer {
         child: Some(child),
         port,
+        request_timeout,
     };
 
     Ok(server)
@@ -472,6 +532,15 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
     let port = find_available_port()?;
     eprintln!("[terminusdb-bin] test_instance: Allocated port {}", port);
 
+    // Test mode: use reduced workers and long timeout
+    let workers = TEST_MODE_WORKERS;
+    let request_timeout = TEST_MODE_TIMEOUT;
+    eprintln!(
+        "[terminusdb-bin] test_instance: Using {} workers, {} second client timeout",
+        workers,
+        request_timeout.as_secs()
+    );
+
     // --memory mode self-initializes, no store init needed
     let args = vec!["serve", "--memory", "root"];
 
@@ -486,6 +555,7 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("TERMINUSDB_SERVER_PORT", port.to_string())
+        .env("TERMINUSDB_SERVER_WORKERS", workers.to_string())
         .spawn()?;
 
     let pid = child.id();
@@ -503,15 +573,30 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
     Ok(TerminusDBServer {
         child: Some(child),
         port,
+        request_timeout: Some(request_timeout),
     })
 }
 
 /// Create a client for the local test server with hardcoded "root" password.
 /// This is used instead of `local_node()` which reads from environment variables,
 /// since memory mode servers always use "root" password.
-async fn create_test_client(port: u16) -> anyhow::Result<TerminusDBHttpClient> {
+///
+/// # Arguments
+/// * `port` - The port the server is listening on
+/// * `request_timeout` - Optional request timeout. If None, uses the default (60 seconds).
+async fn create_test_client(
+    port: u16,
+    request_timeout: Option<Duration>,
+) -> anyhow::Result<TerminusDBHttpClient> {
     let url = format!("http://localhost:{}", port);
-    TerminusDBHttpClient::new(url::Url::parse(&url).unwrap(), "admin", "root", "admin").await
+    TerminusDBHttpClient::new_with_timeout(
+        url::Url::parse(&url).unwrap(),
+        "admin",
+        "root",
+        "admin",
+        request_timeout,
+    )
+    .await
 }
 
 /// Wait for the server to respond using TerminusDBHttpClient.
@@ -583,7 +668,8 @@ async fn wait_for_ready(child: &mut Child, port: u16, max_wait: Duration) -> any
         }
 
         // Use create_test_client() for health check (hardcoded "root" password)
-        let client = match create_test_client(port).await {
+        // Use default timeout for health checks - we want them to be fast
+        let client = match create_test_client(port, None).await {
             Ok(c) => c,
             Err(_) => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -752,6 +838,145 @@ mod tests {
 
         // Cleanup
         client.delete_database("test_ensure_db").await?;
+
+        Ok(())
+    }
+
+    /// Test running multiple TerminusDBServer instances in parallel.
+    ///
+    /// This stress tests:
+    /// - Unique port allocation across concurrent server starts
+    /// - Test mode settings (reduced workers, long timeouts)
+    /// - Schema insertion and querying under resource contention
+    ///
+    /// Each server runs in-memory with test mode enabled (2 workers, 15 min timeout).
+    #[tokio::test]
+    async fn test_parallel_server_instances() -> anyhow::Result<()> {
+        use futures::future::join_all;
+        use terminusdb_client::DocumentInsertArgs;
+        use terminusdb_schema::{EntityIDFor, ToTDBInstance};
+        use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+
+        // Simple test model
+        #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
+        #[tdb(id_field = "id")]
+        struct ParallelTestModel {
+            id: EntityIDFor<Self>,
+            name: String,
+            server_index: i32,
+        }
+
+        // Number of parallel servers to spawn
+        // Using more than typical CPU core count to stress test resource contention
+        const NUM_SERVERS: usize = 16;
+
+        eprintln!(
+            "[test] Starting {} parallel TerminusDBServer instances...",
+            NUM_SERVERS
+        );
+
+        // Spawn all servers in parallel
+        let handles: Vec<_> = (0..NUM_SERVERS)
+            .map(|i| {
+                tokio::spawn(async move {
+                    let start = std::time::Instant::now();
+                    eprintln!("[test] Server {} starting...", i);
+
+                    // Create a new test server (each gets unique port, test mode enabled)
+                    let server = TerminusDBServer::test().await?;
+                    let port = server.port();
+                    eprintln!(
+                        "[test] Server {} started on port {} in {:?}",
+                        i,
+                        port,
+                        start.elapsed()
+                    );
+
+                    // Get client and create a unique database
+                    let client = server.client().await?;
+                    let db_name = format!("parallel_test_{}", i);
+                    client.ensure_database(&db_name).await?;
+                    eprintln!("[test] Server {} created database '{}'", i, db_name);
+
+                    // Insert schema
+                    let spec = terminusdb_client::BranchSpec::with_branch(&db_name, "main");
+                    let args = DocumentInsertArgs::from(spec.clone());
+                    client.insert_schemas::<(ParallelTestModel,)>(args).await?;
+                    eprintln!("[test] Server {} inserted schema", i);
+
+                    // Insert a test instance
+                    let instance = ParallelTestModel {
+                        id: EntityIDFor::new(&format!("test_item_{}", i)).unwrap(),
+                        name: format!("Test Item from Server {}", i),
+                        server_index: i as i32,
+                    };
+                    let args = DocumentInsertArgs::from(spec.clone());
+                    client.insert_instance(&instance, args).await?;
+                    eprintln!("[test] Server {} inserted instance", i);
+
+                    // Query to verify using list_instances
+                    let results: Vec<ParallelTestModel> =
+                        client.list_instances(&spec, None, None).await?;
+                    eprintln!(
+                        "[test] Server {} queried {} instances",
+                        i,
+                        results.len()
+                    );
+
+                    // Verify we got our instance back
+                    assert_eq!(results.len(), 1, "Server {} should have 1 instance", i);
+                    assert_eq!(
+                        results[0].server_index, i as i32,
+                        "Server {} instance should have correct server_index",
+                        i
+                    );
+
+                    // Cleanup
+                    client.delete_database(&db_name).await?;
+                    eprintln!(
+                        "[test] Server {} completed successfully in {:?}",
+                        i,
+                        start.elapsed()
+                    );
+
+                    Ok::<(usize, u16), anyhow::Error>((i, port))
+                })
+            })
+            .collect();
+
+        // Wait for all servers to complete
+        let results = join_all(handles).await;
+
+        // Collect results and check for errors
+        let mut ports = Vec::new();
+        for (i, result) in results.into_iter().enumerate() {
+            match result {
+                Ok(Ok((server_idx, port))) => {
+                    eprintln!("[test] Server {} (port {}) succeeded", server_idx, port);
+                    ports.push(port);
+                }
+                Ok(Err(e)) => {
+                    panic!("Server {} failed with error: {:?}", i, e);
+                }
+                Err(e) => {
+                    panic!("Server {} task panicked: {:?}", i, e);
+                }
+            }
+        }
+
+        // Verify all ports were unique
+        let unique_ports: std::collections::HashSet<_> = ports.iter().collect();
+        assert_eq!(
+            unique_ports.len(),
+            ports.len(),
+            "All servers should have unique ports. Ports: {:?}",
+            ports
+        );
+
+        eprintln!(
+            "[test] All {} parallel servers completed successfully with unique ports: {:?}",
+            NUM_SERVERS, ports
+        );
 
         Ok(())
     }
