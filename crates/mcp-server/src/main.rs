@@ -1934,6 +1934,9 @@ impl TerminusDBMcpHandler {
             quiet: request.quiet,
             db_path: None,
             port: None, // Auto-allocate port
+            test_mode: false,
+            workers: None,
+            request_timeout: None,
         };
 
         // Start the server
