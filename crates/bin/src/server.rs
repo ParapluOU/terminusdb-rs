@@ -395,24 +395,20 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
     eprintln!("[terminusdb-bin] Using port: {}", port);
 
     // Determine worker count: explicit > test_mode default > system default (8)
-    let workers = opts.workers.or_else(|| {
-        if opts.test_mode {
-            Some(TEST_MODE_WORKERS)
-        } else {
-            None
-        }
+    let workers = opts.workers.or(if opts.test_mode {
+        Some(TEST_MODE_WORKERS)
+    } else {
+        None
     });
     if let Some(w) = workers {
         eprintln!("[terminusdb-bin] Using {} workers", w);
     }
 
     // Determine request timeout for clients
-    let request_timeout = opts.request_timeout.or_else(|| {
-        if opts.test_mode {
-            Some(TEST_MODE_TIMEOUT)
-        } else {
-            None
-        }
+    let request_timeout = opts.request_timeout.or(if opts.test_mode {
+        Some(TEST_MODE_TIMEOUT)
+    } else {
+        None
     });
     if let Some(t) = request_timeout {
         eprintln!(
