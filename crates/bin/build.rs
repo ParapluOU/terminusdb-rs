@@ -22,6 +22,78 @@ fn main() {
         return;
     }
 
+    // Check for cross-compilation - if target differs from host, try to use pre-built binaries
+    let target = env::var("TARGET").unwrap_or_default();
+    let host = env::var("HOST").unwrap_or_default();
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+
+    if target != host && !target.is_empty() && !host.is_empty() {
+        println!("cargo:warning=Cross-compilation detected: {} -> {}", host, target);
+
+        // Try to use pre-built binary
+        let prebuilt_dir = PathBuf::from(&manifest_dir).join("prebuilt").join(&target);
+        let prebuilt_binary = prebuilt_dir.join("terminusdb");
+
+        if prebuilt_binary.exists() {
+            println!(
+                "cargo:warning=Using pre-built TerminusDB binary from {}",
+                prebuilt_binary.display()
+            );
+
+            // Copy the binary to OUT_DIR
+            if let Err(e) = fs::copy(&prebuilt_binary, &binary_path) {
+                panic!(
+                    "Failed to copy pre-built binary from {} to {}: {}",
+                    prebuilt_binary.display(),
+                    binary_path.display(),
+                    e
+                );
+            }
+
+            // Set executable permissions
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&binary_path).unwrap().permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&binary_path, perms).unwrap();
+            }
+
+            // Copy librust.dylib for macOS targets
+            if target.contains("apple-darwin") {
+                let prebuilt_dylib = prebuilt_dir.join("librust.dylib");
+                if prebuilt_dylib.exists() {
+                    let dylib_dest = Path::new(&out_dir).join("librust.dylib");
+                    println!("cargo:warning=Copying pre-built librust.dylib...");
+                    if let Err(e) = fs::copy(&prebuilt_dylib, &dylib_dest) {
+                        panic!("Failed to copy pre-built dylib: {}", e);
+                    }
+                } else {
+                    println!("cargo:warning=Note: librust.dylib not found in pre-built directory");
+                }
+            }
+
+            println!(
+                "cargo:warning=Successfully installed pre-built TerminusDB binary at {}",
+                binary_path.display()
+            );
+            return;
+        } else {
+            panic!(
+                "Cross-compilation requires pre-built binaries.\n\
+                 Expected pre-built binary at: {}\n\
+                 \n\
+                 To create pre-built binaries:\n\
+                 1. Build TerminusDB on the target platform ({})\n\
+                 2. Copy the 'terminusdb' binary to {}/\n\
+                 3. For macOS, also copy 'src/rust/librust.dylib'\n",
+                prebuilt_binary.display(),
+                target,
+                prebuilt_dir.display()
+            );
+        }
+    }
+
     println!("cargo:warning=Building TerminusDB from source...");
 
     // Detect platform
@@ -29,7 +101,6 @@ fn main() {
     println!("cargo:warning=Detected platform: {:?}", platform);
 
     // Get crate directory for local installations
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let deps_dir = PathBuf::from(&manifest_dir).join(".deps");
     fs::create_dir_all(&deps_dir).expect("Failed to create .deps directory");
 
