@@ -1,5 +1,5 @@
 #![feature(map_first_last)]
-#![feature(specialization)]
+#![feature(min_specialization)]
 #![feature(associated_type_defaults)]
 #![feature(associated_type_bounds)]
 #![feature(let_chains)]
