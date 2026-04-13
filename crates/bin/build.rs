@@ -110,7 +110,8 @@ fn main() {
         Err(e) => panic!("Failed to ensure dependencies: {}", e),
     };
 
-    // Check if TERMINUSDB_SOURCE is set to use a local checkout
+    // Resolve TerminusDB source directory.
+    // Priority: TERMINUSDB_SOURCE env > sibling terminusdb submodule > git clone.
     let (build_dir, should_cleanup) = if let Ok(source_path) = env::var("TERMINUSDB_SOURCE") {
         let source_dir = PathBuf::from(&source_path);
         if !source_dir.exists() {
@@ -122,28 +123,41 @@ fn main() {
                 source_path
             );
         }
-        println!("cargo:warning=Building from local source: {}", source_path);
+        println!("cargo:warning=Building from TERMINUSDB_SOURCE: {}", source_path);
         (source_dir, false)
     } else {
-        // Get version to build
-        // Default to main branch (the fix is now merged into mainline)
-        let version = env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "main".to_string());
-        println!("cargo:warning=Building TerminusDB version: {}", version);
+        // Check for sibling terminusdb submodule (e.g., modules/terminusdb alongside modules/terminusdb-rs)
+        let workspace_root = PathBuf::from(&manifest_dir).join("../..");
+        let submodule_candidates = [
+            workspace_root.join("../terminusdb"),          // sibling to terminusdb-rs workspace
+        ];
+        let submodule = submodule_candidates.iter().find_map(|p| {
+            p.canonicalize().ok().filter(|c| c.join("Makefile").exists())
+        });
 
-        // Clone TerminusDB to a consistent temporary directory
-        // Note: The dev build embeds absolute paths to this directory in the saved state,
-        // so we use a fixed path that the runtime can recreate
-        let temp_dir = env::temp_dir().join("terminusdb-build");
-        println!(
-            "cargo:warning=Cloning TerminusDB to: {}",
-            temp_dir.display()
-        );
+        if let Some(dir) = submodule {
+            println!(
+                "cargo:warning=Building from local submodule: {}",
+                dir.display()
+            );
+            (dir, false)
+        } else {
+            // Fall back to cloning from GitHub
+            let version = env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "main".to_string());
+            println!("cargo:warning=Building TerminusDB version: {}", version);
 
-        if let Err(e) = clone_terminusdb(&version, &temp_dir) {
-            panic!("Failed to clone TerminusDB: {}", e);
+            let temp_dir = env::temp_dir().join("terminusdb-build");
+            println!(
+                "cargo:warning=Cloning TerminusDB to: {}",
+                temp_dir.display()
+            );
+
+            if let Err(e) = clone_terminusdb(&version, &temp_dir) {
+                panic!("Failed to clone TerminusDB: {}", e);
+            }
+
+            (temp_dir, true)
         }
-
-        (temp_dir, true)
     };
 
     // Build TerminusDB with dependency context

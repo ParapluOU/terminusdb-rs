@@ -2459,7 +2459,7 @@ version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff32365de1b6743cb203b710788263c44a03de03802daf96092f2da4fe6ba4d7"
 dependencies = [
- "proc-macro-crate 3.4.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2 1.0.104",
  "quote 1.0.42",
  "syn 2.0.112",
@@ -3470,7 +3470,7 @@ dependencies = [
 
 [[package]]
 name = "rug"
-version = "1.19.2"
+version = "1.28.0"
 dependencies = [
  "num-bigint",
  "num-integer",
@@ -4631,7 +4631,6 @@ dependencies = [
  "serde_json",
  "terminusdb-bin",
  "terminusdb-client",
- "terminusdb-gql",
  "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
@@ -6074,7 +6073,7 @@ dependencies = [
 [[package]]
 name = "xmlschema"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/xmlschema-rs.git?branch=main#c3c155af45fbb986792e65b59508d627d87764ab"
+source = "git+https://github.com/ParapluOU/xmlschema-rs.git?branch=main#3071eb2e609125c6eeb0169ff0dbcf75f72fa5c8"
 dependencies = [
  "base64 0.21.7",
  "chrono",

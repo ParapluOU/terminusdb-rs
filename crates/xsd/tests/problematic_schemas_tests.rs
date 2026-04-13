@@ -808,7 +808,10 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
     let context = Context {
         schema: "https://test.example.com/diamond#".to_string(),
         base: "https://test.example.com/diamond/data/".to_string(),
-        xsd: Some("http://www.w3.org/2001/XMLSchema#".to_string()),
+        prefixes: std::collections::BTreeMap::from([(
+            "xsd".to_string(),
+            "http://www.w3.org/2001/XMLSchema#".to_string(),
+        )]),
         documentation: None,
     };
 

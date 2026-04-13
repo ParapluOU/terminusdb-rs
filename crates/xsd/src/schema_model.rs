@@ -39,6 +39,10 @@ pub struct XsdSchema {
     /// Other global elements are just reusable building blocks.
     #[serde(default)]
     pub entry_point_elements: Vec<String>,
+    /// Namespace prefix → URI mappings from the XSD file's xmlns: declarations.
+    /// Used to construct prefixed TDB property names for namespaced attributes.
+    #[serde(default)]
+    pub namespace_prefixes: std::collections::HashMap<String, String>,
 }
 
 /// XSD element declaration
@@ -133,6 +137,9 @@ pub struct XsdSimpleType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XsdAttribute {
     pub name: String,
+    /// Namespace URI for namespaced attributes (e.g., "http://www.w3.org/1999/xlink" for xlink:href)
+    #[serde(default)]
+    pub namespace: Option<String>,
     #[serde(rename = "type")]
     pub attr_type: String,
     #[serde(rename = "use")]
@@ -306,6 +313,9 @@ impl XsdSchema {
             entry_point_elements = Self::infer_entry_point_elements(path);
         }
 
+        // Collect namespace prefix→URI mappings from the XSD's xmlns: declarations
+        let namespace_prefixes = schema.source.namespaces.clone();
+
         Ok(Self {
             target_namespace,
             schema_location,
@@ -314,6 +324,7 @@ impl XsdSchema {
             complex_types,
             simple_types,
             entry_point_elements,
+            namespace_prefixes,
         })
     }
 
@@ -742,6 +753,7 @@ impl XsdSchema {
 
             result.push(XsdAttribute {
                 name: attr.name().local_name.clone(),
+                namespace: attr.name().namespace.clone(),
                 attr_type,
                 use_type: use_type.to_string(),
                 default: attr.default().map(|s| s.to_string()),

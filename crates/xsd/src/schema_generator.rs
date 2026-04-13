@@ -31,39 +31,83 @@ pub struct EntryPointScore {
 
 pub struct XsdToSchemaGenerator {
     pub namespace: String,
+    /// Additional element names (case-insensitive) that should be treated as document roots
+    /// (non-subdocuments) in the generated TDB schema, beyond the XSD entry-point elements.
+    /// For collaborative editing, these define chunk boundaries — elements that become
+    /// independently addressable, versionable TDB entities.
+    pub additional_document_roots: Vec<String>,
+    /// Explicit entry point element names. When set, overrides the XSD schema's
+    /// auto-detected entry_point_elements. Only these elements (and additional_document_roots)
+    /// will be non-subdocuments. Everything else becomes a subdocument.
+    pub entry_points: Option<Vec<String>>,
 }
 
 impl XsdToSchemaGenerator {
     pub fn new() -> Self {
         Self {
             namespace: "terminusdb://schema#".to_string(),
+            additional_document_roots: Vec::new(),
+            entry_points: None,
         }
     }
 
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
         Self {
             namespace: namespace.into(),
+            additional_document_roots: Vec::new(),
+            entry_points: None,
         }
+    }
+
+    /// Configure additional document roots (chunk boundaries).
+    ///
+    /// These element names (case-insensitive) will be treated as TDB document roots
+    /// in addition to the XSD entry-point elements. Their types become non-subdocuments
+    /// with `Key::ValueHash`, allowing them to be independently referenced.
+    pub fn with_additional_document_roots(
+        mut self,
+        roots: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.additional_document_roots = roots.into_iter().map(|s| s.into()).collect();
+        self
+    }
+
+    /// Set explicit entry point element names, overriding auto-detection.
+    ///
+    /// When set, ONLY these elements (plus `additional_document_roots`) become
+    /// non-subdocuments. This prevents the auto-detection heuristic from
+    /// treating too many elements as document roots in large schemas.
+    pub fn with_entry_points(
+        mut self,
+        entry_points: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.entry_points = Some(entry_points.into_iter().map(|s| s.into()).collect());
+        self
     }
 
     pub fn generate(&self, xsd_schema: &XsdSchema) -> Result<Vec<Schema>> {
         let mut schemas = Vec::new();
 
-        // Use entry point elements (inferred from file name) to determine document roots.
-        // Only these should be non-subdocuments. Other global elements are just reusable
-        // building blocks that should be embedded as subdocuments.
+        // Determine which types are document roots (non-subdocuments).
         //
-        // IMPORTANT: We need to use the TYPE name of the element, not the element name.
+        // If explicit entry_points are configured, use ONLY those.
+        // Otherwise, use the XSD schema's auto-detected entry_point_elements.
+        //
+        // IMPORTANT: We need the TYPE name of the element, not the element name.
         // For example: <xs:element name="payment" type="ch:paymentType"/>
         // - Element name: "payment" -> would give "Payment"
         // - Type name: "paymentType" -> gives "PaymentType" (correct!)
-        let document_root_types: std::collections::HashSet<String> =
+        let effective_entry_points = self
+            .entry_points
+            .as_ref()
+            .unwrap_or(&xsd_schema.entry_point_elements);
+
+        let mut document_root_types: std::collections::HashSet<String> =
             {
                 use heck::ToPascalCase;
 
                 // First, try to find matches from entry_point_elements
-                let matched_types: std::collections::HashSet<String> = xsd_schema
-                    .entry_point_elements
+                let matched_types: std::collections::HashSet<String> = effective_entry_points
                     .iter()
                     .filter_map(|elem_name| {
                         // Find the root element by name (case-insensitive match)
@@ -76,19 +120,29 @@ impl XsdToSchemaGenerator {
                                 let local = e.name.split('}').last().unwrap_or(&e.name);
                                 local.to_lowercase() == elem_name_lower
                             })
-                            .and_then(|elem| {
-                                // Get the type name from the element's type_info
-                                elem.type_info.as_ref().and_then(|ti| {
-                                    // Use qualified_name or name if available
-                                    ti.qualified_name.as_ref().or(ti.name.as_ref()).map(
-                                        |type_name| {
-                                            // Extract local part and convert to PascalCase
-                                            let local =
-                                                type_name.split('}').last().unwrap_or(type_name);
-                                            local.to_pascal_case()
-                                        },
-                                    )
-                                })
+                            .map(|elem| {
+                                // Get the type name from the element's type_info.
+                                // For named types, use the type name; for anonymous types,
+                                // use the element name (same as how schemas are generated).
+                                elem.type_info
+                                    .as_ref()
+                                    .and_then(|ti| {
+                                        ti.qualified_name.as_ref().or(ti.name.as_ref()).map(
+                                            |type_name| {
+                                                let local = type_name
+                                                    .split('}')
+                                                    .last()
+                                                    .unwrap_or(type_name);
+                                                local.to_pascal_case()
+                                            },
+                                        )
+                                    })
+                                    .unwrap_or_else(|| {
+                                        // Anonymous type — use element name as class name
+                                        let local =
+                                            elem.name.split('}').last().unwrap_or(&elem.name);
+                                        local.to_pascal_case()
+                                    })
                             })
                     })
                     .collect();
@@ -124,6 +178,34 @@ impl XsdToSchemaGenerator {
                     matched_types
                 }
             };
+
+        // Merge additional document roots (chunk boundaries) configured by the caller.
+        // Look up each element name in root_elements to resolve its type name.
+        for elem_name in &self.additional_document_roots {
+            let elem_name_lower = elem_name.to_lowercase();
+            let type_name = xsd_schema
+                .root_elements
+                .iter()
+                .find(|e| {
+                    let local = e.name.split('}').last().unwrap_or(&e.name);
+                    local.to_lowercase() == elem_name_lower
+                })
+                .and_then(|elem| {
+                    elem.type_info.as_ref().and_then(|ti| {
+                        ti.qualified_name
+                            .as_ref()
+                            .or(ti.name.as_ref())
+                            .map(|type_name| {
+                                let local =
+                                    type_name.split('}').last().unwrap_or(type_name);
+                                local.to_pascal_case()
+                            })
+                    })
+                })
+                // Fallback: PascalCase of the element name itself (for anonymous types)
+                .unwrap_or_else(|| elem_name_lower.to_pascal_case());
+            document_root_types.insert(type_name);
+        }
 
         // Build a map of base type -> derived types for inheritance tracking.
         // In TerminusDB, @subdocument status is inherited, so if a child is a document root,
@@ -176,6 +258,13 @@ impl XsdToSchemaGenerator {
             }
         }
 
+        // Build URI→prefix reverse map for namespaced attribute property names
+        let uri_to_prefix: std::collections::HashMap<String, String> = xsd_schema
+            .namespace_prefixes
+            .iter()
+            .map(|(prefix, uri)| (uri.clone(), prefix.clone()))
+            .collect();
+
         // Generate schemas for complex types
         for complex_type in &xsd_schema.complex_types {
             let type_schemas = self.generate_class_from_complex_type_with_context(
@@ -183,6 +272,7 @@ impl XsdToSchemaGenerator {
                 &non_subdocument_types,
                 &xsd_schema.simple_types,
                 &xsd_schema.complex_types,
+                &uri_to_prefix,
             )?;
             schemas.extend(type_schemas);
         }
@@ -233,10 +323,33 @@ impl XsdToSchemaGenerator {
             .replace("#", "/data/")
             .replace("/schema/", "/data/");
 
+        // Populate context prefixes from the XSD's namespace declarations.
+        // TDB uses these to resolve prefixed property names (e.g., "xlink:href").
+        let mut prefixes = std::collections::BTreeMap::from([(
+            "xsd".to_string(),
+            "http://www.w3.org/2001/XMLSchema#".to_string(),
+        )]);
+        for (prefix, uri) in &xsd_schema.namespace_prefixes {
+            // Skip the default/target namespace and XSD itself
+            if prefix.is_empty() || prefix == "xs" || prefix == "xsd" {
+                continue;
+            }
+            // TDB requires HTTP(S) URIs for prefix resolution.
+            // Non-HTTP URIs (urn:, etc.) are normalized to HTTP form.
+            let normalized = Self::normalize_namespace_to_uri(uri);
+            // TDB expects URIs to end with # or / for proper prefix expansion
+            let tdb_uri = if normalized.ends_with('#') || normalized.ends_with('/') {
+                normalized
+            } else {
+                format!("{}#", normalized)
+            };
+            prefixes.insert(prefix.clone(), tdb_uri);
+        }
+
         let context = Context {
             schema: schema_ns.clone(),
             base: base_ns,
-            xsd: Some("http://www.w3.org/2001/XMLSchema#".to_string()),
+            prefixes,
             documentation: None,
         };
 
@@ -908,6 +1021,7 @@ impl XsdToSchemaGenerator {
         root_element_types: &std::collections::HashSet<String>,
         simple_types: &[XsdSimpleType],
         complex_types: &[XsdComplexType],
+        uri_to_prefix: &std::collections::HashMap<String, String>,
     ) -> Result<Vec<Schema>> {
         // Extract namespace and local name from Clark notation: {namespace}localName
         let (namespace, local_name) = self.parse_clark_notation(if complex_type.is_anonymous {
@@ -928,67 +1042,53 @@ impl XsdToSchemaGenerator {
         // Add attribute properties (common to both mixed and non-mixed)
         if let Some(ref attributes) = complex_type.attributes {
             for attr in attributes {
-                properties.push(self.attribute_to_property(attr)?);
+                properties.push(self.attribute_to_property(attr, uri_to_prefix)?);
             }
         }
 
-        // Check if this is a mixed content type with child elements
-        let use_mixed_content = self.should_use_mixed_content(complex_type);
+        // Generate children: List<{Type}Child> for elements with child elements.
+        // This preserves XML element ordering via TDB's ordered List type.
+        // The TaggedUnion allows heterogeneous children in the same list.
+        let has_child_elements = complex_type
+            .child_elements
+            .as_ref()
+            .is_some_and(|c| !c.is_empty());
 
-        // Check if base type also has mixed content - in that case, we inherit `content` property
-        // rather than defining our own (which would cause diamond property violation in TerminusDB)
-        let base_has_mixed_content = if let Some(ref base_type) = complex_type.base_type {
+        // Check if base type defines children (inherited — don't redefine to avoid
+        // diamond property violation in TerminusDB)
+        let base_has_children = if let Some(ref base_type) = complex_type.base_type {
             let (_, base_local_name) = self.parse_clark_notation(base_type);
-
-            // First, check if the base type is actually in our complex types and is mixed
-            let base_is_mixed = complex_types.iter().any(|ct| {
-                // Match by name (with or without namespace)
+            complex_types.iter().any(|ct| {
                 let (_, ct_local) = self.parse_clark_notation(&ct.name);
-                (ct_local == base_local_name || ct.name == *base_type) && ct.mixed
-            });
-
-            // Fallback: also check name patterns for DITA compatibility
-            base_is_mixed || base_type.ends_with(".class") || base_type.ends_with("Class")
+                (ct_local == base_local_name || ct.name == *base_type)
+                    && ct
+                        .child_elements
+                        .as_ref()
+                        .is_some_and(|c| !c.is_empty())
+            })
         } else {
             false
         };
 
-        if use_mixed_content && !base_has_mixed_content {
-            // Mixed content ON BASE CLASS: generate MixedContent structure
+        if has_child_elements && !base_has_children {
             let child_elements = complex_type.child_elements.as_ref().unwrap();
+            let include_text = complex_type.mixed;
 
-            let (inline_union, mixed_content_class, mixed_content_name) = self
-                .generate_mixed_content_schemas(
-                    &class_id,
-                    namespace.clone(),
-                    child_elements,
-                    simple_types,
-                )?;
+            let (child_union, child_union_name) = self.generate_children_union(
+                &class_id,
+                namespace.clone(),
+                child_elements,
+                include_text,
+            )?;
 
-            // Add the supporting schemas
-            schemas.push(inline_union);
-            schemas.push(mixed_content_class);
-
-            // Add a single `content` property instead of individual child properties
+            schemas.push(child_union);
             properties.push(Property {
-                name: "content".to_string(),
-                r#type: Some(TypeFamily::Optional), // May be empty element
-                class: mixed_content_name,
+                name: "children".to_string(),
+                r#type: Some(TypeFamily::List),
+                class: child_union_name,
             });
-        } else if use_mixed_content && base_has_mixed_content {
-            // Mixed content ON DERIVED CLASS: inherit `content` from base, don't add property
-            // This avoids diamond property violation in TerminusDB
-        } else {
-            // Non-mixed: generate individual properties for child elements
-            if let Some(ref child_elements) = complex_type.child_elements {
-                for element in child_elements {
-                    properties.push(self.child_element_to_property(element, simple_types)?);
-                }
-            }
-
-            // Add _text property for simple content or mixed content without child elements
-            // - has_simple_content: explicitly simple content (text only)
-            // - mixed with no children: can contain text but no inline elements
+        } else if !has_child_elements {
+            // No child elements — check for text content
             let needs_text_property = complex_type.has_simple_content
                 || (complex_type.mixed
                     && complex_type
@@ -997,12 +1097,9 @@ impl XsdToSchemaGenerator {
                         .map_or(true, |c| c.is_empty()));
 
             if needs_text_property {
-                // Use the base type's underlying XSD type if it's a simple type
                 let text_type = if let Some(ref base_type) = complex_type.base_type {
                     let (_, base_local_name) = self.parse_clark_notation(base_type);
                     let base_class = base_local_name.to_pascal_case();
-
-                    // Find the simple type and get its base XSD type
                     simple_types
                         .iter()
                         .find(|st| {
@@ -1023,6 +1120,7 @@ impl XsdToSchemaGenerator {
                 });
             }
         }
+        // else: has_child_elements && base_has_children → inherited, don't redefine
 
         // Determine subdocument status:
         // - Document roots (entry points like "Topic") are NOT subdocuments - they're top-level documents
@@ -1097,6 +1195,11 @@ impl XsdToSchemaGenerator {
         // @type: "http://xsd-namespace#ClassName" which matches the expanded schema URI
         // when the schema is inserted with Context { schema: "http://xsd-namespace#" }.
         // This allows multiple XSD schemas with the same class names to coexist.
+        // Non-subdocument classes (chunk boundaries) are marked @unfoldable
+        // so they get inlined when fetching the root document with unfold=true.
+        // This enables loading a full publication tree in a single TDB query.
+        let unfoldable = !subdocument;
+
         schemas.push(Schema::Class {
             id: class_id,
             base: namespace.clone(),
@@ -1105,7 +1208,7 @@ impl XsdToSchemaGenerator {
             subdocument,
             r#abstract: false,
             inherits,
-            unfoldable: false,
+            unfoldable,
             properties,
         });
 
@@ -1211,7 +1314,15 @@ impl XsdToSchemaGenerator {
         (None, name.to_string())
     }
 
-    fn attribute_to_property(&self, attr: &XsdAttribute) -> Result<Property> {
+    /// Convert an XSD attribute to a TDB property.
+    ///
+    /// For namespaced attributes (like xlink:href), the property name includes
+    /// the namespace prefix so TDB can resolve it via the context.
+    fn attribute_to_property(
+        &self,
+        attr: &XsdAttribute,
+        uri_to_prefix: &std::collections::HashMap<String, String>,
+    ) -> Result<Property> {
         let class = self.map_xsd_type_to_tdb_class(&attr.attr_type)?;
 
         let r#type = match attr.use_type.as_str() {
@@ -1219,11 +1330,20 @@ impl XsdToSchemaGenerator {
             _ => Some(TypeFamily::Optional),
         };
 
-        // Extract local name from Clark notation for property name
-        let (_, local_name) = self.parse_clark_notation(&attr.name);
+        // Use namespace-prefixed name for namespaced attributes
+        let name = if let Some(ref ns) = attr.namespace {
+            if let Some(prefix) = uri_to_prefix.get(ns.as_str()) {
+                format!("{}:{}", prefix, attr.name)
+            } else {
+                attr.name.clone()
+            }
+        } else {
+            let (_, local_name) = self.parse_clark_notation(&attr.name);
+            local_name
+        };
 
         Ok(Property {
-            name: local_name,
+            name,
             r#type,
             class,
         })
@@ -1356,6 +1476,8 @@ impl XsdToSchemaGenerator {
             "NCName" | "xs:NCName" | "xsd:NCName" => "xsd:string",
             "ID" | "xs:ID" | "xsd:ID" => "xsd:string",
             "IDREF" | "xs:IDREF" | "xsd:IDREF" => "xsd:string",
+            "IDREFS" | "xs:IDREFS" | "xsd:IDREFS" | "Idrefs" => "xsd:string",
+            "NMTOKENS" | "xs:NMTOKENS" | "xsd:NMTOKENS" | "Nmtokens" => "xsd:string",
             "anyURI" | "xs:anyURI" | "xsd:anyURI" => "xsd:string",
             "integer" | "xs:integer" | "xsd:integer" => "xsd:integer",
             "int" | "xs:int" | "xsd:int" => "xsd:integer",
@@ -1378,6 +1500,19 @@ impl XsdToSchemaGenerator {
             "gYearMonth" | "xs:gYearMonth" | "xsd:gYearMonth" => "xsd:gYearMonth",
             "base64Binary" | "xs:base64Binary" | "xsd:base64Binary" => "xsd:string",
             "hexBinary" | "xs:hexBinary" | "xsd:hexBinary" => "xsd:string",
+            "unsignedLong" | "xs:unsignedLong" | "xsd:unsignedLong" => "xsd:integer",
+            "unsignedShort" | "xs:unsignedShort" | "xsd:unsignedShort" => "xsd:integer",
+            "unsignedByte" | "xs:unsignedByte" | "xsd:unsignedByte" => "xsd:integer",
+            "negativeInteger" | "xs:negativeInteger" | "xsd:negativeInteger" => "xsd:integer",
+            "nonPositiveInteger" | "xs:nonPositiveInteger" | "xsd:nonPositiveInteger" => {
+                "xsd:integer"
+            }
+            // MathML simple types — map to closest XSD primitive
+            "character" | "Character" | "color" | "Color" | "length" | "Length"
+            | "mpadded-length" | "MpaddedLength" | "group-alignment-list" | "GroupAlignmentList"
+            | "group-alignment-list-list" | "GroupAlignmentListList" => "xsd:string",
+            "number" | "Number" | "positive-integer" | "PositiveInteger"
+            | "unsigned-integer" | "UnsignedInteger" => "xsd:integer",
             // xs:anyType allows arbitrary content - map to sys:JSON (unconstrained JSON subdocument)
             "anyType" | "xs:anyType" | "xsd:anyType" => "sys:JSON",
             // User-defined type - convert to PascalCase using heck
@@ -1391,50 +1526,46 @@ impl XsdToSchemaGenerator {
     // Mixed Content Support
     // ========================================================================
 
-    /// Generate schemas for mixed content: a TaggedUnion for inline elements and a MixedContent class.
+    /// Generate a `{TypeName}Child` TaggedUnion for an element's allowed children.
     ///
-    /// Mixed content is when an XML element can contain both text and child elements interleaved:
-    /// ```xml
-    /// <p>The <term>first term</term> and <term>second term</term> are important.</p>
-    /// ```
+    /// Each variant corresponds to an allowed child element type.
+    /// If `include_text_variant` is true (mixed content), a `text: xsd:string` variant is added
+    /// to represent text nodes interspersed with child elements.
     ///
-    /// We model this as:
-    /// - `{TypeName}Inline` - TaggedUnion of all allowed child element types
-    /// - `MixedContent{TypeName}` - Class with `text: String` and `subs: List({TypeName}Inline)`
-    ///
-    /// Returns: (inline_union_schema, mixed_content_schema, inline_union_name)
-    fn generate_mixed_content_schemas(
+    /// Returns: (union_schema, union_type_name)
+    fn generate_children_union(
         &self,
         type_name: &str,
         namespace: Option<String>,
         child_elements: &[ChildElement],
-        _simple_types: &[XsdSimpleType],
-    ) -> Result<(Schema, Schema, String)> {
-        let inline_union_name = format!("{}Inline", type_name);
-        let mixed_content_name = format!("MixedContent{}", type_name);
+        include_text_variant: bool,
+    ) -> Result<(Schema, String)> {
+        let union_name = format!("{}Child", type_name);
 
-        // Generate TaggedUnion properties from child elements
-        let union_properties: Vec<Property> = child_elements
+        let mut union_properties: Vec<Property> = child_elements
             .iter()
             .filter_map(|element| {
-                // Extract local name from Clark notation
                 let (_, local_name) = self.parse_clark_notation(&element.name);
-
-                // Get the class for this element type
                 let class = self.map_xsd_type_to_tdb_class(&element.element_type).ok()?;
-
                 Some(Property {
                     name: local_name,
-                    r#type: None, // TaggedUnion variants are mutually exclusive
+                    r#type: None,
                     class,
                 })
             })
             .collect();
 
-        // Create the inline union TaggedUnion
-        let inline_union = Schema::TaggedUnion {
-            id: inline_union_name.clone(),
-            base: namespace.clone(), // Use XSD namespace for multi-namespace support
+        if include_text_variant {
+            union_properties.push(Property {
+                name: "text".to_string(),
+                r#type: None,
+                class: "xsd:string".to_string(),
+            });
+        }
+
+        let union_schema = Schema::TaggedUnion {
+            id: union_name.clone(),
+            base: namespace,
             key: Key::Random,
             r#abstract: false,
             documentation: None,
@@ -1443,31 +1574,7 @@ impl XsdToSchemaGenerator {
             unfoldable: false,
         };
 
-        // Create the MixedContent class with text and subs
-        let mixed_content = Schema::Class {
-            id: mixed_content_name.clone(),
-            base: namespace.clone(), // Use XSD namespace for multi-namespace support
-            key: Key::Random,
-            documentation: None,
-            subdocument: true,
-            r#abstract: false,
-            inherits: vec![],
-            unfoldable: false,
-            properties: vec![
-                Property {
-                    name: "text".to_string(),
-                    r#type: None, // Required
-                    class: "xsd:string".to_string(),
-                },
-                Property {
-                    name: "subs".to_string(),
-                    r#type: Some(TypeFamily::List), // List preserves order
-                    class: inline_union_name.clone(),
-                },
-            ],
-        };
-
-        Ok((inline_union, mixed_content, mixed_content_name))
+        Ok((union_schema, union_name))
     }
 
     /// Check if a complex type should use mixed content handling.

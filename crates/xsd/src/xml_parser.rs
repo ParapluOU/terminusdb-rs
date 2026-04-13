@@ -928,6 +928,155 @@ impl<'a> XmlToInstanceParser<'a> {
             }
         }
     }
+
+    // ========================================================================
+    // Direct XML → Instance (ordered children)
+    // ========================================================================
+
+    /// Parse an XML Element directly into a TerminusDB Instance, preserving
+    /// child element order via `children: List<{Type}Child>`.
+    ///
+    /// This walks the DOM tree in document order instead of going through
+    /// JSON (which loses inter-element ordering).
+    pub fn xml_element_to_instance(&self, elem: &Element) -> ParseResult<Instance> {
+        let class_name = self.resolve_class_name(elem.local_name());
+
+        // Find the schema for this class
+        let schema = self
+            .schemas
+            .get(&class_name)
+            .ok_or_else(|| XmlParseError::no_schema(&class_name))?;
+
+        let mut instance = Instance {
+            schema: (*schema).clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: BTreeMap::new(),
+        };
+
+        // XML attributes → instance properties.
+        // Namespaced attributes (like xlink:href) use the prefix from the
+        // element's namespace context to match TDB schema property names.
+        for (qname, value) in &elem.attributes {
+            // Skip namespace declarations and DTD/XSI attributes
+            if qname.local_name.starts_with("xmlns")
+                || qname.local_name == "dtd-version"
+                || qname.namespace.as_ref().is_some_and(|ns| {
+                    ns == "http://www.w3.org/2000/xmlns/"
+                        || ns == "http://www.w3.org/2001/XMLSchema-instance"
+                })
+            {
+                continue;
+            }
+
+            let attr_name = if let Some(ref ns) = qname.namespace {
+                // Reverse lookup: find prefix for this namespace URI
+                elem.namespaces
+                    .iter()
+                    .find(|(_, uri)| *uri == ns.as_str())
+                    .map(|(prefix, _)| format!("{}:{}", prefix, qname.local_name))
+                    .unwrap_or_else(|| qname.local_name.clone())
+            } else {
+                qname.local_name.clone()
+            };
+
+            instance.properties.insert(
+                attr_name,
+                InstanceProperty::Primitive(PrimitiveValue::String(value.clone())),
+            );
+        }
+
+        // Build children list (ordered)
+        let child_union_name = format!("{}Child", class_name);
+        let has_child_union = self.schemas.contains_key(&child_union_name);
+
+        if has_child_union {
+            let child_union_schema = self.schemas.get(&child_union_name).unwrap();
+            let mut children = Vec::new();
+
+            // Text before first child element (for mixed content)
+            if let Some(ref text) = elem.text {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    children.push(self.make_text_child(child_union_schema, trimmed));
+                }
+            }
+
+            // Child elements in document order
+            for child_elem in &elem.children {
+                match self.xml_element_to_instance(child_elem) {
+                    Ok(child_instance) => {
+                        children.push(self.make_element_child(
+                            child_union_schema,
+                            child_elem.local_name(),
+                            child_instance,
+                        ));
+                    }
+                    Err(_) => {
+                        // Skip elements we can't resolve (e.g., unknown namespace elements)
+                        continue;
+                    }
+                }
+            }
+
+            // Always include children property (List can be empty [])
+            instance.properties.insert(
+                "children".to_string(),
+                InstanceProperty::Relations(children),
+            );
+        } else if elem.children.is_empty() {
+            // Leaf element — check for text content as _text property
+            if let Some(ref text) = elem.text {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    instance.properties.insert(
+                        "_text".to_string(),
+                        InstanceProperty::Primitive(PrimitiveValue::String(trimmed.to_string())),
+                    );
+                }
+            }
+        }
+
+        Ok(instance)
+    }
+
+    /// Create a TaggedUnion child instance wrapping a text node.
+    fn make_text_child(&self, union_schema: &Schema, text: &str) -> RelationValue {
+        let mut child = Instance {
+            schema: union_schema.clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: BTreeMap::new(),
+        };
+        child.properties.insert(
+            "text".to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String(text.to_string())),
+        );
+        RelationValue::One(child)
+    }
+
+    /// Create a TaggedUnion child instance wrapping an element.
+    fn make_element_child(
+        &self,
+        union_schema: &Schema,
+        element_name: &str,
+        element_instance: Instance,
+    ) -> RelationValue {
+        let mut child = Instance {
+            schema: union_schema.clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: BTreeMap::new(),
+        };
+        child.properties.insert(
+            element_name.to_string(),
+            InstanceProperty::Relation(RelationValue::One(element_instance)),
+        );
+        RelationValue::One(child)
+    }
 }
 
 /// Convert a string to PascalCase

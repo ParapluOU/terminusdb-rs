@@ -349,6 +349,33 @@ impl XsdModel {
         parser.json_to_instances(&json)
     }
 
+    /// Parse XML content into TerminusDB instances, preserving element order.
+    ///
+    /// This walks the XML DOM tree directly (not through JSON), creating
+    /// `children: List<{Type}Child>` instances that preserve document order.
+    /// This is the correct method for schemas using the ordered children model.
+    pub fn parse_xml_to_instances_ordered(
+        &self,
+        xml: &str,
+    ) -> crate::xml_parser::ParseResult<Vec<Instance>> {
+        use xmlschema::documents::Document;
+
+        let doc = Document::from_string(xml)
+            .map_err(|e| crate::xml_parser::XmlParseError::parse(e.to_string()))?;
+
+        let root = doc
+            .root
+            .as_ref()
+            .ok_or_else(|| {
+                crate::xml_parser::XmlParseError::parse("XML document has no root element")
+            })?;
+
+        let element_map = self.element_to_class_map();
+        let parser = XmlToInstanceParser::with_element_mapping(&self.tdb_schemas, element_map);
+        let instance = parser.xml_element_to_instance(root)?;
+        Ok(vec![instance])
+    }
+
     /// Get statistics about the model.
     pub fn stats(&self) -> XsdModelStats {
         let total_complex_types: usize =
