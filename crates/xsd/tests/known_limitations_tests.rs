@@ -91,7 +91,7 @@ fn test_union_types_generate_tagged_union() {
     // This generates a Schema::TaggedUnion with properties for each member type.
 
     let xsd_schema = create_union_type_schema();
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     // Verify TaggedUnion is generated for union type
@@ -253,7 +253,7 @@ fn test_limitation_unbounded_uses_set_not_list() {
     // - xs:list types WOULD use List, but xmlschema-rs doesn't properly parse them
 
     let xsd_schema = create_list_type_schema();
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let container = find_class(&schemas, "DataContainer").expect("DataContainer should exist");
@@ -336,7 +336,7 @@ fn test_list_type_generates_type_family_list() {
     // will automatically work.
 
     let xsd_schema = create_list_property_schema();
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let container = find_class(&schemas, "DataWithList").expect("DataWithList should exist");

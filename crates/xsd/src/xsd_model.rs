@@ -91,7 +91,7 @@ impl XsdModel {
         }
 
         // Generate TerminusDB schemas with context
-        let generator = XsdToSchemaGenerator::new();
+        let mut generator = XsdToSchemaGenerator::new();
         let mut all_schemas = Vec::new();
         let mut context = Context::default();
 
@@ -134,7 +134,7 @@ impl XsdModel {
         let schema_dir = schema_dir.as_ref();
         let catalog = catalog_path.as_ref().map(|p| p.as_ref().to_path_buf());
 
-        let generator = XsdToSchemaGenerator::new();
+        let mut generator = XsdToSchemaGenerator::new();
 
         // Collect the raw XSD schemas for later use
         let xsd_files = generator.discover_xsd_files(schema_dir)?;

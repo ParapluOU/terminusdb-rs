@@ -60,7 +60,7 @@ fn test_simple_book_schema_generates_classes() {
         }
     }
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -110,7 +110,7 @@ fn test_book_type_has_correct_attributes() {
     );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let book_type = find_class(&schemas, "BookType").expect("BookType not found");
@@ -142,7 +142,7 @@ fn test_book_type_has_correct_child_elements() {
     );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let book_type = find_class(&schemas, "BookType").expect("BookType not found");
@@ -191,7 +191,7 @@ fn test_person_type_has_correct_structure() {
     );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let person_type = find_class(&schemas, "PersonType").expect("PersonType not found");
@@ -223,7 +223,7 @@ fn test_catalog_schema_generates_all_types() {
     let xsd_schema =
         XsdSchema::from_xsd_file(xsd_path, None::<&str>).expect("Failed to parse catalog.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -248,7 +248,7 @@ fn test_product_type_various_xsd_types() {
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let product_type = find_class(&schemas, "ProductType").expect("ProductType not found");
@@ -288,7 +288,7 @@ fn test_category_type_self_reference() {
     let xsd_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/catalog.xsd");
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let category_type = find_class(&schemas, "CategoryType").expect("CategoryType not found");
@@ -317,7 +317,7 @@ fn test_generated_schemas_use_correct_key_strategy() {
     );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     for schema in &schemas {
@@ -360,7 +360,7 @@ fn test_namespace_preserved_in_base_for_multi_namespace_support() {
     );
     let xsd_schema = XsdSchema::from_xsd_file(xsd_path, None::<&str>).unwrap();
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     let book_type = find_class(&schemas, "BookType").expect("BookType not found");
@@ -474,7 +474,7 @@ fn test_list_types_generate_type_family_list() {
         }
     }
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");

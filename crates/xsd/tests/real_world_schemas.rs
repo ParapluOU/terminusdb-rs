@@ -64,7 +64,7 @@ fn test_dita_basetopic_generates_schemas() {
     let xsd_schema = XsdSchema::from_xsd_file(&basetopic_path, None::<&str>)
         .expect("Failed to parse DITA basetopic.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -108,7 +108,7 @@ fn test_dita_basemap_schema_loads() {
     let xsd_schema = XsdSchema::from_xsd_file(&basemap_path, None::<&str>)
         .expect("Failed to parse DITA basemap.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -167,7 +167,7 @@ fn test_niso_sts_generates_schemas() {
     let xsd_schema = XsdSchema::from_xsd_file(&niso_path, None::<&str>)
         .expect("Failed to parse NISO-STS schema");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -274,7 +274,7 @@ fn test_niso_sts_schema_properties() {
 fn test_dita_directory_generation() {
     let dita_dir = DITA_DIR.path().join("xsd1.2-url/base/xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
 
     // This tests the entry point detection and directory parsing
     let schemas = generator
@@ -297,7 +297,7 @@ fn test_dita_directory_generation() {
 fn test_niso_directory_generation() {
     let niso_dir = NISO_DIR.path().join("NISO-STS-extended-1-MathML3-XSD");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
 
     let schemas = generator
         .generate_from_directory(&niso_dir, None::<&str>)
@@ -327,7 +327,7 @@ fn test_schema_deduplication() {
     let xsd_schema = XsdSchema::from_xsd_file(&niso_path, None::<&str>)
         .expect("Failed to parse NISO-STS schema");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema).unwrap();
 
     // Check for duplicates by class ID

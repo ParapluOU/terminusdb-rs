@@ -108,7 +108,7 @@ fn test_choice_generates_tagged_union() {
     let xsd_schema = XsdSchema::from_xsd_file(choice_xsd_path(), None::<&str>)
         .expect("Failed to parse choice_types.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -164,7 +164,7 @@ fn test_choice_elements_are_optional() {
     let xsd_schema = XsdSchema::from_xsd_file(choice_xsd_path(), None::<&str>)
         .expect("Failed to parse choice_types.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -194,7 +194,7 @@ fn test_repeating_choice_generates_set() {
     let xsd_schema = XsdSchema::from_xsd_file(choice_xsd_path(), None::<&str>)
         .expect("Failed to parse choice_types.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");
@@ -224,7 +224,7 @@ fn test_payment_type_has_payment_method_choice() {
     let xsd_schema = XsdSchema::from_xsd_file(choice_xsd_path(), None::<&str>)
         .expect("Failed to parse choice_types.xsd");
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator
         .generate(&xsd_schema)
         .expect("Failed to generate schemas");

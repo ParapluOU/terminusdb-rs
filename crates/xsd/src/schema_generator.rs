@@ -40,6 +40,10 @@ pub struct XsdToSchemaGenerator {
     /// auto-detected entry_point_elements. Only these elements (and additional_document_roots)
     /// will be non-subdocuments. Everything else becomes a subdocument.
     pub entry_points: Option<Vec<String>>,
+    /// Maps restricted simple type names to their base XSD types.
+    /// Built during generate() so map_xsd_type_to_tdb_class can resolve
+    /// type aliases like HeadingLevelType → xs:positiveInteger → xsd:integer.
+    simple_type_bases: std::collections::HashMap<String, String>,
 }
 
 impl XsdToSchemaGenerator {
@@ -48,6 +52,7 @@ impl XsdToSchemaGenerator {
             namespace: "terminusdb://schema#".to_string(),
             additional_document_roots: Vec::new(),
             entry_points: None,
+            simple_type_bases: std::collections::HashMap::new(),
         }
     }
 
@@ -56,6 +61,7 @@ impl XsdToSchemaGenerator {
             namespace: namespace.into(),
             additional_document_roots: Vec::new(),
             entry_points: None,
+            simple_type_bases: std::collections::HashMap::new(),
         }
     }
 
@@ -85,7 +91,25 @@ impl XsdToSchemaGenerator {
         self
     }
 
-    pub fn generate(&self, xsd_schema: &XsdSchema) -> Result<Vec<Schema>> {
+    pub fn generate(&mut self, xsd_schema: &XsdSchema) -> Result<Vec<Schema>> {
+        // Build a map of restricted simple type names → base XSD types.
+        // Types with non-enum restrictions (min/max, pattern) can't be expressed
+        // in TDB's schema language, so properties referencing them need to resolve
+        // to the base XSD type instead.
+        self.simple_type_bases.clear();
+        for st in &xsd_schema.simple_types {
+            if let Some(base) = &st.base_type {
+                // Only map types that have restrictions but are NOT enums
+                // (enums get their own Schema::Enum and the PascalCase reference works)
+                let is_enum = st.restrictions.as_ref().is_some_and(|rs| {
+                    rs.iter().any(|r| matches!(r, crate::schema_model::Restriction::Enumeration { .. }))
+                });
+                if !is_enum {
+                    self.simple_type_bases.insert(st.name.clone(), base.clone());
+                }
+            }
+        }
+
         let mut schemas = Vec::new();
 
         // Determine which types are document roots (non-subdocuments).
@@ -298,7 +322,7 @@ impl XsdToSchemaGenerator {
     /// A tuple of (Context, Vec<Schema>) where:
     /// - Context has `@schema` derived from XSD target namespace
     /// - Schemas have unprefixed class names (e.g., "TopicClass")
-    pub fn generate_with_context(&self, xsd_schema: &XsdSchema) -> Result<(Context, Vec<Schema>)> {
+    pub fn generate_with_context(&mut self, xsd_schema: &XsdSchema) -> Result<(Context, Vec<Schema>)> {
         let schemas = self.generate(xsd_schema)?;
 
         // Derive TerminusDB schema namespace from XSD target namespace
@@ -500,7 +524,7 @@ impl XsdToSchemaGenerator {
     /// # Ok::<(), terminusdb_xsd::XsdError>(())
     /// ```
     pub fn generate_from_entry_points(
-        &self,
+        &mut self,
         entry_points: &[impl AsRef<Path>],
         catalog_path: Option<impl AsRef<Path>>,
     ) -> Result<Vec<Schema>> {
@@ -587,7 +611,7 @@ impl XsdToSchemaGenerator {
     /// Consolidated list of all TerminusDB schemas from the XSD type tree,
     /// with automatic deduplication.
     pub fn generate_from_directory(
-        &self,
+        &mut self,
         schema_dir: impl AsRef<Path>,
         catalog_path: Option<impl AsRef<Path>>,
     ) -> Result<Vec<Schema>> {
@@ -901,7 +925,7 @@ impl XsdToSchemaGenerator {
 
     /// Fallback: Parse all files individually (less efficient).
     fn parse_all_files(
-        &self,
+        &mut self,
         xsd_files: &[PathBuf],
         catalog_path: Option<&impl AsRef<Path>>,
     ) -> Result<Vec<Schema>> {
@@ -1515,8 +1539,23 @@ impl XsdToSchemaGenerator {
             | "unsigned-integer" | "UnsignedInteger" => "xsd:integer",
             // xs:anyType allows arbitrary content - map to sys:JSON (unconstrained JSON subdocument)
             "anyType" | "xs:anyType" | "xsd:anyType" => "sys:JSON",
-            // User-defined type - convert to PascalCase using heck
-            other => return Ok(other.to_pascal_case()),
+            // Check if this is a restricted simple type with a base type.
+            // Types like HeadingLevelType (restriction of xs:positiveInteger)
+            // don't get their own TDB schema — resolve to the base type instead.
+            other => {
+                if let Some(base) = self.simple_type_bases.get(other).cloned() {
+                    return self.map_xsd_type_to_tdb_class(&base);
+                }
+                // Also try Clark notation stripped name
+                let stripped = other.split('}').last().unwrap_or(other);
+                if stripped != other {
+                    if let Some(base) = self.simple_type_bases.get(stripped).cloned() {
+                        return self.map_xsd_type_to_tdb_class(&base);
+                    }
+                }
+                // Genuine user-defined class - convert to PascalCase
+                return Ok(other.to_pascal_case());
+            }
         };
 
         Ok(mapped.to_string())
