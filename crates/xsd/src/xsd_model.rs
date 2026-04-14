@@ -71,9 +71,13 @@ impl XsdModel {
     ///
     /// * `entry_points` - Paths to XSD entry-point files
     /// * `catalog_path` - Optional XML catalog for URN resolution
+    /// * `namespace` - Optional TDB namespace URI. If provided, overrides the
+    ///   namespace derived from the XSD's targetNamespace. Required when using
+    ///   `parse_xml_to_instances()` to ensure instances get the correct `@type`.
     pub fn from_entry_points(
         entry_points: &[impl AsRef<Path>],
         catalog_path: Option<impl AsRef<Path>>,
+        namespace: Option<&str>,
     ) -> Result<Self> {
         let catalog = catalog_path.as_ref().map(|p| p.as_ref().to_path_buf());
 
@@ -90,8 +94,13 @@ impl XsdModel {
             xsd_schemas.push(schema);
         }
 
-        // Generate TerminusDB schemas with context
-        let mut generator = XsdToSchemaGenerator::new();
+        // Generate TerminusDB schemas with context.
+        // If a namespace is provided, use it — this ensures parse_xml_to_instances()
+        // produces instances with the correct @type namespace.
+        let mut generator = match namespace {
+            Some(ns) => XsdToSchemaGenerator::with_namespace(ns),
+            None => XsdToSchemaGenerator::new(),
+        };
         let mut all_schemas = Vec::new();
         let mut context = Context::default();
 
@@ -130,11 +139,15 @@ impl XsdModel {
     pub fn from_directory(
         schema_dir: impl AsRef<Path>,
         catalog_path: Option<impl AsRef<Path>>,
+        namespace: Option<&str>,
     ) -> Result<Self> {
         let schema_dir = schema_dir.as_ref();
         let catalog = catalog_path.as_ref().map(|p| p.as_ref().to_path_buf());
 
-        let mut generator = XsdToSchemaGenerator::new();
+        let mut generator = match namespace {
+            Some(ns) => XsdToSchemaGenerator::with_namespace(ns),
+            None => XsdToSchemaGenerator::new(),
+        };
 
         // Collect the raw XSD schemas for later use
         let xsd_files = generator.discover_xsd_files(schema_dir)?;
@@ -177,7 +190,7 @@ impl XsdModel {
         schema_path: impl AsRef<Path>,
         catalog_path: Option<impl AsRef<Path>>,
     ) -> Result<Self> {
-        Self::from_entry_points(&[schema_path.as_ref()], catalog_path)
+        Self::from_entry_points(&[schema_path.as_ref()], catalog_path, None)
     }
 
     /// Set the schema namespace URI for generated schemas.
