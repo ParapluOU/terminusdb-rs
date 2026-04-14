@@ -105,7 +105,20 @@ impl XsdToSchemaGenerator {
                     rs.iter().any(|r| matches!(r, crate::schema_model::Restriction::Enumeration { .. }))
                 });
                 if !is_enum {
+                    // Insert under multiple key forms since type references
+                    // may use qualified names, local names, or PascalCase.
                     self.simple_type_bases.insert(st.name.clone(), base.clone());
+                    // Local name (strip namespace)
+                    let local = st.name.split('}').last().unwrap_or(&st.name);
+                    if local != st.name {
+                        self.simple_type_bases.insert(local.to_string(), base.clone());
+                    }
+                    // PascalCase variant
+                    use heck::ToPascalCase;
+                    let pascal = local.to_pascal_case();
+                    if pascal != local {
+                        self.simple_type_bases.insert(pascal, base.clone());
+                    }
                 }
             }
         }
