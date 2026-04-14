@@ -40,7 +40,7 @@ schemas-dita = { git = "https://github.com/parapluou/schemas-rs" }
 schemas-niso-sts = { git = "https://github.com/parapluou/schemas-rs" }
 # Full schemas bundle for testing problematic schemas
 schemas = { git = "https://github.com/parapluou/schemas-rs", features = ["full"] }
-tempfile.workspace = true
+tempfile = "3"
 terminusdb-bin = { path = "../bin" }
 terminusdb-client = { path = "../client" }
 terminusdb-schema-derive = { path = "../schema/derive" }
