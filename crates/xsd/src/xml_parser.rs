@@ -1014,8 +1014,25 @@ impl<'a> XmlToInstanceParser<'a> {
                         ));
                     }
                     Err(_) => {
-                        // Skip elements we can't resolve (e.g., unknown namespace elements)
-                        continue;
+                        // No schema found for this element's class. This happens for
+                        // simple-type child elements (xs:string, xs:integer, etc.)
+                        // whose types map to XSD primitives rather than TDB classes.
+                        // Capture the text content as a primitive property on the
+                        // TaggedUnion child instance.
+                        let text = child_elem.text.as_deref().unwrap_or("").trim();
+                        if !text.is_empty() {
+                            children.push(self.make_primitive_child(
+                                child_union_schema,
+                                child_elem.local_name(),
+                                text,
+                            ));
+                        } else {
+                            tracing::warn!(
+                                "Skipping empty simple-type child element <{}> in <{}>",
+                                child_elem.local_name(),
+                                elem.local_name(),
+                            );
+                        }
                     }
                 }
             }
@@ -1074,6 +1091,31 @@ impl<'a> XmlToInstanceParser<'a> {
         child.properties.insert(
             element_name.to_string(),
             InstanceProperty::Relation(RelationValue::One(element_instance)),
+        );
+        RelationValue::One(child)
+    }
+
+    /// Create a TaggedUnion child for a simple-type element (xs:string, etc.).
+    ///
+    /// The element's text content becomes a primitive string property on the
+    /// union child, keyed by the element name. For example, `<title>Hello</title>`
+    /// becomes `{ "@type": "MetadataTypeChild", "title": "Hello" }`.
+    fn make_primitive_child(
+        &self,
+        union_schema: &Schema,
+        element_name: &str,
+        text: &str,
+    ) -> RelationValue {
+        let mut child = Instance {
+            schema: union_schema.clone(),
+            id: None,
+            capture: false,
+            ref_props: false,
+            properties: BTreeMap::new(),
+        };
+        child.properties.insert(
+            element_name.to_string(),
+            InstanceProperty::Primitive(PrimitiveValue::String(text.to_string())),
         );
         RelationValue::One(child)
     }
