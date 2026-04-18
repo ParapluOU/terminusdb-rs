@@ -97,6 +97,9 @@ codegen-units = 1
 
 [patch.crates-io]
 # Use git version of terminus-store to match terminusdb-community's requirements
-terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store" }
+terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store", rev = "1c44c02" }
 # Use pure Rust rug shim for cross-compilation (replaces GMP-based rug)
 rug = { path = "crates/rug-shim" }
+# Use our fork of swipl-rs for nightly Rust compatibility
+swipl = { git = "https://github.com/ParapluOU/swipl-rs", branch = "master" }
+swipl-fli = { git = "https://github.com/ParapluOU/swipl-rs", branch = "master" }
