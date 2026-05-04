@@ -24,15 +24,25 @@ impl<T: ToTDBSchema> ToTDBSchema for Vec<T> {
 // Implement ToInstanceProperty for Vec<T> where T implements ToTDBInstance
 impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Vec<T> {
     default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
-        // Check if T is a subdocument type
-        let is_subdocument = T::to_schema().is_subdocument();
+        // Simple enums serialize as a list of primitive strings (their TDB value)
+        if T::to_schema().is_enum() {
+            return InstanceProperty::Primitives(
+                self.into_iter()
+                    .map(|item| {
+                        PrimitiveValue::String(
+                            item.to_instance(None)
+                                .enum_value()
+                                .expect("enum should have variant property"),
+                        )
+                    })
+                    .collect(),
+            );
+        }
 
         InstanceProperty::Relations(
             self.into_iter()
                 .map(|item| {
-                    let mut instance = item.to_instance(None);
-                    // If this is a subdocument, we need to ensure it stays embedded
-                    // The flatten process will check is_subdocument() and skip flattening
+                    let instance = item.to_instance(None);
                     RelationValue::One(instance)
                 })
                 .collect(),
