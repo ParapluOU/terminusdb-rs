@@ -13,16 +13,17 @@ terminusdb-schema = { path = "../schema" }
 # mismatches surface immediately as a panic, rather than silently
 # producing broken SDL files.
 apollo-compiler = "1.31"
+
+# Round-trips a `__Schema` introspection envelope back to SDL text. Used
+# by `render_introspection_to_sdl` (always available — pure JSON→SDL,
+# no server boot involved).
+cynic-introspection = "3.13"
 # Live introspection (`introspect_schema_via_server`) needs a running TDB
 # instance + an HTTP client; both are in their own crates. Kept behind the
 # `live` feature so callers that only want hand-emit SDL (`generate_gql_schema`)
 # don't have to compile the bin/client trees.
 terminusdb-bin = { path = "../bin", optional = true }
 terminusdb-client = { path = "../client", optional = true }
-# Round-trips a `__Schema` introspection envelope back to SDL text, used
-# by `render_introspection_to_sdl`. Optional because it's only useful
-# alongside the introspection helpers under the `live` feature.
-cynic-introspection = { version = "3.13", optional = true }
 
 # TerminusDB community crate (from ParapluOU fork)
 terminusdb-community = { git = "https://github.com/ParapluOU/terminusdb.git", branch = "main" }
@@ -47,7 +48,7 @@ bon = "3.8.2"
 default = []
 # Pulls in terminusdb-bin + terminusdb-client so callers can introspect a
 # live server. Off by default to keep dep cost low for SDL-only consumers.
-live = ["dep:terminusdb-bin", "dep:terminusdb-client", "dep:tokio", "dep:cynic-introspection"]
+live = ["dep:terminusdb-bin", "dep:terminusdb-client", "dep:tokio"]
 
 [dev-dependencies]
 # Tests for the `live` module derive TerminusDBModel on a tiny fixture struct.

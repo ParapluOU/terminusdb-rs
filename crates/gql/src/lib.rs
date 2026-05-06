@@ -24,15 +24,14 @@ pub mod codegen;
 mod frames;
 #[cfg(feature = "live")]
 mod live;
+mod render;
 mod schema;
 
 pub use codegen::{generate_all, generate_filter_impls, generate_filter_types, ModelConfig};
 pub use frames::{schemas_to_allframes, schemas_vec_to_allframes};
 #[cfg(feature = "live")]
-pub use live::{
-    introspect_schema_for, introspect_schema_sdl_for, render_introspection_to_sdl,
-    with_introspected_schema,
-};
+pub use live::{introspect_schema_for, introspect_schema_sdl_for, with_introspected_schema};
+pub use render::render_introspection_to_sdl;
 pub use schema::{allframes_to_sdl, generate_gql_schema};
 
 // Re-export key types from terminusdb-community

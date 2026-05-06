@@ -70,18 +70,7 @@ pub async fn introspect_schema_sdl_for<T: ToTDBSchemas>(
     prefix: &str,
 ) -> anyhow::Result<String> {
     let json = introspect_schema_for::<T>(prefix).await?;
-    render_introspection_to_sdl(&json)
-}
-
-/// Convert a raw `__Schema` introspection envelope (the JSON `data`
-/// field returned by `TerminusDBHttpClient::introspect_schema`) into
-/// SDL text. Wraps cynic-introspection's parse + `to_sdl()` pipeline so
-/// callers don't have to depend on cynic directly.
-pub fn render_introspection_to_sdl(json: &Value) -> anyhow::Result<String> {
-    let response: cynic_introspection::IntrospectionQuery =
-        serde_json::from_value(json.clone())?;
-    let schema = response.into_schema()?;
-    Ok(schema.to_sdl())
+    crate::render::render_introspection_to_sdl(&json)
 }
 
 /// Same as `introspect_schema_for` but takes a connected schema closure
