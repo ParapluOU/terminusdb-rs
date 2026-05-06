@@ -8,6 +8,22 @@ description = "GraphQL schema generation for TerminusDB models"
 # Local dependencies
 terminusdb-schema = { path = "../schema" }
 
+# Apollo's GraphQL spec validator. We feed our hand-emit SDL through it
+# inside `generate_gql_schema` so any dangling type references / field
+# mismatches surface immediately as a panic, rather than silently
+# producing broken SDL files.
+apollo-compiler = "1.31"
+# Live introspection (`introspect_schema_via_server`) needs a running TDB
+# instance + an HTTP client; both are in their own crates. Kept behind the
+# `live` feature so callers that only want hand-emit SDL (`generate_gql_schema`)
+# don't have to compile the bin/client trees.
+terminusdb-bin = { path = "../bin", optional = true }
+terminusdb-client = { path = "../client", optional = true }
+# Round-trips a `__Schema` introspection envelope back to SDL text, used
+# by `render_introspection_to_sdl`. Optional because it's only useful
+# alongside the introspection helpers under the `live` feature.
+cynic-introspection = { version = "3.13", optional = true }
+
 # TerminusDB community crate (from ParapluOU fork)
 terminusdb-community = { git = "https://github.com/ParapluOU/terminusdb.git", branch = "main" }
 
@@ -17,6 +33,7 @@ juniper = { git = "https://github.com/terminusdb-labs/juniper.git", tag = "junip
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
+tokio = { workspace = true, optional = true }
 
 # Error handling
 thiserror = "1.0"
@@ -25,3 +42,17 @@ graphql-parser = "0.4.1"
 quote.workspace = true
 proc-macro2.workspace = true
 bon = "3.8.2"
+
+[features]
+default = []
+# Pulls in terminusdb-bin + terminusdb-client so callers can introspect a
+# live server. Off by default to keep dep cost low for SDL-only consumers.
+live = ["dep:terminusdb-bin", "dep:terminusdb-client", "dep:tokio", "dep:cynic-introspection"]
+
+[dev-dependencies]
+# Tests for the `live` module derive TerminusDBModel on a tiny fixture struct.
+# The derive expansion references `tracing::*` and async runtime is needed
+# to run the introspection round-trip.
+terminusdb-schema-derive = { path = "../schema/derive" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = { workspace = true }

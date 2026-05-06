@@ -1,3 +1,8 @@
+// The `live` introspection helpers compose deep async chains
+// (server boot → schema insert → introspection → response parse) and the
+// async-state-machine layout exceeds rustc's default query depth.
+#![recursion_limit = "512"]
+
 //! GraphQL schema generation for TerminusDB models.
 //!
 //! This crate provides functionality to generate GraphQL schemas from
@@ -17,10 +22,17 @@
 
 pub mod codegen;
 mod frames;
+#[cfg(feature = "live")]
+mod live;
 mod schema;
 
 pub use codegen::{generate_all, generate_filter_impls, generate_filter_types, ModelConfig};
 pub use frames::{schemas_to_allframes, schemas_vec_to_allframes};
+#[cfg(feature = "live")]
+pub use live::{
+    introspect_schema_for, introspect_schema_sdl_for, render_introspection_to_sdl,
+    with_introspected_schema,
+};
 pub use schema::{allframes_to_sdl, generate_gql_schema};
 
 // Re-export key types from terminusdb-community

@@ -435,15 +435,28 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
         };
 
         eprintln!("[terminusdb-bin] Initializing store in {:?}...", path);
-        let init_status = std::process::Command::new(&binary_path)
+        let init_output = std::process::Command::new(&binary_path)
             .args(["store", "init"])
             .current_dir(&path)
             .env("TERMINUSDB_SERVER_DB_PATH", &path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        if !init_status.success() {
-            anyhow::bail!("Failed to initialize store: {:?}", init_status);
+            .output()?;
+        // The terminusdb binary always exits non-zero due to a SWI-Prolog
+        // `unwind(halt(N))` quirk, even when `store init` succeeds. Trust
+        // the operation if either:
+        //   - stdout shows "Successfully initialised", or
+        //   - stderr says the store already exists.
+        let stdout = String::from_utf8_lossy(&init_output.stdout);
+        let stderr = String::from_utf8_lossy(&init_output.stderr);
+        let succeeded = stdout.contains("Successfully initialised")
+            || stderr.contains("StorageAlreadyInitializedError")
+            || stderr.contains("already initialized");
+        if !succeeded {
+            anyhow::bail!(
+                "Failed to initialize store: status={:?}, stdout={:?}, stderr={:?}",
+                init_output.status,
+                stdout,
+                stderr
+            );
         }
 
         Some(path)

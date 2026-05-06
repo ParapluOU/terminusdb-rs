@@ -34,8 +34,47 @@ use crate::frames::schemas_to_allframes;
 /// println!("{}", sdl);
 /// ```
 pub fn generate_gql_schema<T: ToTDBSchemas>() -> String {
+    let sdl = generate_gql_schema_unchecked::<T>();
+    validate_sdl_or_panic(&sdl);
+    sdl
+}
+
+/// Same as `generate_gql_schema` but skips the apollo-compiler validation
+/// pass. Use this only when you intentionally need the raw hand-emit
+/// output even though it may have known omission bugs (e.g. dumping the
+/// SDL to disk for human inspection while `generate_gql_schema` itself
+/// is still failing validation). New code should call the validating
+/// function and let it panic — the panic is the signal that the hand-emit
+/// path needs work.
+pub fn generate_gql_schema_unchecked<T: ToTDBSchemas>() -> String {
     let frames = schemas_to_allframes::<T>();
     allframes_to_sdl(&frames)
+}
+
+/// Run apollo-compiler validation on the SDL we just emitted. The
+/// hand-emit path has known bugs (e.g. references to
+/// `<Enum>_Collection_Filter` and `<Type>_Ordering` inputs that aren't
+/// always emitted alongside) — apollo will refuse to parse the SDL when
+/// any reference is dangling, and we surface that as a panic so callers
+/// can't silently ship broken schemas.
+///
+/// If you hit this in development, the right escape hatch is
+/// `generate_gql_schema_unchecked` (which preserves the old behaviour),
+/// or — better — the live introspection path
+/// (`introspect_schema_for` under the `live` feature).
+fn validate_sdl_or_panic(sdl: &str) {
+    use apollo_compiler::Schema;
+    if let Err(e) = Schema::parse_and_validate(sdl, "generated.graphql") {
+        // The SDL itself is what we want the developer to see, alongside
+        // the apollo error list. Stay terse — apollo's error already has
+        // file/line spans pointing to the bad references.
+        panic!(
+            "generate_gql_schema produced invalid SDL — apollo-compiler refused it.\n\
+             This is a known limitation of the hand-emit path; for a working schema dump \
+             use `terminusdb_gql::introspect_schema_for` (feature `live`).\n\
+             apollo errors:\n{e}"
+        );
+    }
 }
 
 /// Generate SDL from AllFrames.
@@ -703,5 +742,50 @@ mod tests {
             "Has project filter in Ticket_Filter: {}",
             has_project_filter
         );
+    }
+
+    /// The hand-emit SDL has a known bug: `Vec<Enum>` fields generate a
+    /// reference to `Collection<Enum>_Enum_Filter` which the emitter never
+    /// defines. `generate_gql_schema` runs apollo over its output and
+    /// must panic with a clear message in that case.
+    #[test]
+    #[should_panic(expected = "apollo-compiler refused")]
+    fn validates_vec_of_enum_fails_loudly() {
+        let schemas = vec![
+            Schema::Enum {
+                id: "Mood".to_string(),
+                base: None,
+                values: vec!["Happy".to_string(), "Sad".to_string()],
+                documentation: None,
+            },
+            Schema::Class {
+                id: "Diary".to_string(),
+                base: None,
+                key: Key::Lexical(vec!["title".to_string()]),
+                documentation: None,
+                subdocument: false,
+                r#abstract: false,
+                inherits: vec![],
+                unfoldable: false,
+                properties: vec![
+                    Property {
+                        name: "title".to_string(),
+                        r#type: None,
+                        class: "xsd:string".to_string(),
+                    },
+                    // Vec<Mood> — triggers the bogus
+                    // `CollectionMood_Enum_Filter` reference.
+                    Property {
+                        name: "moods".to_string(),
+                        r#type: Some(TypeFamily::List),
+                        class: "Mood".to_string(),
+                    },
+                ],
+            },
+        ];
+        let frames = schemas_vec_to_allframes(&schemas);
+        // The validating wrapper panics; this is what the test checks.
+        let sdl = allframes_to_sdl(&frames);
+        validate_sdl_or_panic(&sdl);
     }
 }
