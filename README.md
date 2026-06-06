@@ -20,6 +20,9 @@ for TerminusDB:
 - **`terminusdb-client`** - High-level client for interacting with TerminusDB
 - **`terminusdb-schema`** - Schema definitions and validation for TerminusDB
 - **`terminusdb-schema-derive`** - Derive macros for TerminusDB schema types
+- **`terminusdb-orm`** - ActiveRecord-style ORM: typed filters/ordering and
+  relation traversal with no hand-written GraphQL (see
+  [`crates/orm/README.md`](crates/orm/README.md))
 - **`terminusdb-woql`** - WOQL (Web Object Query Language) support
 - **`terminusdb-woql2`** - Enhanced WOQL functionality
 - **`terminusdb-woql-builder`** - Builder pattern for constructing WOQL queries
@@ -549,9 +552,41 @@ let users = vec![user1, user2, user3];
 client.insert_many(&users, args).await?;
 ```
 
-### Query Construction
+### Querying with the ORM (recommended — no hand-written GraphQL)
 
-Use WOQL (Web Object Query Language) for advanced queries:
+For typed model queries — filtering, ordering, and loading related entities —
+use the `terminusdb-orm` crate. You express the query as Rust (a derive-generated
+`{Model}Filter` / `{Model}Ordering`) and the ORM renders the GraphQL and
+batch-fetches, so you almost never write a GraphQL filter string by hand:
+
+```rust
+use terminusdb_orm::prelude::*;
+use terminusdb_schema::{StringFilter, TerminusOrdering};
+
+// BlogPosts by a writer named "Ada", newest first
+let result = BlogPost::query(BlogPostFilter {
+        writer: Some(Box::new(WriterFilter {
+            name: Some(StringFilter { eq: Some("Ada".into()), ..Default::default() }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
+    .order_by(BlogPostOrdering { created_at: Some(TerminusOrdering::Desc), ..Default::default() })
+    .with_client(&client)
+    .execute(&spec).await?;
+let posts: Vec<BlogPost> = result.get()?;
+
+// Load a writer + all their posts in exactly two DB calls (no N+1)
+let writer_posts = Writer::find(writer_id).with::<BlogPost>()
+    .with_client(&client).execute(&spec).await?;
+```
+
+See [`crates/orm/README.md`](crates/orm/README.md) for the full ORM guide
+(filters, ordering, relation traversal, typed results).
+
+### Query Construction (WOQL)
+
+For advanced / ad-hoc queries beyond the ORM, use WOQL (Web Object Query Language):
 
 ```rust
 use terminusdb_woql_builder::prelude::*;
