@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! Comprehensive tests for ORM relation API
 //!
 //! This file defines all the syntax we want to support for relation loading.

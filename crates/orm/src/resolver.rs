@@ -578,12 +578,17 @@ pub fn build_graphql_from_relation_specs(
     let mut query = String::new();
     query.push_str("query {\n");
 
-    // Primary type with optional ID filter
+    // Primary type, scoped to the primary IDs. With a single ID use `id:`;
+    // with many (e.g. a filter that matched multiple primaries) use `ids: [...]`
+    // so we don't fall back to scanning the entire type and ignoring the filter.
     if primary_ids.len() == 1 {
         query.push_str(&format!(
             "  {}(id: \"{}\") {{\n",
             primary_type, primary_ids[0]
         ));
+    } else if !primary_ids.is_empty() {
+        let ids_json = serde_json::to_string(primary_ids).unwrap_or_else(|_| "[]".to_string());
+        query.push_str(&format!("  {}(ids: {}) {{\n", primary_type, ids_json));
     } else {
         query.push_str(&format!("  {} {{\n", primary_type));
     }
@@ -890,6 +895,42 @@ mod tests {
         assert!(query.contains("Writer(id: \"Writer/123\")"));
         assert!(query.contains("_writer_of_BlogPost {"));
         assert!(query.contains("_id"));
+    }
+
+    #[test]
+    fn test_build_graphql_from_relation_specs_multi_id_scoped() {
+        // Regression: when a filtered query matches MANY primaries and also loads
+        // a relation, the root must be scoped to those IDs via `ids: [...]`, not
+        // fall back to an unscoped `Type { ... }` that scans the whole type.
+        use crate::query::RelationDirection;
+        use std::any::TypeId;
+
+        let relations = vec![RelationSpec {
+            target_type_id: TypeId::of::<()>(),
+            target_type_name: "Org".to_string(),
+            direction: RelationDirection::Forward {
+                field_name: "org".to_string(),
+            },
+            children: Vec::new(),
+            filter_gql: None,
+            limit: None,
+            offset: None,
+            order_by_gql: None,
+        }];
+
+        let ids = vec![
+            "OrgMembership/a".to_string(),
+            "OrgMembership/b".to_string(),
+        ];
+        let query = build_graphql_from_relation_specs("OrgMembership", &ids, &relations);
+
+        // Scoped to the discovered IDs, not an unscoped whole-type scan.
+        assert!(
+            query.contains("OrgMembership(ids: [\"OrgMembership/a\",\"OrgMembership/b\"])"),
+            "expected ids-scoped root, got:\n{query}"
+        );
+        assert!(!query.contains("OrgMembership {"), "must not scan whole type:\n{query}");
+        assert!(query.contains("org {"));
     }
 
     #[test]

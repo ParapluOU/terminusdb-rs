@@ -54,6 +54,13 @@ pub struct TDBModelOpts {
     /// Fields to use for Lexical or Hash key strategies
     #[darling(default)]
     pub(crate) key_fields: Option<String>,
+
+    /// Opt this model OUT of `{Model}Filter` generation. When the `filters`
+    /// feature is enabled on this derive crate, filters are generated for every
+    /// model by default; `#[tdb(no_filter)]` excludes this one (e.g. models with
+    /// field types that aren't `Filterable` yet).
+    #[darling(default)]
+    pub(crate) no_filter: bool,
 }
 
 /// Rename case conversion strategies

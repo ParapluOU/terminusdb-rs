@@ -448,6 +448,7 @@ fn generate_virtual_structs(
                         id_field: None,
                         rename_all: None,
                         key_fields: None,
+                        no_filter: false,
                     },
                     quote! { None },
                     quote! { SchemaTypeClass },
@@ -512,6 +513,7 @@ fn generate_virtual_structs(
                         id_field: None,
                         rename_all: None,
                         key_fields: None,
+                        no_filter: false,
                     },
                     (&quote! {}, &quote! {}, &None), // No generics for virtual structs
                     None,                            // No custom ID extraction for virtual structs
@@ -580,6 +582,7 @@ fn generate_virtual_structs(
                     id_field: None,
                     rename_all: None,
                     key_fields: None,
+                    no_filter: false,
                 };
 
                 // Process the struct fields to generate instance conversions

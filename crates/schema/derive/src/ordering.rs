@@ -1,0 +1,142 @@
+//! Generation of `{Model}Ordering` structs from the `TerminusDBModel` derive.
+//!
+//! Gated identically to [`crate::filter`] (the `TERMINUSDB_DERIVE_FILTERS=1`
+//! build-time env var + per-model `#[tdb(no_filter)]` opt-out). For each model
+//! the derive emits a typed `{Model}Ordering` input — one
+//! `Option<TerminusOrdering>` per *orderable scalar* field — plus the
+//! `TdbGQLOrdering` impl that connects it to the ORM's `order_by` / relation
+//! `order_by`.
+//!
+//! Only scalar fields are emitted, matching TerminusDB's own `{Model}_Ordering`
+//! input (which never includes relation or enum fields). Unlike filters, an
+//! ordering references no other model's types, so it need not be total — enums
+//! and non-struct shapes simply get no ordering type.
+
+use crate::prelude::*;
+use quote::format_ident;
+
+/// Entry point: emit ordering code for a model, or nothing if ordering is
+/// disabled / the model opted out / the shape isn't an orderable struct.
+pub fn generate_ordering(input: &DeriveInput, opts: &TDBModelOpts) -> proc_macro2::TokenStream {
+    // Reuse the filter gate: same env var, same `#[tdb(no_filter)]` opt-out.
+    if std::env::var("TERMINUSDB_DERIVE_FILTERS").is_err() || opts.no_filter {
+        return quote! {};
+    }
+    if !input.generics.params.is_empty() {
+        return quote! {};
+    }
+
+    match &input.data {
+        Data::Struct(ds) => match &ds.fields {
+            Fields::Named(fields) => generate_struct_ordering(&input.ident, fields, opts),
+            _ => quote! {},
+        },
+        // Enums/unions aren't orderable models and aren't referenced by other
+        // models' ordering types, so nothing is needed for them.
+        _ => quote! {},
+    }
+}
+
+/// `{Model}Ordering` for a struct: one `Option<TerminusOrdering>` per orderable
+/// scalar field (renamed to its TDB property name where needed).
+fn generate_struct_ordering(
+    model: &syn::Ident,
+    fields: &FieldsNamed,
+    opts: &TDBModelOpts,
+) -> proc_macro2::TokenStream {
+    let ordering_ident = format_ident!("{}Ordering", model);
+    let id_field_name = opts.id_field.as_deref();
+
+    let order_fields = fields
+        .named
+        .iter()
+        .filter(|f| !is_phantom_data_type(&f.ty))
+        // The id field is addressed via `_id`, not ordered as a property.
+        .filter(|f| match (f.ident.as_ref(), id_field_name) {
+            (Some(id), Some(idf)) => *id != idf,
+            _ => true,
+        })
+        // Only scalar fields are orderable (matches TDB's `{Model}_Ordering`).
+        .filter(|f| is_orderable_scalar(&f.ty))
+        .map(|f| {
+            let fname = f.ident.as_ref().unwrap();
+            let fopts = TDBFieldOpts::from_field(f).unwrap();
+            let prop_name = fopts.name.unwrap_or_else(|| fname.to_string());
+            let rename = if prop_name != fname.to_string() {
+                quote! { #[serde(rename = #prop_name)] }
+            } else {
+                quote! {}
+            };
+            let decl = quote! {
+                #rename
+                #[serde(skip_serializing_if = "Option::is_none")]
+                pub #fname: Option<terminusdb_schema::TerminusOrdering>,
+            };
+            // `TerminusOrdering::to_gql` renders the bare `ASC`/`DESC`.
+            let render = quote! {
+                if let Some(v) = &self.#fname {
+                    parts.push(format!("{}: {}", #prop_name, terminusdb_schema::ToGql::to_gql(v)));
+                }
+            };
+            (decl, render)
+        })
+        .collect::<Vec<_>>();
+    let order_decls = order_fields.iter().map(|(decl, _)| decl);
+    let order_renders = order_fields.iter().map(|(_, render)| render);
+
+    quote! {
+        #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
+        pub struct #ordering_ident {
+            #(#order_decls)*
+        }
+        impl terminusdb_schema::TdbGQLOrdering<#model> for #ordering_ident {}
+
+        impl terminusdb_schema::ToGql for #ordering_ident {
+            fn to_gql(&self) -> String {
+                let mut parts: Vec<String> = Vec::new();
+                #(#order_renders)*
+                format!("{{{}}}", parts.join(", "))
+            }
+        }
+    }
+}
+
+/// Whether a field type is an orderable scalar — a primitive TDB sorts by.
+/// Unwraps a single `Option<..>` layer, then matches the leaf path segment.
+/// Excludes `TdbLazy`/`EntityIDFor` (relations), `Vec` (collections) and bare
+/// custom idents (enums / sub-documents), none of which TDB lets you order by.
+fn is_orderable_scalar(ty: &syn::Type) -> bool {
+    let inner = unwrap_option(ty).unwrap_or(ty);
+    match inner {
+        syn::Type::Path(tp) => match tp.path.segments.last() {
+            Some(seg) => matches!(
+                seg.ident.to_string().as_str(),
+                "String"
+                    | "str"
+                    | "i8" | "i16" | "i32" | "i64" | "i128" | "isize"
+                    | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                    | "f32" | "f64"
+                    | "bool"
+                    | "DateTime"
+            ),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+/// If `ty` is `Option<Inner>`, return `Inner`; otherwise `None`.
+fn unwrap_option(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(tp) = ty else { return None };
+    let seg = tp.path.segments.last()?;
+    if seg.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })
+}

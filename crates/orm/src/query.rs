@@ -30,7 +30,6 @@
 use std::any::TypeId;
 use std::marker::PhantomData;
 
-use serde::Serialize;
 use terminusdb_client::{BranchSpec, GetOpts};
 use terminusdb_relation::RelationField;
 use terminusdb_schema::{
@@ -40,52 +39,7 @@ use terminusdb_schema::{
 
 use crate::relations::{ForwardRelation, ReverseRelation};
 use crate::{result::OrmResult, ClientProvider, GlobalClient, MultiTypeFetch};
-use terminusdb_schema::{TdbGQLFilter, TdbGQLOrdering};
-
-/// Check if a string looks like a GraphQL enum value.
-///
-/// GraphQL enum values from TerminusDB are typically lowercase single words.
-/// This heuristic checks for strings that are all lowercase letters (a-z).
-fn is_likely_enum_value(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())
-}
-
-/// Convert a JSON value to GraphQL object literal syntax.
-///
-/// GraphQL object literals don't quote keys, but JSON does.
-/// This converts `{"name": {"eq": "test"}}` to `{name: {eq: "test"}}`.
-///
-/// Special handling for enum values: strings that look like GraphQL enums
-/// (all lowercase letters) are output without quotes. This is necessary because
-/// serde serializes Rust enums to strings, but GraphQL expects enum values
-/// to be unquoted.
-pub(crate) fn json_to_graphql(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => {
-            // Check if this looks like a GraphQL enum value (all lowercase letters).
-            // Enum values should not be quoted in GraphQL.
-            if is_likely_enum_value(s) {
-                s.clone()
-            } else {
-                format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(json_to_graphql).collect();
-            format!("[{}]", items.join(", "))
-        }
-        serde_json::Value::Object(obj) => {
-            let fields: Vec<String> = obj
-                .iter()
-                .map(|(k, v)| format!("{}: {}", k, json_to_graphql(v)))
-                .collect();
-            format!("{{{}}}", fields.join(", "))
-        }
-    }
-}
+use terminusdb_schema::{TdbGQLFilter, TdbGQLOrdering, ToGql};
 
 /// Options for loading a relation with filtering/pagination.
 ///
@@ -164,17 +118,11 @@ impl<F, O> RelationOpts<F, O> {
     /// Convert filter and order_by to GraphQL strings for query generation.
     pub(crate) fn to_gql_strings(&self) -> (Option<String>, Option<String>)
     where
-        F: Serialize,
-        O: Serialize,
+        F: ToGql,
+        O: ToGql,
     {
-        let filter_gql = self.filter.as_ref().map(|f| {
-            let json = serde_json::to_value(f).unwrap_or_default();
-            json_to_graphql(&json)
-        });
-        let order_by_gql = self.order_by.as_ref().map(|o| {
-            let json = serde_json::to_value(o).unwrap_or_default();
-            json_to_graphql(&json)
-        });
+        let filter_gql = self.filter.as_ref().map(ToGql::to_gql);
+        let order_by_gql = self.order_by.as_ref().map(ToGql::to_gql);
         (filter_gql, order_by_gql)
     }
 }
@@ -295,8 +243,8 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
     where
         R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<Parent>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.relations.push(RelationSpec {
@@ -345,8 +293,8 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
         R: OrmModel + ToSchemaClass + 'static,
         Field: RelationField + 'static,
         R: ReverseRelation<Parent, Field>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.relations.push(RelationSpec {
@@ -395,8 +343,8 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
         R: OrmModel + ToSchemaClass + 'static,
         Field: RelationField + 'static,
         Parent: ForwardRelation<R, Field>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.relations.push(RelationSpec {
@@ -453,8 +401,8 @@ impl<Parent: OrmModel> RelationBuilder<Parent> {
     where
         R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<Parent>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
         B: FnOnce(RelationBuilder<R>) -> RelationBuilder<R>,
     {
         let nested_builder = builder_fn(RelationBuilder::new());
@@ -571,7 +519,7 @@ pub trait ModelExt: OrmModel + ToSchemaClass {
     fn query<F>(filter: F) -> ModelQuery<Self, GlobalClient>
     where
         Self: Sized,
-        F: TdbGQLFilter<Self> + Serialize,
+        F: TdbGQLFilter<Self>,
     {
         ModelQuery::query(filter)
     }
@@ -684,10 +632,9 @@ impl<T: OrmModel + ToSchemaClass> ModelQuery<T, GlobalClient> {
     /// ```
     pub fn query<F>(filter: F) -> Self
     where
-        F: TdbGQLFilter<T> + Serialize,
+        F: TdbGQLFilter<T>,
     {
-        let filter_json = serde_json::to_value(&filter).unwrap_or_default();
-        let filter_gql = json_to_graphql(&filter_json);
+        let filter_gql = filter.to_gql();
         Self {
             primary_ids: Vec::new(),
             with_relations: Vec::new(),
@@ -810,8 +757,8 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         R: OrmModel + ToSchemaClass + 'static,
         Field: RelationField + 'static,
         T: ForwardRelation<R, Field>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.with_relations.push(RelationSpec {
@@ -882,8 +829,8 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
     where
         R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<T>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.with_relations.push(RelationSpec {
@@ -945,8 +892,8 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
         R: OrmModel + ToSchemaClass + 'static,
         Field: RelationField + 'static,
         R: ReverseRelation<T, Field>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
     {
         let (filter_gql, order_by_gql) = opts.to_gql_strings();
         self.with_relations.push(RelationSpec {
@@ -1032,8 +979,8 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
     where
         R: OrmModel + ToSchemaClass + 'static,
         R: ReverseRelation<T>,
-        F: TdbGQLFilter<R> + Serialize,
-        O: TdbGQLOrdering<R> + Serialize,
+        F: TdbGQLFilter<R>,
+        O: TdbGQLOrdering<R>,
         B: FnOnce(RelationBuilder<R>) -> RelationBuilder<R>,
     {
         let nested_builder = builder_fn(RelationBuilder::new());
@@ -1255,12 +1202,6 @@ impl<T: OrmModel, C: ClientProvider> ModelQuery<T, C> {
             &self.with_relations,
         );
 
-        // Debug: print the generated GraphQL query
-        eprintln!(
-            "[ORM DEBUG] Executing relation GraphQL query:\n{}",
-            graphql_query
-        );
-
         // Execute GraphQL query
         let request = GraphQLRequest::new(&graphql_query);
         let response = self
@@ -1335,10 +1276,9 @@ where
     /// ```
     pub fn order_by<O>(mut self, order_by: O) -> Self
     where
-        O: TdbGQLOrdering<T> + Serialize,
+        O: TdbGQLOrdering<T>,
     {
-        let order_json = serde_json::to_value(&order_by).unwrap_or_default();
-        self.order_by_gql = Some(json_to_graphql(&order_json));
+        self.order_by_gql = Some(order_by.to_gql());
         self
     }
 }

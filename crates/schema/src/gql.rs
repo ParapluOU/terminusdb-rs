@@ -7,8 +7,93 @@
 //! downstream crate) to reference model types (defined in domain crates) without
 //! requiring domain crates to depend on the filter crate.
 
-use crate::TerminusDBModel;
-use serde::Serialize;
+use crate::{EntityIDFor, TdbLazy, TerminusDBModel, ToTDBSchema};
+use serde::{Deserialize, Serialize, Serializer};
+
+/// Renders a typed filter / ordering / value into its GraphQL literal form.
+///
+/// Type-directed: every type owns its own rendering, so there is **no
+/// enum-vs-string guessing**. `String` / `DateTime` / `EntityIDFor` render as
+/// quoted GraphQL strings; numbers, bools and enums render bare; collections
+/// become lists; and filter/ordering structs render as input objects, skipping
+/// `None` fields. The `TerminusDBModel` derive emits `ToGql` for the generated
+/// `{Model}Filter` / `{Enum}Filter` / `{Model}Ordering` types and for enums
+/// (their bare TDB value). This replaces serializing to `serde_json::Value` and
+/// guessing the shape back.
+pub trait ToGql {
+    fn to_gql(&self) -> String;
+}
+
+/// Wrap a string in a GraphQL double-quoted string literal, escaping as needed.
+pub fn gql_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+impl ToGql for String {
+    fn to_gql(&self) -> String {
+        gql_quote(self)
+    }
+}
+impl ToGql for &str {
+    fn to_gql(&self) -> String {
+        gql_quote(self)
+    }
+}
+impl ToGql for bool {
+    fn to_gql(&self) -> String {
+        self.to_string()
+    }
+}
+macro_rules! to_gql_via_display {
+    ($($t:ty),* $(,)?) => {
+        $( impl ToGql for $t { fn to_gql(&self) -> String { self.to_string() } } )*
+    };
+}
+to_gql_via_display!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32, f64);
+
+/// `DateTime` renders as a quoted RFC3339 string (TDB's `DateTime` scalar).
+impl ToGql for chrono::DateTime<chrono::Utc> {
+    fn to_gql(&self) -> String {
+        gql_quote(&self.to_rfc3339())
+    }
+}
+/// An entity id renders as its quoted canonical IRI — what TDB's `_id`/`_ids`
+/// and relation filters expect.
+impl<T: ToTDBSchema> ToGql for EntityIDFor<T> {
+    fn to_gql(&self) -> String {
+        gql_quote(&self.iri_string())
+    }
+}
+impl<T: ToGql> ToGql for Vec<T> {
+    fn to_gql(&self) -> String {
+        format!("[{}]", self.iter().map(ToGql::to_gql).collect::<Vec<_>>().join(", "))
+    }
+}
+impl<T: ToGql + ?Sized> ToGql for Box<T> {
+    fn to_gql(&self) -> String {
+        (**self).to_gql()
+    }
+}
+/// The no-op filter / ordering renders as an empty input object (never actually
+/// emitted — the `filter`/`order_by` slot stays `None`).
+impl ToGql for () {
+    fn to_gql(&self) -> String {
+        "{}".to_string()
+    }
+}
 
 /// Marker trait for filter types that can filter a model M.
 ///
@@ -30,7 +115,7 @@ use serde::Serialize;
 /// // This impl connects the filter to its model
 /// impl TdbGQLFilter<Project> for ProjectFilter {}
 /// ```
-pub trait TdbGQLFilter<M: TerminusDBModel>: Default + Clone + Serialize {}
+pub trait TdbGQLFilter<M: TerminusDBModel>: Default + Clone + ToGql {}
 
 /// Marker trait for ordering types that can order a model M.
 ///
@@ -52,4 +137,243 @@ pub trait TdbGQLFilter<M: TerminusDBModel>: Default + Clone + Serialize {}
 /// // This impl connects the ordering to its model
 /// impl TdbGQLOrdering<Project> for ProjectOrdering {}
 /// ```
-pub trait TdbGQLOrdering<M: TerminusDBModel>: Default + Clone + Serialize {}
+pub trait TdbGQLOrdering<M: TerminusDBModel>: Default + Clone + ToGql {}
+
+/// No-op filter / ordering: `()` satisfies `TdbGQLFilter`/`TdbGQLOrdering` for
+/// any model, so `RelationOpts::new()` — and `.order_by(..)` with no filter —
+/// type-check against `with_opts` without naming a concrete filter type. The
+/// `filter`/`order_by` slots stay `None`, so nothing is ever serialized.
+impl<M: TerminusDBModel> TdbGQLFilter<M> for () {}
+impl<M: TerminusDBModel> TdbGQLOrdering<M> for () {}
+
+/// GraphQL sort direction, mirroring TerminusDB's `TerminusOrdering` enum.
+/// Renders to the bare GraphQL enum values `ASC` / `DESC` via [`ToGql`]; it's
+/// the value of each field in a derive-generated `{Model}Ordering`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TerminusOrdering {
+    #[serde(rename = "ASC")]
+    Asc,
+    #[serde(rename = "DESC")]
+    Desc,
+}
+
+impl ToGql for TerminusOrdering {
+    fn to_gql(&self) -> String {
+        match self {
+            TerminusOrdering::Asc => "ASC",
+            TerminusOrdering::Desc => "DESC",
+        }
+        .to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filter type system
+//
+// The `Filterable` trait maps each model/scalar field type to the GraphQL
+// filter input type that filters it. The `TerminusDBModel` derive uses it to
+// emit `{Model}Filter` structs without having to name other models' filter
+// types: it just writes `Option<<FieldTy as Filterable>::Filter>` per field and
+// the compiler resolves the concrete filter type (e.g. `TdbLazy<Org>` ->
+// `OrgFilter`, `String` -> `StringFilter`).
+//
+// The scalar filter structs below mirror TerminusDB's auto-generated GraphQL
+// filter inputs exactly (see `terminusdb-schema.graphql`), so a filter value
+// serialized to JSON and rendered to GraphQL is accepted as-is by TDB.
+// ---------------------------------------------------------------------------
+
+/// Maps a field type to the GraphQL filter input type that filters it.
+///
+/// Implemented for scalars/`Option`/`Vec`/`TdbLazy`/`EntityIDFor` here, and for
+/// each model/enum by the `TerminusDBModel` derive. Models whose shape has no
+/// real filter (tagged unions, etc.) get an `OpaqueFilter` impl from the derive,
+/// so any field type a generated filter references is covered.
+pub trait Filterable {
+    /// The filter input type for this field type.
+    ///
+    /// Bounds include `Debug`/`DeserializeOwned` because the generated filter
+    /// structs `#[derive(Debug, Deserialize)]`, so every nested filter type must
+    /// satisfy those.
+    type Filter: Default + Clone + std::fmt::Debug + Serialize + serde::de::DeserializeOwned + ToGql;
+}
+
+macro_rules! scalar_filter {
+    ($(#[$m:meta])* $name:ident { $($(#[$fm:meta])* $field:ident : $ty:ty),* $(,)? }) => {
+        $(#[$m])*
+        #[derive(Default, Clone, Debug, Serialize, Deserialize)]
+        pub struct $name {
+            $(
+                $(#[$fm])*
+                #[serde(skip_serializing_if = "Option::is_none")]
+                pub $field: Option<$ty>,
+            )*
+        }
+    };
+}
+
+scalar_filter!(
+    /// Filter for `String`/`xsd:string` fields. Mirrors TDB's `StringFilter`.
+    StringFilter {
+        eq: String, ne: String, lt: String, le: String, gt: String, ge: String,
+        regex: String, #[serde(rename = "startsWith")] starts_with: String,
+        #[serde(rename = "allOfTerms")] all_of_terms: Vec<String>,
+        #[serde(rename = "anyOfTerms")] any_of_terms: Vec<String>,
+    }
+);
+
+scalar_filter!(
+    /// Filter for 32-bit-and-smaller integer fields. Mirrors TDB's `IntFilter`.
+    IntFilter { eq: i64, ne: i64, lt: i64, le: i64, gt: i64, ge: i64 }
+);
+
+scalar_filter!(
+    /// Filter for 64-bit integer fields. Mirrors TDB's `BigIntFilter`.
+    // NOTE: u64 values beyond i64::MAX are not representable here yet — a
+    // follow-up should widen this / use a bigint-as-string representation.
+    BigIntFilter { eq: i64, ne: i64, lt: i64, le: i64, gt: i64, ge: i64 }
+);
+
+scalar_filter!(
+    /// Filter for float fields. Mirrors TDB's `FloatFilter`.
+    FloatFilter { eq: f64, ne: f64, lt: f64, le: f64, gt: f64, ge: f64 }
+);
+
+scalar_filter!(
+    /// Filter for `DateTime<Utc>` fields. Mirrors TDB's `DateTimeFilter`.
+    /// `chrono` serializes to RFC3339, which TDB's `DateTime` scalar accepts.
+    DateTimeFilter {
+        eq: chrono::DateTime<chrono::Utc>, ne: chrono::DateTime<chrono::Utc>,
+        lt: chrono::DateTime<chrono::Utc>, le: chrono::DateTime<chrono::Utc>,
+        gt: chrono::DateTime<chrono::Utc>, ge: chrono::DateTime<chrono::Utc>,
+    }
+);
+
+scalar_filter!(
+    /// Filter for `bool` fields. Mirrors TDB's `BooleanFilter`.
+    BooleanFilter { eq: bool, ne: bool }
+);
+
+/// Emit `ToGql` for a scalar filter: render each `Some` field as
+/// `gqlName: <value.to_gql()>` (the GraphQL name, which may differ from the
+/// Rust field name, e.g. `startsWith`).
+macro_rules! filter_to_gql {
+    ($name:ident { $($field:ident => $gql:literal),* $(,)? }) => {
+        impl ToGql for $name {
+            fn to_gql(&self) -> String {
+                let mut parts: Vec<String> = Vec::new();
+                $(
+                    if let Some(v) = &self.$field {
+                        parts.push(format!(concat!($gql, ": {}"), v.to_gql()));
+                    }
+                )*
+                format!("{{{}}}", parts.join(", "))
+            }
+        }
+    };
+}
+
+filter_to_gql!(StringFilter {
+    eq => "eq", ne => "ne", lt => "lt", le => "le", gt => "gt", ge => "ge",
+    regex => "regex", starts_with => "startsWith",
+    all_of_terms => "allOfTerms", any_of_terms => "anyOfTerms"
+});
+filter_to_gql!(IntFilter { eq => "eq", ne => "ne", lt => "lt", le => "le", gt => "gt", ge => "ge" });
+filter_to_gql!(BigIntFilter { eq => "eq", ne => "ne", lt => "lt", le => "le", gt => "gt", ge => "ge" });
+filter_to_gql!(FloatFilter { eq => "eq", ne => "ne", lt => "lt", le => "le", gt => "gt", ge => "ge" });
+filter_to_gql!(DateTimeFilter { eq => "eq", ne => "ne", lt => "lt", le => "le", gt => "gt", ge => "ge" });
+filter_to_gql!(BooleanFilter { eq => "eq", ne => "ne" });
+
+impl Filterable for String { type Filter = StringFilter; }
+impl Filterable for bool { type Filter = BooleanFilter; }
+impl Filterable for f32 { type Filter = FloatFilter; }
+impl Filterable for f64 { type Filter = FloatFilter; }
+impl Filterable for i8 { type Filter = IntFilter; }
+impl Filterable for i16 { type Filter = IntFilter; }
+impl Filterable for i32 { type Filter = IntFilter; }
+impl Filterable for u8 { type Filter = IntFilter; }
+impl Filterable for u16 { type Filter = IntFilter; }
+impl Filterable for u32 { type Filter = IntFilter; }
+impl Filterable for i64 { type Filter = BigIntFilter; }
+impl Filterable for i128 { type Filter = BigIntFilter; }
+impl Filterable for isize { type Filter = BigIntFilter; }
+impl Filterable for u64 { type Filter = BigIntFilter; }
+impl Filterable for u128 { type Filter = BigIntFilter; }
+impl Filterable for usize { type Filter = BigIntFilter; }
+
+impl<Tz: chrono::TimeZone> Filterable for chrono::DateTime<Tz> {
+    type Filter = DateTimeFilter;
+}
+
+/// `Option<T>` filters the same way as `T` (the field is just optional).
+impl<T: Filterable> Filterable for Option<T> {
+    type Filter = T::Filter;
+}
+
+/// A `TdbLazy<T>` graph link is filtered by the target model's filter (nested).
+impl<T: TerminusDBModel + Filterable> Filterable for TdbLazy<T> {
+    type Filter = T::Filter;
+}
+
+/// An `EntityIDFor<T>` field is stored as a string ID, so it filters as a string.
+impl<T: ToTDBSchema> Filterable for EntityIDFor<T> {
+    type Filter = StringFilter;
+}
+
+/// Filter for a collection field. Currently filters by the element's filter;
+/// TDB's `*_Collection_Filter` shape (allOf/anyOf membership) is a follow-up.
+impl<T: Filterable> Filterable for Vec<T> {
+    type Filter = T::Filter;
+}
+
+/// An empty filter used as a fallback for field types that don't have a
+/// meaningful filter yet (tagged-union enums, unit fields, unsupported shapes).
+/// It serializes to nothing useful and is simply never set, so models that
+/// reference such fields still compile and filter on their other fields.
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub struct OpaqueFilter {}
+
+impl ToGql for OpaqueFilter {
+    fn to_gql(&self) -> String {
+        "{}".to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `_id` / `_ids` envelope serialization
+//
+// TDB's `_id`/`_ids` filter args require the FULL IRI
+// (`terminusdb:///data/Type/id`), not the typed short form `EntityIDFor`
+// serializes to by default. These helpers let the generated filter structs
+// keep typed `EntityIDFor<Model>` fields while emitting the IRI form — without
+// changing `EntityIDFor`'s global serialization (which instance writes rely on).
+// ---------------------------------------------------------------------------
+
+/// `serialize_with` for a filter's `_id` field: emit the full IRI string.
+pub fn serialize_opt_entity_id_iri<T, S>(
+    v: &Option<EntityIDFor<T>>,
+    s: S,
+) -> Result<S::Ok, S::Error>
+where
+    T: ToTDBSchema,
+    S: Serializer,
+{
+    match v {
+        Some(id) => s.serialize_str(&id.iri_string()),
+        None => s.serialize_none(),
+    }
+}
+
+/// `serialize_with` for a filter's `_ids` field: emit a list of full IRI strings.
+pub fn serialize_opt_entity_ids_iri<T, S>(
+    v: &Option<Vec<EntityIDFor<T>>>,
+    s: S,
+) -> Result<S::Ok, S::Error>
+where
+    T: ToTDBSchema,
+    S: Serializer,
+{
+    match v {
+        Some(ids) => s.collect_seq(ids.iter().map(|id| id.iri_string())),
+        None => s.serialize_none(),
+    }
+}

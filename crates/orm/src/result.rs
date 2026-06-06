@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use terminusdb_schema::{json::InstanceFromJson, FromTDBInstance, ToTDBSchema};
+use terminusdb_schema::{json::InstanceFromJson, EntityIDFor, FromTDBInstance, ToTDBSchema};
 
 /// Result container for ORM fetch operations.
 ///
@@ -127,7 +127,7 @@ impl OrmResult {
     ///
     /// # Returns
     /// A HashMap from document ID to deserialized instance.
-    pub fn get_indexed<T>(&self) -> anyhow::Result<HashMap<String, T>>
+    pub fn get_indexed<T>(&self) -> anyhow::Result<HashMap<EntityIDFor<T>, T>>
     where
         T: FromTDBInstance + InstanceFromJson + ToTDBSchema,
     {
@@ -137,11 +137,36 @@ impl OrmResult {
             .iter()
             .filter(|doc| Self::get_type(doc) == Some(&target_class))
             .map(|doc| {
-                let id = Self::get_id(doc)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Document of {} has no @id", std::any::type_name::<T>())
-                    })?
-                    .to_string();
+                // Typed id parsed once at the boundary (canonical TDB `@id`).
+                let id = EntityIDFor::<T>::new_untyped(Self::get_id(doc).ok_or_else(|| {
+                    anyhow::anyhow!("Document of {} has no @id", std::any::type_name::<T>())
+                })?)?;
+                let value = T::from_json(doc.clone())?;
+                Ok((id, value))
+            })
+            .collect()
+    }
+
+    /// Extract all documents of type T as `(id, T)` pairs in document order.
+    ///
+    /// The ordered analog of [`get_indexed`](Self::get_indexed): after an
+    /// ordered Phase-1 query and the order-preserving Phase-2 fetch, document
+    /// order is the requested sort order, which a `HashMap` would discard.
+    pub fn get_ordered<T>(&self) -> anyhow::Result<Vec<(EntityIDFor<T>, T)>>
+    where
+        T: FromTDBInstance + InstanceFromJson + ToTDBSchema,
+    {
+        let target_class = T::to_schema().class_name().to_string();
+
+        self.documents
+            .iter()
+            .filter(|doc| Self::get_type(doc) == Some(&target_class))
+            .map(|doc| {
+                // Parse the canonical TDB `@id` to a typed id once, here at the
+                // boundary, so callers receive `EntityIDFor<T>` and never parse.
+                let id = EntityIDFor::<T>::new_untyped(Self::get_id(doc).ok_or_else(|| {
+                    anyhow::anyhow!("Document of {} has no @id", std::any::type_name::<T>())
+                })?)?;
                 let value = T::from_json(doc.clone())?;
                 Ok((id, value))
             })

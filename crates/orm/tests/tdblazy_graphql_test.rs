@@ -1,3 +1,6 @@
+// Deep ORM `execute()` async chains push layout computation past the default
+// recursion limit (as in the other DB-integration test files here).
+#![recursion_limit = "512"]
 //! Integration tests for TdbLazy-based GraphQL relations.
 //!
 //! TdbLazy<T> creates actual document links in the schema (not strings),

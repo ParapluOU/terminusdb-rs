@@ -144,7 +144,7 @@ impl ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>> {
             .data
             .into_iter()
             .filter_map(|(id_str, _result)| {
-                EntityIDFor::<T>::new_unchecked(&id_str)
+                EntityIDFor::<T>::new_untyped(&id_str)
                     .ok()
                     .map(|entity_id| VersionedEntityIDFor::new(entity_id, commit_id.clone()))
             })

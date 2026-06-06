@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_new_and_deref() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit = CommitId::new("commit456");
         let versioned = VersionedEntityIDFor::new(id.clone(), commit.clone());
 
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn test_partial_eq_entity_id() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit = CommitId::new("commit456");
         let versioned = VersionedEntityIDFor::new(id.clone(), commit);
 
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_partial_eq_string() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit = CommitId::new("commit456");
         let versioned = VersionedEntityIDFor::new(id.clone(), commit);
 
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_partial_eq_tdb_iri() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit = CommitId::new("commit456");
         let versioned = VersionedEntityIDFor::new(id.clone(), commit);
 
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_serialize() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit = CommitId::new("commit456");
         let versioned = VersionedEntityIDFor::new(id, commit);
 
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_clone_and_equality() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit = CommitId::new("commit456");
         let versioned1 = VersionedEntityIDFor::new(id.clone(), commit.clone());
         let versioned2 = versioned1.clone();
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_different_versions_not_equal() {
-        let id = EntityIDFor::<TestEntity>::new_unchecked("TestEntity/test123").unwrap();
+        let id = EntityIDFor::<TestEntity>::new_untyped("TestEntity/test123").unwrap();
         let commit1 = CommitId::new("commit456");
         let commit2 = CommitId::new("commit789");
         let versioned1 = VersionedEntityIDFor::new(id.clone(), commit1);

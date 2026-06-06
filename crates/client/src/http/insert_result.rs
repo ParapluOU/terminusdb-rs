@@ -76,7 +76,7 @@ impl InsertInstanceResult {
 
     /// Get the root ID as a typed EntityIDFor<T>
     pub fn root_ref<T: ToTDBSchema>(&self) -> anyhow::Result<EntityIDFor<T>> {
-        EntityIDFor::new_unchecked(&self.root_id)
+        EntityIDFor::new_untyped(&self.root_id)
     }
 
     /// Get the parsed IRI for the root instance
@@ -140,13 +140,13 @@ impl InsertInstanceResult {
         let mut refs = Vec::new();
 
         // Try to add root if it's type T
-        if let Ok(root_id) = EntityIDFor::<T>::new_unchecked(&self.root_id) {
+        if let Ok(root_id) = EntityIDFor::<T>::new_untyped(&self.root_id) {
             refs.push(VersionedEntityIDFor::new(root_id, commit_id.clone()));
         }
 
         // Filter sub-entities to only type T
         for (id_str, _result) in &self.sub_entities {
-            if let Ok(entity_id) = EntityIDFor::<T>::new_unchecked(id_str) {
+            if let Ok(entity_id) = EntityIDFor::<T>::new_untyped(id_str) {
                 refs.push(VersionedEntityIDFor::new(entity_id, commit_id.clone()));
             }
         }

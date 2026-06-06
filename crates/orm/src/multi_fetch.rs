@@ -3,11 +3,62 @@
 //! Provides the core trait and implementation for fetching multiple documents
 //! of potentially different types in a single API call.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use terminusdb_client::{BranchSpec, GetOpts, TerminusDBHttpClient};
 
 use crate::{result::OrmResult, ClientProvider, GlobalClient};
+
+/// Normalize an id / `@id` to its `Type/local` form for order matching:
+/// strips a leading `terminusdb:///<graph>/` IRI prefix if present, so a short
+/// id (`Page/abc`) and the full IRI TDB returns (`terminusdb:///data/Page/abc`)
+/// compare equal. Url-encoded characters inside lexical-key locals are left
+/// untouched (they aren't real `/` separators).
+fn normalize_id(id: &str) -> &str {
+    match id.find("///") {
+        Some(idx) => {
+            let after = &id[idx + 3..]; // e.g. `data/Page/abc`
+            match after.find('/') {
+                Some(slash) => &after[slash + 1..], // drop the graph segment
+                None => after,
+            }
+        }
+        None => id,
+    }
+}
+
+/// Reorder fetched documents to match the requested id order. Documents whose
+/// id isn't in `order` (shouldn't happen) are appended at the end rather than
+/// dropped. Duplicate ids in `order` each consume one matching document.
+fn reorder_documents_to(
+    order: &[String],
+    documents: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let mut by_id: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut leftover = Vec::new();
+    for doc in documents {
+        match doc.get("@id").and_then(|v| v.as_str()) {
+            Some(id) => by_id
+                .entry(normalize_id(id).to_string())
+                .or_default()
+                .push(doc),
+            None => leftover.push(doc),
+        }
+    }
+    let mut out = Vec::with_capacity(order.len());
+    for id in order {
+        if let Some(docs) = by_id.get_mut(normalize_id(id)) {
+            if !docs.is_empty() {
+                out.push(docs.remove(0));
+            }
+        }
+    }
+    for docs in by_id.into_values() {
+        out.extend(docs);
+    }
+    out.extend(leftover);
+    out
+}
 
 /// Trait for fetching multiple documents of mixed types.
 ///
@@ -54,15 +105,23 @@ async fn fetch_by_ids_impl(
         return Ok(OrmResult::empty());
     }
 
-    // Deduplicate IDs to avoid redundant fetches
-    let unique_ids: Vec<String> = ids
-        .into_iter()
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    // Deduplicate IDs while PRESERVING first-seen order, so a Phase-1 query with
+    // `orderBy` keeps its ordering through this Phase-2 batch fetch.
+    let mut seen = HashSet::new();
+    let mut unique_ids: Vec<String> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if seen.insert(id.clone()) {
+            unique_ids.push(id);
+        }
+    }
 
     // Single API call for all IDs, regardless of type
-    let documents = client.get_documents(unique_ids, spec, opts).await?;
+    let documents = client.get_documents(unique_ids.clone(), spec, opts).await?;
+
+    // TDB's batch fetch does not guarantee documents come back in the requested
+    // id order, so re-sort to `unique_ids`. Without this an ordered query's sort
+    // would be silently lost here.
+    let documents = reorder_documents_to(&unique_ids, documents);
 
     Ok(OrmResult::new(documents))
 }

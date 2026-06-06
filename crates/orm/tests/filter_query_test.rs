@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! Integration tests for ModelExt::query() with relation filters.
 //!
 //! Tests the complete flow: Schema → GraphQL Filter → Query Execution
@@ -5,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use terminusdb_client::DocumentInsertArgs;
 use terminusdb_orm::prelude::*;
-use terminusdb_schema::ToTDBInstance;
+use terminusdb_schema::{ToGql, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 use terminusdb_test::test as db_test;
 
@@ -83,6 +84,76 @@ impl TdbGQLOrdering<TestProject> for StubOrdering {}
 impl TdbGQLFilter<TestTicket> for TestTicketFilter {}
 impl TdbGQLOrdering<TestTicket> for StubOrdering {}
 
+// `ToGql` for the hand-written test filters (the marker traits now require it;
+// real `{Model}Filter`s get this from the derive). Each renders its `Some`
+// fields, strings quoted via the leaf `ToGql for String`.
+impl ToGql for StubOrdering {
+    fn to_gql(&self) -> String {
+        "{}".to_string()
+    }
+}
+impl ToGql for StringFilter {
+    fn to_gql(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if let Some(v) = &self.eq { p.push(format!("eq: {}", v.to_gql())); }
+        if let Some(v) = &self.ne { p.push(format!("ne: {}", v.to_gql())); }
+        if let Some(v) = &self.regex { p.push(format!("regex: {}", v.to_gql())); }
+        if let Some(v) = &self.startsWith { p.push(format!("startsWith: {}", v.to_gql())); }
+        format!("{{{}}}", p.join(", "))
+    }
+}
+impl ToGql for TestProjectFilter {
+    fn to_gql(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if let Some(v) = &self.name { p.push(format!("name: {}", v.to_gql())); }
+        if let Some(v) = &self.id { p.push(format!("_id: {}", v.to_gql())); }
+        if let Some(v) = &self.and { p.push(format!("_and: {}", v.to_gql())); }
+        if let Some(v) = &self.or { p.push(format!("_or: {}", v.to_gql())); }
+        format!("{{{}}}", p.join(", "))
+    }
+}
+impl ToGql for TestTicketFilter {
+    fn to_gql(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if let Some(v) = &self.title { p.push(format!("title: {}", v.to_gql())); }
+        if let Some(v) = &self.project { p.push(format!("project: {}", v.to_gql())); }
+        if let Some(v) = &self.parent { p.push(format!("parent: {}", v.to_gql())); }
+        if let Some(v) = &self.id { p.push(format!("_id: {}", v.to_gql())); }
+        if let Some(v) = &self.and { p.push(format!("_and: {}", v.to_gql())); }
+        if let Some(v) = &self.or { p.push(format!("_or: {}", v.to_gql())); }
+        format!("{{{}}}", p.join(", "))
+    }
+}
+impl ToGql for AuthorFilter {
+    fn to_gql(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if let Some(v) = &self.name { p.push(format!("name: {}", v.to_gql())); }
+        if let Some(v) = &self.id { p.push(format!("_id: {}", v.to_gql())); }
+        format!("{{{}}}", p.join(", "))
+    }
+}
+impl ToGql for ArticleFilter {
+    fn to_gql(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if let Some(v) = &self.title { p.push(format!("title: {}", v.to_gql())); }
+        if let Some(v) = &self.author { p.push(format!("author: {}", v.to_gql())); }
+        if let Some(v) = &self.id { p.push(format!("_id: {}", v.to_gql())); }
+        format!("{{{}}}", p.join(", "))
+    }
+}
+impl ToGql for TaskFilter {
+    fn to_gql(&self) -> String {
+        let mut p: Vec<String> = Vec::new();
+        if let Some(v) = &self.title { p.push(format!("title: {}", v.to_gql())); }
+        if let Some(v) = &self.assignee { p.push(format!("assignee: {}", v.to_gql())); }
+        if let Some(v) = &self.id { p.push(format!("_id: {}", v.to_gql())); }
+        if let Some(v) = &self.not { p.push(format!("_not: {}", v.to_gql())); }
+        if let Some(v) = &self.and { p.push(format!("_and: {}", v.to_gql())); }
+        if let Some(v) = &self.or { p.push(format!("_or: {}", v.to_gql())); }
+        format!("{{{}}}", p.join(", "))
+    }
+}
+
 /// Test that filter query builds correct GraphQL query string
 #[test]
 fn test_filter_query_builds_correct_graphql() {
@@ -140,17 +211,17 @@ async fn test_filter_query_execution(client: _, spec: _) -> anyhow::Result<()> {
     // Insert tickets
     let ticket1 = TestTicket {
         title: "Fix bug in Alpha".to_string(),
-        project: EntityIDFor::new_unchecked(&project1_id)?,
+        project: EntityIDFor::new_untyped(&project1_id)?,
         parent: None,
     };
     let ticket2 = TestTicket {
         title: "Add feature to Alpha".to_string(),
-        project: EntityIDFor::new_unchecked(&project1_id)?,
+        project: EntityIDFor::new_untyped(&project1_id)?,
         parent: None,
     };
     let ticket3 = TestTicket {
         title: "Fix bug in Beta".to_string(),
-        project: EntityIDFor::new_unchecked(&project2_id)?,
+        project: EntityIDFor::new_untyped(&project2_id)?,
         parent: None,
     };
 

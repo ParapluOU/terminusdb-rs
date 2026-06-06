@@ -8,7 +8,7 @@ pub trait TerminusDBModel:
     fn instance_id(&self) -> Option<EntityIDFor<Self>> {
         match self.to_instance(None).gen_id() {
             None => None,
-            Some(id) => EntityIDFor::new_unchecked(&id).unwrap().into(),
+            Some(id) => EntityIDFor::new_untyped(&id).unwrap().into(),
         }
     }
 }

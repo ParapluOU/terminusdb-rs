@@ -4,6 +4,8 @@ mod args;
 #[cfg(feature = "generic-derive")]
 mod bounds;
 mod enum_simple;
+mod filter;
+mod ordering;
 mod enum_union;
 mod from_instance;
 mod generics;
@@ -226,12 +228,22 @@ pub fn derive_terminusdb_model(input: TokenStream) -> TokenStream {
     // Generate serde Serialize/Deserialize implementations
     let serde_impl = serde_impl::generate_serde_impls(&input, is_simple_enum);
 
+    // Generate the `{Model}Filter` struct + Filterable/TdbGQLFilter impls when
+    // the `filters` feature is on and the model opted in via `#[tdb(filter)]`.
+    let filter_impl = filter::generate_filter(&input, &opts);
+
+    // Generate the `{Model}Ordering` struct + TdbGQLOrdering impl, gated the
+    // same way as filters.
+    let ordering_impl = ordering::generate_ordering(&input, &opts);
+
     // Combine the results
     let final_output = quote! {
         #expanded
         #instance_from_json_impl
         #from_instance_impl
         #serde_impl
+        #filter_impl
+        #ordering_impl
     };
 
     final_output.into()
