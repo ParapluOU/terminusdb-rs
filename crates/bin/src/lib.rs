@@ -75,6 +75,82 @@ pub static TERMINUSDB_BINARY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/
 #[cfg(target_os = "macos")]
 pub static LIBRUST_DYLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/librust.dylib"));
 
+/// The embedded, relocatable SWI-Prolog runtime home (Linux only).
+///
+/// The terminusdb binary is a SWI-Prolog saved state and needs its Prolog home
+/// (boot file, library predicates, foreign `.so`s) at runtime. We ship it as a
+/// `.tar.zst` blob and extract it on first use so the server runs on a machine
+/// with no swipl installed.
+#[cfg(target_os = "linux")]
+pub static SWIPL_HOME_BLOB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/swipl-home.tar.gz"));
+
+/// Extract the embedded SWI-Prolog home (Linux) into the cache dir and return
+/// the root of the extracted tree (which contains `bin/` and `lib/swipl/`).
+///
+/// The tree is extracted once; a stamp file keyed on the blob length avoids
+/// re-extracting on every call and refreshes it when the embedded blob changes.
+#[cfg(target_os = "linux")]
+pub fn extract_swipl_home() -> std::io::Result<PathBuf> {
+    let cache_dir = std::env::temp_dir().join("terminusdb-bin-cache");
+    let home_root = cache_dir.join("swipl-home");
+    let stamp = cache_dir.join("swipl-home.stamp");
+
+    let expected = SWIPL_HOME_BLOB.len().to_string();
+    let up_to_date = fs::read_to_string(&stamp)
+        .map(|s| s.trim() == expected)
+        .unwrap_or(false)
+        && home_root.join("lib").join("swipl").exists();
+
+    if !up_to_date {
+        // Fresh extraction: clear any stale tree first.
+        let _ = fs::remove_dir_all(&home_root);
+        fs::create_dir_all(&home_root)?;
+        let decoder = flate2::read::GzDecoder::new(SWIPL_HOME_BLOB);
+        let mut archive = tar::Archive::new(decoder);
+        archive.set_preserve_permissions(true);
+        archive.unpack(&home_root)?;
+        fs::write(&stamp, &expected)?;
+    }
+
+    Ok(home_root)
+}
+
+/// SWI-Prolog per-arch library subdir (PLARCH), e.g. `x86_64-linux`.
+#[cfg(target_os = "linux")]
+fn plarch() -> String {
+    format!("{}-linux", std::env::consts::ARCH)
+}
+
+/// Apply the environment the embedded terminusdb binary needs to locate its
+/// SWI-Prolog runtime. On Linux this points `SWI_HOME_DIR` at the bundled home
+/// and prepends its shared-library dirs to `LD_LIBRARY_PATH`. No-op elsewhere
+/// (macOS handles relocation via the extracted librust.dylib).
+pub fn apply_runtime_env(cmd: &mut Command) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let home_root = extract_swipl_home()?;
+        let swipl_home = home_root.join("lib").join("swipl");
+        cmd.env("SWI_HOME_DIR", &swipl_home);
+
+        let mut ld_dirs = vec![home_root.join("lib")];
+        let arch_lib = swipl_home.join("lib").join(plarch());
+        if arch_lib.exists() {
+            ld_dirs.push(arch_lib);
+        }
+        if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
+            ld_dirs.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(joined) = std::env::join_paths(&ld_dirs) {
+            cmd.env("LD_LIBRARY_PATH", joined);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cmd;
+    }
+    Ok(())
+}
+
 /// Extracts the embedded TerminusDB binary to a temporary location and returns the path.
 ///
 /// The binary is cached in a temporary directory to avoid repeated extractions.
@@ -171,7 +247,10 @@ fn is_outdated(path: &Path) -> std::io::Result<bool> {
 pub fn run_terminusdb(args: &[&str]) -> std::io::Result<ExitStatus> {
     let binary_path = extract_binary()?;
 
-    Command::new(binary_path).args(args).status()
+    let mut cmd = Command::new(binary_path);
+    cmd.args(args);
+    apply_runtime_env(&mut cmd)?;
+    cmd.status()
 }
 
 /// Runs TerminusDB with the given arguments and inherits all I/O streams.

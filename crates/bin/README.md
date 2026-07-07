@@ -20,14 +20,40 @@ Build script crate that compiles TerminusDB from source and embeds it as a Rust 
 ## Dependencies
 
 ### Required (must be installed manually)
-- **git** - For cloning TerminusDB repository
-- **make** - For running TerminusDB build process
-- **SWI-Prolog** - Prolog runtime required by TerminusDB
-  - macOS: `brew install swi-prolog`
-  - Linux: `sudo apt-add-repository ppa:swi-prolog/stable && sudo apt-get update && sudo apt-get install swi-prolog`
-- **GMP library** - Math library required by SWI-Prolog
-  - macOS: `brew install gmp`
-  - Linux: `sudo apt-get install libgmp-dev`
+Standard build-host tools for compiling TerminusDB and its Rust/Prolog
+extensions from source (on Debian/Ubuntu: `apt install build-essential`, plus
+the extras below):
+- **git** - For cloning the TerminusDB repository
+- **make** + a C/C++ toolchain (`gcc`/`clang`) - TerminusDB build process
+- **m4** - Required by `gmp-mpfr-sys` (bignum) when it builds GMP from source
+- **clang / libclang** - Required by `bindgen` in the `swipl-fli` binding
+- **node** + **npm** and **elm** - For the dashboard build
+- **cmake** - Only for the SWI-Prolog source-build fallback (non-x86_64 Linux)
+
+### SWI-Prolog (Linux: fully automatic & self-contained)
+On **Linux** you do **not** need to install SWI-Prolog. The build provisions a
+relocatable SWI-Prolog 10.x — together with its *full* dependency closure — and
+bundles it into the embedded binary, so the resulting server runs on a bare
+Linux box with no swipl installed. Acquisition order (each a fallback for the
+previous):
+1. Cached env under `.deps/swipl-env/<target>/`
+2. A `micromamba` conda env (`swi-prolog=10.0.0` + `libxcrypt`), which solves and
+   downloads the whole closure into one relocatable prefix. `micromamba` itself
+   is a static binary downloaded automatically to `.deps/micromamba/`.
+3. Compile from source (needs cmake + C toolchain; covers arches conda-forge has
+   no swi-prolog build for, e.g. currently non-x86_64 Linux).
+
+Why the full closure (not just the swi-prolog package): swipl's foreign
+extensions (`archive`, `crypt`, `ssl`, …) each pull sibling shared libraries
+(`libarchive` → zstd/lz4/xml2/krb5/…, `libxcrypt` → `libcrypt.so.2`). The
+`qsave` bootstrap autoloads them, so all must be present or the build fails —
+and `libcrypt.so.2` isn't satisfied by Debian's `libcrypt.so.1`. micromamba
+resolves this closure correctly; the build then packs the trimmed prefix
+(headers/docs/static libs removed) into `swipl-home.tar.gz` for embedding.
+
+On **macOS** SWI-Prolog is still a manual prerequisite (self-contained macOS
+bundling is out of scope for now):
+- `brew install swi-prolog gmp`
 
 ### Optional (auto-bundled if missing)
 - **protoc** - Protocol Buffers compiler
@@ -69,7 +95,14 @@ The dev build requires `librust.dylib` at runtime, which is automatically bundle
 
 ### Linux
 
-On Linux, the build uses `make PROFILE=release` which creates a standalone release binary
+On Linux, the build uses `make PROFILE=release` which creates a standalone
+release binary. Because that binary is a SWI-Prolog *saved state* that needs its
+Prolog home at runtime, the build packs the provisioned, relocatable SWI-Prolog
+home into `OUT_DIR/swipl-home.tar.gz` and embeds it. At runtime the library
+extracts it to the cache dir and points the binary at it via `SWI_HOME_DIR` +
+`LD_LIBRARY_PATH` (see `apply_runtime_env`). The non-glibc shared libraries
+swipl needs (GMP, ncurses/tinfo, zlib, ...) are copied into the bundle so it is
+self-contained on a bare box.
 
 ## Files
 

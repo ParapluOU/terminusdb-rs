@@ -18,6 +18,19 @@ uuid = { workspace = true, features = ["v4"] }
 
 [build-dependencies]
 which = "6.0"
+# Pure-Rust archive handling for build.rs. SWI-Prolog's full closure is solved
+# by micromamba (a downloaded static binary); the m4/gmp resiliency tools are
+# fetched as conda `.conda` packages (zip containing a `pkg-*.tar.zst`) and
+# extracted here. All codecs are pure Rust (no C toolchain, no
+# `unzip`/`zstd`/`tar` binaries required to run build.rs):
+#   zip     -> read a `.conda` (a zip) / protoc zip
+#   ruzstd  -> decode the inner `pkg-*.tar.zst` payload
+#   flate2  -> gzip-pack the swipl home for embedding (miniz_oxide backend)
+#   tar     -> (un)pack tar streams
+zip = { version = "2", default-features = false, features = ["deflate"] }
+ruzstd = "0.7"
+flate2 = "1"
+tar = "0.4"
 
 [lib]
 path = "src/lib.rs"
@@ -28,6 +41,14 @@ path = "src/main.rs"
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.178"
+
+# On Linux the embedded server ships its own relocatable SWI-Prolog runtime
+# home (packed as a tar.gz blob). These extract it at runtime with pure-Rust
+# codecs (no external tools), so the server runs on a bare Linux box with no
+# swipl installed.
+[target."cfg(target_os = \"linux\")".dependencies]
+flate2 = "1"
+tar = "0.4"
 
 [dev-dependencies]
 terminusdb-schema-derive = { version = "0.1.0", path = "../schema/derive" }

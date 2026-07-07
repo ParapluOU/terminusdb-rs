@@ -435,11 +435,13 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
         };
 
         eprintln!("[terminusdb-bin] Initializing store in {:?}...", path);
-        let init_output = std::process::Command::new(&binary_path)
+        let mut init_cmd = std::process::Command::new(&binary_path);
+        init_cmd
             .args(["store", "init"])
             .current_dir(&path)
-            .env("TERMINUSDB_SERVER_DB_PATH", &path)
-            .output()?;
+            .env("TERMINUSDB_SERVER_DB_PATH", &path);
+        crate::apply_runtime_env(&mut init_cmd)?;
+        let init_output = init_cmd.output()?;
         // The terminusdb binary always exits non-zero due to a SWI-Prolog
         // `unwind(halt(N))` quirk, even when `store init` succeeds. Trust
         // the operation if either:
@@ -495,6 +497,9 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
         cmd.current_dir(path);
         cmd.env("TERMINUSDB_SERVER_DB_PATH", path);
     }
+
+    // Point the binary at its bundled SWI-Prolog runtime (Linux self-contained embed).
+    crate::apply_runtime_env(&mut cmd)?;
 
     let mut child = cmd.spawn()?;
 
