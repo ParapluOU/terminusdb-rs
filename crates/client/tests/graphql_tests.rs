@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Integration tests for GraphQL functionality
 //!
 //! DISABLED: These tests use create_database which doesn't exist in the current API.

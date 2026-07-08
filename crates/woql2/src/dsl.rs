@@ -142,6 +142,40 @@ impl ToDSL for Query {
             Query::InsertDocument(insert_doc) => insert_doc.to_dsl(),
             Query::UpdateDocument(update_doc) => update_doc.to_dsl(),
             Query::DeleteDocument(delete_doc) => delete_doc.to_dsl(),
+            // TerminusDB 12 additions
+            Query::Slice(slice) => slice.to_dsl(),
+            Query::ListToSet(op) => op.to_dsl(),
+            Query::SetUnion(op) => op.to_dsl(),
+            Query::SetIntersection(op) => op.to_dsl(),
+            Query::SetDifference(op) => op.to_dsl(),
+            Query::SetMember(op) => op.to_dsl(),
+            Query::Gte(op) => op.to_dsl(),
+            Query::Lte(op) => op.to_dsl(),
+            Query::Comment(op) => op.to_dsl(),
+            Query::Collect(op) => op.to_dsl(),
+            Query::Sequence(op) => op.to_dsl(),
+            Query::InRange(op) => op.to_dsl(),
+            Query::RangeMin(op) => op.to_dsl(),
+            Query::RangeMax(op) => op.to_dsl(),
+            Query::TripleSlice(op) => op.to_dsl(),
+            Query::TripleSliceRev(op) => op.to_dsl(),
+            Query::TripleNext(op) => op.to_dsl(),
+            Query::TriplePrevious(op) => op.to_dsl(),
+            Query::Interval(op) => op.to_dsl(),
+            Query::IntervalStartDuration(op) => op.to_dsl(),
+            Query::IntervalDurationEnd(op) => op.to_dsl(),
+            Query::IntervalRelation(op) => op.to_dsl(),
+            Query::IntervalRelationTyped(op) => op.to_dsl(),
+            Query::DateDuration(op) => op.to_dsl(),
+            Query::DayAfter(op) => op.to_dsl(),
+            Query::DayBefore(op) => op.to_dsl(),
+            Query::IsoWeek(op) => op.to_dsl(),
+            Query::Weekday(op) => op.to_dsl(),
+            Query::WeekdaySundayStart(op) => op.to_dsl(),
+            Query::MonthStartDate(op) => op.to_dsl(),
+            Query::MonthStartDates(op) => op.to_dsl(),
+            Query::MonthEndDate(op) => op.to_dsl(),
+            Query::MonthEndDates(op) => op.to_dsl(),
             // Add more as needed
             _ => format!("// TODO: {}", std::any::type_name_of_val(self)),
         }
@@ -837,5 +871,333 @@ impl fmt::Display for PathSequence {
 impl fmt::Display for PathOr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_dsl())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TerminusDB 12 operations
+// ---------------------------------------------------------------------------
+
+use crate::collection::{ListToSet, SetDifference, SetIntersection, SetMember, SetUnion, Slice};
+use crate::compare::{Gte, Lte};
+use crate::interval::{
+    DateDuration, DayAfter, DayBefore, Interval, IntervalDurationEnd, IntervalRelation,
+    IntervalRelationTyped, IntervalStartDuration, IsoWeek, MonthEndDate, MonthEndDates,
+    MonthStartDate, MonthStartDates, Weekday, WeekdaySundayStart,
+};
+use crate::misc::{Collect, Comment, InRange, RangeMax, RangeMin, Sequence};
+use crate::triple::{TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
+
+impl ToDSL for Slice {
+    fn to_dsl(&self) -> String {
+        let mut args = vec![self.list.to_dsl(), self.start.to_dsl()];
+        if let Some(end) = &self.end {
+            args.push(end.to_dsl());
+        }
+        args.push(self.result.to_dsl());
+        render_function("slice", &args)
+    }
+}
+
+impl ToDSL for ListToSet {
+    fn to_dsl(&self) -> String {
+        render_function("list_to_set", &[self.list.to_dsl(), self.set.to_dsl()])
+    }
+}
+
+impl ToDSL for SetUnion {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "set_union",
+            &[self.list_a.to_dsl(), self.list_b.to_dsl(), self.result.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for SetIntersection {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "set_intersection",
+            &[self.list_a.to_dsl(), self.list_b.to_dsl(), self.result.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for SetDifference {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "set_difference",
+            &[self.list_a.to_dsl(), self.list_b.to_dsl(), self.result.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for SetMember {
+    fn to_dsl(&self) -> String {
+        render_function("set_member", &[self.element.to_dsl(), self.set.to_dsl()])
+    }
+}
+
+impl ToDSL for Gte {
+    fn to_dsl(&self) -> String {
+        render_function("gte", &[self.left.to_dsl(), self.right.to_dsl()])
+    }
+}
+
+impl ToDSL for Lte {
+    fn to_dsl(&self) -> String {
+        render_function("lte", &[self.left.to_dsl(), self.right.to_dsl()])
+    }
+}
+
+impl ToDSL for Comment {
+    fn to_dsl(&self) -> String {
+        let mut args = vec![self.comment.to_dsl()];
+        if let Some(query) = &self.query {
+            args.push(query.to_dsl());
+        }
+        render_function("comment", &args)
+    }
+}
+
+impl ToDSL for Collect {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "collect",
+            &[self.template.to_dsl(), self.into.to_dsl(), self.query.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for Sequence {
+    fn to_dsl(&self) -> String {
+        let mut args = vec![self.value.to_dsl(), self.start.to_dsl(), self.end.to_dsl()];
+        if let Some(step) = &self.step {
+            args.push(step.to_dsl());
+        }
+        if let Some(count) = &self.count {
+            args.push(count.to_dsl());
+        }
+        render_function("sequence", &args)
+    }
+}
+
+impl ToDSL for InRange {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "in_range",
+            &[self.value.to_dsl(), self.start.to_dsl(), self.end.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for RangeMin {
+    fn to_dsl(&self) -> String {
+        render_function("range_min", &[self.list.to_dsl(), self.result.to_dsl()])
+    }
+}
+
+impl ToDSL for RangeMax {
+    fn to_dsl(&self) -> String {
+        render_function("range_max", &[self.list.to_dsl(), self.result.to_dsl()])
+    }
+}
+
+fn triple_slice_args(
+    subject: &crate::value::NodeValue,
+    predicate: &crate::value::NodeValue,
+    object: &crate::value::Value,
+    extra: &[String],
+    graph: &Option<GraphType>,
+) -> Vec<String> {
+    let mut args = vec![subject.to_dsl(), predicate.to_dsl(), object.to_dsl()];
+    args.extend_from_slice(extra);
+    if *graph != None && *graph != Some(GraphType::Instance) {
+        args.push(escape_string(&format!("{:?}", graph).to_lowercase()));
+    }
+    args
+}
+
+impl ToDSL for TripleSlice {
+    fn to_dsl(&self) -> String {
+        let args = triple_slice_args(
+            &self.subject,
+            &self.predicate,
+            &self.object,
+            &[self.low.to_dsl(), self.high.to_dsl()],
+            &self.graph,
+        );
+        render_function("triple_slice", &args)
+    }
+}
+
+impl ToDSL for TripleSliceRev {
+    fn to_dsl(&self) -> String {
+        let args = triple_slice_args(
+            &self.subject,
+            &self.predicate,
+            &self.object,
+            &[self.low.to_dsl(), self.high.to_dsl()],
+            &self.graph,
+        );
+        render_function("triple_slice_rev", &args)
+    }
+}
+
+impl ToDSL for TripleNext {
+    fn to_dsl(&self) -> String {
+        let args = triple_slice_args(
+            &self.subject,
+            &self.predicate,
+            &self.object,
+            &[self.next.to_dsl()],
+            &self.graph,
+        );
+        render_function("triple_next", &args)
+    }
+}
+
+impl ToDSL for TriplePrevious {
+    fn to_dsl(&self) -> String {
+        let args = triple_slice_args(
+            &self.subject,
+            &self.predicate,
+            &self.object,
+            &[self.previous.to_dsl()],
+            &self.graph,
+        );
+        render_function("triple_previous", &args)
+    }
+}
+
+impl ToDSL for Interval {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "interval",
+            &[self.start.to_dsl(), self.end.to_dsl(), self.interval.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for IntervalStartDuration {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "interval_start_duration",
+            &[self.start.to_dsl(), self.duration.to_dsl(), self.interval.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for IntervalDurationEnd {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "interval_duration_end",
+            &[self.duration.to_dsl(), self.end.to_dsl(), self.interval.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for IntervalRelation {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "interval_relation",
+            &[
+                self.relation.to_dsl(),
+                self.x_start.to_dsl(),
+                self.x_end.to_dsl(),
+                self.y_start.to_dsl(),
+                self.y_end.to_dsl(),
+            ],
+        )
+    }
+}
+
+impl ToDSL for IntervalRelationTyped {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "interval_relation_typed",
+            &[self.relation.to_dsl(), self.x.to_dsl(), self.y.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for DateDuration {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "date_duration",
+            &[self.start.to_dsl(), self.duration.to_dsl(), self.end.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for DayAfter {
+    fn to_dsl(&self) -> String {
+        render_function("day_after", &[self.date.to_dsl(), self.next.to_dsl()])
+    }
+}
+
+impl ToDSL for DayBefore {
+    fn to_dsl(&self) -> String {
+        render_function("day_before", &[self.date.to_dsl(), self.previous.to_dsl()])
+    }
+}
+
+impl ToDSL for IsoWeek {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "iso_week",
+            &[self.date.to_dsl(), self.week.to_dsl(), self.year.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for Weekday {
+    fn to_dsl(&self) -> String {
+        render_function("weekday", &[self.date.to_dsl(), self.weekday.to_dsl()])
+    }
+}
+
+impl ToDSL for WeekdaySundayStart {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "weekday_sunday_start",
+            &[self.date.to_dsl(), self.weekday.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for MonthStartDate {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "month_start_date",
+            &[self.year_month.to_dsl(), self.date.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for MonthEndDate {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "month_end_date",
+            &[self.year_month.to_dsl(), self.date.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for MonthStartDates {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "month_start_dates",
+            &[self.date.to_dsl(), self.start.to_dsl(), self.end.to_dsl()],
+        )
+    }
+}
+
+impl ToDSL for MonthEndDates {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "month_end_dates",
+            &[self.date.to_dsl(), self.start.to_dsl(), self.end.to_dsl()],
+        )
     }
 }

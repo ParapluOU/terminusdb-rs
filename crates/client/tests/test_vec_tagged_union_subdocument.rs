@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};

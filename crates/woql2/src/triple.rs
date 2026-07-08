@@ -188,4 +188,72 @@ pub struct DeletedLink {
     pub graph: GraphType,
 }
 
+/// Ordered range query over triples: bind objects in the half-open range ['low', 'high'). (TerminusDB 12)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct TripleSlice {
+    /// A URI or variable which is the source or subject of the graph edge.
+    pub subject: NodeValue,
+    /// A URI or variable which is the edge-label or predicate of the graph edge.
+    pub predicate: NodeValue,
+    /// A URI, datatype or variable which is the target or object of the graph edge.
+    pub object: self::Value,
+    /// The inclusive lower bound of the object range.
+    pub low: self::Value,
+    /// The exclusive upper bound of the object range.
+    pub high: self::Value,
+    /// An optional graph (either 'instance' or 'schema')
+    pub graph: Option<GraphType>,
+}
+
+/// Ordered range query over triples in reverse order. (TerminusDB 12)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct TripleSliceRev {
+    /// A URI or variable which is the source or subject of the graph edge.
+    pub subject: NodeValue,
+    /// A URI or variable which is the edge-label or predicate of the graph edge.
+    pub predicate: NodeValue,
+    /// A URI, datatype or variable which is the target or object of the graph edge.
+    pub object: self::Value,
+    /// The inclusive lower bound of the object range.
+    pub low: self::Value,
+    /// The exclusive upper bound of the object range.
+    pub high: self::Value,
+    /// An optional graph (either 'instance' or 'schema')
+    pub graph: Option<GraphType>,
+}
+
+/// Bind the next object after 'object' in the triple ordering. (TerminusDB 12)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct TripleNext {
+    /// A URI or variable which is the source or subject of the graph edge.
+    pub subject: NodeValue,
+    /// A URI or variable which is the edge-label or predicate of the graph edge.
+    pub predicate: NodeValue,
+    /// A URI, datatype or variable which is the target or object of the graph edge.
+    pub object: self::Value,
+    /// The next object in the ordering.
+    pub next: self::Value,
+    /// An optional graph (either 'instance' or 'schema')
+    pub graph: Option<GraphType>,
+}
+
+/// Bind the previous object before 'object' in the triple ordering. (TerminusDB 12)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct TriplePrevious {
+    /// A URI or variable which is the source or subject of the graph edge.
+    pub subject: NodeValue,
+    /// A URI or variable which is the edge-label or predicate of the graph edge.
+    pub predicate: NodeValue,
+    /// A URI, datatype or variable which is the target or object of the graph edge.
+    pub object: self::Value,
+    /// The previous object in the ordering.
+    pub previous: self::Value,
+    /// An optional graph (either 'instance' or 'schema')
+    pub graph: Option<GraphType>,
+}
+
 // Note: DeleteData is not explicitly in the schema, seems DeleteTriple covers it.

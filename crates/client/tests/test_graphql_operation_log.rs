@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Unit test to verify GraphQL queries are tracked in the operation log
 
 use terminusdb_client::debug::OperationType;

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 // Integration tests for TerminusDB client
 // Uses TerminusDBServer::test_instance() for auto-spawning local server
 

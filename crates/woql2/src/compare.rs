@@ -35,6 +35,26 @@ pub struct Greater {
     pub right: DataValue,
 }
 
+/// Predicate determining if 'left' is greater than or equal to 'right' according to natural ordering. (TerminusDB 12)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct Gte {
+    /// The left-hand element.
+    pub left: DataValue,
+    /// The right-hand element.
+    pub right: DataValue,
+}
+
+/// Predicate determining if 'left' is less than or equal to 'right' according to natural ordering. (TerminusDB 12)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct Lte {
+    /// The left-hand element.
+    pub left: DataValue,
+    /// The right-hand element.
+    pub right: DataValue,
+}
+
 /// Provides class subsumption (the inheritance model) according to the schema design. True whenver 'child' is a child of 'parent'. Can be used as a generator or a check.
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 

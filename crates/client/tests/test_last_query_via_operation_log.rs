@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 // TODO: This test file uses debug module functionality (clear_operation_log, get_operation_log,
 // local_node_test, debug::OperationType) that is not fully implemented.
 // Disabled until the debug module is complete.

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Integration tests for `with_merge_branch` functionality.
 //!
 //! These tests require `terminusdb-bin` to be built.

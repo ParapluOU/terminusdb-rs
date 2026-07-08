@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use anyhow::*;
 use serde::{Deserialize, Serialize};
 use terminusdb_client::deserialize::*;

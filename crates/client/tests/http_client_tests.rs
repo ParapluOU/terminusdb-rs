@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 // Integration tests for TerminusDBHttpClient
 
 use serde::{Deserialize, Serialize};

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 // TODO: These tests require the #[tdb(instance)] feature which has trait implementation issues.
 // The Person and Company models with instance references don't properly implement ToTDBSchema.
 // This needs investigation into the schema derive macro.

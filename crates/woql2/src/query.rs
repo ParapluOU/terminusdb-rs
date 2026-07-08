@@ -1,19 +1,31 @@
-use crate::collection::{Dot, Length, Member, Sum};
-use crate::compare::{Equals, Greater, IsA, Less, Subsumption, TypeOf, Typecast};
+use crate::collection::{
+    Dot, Length, ListToSet, Member, SetDifference, SetIntersection, SetMember, SetUnion, Slice,
+    Sum,
+};
+use crate::compare::{Equals, Greater, Gte, IsA, Less, Lte, Subsumption, TypeOf, Typecast};
 use crate::control::{
     Distinct, From, If, Immediately, Into, Once, Pin, Select, Using, WoqlOptional,
 };
 use crate::document::{DeleteDocument, InsertDocument, ReadDocument, UpdateDocument};
 use crate::expression::{ArithmeticExpression, ArithmeticValue};
 use crate::get::Get;
-use crate::misc::{Count, HashKey, LexicalKey, Limit, RandomKey, Size, Start, TripleCount};
+use crate::interval::{
+    DateDuration, DayAfter, DayBefore, Interval, IntervalDurationEnd, IntervalRelation,
+    IntervalRelationTyped, IntervalStartDuration, IsoWeek, MonthEndDate, MonthEndDates,
+    MonthStartDate, MonthStartDates, Weekday, WeekdaySundayStart,
+};
+use crate::misc::{
+    Collect, Comment, Count, HashKey, InRange, LexicalKey, Limit, RandomKey, RangeMax, RangeMin,
+    Sequence, Size, Start, TripleCount,
+};
 use crate::order::{GroupBy, OrderBy};
 use crate::path::PathPattern;
 use crate::prelude::*;
 use crate::string::{Concatenate, Join, Like, Lower, Pad, Regexp, Split, Substring, Trim, Upper};
 use crate::triple::{
     AddData, AddLink, AddTriple, AddedData, AddedLink, AddedTriple, Data, DeleteLink, DeleteTriple,
-    DeletedLink, DeletedTriple, Link, Triple,
+    DeletedLink, DeletedTriple, Link, Triple, TripleNext, TriplePrevious, TripleSlice,
+    TripleSliceRev,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -125,6 +137,40 @@ pub enum Query {
     Size(Size),
     TripleCount(TripleCount),
     Call(Call),
+    // --- TerminusDB 12 additions ---
+    Slice(Slice),
+    ListToSet(ListToSet),
+    SetUnion(SetUnion),
+    SetIntersection(SetIntersection),
+    SetDifference(SetDifference),
+    SetMember(SetMember),
+    Gte(Gte),
+    Lte(Lte),
+    Comment(Comment),
+    Collect(Collect),
+    Sequence(Sequence),
+    InRange(InRange),
+    RangeMin(RangeMin),
+    RangeMax(RangeMax),
+    TripleSlice(TripleSlice),
+    TripleSliceRev(TripleSliceRev),
+    TripleNext(TripleNext),
+    TriplePrevious(TriplePrevious),
+    Interval(Interval),
+    IntervalStartDuration(IntervalStartDuration),
+    IntervalDurationEnd(IntervalDurationEnd),
+    IntervalRelation(IntervalRelation),
+    IntervalRelationTyped(IntervalRelationTyped),
+    DateDuration(DateDuration),
+    DayAfter(DayAfter),
+    DayBefore(DayBefore),
+    IsoWeek(IsoWeek),
+    Weekday(Weekday),
+    WeekdaySundayStart(WeekdaySundayStart),
+    MonthStartDate(MonthStartDate),
+    MonthStartDates(MonthStartDates),
+    MonthEndDate(MonthEndDate),
+    MonthEndDates(MonthEndDates),
 }
 
 impl Query {

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Tests for environment variable authentication
 
 use std::env;

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use serde_json::json;
 use terminusdb_woql2::query::{NamedParametricQuery, Query};
 use terminusdb_woql2::*;

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Integration tests for the open_database API
 
 #[cfg(not(target_arch = "wasm32"))]

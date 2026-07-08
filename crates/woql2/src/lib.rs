@@ -17,6 +17,7 @@ pub mod document;
 pub mod dsl;
 pub mod expression;
 pub mod get;
+pub mod interval;
 pub mod macros;
 pub mod misc;
 pub mod order;
@@ -32,8 +33,11 @@ pub mod query_dsl;
 
 pub mod prelude {
     // Re-export core types
-    pub use super::collection::{Dot, Length, Member, Sum};
-    pub use super::compare::{Equals, Greater, IsA, Less, Subsumption, TypeOf, Typecast};
+    pub use super::collection::{
+        Dot, Length, ListToSet, Member, SetDifference, SetIntersection, SetMember, SetUnion,
+        Slice, Sum,
+    };
+    pub use super::compare::{Equals, Greater, Gte, IsA, Less, Lte, Subsumption, TypeOf, Typecast};
     pub use super::control::{
         Distinct, From, If, Immediately, Into, Once, Pin, Select, Using, WoqlOptional,
     };
@@ -42,7 +46,15 @@ pub mod prelude {
         ArithmeticExpression, ArithmeticValue, Div, Divide, Exp, Floor, Minus, Plus, Times,
     };
     pub use super::get::{Column, FormatType, Get, Indicator, QueryResource, Source};
-    pub use super::misc::{Count, HashKey, LexicalKey, Limit, RandomKey, Size, Start, TripleCount};
+    pub use super::interval::{
+        DateDuration, DayAfter, DayBefore, Interval, IntervalDurationEnd, IntervalRelation,
+        IntervalRelationTyped, IntervalStartDuration, IsoWeek, MonthEndDate, MonthEndDates,
+        MonthStartDate, MonthStartDates, Weekday, WeekdaySundayStart,
+    };
+    pub use super::misc::{
+        Collect, Comment, Count, HashKey, InRange, LexicalKey, Limit, RandomKey, RangeMax,
+        RangeMin, Sequence, Size, Start, TripleCount,
+    };
     pub use super::order::{GroupBy, Order, OrderBy, OrderTemplate};
     pub use super::path::{
         InversePathPredicate, PathOr, PathPattern, PathPlus, PathPredicate, PathSequence, PathStar,
@@ -54,7 +66,8 @@ pub mod prelude {
     };
     pub use super::triple::{
         AddData, AddLink, AddTriple, AddedData, AddedLink, AddedTriple, Data, DeleteLink,
-        DeleteTriple, DeletedLink, DeletedTriple, Link, Triple,
+        DeleteTriple, DeletedLink, DeletedTriple, Link, Triple, TripleNext, TriplePrevious,
+        TripleSlice, TripleSliceRev,
     };
     pub use super::value::{DataValue, DictionaryTemplate, FieldValuePair, NodeValue, Value};
     // Export the IntoDataValue trait for ergonomic API usage

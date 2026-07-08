@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test_document_if_exists {

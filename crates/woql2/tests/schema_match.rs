@@ -9,31 +9,18 @@ mod tests {
     use terminusdb_schema::{Schema, ToTDBSchema};
     use terminusdb_woql2::prelude::*; // Import all our WOQL types
 
-    // Helper function to load and parse the woql.json spec
+    // Helper function to load and parse the woql.json spec.
+    // The authoritative spec is the upstream terminus-schema woql.json mirrored
+    // at docs/schemas/woql.json (refreshed alongside the docs mirror).
     fn load_woql_spec() -> HashMap<String, Value> {
-        // Assuming tests run from the workspace root or crate root, adjust path accordingly.
-        // Let's try relative paths suitable for `cargo test` from workspace root.
-        let path_candidates = [
-            "spec/woql.json",
-            "../spec/woql.json",
-            "../../spec/woql.json",
-            "../../../spec/woql.json", // Likely correct if run from crate root
-        ];
-
-        let mut path_to_use = None;
-        for p in &path_candidates {
-            if Path::new(p).exists() {
-                path_to_use = Some(p);
-                break;
-            }
-        }
-
-        let path = path_to_use.unwrap_or_else(|| {
-            panic!(
-                "Could not find spec/woql.json. CWD: {:?}",
-                std::env::current_dir().unwrap()
-            )
-        });
+        let path = format!(
+            "{}/../../docs/schemas/woql.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        assert!(
+            Path::new(&path).exists(),
+            "WOQL spec not found at {path}; refresh docs/schemas/woql.json from upstream"
+        );
 
         println!("Loading WOQL spec from: {}", path);
 
@@ -189,7 +176,6 @@ mod tests {
     }
     */
     #[test]
-    #[ignore = "Requires spec/woql.json file which is not present"]
     fn test_basic_types() {
         let spec_map = load_woql_spec();
         // assert_schema_matches_spec::<Value>("Value", &spec_map); // Commented out - serde_json::Value doesn't implement ToTDBSchema
@@ -197,6 +183,57 @@ mod tests {
         assert_schema_matches_spec::<DataValue>("DataValue", &spec_map);
         assert_schema_matches_spec::<Order>("Order", &spec_map); // Enum example
         assert_schema_matches_spec::<Triple>("Triple", &spec_map); // Class example
-                                                                   // Add more types here...
+    }
+
+    /// Two-way coverage: every non-abstract class in the upstream woql.json
+    /// spec that inherits (directly) from `Query` must have a corresponding
+    /// `Query` enum variant, and vice versa. Upstream additions fail the
+    /// missing-variant direction; local inventions fail the extra-variant one.
+    #[test]
+    fn test_query_enum_covers_spec() {
+        let spec_map = load_woql_spec();
+
+        // Spec-side: classes whose @inherits mentions "Query".
+        let mut spec_classes: Vec<String> = spec_map
+            .iter()
+            .filter(|(id, v)| {
+                *id != "Query"
+                    && match v.get("@inherits") {
+                        Some(Value::String(s)) => s == "Query",
+                        Some(Value::Array(a)) => {
+                            a.iter().any(|x| x.as_str() == Some("Query"))
+                        }
+                        _ => false,
+                    }
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        spec_classes.sort();
+
+        // Rust-side: the Query tagged-union's variant target classes.
+        let schema = Query::to_schema();
+        let mut variant_classes: Vec<String> = match &schema {
+            Schema::TaggedUnion { properties, .. } => {
+                properties.iter().map(|p| p.class.clone()).collect()
+            }
+            other => panic!("Query schema is not a TaggedUnion: {:?}", other),
+        };
+        variant_classes.sort();
+
+        let missing: Vec<_> = spec_classes
+            .iter()
+            .filter(|c| !variant_classes.contains(c))
+            .collect();
+        let extra: Vec<_> = variant_classes
+            .iter()
+            .filter(|c| !spec_classes.contains(c))
+            .collect();
+
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "Query enum out of sync with woql.json spec.\n   spec classes missing a variant: {:?}\n   variants with no spec class: {:?}",
+            missing,
+            extra
+        );
     }
 }

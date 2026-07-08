@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Test file to verify the new bulk document retrieval functionality
 //!
 //! These tests verify that the new get_documents() and get_instances() methods

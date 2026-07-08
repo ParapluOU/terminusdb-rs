@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 #![cfg(not(target_arch = "wasm32"))]
 
 // NOTE: These tests use debug module functionality that is not yet fully implemented.

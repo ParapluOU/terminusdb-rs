@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 #![cfg(not(target_arch = "wasm32"))]
 
 use terminusdb_schema::ToTDBInstance;

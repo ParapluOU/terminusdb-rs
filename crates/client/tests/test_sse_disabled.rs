@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 /// Test that SSE functionality is disabled by default and can be enabled via env var
 use serde::{Deserialize, Serialize};
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient};

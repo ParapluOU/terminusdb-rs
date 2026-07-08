@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Integration tests for TerminusDB organization API endpoints
 //!
 //! Tests organization CRUD operations, user management, and capabilities

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use serde_json::{json, Value};
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient};

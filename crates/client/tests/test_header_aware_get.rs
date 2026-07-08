@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Tests for header-aware GET methods that return commit IDs
 
 #[cfg(not(target_arch = "wasm32"))]

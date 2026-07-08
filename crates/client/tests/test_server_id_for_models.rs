@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 #![cfg(test)]
 
 use terminusdb_client::*;
