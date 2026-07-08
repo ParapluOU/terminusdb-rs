@@ -564,13 +564,16 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
     );
 
     // Pipe stderr so we can capture early failure messages
-    let mut child = std::process::Command::new(&binary_path)
-        .args(&args)
+    let mut cmd = std::process::Command::new(&binary_path);
+    cmd.args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("TERMINUSDB_SERVER_PORT", port.to_string())
-        .env("TERMINUSDB_SERVER_WORKERS", workers.to_string())
-        .spawn()?;
+        .env("TERMINUSDB_SERVER_WORKERS", workers.to_string());
+    // The v12 binary links libswipl dynamically; point it at the bundled
+    // SWI-Prolog home and shared libs like every other spawn path does.
+    crate::apply_runtime_env(&mut cmd)?;
+    let mut child = cmd.spawn()?;
 
     let pid = child.id();
     eprintln!(
