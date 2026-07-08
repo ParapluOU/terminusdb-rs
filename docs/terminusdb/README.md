@@ -1,38 +1,36 @@
-[![TerminusDB Documentation](https://assets.terminusdb.com/readmes/terminusdb-docs/header.gif)][terminusdb-docs]
+# TerminusDB Documentation (local mirror)
 
----
+This directory is a local mirror of the **official TerminusDB documentation**,
+kept in-repo so LLM agents and developers can reference it offline.
 
-[![Discord](https://img.shields.io/discord/689805612053168129?label=Discord&logo=Discord&style=plastic)](https://discord.gg/yTJKAma)
-[![Reddit](https://img.shields.io/reddit/subreddit-subscribers/TerminusDB?style=social)](https://www.reddit.com/r/TerminusDB/)
-[![Twitter](https://img.shields.io/twitter/follow/terminusdb?color=skyblue&label=Follow%20on%20Twitter&logo=twitter&style=flat)](https://twitter.com/TerminusDB)
+- **Upstream**: https://github.com/dfrnt-labs/terminusdb-docs-static (source of https://terminusdb.org/docs/)
+- **Mirrored commit**: `0f36c9a074d112f4325886bc4a5f4030b9c82b8c` (2026-05-19, "Added public sandbox")
+- **Covers**: TerminusDB 12 (DFRNT-maintained releases)
+- **Last refreshed**: 2026-07-08
 
-**TerminusDB documentation is now served through our [headless content management system TerminusCMS](https://terminusdb.com/terminuscms/) meaning this repository is out of date. For up-to-date documentation, visit our [documentation site][terminusdb-docs].**
+## Layout
 
-[**TerminusDB**][terminusdb] is an [open-source][terminusdb-repo] graph database
-and document store. It allows you to link JSON documents in a powerful knowledge
-graph all through a simple document API.
+- Every upstream page `src/app/docs/<slug>/page.md` is copied here as `<slug>.md` (flat).
+- `index.md` is the docs landing page; `INDEX.md` mirrors the site navigation and links every local file — start there.
+- Pages are Markdoc-flavored markdown with YAML frontmatter (`tags`, `title`, SEO metadata). `{% callout %}`-style tags are Markdoc directives; read through them.
+- A handful of pages are React-only upstream (interactive OpenAPI/Swagger viewers, topic browser) and have no markdown; `INDEX.md` links those to the live site.
 
-[terminusdb]: https://terminusdb.com/
-[terminusdb-docs]: https://terminusdb.com/docs/
-[terminusdb-repo]: https://github.com/terminusdb/terminusdb
+## How to refresh
 
-**TerminusCMS** is a headless content and knowledge management system for complex environments. Build an organization-wide knowledge graph for data and content that can be curated by machines and humans. [Sign up a clone a demo to play with today][dashboard].
+```bash
+git clone --depth 1 https://github.com/dfrnt-labs/terminusdb-docs-static /tmp/terminusdb-docs-static
+git rm -rq docs/terminusdb && mkdir -p docs/terminusdb
+for f in /tmp/terminusdb-docs-static/src/app/docs/*/page.md; do
+  cp "$f" "docs/terminusdb/$(basename $(dirname "$f")).md"
+done
+cp /tmp/terminusdb-docs-static/src/app/docs/page.md docs/terminusdb/index.md
+# regenerate INDEX.md from src/lib/navigation.ts, restore this README,
+# and record the new upstream commit hash + date above
+```
 
-[dashboard]: https://dashboard.terminusdb.com/
+## Historical note
 
-## Contributing
-
-We love feedback!
-
-* [Report a problem with the documentation.](https://github.com/terminusdb/terminusdb-docs/issues)
-
-## Community
-
-Come visit us on [Discord][discord] or our [Community Reddit][reddit]. On Twitter, we're
-[@TerminusDB][twitter].
-
-<img align="right" src="https://assets.terminusdb.com/images/TerminusDB%20color%20mascot.png" width="256px"/>
-
-[discord]: https://discord.gg/yTJKAma
-[reddit]: https://www.reddit.com/r/TerminusDB/
-[twitter]: https://twitter.com/TerminusDB
+Before 2026-07-08 this directory held a copy of the old
+`terminusdb/terminusdb-docs` GitBook repo, which had been unmaintained since the
+docs moved to terminusdb.org under DFRNT stewardship (2025). That copy predated
+TerminusDB 12 and is superseded by this mirror.

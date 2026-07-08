@@ -1,2 +1,0 @@
-# JavaScript Client Reference
-

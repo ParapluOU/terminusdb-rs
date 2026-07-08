@@ -1,2 +1,0 @@
-# Relational vs Graph Databases
-

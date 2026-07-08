@@ -1,1 +1,0 @@
-# TerminusDB GraphQL Reference

@@ -1,10 +1,16 @@
 /* eslint-disable camelcase */
 /* eslint-disable no-underscore-dangle */
+/* eslint no-trailing-spaces: ["error", { "ignoreComments": true }] */
 /// /@ts-check
 // I HAVE TO REVIEW THE Inheritance and the prototype chain
 const WOQLQuery = require('./query/woqlBuilder');
 const WOQLLibrary = require('./query/woqlLibrary');
-const { Vars, Var, Doc } = require('./query/woqlDoc');
+const {
+  Vars, Var, Doc,
+  VarsUnique,
+  VarUnique,
+  SetVarsUniqueCounter,
+} = require('./query/woqlDoc');
 // eslint-disable-next-line no-unused-vars
 const typedef = require('./typedef');
 // eslint-disable-next-line no-unused-vars
@@ -46,7 +52,7 @@ const WOQL = {};
  * WOQL.using("userName/dbName/local/commit|branch/commitID").triple(a, b, c)
  */
 WOQL.using = function (refPath, subquery) {
-    return new WOQLQuery().using(refPath, subquery);
+  return new WOQLQuery().using(refPath, subquery);
 };
 
 /**
@@ -56,7 +62,7 @@ WOQL.using = function (refPath, subquery) {
  * @returns {WOQLQuery}
  */
 WOQL.comment = function (comment, subquery) {
-    return new WOQLQuery().comment(comment, subquery);
+  return new WOQLQuery().comment(comment, subquery);
 };
 
 /**
@@ -68,7 +74,7 @@ WOQL.comment = function (comment, subquery) {
  * @returns {WOQLQuery}
  */
 WOQL.select = function (...varNames) {
-    return new WOQLQuery().select(...varNames);
+  return new WOQLQuery().select(...varNames);
 };
 
 /**
@@ -77,7 +83,29 @@ WOQL.select = function (...varNames) {
  * @returns {WOQLQuery}
  */
 WOQL.distinct = function (...varNames) {
-    return new WOQLQuery().distinct(...varNames);
+  return new WOQLQuery().distinct(...varNames);
+};
+
+/**
+ * Create a localized scope for variables to prevent leaking into outer scope
+ * @param {Object} paramSpec - Object mapping parameter names to values or null
+ * @returns {Array} - Returns [localized, v] with wrapper function and unique
+ *   variable names
+ * @example
+ * const [localized, v] = WOQL.localize({
+ *   consSubject: 'v:list',
+ *   valueVar: 'v:value',
+ *   last_cell: null  // null creates a local-only variable
+ * });
+ * return localized(
+ *   WOQL.and(
+ *     WOQL.triple(v.consSubject, 'rdf:type', 'rdf:List'),
+ *     WOQL.triple(v.last_cell, 'rdf:rest', 'rdf:nil')
+ *   )
+ * );
+ */
+WOQL.localize = function (paramSpec) {
+  return new WOQLQuery().localize(paramSpec);
 };
 
 /**
@@ -96,7 +124,7 @@ WOQL.distinct = function (...varNames) {
  */
 
 WOQL.and = function (...subqueries) {
-    return new WOQLQuery().and(...subqueries);
+  return new WOQLQuery().and(...subqueries);
 };
 
 /**
@@ -105,14 +133,14 @@ WOQL.and = function (...subqueries) {
  */
 
 WOQL.read_object = function (IRI, output, formatObj) {
-    return new WOQLQuery().read_document(IRI, output, formatObj);
+  return new WOQLQuery().read_document(IRI, output, formatObj);
 };
 
 /**
  * Read a node identified by an IRI as a JSON-LD document
  * @param {string} IRI -  The document id  or a variable to read
  * @param {string} output - Variable which will be bound to the document.
- * @return {object} WOQLQuery
+ * @return {WOQLQuery} WOQLQuery
  * @example
  * let [person] = vars("Person")
  * const query = WOQL.read_document(
@@ -123,7 +151,7 @@ WOQL.read_object = function (IRI, output, formatObj) {
  */
 
 WOQL.read_document = function (IRI, output) {
-    return new WOQLQuery().read_document(IRI, output);
+  return new WOQLQuery().read_document(IRI, output);
 };
 
 /**
@@ -131,7 +159,7 @@ WOQL.read_document = function (IRI, output) {
  * @param {object} docjson -  The document to insert. Must either have an '@id' or
  * have a class specified key.
  * @param {string} [IRI] - An optional identifier specifying the document location.
- * @return {object} WOQLQuery
+ * @return {WOQLQuery} WOQLQuery
  * @example
  * const res = await client.query(
  *    WOQL.insert_document(WOQL.doc({ "@type" : "Person", "label": "John" }))
@@ -139,7 +167,7 @@ WOQL.read_document = function (IRI, output) {
  */
 
 WOQL.insert_document = function (docjson, IRI) {
-    return new WOQLQuery().insert_document(docjson, IRI);
+  return new WOQLQuery().insert_document(docjson, IRI);
 };
 
 /**
@@ -151,17 +179,17 @@ WOQL.insert_document = function (docjson, IRI) {
  */
 
 WOQL.update_document = function (docjson, IRI) {
-    return new WOQLQuery().update_document(docjson, IRI);
+  return new WOQLQuery().update_document(docjson, IRI);
 };
 
 /**
  * Delete a document from the graph.
  * @param {string} IRI -  The document id  or a variable
- * @return {object} WOQLQuery
+ * @return {WOQLQuery} WOQLQuery
  */
 
 WOQL.delete_document = function (IRI) {
-    return new WOQLQuery().delete_document(IRI);
+  return new WOQLQuery().delete_document(IRI);
 };
 
 /**
@@ -177,7 +205,7 @@ WOQL.delete_document = function (IRI) {
  *  )
  */
 WOQL.or = function (...subqueries) {
-    return new WOQLQuery().or(...subqueries);
+  return new WOQLQuery().or(...subqueries);
 };
 
 /**
@@ -188,7 +216,7 @@ WOQL.or = function (...subqueries) {
  */
 
 WOQL.from = function (graphRef, query) {
-    return new WOQLQuery().from(graphRef, query);
+  return new WOQLQuery().from(graphRef, query);
 };
 
 /**
@@ -203,7 +231,7 @@ WOQL.from = function (graphRef, query) {
  *
  */
 WOQL.into = function (graphRef, subquery) {
-    return new WOQLQuery().into(graphRef, subquery);
+  return new WOQLQuery().into(graphRef, subquery);
 };
 
 /**
@@ -214,7 +242,7 @@ WOQL.into = function (graphRef, subquery) {
  * @returns {WOQLQuery}
  */
 WOQL.triple = function (subject, predicate, object) {
-    return new WOQLQuery().triple(subject, predicate, object);
+  return new WOQLQuery().triple(subject, predicate, object);
 };
 
 /**
@@ -226,7 +254,7 @@ WOQL.triple = function (subject, predicate, object) {
  * @returns {WOQLQuery}
  */
 WOQL.added_triple = function (subject, predicate, object) {
-    return new WOQLQuery().added_triple(subject, predicate, object);
+  return new WOQLQuery().added_triple(subject, predicate, object);
 };
 
 /**
@@ -238,7 +266,7 @@ WOQL.added_triple = function (subject, predicate, object) {
  * @returns {WOQLQuery}
  */
 WOQL.removed_triple = function (subject, predicate, object) {
-    return new WOQLQuery().removed_triple(subject, predicate, object);
+  return new WOQLQuery().removed_triple(subject, predicate, object);
 };
 
 /**
@@ -250,7 +278,7 @@ WOQL.removed_triple = function (subject, predicate, object) {
  * @returns {WOQLQuery}
  */
 WOQL.quad = function (subject, predicate, object, graphRef) {
-    return new WOQLQuery().quad(subject, predicate, object, graphRef);
+  return new WOQLQuery().quad(subject, predicate, object, graphRef);
 };
 
 /**
@@ -263,7 +291,7 @@ WOQL.quad = function (subject, predicate, object, graphRef) {
  * @returns {WOQLQuery}
  */
 WOQL.added_quad = function (subject, predicate, object, graphRef) {
-    return new WOQLQuery().added_quad(subject, predicate, object, graphRef);
+  return new WOQLQuery().added_quad(subject, predicate, object, graphRef);
 };
 
 /**
@@ -276,58 +304,170 @@ WOQL.added_quad = function (subject, predicate, object, graphRef) {
  * @returns {WOQLQuery}
  */
 WOQL.removed_quad = function (subject, predicate, object, graphRef) {
-    return new WOQLQuery().removed_quad(subject, predicate, object, graphRef);
+  return new WOQLQuery().removed_quad(subject, predicate, object, graphRef);
+};
+
+/**
+ * Creates a triple pattern matching rule for [S, P, O] with a half-open
+ * value range [low, high) on the object in ascending order.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The IRI of a node or a variable, or a literal
+ * @param {object} low - The inclusive lower bound as a typed value
+ * @param {object} high - The exclusive upper bound as a typed value
+ * @returns {WOQLQuery}
+ */
+WOQL.triple_slice = function (subject, predicate, object, low, high) {
+  return new WOQLQuery().triple_slice(subject, predicate, object, low, high);
+};
+
+/**
+ * Creates a quad pattern matching rule for [S, P, O, G] with a half-open
+ * value range [low, high) on the object and an explicit graph selector.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The IRI of a node or a variable, or a literal
+ * @param {object} low - The inclusive lower bound as a typed value
+ * @param {object} high - The exclusive upper bound as a typed value
+ * @param {typedef.GraphRef} graphRef - A valid graph resource identifier string
+ * @returns {WOQLQuery}
+ */
+WOQL.quad_slice = function (subject, predicate, object, low, high, graphRef) {
+  return new WOQLQuery().quad_slice(subject, predicate, object, low, high, graphRef);
+};
+
+/**
+ * Creates a triple pattern matching rule for [S, P, O] with a half-open
+ * value range [low, high) on the object in reverse (descending) order.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The IRI of a node or a variable, or a literal
+ * @param {object} low - The inclusive lower bound as a typed value
+ * @param {object} high - The exclusive upper bound as a typed value
+ * @returns {WOQLQuery}
+ */
+WOQL.triple_slice_rev = function (subject, predicate, object, low, high) {
+  return new WOQLQuery().triple_slice_rev(subject, predicate, object, low, high);
+};
+
+/**
+ * Creates a quad pattern matching rule for [S, P, O, G] with a half-open
+ * value range [low, high) on the object in reverse order, with an explicit graph selector.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The IRI of a node or a variable, or a literal
+ * @param {object} low - The inclusive lower bound as a typed value
+ * @param {object} high - The exclusive upper bound as a typed value
+ * @param {typedef.GraphRef} graphRef - A valid graph resource identifier string
+ * @returns {WOQLQuery}
+ */
+WOQL.quad_slice_rev = function (subject, predicate, object, low, high, graphRef) {
+  return new WOQLQuery().quad_slice_rev(subject, predicate, object, low, high, graphRef);
+};
+
+/**
+ * Finds the next object value after a reference for a given subject-predicate pair.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The current object value or a variable
+ * @param {object|Var} next - The next object value or a variable
+ * @returns {WOQLQuery}
+ */
+WOQL.triple_next = function (subject, predicate, object, next) {
+  return new WOQLQuery().triple_next(subject, predicate, object, next);
+};
+
+/**
+ * Finds the next object value with an explicit graph selector.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The current object value or a variable
+ * @param {object|Var} next - The next object value or a variable
+ * @param {typedef.GraphRef} graphRef - A valid graph resource identifier string
+ * @returns {WOQLQuery}
+ */
+WOQL.quad_next = function (subject, predicate, object, next, graphRef) {
+  return new WOQLQuery().quad_next(subject, predicate, object, next, graphRef);
+};
+
+/**
+ * Finds the previous object value before a reference for a given subject-predicate pair.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The current object value or a variable
+ * @param {object|Var} previous - The previous object value or a variable
+ * @returns {WOQLQuery}
+ */
+WOQL.triple_previous = function (subject, predicate, object, previous) {
+  return new WOQLQuery().triple_previous(subject, predicate, object, previous);
+};
+
+/**
+ * Finds the previous object value with an explicit graph selector.
+ * @param {string|Var} subject - The IRI of a triple's subject or a variable
+ * @param {string|Var} predicate - The IRI of a property or a variable
+ * @param {string|Var} object - The current object value or a variable
+ * @param {object|Var} previous - The previous object value or a variable
+ * @param {typedef.GraphRef} graphRef - A valid graph resource identifier string
+ * @returns {WOQLQuery}
+ */
+WOQL.quad_previous = function (subject, predicate, object, previous, graphRef) {
+  return new WOQLQuery().quad_previous(subject, predicate, object, previous, graphRef);
 };
 
 /**
  * Returns true if ClassA subsumes ClassB, according to the current DB schema
  * @param {string} classA - ClassA
  * @param {string} classB - ClassB
- * @returns {boolean} WOQLQuery
+ * @returns {WOQLQuery} WOQLQuery
  */
 WOQL.sub = function (classA, classB) {
-    return new WOQLQuery().sub(classA, classB);
+  return new WOQLQuery().sub(classA, classB);
 };
 
 WOQL.subsumption = function (classA, classB) {
-    return new WOQLQuery().sub(classA, classB);
+  return new WOQLQuery().sub(classA, classB);
 };
 
 /**
  * Matches if a is equal to b
- * @param {string|Var} varName - literal, variable or id
- * @param {string|Var} varValue - literal, variable or id
+ * @param {string|number|boolean|array|Var} varName - literal, variable, array, or id
+ * @param {string|number|boolean|array|Var} varValue - literal, variable, array, or id
  * @returns {WOQLQuery}
  *
  *
  */
 WOQL.eq = function (varName, varValue) {
-    return new WOQLQuery().eq(varName, varValue);
+  return new WOQLQuery().eq(varName, varValue);
 };
 
 WOQL.equals = function (varName, varValue) {
-    return new WOQLQuery().eq(varName, varValue);
+  return new WOQLQuery().eq(varName, varValue);
 };
 
 /**
- * Substring
+ * Substring of string
  * @param {string|Var} string - String or variable
  * @param {number|Var} before - integer or variable (characters from start to begin)
  * @param {number|Var} [length] - integer or variable (length of substring)
  * @param {number|Var} [after] - integer or variable (number of characters after substring)
  * @param {string|Var} [substring] - String or variable
  * @returns {WOQLQuery}
+ * @example
+ * let [after, result] = vars("after", "result")
+ * substr("joe", 1, 2, after, result)
+ * //result is "oe", after is 2
  */
 
 WOQL.substr = function (string, before, length, after, substring) {
-    return new WOQLQuery().substr(string, before, length, after, substring);
+  return new WOQLQuery().substr(string, before, length, after, substring);
 };
 WOQL.substring = function (string, before, length, after, substring) {
-    return new WOQLQuery().substr(string, before, length, after, substring);
+  return new WOQLQuery().substr(string, before, length, after, substring);
 };
 
 /**
- * Use the document inteface to import documents
+ * Use the document interface to import documents
  * @deprecated
  * Retrieves the exernal resource defined by QueryResource and copies values
  * from it into variables defined in AsVars
@@ -341,11 +481,11 @@ WOQL.substring = function (string, before, length, after, substring) {
  * //"b" into a variable b from remote CSV
  */
 WOQL.get = function (asvars, queryResource) {
-    return new WOQLQuery().get(asvars, queryResource);
+  return new WOQLQuery().get(asvars, queryResource);
 };
 
 /**
- * Use the document inteface to import documents
+ * Use the document interface to import documents
  * @deprecated
  * @put Outputs the results of a query to a file
  * @param {Vars | array<Var>} varsToExp - an array of AsVar variable
@@ -355,7 +495,7 @@ WOQL.get = function (asvars, queryResource) {
  * @returns {WOQLQuery} A WOQLQuery which contains the put expression
  */
 WOQL.put = function (varsToExp, query, fileResource) {
-    return new WOQLQuery().put(varsToExp, query, fileResource);
+  return new WOQLQuery().put(varsToExp, query, fileResource);
 };
 
 /**
@@ -366,12 +506,12 @@ WOQL.put = function (varsToExp, query, fileResource) {
  * @returns {WOQLQuery}
  * @example
  * let [First_Var, Second_Var] = vars('First_Var', 'Second_Var')
- * WOQL.as("first var", First_Var, "string").as("second var", Second_Var)
- * WOQL.as(["first var", First_Var, "string"], ["second var", Second_Var])
+ * WOQL.as("first var", First_Var, "xsd:string").as("second var", Second_Var)
+ * WOQL.as(["first var", First_Var, "xsd:string"], ["second var", Second_Var])
  */
 
 WOQL.as = function (source, target, type) {
-    return new WOQLQuery().as(source, target, type);
+  return new WOQLQuery().as(source, target, type);
 };
 
 /**
@@ -384,7 +524,7 @@ WOQL.as = function (source, target, type) {
  */
 //
 WOQL.remote = function (remoteObj, formatObj) {
-    return new WOQLQuery().remote(remoteObj, formatObj);
+  return new WOQLQuery().remote(remoteObj, formatObj);
 };
 
 /**
@@ -398,7 +538,7 @@ WOQL.remote = function (remoteObj, formatObj) {
  * post("/.../.../", {type:'csv'})
  */
 WOQL.post = function (url, formatObj, source) {
-    return new WOQLQuery().post(url, formatObj, source);
+  return new WOQLQuery().post(url, formatObj, source);
 };
 
 /**
@@ -411,7 +551,7 @@ WOQL.post = function (url, formatObj, source) {
  * delete_triple("john", "age", 42)
  */
 WOQL.delete_triple = function (subject, predicate, object) {
-    return new WOQLQuery().delete_triple(subject, predicate, object);
+  return new WOQLQuery().delete_triple(subject, predicate, object);
 };
 
 /**
@@ -425,7 +565,7 @@ WOQL.delete_triple = function (subject, predicate, object) {
  * WOQL.delete_quad("Person", "rdf:type", "sys:Class", "schema")
  */
 WOQL.delete_quad = function (subject, predicate, object, graphRef) {
-    return new WOQLQuery().delete_quad(subject, predicate, object, graphRef);
+  return new WOQLQuery().delete_quad(subject, predicate, object, graphRef);
 };
 
 /**
@@ -436,7 +576,7 @@ WOQL.delete_quad = function (subject, predicate, object, graphRef) {
  * @returns {WOQLQuery}
  */
 WOQL.add_triple = function (subject, predicate, object) {
-    return new WOQLQuery().add_triple(subject, predicate, object);
+  return new WOQLQuery().add_triple(subject, predicate, object);
 };
 
 /**
@@ -448,7 +588,7 @@ WOQL.add_triple = function (subject, predicate, object) {
  * @returns {WOQLQuery}
  */
 WOQL.add_quad = function (subject, predicate, object, graphRef) {
-    return new WOQLQuery().add_quad(subject, predicate, object, graphRef);
+  return new WOQLQuery().add_quad(subject, predicate, object, graphRef);
 };
 
 /**
@@ -481,7 +621,7 @@ WOQL.add_quad = function (subject, predicate, object, graphRef) {
  * //trimmed contains "hello"
  */
 WOQL.trim = function (inputStr, resultVarName) {
-    return new WOQLQuery().trim(inputStr, resultVarName);
+  return new WOQLQuery().trim(inputStr, resultVarName);
 };
 
 /**
@@ -498,7 +638,7 @@ WOQL.trim = function (inputStr, resultVarName) {
  * evaluate(plus(2, minus(3, 1)), result)
  */
 WOQL.evaluate = function (arithExp, resultVarName) {
-    return new WOQLQuery().eval(arithExp, resultVarName);
+  return new WOQLQuery().eval(arithExp, resultVarName);
 };
 
 /**
@@ -513,9 +653,12 @@ WOQL.evaluate = function (arithExp, resultVarName) {
  * @example
  * let [result] = vars("result")
  * eval(plus(2, minus(3, 1)), result)
+ * @deprecated Use {@link evaluate} instead. The name 'eval' conflicts with JavaScript's
+ * built-in eval in strict mode.
+ * @internal
  */
 WOQL.eval = function (arithExp, resultVarName) {
-    return new WOQLQuery().eval(arithExp, resultVarName);
+  return new WOQLQuery().eval(arithExp, resultVarName);
 };
 
 /**
@@ -528,7 +671,7 @@ WOQL.eval = function (arithExp, resultVarName) {
  * evaluate(plus(2, plus(3, 1)), result)
  */
 WOQL.plus = function (...args) {
-    return new WOQLQuery().plus(...args);
+  return new WOQLQuery().plus(...args);
 };
 
 /**
@@ -542,7 +685,7 @@ WOQL.plus = function (...args) {
  * evaluate(minus(2.1, plus(0.2, 1)), result)
  */
 WOQL.minus = function (...args) {
-    return new WOQLQuery().minus(...args);
+  return new WOQLQuery().minus(...args);
 };
 
 /**
@@ -556,7 +699,7 @@ WOQL.minus = function (...args) {
  *  //result contains 9.000000000000002y
  */
 WOQL.times = function (...args) {
-    return new WOQLQuery().times(...args);
+  return new WOQLQuery().times(...args);
 };
 
 /**
@@ -569,7 +712,7 @@ WOQL.times = function (...args) {
  *  //result contains 0.9000000000000001
  */
 WOQL.divide = function (...args) {
-    return new WOQLQuery().divide(...args);
+  return new WOQLQuery().divide(...args);
 };
 
 /**
@@ -583,7 +726,7 @@ WOQL.divide = function (...args) {
  * //result contains 3
  */
 WOQL.div = function (...args) {
-    return new WOQLQuery().div(...args);
+  return new WOQLQuery().div(...args);
 };
 
 /*
@@ -604,7 +747,7 @@ WOQL.div = function (...args) {
  * //result contains 9
  */
 WOQL.exp = function (varNum, expNum) {
-    return new WOQLQuery().exp(varNum, expNum);
+  return new WOQLQuery().exp(varNum, expNum);
 };
 
 /**
@@ -618,7 +761,7 @@ WOQL.exp = function (varNum, expNum) {
  * //result contains 0.9 - floating point error removed
  */
 WOQL.floor = function (varNum) {
-    return new WOQLQuery().floor(varNum);
+  return new WOQLQuery().floor(varNum);
 };
 
 /**
@@ -632,7 +775,7 @@ WOQL.floor = function (varNum) {
  * isa(subject, "Person")
  */
 WOQL.isa = function (instanceIRI, classId) {
-    return new WOQLQuery().isa(instanceIRI, classId);
+  return new WOQLQuery().isa(instanceIRI, classId);
 };
 
 /**
@@ -649,7 +792,7 @@ WOQL.isa = function (instanceIRI, classId) {
  * //dist contains 0.7265420560747664
  */
 WOQL.like = function (stringA, stringB, distance) {
-    return new WOQLQuery().like(stringA, stringB, distance);
+  return new WOQLQuery().like(stringA, stringB, distance);
 };
 
 /**
@@ -665,7 +808,7 @@ WOQL.like = function (stringA, stringB, distance) {
  * //result contains true
  */
 WOQL.less = function (varNum01, varNum02) {
-    return new WOQLQuery().less(varNum01, varNum02);
+  return new WOQLQuery().less(varNum01, varNum02);
 };
 
 /**
@@ -680,7 +823,159 @@ WOQL.less = function (varNum01, varNum02) {
  * //result contains true
  */
 WOQL.greater = function (varNum01, varNum02) {
-    return new WOQLQuery().greater(varNum01, varNum02);
+  return new WOQLQuery().greater(varNum01, varNum02);
+};
+
+WOQL.gt = WOQL.greater;
+WOQL.lt = WOQL.less;
+
+/**
+ * Compares two values using greater-than-or-equal ordering.
+ * @param {string|number|Var} left - The greater or equal value
+ * @param {string|number|Var} right - The lesser or equal value
+ * @returns {WOQLQuery}
+ */
+WOQL.gte = function (left, right) {
+  return new WOQLQuery().gte(left, right);
+};
+
+/**
+ * Compares two values using less-than-or-equal ordering.
+ * @param {string|number|Var} left - The lesser or equal value
+ * @param {string|number|Var} right - The greater or equal value
+ * @returns {WOQLQuery}
+ */
+WOQL.lte = function (left, right) {
+  return new WOQLQuery().lte(left, right);
+};
+
+/**
+ * Tests whether a value falls within the half-open range [start, end).
+ * @param {string|number|Var} value - The value to test
+ * @param {string|number|Var} start - The inclusive lower bound
+ * @param {string|number|Var} end - The exclusive upper bound
+ * @returns {WOQLQuery}
+ */
+WOQL.in_range = function (value, start, end) {
+  return new WOQLQuery().in_range(value, start, end);
+};
+
+/**
+ * Generates a sequence of values in the half-open range [start, end).
+ * When value is unbound, produces each value via backtracking.
+ * @param {string|number|Var} value - The generated sequence value (or variable)
+ * @param {string|number|Var} start - The inclusive start of the sequence
+ * @param {string|number|Var} end - The exclusive end of the sequence
+ * @param {string|number|Var} [step] - Optional increment per step
+ * @param {string|number|Var} [count] - Optional total count
+ * @returns {WOQLQuery}
+ */
+WOQL.sequence = function (value, start, end, step, count) {
+  return new WOQLQuery().sequence(value, start, end, step, count);
+};
+
+/**
+ * Computes the first day of the month for a given xsd:gYearMonth.
+ * @param {string|object|Var} yearMonth - A gYearMonth value or variable
+ * @param {string|object|Var} date - The resulting xsd:date (or variable)
+ * @returns {WOQLQuery}
+ */
+WOQL.month_start_date = function (yearMonth, date) {
+  return new WOQLQuery().month_start_date(yearMonth, date);
+};
+
+/**
+ * Computes the last day of the month for a given xsd:gYearMonth. Handles leap years.
+ * @param {string|object|Var} yearMonth - A gYearMonth value or variable
+ * @param {string|object|Var} date - The resulting xsd:date (or variable)
+ * @returns {WOQLQuery}
+ */
+WOQL.month_end_date = function (yearMonth, date) {
+  return new WOQLQuery().month_end_date(yearMonth, date);
+};
+
+/**
+ * Generator: produces every first-of-month date in the half-open range [start, end).
+ * @param {string|object|Var} date - The generated first-of-month date (or variable)
+ * @param {string|object|Var} start - The inclusive start date
+ * @param {string|object|Var} end - The exclusive end date
+ * @returns {WOQLQuery}
+ */
+WOQL.month_start_dates = function (date, start, end) {
+  return new WOQLQuery().month_start_dates(date, start, end);
+};
+
+/**
+ * Generator: produces every last-of-month date in the half-open range [start, end).
+ * @param {string|object|Var} date - The generated last-of-month date (or variable)
+ * @param {string|object|Var} start - The inclusive start date
+ * @param {string|object|Var} end - The exclusive end date
+ * @returns {WOQLQuery}
+ */
+WOQL.month_end_dates = function (date, start, end) {
+  return new WOQLQuery().month_end_dates(date, start, end);
+};
+
+/**
+ * Allen's Interval Algebra: classifies or validates the relationship
+ * between two half-open intervals.
+ * @param {string|object|Var} relation - Relation name (string) or variable for classification
+ * @param {string|number|object|Var} xStart - Inclusive start of interval X
+ * @param {string|number|object|Var} xEnd - Exclusive end of interval X
+ * @param {string|number|object|Var} yStart - Inclusive start of interval Y
+ * @param {string|number|object|Var} yEnd - Exclusive end of interval Y
+ * @returns {WOQLQuery}
+ */
+WOQL.interval_relation = function (relation, xStart, xEnd, yStart, yEnd) {
+  return new WOQLQuery().interval_relation(relation, xStart, xEnd, yStart, yEnd);
+};
+
+WOQL.interval_relation_typed = function (relation, x, y) {
+  return new WOQLQuery().interval_relation_typed(relation, x, y);
+};
+
+WOQL.range_min = function (list, result) {
+  return new WOQLQuery().range_min(list, result);
+};
+
+WOQL.range_max = function (list, result) {
+  return new WOQLQuery().range_max(list, result);
+};
+
+WOQL.interval = function (start, end, interval) {
+  return new WOQLQuery().interval(start, end, interval);
+};
+
+WOQL.interval_start_duration = function (start, duration, interval) {
+  return new WOQLQuery().interval_start_duration(start, duration, interval);
+};
+
+WOQL.interval_duration_end = function (duration, end, interval) {
+  return new WOQLQuery().interval_duration_end(duration, end, interval);
+};
+
+WOQL.day_after = function (date, next) {
+  return new WOQLQuery().day_after(date, next);
+};
+
+WOQL.day_before = function (date, previous) {
+  return new WOQLQuery().day_before(date, previous);
+};
+
+WOQL.weekday = function (date, weekday) {
+  return new WOQLQuery().weekday(date, weekday);
+};
+
+WOQL.weekday_sunday_start = function (date, weekday) {
+  return new WOQLQuery().weekday_sunday_start(date, weekday);
+};
+
+WOQL.iso_week = function (date, year, week) {
+  return new WOQLQuery().iso_week(date, year, week);
+};
+
+WOQL.date_duration = function (start, end, duration) {
+  return new WOQLQuery().date_duration(start, end, duration);
 };
 
 /**
@@ -695,11 +990,11 @@ WOQL.greater = function (varNum01, varNum02) {
  * opt().triple(subject, 'label', "A")
  */
 WOQL.opt = function (subquery) {
-    return new WOQLQuery().opt(subquery);
+  return new WOQLQuery().opt(subquery);
 };
 
 WOQL.optional = function (subquery) {
-    return new WOQLQuery().opt(subquery);
+  return new WOQLQuery().opt(subquery);
 };
 
 /**
@@ -717,7 +1012,7 @@ WOQL.optional = function (subquery) {
  * unique("doc:Person", ["John", "Smith"], newid)
  */
 WOQL.unique = function (prefix, inputVarList, resultVarName) {
-    return new WOQLQuery().unique(prefix, inputVarList, resultVarName);
+  return new WOQLQuery().unique(prefix, inputVarList, resultVarName);
 };
 
 /**
@@ -734,10 +1029,34 @@ WOQL.unique = function (prefix, inputVarList, resultVarName) {
  * idgen("doc:Person", ["John", "Smith"], newid)
  */
 WOQL.idgen = function (prefix, inputVarList, resultVarName) {
-    return new WOQLQuery().idgen(prefix, inputVarList, resultVarName);
+  return new WOQLQuery().idgen(prefix, inputVarList, resultVarName);
 };
 WOQL.idgenerator = function (prefix, inputVarList, resultVarName) {
-    return new WOQLQuery().idgen(prefix, inputVarList, resultVarName);
+  return new WOQLQuery().idgen(prefix, inputVarList, resultVarName);
+};
+
+/**
+ * Generates a random ID with a specified prefix
+ * @param {string} prefix - prefix for the generated ID
+ * @param {string} resultVarName - variable that stores the generated ID
+ * @returns {WOQLQuery} A WOQLQuery object containing the random ID generation function
+ * @example
+ * let [newid] = vars("newid")
+ * idgen_random("Person/", newid)
+ */
+WOQL.idgen_random = function (prefix, resultVarName) {
+  return new WOQLQuery().idgen_random(prefix, resultVarName);
+};
+
+/**
+ * Backward-compatible alias for idgen_random
+ * @deprecated Use idgen_random instead
+ * @param {string} prefix - prefix for the generated ID
+ * @param {string} resultVarName - variable that stores the generated ID
+ * @returns {WOQLQuery} A WOQLQuery object containing the random ID generation function
+ */
+WOQL.random_idgen = function (prefix, resultVarName) {
+  return new WOQLQuery().idgen_random(prefix, resultVarName);
 };
 
 /**
@@ -752,7 +1071,7 @@ WOQL.idgenerator = function (prefix, inputVarList, resultVarName) {
  * //upper contains "ABCE"
  */
 WOQL.upper = function (inputVarName, resultVarName) {
-    return new WOQLQuery().upper(inputVarName, resultVarName);
+  return new WOQLQuery().upper(inputVarName, resultVarName);
 };
 
 /**
@@ -767,7 +1086,7 @@ WOQL.upper = function (inputVarName, resultVarName) {
  * //lower contains "abce"
  */
 WOQL.lower = function (inputVarName, resultVarName) {
-    return new WOQLQuery().lower(inputVarName, resultVarName);
+  return new WOQLQuery().lower(inputVarName, resultVarName);
 };
 
 /**
@@ -786,7 +1105,7 @@ WOQL.lower = function (inputVarName, resultVarName) {
  * //fixed contains "joe     "
  */
 WOQL.pad = function (inputVarName, pad, len, resultVarName) {
-    return new WOQLQuery().pad(inputVarName, pad, len, resultVarName);
+  return new WOQLQuery().pad(inputVarName, pad, len, resultVarName);
 };
 
 /**
@@ -801,7 +1120,7 @@ WOQL.pad = function (inputVarName, pad, len, resultVarName) {
  * split("joe has a hat", " ", words)
  */
 WOQL.split = function (inputVarName, separator, resultVarName) {
-    return new WOQLQuery().split(inputVarName, separator, resultVarName);
+  return new WOQLQuery().split(inputVarName, separator, resultVarName);
 };
 
 /**
@@ -815,7 +1134,7 @@ WOQL.split = function (inputVarName, separator, resultVarName) {
  * member(name, ["john", "joe", "frank"])
  */
 WOQL.member = function (element, list) {
-    return new WOQLQuery().member(element, list);
+  return new WOQLQuery().member(element, list);
 };
 
 /**
@@ -830,7 +1149,7 @@ WOQL.member = function (element, list) {
  * concat([first_name, " ", last_name], full_name)
  */
 WOQL.concat = function (varList, resultVarName) {
-    return new WOQLQuery().concat(varList, resultVarName);
+  return new WOQLQuery().concat(varList, resultVarName);
 };
 
 /**
@@ -848,7 +1167,7 @@ WOQL.concat = function (varList, resultVarName) {
  * join(["joe", "has", "a", "hat", " ", sentence)
  */
 WOQL.join = function (varList, glue, resultVarName) {
-    return new WOQLQuery().join(varList, glue, resultVarName);
+  return new WOQLQuery().join(varList, glue, resultVarName);
 };
 
 /**
@@ -863,7 +1182,24 @@ WOQL.join = function (varList, glue, resultVarName) {
  * sum([2, 3, 4, 5], total)
  */
 WOQL.sum = function (subquery, total) {
-    return new WOQLQuery().sum(subquery, total);
+  return new WOQLQuery().sum(subquery, total);
+};
+
+/**
+ * Extracts a contiguous subsequence from a list, following JavaScript's slice() semantics
+ * @param {string|array|Var} inputList - Either a variable representing a list or a list of
+ * variables or literals
+ * @param {string|Var} resultVarName - A variable in which the sliced list is stored
+ * @param {number|string|Var} start - The start index (0-based, supports negative indices)
+ * @param {number|string|Var} [end] - The end index (exclusive, optional - defaults to list length)
+ * @returns {WOQLQuery} A WOQLQuery which contains the Slice pattern matching expression
+ * @example
+ * let [result] = vars("result")
+ * slice(["a", "b", "c", "d"], result, 1, 3)  // result = ["b", "c"]
+ * slice(["a", "b", "c", "d"], result, -2)    // result = ["c", "d"]
+ */
+WOQL.slice = function (inputList, resultVarName, start, end) {
+  return new WOQLQuery().slice(inputList, resultVarName, start, end);
 };
 
 /**
@@ -879,7 +1215,7 @@ WOQL.sum = function (subquery, total) {
  * start(100).triple(a, b, c)
  */
 WOQL.start = function (start, subquery) {
-    return new WOQLQuery().start(start, subquery);
+  return new WOQLQuery().start(start, subquery);
 };
 
 /**
@@ -897,7 +1233,7 @@ WOQL.start = function (start, subquery) {
  * limit(100,triple(a, b, c))
  */
 WOQL.limit = function (limit, subquery) {
-    return new WOQLQuery().limit(limit, subquery);
+  return new WOQLQuery().limit(limit, subquery);
 };
 
 /**
@@ -921,10 +1257,10 @@ WOQL.limit = function (limit, subquery) {
  * and m is a list of matches:
  */
 WOQL.re = function (pattern, inputVarName, resultVarList) {
-    return new WOQLQuery().re(pattern, inputVarName, resultVarList);
+  return new WOQLQuery().re(pattern, inputVarName, resultVarList);
 };
 WOQL.regexp = function (pattern, inputVarName, resultVarList) {
-    return new WOQLQuery().re(pattern, inputVarName, resultVarList);
+  return new WOQLQuery().re(pattern, inputVarName, resultVarList);
 };
 
 /**
@@ -940,7 +1276,7 @@ WOQL.regexp = function (pattern, inputVarName, resultVarList) {
  * length(["john", "joe", "frank"], count)
  */
 WOQL.length = function (inputVarList, resultVarName) {
-    return new WOQLQuery().length(inputVarList, resultVarName);
+  return new WOQLQuery().length(inputVarList, resultVarName);
 };
 
 /**
@@ -954,7 +1290,7 @@ WOQL.length = function (inputVarList, resultVarName) {
  * not().triple(subject, 'label', label)
  */
 WOQL.not = function (subquery) {
-    return new WOQLQuery().not(subquery);
+  return new WOQLQuery().not(subquery);
 };
 
 /**
@@ -963,7 +1299,7 @@ WOQL.not = function (subquery) {
  * @returns {WOQLQuery} A WOQLQuery object containing the once sub Query
  */
 WOQL.once = function (subquery) {
-    return new WOQLQuery().once(subquery);
+  return new WOQLQuery().once(subquery);
 };
 
 /**
@@ -972,7 +1308,7 @@ WOQL.once = function (subquery) {
  * @returns {WOQLQuery} A WOQLQuery object containing the immediately sub Query
  */
 WOQL.immediately = function (subquery) {
-    return new WOQLQuery().immediately(subquery);
+  return new WOQLQuery().immediately(subquery);
 };
 
 /**
@@ -985,7 +1321,7 @@ WOQL.immediately = function (subquery) {
  * WOQL.count(count).triple(Person, "rdf:type", "@schema:Person")
  */
 WOQL.count = function (countVarName, subquery) {
-    return new WOQLQuery().count(countVarName, subquery);
+  return new WOQLQuery().count(countVarName, subquery);
 };
 
 /**
@@ -1001,10 +1337,10 @@ WOQL.count = function (countVarName, subquery) {
  * cast("22/3/98", "xsd:dateTime", time)
  */
 WOQL.typecast = function (varName, varType, resultVarName) {
-    return new WOQLQuery().typecast(varName, varType, resultVarName);
+  return new WOQLQuery().typecast(varName, varType, resultVarName);
 };
 WOQL.cast = function (varName, varType, resultVarName) {
-    return new WOQLQuery().typecast(varName, varType, resultVarName);
+  return new WOQLQuery().typecast(varName, varType, resultVarName);
 };
 
 /**
@@ -1019,13 +1355,14 @@ WOQL.cast = function (varName, varType, resultVarName) {
  * WOQL.order_by(A, [B, "asc"], [C, "desc"]).triple(A, B, C);
  */
 WOQL.order_by = function (...varNames) {
-    return new WOQLQuery().order_by(...varNames);
+  return new WOQLQuery().order_by(...varNames);
 };
 
 /**
  *
  * Groups the results of the contained subquery on the basis of identical values for Groupvars,
- * extracts the patterns defined in PatternVars and stores the results in GroupedVar
+ * extracts the patterns defined in PatternVars and stores the results in GroupedVar.  
+ * See also {@link /docs/group-query-results/ How to Group Results in WOQL}
  * @param {array|string|Var} varList - Either a single variable or an array of variables
  * @param {array|string|Var} patternVars - Either a single variable or an array of variables
  * @param {string|Var} resultVarName - output variable name
@@ -1039,9 +1376,34 @@ WOQL.order_by = function (...varNames) {
  *   .triple(person, "first_name", first_name)
  *   .triple(person, "last_name", last_name)
  *   .triple(person, "age", age)
+ * OR extract a simple list of last_name in age_group that can be
+ * used for example with member()
+ * group_by([], last_name, age_group)
+ *   .triple(person, "first_name", first_name)
  */
 WOQL.group_by = function (varList, patternVars, resultVarName, subquery) {
-    return new WOQLQuery().group_by(varList, patternVars, resultVarName, subquery);
+  return new WOQLQuery().group_by(varList, patternVars, resultVarName, subquery);
+};
+
+/**
+ * Collects all solutions of a sub-query into a list.
+ * Completes the list/binding symmetry alongside member:
+ * - Member: List → Bindings (destructure)
+ * - Collect: Bindings → List (gather)
+ *
+ * @param {string|Var|array} template - A variable, or an array of variables, specifying what to
+ * collect from each solution
+ * @param {string|Var} into - Variable that will be bound to the collected list
+ * @param {WOQLQuery} [subquery] - The query whose solutions will be collected
+ * @returns {WOQLQuery} A WOQLQuery which contains the collect expression
+ * @example
+ * let [name, names] = vars("name", "names")
+ * WOQL.collect(name, names, WOQL.triple("v:doc", "name", name))
+ * // or fluent style:
+ * WOQL.collect(name, names).triple("v:doc", "name", name)
+ */
+WOQL.collect = function (template, into, subquery) {
+  return new WOQLQuery().collect(template, into, subquery);
 };
 
 /**
@@ -1052,7 +1414,7 @@ WOQL.group_by = function (varList, patternVars, resultVarName, subquery) {
  * when(true()).triple("a", "b", "c")
  */
 WOQL.true = function () {
-    return new WOQLQuery().true();
+  return new WOQLQuery().true();
 };
 
 /**
@@ -1072,7 +1434,7 @@ WOQL.true = function () {
  * path(person, "((father|mother) {2,2}), brother)", grand_uncle, lineage)
  */
 WOQL.path = function (subject, pattern, object, resultVarName) {
-    return new WOQLQuery().path(subject, pattern, object, resultVarName);
+  return new WOQLQuery().path(subject, pattern, object, resultVarName);
 };
 
 /**
@@ -1087,7 +1449,7 @@ WOQL.path = function (subject, pattern, object, resultVarName) {
  * //returns the number of bytes in the main instance graph on the main branch
  */
 WOQL.size = function (resourceId, resultVarName) {
-    return new WOQLQuery().size(resourceId, resultVarName);
+  return new WOQLQuery().size(resourceId, resultVarName);
 };
 
 /**
@@ -1104,7 +1466,7 @@ WOQL.size = function (resourceId, resultVarName) {
  * //returns the number of bytes in the local commit graph
  */
 WOQL.triple_count = function (resourceId, tripleCount) {
-    return new WOQLQuery().triple_count(resourceId, tripleCount);
+  return new WOQLQuery().triple_count(resourceId, tripleCount);
 };
 
 /**
@@ -1116,7 +1478,7 @@ WOQL.triple_count = function (resourceId, tripleCount) {
  *
  */
 WOQL.type_of = function (elementId, elementType) {
-    return new WOQLQuery().type_of(elementId, elementType);
+  return new WOQLQuery().type_of(elementId, elementType);
 };
 
 /**
@@ -1138,7 +1500,7 @@ WOQL.type_of = function (elementId, elementType) {
  * //will return every triple in schema/main graph
  */
 WOQL.star = function (graph, subject, predicate, object) {
-    return new WOQLQuery().star(graph, subject, predicate, object);
+  return new WOQLQuery().star(graph, subject, predicate, object);
 };
 
 /**
@@ -1156,7 +1518,7 @@ WOQL.star = function (graph, subject, predicate, object) {
  * //will return every triple in the instance/main graph that has "doc:mydoc" as its subject
  */
 WOQL.all = function (subject, predicate, object, graphRef) {
-    return new WOQLQuery().all(subject, predicate, object, graphRef);
+  return new WOQLQuery().all(subject, predicate, object, graphRef);
 };
 
 /**
@@ -1174,7 +1536,7 @@ WOQL.all = function (subject, predicate, object, graphRef) {
  * //equivalent to triple("mydoc", "label", "my label")
  */
 WOQL.node = function (nodeid, chainType) {
-    return new WOQLQuery().node(nodeid, chainType);
+  return new WOQLQuery().node(nodeid, chainType);
 };
 // These ones are special ones for dealing with the schema only...
 
@@ -1192,7 +1554,7 @@ WOQL.node = function (nodeid, chainType) {
  * //equivalent to add_triple("mydoc", "rdf:type", "@schema:MyType")
  */
 WOQL.insert = function (classId, classType, graphRef) {
-    return new WOQLQuery().insert(classId, classType, graphRef);
+  return new WOQLQuery().insert(classId, classType, graphRef);
 };
 
 /**
@@ -1206,7 +1568,7 @@ WOQL.insert = function (classId, classType, graphRef) {
  */
 
 WOQL.graph = function (graphRef) {
-    return new WOQLQuery().graph(graphRef);
+  return new WOQLQuery().graph(graphRef);
 };
 
 // to be review
@@ -1220,7 +1582,7 @@ WOQL.graph = function (graphRef) {
  * //will delete everything from the schema/main graph
  */
 WOQL.nuke = function (graphRef) {
-    return new WOQLQuery().nuke(graphRef);
+  return new WOQLQuery().nuke(graphRef);
 };
 
 /**
@@ -1231,7 +1593,7 @@ WOQL.nuke = function (graphRef) {
  * //then q.triple(1, 1) ...
  */
 WOQL.query = function () {
-    return new WOQLQuery();
+  return new WOQLQuery();
 };
 
 /**
@@ -1244,12 +1606,12 @@ WOQL.query = function () {
  * json version of query for passing to api
  */
 WOQL.json = function (JSON_LD) {
-    return new WOQLQuery().json(JSON_LD);
+  return new WOQLQuery().json(JSON_LD);
 };
 
 /**
  * get the predefined library query [WOQLLibrary](/api/woqlLibrary.js?id=WOQLLibrary)
- * @returns {WOQLQuery} WOQLQuery object
+ * @returns {WOQLLibrary} WOQLLibrary object
  * @example
  * //get commits older than the specified commit id
  * const query = WOQL.lib().previousCommits('m8vpxewh2aovfauebfkbzwmj4qwr5lb')
@@ -1265,83 +1627,83 @@ WOQL.json = function (JSON_LD) {
  * const query = WOQL.lib().branches()
  */
 WOQL.lib = function () {
-    return new WOQLLibrary();
+  return new WOQLLibrary();
 };
 
 /**
  * Generates explicitly a JSON-LD string literal from the input
  * @param {string | boolean | number} val - any primitive literal type
- * @returns {object} - A JSON-LD string literal
+ * @returns {string|Var} - A JSON-LD string literal
  * @example
  * string(1)
  * //returns { "@type": "xsd:string", "@value": "1" }
  */
 WOQL.string = function (val) {
-    return new WOQLQuery().string(val);
+  return new WOQLQuery().string(val);
 };
 
 /**
  * Generates explicitly a JSON-LD string literal from the input
- * @param {string} val - any literal type
+ * @param {string|number|boolean} val - any literal type
  * @param {string} type - an xsd or xdd type
- * @returns {object} - A JSON-LD literal
+ * @returns {Var} - A JSON-LD literal
  * @example
  * literal(1, "nonNegativeInteger")
  * //returns { "@type": "xsd:nonNegativeInteger", "@value": 1 }
  */
 WOQL.literal = function (val, type) {
-    return new WOQLQuery().literal(val, type);
+  return new WOQLQuery().literal(val, type);
 };
 
 /**
  * Generates explicitly a JSON-LD literal date from the imput
  * @param {string} date - any date format string (YYYY-MM-DD)
- * @returns {object} - A JSON-LD literal date
+ * @returns {Var} - A JSON-LD literal date
  * @example
  * date("2022-10-02")
  * //returns { "@type": "xsd:date", "@value": "2022-10-02" }
  */
 WOQL.date = function (date) {
-    return new WOQLQuery().literal(date, 'xsd:date');
+  return new WOQLQuery().literal(date, 'xsd:date');
 };
 
 /**
  * Generates explicitly a JSON-LD literal datetime from the imput
  * @param {string} datetime - any datetime format string (YYYY-MM-DDThh-mm-ssZ)
- * @returns {object} - A JSON-LD literal datetime
+ * @returns {Var} - A JSON-LD literal datetime
  * @example
  * datetime("2022-10-19T14:17:12Z")
  * //returns { "@type": "xsd:dateTime", "@value": "2022-10-19T14:17:12Z" }
  */
 WOQL.datetime = function (datetime) {
-    return new WOQLQuery().literal(datetime, 'xsd:dateTime');
+  return new WOQLQuery().literal(datetime, 'xsd:dateTime');
 };
 
 /**
  * Generates explicitly a JSON-LD literal boolean from the input
  * @param {boolean} bool - true | false
- * @returns {object} - A JSON-LD literal boolean
+ * @returns {Var} - A JSON-LD literal boolean
  * @example
  * boolean(true)
  * //returns { "@type": "xsd:boolean", "@value": true }
  */
 WOQL.boolean = function (bool) {
-    return new WOQLQuery().boolean(bool);
+  return new WOQLQuery().boolean(bool);
 };
 
 /**
  * Explicitly sets a value to be an IRI - avoiding automatic type marshalling
  * @param {string} val string which will be treated as an IRI
- * @returns {object} - A JSON-LD IRI value
+ * @returns {Var} - A JSON-LD IRI value
  */
 WOQL.iri = function (val) {
-    return new WOQLQuery().iri(val);
+  return new WOQLQuery().iri(val);
 };
 
 /**
  * Generates javascript variables for use as WOQL variables within a query
  * @param  {...string} varNames
- * @returns {array<Var>} an array of javascript variables which can be dereferenced using the
+ * @returns {Array<Var>} an array of javascript variables which can be dereferenced using the
  * array destructuring operation
  * @example
  * const [a, b, c] = WOQL.vars("a", "b", "c")
@@ -1349,20 +1711,44 @@ WOQL.iri = function (val) {
  */
 
 WOQL.vars = function (...varNames) {
-    return varNames.map((item) => new Var(item));
+  return varNames.map((item) => new Var(item));
+};
+
+/**
+ * Generates unique javascript variables for use as WOQL variables within a query
+ * @param  {...string} varNames
+ * @returns {Array<Var>} an array of javascript variables which can be dereferenced using the
+ * array destructuring operation
+ * @example
+ * const [a, b, c] = WOQL.vars("a", "b", "c")
+ * //a, b, c are javascript variables that are unique WOQL variables
+ */
+
+WOQL.vars_unique = function (...varNames) {
+  return varNames.map((item) => new VarUnique(item));
+};
+
+/**
+ * Sets the unique variable counter to a specific value
+ * This is particularly useful together with select() for locally scoped variables
+ * @param  {number} start - starting value
+ */
+
+WOQL.vars_unique_reset_start = function (start) {
+  SetVarsUniqueCounter(start ?? 0);
 };
 
 /**
  * Produces an encoded form of a document that can be used by a WOQL operation
- * such as `WOQL.insert_document`.
+ * such as `WOQL.insert_document` or with `WOQL.dot` operators
  * @param  {object} object - Document to encode
- * @returns {object} The encoded document
+ * @returns {Var} The encoded document
  * @example
- * const doc = WOQL.doc({ "@type": "Person", name: "Newperson" })
+ * WOQL.insert_document(WOQL.doc({ "@type": "Person", name: "Newperson" }), "v:docId")
  */
 
 WOQL.doc = function (object) {
-    return new Doc(object);
+  return new Doc(object);
 };
 
 /**
@@ -1373,20 +1759,36 @@ WOQL.doc = function (object) {
  * @returns {WOQLClient}
  */
 WOQL.client = function (client) {
-    if (client) this._client = client;
-    return this._client;
+  if (client) this._client = client;
+  return this._client;
 };
 
 /**
  *
  * @param  {...string} varNames
- * @returns {object<Var>}
+ * @returns {Record<string, Var>}
  * @example
  * const v = WOQL.Vars('var01', 'var02', 'var03');
  * triple(v.var01, v.var02, v.var03)
  */
 WOQL.Vars = function (...varNames) {
-    return new Vars(...varNames);
+  return new Vars(...varNames);
+};
+
+/**
+ *
+ * Produces variables with unique names by appending an incrementing counter to each variable name.
+ * This is particularly useful together with select() for locally scoped variables
+ *
+ * @param  {...string} varNames
+ * @returns {Record<string, Var>}
+ * @example
+ * // Creates variables like "a_4", "b_5" - unique even with same input names
+ * const v = WOQL.VarsUnique('var01', 'var02', 'var03');
+ * triple(v.var01, v.var02, v.var03) // locally scoped
+ */
+WOQL.VarsUnique = function (...varNames) {
+  return new VarsUnique(...varNames);
 };
 
 /**
@@ -1394,42 +1796,46 @@ WOQL.Vars = function (...varNames) {
  * query module
  * allow you to use WOQL words as top level functions
  * @param {*} auto_eval
+ * @returns {WOQLQuery} WOQLQuery
  */
 WOQL.emerge = function (auto_eval) {
-    const unemerged = ['emerge', 'true', 'eval'];
-    function _emerge_str(k) {
-        const str = `function ${k}(...args){
+  const unemerged = ['emerge', 'true', 'eval'];
+  function _emerge_str(k) {
+    const str = `function ${k}(...args){
             return WOQL.${k}(...args)
         }`;
-        return str;
-    }
-    const funcs = [_emerge_str('Vars')];
-    // eslint-disable-next-line no-restricted-syntax
-    for (const k in this) {
-        if (typeof this[k] === 'function') {
-            if (unemerged.indexOf(k) === -1) {
-                funcs.push(_emerge_str(k));
-            }
-        }
-    }
-    const str = funcs.join(';\n');
-    // eslint-disable-next-line no-eval
-    if (auto_eval) eval(str);
     return str;
+  }
+  const funcs = [_emerge_str('Vars')];
+  // eslint-disable-next-line no-restricted-syntax
+  for (const k in this) {
+    if (typeof this[k] === 'function') {
+      if (unemerged.indexOf(k) === -1) {
+        funcs.push(_emerge_str(k));
+      }
+    }
+  }
+  const str = funcs.join(';\n');
+  // eslint-disable-next-line no-eval
+  if (auto_eval) eval(str);
+  return str;
 };
 
 /**
  * Update a pattern matching rule for the triple (Subject, Predicate, oldObjValue) with the
- * new one (Subject, Predicate, newObjValue)
+ * new one (Subject, Predicate, newObjValue). Replaces old triple with new triple
  * @param {string|Var} subject - The IRI of a triple’s subject or a variable
  * @param {string|Var} predicate - The IRI of a property or a variable
  * @param {string|Var} newObjValue - The value to update or a literal
  * @param {string|Var} oldObjValue - The old value of the object
  * @returns {WOQLQuery} A WOQLQuery which contains the a Update Triple Statement
+ * @example
+ * let [newValue, oldValue] = WOQL.vars("newValue", "oldValue")
+ * WOQL.update_triple("Project/1", "name", newValue, oldValue)
  */
 
 WOQL.update_triple = function (subject, predicate, newObjValue, oldObjValue) {
-    return new WOQLQuery().update_triple(subject, predicate, newObjValue, oldObjValue);
+  return new WOQLQuery().update_triple(subject, predicate, newObjValue, oldObjValue);
 };
 
 /**
@@ -1439,10 +1845,13 @@ WOQL.update_triple = function (subject, predicate, newObjValue, oldObjValue) {
  * @param {string|Var} newObject - The value to update or a literal
  * @param {typedef.GraphRef} graphRef - A valid graph resource identifier string
  * @returns {WOQLQuery} A WOQLQuery which contains the a Update Quad Statement
+ * @example
+ * let [newObj, oldObj] = WOQL.vars("newObj", "oldObj")
+ * WOQL.update_quad("Project/1", "name", newObj, oldObj, "schema/main")
  */
 
 WOQL.update_quad = function (subject, predicate, newObject, graphRef) {
-    return new WOQLQuery().update_quad(subject, predicate, newObject, graphRef);
+  return new WOQLQuery().update_quad(subject, predicate, newObject, graphRef);
 };
 
 /**
@@ -1454,7 +1863,7 @@ WOQL.update_quad = function (subject, predicate, newObject, graphRef) {
  * @returns {WOQLQuery} A WOQLQuery which contains the a quad or a triple Statement
  */
 WOQL.value = function (subject, predicate, objValue) {
-    return new WOQLQuery().value(subject, predicate, objValue);
+  return new WOQLQuery().value(subject, predicate, objValue);
 };
 
 /**
@@ -1465,7 +1874,7 @@ WOQL.value = function (subject, predicate, objValue) {
  * @returns {WOQLQuery} A WOQLQuery which contains the a quad or a triple Statement
  */
 WOQL.link = function (subject, predicate, object) {
-    return new WOQLQuery().link(subject, predicate, object);
+  return new WOQLQuery().link(subject, predicate, object);
 };
 
 /**
@@ -1474,9 +1883,92 @@ WOQL.link = function (subject, predicate, object) {
  * @param {string|Var} field - The field from which the document which is being accessed.
  * @param {string|Var} value - The value for the document and field.
  * @returns {WOQLQuery} A WOQLQuery which contains the a dot Statement
+ * @example
+ * // Use either "v:personName" and "v:doc", OR `personName` and `doc` with variables:
+ * // `let [personName, doc] = WOQL.vars("personName", "doc")`
+ * and(
+ *   WOQL.eq("v:doc", WOQL.doc({ "@type": "Person", name: "Alice" })),
+ *   WOQL.dot("v:doc", "name", "v:personName")
+ * )
+ * // extracts the "name" field value from the document into personName variable
  */
 WOQL.dot = function (document, field, value) {
-    return new WOQLQuery().dot(document, field, value);
+  return new WOQLQuery().dot(document, field, value);
+};
+
+/**
+ * Computes the set difference between two lists (elements in listA but not in listB)
+ * @param {string|Var|array} listA - First list or variable
+ * @param {string|Var|array} listB - Second list or variable
+ * @param {string|Var} result - Variable to store the result
+ * @returns {WOQLQuery} A WOQLQuery which contains the SetDifference expression
+ * @example
+ * let [result] = vars("result")
+ * set_difference(["a", "b", "c"], ["b", "d"], result)  // result = ["a", "c"]
+ */
+WOQL.set_difference = function (listA, listB, result) {
+  return new WOQLQuery().set_difference(listA, listB, result);
+};
+
+/**
+ * Computes the set intersection between two lists (elements common to both)
+ * @param {string|Var|array} listA - First list or variable
+ * @param {string|Var|array} listB - Second list or variable
+ * @param {string|Var} result - Variable to store the result
+ * @returns {WOQLQuery} A WOQLQuery which contains the SetIntersection expression
+ * @example
+ * let [result] = vars("result")
+ * set_intersection(["a", "b", "c"], ["b", "c", "d"], result)  // result = ["b", "c"]
+ */
+WOQL.set_intersection = function (listA, listB, result) {
+  return new WOQLQuery().set_intersection(listA, listB, result);
+};
+
+/**
+ * Computes the set union of two lists (all unique elements from both lists)
+ * @param {string|Var|array} listA - First list or variable
+ * @param {string|Var|array} listB - Second list or variable
+ * @param {string|Var} result - Variable to store the result
+ * @returns {WOQLQuery} A WOQLQuery which contains the SetUnion expression
+ * @example
+ * let [result] = vars("result")
+ * set_union(["a", "b"], ["b", "c"], result)  // result = ["a", "b", "c"]
+ */
+WOQL.set_union = function (listA, listB, result) {
+  return new WOQLQuery().set_union(listA, listB, result);
+};
+
+/**
+ * Checks if an element is a member of a set
+ * @param {string|number|Var} element - Element to check for membership
+ * @param {string|Var|array} set - Set (list) to check membership in
+ * @returns {WOQLQuery} A WOQLQuery which contains the SetMember expression
+ * @example
+ * let [result] = vars("result")
+ * set_member("b", ["a", "b", "c"], result)  // true if "b" is in the set
+ */
+WOQL.set_member = function (element, set) {
+  return new WOQLQuery().set_member(element, set);
+};
+
+/**
+ * Converts a list to a set by removing duplicates and sorting
+ * @param {string|Var|array} list - List or variable containing a list
+ * @param {string|Var} set - Variable to store the resulting set
+ * @returns {WOQLQuery} A WOQLQuery which contains the ListToSet expression
+ * @example
+ * let [result] = vars("result")
+ * list_to_set(["a", "b", "a", "c", "b"], result)  // result = ["a", "b", "c"]
+ * @example
+ * let [mySet, isMember] = vars("mySet", "isMember")
+ * and(
+ *   list_to_set(["a", "b", "a", "c"], mySet),
+ *   set_member("b", mySet),
+ *   opt().eq(is_member, "b-is-member")
+ * )  // mySet = ["a", "b", "c"], "b" is a member, and is_member is set to "b-is-member"
+ */
+WOQL.list_to_set = function (list, set) {
+  return new WOQLQuery().list_to_set(list, set);
 };
 
 module.exports = WOQL;

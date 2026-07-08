@@ -1,2 +1,0 @@
-# Use the JavaScript Client
-
