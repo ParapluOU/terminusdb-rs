@@ -4786,7 +4786,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-community"
 version = "0.1.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?branch=main#dd75e024fc6c822be0cbbe395ddbaac452032166"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=02db9bdbbf54aa768aafccaa54cc5e9984f0684d#02db9bdbbf54aa768aafccaa54cc5e9984f0684d"
 dependencies = [
  "aho-corasick 0.7.20",
  "bimap",
@@ -5030,7 +5030,7 @@ dependencies = [
 [[package]]
 name = "terminusdb-store-prolog"
 version = "0.2.0"
-source = "git+https://github.com/ParapluOU/terminusdb.git?branch=main#dd75e024fc6c822be0cbbe395ddbaac452032166"
+source = "git+https://github.com/ParapluOU/terminusdb.git?rev=02db9bdbbf54aa768aafccaa54cc5e9984f0684d#02db9bdbbf54aa768aafccaa54cc5e9984f0684d"
 dependencies = [
  "base64 0.13.1",
  "chardetng",
