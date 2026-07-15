@@ -55,6 +55,20 @@ let compiled = (doc(acme_id) >> child("city")).compile()?;   // same thing
 - `[...]` predicate syntax is **not** offered: Rust's `Index` must return a
   reference into the receiver, so it can't grow a builder — hence `.filter(...)`.
 
+### String templates
+
+For the times you have a template string, `xpath!` formats (like `format!`) and
+compiles, so the syntax is **checked at runtime** (it returns `Result`, never
+panics):
+
+```rust
+use terminusdb_xpath::xpath;
+let compiled = xpath!(r#"document("{}")/submodel/@{}"#, id, "prop")?;
+```
+
+Prefer the typed `builder` for interpolating ids (`doc::<T>(id)`); values spliced
+into `xpath!` are formatted verbatim.
+
 ## Typed results
 
 `client.query::<T>(…)` is generic over the result type, so you don't have to stop

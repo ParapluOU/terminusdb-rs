@@ -206,6 +206,28 @@ fn builder_matches_string_form() {
     );
 }
 
+/// `xpath!("...{}...", arg)` formats then compiles, with a runtime parse check.
+#[test]
+fn xpath_format_macro() {
+    use terminusdb_xpath::xpath;
+
+    // Formatted template equals the directly-compiled string form.
+    let formatted = xpath!("{}/@{}", "submodel", "prop").unwrap();
+    let direct = to_ir("submodel/@prop").unwrap();
+    assert_eq!(formatted.query, compile("submodel/@prop").unwrap().query);
+    let _ = direct;
+
+    // Interpolating a document id.
+    let compiled = xpath!(r#"document("{}")/submodel/@prop"#, "MyModel/1234").unwrap();
+    assert_eq!(compiled.result_var, "x1");
+
+    // The runtime parse check: a malformed template is an Err, not a panic.
+    assert!(matches!(
+        xpath!("{}", "///"),
+        Err(XPathError::Parse(_))
+    ));
+}
+
 /// Constructs outside the supported subset are rejected explicitly.
 #[test]
 fn unsupported_constructs_are_rejected() {

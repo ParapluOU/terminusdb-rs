@@ -70,6 +70,28 @@ pub fn compile_with(expr: &str, opts: &CompileOptions) -> Result<CompiledXPath> 
     compile::compile(&query, opts)
 }
 
+/// Format an XPath expression (like [`format!`]) and [`compile`] it, so the
+/// syntax is **checked at runtime** — the result is `Result<CompiledXPath>`, and
+/// a malformed or unsupported expression is an `Err`, never a panic.
+///
+/// This is the string-template escape hatch. For interpolating a document id,
+/// prefer the type-safe [`builder`] (`doc::<T>(id)`); values spliced here are
+/// formatted verbatim (mind XPath-significant characters).
+///
+/// ```
+/// use terminusdb_xpath::xpath;
+///
+/// let compiled = xpath!(r#"document("{}")/submodel/@{}"#, "MyModel/1234", "prop")?;
+/// assert_eq!(compiled.result_var, "x1");
+/// # Ok::<(), terminusdb_xpath::XPathError>(())
+/// ```
+#[macro_export]
+macro_rules! xpath {
+    ($($arg:tt)*) => {
+        $crate::compile(&format!($($arg)*))
+    };
+}
+
 /// Parse and lower an XPath expression to the intermediate representation,
 /// without compiling to WOQL. Useful for inspection and testing.
 pub fn to_ir(expr: &str) -> Result<ir::XPathQuery> {
