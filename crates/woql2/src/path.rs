@@ -6,7 +6,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 // Represents the abstract class "PathPattern"
 /// An abstract class specifying the AST super-class of all path patterns.
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
-
+#[tdb(abstract_class = true)]
 pub enum PathPattern {
     Predicate(PathPredicate),
     InversePredicate(InversePathPredicate),

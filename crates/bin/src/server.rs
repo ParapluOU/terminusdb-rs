@@ -300,6 +300,53 @@ impl TerminusDBServer {
         })
         .await
     }
+
+    /// Run a test/example with a temporary database seeded with `seed_entities`.
+    ///
+    /// Builds on [`with_db_schema`](Self::with_db_schema): it auto-inserts the
+    /// schema tree for `M` (including any subdocuments it references), then
+    /// inserts every entity, then hands the client and `BranchSpec` to the
+    /// closure. The database is deleted when the closure returns (even on
+    /// failure). This removes the need for a hand-written `seed()` step for the
+    /// common case of a single top-level model.
+    ///
+    /// For several *unrelated* top-level types, use
+    /// [`with_db_schema`](Self::with_db_schema) and insert entities yourself.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// server
+    ///     .with_db_seed("test", vec![alice, bob], |client, spec| async move {
+    ///         // The Person schema tree and both entities are already inserted.
+    ///         Ok(())
+    ///     })
+    ///     .await
+    /// ```
+    pub async fn with_db_seed<M, F, Fut, R>(
+        &self,
+        prefix: &str,
+        seed_entities: impl IntoIterator<Item = M>,
+        f: F,
+    ) -> anyhow::Result<R>
+    where
+        M: terminusdb_schema::TerminusDBModel + terminusdb_schema::ToTDBSchema,
+        F: FnOnce(TerminusDBHttpClient, terminusdb_client::BranchSpec) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<R>>,
+    {
+        // Collect up front so we don't hold the iterator across await points.
+        let entities: Vec<M> = seed_entities.into_iter().collect();
+        // Delegate schema insertion to with_db_schema (single source of truth),
+        // then insert the entities before running the closure.
+        self.with_db_schema::<(M,), _, _, _>(prefix, |client, spec| async move {
+            let args = terminusdb_client::DocumentInsertArgs::from(spec.clone());
+            for entity in &entities {
+                client.insert_instance(entity, args.clone()).await?;
+            }
+            f(client, spec).await
+        })
+        .await
+    }
 }
 
 impl Drop for TerminusDBServer {

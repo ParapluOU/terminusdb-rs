@@ -122,7 +122,8 @@ async fn test_with_models() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
     // Schemas for MyModel are automatically inserted
-    server.with_db_schema::<(MyModel,)>("test_models", |client, spec| async move {
+    // The `_, _, _` are the inferred F/Fut/R generics — turbofish needs all four.
+    server.with_db_schema::<(MyModel,), _, _, _>("test_models", |client, spec| async move {
         let args = DocumentInsertArgs::from(spec.clone());
         client.insert_instance(&my_instance, args).await?;
         Ok(())
@@ -130,10 +131,21 @@ async fn test_with_models() -> anyhow::Result<()> {
 }
 ```
 
+**Seeding schema + data in one call:**
+```rust
+// Inserts M's schema tree (incl. subdocuments) AND the instances, then runs the
+// closure — no hand-written seed step. `M` is inferred from the instances.
+server.with_db_seed("test_seeded", vec![alice, bob], |client, spec| async move {
+    // Person schema + alice/bob already inserted.
+    Ok(())
+}).await
+```
+
 **Key Points:**
 - `test_instance()` returns a shared server per-process (efficient for multiple tests)
 - `with_tmp_db()` creates a unique database name using UUID (no conflicts between parallel tests)
-- `with_db_schema::<T>()` pre-inserts schemas before running the test
+- `with_db_schema::<T>()` pre-inserts schemas before running the test (T is a tuple of types)
+- `with_db_seed(prefix, instances, f)` pre-inserts a single model's schema tree AND the instances
 - Databases are automatically cleaned up even if the test fails/panics
 - No `#[ignore]` needed - tests run automatically with `cargo test`
 - Each test process gets its own server on a unique port via `TERMINUSDB_SERVER_PORT`

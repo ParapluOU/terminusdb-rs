@@ -18,6 +18,7 @@ pub mod dsl;
 pub mod expression;
 pub mod get;
 pub mod interval;
+pub mod json;
 pub mod macros;
 pub mod misc;
 pub mod order;
@@ -148,6 +149,9 @@ pub mod prelude {
 
     // DSL rendering trait
     pub use super::dsl::ToDSL;
+
+    // WOQL JSON-LD serialization (strip null props, graph defaults)
+    pub use super::json::normalize_woql_json;
 }
 
 #[test]

@@ -204,6 +204,14 @@ pub struct TDBFieldOpts {
     /// Whether this field is the default relation to its target type
     #[darling(default)]
     pub(crate) default_relation: bool,
+
+    /// When set (`#[tdb(default)]`), an `Option<T>` field whose value is `None`
+    /// is serialized as `T::default()` instead of a null property. Useful for
+    /// fields where "unset" has a canonical default meaning (e.g. a WOQL
+    /// triple's `graph`, which defaults to `instance`). The field type must be
+    /// `Option<T>` where `T: Default`.
+    #[darling(default)]
+    pub(crate) default: bool,
 }
 
 /// Container for attributes specified on enum variants

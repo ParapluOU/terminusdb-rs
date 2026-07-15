@@ -15,6 +15,7 @@ pub struct Triple {
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
     /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -29,6 +30,7 @@ pub struct AddTriple {
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
     /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -43,6 +45,7 @@ pub struct AddedTriple {
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
     /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -57,6 +60,7 @@ pub struct DeleteTriple {
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
     /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -71,6 +75,7 @@ pub struct DeletedTriple {
     /// A URI, datatype or variable which is the target or object of the graph edge.
     pub object: self::Value,
     /// An optional graph (either 'instance' or 'schema'), defaults to 'instance' if not specified
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -203,6 +208,7 @@ pub struct TripleSlice {
     /// The exclusive upper bound of the object range.
     pub high: self::Value,
     /// An optional graph (either 'instance' or 'schema')
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -221,6 +227,7 @@ pub struct TripleSliceRev {
     /// The exclusive upper bound of the object range.
     pub high: self::Value,
     /// An optional graph (either 'instance' or 'schema')
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -237,6 +244,7 @@ pub struct TripleNext {
     /// The next object in the ordering.
     pub next: self::Value,
     /// An optional graph (either 'instance' or 'schema')
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 
@@ -253,6 +261,7 @@ pub struct TriplePrevious {
     /// The previous object in the ordering.
     pub previous: self::Value,
     /// An optional graph (either 'instance' or 'schema')
+    #[tdb(default)]
     pub graph: Option<GraphType>,
 }
 

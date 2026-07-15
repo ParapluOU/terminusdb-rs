@@ -135,6 +135,14 @@ pub fn process_fields_for_instance(
             // Extract subdocument value before quote
             let subdocument = field_opts.subdocument;
 
+            // `#[tdb(default)]`: serialize a `None` Option as `T::default()`
+            // rather than a null property (field type must be `Option<T>: Default`).
+            let field_access = if field_opts.default {
+                quote! { self.#field_name.clone().unwrap_or_default() }
+            } else {
+                quote! { self.#field_name.clone() }
+            };
+
             /*
 
             // Generate code to check if the field type is a simple enum
@@ -183,7 +191,7 @@ pub fn process_fields_for_instance(
                 properties.insert(
                     #property_name.to_string(),
                     <_ as terminusdb_schema::ToInstanceProperty<Self>>::to_property(
-                        self.#field_name.clone(),
+                        #field_access,
                         &#property_name,
                         &schema
                     )

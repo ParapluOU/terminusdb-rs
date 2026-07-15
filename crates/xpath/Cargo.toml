@@ -1,0 +1,35 @@
+[package]
+name = "terminusdb-xpath"
+description = "Compile XPath expressions into TerminusDB WOQL queries"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Compile target: the WOQL AST.
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-schema = { path = "../schema" }
+
+# Spec-grade XPath 3.1 parser + AST (from the ParapluOU/x-rs bundle, see modules/x-rs).
+# We reuse this to parse XPath into an AST, then lower that AST into WOQL.
+xee-xpath-ast = "=0.1.4"
+# xee re-exports `Name` as xot::xmlname::OwnedName; we need the NameStrInfo trait
+# (local_name/namespace) to read names out of the AST.
+xot = "0.31"
+
+anyhow = { workspace = true }
+thiserror = "2.0"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# For the live end-to-end test against a real TerminusDB server.
+terminusdb-client = { path = "../client" }
+terminusdb-bin = { path = "../bin" }
+terminusdb-schema-derive = { path = "../schema/derive" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+anyhow = { workspace = true }
+# Referenced by the TerminusDBModel/FromTDBInstance derive-generated code.
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }

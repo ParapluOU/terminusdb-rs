@@ -16,7 +16,7 @@ use {
         time::{Duration, Instant},
     },
     terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance, ToTDBSchema},
-    terminusdb_woql2::{dsl::ToDSL, prelude::Query as Woql2Query},
+    terminusdb_woql2::{dsl::ToDSL, json::normalize_woql_json, prelude::Query as Woql2Query},
     terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
 };
 
@@ -63,7 +63,8 @@ impl super::client::TerminusDBHttpClient {
     ) -> anyhow::Result<WOQLResult<T>> {
         let start_time = Instant::now();
 
-        // Serialize the query to JSON-LD here
+        // Serialize the query to JSON-LD here. Graph defaults are applied at the
+        // HTTP funnel (query_raw / query_raw_mut / query_raw_with_headers).
         let json_query = query.to_instance(None).to_json();
         let woql_context = crate::Context::woql().to_json();
 
@@ -286,10 +287,15 @@ impl super::client::TerminusDBHttpClient {
     pub async fn query_raw<T: Debug + DeserializeOwned>(
         &self,
         spec: Option<BranchSpec>,
-        query: serde_json::Value,
+        mut query: serde_json::Value,
         timeout: Option<Duration>,
     ) -> anyhow::Result<WOQLResult<T>> {
         let start_time = Instant::now();
+
+        // Fill in default `graph` values: a triple serialized with `graph: null`
+        // is an invalid WOQL AST. Applied here so every send path is covered,
+        // regardless of how `query` was serialized.
+        normalize_woql_json(&mut query);
 
         let uri = match spec {
             None => self.build_url().endpoint("woql").build(),
@@ -348,11 +354,14 @@ impl super::client::TerminusDBHttpClient {
     async fn query_raw_mut<T: Debug + DeserializeOwned>(
         &self,
         spec: Option<BranchSpec>,
-        query: serde_json::Value,
+        mut query: serde_json::Value,
         author: &str,
         message: &str,
         timeout: Option<Duration>,
     ) -> anyhow::Result<WOQLResult<T>> {
+        // See query_raw: ensure default graphs before sending.
+        normalize_woql_json(&mut query);
+
         let uri = match spec {
             None => self.build_url().endpoint("woql").build(),
             Some(spc) => self
@@ -545,9 +554,12 @@ impl super::client::TerminusDBHttpClient {
     pub async fn query_raw_with_headers<T: Debug + DeserializeOwned>(
         &self,
         spec: Option<BranchSpec>,
-        query: serde_json::Value,
+        mut query: serde_json::Value,
         timeout: Option<Duration>,
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
+        // See query_raw: ensure default graphs before sending.
+        normalize_woql_json(&mut query);
+
         let uri = match spec {
             None => self.build_url().endpoint("woql").build(),
             Some(spc) => self

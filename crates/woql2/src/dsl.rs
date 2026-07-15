@@ -91,6 +91,7 @@ impl ToDSL for XSDAnySimpleType {
         match self {
             XSDAnySimpleType::String(s) => escape_string(s),
             XSDAnySimpleType::Boolean(b) => b.to_string(),
+            XSDAnySimpleType::Integer(i) => i.to_string(),
             XSDAnySimpleType::Float(f) => f.to_string(),
             XSDAnySimpleType::Decimal(d) => d.to_string(),
             XSDAnySimpleType::DateTime(dt) => escape_string(&dt.to_string()),
@@ -190,8 +191,9 @@ impl ToDSL for Triple {
             self.object.to_dsl(),
         ];
 
-        // Only add graph parameter if it's not the default (Instance)
-        if self.graph != Some(GraphType::Instance) {
+        // Only add graph parameter if it's not the default. Both `None` and
+        // `Some(Instance)` mean the default instance graph, so omit the arg.
+        if !matches!(self.graph, None | Some(GraphType::Instance)) {
             args.push(escape_string(&format!("{:?}", self.graph).to_lowercase()));
         }
 
@@ -541,20 +543,19 @@ impl ToDSL for PathPattern {
 
 impl ToDSL for PathPredicate {
     fn to_dsl(&self) -> String {
-        if let Some(pred) = &self.predicate {
-            render_function("pred", &[escape_string(pred)])
-        } else {
-            render_function("pred", &[escape_string("")])
+        // No predicate = the any-predicate wildcard; render as `pred()`.
+        match &self.predicate {
+            Some(pred) => render_function("pred", &[escape_string(pred)]),
+            None => render_function("pred", &[]),
         }
     }
 }
 
 impl ToDSL for InversePathPredicate {
     fn to_dsl(&self) -> String {
-        if let Some(pred) = &self.predicate {
-            render_function("inv", &[escape_string(pred)])
-        } else {
-            render_function("inv", &[escape_string("")])
+        match &self.predicate {
+            Some(pred) => render_function("inv", &[escape_string(pred)]),
+            None => render_function("inv", &[]),
         }
     }
 }
