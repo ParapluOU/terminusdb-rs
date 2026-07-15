@@ -101,37 +101,38 @@ impl Ctx {
     }
 }
 
-/// Compile an [`ir::XPathQuery`] into WOQL.
-pub fn compile(q: &ir::XPathQuery, opts: &CompileOptions) -> Result<CompiledXPath> {
-    let mut ctx = Ctx { counter: 0 };
+fn head_db(head: &ir::ContextHead) -> Option<String> {
+    match head {
+        ir::ContextHead::Document { db, .. } | ir::ContextHead::Root { db } => db.clone(),
+    }
+}
 
-    let (using_db, mut subject) = match &q.head {
-        ir::ContextHead::Document { db, id } => (db.clone(), NodeValue::Node(id.clone())),
-        ir::ContextHead::Root { db } => (db.clone(), NodeValue::Variable(ctx.fresh("root"))),
+/// Build the `And`-clauses and the result variable for one path, minting fresh
+/// variables from `ctx`. Sharing `ctx` across union branches keeps their
+/// internal variables from colliding.
+fn build_path(
+    q: &ir::XPathQuery,
+    opts: &CompileOptions,
+    ctx: &mut Ctx,
+) -> Result<(Vec<Query>, String)> {
+    let mut subject = match &q.head {
+        ir::ContextHead::Document { id, .. } => NodeValue::Node(id.clone()),
+        ir::ContextHead::Root { .. } => NodeValue::Variable(ctx.fresh("root")),
     };
 
     if q.steps.is_empty() {
-        // A bare `document("Id")` selects the document node itself. Bind the
-        // result variable to it (via `eq`) so callers can read it as a full
-        // model with `read_documents_query`. A bare `db()`/root has nothing to
-        // bind to.
+        // A bare `document("Id")` selects the document node itself: bind the
+        // result variable to it (via `eq`) so it can be read as a full model.
         return match &q.head {
             ir::ContextHead::Document { id, .. } => {
                 let r = ctx.fresh("x");
-                let body = Query::Select(Select {
-                    variables: vec![r.clone()],
-                    query: Box::new(Query::And(And {
-                        and: vec![Query::Equals(Equals {
-                            left: Value::Variable(r.clone()),
-                            right: Value::Node(id.clone()),
-                        })],
-                    })),
-                });
-                Ok(CompiledXPath {
-                    query: body,
-                    result_var: r,
-                    using_db,
-                })
+                Ok((
+                    vec![Query::Equals(Equals {
+                        left: Value::Variable(r.clone()),
+                        right: Value::Node(id.clone()),
+                    })],
+                    r,
+                ))
             }
             ir::ContextHead::Root { .. } => Err(XPathError::unsupported(
                 "a bare db()/relative selection with no navigation steps selects nothing",
@@ -139,24 +140,61 @@ pub fn compile(q: &ir::XPathQuery, opts: &CompileOptions) -> Result<CompiledXPat
         };
     }
 
-    let mut clauses: Vec<Query> = Vec::new();
+    let mut clauses = Vec::new();
     let mut result_var = String::new();
     for step in &q.steps {
-        let obj = emit_step(&mut ctx, &mut clauses, subject.clone(), step, opts)?;
+        let obj = emit_step(ctx, &mut clauses, subject.clone(), step, opts)?;
         subject = NodeValue::Variable(obj.clone());
         result_var = obj;
     }
+    Ok((clauses, result_var))
+}
 
-    let body = Query::Select(Select {
+/// Compile an [`ir::XPathQuery`] into WOQL.
+pub fn compile(q: &ir::XPathQuery, opts: &CompileOptions) -> Result<CompiledXPath> {
+    let mut ctx = Ctx { counter: 0 };
+    let (clauses, result_var) = build_path(q, opts, &mut ctx)?;
+    let query = Query::Select(Select {
         variables: vec![result_var.clone()],
         query: Box::new(Query::And(And { and: clauses })),
     });
-
     Ok(CompiledXPath {
-        query: body,
+        query,
         result_var,
-        using_db,
+        using_db: head_db(&q.head),
     })
+}
+
+/// Compile a **union** of paths (`a | b | …`) into WOQL: every branch binds one
+/// shared result variable, combined with `Or`. Branches share a variable
+/// counter so their internal variables don't clash across the disjunction.
+pub fn compile_union(branches: &[ir::XPathQuery], opts: &CompileOptions) -> Result<CompiledXPath> {
+    match branches {
+        [] => Err(XPathError::Empty),
+        [single] => compile(single, opts),
+        _ => {
+            let mut ctx = Ctx { counter: 0 };
+            let result = ctx.fresh("u");
+            let mut or_branches = Vec::with_capacity(branches.len());
+            for branch in branches {
+                let (mut clauses, rv) = build_path(branch, opts, &mut ctx)?;
+                clauses.push(Query::Equals(Equals {
+                    left: Value::Variable(result.clone()),
+                    right: Value::Variable(rv),
+                }));
+                or_branches.push(Query::And(And { and: clauses }));
+            }
+            let query = Query::Select(Select {
+                variables: vec![result.clone()],
+                query: Box::new(Query::Or(Or { or: or_branches })),
+            });
+            Ok(CompiledXPath {
+                query,
+                result_var: result,
+                using_db: head_db(&branches[0].head),
+            })
+        }
+    }
 }
 
 /// Emit the WOQL clause(s) for one step (the edge plus any predicates) and

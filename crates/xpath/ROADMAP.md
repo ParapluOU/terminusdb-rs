@@ -142,9 +142,14 @@ Non-standard pseudo-functions that establish where navigation begins.
 | ------------------ | ----------------- | -------------------------------- | ------ |
 | sequence concat    | `(a, b)`          | union of solutions              | ❌     |
 | range              | `1 to 10`         | —                               | 🚫     |
-| union              | `a \| b`, `a union b` | `Or` / `SetUnion`            | ❌     |
+| union              | `a \| b`, `a union b` | `Select([u], Or([a, b]))`   | 🚧 builder `\|` ✅, string form ❌ |
 | intersect          | `a intersect b`   | `SetIntersection`               | ❌     |
 | except             | `a except b`      | `SetDifference`                 | ❌     |
+
+> **Union** works via the builder's `|` operator (`doc(a)/… | doc(b)/…`): each
+> branch binds a shared result variable, combined with WOQL `Or` (branches share
+> one variable counter so their internal vars don't clash). The **string** form
+> `a | b` isn't lowered yet (xee parses it as a binary `union` expression).
 
 ---
 

@@ -50,6 +50,9 @@ let compiled = (doc(acme_id) >> child("city")).compile()?;   // same thing
 ```
 
 - Navigation is `/`; **descendant** (`//`) is `>>` (or `descendant(...)`).
+- **Union** is `|`: `doc(a) / attr("name") | doc(b) / attr("name")` — results from
+  either branch (compiles to WOQL `Or`). `|` binds loosest, so each side is a
+  whole path.
 - Predicates are `.filter(pred)` where `pred` is
   `attr("x").eq(v)` / `.ne` / `.lt` / `.le` / `.gt` / `.ge` / `.exists()`.
 - `[...]` predicate syntax is **not** offered: Rust's `Index` must return a

@@ -110,6 +110,29 @@ mod tests {
         Ok(())
     }
 
+    /// Run an already-compiled query and assert its (distinct, sorted) results.
+    async fn assert_compiled(
+        client: &TerminusDBHttpClient,
+        spec: &BranchSpec,
+        compiled: &terminusdb_xpath::CompiledXPath,
+        expected: &[&str],
+    ) -> anyhow::Result<()> {
+        let res = client
+            .query::<HashMap<String, serde_json::Value>>(Some(spec.clone()), compiled.query.clone())
+            .await?;
+        let mut got: Vec<String> = res
+            .bindings
+            .iter()
+            .filter_map(|b| b.get(&compiled.result_var).and_then(binding_scalar))
+            .collect();
+        got.sort();
+        got.dedup();
+        let mut want: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(got, want);
+        Ok(())
+    }
+
     /// Extract a scalar (literal or node IRI) from a WOQL binding value.
     fn binding_scalar(v: &serde_json::Value) -> Option<String> {
         if let Some(s) = v.as_str() {
@@ -212,6 +235,65 @@ mod tests {
                 .filter_map(|b| b.get(&compiled.result_var).and_then(binding_scalar))
                 .collect();
             assert_eq!(got, vec!["10115".to_string()]);
+            Ok(())
+        })
+        .await
+    }
+
+    /// Union (`|`) of two document paths — results from either branch.
+    #[tokio::test]
+    async fn union() -> anyhow::Result<()> {
+        use terminusdb_xpath::builder::{attr, doc};
+        with_dataset(|client, spec, ids| async move {
+            let q = doc(ids.jane.clone()) / attr("name") | doc(ids.john.clone()) / attr("name");
+            assert_compiled(&client, &spec, &q.compile()?, &["Jane", "John"]).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// COMPOUND: union of two *predicate-filtered* hops.
+    /// jane's Berlin address zip + john's Paris address zip.
+    #[tokio::test]
+    async fn union_of_filtered_hops() -> anyhow::Result<()> {
+        use terminusdb_xpath::builder::{attr, child, doc};
+        with_dataset(|client, spec, ids| async move {
+            let q = doc(ids.jane.clone())
+                / child("address").filter(attr("city").eq("Berlin"))
+                / attr("zip")
+                | doc(ids.john.clone())
+                    / child("address").filter(attr("city").eq("Paris"))
+                    / attr("zip");
+            assert_compiled(&client, &spec, &q.compile()?, &["10115", "75001"]).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// COMPOUND: descendant + predicate + attribute in one path.
+    /// jane//address[@zip = 10115]/@city  →  Berlin.
+    #[tokio::test]
+    async fn descendant_predicate_attr() -> anyhow::Result<()> {
+        use terminusdb_xpath::builder::{attr, child, doc};
+        with_dataset(|client, spec, ids| async move {
+            let q = doc(ids.jane.clone()) >> child("address").filter(attr("zip").eq(10115))
+                / attr("city");
+            assert_compiled(&client, &spec, &q.compile()?, &["Berlin"]).await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// COMPOUND: relative union with numeric + string predicates across all docs.
+    /// address[@zip > 70000]/@city  |  address[@city = "Berlin"]/@zip
+    #[tokio::test]
+    async fn compound_relative_union() -> anyhow::Result<()> {
+        use terminusdb_xpath::builder::{attr, child};
+        with_dataset(|client, spec, _ids| async move {
+            let q = child("address").filter(attr("zip").gt(70000)) / attr("city")
+                | child("address").filter(attr("city").eq("Berlin")) / attr("zip");
+            // Paris (john's zip>70000) + 10115 (jane's Berlin zip)
+            assert_compiled(&client, &spec, &q.compile()?, &["10115", "Paris"]).await?;
             Ok(())
         })
         .await

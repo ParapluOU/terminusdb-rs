@@ -206,6 +206,35 @@ fn builder_matches_string_form() {
     );
 }
 
+/// `a | b` (union) compiles to `Select([u0], Or([And_a, And_b]))`, where each
+/// branch binds the shared result var and branches don't share internal vars.
+#[test]
+fn union_compiles_to_or() {
+    use terminusdb_xpath::builder::{attr, child};
+
+    let compiled = (child("a") / attr("x") | child("b") / attr("y"))
+        .compile()
+        .unwrap();
+
+    assert_eq!(compiled.result_var, "u0");
+    let Query::Select(sel) = &compiled.query else {
+        panic!("expected Select");
+    };
+    assert_eq!(sel.variables, vec!["u0".to_string()]);
+    let Query::Or(or) = &*sel.query else {
+        panic!("expected Or");
+    };
+    assert_eq!(or.or.len(), 2);
+    // each branch ends by binding u0 (via Equals) — branch var names are disjoint
+    for branch in &or.or {
+        let Query::And(and) = branch else { panic!() };
+        assert!(and
+            .and
+            .iter()
+            .any(|q| matches!(q, Query::Equals(_))));
+    }
+}
+
 /// `xpath!("...{}...", arg)` formats then compiles, with a runtime parse check.
 #[test]
 fn xpath_format_macro() {

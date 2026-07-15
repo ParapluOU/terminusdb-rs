@@ -23,7 +23,7 @@
 //! (`a[b]`) must return a reference into `a`, so it can't grow a builder. Use
 //! `.filter(...)` instead.
 
-use std::ops::{Div, Shr};
+use std::ops::{BitOr, Div, Shr};
 
 use terminusdb_schema::{EntityIDFor, ToTDBSchema};
 
@@ -203,6 +203,46 @@ impl XPath {
     /// Compile to WOQL with explicit [`CompileOptions`].
     pub fn compile_with(&self, opts: &CompileOptions) -> Result<CompiledXPath> {
         crate::compile::compile(&self.to_ir(), opts)
+    }
+}
+
+/// `a | b` — a **union** of paths: results matching either. `|` binds looser than
+/// `/` and `>>`, so `doc(a)/child("x") | doc(b)/child("y")` groups as two whole
+/// paths.
+impl BitOr for XPath {
+    type Output = Union;
+    fn bitor(self, rhs: XPath) -> Union {
+        Union(vec![self, rhs])
+    }
+}
+
+/// A union of paths (`a | b | c`). Compile with [`Union::compile`]. Results from
+/// all branches are combined (bound to one variable via WOQL `Or`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Union(Vec<XPath>);
+
+impl BitOr<XPath> for Union {
+    type Output = Union;
+    fn bitor(mut self, rhs: XPath) -> Union {
+        self.0.push(rhs);
+        self
+    }
+}
+
+impl Union {
+    /// The IR of each branch.
+    pub fn to_irs(&self) -> Vec<ir::XPathQuery> {
+        self.0.iter().map(XPath::to_ir).collect()
+    }
+
+    /// Compile the union to WOQL with default [`CompileOptions`].
+    pub fn compile(&self) -> Result<CompiledXPath> {
+        self.compile_with(&CompileOptions::default())
+    }
+
+    /// Compile the union to WOQL with explicit [`CompileOptions`].
+    pub fn compile_with(&self, opts: &CompileOptions) -> Result<CompiledXPath> {
+        crate::compile::compile_union(&self.to_irs(), opts)
     }
 }
 
