@@ -87,3 +87,29 @@ pub enum Literal {
     Int(i64),
     Float(f64),
 }
+
+impl From<&str> for Literal {
+    fn from(s: &str) -> Self {
+        Literal::Str(s.to_string())
+    }
+}
+impl From<String> for Literal {
+    fn from(s: String) -> Self {
+        Literal::Str(s)
+    }
+}
+impl From<i64> for Literal {
+    fn from(i: i64) -> Self {
+        Literal::Int(i)
+    }
+}
+impl From<i32> for Literal {
+    fn from(i: i32) -> Self {
+        Literal::Int(i as i64)
+    }
+}
+impl From<f64> for Literal {
+    fn from(f: f64) -> Self {
+        Literal::Float(f)
+    }
+}

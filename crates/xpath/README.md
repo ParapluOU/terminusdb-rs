@@ -29,6 +29,32 @@ Data-model mapping: a child step `foo` follows an **object property** (a graph
 hop), `@foo` reads a **value property** (a literal), and `//foo` reaches `foo`
 through any chain of edges.
 
+## Building queries in Rust (no strings)
+
+The [`builder`] module constructs paths with `/` operator overloading and
+compiles straight to WOQL (no text parsing). `doc::<T>()` takes the typed id.
+
+```rust
+use terminusdb_xpath::builder::{doc, child, attr, descendant};
+
+// document("Person/jane")/employer[@founded > 1990]/@name
+let compiled = (doc(jane_id)                       // doc::<Person>(impl Into<EntityIDFor<T>>)
+    / child("employer").filter(attr("founded").gt(1990))
+    / attr("name"))
+    .compile()?;
+
+// descendant (`a//city`) — `//` can't be written literally (it's a Rust line
+// comment), so use `descendant(...)` or the `>>` operator:
+let compiled = (doc(acme_id) / descendant("city")).compile()?;
+let compiled = (doc(acme_id) >> child("city")).compile()?;   // same thing
+```
+
+- Navigation is `/`; **descendant** (`//`) is `>>` (or `descendant(...)`).
+- Predicates are `.filter(pred)` where `pred` is
+  `attr("x").eq(v)` / `.ne` / `.lt` / `.le` / `.gt` / `.ge` / `.exists()`.
+- `[...]` predicate syntax is **not** offered: Rust's `Index` must return a
+  reference into the receiver, so it can't grow a builder — hence `.filter(...)`.
+
 ## Typed results
 
 `client.query::<T>(…)` is generic over the result type, so you don't have to stop

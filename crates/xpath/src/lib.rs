@@ -45,6 +45,7 @@ mod error;
 mod lower;
 mod parse;
 
+pub mod builder;
 pub mod debug;
 pub mod ir;
 

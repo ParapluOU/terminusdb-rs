@@ -162,6 +162,50 @@ fn descendant_compiles_to_path() {
     assert!(and.and.iter().any(|q| matches!(q, Query::Path(_))));
 }
 
+/// The typed builder produces the SAME IR as parsing the equivalent string —
+/// so the string parser and the builder are two front-ends to one compiler.
+#[test]
+fn builder_matches_string_form() {
+    use terminusdb_xpath::builder::{attr, child, descendant};
+
+    // submodel/@prop  — via `/` operator overloading
+    assert_eq!(
+        (child("submodel") / attr("prop")).to_ir(),
+        to_ir("submodel/@prop").unwrap()
+    );
+
+    // @name  (relative attribute)
+    assert_eq!(attr("name").to_ir(), to_ir("@name").unwrap());
+
+    // person[@name = "Jane"]/age  — predicate via `.filter`, chain via `/`
+    assert_eq!(
+        (child("person").filter(attr("name").eq("Jane")) / child("age")).to_ir(),
+        to_ir(r#"person[@name = "Jane"]/age"#).unwrap()
+    );
+
+    // employer[@founded > 1990]  (numeric comparison predicate)
+    assert_eq!(
+        child("employer").filter(attr("founded").gt(1990)).to_ir(),
+        to_ir("employer[@founded > 1990]").unwrap()
+    );
+
+    // a//city  (descendant), two ways: descendant() function and the `>>` operator.
+    assert_eq!(
+        (child("a") / descendant("city")).to_ir(),
+        to_ir("a//city").unwrap()
+    );
+    assert_eq!(
+        (child("a") >> child("city")).to_ir(),
+        to_ir("a//city").unwrap()
+    );
+
+    // `>>` binds looser than `/`: (doc/a) >> (b/@c) == a//b/@c
+    assert_eq!(
+        (child("a") >> child("b") / attr("c")).to_ir(),
+        to_ir("a//b/@c").unwrap()
+    );
+}
+
 /// Constructs outside the supported subset are rejected explicitly.
 #[test]
 fn unsupported_constructs_are_rejected() {

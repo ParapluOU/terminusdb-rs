@@ -188,6 +188,35 @@ mod tests {
         .await
     }
 
+    /// The type-safe builder (no strings) runs against the DB. `doc(id)` takes
+    /// the typed `EntityIDFor<Person>` directly.
+    #[tokio::test]
+    async fn typed_builder() -> anyhow::Result<()> {
+        use terminusdb_xpath::builder::{attr, doc};
+        with_dataset(|client, spec, ids| async move {
+            // doc(jane)/address[@city = "Berlin"]/@zip
+            let compiled = doc(ids.jane.clone())
+                .child("address")
+                .filter(attr("city").eq("Berlin"))
+                .attr("zip")
+                .compile()?;
+            let res = client
+                .query::<HashMap<String, serde_json::Value>>(
+                    Some(spec.clone()),
+                    compiled.query.clone(),
+                )
+                .await?;
+            let got: Vec<String> = res
+                .bindings
+                .iter()
+                .filter_map(|b| b.get(&compiled.result_var).and_then(binding_scalar))
+                .collect();
+            assert_eq!(got, vec!["10115".to_string()]);
+            Ok(())
+        })
+        .await
+    }
+
     #[tokio::test]
     async fn descendant() -> anyhow::Result<()> {
         with_dataset(|client, spec, ids| async move {
