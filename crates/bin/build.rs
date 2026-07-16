@@ -150,8 +150,12 @@ fn main() {
             );
             (dir, false)
         } else {
-            // Fall back to cloning from GitHub
-            let version = env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "main".to_string());
+            // Fall back to cloning from GitHub.
+            // Pinned to the ParapluOU/terminusdb fork tag rebased onto upstream
+            // TerminusDB 12.1 (upstream branch 12.1-rc; no v12.1 release tag yet).
+            // Override with TERMINUSDB_VERSION to track a moving branch or bump.
+            let version =
+                env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "v12.1-rc-paraplu.1".to_string());
             println!("cargo:warning=Building TerminusDB version: {}", version);
 
             let temp_dir = env::temp_dir().join("terminusdb-build");

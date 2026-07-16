@@ -6,7 +6,7 @@
 //!
 //! ## Environment Variables
 //!
-//! - `TERMINUSDB_VERSION`: Git branch or tag to build (default: "main")
+//! - `TERMINUSDB_VERSION`: Git branch or tag to build (default: "v12.1-rc-paraplu.1")
 //! - `TERMINUSDB_FORCE_REBUILD`: Set to "1" to force rebuild even if binary exists
 //!
 //! ## Example (Low-level API)
