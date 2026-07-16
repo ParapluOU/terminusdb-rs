@@ -1,0 +1,49 @@
+[package]
+name = "terminusdb-sparql"
+description = "Compile SPARQL queries into TerminusDB WOQL queries"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Compile target: the WOQL AST.
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-schema = { path = "../schema" }
+
+# Spec-grade SPARQL 1.1 parser + algebra (from the oxigraph ecosystem). We reuse
+# this to parse SPARQL into its algebra, then lower that algebra into WOQL —
+# rather than hand-writing a SPARQL parser. `oxrdf` provides the RDF term types
+# (NamedNode/Literal/Variable) that spargebra re-exports.
+spargebra = "=0.4.6"
+oxrdf = "=0.3.3"
+
+anyhow = { workspace = true }
+thiserror = "2.0"
+serde_json = { workspace = true }
+decimal-rs = { workspace = true }
+chrono = { workspace = true }
+
+# Optional: the concrete HTTP backend. Kept optional so the compiler core does
+# not depend on the client at build time (mirrors the xpath and sql crates).
+terminusdb-client = { path = "../client", optional = true }
+
+[features]
+client = ["dep:terminusdb-client"]
+
+# The showcase example drives a live server, so it needs the client backend.
+[[example]]
+name = "showcase"
+required-features = ["client"]
+
+[dev-dependencies]
+# For the live end-to-end tests against a real embedded TerminusDB server.
+terminusdb-client = { path = "../client" }
+terminusdb-bin = { path = "../bin" }
+terminusdb-schema-derive = { path = "../schema/derive" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+anyhow = { workspace = true }
+# Referenced by the TerminusDBModel/FromTDBInstance derive-generated code.
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
