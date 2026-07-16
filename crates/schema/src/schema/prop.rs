@@ -45,7 +45,7 @@ impl PartialOrd for Property {
 
 impl Property {
     pub fn is_relation(&self) -> bool {
-        !crate::primitive::is_primitive(&self.class)
+        !terminusdb_format::prefix::is_primitive(&self.class)
     }
 
     pub fn field_name(&self) -> &String {

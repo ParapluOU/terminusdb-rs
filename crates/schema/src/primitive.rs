@@ -15,10 +15,9 @@ use crate::{
     Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass,
 };
 
-pub const UNIT: &str = "sys:Unit";
-
-pub const JSON: &str = "sys:JSON";
-pub const JSON_DOCUMENT: &str = "sys:JSONDocument";
+// The `sys:*` system vocabulary now lives in `terminusdb-format`; re-exported
+// here so `terminusdb_schema::{UNIT, JSON, JSON_DOCUMENT}` keep resolving.
+pub use terminusdb_format::sys::{JSON, JSON_DOCUMENT, UNIT};
 
 /**
 * base_type(?BaseTypeURI:uri) is nondet.
@@ -73,64 +72,11 @@ pub const JSON_DOCUMENT: &str = "sys:JSONDocument";
 | xsd:NCName |	XML NCNames |
  */
 
-macro_rules! primitive {
-    ($const_name:ident: $xsd_type:expr) => {
-        pub const $const_name : &str = concat!("xsd:", $xsd_type);
-    };
-
-    ({$($const_name:ident: $xsd_type:expr),*}) => {
-        $(
-            primitive!($const_name: $xsd_type);
-        )*
-    }
-}
-
-pub fn is_primitive(cls: &str) -> bool {
-    cls.starts_with("xsd:")
-}
-
-primitive!({
-    // the 'G' stands for 'Gregorian'
-    G_YEAR: "gYear",
-    G_YEAR_MONTH: "gYearMonth",
-    G_YEAR_RANGE: "gYearRange",
-    G_MONTH_DAY: "gMonthDay",
-
-    YEAR_MONTH_DURATION: "yearMonthDuration",
-    DAY_TIME_DURATION: "dayTimeDuration",
-    DURATION: "duration",
-
-    DATE: "date",
-    DATETIME: "dateTime",
-    DATE_TIMESTAMP: "dateTimeStamp",
-
-    NON_NEGATIVE_INTEGER: "nonNegativeInteger",
-    POSITIVE_INTEGER: "positiveInteger",
-    NEGATIVE_INTEGER: "negativeInteger",
-    NON_POSITIVE_INTEGER: "nonPositiveInteger",
-    UNSIGNED_INT: "unsignedInt",
-
-    BYTE: "byte",
-    SHORT: "short",
-    UNSIGNED_BYTE: "unsignedByte",
-
-    FLOAT: "float",
-    TIME: "time",
-    STRING: "string",
-    DECIMAL: "decimal",
-
-    INTEGER: "integer",
-    INT: "integer",
-    BOOLEAN: "boolean",
-    BOOL: "boolean",
-    DOUBLE: "double",
-    LONG: "long",
-    UNSIGNED_LONG: "unsignedLong",
-    HEX_BINARY: "hexBinary",
-    BASE64_BINARY: "base64Binary",
-
-    URI: "anyURI"
-});
+// The XSD datatype classifier and the `xsd:*` CURIE constants now live in
+// `terminusdb-format`. Re-export both so `terminusdb_schema::is_primitive` and
+// `terminusdb_schema::{STRING, INTEGER, ...}` keep resolving for dependents.
+pub use terminusdb_format::prefix::is_primitive;
+pub use terminusdb_format::xsd::*;
 
 #[test]
 fn test_primitive() {

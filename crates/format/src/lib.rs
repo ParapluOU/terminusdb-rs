@@ -24,7 +24,9 @@ pub mod error;
 pub mod keyword;
 pub mod prefix;
 pub mod schema_doc;
+pub mod sys;
 pub mod value;
+pub mod xsd;
 
 pub use datatype::{classify_datatype, classify_xsd_local, XsdCategory};
 pub use error::{FormatError, Result};

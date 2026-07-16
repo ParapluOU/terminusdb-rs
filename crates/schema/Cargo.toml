@@ -25,6 +25,7 @@ rayon = "1.5.3"
 glob = { version = "0.3.0" }
 hashable = "0.0.0"
 # our local libs
+terminusdb-format = { path = "../format" }
 enum_variant_macros = "0.3.0"
 pseudonym.workspace = true
 anyhow = { workspace = true }

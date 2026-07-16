@@ -380,62 +380,10 @@ mod tests {
         assert_eq!(custom.to_string(), "custom:///base/Person/123");
     }
 
-    #[test]
-    fn test_strip_schema_prefix() {
-        // Full URI with fragment
-        assert_eq!(strip_schema_prefix("https://pubb.in/schemas/gdocs/1.0#DocumentType"), "DocumentType");
-        // Schema prefix
-        assert_eq!(strip_schema_prefix("gd:SectionType"), "SectionType");
-        // XML namespace prefixes preserved
-        assert_eq!(strip_schema_prefix("xlink:href"), "xlink:href");
-        assert_eq!(strip_schema_prefix("xml:lang"), "xml:lang");
-        assert_eq!(strip_schema_prefix("xi:include"), "xi:include");
-        // No prefix
-        assert_eq!(strip_schema_prefix("SecChild"), "SecChild");
-        // JSON-LD keywords
-        assert_eq!(strip_schema_prefix("@type"), "@type");
-    }
+    // `strip_schema_prefix` moved to `terminusdb-format`; its tests live there.
 }
 
-/// Known XML namespace prefixes that should be preserved (not stripped).
-const XML_NS_PREFIXES: &[&str] = &[
-    "xlink", "xml", "xmlns", "xsl", "xi", "mml", "oasis",
-    "ali", "tbx", "mtl", "c",
-];
-
-/// Extract the local name from a TDB type or property string.
-///
-/// Strips namespace URIs (`https://ns#Name` → `Name`) and TDB schema
-/// prefixes (`gd:Name` → `Name`), while preserving known XML namespace
-/// prefixes (`xlink:href` stays as-is).
-///
-/// # Examples
-/// ```
-/// use terminusdb_schema::strip_schema_prefix;
-///
-/// assert_eq!(strip_schema_prefix("https://pubb.in/schemas/gdocs/1.0#DocumentType"), "DocumentType");
-/// assert_eq!(strip_schema_prefix("gd:SectionType"), "SectionType");
-/// assert_eq!(strip_schema_prefix("xlink:href"), "xlink:href");
-/// assert_eq!(strip_schema_prefix("SecChild"), "SecChild");
-/// ```
-pub fn strip_schema_prefix(s: &str) -> &str {
-    // Full URI: https://ns#Name → Name
-    if let Some(pos) = s.rfind('#') {
-        return &s[pos + 1..];
-    }
-    // Short prefix: gd:Name — but NOT xml namespace prefixes
-    if let Some(pos) = s.find(':') {
-        let prefix = &s[..pos];
-        // Keep known XML namespace prefixes
-        if XML_NS_PREFIXES.contains(&prefix) {
-            return s;
-        }
-        // Keep URL schemes (contain /)
-        if prefix.contains('/') {
-            return s;
-        }
-        // Strip TDB schema prefixes
-        return &s[pos + 1..];
-    }
-    s
-}
+// `strip_schema_prefix` (and its `XML_NS_PREFIXES` table) moved to
+// `terminusdb-format`. Re-exported so `terminusdb_schema::strip_schema_prefix`
+// and `iri::strip_schema_prefix` keep resolving.
+pub use terminusdb_format::prefix::strip_schema_prefix;
