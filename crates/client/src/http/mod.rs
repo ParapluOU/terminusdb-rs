@@ -43,6 +43,7 @@ pub mod instance;
 pub mod log;
 pub mod merge_branch;
 pub mod migration;
+pub mod prefix;
 pub mod open;
 pub mod organization;
 pub mod query;
@@ -71,6 +72,7 @@ pub use client::TerminusDBHttpClient;
 pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use document::DeleteOpts;
 pub use migration::{MigrationOperation, MigrationOptions, MigrationResponse};
+pub use prefix::PrefixResponse;
 pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
 pub use helpers::{
     dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema,
