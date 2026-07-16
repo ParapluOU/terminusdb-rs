@@ -259,12 +259,15 @@ impl super::client::TerminusDBHttpClient {
             Err(anyhow!("document #{} does not exist", id))?
         }
 
-        let uri = self
+        let mut url_builder = self
             .build_url()
             .endpoint("document")
             .database(spec)
-            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized)
-            .build();
+            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized);
+        if opts.raw_json {
+            url_builder = url_builder.query("raw_json", "true");
+        }
+        let uri = url_builder.build();
 
         debug!("retrieving document at {}...", &uri);
 
@@ -505,6 +508,12 @@ impl super::client::TerminusDBHttpClient {
                 if args.force {
                     url_builder = url_builder.query("full_replace", "true");
                 }
+                if args.merge_repeats {
+                    url_builder = url_builder.query("merge_repeats", "true");
+                }
+                if args.raw_json {
+                    url_builder = url_builder.query("raw_json", "true");
+                }
 
                 let uri = url_builder.build();
 
@@ -545,12 +554,18 @@ impl super::client::TerminusDBHttpClient {
                 r
             }
             DocumentMethod::Put => {
-                let uri = self
+                let mut url_builder = self
                     .build_url()
                     .endpoint("document")
                     .database(&args.spec)
-                    .document_params(&args.author, &args.message, &ty, false) // create=false
-                    .build();
+                    .document_params(&args.author, &args.message, &ty, false); // create=false
+                if args.merge_repeats {
+                    url_builder = url_builder.query("merge_repeats", "true");
+                }
+                if args.raw_json {
+                    url_builder = url_builder.query("raw_json", "true");
+                }
+                let uri = url_builder.build();
 
                 debug!("PUT {} to URI {} (create=false)", &ty, &uri);
 
@@ -571,12 +586,18 @@ impl super::client::TerminusDBHttpClient {
                 request.send().await?
             }
             DocumentMethod::PutWithCreate => {
-                let uri = self
+                let mut url_builder = self
                     .build_url()
                     .endpoint("document")
                     .database(&args.spec)
-                    .document_params(&args.author, &args.message, &ty, true) // create=true
-                    .build();
+                    .document_params(&args.author, &args.message, &ty, true); // create=true
+                if args.merge_repeats {
+                    url_builder = url_builder.query("merge_repeats", "true");
+                }
+                if args.raw_json {
+                    url_builder = url_builder.query("raw_json", "true");
+                }
+                let uri = url_builder.build();
 
                 debug!("PUT {} to URI {} (create=true)", &ty, &uri);
 

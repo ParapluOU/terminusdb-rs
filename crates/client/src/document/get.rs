@@ -13,6 +13,9 @@ pub struct GetOpts {
     pub type_filter: Option<String>,
     /// Minimize the output (defaults to true for efficient data transfer)
     pub minimized: bool,
+    /// TerminusDB 12 `raw_json`: read the document as unstructured
+    /// `sys:JSONDocument`. Required to GET a document inserted with `raw_json`.
+    pub raw_json: bool,
     /// Optional request timeout
     pub timeout: Option<Duration>,
 }
@@ -26,6 +29,7 @@ impl Default for GetOpts {
             count: None,
             type_filter: None,
             minimized: true,
+            raw_json: false,
             timeout: None,
         }
     }
@@ -82,6 +86,12 @@ impl GetOpts {
     /// Set as_list for chaining
     pub fn with_as_list(mut self, as_list: bool) -> Self {
         self.as_list = as_list;
+        self
+    }
+
+    /// Set raw_json for chaining (read as unstructured sys:JSONDocument).
+    pub fn with_raw_json(mut self, raw_json: bool) -> Self {
+        self.raw_json = raw_json;
         self
     }
 

@@ -33,6 +33,12 @@ pub struct DocumentInsertArgs {
     /// - If `force=false`: POST will fail with a duplicate ID error from TerminusDB
     /// - If `force=true`: POST will succeed and replace existing documents
     pub skip_existence_check: bool,
+    /// TerminusDB 12 `merge_repeats`: when a single request contains several
+    /// documents with the same `@id`, silently merge them instead of erroring.
+    pub merge_repeats: bool,
+    /// TerminusDB 12 `raw_json`: insert the payload as unstructured
+    /// `sys:JSONDocument` (no schema check). Documents must carry an `@id`.
+    pub raw_json: bool,
     /// optional request timeout
     pub timeout: Option<Duration>,
 }
@@ -58,6 +64,20 @@ impl DocumentInsertArgs {
         self.timeout = Some(timeout);
         self
     }
+
+    /// Enable TerminusDB 12 `merge_repeats` (merge same-`@id` documents in one
+    /// request instead of erroring).
+    pub fn with_merge_repeats(mut self, merge_repeats: bool) -> Self {
+        self.merge_repeats = merge_repeats;
+        self
+    }
+
+    /// Enable TerminusDB 12 `raw_json` (insert as unstructured
+    /// `sys:JSONDocument`, no schema check).
+    pub fn with_raw_json(mut self, raw_json: bool) -> Self {
+        self.raw_json = raw_json;
+        self
+    }
 }
 
 impl Default for DocumentInsertArgs {
@@ -73,6 +93,8 @@ impl Default for DocumentInsertArgs {
             },
             force: false,
             skip_existence_check: false,
+            merge_repeats: false,
+            raw_json: false,
             timeout: None,
         }
     }
