@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
 use terminusdb_schema::*;
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+use terminusdb_schema_derive::{FromTDBInstance, FromTuple, TerminusDBModel};
 use terminusdb_xpath::{compile, explain, Explanation};
 
 // ===========================================================================
@@ -51,7 +51,7 @@ use terminusdb_xpath::{compile, explain, Explanation};
 /// A postal address. A **subdocument**: stored inline in its owner, but still a
 /// node in the graph reachable through the owner's object-property edge. Both
 /// fields are value properties (literals).
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
 #[tdb(subdocument = true)]
 struct Address {
     city: String,
@@ -61,7 +61,7 @@ struct Address {
 /// A company. Also a subdocument here (embedded in the employee).
 /// - `name`, `founded` are **value properties**,
 /// - `headquarters` is an **object property** edge to an `Address`.
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
 #[tdb(subdocument = true)]
 struct Company {
     name: String,
@@ -72,7 +72,7 @@ struct Company {
 /// An employee: a top-level document (has its own IRI, e.g. `Employee/alice`).
 /// - `name`, `salary` are **value properties**,
 /// - `employer` is an **object property** edge to a `Company`.
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
 #[tdb(id_field = "id")]
 struct Employee {
     id: EntityIDFor<Self>,
@@ -90,20 +90,16 @@ async fn main() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
     // The seed data. `Company`/`Address` are subdocuments, so each `Employee`
-    // carries them inline.
-    let company = |name: &str, founded, city: &str, country: &str| Company {
-        name: name.to_string(),
-        founded,
-        headquarters: Address {
-            city: city.to_string(),
-            country: country.to_string(),
-        },
+    // carries them inline. `FromTuple` builds each model from a tuple (nested
+    // models included), and `from_tuples` builds the whole `Vec`.
+    let company = |name: &str, founded: i32, city: &str, country: &str| {
+        Company::from((name, founded, Address::from((city, country))))
     };
-    let employees = vec![
-        employee("alice", "Alice", 95000, company("Acme Corp", 1999, "London", "UK"))?,
-        employee("bob", "Bob", 80000, company("Globex", 2010, "Berlin", "DE"))?,
-        employee("carol", "Carol", 120000, company("Acme Corp", 1999, "London", "UK"))?,
-    ];
+    let employees = Employee::from_tuples([
+        ("alice", "Alice", 95000, company("Acme Corp", 1999, "London", "UK")),
+        ("bob", "Bob", 80000, company("Globex", 2010, "Berlin", "DE")),
+        ("carol", "Carol", 120000, company("Acme Corp", 1999, "London", "UK")),
+    ]);
 
     // with_db_seed inserts the Employee schema tree (Company + Address are
     // pulled in) AND the instances — no hand-written seed step needed.
@@ -295,15 +291,6 @@ fn short_type<T>() -> &'static str {
 // ===========================================================================
 
 /// Construct an `Employee` with a typed id.
-fn employee(id: &str, name: &str, salary: i32, employer: Company) -> anyhow::Result<Employee> {
-    Ok(Employee {
-        id: EntityIDFor::new(id)?,
-        name: name.to_string(),
-        salary,
-        employer,
-    })
-}
-
 fn banner(title: &str) {
     println!("\n{}", "═".repeat(78));
     println!(" {title}");
