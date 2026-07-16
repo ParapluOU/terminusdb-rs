@@ -8,6 +8,7 @@ pub mod hashmap_uuid;
 pub mod uuid;
 
 mod r#box;
+mod decimal;
 mod generic;
 mod int;
 mod opt;

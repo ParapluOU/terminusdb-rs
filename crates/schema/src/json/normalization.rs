@@ -131,21 +131,73 @@ pub fn new_ref(hash: String) -> JSONFragmentRef {
     map
 }
 
+/// Write `value` as canonical JSON into `out`: object keys sorted
+/// lexicographically, no insignificant whitespace, numbers by their exact
+/// `serde_json::Number` string (arbitrary_precision-safe).
+fn write_canonical(value: &serde_json::Value, out: &mut String) {
+    use serde_json::Value;
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::String(s) => write_canonical_string(s, out),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, key) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical_string(key, out);
+                out.push(':');
+                write_canonical(&map[key], out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// Write a JSON string literal (with the minimal RFC 8259 escapes) into `out`.
+fn write_canonical_string(s: &str, out: &mut String) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 pub fn hash_fragment(fragment: &JSONFragment) -> String {
-    // Create a canonical serializer to ensure key order is consistent
-    let mut ser = Serializer::with_formatter(Vec::new(), CanonicalFormatter::new());
-
-    // Serialize the fragment to canonical JSON format
+    // Canonical JSON (sorted object keys, no insignificant whitespace) then
+    // SHA-256. We serialize by hand rather than via `serde_canonical_json`
+    // because that crate panics on serde_json's `arbitrary_precision` number
+    // representation (enabled workspace-wide for TerminusDB 12 high-precision
+    // decimals). Numbers are emitted by their exact `Number` string, so
+    // precision is preserved in the hash.
     let value = serde_json::Value::Object(fragment.clone());
-    value
-        .serialize(&mut ser)
-        .expect("Failed to serialize JSON fragment");
+    let mut canonical_json = String::new();
+    write_canonical(&value, &mut canonical_json);
 
-    // Convert serialized bytes to UTF-8 string
-    let canonical_json =
-        String::from_utf8(ser.into_inner()).expect("Failed to convert canonical JSON to string");
-
-    // Create hash of the canonical JSON
     let mut hasher = Sha256::new();
     hasher.update(canonical_json.as_bytes());
     let result = hasher.finalize();

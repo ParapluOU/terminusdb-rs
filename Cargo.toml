@@ -52,7 +52,9 @@ derive_builder = "0.20.0"
 pseudonym = "0.2.3"
 
 # Decimal support
-rust_decimal = { version = "1.0", features = ["serde-str"] }
+# bigdecimal: arbitrary-precision decimal for xsd:decimal model fields (v12 stores
+# up to 256 digits, prints ~20). Preferred over rust_decimal's fixed ~28 digits.
+bigdecimal = { version = "0.4", features = ["serde"] }
 
 # Proc macro dependencies
 darling = "0.20.3"

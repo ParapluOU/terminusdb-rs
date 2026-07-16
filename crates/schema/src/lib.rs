@@ -31,6 +31,11 @@ pub use pred::*;
 pub use r#impl::map::HashMapStringEntry;
 pub use ty::*;
 
+/// Re-export so models can declare `xsd:decimal` fields as
+/// `terminusdb_schema::BigDecimal` without depending on the `bigdecimal` crate
+/// directly (its `ToSchemaClass`/`ToInstanceProperty` impls live in this crate).
+pub use bigdecimal::BigDecimal;
+
 // Re-export the helper function for deserializing complex types
 pub use instance::prop::{from_tdb_instance_property, MaybeFromTDBInstance};
 

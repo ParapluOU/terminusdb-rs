@@ -13,6 +13,7 @@ tempfile = "3"
 #filepath = "*"
 #subprocess = "0.2.9"
 decimal-rs = { version = "0.1.38", features = ["serde"] }
+bigdecimal = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 enum_derive = "0.1.7"
 custom_derive = "0.1.7"

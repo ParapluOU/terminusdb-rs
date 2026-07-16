@@ -7,7 +7,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::marker::PhantomData;
-use std::str::FromStr;
 
 // Implementations for primitive types
 impl<Parent> InstancePropertyFromJson<Parent> for String {
@@ -47,24 +46,8 @@ macro_rules! impl_int_deserialization {
                         }
                         Err(anyhow!("Number cannot be represented as an integer"))
                     }
-                    Value::String(s) => {
-                        // TerminusDB sometimes returns numbers as strings
-                        if let Ok(i) = s.parse::<i64>() {
-                            if i >= <$ty>::MIN as i64 && i <= <$ty>::MAX as i64 {
-                                if let Ok(n) = serde_json::Number::from_str(&s) {
-                                    return Ok(InstanceProperty::Primitive(
-                                        PrimitiveValue::Number(n),
-                                    ));
-                                }
-                            }
-                            return Err(anyhow!(
-                                "Number {} is out of range for {}",
-                                i,
-                                stringify!($ty)
-                            ));
-                        }
-                        Err(anyhow!("String '{}' cannot be parsed as a number", s))
-                    }
+                    // TerminusDB 12 returns numbers as native JSON numbers; the
+                    // v11 string-wrapped-number fallback is intentionally gone.
                     _ => Err(anyhow!("Expected a number, got {:?}", json)),
                 }
             }
@@ -91,15 +74,6 @@ impl<Parent> InstancePropertyFromJson<Parent> for i64 {
                 }
                 Err(anyhow!("Number cannot be represented as i64"))
             }
-            Value::String(s) => {
-                // TerminusDB sometimes returns numbers as strings
-                if let Ok(_i) = s.parse::<i64>() {
-                    if let Ok(n) = serde_json::Number::from_str(&s) {
-                        return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
-                    }
-                }
-                Err(anyhow!("String '{}' cannot be parsed as i64", s))
-            }
             _ => Err(anyhow!("Expected a number, got {:?}", json)),
         }
     }
@@ -120,15 +94,6 @@ impl<Parent> InstancePropertyFromJson<Parent> for u64 {
                     }
                 }
                 Err(anyhow!("Number cannot be represented as u64"))
-            }
-            Value::String(s) => {
-                // TerminusDB sometimes returns numbers as strings
-                if let Ok(_u) = s.parse::<u64>() {
-                    if let Ok(n) = serde_json::Number::from_str(&s) {
-                        return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
-                    }
-                }
-                Err(anyhow!("String '{}' cannot be parsed as u64", s))
             }
             _ => Err(anyhow!("Expected a number, got {:?}", json)),
         }

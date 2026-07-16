@@ -184,7 +184,8 @@ to_schema_class!({
     i64: LONG,
     isize: INTEGER,
     String: STRING,
-    f64: FLOAT,
+    // f64 is IEEE-754 binary64 == xsd:double; f32 is binary32 == xsd:float.
+    f64: DOUBLE,
     f32: FLOAT,
     bool: BOOLEAN,
     u8: UNSIGNED_BYTE,
