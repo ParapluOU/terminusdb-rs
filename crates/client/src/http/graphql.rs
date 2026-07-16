@@ -82,13 +82,37 @@ pub struct GraphQLLocation {
 }
 
 /// A segment in a GraphQL error path (can be a field name or array index)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum GraphQLPathSegment {
     /// Field name
     Field(String),
     /// Array index
     Index(usize),
+}
+
+// Manual Deserialize: `#[serde(untagged)]` with a bare numeric variant (`Index`)
+// cannot round-trip serde_json's `arbitrary_precision` number token through
+// serde's `Content` buffer, so array-index path segments would fail to parse.
+// Dispatch directly on the JSON value's shape instead.
+impl<'de> Deserialize<'de> for GraphQLPathSegment {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(s) => Ok(GraphQLPathSegment::Field(s)),
+            serde_json::Value::Number(ref n) => n
+                .as_u64()
+                .map(|i| GraphQLPathSegment::Index(i as usize))
+                .ok_or_else(|| D::Error::custom("GraphQL path index is not a u64")),
+            other => Err(D::Error::custom(format!(
+                "GraphQL path segment must be a string or index, got {other}"
+            ))),
+        }
+    }
 }
 
 /// The standard introspection query for GraphQL schemas

@@ -60,11 +60,34 @@ pub struct XsdElement {
 }
 
 /// Cardinality for max_occurs
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Cardinality {
     Number(u32),
     Unbounded, // null in JSON means unbounded
+}
+
+// Manual Deserialize: `#[serde(untagged)]` with a bare numeric variant cannot
+// round-trip serde_json's `arbitrary_precision` number token through serde's
+// `Content` buffer. Dispatch on the JSON value shape (null -> Unbounded).
+impl<'de> Deserialize<'de> for Cardinality {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::Null => Ok(Cardinality::Unbounded),
+            serde_json::Value::Number(n) => n
+                .as_u64()
+                .and_then(|x| u32::try_from(x).ok())
+                .map(Cardinality::Number)
+                .ok_or_else(|| D::Error::custom("cardinality is not a u32")),
+            other => Err(D::Error::custom(format!(
+                "cardinality must be a number or null, got {other}"
+            ))),
+        }
+    }
 }
 
 /// Type information (inline or reference)

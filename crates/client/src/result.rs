@@ -154,11 +154,43 @@ impl ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>> {
     }
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(untagged)]
+#[derive(Debug)]
 pub enum ApiResponse<R> {
     Error(TypedErrorResponse),
     Success(R),
+}
+
+// Manual Deserialize instead of `#[serde(untagged)]`: with serde_json's
+// `arbitrary_precision` feature (needed so TerminusDB 12 high-precision
+// xsd:decimal / timestamps survive parsing), untagged/flatten enums buffer the
+// input through serde's `Content`, which cannot round-trip the arbitrary-
+// precision number token and fails with "did not match any variant". We instead
+// inspect the response object once and dispatch: the standard v12 error envelope
+// carries `api:status == "api:failure"` (and/or an `api:error` object); anything
+// else is a success payload deserialized directly into the concrete `R` (concrete
+// deserialization reads numbers losslessly, no buffering).
+impl<'de, R> Deserialize<'de> for ApiResponse<R>
+where
+    R: DeserializeOwned,
+{
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = Value::deserialize(deserializer)?;
+        let is_error = value.get("api:status").and_then(Value::as_str) == Some("api:failure")
+            || value.get("api:error").is_some();
+        if is_error {
+            serde_json::from_value(value)
+                .map(ApiResponse::Error)
+                .map_err(D::Error::custom)
+        } else {
+            serde_json::from_value(value)
+                .map(ApiResponse::Success)
+                .map_err(D::Error::custom)
+        }
+    }
 }
 
 // #[derive(Debug, Clone)]
