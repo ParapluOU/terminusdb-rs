@@ -15,12 +15,18 @@ bin tests + 244 client integration tests all green. New behaviors probed live
   lacked `#[tdb(abstract_class)]` / `#[tdb(rename_all="lowercase")]`, so `Eval`
   arithmetic serialized an illegal `{"@type":"ArithmeticExpression",...}` wrapper
   the server rejected ("Not well formed WOQL JSON-LD"). Now fixed; Eval works.
-- **KEY M1 FINDING — decimal precision is lost client-side.** `Eval(1/3)` on 12.1
-  returns `xsd:decimal` at full rational precision, but the client shows
-  `0.33333333333333337` (an f64 artifact). Root cause: `response.rs:80` parses
-  responses with `serde_json::from_str::<Value>` **without** `arbitrary_precision`,
-  truncating any decimal past ~16 digits through f64. This is exactly what P0.2 /
-  M1 must fix (enable `arbitrary_precision` + a real decimal field type).
+- **KEY M1 FINDING — decimal precision was lost client-side → FIXED.** `Eval(1/3)`
+  on 12.1 returns `xsd:decimal` at full rational precision, but the client showed
+  `0.33333333333333337` (f64 artifact) because response parsing used serde_json
+  without `arbitrary_precision`, truncating decimals past ~16 digits through f64.
+  Fixed by enabling `arbitrary_precision` workspace-wide; `Eval(1/3)` now
+  round-trips as `0.33333333333333333333`. Fallout: the feature's number token
+  can't pass through serde's `Content` buffer, so three untagged/flatten enums
+  (`ApiResponse`, `GraphQLPathSegment`, `xsd::Cardinality`) got manual `Deserialize`
+  impls that dispatch on a `serde_json::Value`. Full client suite green (248/248).
+  **Remaining M1 pieces:** `f64`→`xsd:double` (schema-shape change — currently
+  `f64`→`xsd:float`), a first-class high-precision decimal field type
+  (`bigdecimal`), and the strict-v12 read-path cleanup.
 - **Minor follow-up:** `Interval(start,end→var)` construction returned an unbound
   result (None); needs the right binding mode / arg shape — revisit in M1/M3.
 
