@@ -27,6 +27,7 @@
 //! - `change_listener`: Type-safe change listener API
 
 // Public modules
+pub mod apply;
 pub mod branch;
 pub mod branch_client;
 pub mod change_listener;
@@ -71,6 +72,7 @@ pub use client::TerminusDBHttpClient;
 #[cfg(not(target_arch = "wasm32"))]
 pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use document::DeleteOpts;
+pub use apply::ApplyOptions;
 pub use migration::{MigrationOperation, MigrationOptions, MigrationResponse};
 pub use prefix::PrefixResponse;
 pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
