@@ -240,6 +240,14 @@ impl Catalog {
     /// is unsupported* rather than seeing a bare "not found".
     pub(crate) fn enrich_plan_error(&self, e: DataFusionError) -> SqlError {
         let msg = e.to_string();
+        // v1 registers no scalar/aggregate/window functions, so a call to one
+        // fails deep in SqlToRel with an opaque "No functions registered" internal
+        // error. Present it as the real reason.
+        if msg.contains("No functions registered") {
+            return SqlError::Unsupported(
+                "functions and aggregates (COUNT/SUM/…) are not supported in v1".to_string(),
+            );
+        }
         for ((table, col), reason) in &self.omitted_cols {
             if error_mentions(&msg, col) {
                 return SqlError::UnsupportedColumn {
