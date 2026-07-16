@@ -18,8 +18,8 @@ use datafusion_expr::LogicalPlan;
 use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::SqlToRel;
 use serde_json::Value;
-use terminusdb_format::prefix::{is_primitive, is_sys, schema_curie};
-use terminusdb_format::{parse_schema, Family, RawClass, RawProperty};
+use terminusdb_format::prefix::schema_curie;
+use terminusdb_format::{parse_schema, Family, PropertyKind, RawClass, RawProperty};
 
 use crate::context::TdbContextProvider;
 use crate::error::{Result, SqlError};
@@ -105,8 +105,8 @@ impl Catalog {
 
                 let nullable = matches!(prop.family, Some(Family::Optional)) || prop.force_nullable;
 
-                // Classify the property's range.
-                let (kind, datatype) = if is_primitive(&prop.class) || is_sys(&prop.class) {
+                // Classify the property's range (datatype value vs graph link).
+                let (kind, datatype) = if PropertyKind::of(&prop.class).is_datatype() {
                     match datatype_to_arrow(&prop.class) {
                         Ok((dt, semantic)) => (ColumnKind::Scalar { semantic }, dt),
                         Err(reason) => {

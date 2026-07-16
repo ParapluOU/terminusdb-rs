@@ -532,10 +532,11 @@ impl Schema {
         }
     }
 
-    pub fn is_relation_property(&self, field_name: &str) -> bool {
+    /// Whether the named property is a graph link (object property).
+    pub fn is_link_property(&self, field_name: &str) -> bool {
         self.own_properties()
             .iter()
-            .any(|prop| prop.field_name() == field_name && prop.is_relation())
+            .any(|prop| prop.field_name() == field_name && prop.is_link())
     }
 
     // todo: make ID field strongly typed

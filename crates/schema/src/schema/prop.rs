@@ -44,8 +44,18 @@ impl PartialOrd for Property {
 }
 
 impl Property {
-    pub fn is_relation(&self) -> bool {
-        !terminusdb_format::prefix::is_primitive(&self.class)
+    /// Whether this property's range is a stored value or a graph link.
+    pub fn kind(&self) -> terminusdb_format::PropertyKind {
+        terminusdb_format::PropertyKind::of(&self.class)
+    }
+
+    /// True when this property is a graph link (object property) rather than a
+    /// datatype value. Replaces the old `is_relation`; unlike it, `sys:*` ranges
+    /// (`sys:JSON`, `sys:Unit`) are correctly treated as values, not links.
+    /// (Distinct from [`crate::InstanceProperty::is_relation`], which is about an
+    /// instance *value* being a relation.)
+    pub fn is_link(&self) -> bool {
+        self.kind().is_link()
     }
 
     pub fn field_name(&self) -> &String {

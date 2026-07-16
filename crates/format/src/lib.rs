@@ -23,6 +23,7 @@ pub mod datatype;
 pub mod error;
 pub mod keyword;
 pub mod prefix;
+pub mod property;
 pub mod schema_doc;
 pub mod sys;
 pub mod value;
@@ -30,5 +31,6 @@ pub mod xsd;
 
 pub use datatype::{classify_datatype, classify_xsd_local, XsdCategory};
 pub use error::{FormatError, Result};
+pub use property::PropertyKind;
 pub use schema_doc::{parse_schema, Family, RawClass, RawEnum, RawProperty, RawSchema};
 pub use value::{classify_value, WireValue};
