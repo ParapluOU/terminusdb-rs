@@ -47,12 +47,19 @@ mod tests {
         server
             .with_db_schema::<(Book, Author), _, _, _>("sql_objref", |client, spec| async move {
                 let args = DocumentInsertArgs::from(spec.clone());
-                // Authors first (the links point at them).
-                client.insert_instance(&Author::from(("rowling", "Rowling")), args.clone()).await?;
-                client.insert_instance(&Author::from(("tolkien", "Tolkien")), args.clone()).await?;
-                client.insert_instance(&Book::from(("hp1", "Philosopher's Stone", "rowling")), args.clone()).await?;
-                client.insert_instance(&Book::from(("hp2", "Chamber of Secrets", "rowling")), args.clone()).await?;
-                client.insert_instance(&Book::from(("lotr", "Fellowship", "tolkien")), args.clone()).await?;
+                // Authors first (the links point at them). A whole array of tuples
+                // → Vec<Author> via `from_tuples`.
+                for a in Author::from_tuples([("rowling", "Rowling"), ("tolkien", "Tolkien")]) {
+                    client.insert_instance(&a, args.clone()).await?;
+                }
+                // Books referencing authors by id.
+                for b in Book::from_tuples([
+                    ("hp1", "Philosopher's Stone", "rowling"),
+                    ("hp2", "Chamber of Secrets", "rowling"),
+                    ("lotr", "Fellowship", "tolkien"),
+                ]) {
+                    client.insert_instance(&b, args.clone()).await?;
+                }
 
                 let session = Session::open(client.clone(), &spec.db, spec.branch.as_deref()).await?;
                 f(session, spec).await
@@ -87,6 +94,42 @@ mod tests {
             Ok(())
         })
         .await
+    }
+
+    /// A reference field given a NESTED model (a whole `Author`, not an id):
+    /// `FromTuple` accepts either, and the linked author is created alongside the
+    /// book. Uses its own isolated db so it doesn't perturb the shared dataset.
+    #[tokio::test]
+    async fn nested_model_reference() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Book, Author), _, _, _>("sql_objref_nested", |client, spec| async move {
+                let args = DocumentInsertArgs::from(spec.clone());
+                // The 3rd tuple element is an `Author` value, not a `&str` id.
+                client
+                    .insert_instance(
+                        &Book::from((
+                            "silmarillion",
+                            "The Silmarillion",
+                            Author::from(("tolkien", "J.R.R. Tolkien")),
+                        )),
+                        args.clone(),
+                    )
+                    .await?;
+
+                let session = Session::open(client.clone(), &spec.db, spec.branch.as_deref()).await?;
+                // The nested author was created and is reachable through the link.
+                let r = session
+                    .run(
+                        "SELECT b.title AS title, a.name AS author \
+                         FROM book b JOIN author a ON b.author = a.iri",
+                    )
+                    .await?;
+                assert_eq!(col(&r, "title"), vec!["The Silmarillion"]);
+                assert_eq!(col(&r, "author"), vec!["J.R.R. Tolkien"]);
+                Ok(())
+            })
+            .await
     }
 
     /// A real IRI equijoin: `book.author` (a link value) unifies with the

@@ -63,6 +63,8 @@ pub fn derive(input: &DeriveInput) -> TokenStream {
 
     // Trailing comma makes the single-field case a 1-tuple `(P0,)`.
     quote! {
+        // (1) Build one model from a tuple, converting each element into its field
+        //     type. `Self` is valid here, so `EntityIDFor<Self>` needs no rewriting.
         impl<#(#params),*> ::core::convert::From<(#(#params,)*)> for #name
         where
             #(#params: ::terminusdb_schema::IntoField<#field_types>,)*
@@ -71,6 +73,31 @@ pub fn derive(input: &DeriveInput) -> TokenStream {
                 Self {
                     #(#field_names: ::terminusdb_schema::IntoField::into_field(__tuple.#indices),)*
                 }
+            }
+        }
+
+        // (2) A whole model value converts into a link (`Ref<Self>` /
+        //     `TdbLazy<Self>`), so a reference field can be given a NESTED model,
+        //     not just an id. A concrete (non-blanket) impl, so it cannot collide
+        //     with the `&str -> link` blanket in terminusdb-schema.
+        impl ::terminusdb_schema::IntoField<::terminusdb_schema::TdbLazy<#name>> for #name {
+            fn into_field(self) -> ::terminusdb_schema::TdbLazy<#name> {
+                ::terminusdb_schema::TdbLazy::from(self)
+            }
+        }
+
+        // (3) Build a `Vec<Self>` from an array / iterator of tuples (or models):
+        //     each element is converted via its `Into<Self>` (the impl from (1)).
+        impl #name {
+            pub fn from_tuples<__I>(__items: __I) -> ::std::vec::Vec<Self>
+            where
+                __I: ::core::iter::IntoIterator,
+                __I::Item: ::core::convert::Into<Self>,
+            {
+                __items
+                    .into_iter()
+                    .map(::core::convert::Into::into)
+                    .collect()
             }
         }
     }

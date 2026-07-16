@@ -70,22 +70,23 @@ async fn main() -> anyhow::Result<()> {
     server
         .with_db_schema::<(Book, Author), _, _, _>("sql_showcase", |client, spec| async move {
             let args = DocumentInsertArgs::from(spec.clone());
-            for a in [
-                Author::from(("austen", "Jane Austen", "UK")),
-                Author::from(("tolkien", "J.R.R. Tolkien", "UK")),
-                Author::from(("orwell", "George Orwell", "UK")),
-                Author::from(("asimov", "Isaac Asimov", "US")),
-                Author::from(("newcomer", "New Writer", "US")), // no books → left-join NULL
-            ] {
+            // A whole array of tuples → Vec<Model> via `from_tuples`.
+            for a in Author::from_tuples([
+                ("austen", "Jane Austen", "UK"),
+                ("tolkien", "J.R.R. Tolkien", "UK"),
+                ("orwell", "George Orwell", "UK"),
+                ("asimov", "Isaac Asimov", "US"),
+                ("newcomer", "New Writer", "US"), // no books → left-join NULL
+            ]) {
                 client.insert_instance(&a, args.clone()).await?;
             }
-            for b in [
-                Book::from(("pride", "Pride and Prejudice", 1813, Some("Romance"), "austen")),
-                Book::from(("lotr", "The Lord of the Rings", 1954, Some("Fantasy"), "tolkien")),
-                Book::from(("hobbit", "The Hobbit", 1937, Some("Fantasy"), "tolkien")),
-                Book::from(("1984", "Nineteen Eighty-Four", 1949, Some("Dystopia"), "orwell")),
-                Book::from(("foundation", "Foundation", 1951, None::<&str>, "asimov")), // no genre → NULL
-            ] {
+            for b in Book::from_tuples([
+                ("pride", "Pride and Prejudice", 1813, Some("Romance"), "austen"),
+                ("lotr", "The Lord of the Rings", 1954, Some("Fantasy"), "tolkien"),
+                ("hobbit", "The Hobbit", 1937, Some("Fantasy"), "tolkien"),
+                ("1984", "Nineteen Eighty-Four", 1949, Some("Dystopia"), "orwell"),
+                ("foundation", "Foundation", 1951, None::<&str>, "asimov"), // no genre → NULL
+            ]) {
                 client.insert_instance(&b, args.clone()).await?;
             }
 

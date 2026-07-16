@@ -282,17 +282,25 @@ pub fn derive_from_terminusdb_instance(input: TokenStream) -> TokenStream {
     .into()
 }
 
-/// Derive `From<(A, B, …)>` for a named-field struct: each tuple element is
-/// converted into its field's type via [`terminusdb_schema::IntoField`]. This
-/// removes model-instantiation boilerplate in fixtures, examples, and tests:
+/// Derive tuple-based construction for a named-field struct, removing model
+/// instantiation boilerplate in fixtures, examples, and tests. Generates:
+///
+/// 1. `From<(A, B, …)>` — build one model, converting each tuple element into its
+///    field's type via [`terminusdb_schema::IntoField`].
+/// 2. `IntoField<TdbLazy<Self>> for Self` — so a **reference field** (`Ref<T>`)
+///    accepts either an id (`&str`) *or* a whole **nested model** value.
+/// 3. `Self::from_tuples(iter)` — build a `Vec<Self>` from an array / iterator of
+///    tuples (an array-of-tuples can't use `.into()` for `Vec<T>` because it would
+///    collide with std's `From<[T; N]> for Vec<T>`).
 ///
 /// ```ignore
 /// #[derive(TerminusDBModel, FromTuple)]
 /// #[tdb(id_field = "id")]
 /// struct Book { id: EntityIDFor<Self>, title: String, author: Ref<Author> }
 ///
-/// // instead of Book { id: EntityIDFor::new("hp1")?, title: "…".into(), author: Ref::from(…) }
-/// let b = Book::from(("hp1", "Philosopher's Stone", "rowling"));
+/// let one   = Book::from(("hp1", "Philosopher's Stone", "rowling"));           // ref by id
+/// let nested = Book::from(("hp1", "Philosopher's Stone", Author::from((…))));  // ref by nested model
+/// let many  = Book::from_tuples([("hp1", "…", "rowling"), ("hp2", "…", "rowling")]); // Vec<Book>
 /// ```
 #[proc_macro_derive(FromTuple)]
 pub fn derive_from_tuple(input: TokenStream) -> TokenStream {
