@@ -5,6 +5,7 @@ mod args;
 mod bounds;
 mod enum_simple;
 mod filter;
+mod from_tuple;
 mod ordering;
 mod enum_union;
 mod from_instance;
@@ -279,4 +280,22 @@ pub fn derive_from_terminusdb_instance(input: TokenStream) -> TokenStream {
         // All functionality has been integrated into TerminusDBModel
     }
     .into()
+}
+
+/// Derive `From<(A, B, …)>` for a named-field struct: each tuple element is
+/// converted into its field's type via [`terminusdb_schema::IntoField`]. This
+/// removes model-instantiation boilerplate in fixtures, examples, and tests:
+///
+/// ```ignore
+/// #[derive(TerminusDBModel, FromTuple)]
+/// #[tdb(id_field = "id")]
+/// struct Book { id: EntityIDFor<Self>, title: String, author: Ref<Author> }
+///
+/// // instead of Book { id: EntityIDFor::new("hp1")?, title: "…".into(), author: Ref::from(…) }
+/// let b = Book::from(("hp1", "Philosopher's Stone", "rowling"));
+/// ```
+#[proc_macro_derive(FromTuple)]
+pub fn derive_from_tuple(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    from_tuple::derive(&input).into()
 }

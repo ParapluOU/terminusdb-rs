@@ -36,12 +36,15 @@
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
 use terminusdb_schema::*;
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+use terminusdb_schema_derive::{FromTDBInstance, FromTuple, TerminusDBModel};
 use terminusdb_sql::{explain, Catalog, QueryResponse, Session, SqlValue};
 
 // --- schema ------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+// `FromTuple` generates `From<(…)>`, converting each tuple element into its field
+// type (`&str` → id / link / String, `Option<&str>` → `Option<String>`). No
+// per-model constructor boilerplate.
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
 #[tdb(id_field = "id")]
 struct Author {
     id: EntityIDFor<Self>,
@@ -49,7 +52,7 @@ struct Author {
     country: String,
 }
 
-#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
 #[tdb(id_field = "id")]
 struct Book {
     id: EntityIDFor<Self>,
@@ -61,23 +64,6 @@ struct Book {
     author: Ref<Author>,
 }
 
-fn author(id: &str, name: &str, country: &str) -> anyhow::Result<Author> {
-    Ok(Author {
-        id: EntityIDFor::new(id)?,
-        name: name.into(),
-        country: country.into(),
-    })
-}
-fn book(id: &str, title: &str, year: i32, genre: Option<&str>, author: &str) -> anyhow::Result<Book> {
-    Ok(Book {
-        id: EntityIDFor::new(id)?,
-        title: title.into(),
-        year,
-        genre: genre.map(str::to_string),
-        author: Ref::from(EntityIDFor::<Author>::new(author)?),
-    })
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
@@ -85,20 +71,20 @@ async fn main() -> anyhow::Result<()> {
         .with_db_schema::<(Book, Author), _, _, _>("sql_showcase", |client, spec| async move {
             let args = DocumentInsertArgs::from(spec.clone());
             for a in [
-                author("austen", "Jane Austen", "UK")?,
-                author("tolkien", "J.R.R. Tolkien", "UK")?,
-                author("orwell", "George Orwell", "UK")?,
-                author("asimov", "Isaac Asimov", "US")?,
-                author("newcomer", "New Writer", "US")?, // no books → left-join NULL
+                Author::from(("austen", "Jane Austen", "UK")),
+                Author::from(("tolkien", "J.R.R. Tolkien", "UK")),
+                Author::from(("orwell", "George Orwell", "UK")),
+                Author::from(("asimov", "Isaac Asimov", "US")),
+                Author::from(("newcomer", "New Writer", "US")), // no books → left-join NULL
             ] {
                 client.insert_instance(&a, args.clone()).await?;
             }
             for b in [
-                book("pride", "Pride and Prejudice", 1813, Some("Romance"), "austen")?,
-                book("lotr", "The Lord of the Rings", 1954, Some("Fantasy"), "tolkien")?,
-                book("hobbit", "The Hobbit", 1937, Some("Fantasy"), "tolkien")?,
-                book("1984", "Nineteen Eighty-Four", 1949, Some("Dystopia"), "orwell")?,
-                book("foundation", "Foundation", 1951, None, "asimov")?, // no genre → NULL
+                Book::from(("pride", "Pride and Prejudice", 1813, Some("Romance"), "austen")),
+                Book::from(("lotr", "The Lord of the Rings", 1954, Some("Fantasy"), "tolkien")),
+                Book::from(("hobbit", "The Hobbit", 1937, Some("Fantasy"), "tolkien")),
+                Book::from(("1984", "Nineteen Eighty-Four", 1949, Some("Dystopia"), "orwell")),
+                Book::from(("foundation", "Foundation", 1951, None::<&str>, "asimov")), // no genre → NULL
             ] {
                 client.insert_instance(&b, args.clone()).await?;
             }

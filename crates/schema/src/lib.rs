@@ -19,6 +19,7 @@ pub use primitive::*;
 pub use schema::*;
 pub use xsdtype::*;
 pub mod json;
+pub use field::*;
 pub use id::*;
 pub use iri::{TdbIRI, DEFAULT_DATA_BASE, strip_schema_prefix};
 pub mod json_ld;
@@ -37,6 +38,7 @@ mod r#impl;
 
 mod context;
 mod document;
+mod field;
 mod fvec;
 mod gql;
 mod id;

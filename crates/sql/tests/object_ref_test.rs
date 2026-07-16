@@ -15,17 +15,19 @@ mod tests {
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
     use terminusdb_schema::*;
-    use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+    use terminusdb_schema_derive::{FromTDBInstance, FromTuple, TerminusDBModel};
     use terminusdb_sql::{ColumnKind, QueryResponse, Session, SqlValue};
 
-    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
     #[tdb(id_field = "id")]
     struct Author {
         id: EntityIDFor<Self>,
         name: String,
     }
 
-    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+    // `FromTuple` builds the model from a same-arity tuple, converting each element
+    // into its field type (`&str` → id / link / String) — no per-model helper fns.
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance, FromTuple)]
     #[tdb(id_field = "id")]
     struct Book {
         id: EntityIDFor<Self>,
@@ -34,20 +36,6 @@ mod tests {
         /// purpose-named alias of `TdbLazy<T>` — this test also proves the alias
         /// works as a model field end to end.
         author: Ref<Author>,
-    }
-
-    fn author(id: &str, name: &str) -> anyhow::Result<Author> {
-        Ok(Author {
-            id: EntityIDFor::new(id)?,
-            name: name.to_string(),
-        })
-    }
-    fn book(id: &str, title: &str, author_id: &str) -> anyhow::Result<Book> {
-        Ok(Book {
-            id: EntityIDFor::new(id)?,
-            title: title.to_string(),
-            author: Ref::from(EntityIDFor::<Author>::new(author_id)?),
-        })
     }
 
     async fn with_session<F, Fut>(f: F) -> anyhow::Result<()>
@@ -60,11 +48,11 @@ mod tests {
             .with_db_schema::<(Book, Author), _, _, _>("sql_objref", |client, spec| async move {
                 let args = DocumentInsertArgs::from(spec.clone());
                 // Authors first (the links point at them).
-                client.insert_instance(&author("rowling", "Rowling")?, args.clone()).await?;
-                client.insert_instance(&author("tolkien", "Tolkien")?, args.clone()).await?;
-                client.insert_instance(&book("hp1", "Philosopher's Stone", "rowling")?, args.clone()).await?;
-                client.insert_instance(&book("hp2", "Chamber of Secrets", "rowling")?, args.clone()).await?;
-                client.insert_instance(&book("lotr", "Fellowship", "tolkien")?, args.clone()).await?;
+                client.insert_instance(&Author::from(("rowling", "Rowling")), args.clone()).await?;
+                client.insert_instance(&Author::from(("tolkien", "Tolkien")), args.clone()).await?;
+                client.insert_instance(&Book::from(("hp1", "Philosopher's Stone", "rowling")), args.clone()).await?;
+                client.insert_instance(&Book::from(("hp2", "Chamber of Secrets", "rowling")), args.clone()).await?;
+                client.insert_instance(&Book::from(("lotr", "Fellowship", "tolkien")), args.clone()).await?;
 
                 let session = Session::open(client.clone(), &spec.db, spec.branch.as_deref()).await?;
                 f(session, spec).await
