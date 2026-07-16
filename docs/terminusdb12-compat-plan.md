@@ -1,5 +1,29 @@
 # TerminusDB 12 Compatibility Plan
 
+## Live verification against 12.1 (2026-07-16)
+
+Target retargeted v12.0.6 → **v12.1** (upstream `12.1-rc` branch; no v12.1 tag
+yet). Server fork rebased onto it (`v12.1-rc-paraplu.1`), embedded build + 28
+bin tests + 244 client integration tests all green. New behaviors probed live
+(`crates/client/tests/test_v12_woql_ops.rs`, `test_v12_numeric_intervals.rs`):
+
+- **Work correctly:** all new WOQL ops — SetUnion/Intersection/Difference,
+  ListToSet, Slice (half-open), Gte/Lte, InRange; and IntervalRelation returns
+  the right Allen relation (`overlaps`). Confirms the 33 new AST classes'
+  JSON-LD serialization matches the server, not just the offline schema.
+- **Fixed a pre-existing bug:** `ArithmeticExpression`/`ArithmeticValue` enums
+  lacked `#[tdb(abstract_class)]` / `#[tdb(rename_all="lowercase")]`, so `Eval`
+  arithmetic serialized an illegal `{"@type":"ArithmeticExpression",...}` wrapper
+  the server rejected ("Not well formed WOQL JSON-LD"). Now fixed; Eval works.
+- **KEY M1 FINDING — decimal precision is lost client-side.** `Eval(1/3)` on 12.1
+  returns `xsd:decimal` at full rational precision, but the client shows
+  `0.33333333333333337` (an f64 artifact). Root cause: `response.rs:80` parses
+  responses with `serde_json::from_str::<Value>` **without** `arbitrary_precision`,
+  truncating any decimal past ~16 digits through f64. This is exactly what P0.2 /
+  M1 must fix (enable `arbitrary_precision` + a real decimal field type).
+- **Minor follow-up:** `Interval(start,end→var)` construction returned an unbound
+  result (None); needs the right binding mode / arg shape — revisit in M1/M3.
+
 Status: draft (2026-07-08). Based on the refreshed docs mirror in `docs/terminusdb/`
 (upstream commit `0f36c9a`, covering TerminusDB 12.0.x through the May-2026 doc
 revision), the refreshed `docs/openapi.yaml` (API v12.0.5), and a diff of the old

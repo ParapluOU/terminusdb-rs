@@ -8,6 +8,7 @@ use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 /// A variable or data value used within an arithmetic expression.
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
+#[tdb(rename_all = "lowercase")]
 pub enum ArithmeticValue {
     /// An xsd data type value.
     Data(XSDAnySimpleType), // Use XSDAnySimpleType instead of PrimitiveValue
@@ -17,8 +18,12 @@ pub enum ArithmeticValue {
 
 // Represents the abstract class "ArithmeticExpression"
 /// An abstract class specifying the AST super-class of all arithemtic expressions.
+///
+/// `abstract_class` makes each variant serialize as its concrete `@type`
+/// (e.g. `{"@type":"Divide",...}`) rather than an illegal
+/// `{"@type":"ArithmeticExpression","divide":{...}}` wrapper the server rejects.
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
-
+#[tdb(abstract_class = true)]
 pub enum ArithmeticExpression {
     Value(ArithmeticValue),
     Plus(Plus),
