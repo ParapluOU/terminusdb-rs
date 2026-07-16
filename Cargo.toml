@@ -104,10 +104,18 @@ lto = true
 codegen-units = 1
 
 [patch.crates-io]
-# Use git version of terminus-store to match terminusdb-community's requirements
-terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store", rev = "1c44c02" }
+# Pins matched to terminusdb-community @ v12.1-main (fork rebased on upstream
+# 12.1-rc). Keep in lockstep with crates/gql's terminusdb-community rev.
+# NB: source spec must match the community crate's own `git=".../terminusdb-store"`
+# (no rev) EXACTLY, or cargo resolves two distinct terminus-store copies and the
+# GrpcLabelStore -> LabelStore trait impl no longer unifies. The exact commit is
+# still pinned by Cargo.lock.
+terminus-store = { git = "https://github.com/terminusdb-org/terminusdb-store" }
 # Use pure Rust rug shim for cross-compilation (replaces GMP-based rug)
 rug = { path = "crates/rug-shim" }
-# Use our fork of swipl-rs for nightly Rust compatibility
-swipl = { git = "https://github.com/ParapluOU/swipl-rs", branch = "master" }
-swipl-fli = { git = "https://github.com/ParapluOU/swipl-rs", branch = "master" }
+# swipl-rs as pinned by 12.1-rc (terminusdb-org).
+swipl = { git = "https://github.com/terminusdb-org/swipl-rs", rev = "2fdd55ee360afc3657aca44e3bf04ca1f48b1c50" }
+swipl-fli = { git = "https://github.com/terminusdb-org/swipl-rs", rev = "2fdd55ee360afc3657aca44e3bf04ca1f48b1c50" }
+# tdb-succinct on 12.1-rc's xbrl-json-iso-intervals branch (adds DateTimeInterval,
+# required by terminusdb-store-prolog @ v12.1).
+tdb-succinct = { git = "https://github.com/terminusdb-org/tdb-succinct", rev = "ec1519923e44e73cad17264f21534065855be6e0" }

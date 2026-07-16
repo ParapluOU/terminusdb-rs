@@ -134,6 +134,15 @@ impl IdQueryBuilder {
     pub fn build_request(&self) -> GraphQLRequest {
         GraphQLRequest::new(self.build())
     }
+
+    /// Build a TerminusDB 12 `_count` request for this query's root type. Unlike
+    /// [`IdQueryResult::total_count`] (which counts already-fetched IDs), this
+    /// asks the server for the count directly, without materializing the rows.
+    /// Counts all documents of the root type. Execute it via the client's
+    /// GraphQL executor and read `data._count`.
+    pub fn build_count_request(&self) -> GraphQLRequest {
+        GraphQLRequest::new(format!("query {{\n  _count({}: {{}})\n}}\n", self.root_type))
+    }
 }
 
 /// Result of executing an ID query - contains all collected IDs organized by type.

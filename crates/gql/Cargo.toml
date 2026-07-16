@@ -29,7 +29,7 @@ terminusdb-client = { path = "../client", optional = true }
 # Pinned to the pre-v12-rebase main SHA so the fork's main branch can be
 # flipped to the v12 base without breaking this build; M5 of the v12 upgrade
 # re-pins this to the rebased rev (lockstep with the root [patch] pins).
-terminusdb-community = { git = "https://github.com/ParapluOU/terminusdb.git", rev = "02db9bdbbf54aa768aafccaa54cc5e9984f0684d" }
+terminusdb-community = { git = "https://github.com/ParapluOU/terminusdb.git", rev = "557584d8925e03dd53151e65eee0c92dd61100d8" }
 
 # Juniper - same version as terminusdb-community
 juniper = { git = "https://github.com/terminusdb-labs/juniper.git", tag = "juniper-v0.15.11-p1" }

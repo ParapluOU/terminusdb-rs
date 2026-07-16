@@ -376,6 +376,37 @@ impl TerminusDBHttpClient {
             })
     }
 
+    /// Count documents of a type using the TerminusDB 12 GraphQL `_count` field,
+    /// which returns the number of matching documents *without* fetching them.
+    ///
+    /// `filter` is a raw GraphQL filter object literal (e.g.
+    /// `"{name: {startsWith: \"Al\"}}"`); pass `"{}"` to count all documents of
+    /// the type. Example query issued: `query { _count(Person: {}) }`.
+    pub async fn count_documents(
+        &self,
+        database: &str,
+        branch: Option<&str>,
+        type_name: &str,
+        filter: &str,
+    ) -> Result<usize, TerminusDBAdapterError> {
+        let query = format!("query {{\n  _count({}: {})\n}}\n", type_name, filter);
+        let response: GraphQLResponse<Value> = self
+            .execute_graphql(database, branch, GraphQLRequest::new(query), None)
+            .await?;
+        let count = response
+            .data
+            .as_ref()
+            .and_then(|d| d.get("_count"))
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                TerminusDBAdapterError::Other(format!(
+                    "GraphQL _count response missing integer _count field: {:?}",
+                    response.data
+                ))
+            })?;
+        Ok(count as usize)
+    }
+
     /// Get the GraphQL schema for a database using introspection
     ///
     /// # Arguments
