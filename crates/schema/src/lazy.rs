@@ -12,12 +12,52 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::convert::TryInto;
 
-/// Lazy loading container for TerminusDB instances
+/// A **link** (object property / graph edge) to another TerminusDB document of
+/// type `T`, loaded lazily.
+///
+/// As a model field, `TdbLazy<T>` is the way to express a traversable reference to
+/// another model: its schema range is `T`'s class (an object property, not a
+/// datatype), and it stores a relation to the target document's IRI. Follow it via
+/// a WOQL path, a SQL join (`child.link = parent.iri`), or document unfolding.
+///
+/// This is the correct type for a graph reference. Do NOT use
+/// [`EntityIDFor<T>`](crate::EntityIDFor) for a link — that serialises to a plain
+/// `xsd:string` value and is not an edge. Construct a link from an id via
+/// `TdbLazy::from(EntityIDFor::<T>::new(id)?)`, or from a full instance via
+/// `TdbLazy::from(model)`.
 #[derive(Debug, Clone)]
 pub struct TdbLazy<T: TerminusDBModel> {
     id: Option<EntityIDFor<T>>,
     data: Option<Box<T>>,
 }
+
+/// A traversable reference (graph edge / object property) to another TerminusDB
+/// document of type `T` — the purpose-named alias for [`TdbLazy<T>`].
+///
+/// Prefer `Ref<T>` at model field-declaration sites: it makes the value-vs-link
+/// distinction obvious from the type itself. `EntityIDFor<T>` stores an id
+/// *value* (`xsd:string`); `Ref<T>` is a *link* you can follow (WOQL path, SQL
+/// join, unfold).
+///
+/// ```ignore
+/// #[derive(TerminusDBModel)]
+/// struct Book {
+///     id: EntityIDFor<Self>,   // VALUE: the book's own id string
+///     author: Ref<Author>,     // LINK: a graph edge to an Author document
+/// }
+/// ```
+///
+/// Construct one from an id via `Ref::from(EntityIDFor::<T>::new(id)?)`, or from a
+/// full instance via `Ref::from(model)`.
+pub type Ref<T> = TdbLazy<T>;
+
+/// A traversable link (graph edge / object property) to another TerminusDB
+/// document of type `T` — a synonym for [`Ref<T>`](crate::Ref) / [`TdbLazy<T>`].
+///
+/// Use whichever reads best in context; `Link<T>` and `Ref<T>` are identical. As
+/// with `Ref<T>`, this is a LINK (an object property), not a stored id value — use
+/// `EntityIDFor<T>` only when you want a bare `xsd:string` id.
+pub type Link<T> = TdbLazy<T>;
 
 impl<T: TerminusDBModel> TdbLazy<T> {
     pub fn new(id: Option<EntityIDFor<T>>, data: Option<T>) -> Self {

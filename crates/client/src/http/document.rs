@@ -1162,6 +1162,33 @@ impl super::client::TerminusDBHttpClient {
         Ok(docs)
     }
 
+    /// Retrieve the authored **schema** documents (classes, enums, the
+    /// `@context`) from the schema graph, honouring any commit/branch pin on
+    /// `spec`. This is the read side of `graph_type=schema`; the existing
+    /// document getters only read the instance graph.
+    pub async fn get_schema_documents(
+        &self,
+        spec: &BranchSpec,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        let uri = self
+            .build_url()
+            .endpoint("document")
+            .database(spec)
+            .query("graph_type", "schema")
+            .query("as_list", "true")
+            .build();
+
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await?;
+
+        let docs = self.parse_response::<Vec<serde_json::Value>>(res).await?;
+        Ok(docs)
+    }
+
     /// Retrieves multiple untyped documents from the database and returns both the documents and commit ID.
     ///
     /// This is a header-aware variant of [`get_documents`](Self::get_documents) that returns

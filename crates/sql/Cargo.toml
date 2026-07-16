@@ -1,0 +1,42 @@
+[package]
+name = "terminusdb-sql"
+description = "Compile SQL queries into TerminusDB WOQL queries"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# DataFusion's logical layer only: parser + name-resolver + type-checker + IR.
+# We do NOT pull in the execution engine, TableProvider, or physical planning.
+datafusion-sql    = "=54.0.0"
+datafusion-expr   = "=54.0.0"
+datafusion-common = "=54.0.0" # use its re-exported arrow: datafusion_common::arrow::datatypes::*
+
+terminusdb-schema = { path = "../schema" }
+terminusdb-woql2  = { path = "../woql2" }
+
+thiserror = "2.0"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = "0.1"
+chrono = { workspace = true }
+decimal-rs = { workspace = true }
+
+# Optional: the concrete HTTP backend. Kept optional so the compiler core does
+# not depend on the client at build time (mirrors the xpath crate).
+terminusdb-client = { path = "../client", optional = true }
+
+[features]
+client = ["dep:terminusdb-client"]
+
+[dev-dependencies]
+# Full DataFusion engine, used ONLY as the differential-test oracle.
+datafusion = "=54.0.0"
+terminusdb-client = { path = "../client" }
+terminusdb-bin    = { path = "../bin" }
+terminusdb-schema-derive = { path = "../schema/derive" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }

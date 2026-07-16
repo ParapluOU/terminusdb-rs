@@ -377,6 +377,11 @@ impl TerminusDBHttpClient {
         client
     }
 
+    /// The organization/team this client operates within.
+    pub fn org(&self) -> &str {
+        &self.org
+    }
+
     /// Returns a clone of the last executed WOQL query for debugging purposes.
     ///
     /// This method provides access to the most recently executed query, which can be

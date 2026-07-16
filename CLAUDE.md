@@ -230,3 +230,24 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 
 - If serializing TerminusDB models (structs/enums deriving TerminusDBModel) have issues with how they are serialized, then DONT try to fix it with a custom Serialize, Deserialize impl, as these are not used by our implementation. If the struct is supposed to be a "model", it should be converteable to an Instance, so derive TerminusDBModel. If the layout of it has to change use the tdb() proc-macro attributes defined in the schema/derive. If structs represent pritimitive values, they need implementations of ToInstanceProperty instead so that they are convertable to field values without representing a model.
 - tests should NOT manually implement ToTDBSchema. if there are import conflicts because the derive hardcodes terminusdb_schema, create a crate alias like 'use crate as terminusdb_schema'
+
+### Field types: VALUE vs LINK (graph edge)
+
+The type of a model field decides whether it becomes a **datatype property** (a
+stored value) or an **object property** (a traversable graph edge). Getting this
+wrong is a recurring mistake — a field you think is a link is actually just a
+string, so joins/graph traversals silently operate on id-strings instead of edges.
+
+- `EntityIDFor<T>` (and `PrimaryKey!()`) is a **VALUE**: it serialises to an
+  `xsd:string` holding an id. It is NOT a graph reference. Use it for the `id`
+  field of a model, or when you deliberately want to store a bare id string.
+- `Ref<T>` (a purpose-named alias of `TdbLazy<T>`; `Link<T>` is an identical
+  synonym) is a **LINK**: its schema range is `T`'s class and it stores a relation
+  to another document (an object property / graph edge). Use `Ref<T>` whenever a
+  field should be a traversable reference to another model.
+- Embedding the model type directly (`field: T`) also creates a link — a
+  subdocument if `T` is `#[tdb(subdocument = true)]`, otherwise an object property.
+
+Rule of thumb: if you need to follow the field to another document (WOQL path,
+SQL join, unfold), it must be `Ref<T>`/`Link<T>`/`TdbLazy<T>`/`T` — never
+`EntityIDFor<T>`.

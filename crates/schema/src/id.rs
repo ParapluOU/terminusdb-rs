@@ -51,6 +51,18 @@ macro_rules! PrimaryKey {
     };
 }
 
+/// A typed id **value** for an entity of type `T`.
+///
+/// This is a VALUE, not a graph edge: as a model field it serialises to an
+/// `xsd:string` datatype property holding an id — it does **not** create an
+/// object property / traversable reference to another document. Use it for a
+/// model's own `id` field (see [`PrimaryKey!`]), or when you deliberately want to
+/// store a bare id string.
+///
+/// To link one model to another (an object property you can follow via a WOQL
+/// path, a SQL join, or document unfolding), use [`Ref<T>`](crate::Ref) (the
+/// purpose-named alias of [`TdbLazy<T>`](crate::TdbLazy)), or embed the model type
+/// directly — never `EntityIDFor<T>`.
 #[derive(Debug)]
 pub struct EntityIDFor<T: ToTDBSchema> {
     /// The parsed IRI

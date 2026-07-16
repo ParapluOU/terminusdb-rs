@@ -13,6 +13,7 @@ members = [
     "crates/rug-shim",
     "crates/schema",
     "crates/schema/derive",
+    "crates/sql",
     "crates/terminusdb",
     "crates/test",
     "crates/test/macros",
