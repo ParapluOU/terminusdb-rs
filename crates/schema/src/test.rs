@@ -944,3 +944,54 @@ mod optional_entity_id_tests {
         assert_eq!(lazy_from_instance.get_expect().email, "test@example.com");
     }
 }
+
+#[cfg(test)]
+mod cardinality_tests {
+    use crate as terminusdb_schema;
+    use crate::*;
+    use std::collections::HashSet;
+    use terminusdb_schema_derive::*;
+
+    #[derive(Clone, TerminusDBModel)]
+    struct WithCardinality {
+        #[tdb(min_cardinality = 1, max_cardinality = 3)]
+        ranged: HashSet<String>,
+        #[tdb(cardinality = 2)]
+        exact: HashSet<String>,
+        #[tdb(min_cardinality = 1)]
+        at_least_one: HashSet<String>,
+        plain: HashSet<String>,
+    }
+
+    fn prop_type(schema: &Schema, name: &str) -> Option<TypeFamily> {
+        match schema {
+            Schema::Class { properties, .. } => properties
+                .iter()
+                .find(|p| p.name == name)
+                .and_then(|p| p.r#type.clone()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_set_cardinality_attrs() {
+        let schema = <WithCardinality as ToTDBSchema>::to_schema();
+        assert_eq!(
+            prop_type(&schema, "ranged"),
+            Some(TypeFamily::Set(SetCardinality::Range { min: 1, max: 3 }))
+        );
+        assert_eq!(
+            prop_type(&schema, "exact"),
+            Some(TypeFamily::Set(SetCardinality::Exact(2)))
+        );
+        assert_eq!(
+            prop_type(&schema, "at_least_one"),
+            Some(TypeFamily::Set(SetCardinality::Min(1)))
+        );
+        // A plain HashSet keeps its default Set family (no explicit cardinality).
+        assert_eq!(
+            prop_type(&schema, "plain"),
+            Some(TypeFamily::Set(SetCardinality::None))
+        );
+    }
+}

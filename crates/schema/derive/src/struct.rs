@@ -518,6 +518,38 @@ pub fn process_named_fields(
                 quote!{}
             };
 
+            // Set-cardinality override (TerminusDB 12 @cardinality /
+            // @min_cardinality / @max_cardinality). Forces the property into a
+            // `Set` type family carrying the requested cardinality; `@cardinality`
+            // (exact) takes precedence over a min/max range.
+            let cardinality_override = match (
+                field_opts.cardinality,
+                field_opts.min_cardinality,
+                field_opts.max_cardinality,
+            ) {
+                (Some(exact), _, _) => quote! {
+                    prop.r#type = Some(terminusdb_schema::TypeFamily::Set(
+                        terminusdb_schema::SetCardinality::Exact(#exact),
+                    ));
+                },
+                (None, Some(min), Some(max)) => quote! {
+                    prop.r#type = Some(terminusdb_schema::TypeFamily::Set(
+                        terminusdb_schema::SetCardinality::Range { min: #min, max: #max },
+                    ));
+                },
+                (None, Some(min), None) => quote! {
+                    prop.r#type = Some(terminusdb_schema::TypeFamily::Set(
+                        terminusdb_schema::SetCardinality::Min(#min),
+                    ));
+                },
+                (None, None, Some(max)) => quote! {
+                    prop.r#type = Some(terminusdb_schema::TypeFamily::Set(
+                        terminusdb_schema::SetCardinality::Max(#max),
+                    ));
+                },
+                (None, None, None) => quote! {},
+            };
+
             let mut property = quote! {
                 // terminusdb_schema::Property {
                 //     name: #property_name.to_string(),
@@ -528,6 +560,7 @@ pub fn process_named_fields(
                 {
                     let mut prop = <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_property(#property_name);
                     #classoverride
+                    #cardinality_override
                     prop
                 }
             };

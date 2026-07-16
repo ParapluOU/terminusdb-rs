@@ -212,6 +212,19 @@ pub struct TDBFieldOpts {
     /// `Option<T>` where `T: Default`.
     #[darling(default)]
     pub(crate) default: bool,
+
+    /// Exact cardinality for a `Set` field (`@cardinality`). Emits
+    /// `SetCardinality::Exact`; mutually exclusive with min/max_cardinality.
+    #[darling(default)]
+    pub(crate) cardinality: Option<usize>,
+
+    /// Minimum cardinality for a `Set` field (`@min_cardinality`).
+    #[darling(default)]
+    pub(crate) min_cardinality: Option<usize>,
+
+    /// Maximum cardinality for a `Set` field (`@max_cardinality`).
+    #[darling(default)]
+    pub(crate) max_cardinality: Option<usize>,
 }
 
 /// Container for attributes specified on enum variants

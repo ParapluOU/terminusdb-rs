@@ -189,10 +189,21 @@ Work items:
 
 ## P2 — Schema & derive (terminusdb-schema / -derive)
 
+**Status (2026-07-16):** Set cardinality DONE — `#[tdb(cardinality = N)]` /
+`#[tdb(min_cardinality = N, max_cardinality = M)]` field attrs drive
+`TypeFamily::Set(SetCardinality::{Exact,Min,Max,Range})` (no core-struct change
+needed: `TypeFamily::Set` already carries `SetCardinality`; the derive mutates
+`prop.r#type`). Migration API client DONE (see P3). **Deferred as one core-struct
+refactor:** field-level `@unfold` needs a new `Property.unfold` field and
+class-level `@shared` needs a new `Schema::Class.shared` field — each touches
+~160 `Property {` / ~56 `Schema::Class {` literal construction sites plus the
+JSON emission, so they're a dedicated follow-up rather than folded in here.
+
 - [ ] **Field-level `@unfold`** (`document-unfolding-reference.md`): new field
       attr `#[tdb(unfold)]` → emit `"@unfold": true` on the property. Distinct
       from the existing class-level `@unfoldable`
-      (`crates/schema/src/schema/schema.rs:658-659`).
+      (`crates/schema/src/schema/schema.rs:658-659`). *(deferred — needs
+      `Property.unfold` field + all construction sites updated.)*
 - [ ] **Class-level `@shared`** (cascade-delete, v12.0.6,
       `schema-reference-guide.md`): new struct attr `#[tdb(shared)]` → emit
       `"@shared": []`. Enforce mutual exclusion with `subdocument` at derive
