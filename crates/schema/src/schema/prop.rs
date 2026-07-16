@@ -55,20 +55,21 @@ impl Property {
 
 impl ToSchemaPropertyJsonValue for Property {
     fn to_property_value(&self) -> Value {
+        use terminusdb_format::keyword;
         if self.r#type.is_none() {
             return self.class.clone().into();
         }
 
         let mut map = serde_json::Map::new();
 
-        // the relation type
+        // the type family (List/Set/Array/Optional)
         if let Some(t) = self.r#type {
-            map.insert("@type".to_string(), t.to_string().into());
+            map.insert(keyword::TYPE.to_string(), t.to_string().into());
             map.append(&mut t.to_map()); // todo: isnt this redundant?
         }
 
         // the class of object targeted by the relation
-        map.insert("@class".to_string(), self.class.clone().into());
+        map.insert(keyword::CLASS.to_string(), self.class.clone().into());
 
         map.into()
     }

@@ -36,15 +36,16 @@ impl Context {
 
 impl ToJson for Context {
     fn to_map(&self) -> Map<String, Value> {
+        use terminusdb_format::keyword;
         let mut map = serde_json::Map::new();
-        map.insert("@type".to_string(), "@context".to_string().into());
-        map.insert("@schema".to_string(), self.schema.clone().into());
-        map.insert("@base".to_string(), self.base.clone().into());
+        map.insert(keyword::TYPE.to_string(), keyword::CONTEXT.to_string().into());
+        map.insert(keyword::SCHEMA.to_string(), self.schema.clone().into());
+        map.insert(keyword::BASE.to_string(), self.base.clone().into());
         for (prefix, uri) in &self.prefixes {
             map.insert(prefix.clone(), uri.clone().into());
         }
         if let Some(doc) = &self.documentation {
-            map.insert("@documentation".to_string(), doc.to_map().into());
+            map.insert(keyword::DOCUMENTATION.to_string(), doc.to_map().into());
         }
         map
     }

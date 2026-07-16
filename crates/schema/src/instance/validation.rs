@@ -398,10 +398,11 @@ fn validate_property_type(
     let prop_name = &property.name;
     let expected_class = &property.class;
 
-    // Check if it's a primitive type
-    let is_primitive_class = expected_class.starts_with("xsd:")
+    // Check if it's a primitive (value-typed) class. Besides xsd:*, TerminusDB's
+    // extended-datatype `xdd:json` and the `sys:Unit` type are value-valued here.
+    let is_primitive_class = terminusdb_format::prefix::is_primitive(expected_class)
         || expected_class == "xdd:json"
-        || expected_class == "sys:Unit";
+        || expected_class == terminusdb_format::sys::UNIT;
 
     match (is_primitive_class, instance_prop) {
         (true, InstanceProperty::Primitive(_)) | (true, InstanceProperty::Primitives(_)) => {

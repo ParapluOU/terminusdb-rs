@@ -44,22 +44,23 @@ impl Default for Key {
 // todo: refactor to serde-compatible
 impl ToJson for Key {
     fn to_map(&self) -> Map<String, Value> {
+        use terminusdb_format::keyword;
         let mut map = serde_json::Map::new();
 
         match self {
             Key::Lexical(fields) => {
-                map.insert("@type".to_string(), "Lexical".into());
-                map.insert("@fields".to_string(), fields.clone().into());
+                map.insert(keyword::TYPE.to_string(), "Lexical".into());
+                map.insert(keyword::FIELDS.to_string(), fields.clone().into());
             }
             Key::Hash(fields) => {
-                map.insert("@type".to_string(), "Hash".into());
-                map.insert("@fields".to_string(), fields.clone().into());
+                map.insert(keyword::TYPE.to_string(), "Hash".into());
+                map.insert(keyword::FIELDS.to_string(), fields.clone().into());
             }
             Key::ValueHash => {
-                map.insert("@type".to_string(), "ValueHash".into());
+                map.insert(keyword::TYPE.to_string(), "ValueHash".into());
             }
             Key::Random => {
-                map.insert("@type".to_string(), "Random".into());
+                map.insert(keyword::TYPE.to_string(), "Random".into());
             }
         }
 
