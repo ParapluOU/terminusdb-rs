@@ -236,6 +236,20 @@ JSON emission, so they're a dedicated follow-up rather than folded in here.
 
 ## P3 — Client endpoints & parameters (terminusdb-client)
 
+**Status (2026-07-16) — delivered, each live-verified against 12.1:**
+- Document params `merge_repeats` + `raw_json` (POST/PUT), and `raw_json` on GET.
+- Schema **migration** API client (`/api/migration`, 13 typed ops).
+- **Prefix** management CRUD (`/api/prefix/...`: add/get/update/upsert/delete).
+- **WOQL streaming** (`query_stream()` — ndjson Preface/Binding/Postscript, error
+  after HTTP 200 surfaced as a stream `Err`).
+- **Apply** endpoint (`apply_commit_diff` — cherry-pick / squash-merge commits).
+
+**Still open (lower value; the generic error path already surfaces failures):**
+`@capture`/`@ref` bulk-insert helpers; the four diff-endpoint body forms; typed
+error variants for the new envelopes (prefix/migration/patch-409 currently fall
+through `TypedErrorResponse::GenericError`, so they already raise as errors);
+GET `compress_ids`/`ids`/`count`/`skip`; capabilities Name-vs-ID mode check.
+
 Document API (`document-insertion.md`; current param handling in
 `crates/client/src/http/document.rs` sends only `unfold`, `as_list`,
 `minimized`, `graph_type`, `author`, `message`, `full_replace`, `nuke`, `id`):
