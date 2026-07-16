@@ -22,6 +22,34 @@ use {
 
 use crate::result::ResponseWithHeaders;
 
+/// Parse one ndjson line of a streaming WOQL response. Returns the binding map
+/// (with the `@type` marker stripped) for a `Binding` record, `None` for
+/// `PrefaceRecord`/`PostscriptRecord`/blank lines, and an error for a trailing
+/// `api:ErrorResponse` record.
+fn parse_woql_stream_line(
+    line: &[u8],
+) -> anyhow::Result<Option<serde_json::Map<String, Value>>> {
+    if line.is_empty() {
+        return Ok(None);
+    }
+    let val: Value =
+        serde_json::from_slice(line).context("invalid ndjson line in WOQL stream")?;
+    match val.get("@type").and_then(|t| t.as_str()) {
+        Some("Binding") => {
+            if let Value::Object(mut map) = val {
+                map.remove("@type");
+                Ok(Some(map))
+            } else {
+                Ok(None)
+            }
+        }
+        Some("api:ErrorResponse") => {
+            Err(anyhow::anyhow!("streaming WOQL error: {}", val))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Query execution methods for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
     /// Executes a WOQL query and returns typed results.
@@ -338,6 +366,76 @@ impl super::client::TerminusDBHttpClient {
         trace!("query result: {:#?}", &json);
 
         Ok(json)
+    }
+
+    /// Execute a WOQL query in TerminusDB 12 **streaming mode** and yield each
+    /// solution as it is found, instead of collecting all of them first.
+    ///
+    /// The server replies with newline-delimited JSON (`PrefaceRecord` →
+    /// `Binding`* → `PostscriptRecord`); this returns a `Stream` of the
+    /// `Binding` maps (each variable name → value, unbound vars are `null`;
+    /// the `@type` marker is stripped). If the stream ends with an
+    /// `api:ErrorResponse` (errors can arrive after the HTTP 200), the stream
+    /// yields that as an `Err`.
+    pub async fn query_stream(
+        &self,
+        spec: Option<BranchSpec>,
+        query: Woql2Query,
+    ) -> anyhow::Result<impl futures_util::Stream<Item = anyhow::Result<serde_json::Map<String, Value>>>>
+    {
+        use futures_util::StreamExt;
+
+        let uri = match &spec {
+            None => self.build_url().endpoint("woql").build(),
+            Some(spc) => self
+                .build_url()
+                .endpoint("woql")
+                .simple_database(&spc.db)
+                .build(),
+        };
+
+        let json_query = query.to_instance(None).to_json();
+        let body = json!({ "query": json_query, "streaming": true });
+
+        let _permit = self.acquire_read_permit().await;
+        let res = self
+            .http
+            .post(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("failed to send streaming WOQL query")?;
+
+        // A failure *before* streaming begins arrives as a normal error body.
+        if !res.status().is_success() {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            anyhow::bail!("streaming WOQL query failed ({}): {}", status, text);
+        }
+
+        let byte_stream = res.bytes_stream();
+
+        Ok(async_stream::try_stream! {
+            futures_util::pin_mut!(byte_stream);
+            let mut buf: Vec<u8> = Vec::new();
+
+            while let Some(chunk) = byte_stream.next().await {
+                let chunk = chunk.context("error reading WOQL stream chunk")?;
+                buf.extend_from_slice(&chunk);
+                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=pos).collect();
+                    if let Some(binding) = parse_woql_stream_line(&line[..line.len() - 1])? {
+                        yield binding;
+                    }
+                }
+            }
+            // Trailing line without a final newline.
+            if let Some(binding) = parse_woql_stream_line(&buf)? {
+                yield binding;
+            }
+        })
     }
 
     /// Internal method for executing mutating WOQL queries with commit info
