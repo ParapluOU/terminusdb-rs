@@ -74,7 +74,7 @@ impl ToSchemaPropertyJsonValue for Property {
 
         // the type family (List/Set/Array/Optional)
         if let Some(t) = self.r#type {
-            map.insert(keyword::TYPE.to_string(), t.to_string().into());
+            map.insert(keyword::TYPE.to_string(), t.family_name().into());
             map.append(&mut t.to_map()); // todo: isnt this redundant?
         }
 

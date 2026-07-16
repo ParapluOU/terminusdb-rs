@@ -155,12 +155,20 @@ pub enum TypeFamily {
     Optional,
 }
 
+impl std::fmt::Display for TypeFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.family_name())
+    }
+}
+
 impl TypeFamily {
-    pub fn to_string(&self) -> &str {
+    /// The type-family keyword as it appears in a schema document
+    /// (`"List"`, `"Set"`, `"Array"`, `"Optional"`).
+    pub fn family_name(&self) -> &'static str {
         match self {
             TypeFamily::List => "List",
-            TypeFamily::Set(maybeCardinality) => "Set",
-            TypeFamily::Array(dimensions) => "Array",
+            TypeFamily::Set(_) => "Set",
+            TypeFamily::Array(_) => "Array",
             TypeFamily::Optional => "Optional",
         }
     }
@@ -185,12 +193,13 @@ impl TypeFamily {
 // todo: refactor into serde-compatible
 impl ToJson for TypeFamily {
     fn to_map(&self) -> Map<String, Value> {
+        use terminusdb_format::keyword;
         let mut map = serde_json::Map::new();
 
         match self {
             TypeFamily::Set(cardinality) => return cardinality.to_map(),
             TypeFamily::Array(dimensions) => {
-                map.insert("@dimensions".to_string(), (*dimensions).into());
+                map.insert(keyword::DIMENSIONS.to_string(), (*dimensions).into());
             }
             _ => {}
         }
