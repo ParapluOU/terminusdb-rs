@@ -626,6 +626,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "serde",
 ]
 
 [[package]]
@@ -6892,6 +6893,7 @@ name = "terminusdb-schema"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bigdecimal",
  "chrono",
  "custom_derive",
  "decimal-rs",
@@ -7073,7 +7075,6 @@ dependencies = [
  "chrono",
  "decimal-rs",
  "derive_builder",
- "rust_decimal",
  "serde",
  "serde_json",
  "tap",
