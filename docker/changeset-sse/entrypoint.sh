@@ -32,7 +32,11 @@ fi
 
 echo "SERVER_PORT $TERMINUSDB_SERVER_PORT"
 
-# NOW set plugin path before serving (so plugins load after init)
-export TERMINUSDB_PLUGINS_PATH=/opt/terminusdb-plugins
+# DEPRECATED / DISABLED: the changeset-sse Prolog plugin is our own, is not
+# stable, and is no longer maintained. Do NOT load it. Leaving the plugin path
+# unset means the server serves as a plain TerminusDB 12 instance. TerminusDB 12
+# offers native diff+streaming on the history endpoint; prefer that instead.
+# To re-enable the plugin (not recommended), uncomment the line below:
+# export TERMINUSDB_PLUGINS_PATH=/opt/terminusdb-plugins
 
 exec /app/terminusdb/terminusdb serve

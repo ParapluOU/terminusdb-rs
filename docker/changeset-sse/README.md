@@ -1,5 +1,13 @@
 # TerminusDB with Changeset SSE Plugin
 
+> **⚠️ DEPRECATED — plugin disabled.** The `changeset-sse` plugin is our own,
+> is not stable, and is no longer maintained. As of the TerminusDB 12 upgrade it
+> is **no longer loaded**: the Dockerfile does not copy it and the entrypoint no
+> longer sets `TERMINUSDB_PLUGINS_PATH`, so this image now runs as a plain
+> TerminusDB 12 server. For change/diff streaming, prefer TerminusDB 12's native
+> diff + streaming on the history endpoint. The rest of this document describes
+> the plugin as it was; the files remain (commented out) for reference only.
+
 This Docker setup provides a TerminusDB instance pre-configured with the `changeset-sse` plugin.
 
 ## Overview

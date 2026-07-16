@@ -63,8 +63,10 @@ this plan needs a reproducible v12 server to test against.
 - [ ] Change the default `TERMINUSDB_VERSION` from `"main"` to a pinned v12 tag.
 - [ ] Verify the SWI-Prolog pin (`build.rs:572`, currently `10.0.0`) matches what
       v12.0.4+ requires (release notes: "SWI-Prolog 10 support").
-- [ ] Update `docker/changeset-sse/Dockerfile` (`FROM terminusdb-server:v11.1.14`
-      → a v12 tag) and re-test the changeset SSE plugin against v12.
+- [x] `docker/changeset-sse`: bumped base v11.1.14 → v12.0.6, but the plugin is
+      DEPRECATED/unstable (our own, unmaintained) so it is now DISABLED, not
+      ported — the Dockerfile no longer COPYs it and the entrypoint no longer
+      sets `TERMINUSDB_PLUGINS_PATH`. Prefer v12 native history diff+streaming.
 - [ ] Refresh prebuilt binaries under `crates/bin/prebuilt/`.
 
 ### 0.2 Numeric handling (the headline v12 breaking change)
