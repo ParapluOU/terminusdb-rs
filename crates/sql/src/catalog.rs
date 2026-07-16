@@ -18,25 +18,14 @@ use datafusion_expr::LogicalPlan;
 use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::SqlToRel;
 use serde_json::Value;
-use terminusdb_schema::is_primitive;
+use terminusdb_format::prefix::{is_primitive, is_sys, schema_curie};
+use terminusdb_format::{parse_schema, Family, RawClass, RawProperty};
 
 use crate::context::TdbContextProvider;
 use crate::error::{Result, SqlError};
 use crate::mangle::{mangle, IdentMap};
 use crate::meta::{ColumnKind, ColumnMeta, OmitReason, OmittedColumn, TableMeta, IRI_COLUMN};
-use crate::schema_read::{parse_schema, Family, RawClass, RawProperty};
 use crate::typemap::datatype_to_arrow;
-
-/// Turn a schema entity name into the WOQL prefixed-name form used as a triple
-/// predicate / type object (`Person` → `@schema:Person`). Already-qualified names
-/// (containing `:`) are left untouched. This mirrors `terminusdb-xpath`.
-pub(crate) fn schema_iri(name: &str) -> String {
-    if name.contains(':') {
-        name.to_string()
-    } else {
-        format!("@schema:{name}")
-    }
-}
 
 /// A commit-pinned mirror of the schema graph, ready to plan SQL against.
 #[derive(Debug)]
@@ -117,8 +106,7 @@ impl Catalog {
                 let nullable = matches!(prop.family, Some(Family::Optional)) || prop.force_nullable;
 
                 // Classify the property's range.
-                let (kind, datatype) = if is_primitive(&prop.class) || prop.class.starts_with("sys:")
-                {
+                let (kind, datatype) = if is_primitive(&prop.class) || is_sys(&prop.class) {
                     match datatype_to_arrow(&prop.class) {
                         Ok((dt, semantic)) => (ColumnKind::Scalar { semantic }, dt),
                         Err(reason) => {
@@ -162,7 +150,7 @@ impl Catalog {
                 fields.push(Field::new(&col_sql, datatype, nullable));
                 columns.push(ColumnMeta {
                     sql_name: col_sql,
-                    predicate: Some(schema_iri(&prop.name)),
+                    predicate: Some(schema_curie(&prop.name)),
                     kind,
                     nullable,
                 });

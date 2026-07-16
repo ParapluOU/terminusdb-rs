@@ -16,6 +16,7 @@ datafusion-common = "=54.0.0" # use its re-exported arrow: datafusion_common::ar
 
 terminusdb-schema = { path = "../schema" }
 terminusdb-woql2  = { path = "../woql2" }
+terminusdb-format = { path = "../format" }
 
 thiserror = "2.0"
 serde_json = { workspace = true }

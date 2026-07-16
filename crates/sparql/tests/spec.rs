@@ -109,17 +109,21 @@ mod tests {
         Ok(())
     }
 
-    /// Extract a scalar (literal or node IRI) from a WOQL binding value.
+    /// Extract a scalar (literal or node IRI) from a WOQL binding value, using
+    /// the shared [`terminusdb_format::classify_value`] node-vs-literal split.
     fn binding_scalar(v: &serde_json::Value) -> Option<String> {
-        if let Some(s) = v.as_str() {
-            return Some(s.to_string());
+        use terminusdb_format::WireValue;
+        match terminusdb_format::classify_value(v) {
+            WireValue::Node(iri) => Some(iri),
+            WireValue::Literal { value, .. } => match value {
+                serde_json::Value::String(s) => Some(s),
+                serde_json::Value::Null => None,
+                other => Some(other.to_string()),
+            },
+            // Bare scalars / unknown shapes: no scalar projection (matches the
+            // prior hand-rolled behavior).
+            _ => None,
         }
-        match v.get("@value") {
-            Some(serde_json::Value::String(s)) => return Some(s.clone()),
-            Some(other) if !other.is_null() => return Some(other.to_string()),
-            _ => {}
-        }
-        v.get("@id").and_then(|x| x.as_str()).map(str::to_string)
     }
 
     // --- cases --------------------------------------------------------------

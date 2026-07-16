@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use terminusdb_schema::strip_schema_prefix;
+use terminusdb_format::prefix::strip_schema_prefix;
 
 use crate::error::SqlError;
 

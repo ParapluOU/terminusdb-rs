@@ -68,7 +68,7 @@ pub fn datatype_to_arrow(class: &str) -> Result<(DataType, Semantic), RejectReas
         _ => {}
     }
 
-    let local = class.strip_prefix("xsd:").unwrap_or(class);
+    let local = terminusdb_format::prefix::xsd_local_name(class).unwrap_or(class);
     use Semantic::*;
     let mapped: (DataType, Semantic) = match local {
         // --- strings ---

@@ -35,7 +35,6 @@ mod error;
 mod mangle;
 mod meta;
 mod runner;
-mod schema_read;
 mod session;
 mod typemap;
 

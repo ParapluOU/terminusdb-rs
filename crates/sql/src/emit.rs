@@ -30,13 +30,14 @@ use std::collections::{HashMap, HashSet};
 use datafusion_common::{Column as DfColumn, ScalarValue};
 use datafusion_expr::expr::Sort as SortExpr;
 use datafusion_expr::{BinaryExpr, Distinct, Expr, JoinType, LogicalPlan, Operator};
+use terminusdb_format::prefix::{schema_curie, RDF_TYPE_CURIE};
 use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::prelude::{
     And, DataValue, Distinct as WoqlDistinct, Equals, Greater, Gte, Less, Limit, Lte, NodeValue,
     Not, Or, Order, OrderBy, OrderTemplate, Query, Select, Start, Triple, True, Value, WoqlOptional,
 };
 
-use crate::catalog::{schema_iri, Catalog};
+use crate::catalog::Catalog;
 use crate::error::{Result, SqlError};
 use crate::meta::{ColumnKind, ColumnMeta, TableMeta};
 
@@ -335,8 +336,8 @@ fn emit_table_scan(
     // Type filter: ?subject rdf:type @schema:Class
     clauses.push(Query::Triple(Triple {
         subject: NodeValue::Variable(subject.clone()),
-        predicate: NodeValue::Node("rdf:type".to_string()),
-        object: Value::Node(schema_iri(&meta.class_iri)),
+        predicate: NodeValue::Node(RDF_TYPE_CURIE.to_string()),
+        object: Value::Node(schema_curie(&meta.class_iri)),
         graph: None,
     }));
 

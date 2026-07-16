@@ -1,0 +1,16 @@
+[package]
+name = "terminusdb-format"
+description = "TerminusDB JSON-LD-flavored wire-format primitives (keywords, XSD datatypes, literal/node classification, schema-document parsing)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# This crate is a PURE LEAF: it depends only on serde/serde_json/thiserror and
+# MUST NOT depend on terminusdb-schema (or anything that does). That invariant is
+# what lets `terminusdb-schema` later depend on THIS crate without a cycle.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

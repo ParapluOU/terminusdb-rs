@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use serde_json::Value;
+use terminusdb_format::{XsdCategory, WireValue};
 
 use crate::emit::ProjCol;
 
@@ -90,34 +91,32 @@ impl SqlValue {
 
 /// Decode one WOQL binding value. A bare string is a node IRI; a typed
 /// `{"@type","@value"}` object is a literal; bare numbers/bools are literals too.
+///
+/// The node-vs-literal discrimination is delegated to [`terminusdb_format::classify_value`]
+/// (shared with the SPARQL compiler); this function only maps the classified
+/// term onto the SQL cell model.
 fn decode_value(v: &Value) -> SqlValue {
-    match v {
-        Value::String(s) => SqlValue::Node(s.clone()),
-        Value::Bool(b) => SqlValue::Bool(*b),
-        Value::Number(n) => number_to_sql(n),
-        Value::Object(o) => match (o.get("@type").and_then(Value::as_str), o.get("@value")) {
-            (Some(ty), Some(val)) => typed_literal(ty, val),
-            // A node object like {"@id": "..."}.
-            _ => match o.get("@id").and_then(Value::as_str) {
-                Some(id) => SqlValue::Node(id.to_string()),
-                None => SqlValue::Json(v.clone()),
-            },
-        },
-        Value::Null => SqlValue::Null,
-        other => SqlValue::Json(other.clone()),
+    match terminusdb_format::classify_value(v) {
+        WireValue::Null => SqlValue::Null,
+        WireValue::Bool(b) => SqlValue::Bool(b),
+        WireValue::Number(n) => number_to_sql(&n),
+        WireValue::Node(id) => SqlValue::Node(id),
+        WireValue::Literal { datatype: Some(ty), value } => typed_literal(&ty, &value),
+        // A datatype-less `@value` (does not occur in real WOQL output) — treat
+        // the payload as a plain string.
+        WireValue::Literal { datatype: None, value } => SqlValue::Str(scalar_string(&value)),
+        WireValue::Unknown(v) => SqlValue::Json(v),
     }
 }
 
+/// Map a typed literal (datatype CURIE/IRI + payload) onto a [`SqlValue`], using
+/// the shared XSD datatype classification. Tolerates both JSON-native and
+/// lexical-string encodings of numeric payloads.
 fn typed_literal(ty: &str, val: &Value) -> SqlValue {
-    let local = ty.strip_prefix("xsd:").unwrap_or(ty);
-    match local {
-        "string" | "normalizedString" | "token" | "anyURI" => {
-            SqlValue::Str(val.as_str().unwrap_or_default().to_string())
-        }
-        "boolean" => SqlValue::Bool(as_bool(val)),
-        "integer" | "int" | "long" | "short" | "byte" | "nonNegativeInteger"
-        | "positiveInteger" | "negativeInteger" | "nonPositiveInteger" | "unsignedInt"
-        | "unsignedLong" | "unsignedShort" | "unsignedByte" => match val.as_i64() {
+    match terminusdb_format::classify_datatype(ty) {
+        XsdCategory::Text => SqlValue::Str(scalar_string(val)),
+        XsdCategory::Boolean => SqlValue::Bool(as_bool(val)),
+        XsdCategory::Integer => match val.as_i64() {
             Some(i) => SqlValue::Int(i),
             None => val
                 .as_str()
@@ -125,8 +124,8 @@ fn typed_literal(ty: &str, val: &Value) -> SqlValue {
                 .map(SqlValue::Int)
                 .unwrap_or_else(|| SqlValue::Json(val.clone())),
         },
-        "decimal" => SqlValue::Decimal(scalar_string(val)),
-        "double" | "float" => match val.as_f64() {
+        XsdCategory::Decimal => SqlValue::Decimal(scalar_string(val)),
+        XsdCategory::Double => match val.as_f64() {
             Some(f) => SqlValue::Float(f),
             None => val
                 .as_str()
@@ -134,8 +133,8 @@ fn typed_literal(ty: &str, val: &Value) -> SqlValue {
                 .map(SqlValue::Float)
                 .unwrap_or_else(|| SqlValue::Json(val.clone())),
         },
-        "date" | "dateTime" | "dateTimeStamp" | "time" => SqlValue::Temporal(scalar_string(val)),
-        _ => SqlValue::Str(scalar_string(val)),
+        XsdCategory::Temporal => SqlValue::Temporal(scalar_string(val)),
+        XsdCategory::Binary | XsdCategory::Other => SqlValue::Str(scalar_string(val)),
     }
 }
 

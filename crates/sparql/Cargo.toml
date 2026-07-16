@@ -11,6 +11,7 @@ authors.workspace = true
 # Compile target: the WOQL AST.
 terminusdb-woql2 = { path = "../woql2" }
 terminusdb-schema = { path = "../schema" }
+terminusdb-format = { path = "../format" }
 
 # Spec-grade SPARQL 1.1 parser + algebra (from the oxigraph ecosystem). We reuse
 # this to parse SPARQL into its algebra, then lower that algebra into WOQL —

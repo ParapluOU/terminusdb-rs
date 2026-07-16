@@ -1,15 +1,17 @@
 //! Parse TerminusDB schema-graph documents (the authored JSON, as emitted by
-//! `Schema::to_json`) into a small raw model the catalog builder consumes.
+//! `Schema::to_json`) into a small raw model that consumers (the SQL catalog
+//! builder today; potentially the schema crate itself later) can walk.
 //!
-//! We parse the JSON ourselves rather than deserializing into
-//! [`terminusdb_schema::Schema`], because that type's derived `Deserialize` is
+//! We parse the JSON directly rather than deserializing into
+//! `terminusdb_schema::Schema`, because that type's derived `Deserialize` is
 //! explicitly *not* compliant with TerminusDB's schema JSON (it exists only for
-//! internal RPC — see `crates/schema/src/schema/schema.rs`). We only need the
-//! subset relevant to tables/columns, so a focused parser is simpler and safer.
+//! internal RPC). A focused parser over the subset that matters is simpler and
+//! keeps this crate free of any dependency on `terminusdb-schema`.
 
 use serde_json::Value;
 
-use crate::error::{Result, SqlError};
+use crate::error::{FormatError, Result};
+use crate::keyword;
 
 /// The parsed schema graph: concrete classes + enums.
 #[derive(Debug, Clone, Default)]
@@ -42,8 +44,9 @@ pub struct RawProperty {
     pub force_nullable: bool,
 }
 
-/// Property type families we distinguish (cardinality detail is irrelevant to v1
-/// since any multi-valued property is rejected).
+/// Property type families. Cardinality detail (`@cardinality`/`@dimensions`) is
+/// intentionally not captured here — consumers that need it can read it off the
+/// raw JSON; this model exists for the tables/columns use case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
     Optional,
@@ -53,12 +56,23 @@ pub enum Family {
 }
 
 impl Family {
-    /// True for the container families (rejected in v1 as multi-valued).
+    /// Parse a type-family name (`"Optional"`, `"Set"`, `"List"`, `"Array"`).
+    pub fn parse(name: &str) -> Option<Family> {
+        match name {
+            "Optional" => Some(Family::Optional),
+            "Set" => Some(Family::Set),
+            "List" => Some(Family::List),
+            "Array" => Some(Family::Array),
+            _ => None,
+        }
+    }
+
+    /// True for the container families (multi-valued: set/list/array).
     pub fn is_multivalued(self) -> bool {
         matches!(self, Family::Set | Family::List | Family::Array)
     }
 
-    /// The container name for an omission reason.
+    /// The lowercase container name (useful for diagnostics).
     pub fn container_name(self) -> &'static str {
         match self {
             Family::Set => "set",
@@ -77,7 +91,7 @@ pub struct RawEnum {
 }
 
 /// Parse a list of schema-graph documents into [`RawSchema`]. The `@context`
-/// document is skipped.
+/// document is skipped, as are non-object entries and unknown document kinds.
 pub fn parse_schema(docs: &[Value]) -> Result<RawSchema> {
     let mut out = RawSchema::default();
     for doc in docs {
@@ -85,15 +99,15 @@ pub fn parse_schema(docs: &[Value]) -> Result<RawSchema> {
             Some(o) => o,
             None => continue, // non-object entries are not schema documents
         };
-        let ty = obj.get("@type").and_then(Value::as_str).unwrap_or("");
+        let ty = obj.get(keyword::TYPE).and_then(Value::as_str).unwrap_or("");
         match ty {
             "@context" => continue,
             "Enum" => out.enums.push(parse_enum(obj)?),
             "Class" => out.classes.push(parse_class(obj, false)?),
             "TaggedUnion" => out.classes.push(parse_class(obj, true)?),
             other => {
-                // Unknown top-level document type — skip rather than fail the whole
-                // load, but this should not normally occur in a schema graph.
+                // Unknown top-level document type — skip rather than fail the
+                // whole load, but this should not normally occur.
                 let _ = other;
             }
         }
@@ -102,44 +116,33 @@ pub fn parse_schema(docs: &[Value]) -> Result<RawSchema> {
 }
 
 fn parse_enum(obj: &serde_json::Map<String, Value>) -> Result<RawEnum> {
-    let id = required_str(obj, "@id")?;
+    let id = required_str(obj, keyword::ID)?;
     let values = obj
-        .get("@value")
+        .get(keyword::VALUE)
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
     Ok(RawEnum { id, values })
 }
 
 fn parse_class(obj: &serde_json::Map<String, Value>, tagged_union: bool) -> Result<RawClass> {
-    let id = required_str(obj, "@id")?;
-    let is_abstract = obj.contains_key("@abstract");
-    let is_subdocument = obj.contains_key("@subdocument");
-    let inherits = parse_inherits(obj.get("@inherits"));
+    let id = required_str(obj, keyword::ID)?;
+    let is_abstract = obj.contains_key(keyword::ABSTRACT);
+    let is_subdocument = obj.contains_key(keyword::SUBDOCUMENT);
+    let inherits = parse_inherits(obj.get(keyword::INHERITS));
 
     let mut properties = Vec::new();
     for (key, val) in obj {
         if key.starts_with('@') {
             // Handle the one structural key that introduces properties.
-            if key == "@oneOf" {
+            if key == keyword::ONE_OF {
                 parse_one_of(val, &mut properties)?;
             }
             continue;
         }
         properties.push(parse_property(key, val, tagged_union)?);
     }
-    Ok(RawClass {
-        id,
-        is_abstract,
-        is_subdocument,
-        inherits,
-        properties,
-    })
+    Ok(RawClass { id, is_abstract, is_subdocument, inherits, properties })
 }
 
 fn parse_property(name: &str, val: &Value, force_nullable: bool) -> Result<RawProperty> {
@@ -153,33 +156,22 @@ fn parse_property(name: &str, val: &Value, force_nullable: bool) -> Result<RawPr
         }),
         // Container / optional object.
         Value::Object(o) => {
-            let fam = o.get("@type").and_then(Value::as_str);
-            let family = match fam {
-                Some("Optional") => Family::Optional,
-                Some("Set") => Family::Set,
-                Some("List") => Family::List,
-                Some("Array") => Family::Array,
-                other => {
-                    return Err(SqlError::SchemaParse(format!(
-                        "property `{name}` has unrecognised type family {other:?}"
-                    )))
-                }
-            };
+            let fam = o.get(keyword::TYPE).and_then(Value::as_str);
+            let family = fam.and_then(Family::parse).ok_or_else(|| {
+                FormatError::SchemaParse(format!(
+                    "property `{name}` has unrecognised type family {fam:?}"
+                ))
+            })?;
             let class = o
-                .get("@class")
+                .get(keyword::CLASS)
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    SqlError::SchemaParse(format!("property `{name}` is missing `@class`"))
+                    FormatError::SchemaParse(format!("property `{name}` is missing `@class`"))
                 })?
                 .to_string();
-            Ok(RawProperty {
-                name: name.to_string(),
-                class,
-                family: Some(family),
-                force_nullable,
-            })
+            Ok(RawProperty { name: name.to_string(), class, family: Some(family), force_nullable })
         }
-        other => Err(SqlError::SchemaParse(format!(
+        other => Err(FormatError::SchemaParse(format!(
             "property `{name}` has unexpected value {other}"
         ))),
     }
@@ -188,13 +180,13 @@ fn parse_property(name: &str, val: &Value, force_nullable: bool) -> Result<RawPr
 /// `@oneOf` is an array of objects, each mapping property name → range. All such
 /// properties are mutually exclusive, hence nullable.
 fn parse_one_of(val: &Value, out: &mut Vec<RawProperty>) -> Result<()> {
-    let groups = val.as_array().ok_or_else(|| {
-        SqlError::SchemaParse("`@oneOf` must be an array of property groups".into())
-    })?;
+    let groups = val
+        .as_array()
+        .ok_or_else(|| FormatError::SchemaParse("`@oneOf` must be an array of property groups".into()))?;
     for group in groups {
-        let obj = group.as_object().ok_or_else(|| {
-            SqlError::SchemaParse("`@oneOf` entries must be objects".into())
-        })?;
+        let obj = group
+            .as_object()
+            .ok_or_else(|| FormatError::SchemaParse("`@oneOf` entries must be objects".into()))?;
         for (name, v) in obj {
             if name.starts_with('@') {
                 continue;
@@ -208,11 +200,9 @@ fn parse_one_of(val: &Value, out: &mut Vec<RawProperty>) -> Result<()> {
 fn parse_inherits(val: Option<&Value>) -> Vec<String> {
     match val {
         Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Array(arr)) => arr
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
+        Some(Value::Array(arr)) => {
+            arr.iter().filter_map(Value::as_str).map(str::to_string).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -221,7 +211,7 @@ fn required_str(obj: &serde_json::Map<String, Value>, key: &str) -> Result<Strin
     obj.get(key)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| SqlError::SchemaParse(format!("schema document missing `{key}`")))
+        .ok_or_else(|| FormatError::SchemaParse(format!("schema document missing `{key}`")))
 }
 
 #[cfg(test)]

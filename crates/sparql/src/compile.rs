@@ -22,15 +22,12 @@
 //! `terminusdb:///data/...` instance IRI) passes through verbatim.
 
 use decimal_rs::Decimal;
+use terminusdb_format::prefix::{contract_iri, SCHEMA_IRI_DEFAULT};
 use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::prelude::*;
 
 use crate::error::{Result, SparqlError};
 use crate::ir;
-
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDFS: &str = "http://www.w3.org/2000/01/rdf-schema#";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 /// Options controlling how SPARQL IRIs map onto WOQL nodes/predicates.
 #[derive(Debug, Clone)]
@@ -44,7 +41,7 @@ pub struct CompileOptions {
 impl Default for CompileOptions {
     fn default() -> Self {
         Self {
-            schema_base: "http://terminusdb.com/schema#".to_string(),
+            schema_base: SCHEMA_IRI_DEFAULT.to_string(),
         }
     }
 }
@@ -313,23 +310,13 @@ fn expr_data(e: &ir::Expr) -> Result<DataValue> {
     }
 }
 
-/// Map a SPARQL IRI onto the WOQL node/predicate string.
+/// Map a SPARQL IRI onto the WOQL node/predicate string. Members of the schema
+/// namespace contract to `@schema:`, the well-known `rdf:`/`rdfs:`/`xsd:`
+/// namespaces to their prefixes, and anything else (a full
+/// `terminusdb:///data/...` instance IRI, a foreign vocabulary) passes through
+/// unchanged. See [`terminusdb_format::prefix::contract_iri`].
 fn map_iri(iri: &str, opts: &CompileOptions) -> String {
-    if let Some(local) = iri.strip_prefix(&opts.schema_base) {
-        return format!("@schema:{local}");
-    }
-    if let Some(local) = iri.strip_prefix(RDF) {
-        return format!("rdf:{local}");
-    }
-    if let Some(local) = iri.strip_prefix(RDFS) {
-        return format!("rdfs:{local}");
-    }
-    if let Some(local) = iri.strip_prefix(XSD) {
-        return format!("xsd:{local}");
-    }
-    // Anything else (a full `terminusdb:///data/...` instance IRI, a foreign
-    // vocabulary) passes through unchanged.
-    iri.to_string()
+    contract_iri(iri, &opts.schema_base)
 }
 
 fn literal_to_xsd(l: &ir::Literal) -> Result<XSDAnySimpleType> {

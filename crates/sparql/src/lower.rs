@@ -174,37 +174,40 @@ fn lower_predicate(p: &NamedNodePattern) -> Result<ir::Term> {
     }
 }
 
-/// XSD datatype IRIs we recognise coarsely.
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-
 fn lower_literal(l: &oxrdf::Literal) -> ir::Literal {
+    use terminusdb_format::prefix::{xsd_local_name, RDF_LANGSTRING_IRI};
+    use terminusdb_format::XsdCategory;
+
     let value = l.value().to_string();
     let dt = l.datatype().as_str().to_string();
-    let local = dt.strip_prefix(XSD);
-    match local {
-        Some("string") => ir::Literal::Str(value),
-        Some("integer") | Some("int") | Some("long") | Some("short") | Some("byte")
-        | Some("nonNegativeInteger") | Some("positiveInteger") | Some("nonPositiveInteger")
-        | Some("negativeInteger") | Some("unsignedInt") | Some("unsignedLong")
-        | Some("unsignedShort") | Some("unsignedByte") => {
-            value.parse::<i64>().map(ir::Literal::Int).unwrap_or(ir::Literal::Typed(value, dt))
-        }
-        Some("double") | Some("float") => value
+    // The numeric/boolean categories are the ones whose grouping is identical to
+    // the SQL decoder's, so they come from the shared classifier. The string
+    // decision is intentionally narrower here than the shared `Text` category: we
+    // only collapse `xsd:string` / `rdf:langString` to a bare string, and keep
+    // every other datatype (`xsd:token`, `xsd:anyURI`, temporal, …) as a `Typed`
+    // literal so the emitted WOQL preserves its datatype.
+    match terminusdb_format::classify_datatype(&dt) {
+        XsdCategory::Integer => value
+            .parse::<i64>()
+            .map(ir::Literal::Int)
+            .unwrap_or(ir::Literal::Typed(value, dt)),
+        XsdCategory::Double => value
             .parse::<f64>()
             .map(ir::Literal::Double)
             .unwrap_or(ir::Literal::Typed(value, dt)),
-        Some("decimal") => ir::Literal::Decimal(value),
-        Some("boolean") => match value.as_str() {
+        XsdCategory::Decimal => ir::Literal::Decimal(value),
+        XsdCategory::Boolean => match value.as_str() {
             "true" | "1" => ir::Literal::Bool(true),
             "false" | "0" => ir::Literal::Bool(false),
             _ => ir::Literal::Typed(value, dt),
         },
-        // Plain string literals (no explicit datatype) and language-tagged
-        // strings both surface as strings for WOQL's purposes.
-        _ if dt == "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString" => {
-            ir::Literal::Str(value)
+        _ => {
+            if xsd_local_name(&dt) == Some("string") || dt == RDF_LANGSTRING_IRI {
+                ir::Literal::Str(value)
+            } else {
+                ir::Literal::Typed(value, dt)
+            }
         }
-        _ => ir::Literal::Typed(value, dt),
     }
 }
 

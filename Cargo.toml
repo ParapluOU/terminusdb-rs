@@ -4,6 +4,7 @@ members = [
     "crates/bin",
     "crates/cli",
     "crates/client",
+    "crates/format",
     "crates/gql",
     "crates/manager",
     "crates/mcp-server",

@@ -74,6 +74,14 @@ pub enum SqlError {
 
 pub type Result<T> = std::result::Result<T, SqlError>;
 
+impl From<terminusdb_format::FormatError> for SqlError {
+    fn from(e: terminusdb_format::FormatError) -> Self {
+        match e {
+            terminusdb_format::FormatError::SchemaParse(s) => SqlError::SchemaParse(s),
+        }
+    }
+}
+
 impl SqlError {
     pub(crate) fn unsupported(msg: impl Into<String>) -> Self {
         SqlError::Unsupported(msg.into())
