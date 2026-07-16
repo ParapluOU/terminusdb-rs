@@ -218,9 +218,24 @@ let (instance_id, commit_id) = client.insert_instance_with_commit_id(&model, arg
 println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" prefix
 ```
 
+## TerminusDB version
+
+This workspace targets **TerminusDB 12.1** and is v12-only (no v11 compatibility).
+The embedded server (`terminusdb-bin`) builds the `ParapluOU/terminusdb` fork
+rebased onto upstream `12.1-rc`, pinned in `crates/bin/build.rs` (default
+`TERMINUSDB_VERSION = "v12.1-rc-paraplu.1"`). See
+`docs/terminusdb12-compat-plan.md` for the upgrade milestones and status, and the
+refreshed docs mirror in `docs/terminusdb/`.
+
+Numeric handling (v12): the server returns numbers as native JSON numbers at full
+rational precision. `serde_json`'s `arbitrary_precision` feature is enabled
+workspace-wide so high-precision `xsd:decimal`/timestamps are not truncated
+through f64. Rust field types: `f64` → `xsd:double`, `f32` → `xsd:float`, and
+`terminusdb_schema::BigDecimal` (bigdecimal, arbitrary precision) → `xsd:decimal`.
+
 ## Common Troubleshooting
 
-- When TerminusDB returns an error indicating a "Schema failure", it most often means we have changed a model's shape after inserting its schema. This can be resolved by dropping the database using the client::delete_database() function.
+- When TerminusDB returns an error indicating a "Schema failure", it most often means we have changed a model's shape after inserting its schema. On an **empty/dev** database this can be resolved by dropping it with `client::delete_database()`. On a database that already holds **data**, use the TerminusDB 12 schema-migration API instead (`client.migrate_schema(...)` with typed `MigrationOperation`s — e.g. `CreateClassProperty`, `MoveClassProperty`, `CastClassProperty`) to evolve the schema without losing data.
 
 ## Testing and Development Insights
 

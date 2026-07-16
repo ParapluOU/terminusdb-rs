@@ -1,0 +1,71 @@
+name: Tests
+
+# Integration tests against a self-contained, embedded TerminusDB 12.1 server.
+# `terminusdb-bin`'s build script clones + builds the pinned ParapluOU/terminusdb
+# fork (rebased on upstream 12.1-rc) and bundles its SWI-Prolog runtime, so the
+# tests spawn a real v12.1 server in memory mode — no external service needed.
+#
+# TerminusDB 12-only: there is intentionally no v11 job (the client dropped v11
+# compatibility during the v12 upgrade).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Match crates/bin/build.rs's default so the cache key and the built server tag agree.
+  TERMINUSDB_VERSION: v12.1-rc-paraplu.1
+
+jobs:
+  integration-tests:
+    name: Integration tests (embedded TerminusDB 12.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build deps for the workspace and the embedded server build (bindgen needs
+      # clang/libclang; the gRPC labelstore build needs protoc; the server build
+      # provisions its own SWI-Prolog but wants make/gmp/openssl available).
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential make git curl unzip ca-certificates \
+            openssl libssl-dev libgmp-dev clang libclang-dev protobuf-compiler
+
+      - name: Install Rust nightly (per rust-toolchain.toml)
+        run: |
+          rustup show active-toolchain || rustup toolchain install nightly
+          rustc --version && cargo --version
+
+      # Cache the cargo caches, the build output (which holds the compiled server
+      # + bundled swipl-home under target/.../build/terminusdb-bin-*/out), and the
+      # server build's downloaded deps (protoc, micromamba/swipl env).
+      - name: Cache cargo & embedded server build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            crates/bin/.deps
+          key: ${{ runner.os }}-cargo-${{ env.TERMINUSDB_VERSION }}-${{ hashFiles('Cargo.lock', 'crates/bin/build.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.TERMINUSDB_VERSION }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Build embedded server + client
+        run: cargo build -p terminusdb-bin -p terminusdb-client
+
+      - name: terminusdb-bin server boot tests
+        run: cargo test -p terminusdb-bin
+
+      - name: Schema + WOQL unit tests
+        run: cargo test -p terminusdb-schema -p terminusdb-woql2
+
+      - name: Client integration tests (vs embedded 12.1 server)
+        run: cargo test -p terminusdb-client --tests --no-fail-fast

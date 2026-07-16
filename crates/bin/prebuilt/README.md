@@ -2,6 +2,13 @@
 
 This directory contains pre-built TerminusDB binaries for cross-compilation.
 
+> **⚠️ STALE — needs a v12.1 rebuild.** The macOS binaries here
+> (`aarch64-apple-darwin/`) were built from the pre-v12 (TerminusDB 11) fork and
+> do NOT match the current pinned server (`v12.1-rc-paraplu.1`, see
+> `crates/bin/build.rs`). Rebuild them on a macOS host from the pinned fork tag
+> before relying on the cross-compilation path; `x86_64-apple-darwin/` has never
+> been populated. (Linux builds from source and does not use these.)
+
 ## Structure
 
 ```

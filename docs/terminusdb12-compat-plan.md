@@ -304,15 +304,20 @@ Document API (`document-insertion.md`; current param handling in
 - [x] Refresh `docs/openapi.yaml` (10.0.3 → 12.0.5), `docs/schemas/*.json`
       (WOQL/ref/repo/system schemas from upstream main), and `docs/woql/woql.js`
       (current JS builder, includes the new operators). *(done 2026-07-08)*
-- [ ] Delete or refresh the remaining stale doc artifacts superseded by the
-      mirror: `docs/woql/class-reference.md` + `docs/woql/guide/` (old repo era)
-      and `docs/terminusdb-schema.md` (old TerminusCMS schema guide — superseded
-      by `docs/terminusdb/schema-reference-guide.md`).
-- [ ] Regenerate the OpenAPI client (`cd client && make generate-client`)
-      against the v12.0.5 spec and reconcile differences.
-- [ ] CI: run the integration suite against the pinned v12 embedded server;
-      consider a compatibility job against the last v11 tag if v11 support is
-      to be retained (decide and document a support policy).
+- [x] Deleted the stale doc artifacts superseded by the mirror:
+      `docs/woql/class-reference.md`, `docs/woql/guide/`, and
+      `docs/terminusdb-schema.md`. *(M7)*
+- [x] Refreshed `docs/openapi.yaml` to the upstream **v12.0.6** tag. NB: this
+      spec is a **read-only mirror of upstream `terminusdb/terminusdb`, not our
+      API definition** — do NOT run a "generate our client from it" step.
+- [x] CI: added `.github/workflows/tests.yml` — builds the embedded 12.1 server
+      and runs `terminusdb-bin` boot tests + schema/woql2 unit tests + the client
+      integration suite. **v12-only, no v11 job** (v11 support dropped). *(M7)*
+- [ ] Rebuild `crates/bin/prebuilt/*-apple-darwin/` from the pinned v12.1 fork
+      tag — needs a macOS host (current binaries are v11-era; flagged stale in
+      the prebuilt README).
+- [x] Updated `CLAUDE.md`: v12-only + numeric behavior; the schema-failure
+      troubleshooting now points to the migration API for databases with data. *(M7)*
 - [ ] Sequence note: land P0 first (pinned server + numeric correctness), then
       P1 (WOQL) and P2 (schema) in parallel, then P3. Each functional item needs
       an integration test against the real v12 server per CLAUDE.md.
