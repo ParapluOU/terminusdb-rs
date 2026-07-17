@@ -168,27 +168,25 @@ async fn roundtrip_option_none() -> Result<()> {
 // chrono temporals.
 // ---------------------------------------------------------------------------
 
-// NOTE: chrono::NaiveDate (xsd:date) has NO ToSchemaClass/ToInstanceProperty impl
-// in terminusdb-schema — only DateTime<Utc> (xsd:dateTime) and NaiveTime (xsd:time)
-// are wired. So xsd:date is not currently representable as a model field; that gap
-// is tracked separately, not exercised here.
 #[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id", key = "random")]
 struct Temporals {
     id: EntityIDFor<Self>,
     dt: chrono::DateTime<chrono::Utc>,
+    date: chrono::NaiveDate,
     time: chrono::NaiveTime,
 }
 
 #[tokio::test]
 async fn roundtrip_temporals() -> Result<()> {
-    use chrono::{NaiveTime, TimeZone, Utc};
+    use chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
     roundtrip(
         "rt_temporals",
         "t1",
         Temporals {
             id: EntityIDFor::new("t1").unwrap(),
             dt: Utc.with_ymd_and_hms(2021, 3, 14, 15, 9, 26).unwrap(),
+            date: NaiveDate::from_ymd_opt(2021, 3, 14).unwrap(),
             time: NaiveTime::from_hms_opt(15, 9, 26).unwrap(),
         },
     )
@@ -326,18 +324,12 @@ struct Maps {
     kv: std::collections::HashMap<String, String>,
 }
 
-// KNOWN GAP (documented, not yet fixed): HashMap<String, String> has an
-// internally inconsistent representation — it *serializes* as a Set of
-// `HashMapStringEntry` subdocuments (impl/map.rs), but its `FromInstanceProperty`
-// *deserializes* expecting a `sys:JSON` object (impl/hashmap.rs:163). So it cannot
-// roundtrip until those two sides are reconciled. The schema-tree fix in this
-// change makes the *insert* half work (HashMapStringEntry is now registered);
-// read-back still needs a matching deserializer. Ignored until then.
-#[ignore = "HashMap<String,String> serialize/deserialize representations disagree; see note"]
 #[tokio::test]
 async fn roundtrip_hashmap() -> Result<()> {
     use std::collections::HashMap;
-    roundtrip(
+    // HashMap<String,String> is stored as a sys:JSON object (content-addressed),
+    // so it must be retrieved unfolded — like the sys:JSON test.
+    roundtrip_unfolded(
         "rt_hashmap",
         "m1",
         Maps {

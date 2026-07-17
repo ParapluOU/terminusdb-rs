@@ -1,10 +1,10 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromInstanceProperty, InstanceProperty, MaybeFromTDBInstance, Primitive, PrimitiveValue,
-    Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, DATETIME, TIME,
+    Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, DATE, DATETIME, TIME,
 };
 use anyhow::bail;
-use chrono::{DateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde_json::Value;
 
 // Implement ToSchemaClass for DateTime<Utc>
@@ -152,6 +152,74 @@ impl FromInstanceProperty for NaiveTime {
 }
 
 impl<Parent> InstancePropertyFromJson<Parent> for NaiveTime {
+    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+        match json.as_str() {
+            Some(s) => Ok(InstanceProperty::Primitive(PrimitiveValue::String(
+                s.to_string(),
+            ))),
+            None => bail!("Expected a string, got: {}", json),
+        }
+    }
+}
+
+// === chrono::NaiveDate as xsd:date ===
+
+impl ToSchemaClass for NaiveDate {
+    fn to_class() -> String {
+        DATE.to_string()
+    }
+}
+
+impl Primitive for NaiveDate {}
+
+impl ToMaybeTDBSchema for NaiveDate {}
+
+impl From<NaiveDate> for PrimitiveValue {
+    fn from(date: NaiveDate) -> Self {
+        Self::String(date.format("%Y-%m-%d").to_string())
+    }
+}
+
+impl From<NaiveDate> for InstanceProperty {
+    fn from(date: NaiveDate) -> Self {
+        Self::Primitive(date.into())
+    }
+}
+
+impl<Parent> ToInstanceProperty<Parent> for NaiveDate {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
+        self.into()
+    }
+}
+
+/// Reduce an xsd:date lexical form to the bare `YYYY-MM-DD` date. TerminusDB may
+/// round-trip a date with a timezone ("2021-03-14Z", "2021-03-14+01:00") or as a
+/// dateTime ("2021-03-14T00:00:00Z"); `NaiveDate` carries none of that.
+fn strip_date_zone(s: &str) -> &str {
+    let s = s.split('T').next().unwrap_or(s);
+    let s = s.strip_suffix('Z').unwrap_or(s);
+    // A date is 10 chars (YYYY-MM-DD); a trailing +hh:mm / -hh:mm offset follows.
+    if s.len() > 10 {
+        if let Some(rel) = s[10..].find(['+', '-']) {
+            return &s[..10 + rel];
+        }
+    }
+    s
+}
+
+impl FromInstanceProperty for NaiveDate {
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        if let InstanceProperty::Primitive(PrimitiveValue::String(s)) = prop {
+            let s = strip_date_zone(s);
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!("Failed to parse date string: {}", s))
+        } else {
+            Err(anyhow::anyhow!("Expected String primitive value"))
+        }
+    }
+}
+
+impl<Parent> InstancePropertyFromJson<Parent> for NaiveDate {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
         match json.as_str() {
             Some(s) => Ok(InstanceProperty::Primitive(PrimitiveValue::String(

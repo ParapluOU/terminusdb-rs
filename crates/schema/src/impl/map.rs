@@ -90,36 +90,33 @@ impl ToSchemaClass for HashMap<String, String> {
     }
 }
 
-// A HashMap<String, String> field is stored as a Set of `HashMapStringEntry`
-// subdocuments, so the model's schema tree must include that entry class —
-// otherwise inserting the schema fails with `not_a_class_or_base_type`.
-impl ToMaybeTDBSchema for HashMap<String, String> {
-    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
-        <HashMapStringEntry as ToTDBSchema>::to_schema_tree_mut(collection);
+// A HashMap<String, String> is stored as a single `sys:JSON` object `{key: value}`
+// — consistent with its FromInstanceProperty deserializer (impl/hashmap.rs) and
+// with HashMap<String, Value>. (The earlier `HashMapStringEntry` subdocument form
+// was write-only: it could not be deserialized back, so the two sides disagreed.)
+impl Primitive for HashMap<String, String> {}
+
+impl ToMaybeTDBSchema for HashMap<String, String> {}
+
+impl From<HashMap<String, String>> for PrimitiveValue {
+    fn from(map: HashMap<String, String>) -> Self {
+        let json_map: serde_json::Map<String, serde_json::Value> = map
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect();
+        Self::Object(serde_json::Value::Object(json_map))
     }
 }
 
-impl<Parent> ToSchemaProperty<Parent> for HashMap<String, String> {
-    fn to_schema_property(field_name: &str) -> Property {
-        Property {
-            name: field_name.to_string(),
-            r#type: Some(TypeFamily::Set(SetCardinality::None)),
-            class: "HashMapStringEntry".to_string(),
-        }
+impl From<HashMap<String, String>> for InstanceProperty {
+    fn from(map: HashMap<String, String>) -> Self {
+        Self::Primitive(map.into())
     }
 }
 
 impl<Parent> ToInstanceProperty<Parent> for HashMap<String, String> {
     fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
-        let entries: Vec<InstanceProperty> = self
-            .into_iter()
-            .map(|(k, v)| {
-                let entry = HashMapStringEntry { key: k, value: v };
-                InstanceProperty::Relation(RelationValue::One(entry.to_instance(None)))
-            })
-            .collect();
-
-        InstanceProperty::Any(entries)
+        self.into()
     }
 }
 
