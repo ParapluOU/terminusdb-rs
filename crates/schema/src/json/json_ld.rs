@@ -13,7 +13,7 @@ use serde_json::Value;
 pub fn get_type(json: &Value) -> Result<&str, String> {
     let obj = json.as_object()
         .ok_or_else(|| format!("Expected JSON object, got {}", json))?;
-    obj.get("@type")
+    obj.get(terminusdb_format::keyword::TYPE)
         .and_then(|v| v.as_str())
         .ok_or_else(|| format!(
             "Missing @type on JSON-LD object with keys: {:?}",
@@ -27,7 +27,7 @@ pub fn get_type(json: &Value) -> Result<&str, String> {
 pub fn get_id(json: &Value) -> Result<&str, String> {
     let obj = json.as_object()
         .ok_or_else(|| format!("Expected JSON object, got {}", json))?;
-    obj.get("@id")
+    obj.get(terminusdb_format::keyword::ID)
         .and_then(|v| v.as_str())
         .ok_or_else(|| format!(
             "Missing @id on JSON-LD object with keys: {:?}",

@@ -22,7 +22,9 @@ pub mod json;
 pub use field::*;
 pub use id::*;
 pub use iri::{TdbIRI, DEFAULT_DATA_BASE, strip_schema_prefix};
-pub mod json_ld;
+// `json_ld` now lives under `json/`; re-exported at the crate root so the
+// `terminusdb_schema::json_ld::*` path keeps resolving.
+pub use json::json_ld;
 pub use json::{InstanceFromJson, ToJson};
 pub use lazy::*;
 pub use marker::*;
