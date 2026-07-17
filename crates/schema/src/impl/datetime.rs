@@ -111,9 +111,30 @@ impl<Parent> ToInstanceProperty<Parent> for NaiveTime {
     }
 }
 
+/// Strip a trailing timezone designator (`Z`, or a `+hh:mm` / `-hh:mm` offset)
+/// from an xsd:time lexical form, leaving the bare time-of-day for `NaiveTime`.
+fn strip_time_zone(s: &str) -> &str {
+    if let Some(stripped) = s.strip_suffix('Z') {
+        return stripped;
+    }
+    // A pure time string has no date, so a trailing '+'/'-' can only start an
+    // offset. Only strip if the head still looks like a time (contains ':').
+    if let Some(pos) = s.rfind(['+', '-']) {
+        let (head, _offset) = s.split_at(pos);
+        if head.contains(':') {
+            return head;
+        }
+    }
+    s
+}
+
 impl FromInstanceProperty for NaiveTime {
     fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
         if let InstanceProperty::Primitive(PrimitiveValue::String(s)) = prop {
+            // TerminusDB stores xsd:time with a timezone, so a value round-trips
+            // back as e.g. "15:09:26Z" (or with a "+hh:mm" offset). NaiveTime has
+            // no timezone, so strip a trailing "Z" / offset before parsing.
+            let s = strip_time_zone(s);
             // Try parsing with different formats
             if let Ok(time) = NaiveTime::parse_from_str(s, "%H:%M:%S%.f") {
                 Ok(time)

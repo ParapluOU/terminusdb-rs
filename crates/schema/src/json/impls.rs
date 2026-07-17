@@ -34,17 +34,22 @@ macro_rules! impl_int_deserialization {
             fn property_from_json(json: Value) -> Result<InstanceProperty> {
                 match json {
                     Value::Number(n) => {
-                        if let Some(i) = n.as_i64() {
-                            if i >= <$ty>::MIN as i64 && i <= <$ty>::MAX as i64 {
-                                return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
-                            }
-                            return Err(anyhow!(
-                                "Number {} is out of range for {}",
-                                i,
-                                stringify!($ty)
-                            ));
+                        // Bounds are checked in i128 so that types whose MAX
+                        // exceeds i64::MAX (e.g. usize/u64 on 64-bit, where
+                        // `usize::MAX as i64` would wrap to -1) are handled
+                        // correctly. Values above i64::MAX arrive via as_u64.
+                        let in_range = n
+                            .as_i64()
+                            .map(|i| {
+                                (i as i128) >= <$ty>::MIN as i128
+                                    && (i as i128) <= <$ty>::MAX as i128
+                            })
+                            .or_else(|| n.as_u64().map(|u| (u as i128) <= <$ty>::MAX as i128))
+                            .unwrap_or(false);
+                        if in_range {
+                            return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
                         }
-                        Err(anyhow!("Number cannot be represented as an integer"))
+                        Err(anyhow!("Number {} is out of range for {}", n, stringify!($ty)))
                     }
                     // TerminusDB 12 returns numbers as native JSON numbers; the
                     // v11 string-wrapped-number fallback is intentionally gone.
