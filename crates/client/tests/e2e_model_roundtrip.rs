@@ -549,3 +549,183 @@ async fn roundtrip_tagged_union_struct() -> Result<()> {
 async fn roundtrip_tagged_union_unit() -> Result<()> {
     roundtrip_shape("rt_tu_nothing", "dr3", Shape::Nothing).await
 }
+
+// ---------------------------------------------------------------------------
+// Key strategies with server-generated ids (Lexical / Hash / ValueHash).
+// The id is derived server-side, so we use ServerIDFor + insert_and_retrieve.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(key = "lexical", key_fields = "code", id_field = "id")]
+struct LexItem {
+    id: ServerIDFor<Self>,
+    code: String,
+    label: String,
+}
+
+#[tokio::test]
+async fn roundtrip_key_lexical() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_db_schema::<(LexItem,), _, _, _>("rt_key_lexical", |client, spec| async move {
+            let item = LexItem {
+                id: ServerIDFor::new(),
+                code: "abc-123".into(),
+                label: "Widget".into(),
+            };
+            let args = DocumentInsertArgs::from(spec.clone());
+            let (retrieved, _commit) = client.insert_instance_and_retrieve(&item, args).await?;
+            assert!(retrieved.id.is_some(), "lexical key should be assigned");
+            assert_eq!(retrieved.code, item.code);
+            assert_eq!(retrieved.label, item.label);
+            Ok(())
+        })
+        .await
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(key = "hash", key_fields = "first,second", id_field = "id")]
+struct HashItem {
+    id: ServerIDFor<Self>,
+    first: String,
+    second: String,
+}
+
+#[tokio::test]
+async fn roundtrip_key_hash() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_db_schema::<(HashItem,), _, _, _>("rt_key_hash", |client, spec| async move {
+            let item = HashItem {
+                id: ServerIDFor::new(),
+                first: "alpha".into(),
+                second: "beta".into(),
+            };
+            let args = DocumentInsertArgs::from(spec.clone());
+            let (retrieved, _commit) = client.insert_instance_and_retrieve(&item, args).await?;
+            assert!(retrieved.id.is_some(), "hash key should be assigned");
+            assert_eq!(retrieved.first, item.first);
+            assert_eq!(retrieved.second, item.second);
+            Ok(())
+        })
+        .await
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(key = "value_hash", id_field = "id")]
+struct VhItem {
+    id: ServerIDFor<Self>,
+    content: String,
+}
+
+#[tokio::test]
+async fn roundtrip_key_value_hash() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_db_schema::<(VhItem,), _, _, _>("rt_key_value_hash", |client, spec| async move {
+            let item = VhItem {
+                id: ServerIDFor::new(),
+                content: "deterministic".into(),
+            };
+            let args = DocumentInsertArgs::from(spec.clone());
+            let (retrieved, _commit) = client.insert_instance_and_retrieve(&item, args).await?;
+            assert!(retrieved.id.is_some(), "value_hash key should be assigned");
+            assert_eq!(retrieved.content, item.content);
+            Ok(())
+        })
+        .await
+}
+
+// ---------------------------------------------------------------------------
+// Inheritance (abstract base + concrete subclass).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(abstract_class = true, key = "random")]
+struct NamedEntity {
+    label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", inherits = "NamedEntity", key = "random")]
+struct Gadget {
+    id: EntityIDFor<Self>,
+    label: String,
+    voltage: i32,
+}
+
+#[tokio::test]
+async fn roundtrip_inheritance() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_db_schema::<(NamedEntity, Gadget), _, _, _>("rt_inheritance", |client, spec| async move {
+            let gadget = Gadget {
+                id: EntityIDFor::new("g1").unwrap(),
+                label: "Toaster".into(),
+                voltage: 230,
+            };
+            let args = DocumentInsertArgs::from(spec.clone());
+            client.insert_instance(&gadget, args).await?;
+            let mut de = DefaultTDBDeserializer;
+            let retrieved: Gadget = client.get_instance::<Gadget>("g1", &spec, &mut de).await?;
+            assert_eq!(retrieved, gadget);
+            Ok(())
+        })
+        .await
+}
+
+// ---------------------------------------------------------------------------
+// Composite: a model combining several features at once.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Composite {
+    id: EntityIDFor<Self>,
+    title: String,
+    tags: Vec<String>,
+    count: Option<i32>,
+    address: Address,
+    color: Color,
+    author: Ref<Author>,
+}
+
+#[tokio::test]
+async fn roundtrip_composite() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_db_schema::<(Author, Composite), _, _, _>("rt_composite", |client, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            let author = Author {
+                id: EntityIDFor::new("ca1").unwrap(),
+                name: "Edsger".into(),
+            };
+            client.insert_instance(&author, args.clone()).await?;
+
+            let original = Composite {
+                id: EntityIDFor::new("cx1").unwrap(),
+                title: "Everything".into(),
+                tags: vec!["a".into(), "b".into()],
+                count: Some(3),
+                address: Address {
+                    street: "5 Dijkstra St".into(),
+                    city: "Austin".into(),
+                },
+                color: Color::Blue,
+                author: Ref::from(EntityIDFor::<Author>::new("ca1").unwrap()),
+            };
+            client.insert_instance(&original, args).await?;
+
+            let mut de = DefaultTDBDeserializer;
+            let retrieved: Composite =
+                client.get_instance_unfolded::<Composite>("cx1", &spec, &mut de).await?;
+            assert_eq!(retrieved.title, original.title);
+            assert_eq!(retrieved.tags, original.tags);
+            assert_eq!(retrieved.count, original.count);
+            assert_eq!(retrieved.address, original.address);
+            assert_eq!(retrieved.color, original.color);
+            assert_eq!(retrieved.author.id().id(), "ca1");
+            Ok(())
+        })
+        .await
+}
