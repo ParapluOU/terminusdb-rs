@@ -50,7 +50,7 @@ impl<T: Primitive, S> ToInstanceProperty<S> for Option<Vec<T>> {
 }
 
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<Vec<T>> {
-    fn to_property(name: &str) -> Property {
+    fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             r#type: Some(TypeFamily::Array(1)),
@@ -60,7 +60,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<Vec<T>> {
 }
 
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<T> {
-    default fn to_property(name: &str) -> Property {
+    default fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             r#type: Some(TypeFamily::Optional),
@@ -70,7 +70,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<T> {
 }
 
 impl<Parent, T: ToTDBSchema + ToSchemaClass> ToSchemaProperty<Parent> for Option<EntityIDFor<T>> {
-    fn to_property(name: &str) -> Property {
+    fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             r#type: Some(TypeFamily::Optional),

@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn test_hashmap_uuid_string_schema_property() {
-        let property = <HashMap<Uuid, String> as ToSchemaProperty<()>>::to_property("uuid_map");
+        let property = <HashMap<Uuid, String> as ToSchemaProperty<()>>::to_schema_property("uuid_map");
         assert_eq!(property.name, "uuid_map");
         assert_eq!(property.class, JSON);
     }

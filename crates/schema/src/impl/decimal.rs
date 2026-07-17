@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_decimal_schema_property() {
-        let property = <BigDecimal as ToSchemaProperty<()>>::to_property("price");
+        let property = <BigDecimal as ToSchemaProperty<()>>::to_schema_property("price");
         assert_eq!(property.name, "price");
         assert_eq!(property.class, DECIMAL);
     }

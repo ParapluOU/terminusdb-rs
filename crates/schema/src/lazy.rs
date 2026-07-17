@@ -245,7 +245,7 @@ impl<T: TerminusDBModel> ToTDBSchema for TdbLazy<T> {
 }
 
 // impl<Parent, T: ToSchemaProperty<Parent>+TerminusDBModel> ToSchemaProperty<Parent> for TdbLazy<T> {
-//     fn to_property(prop_name: &str) -> Property {
+//     fn to_schema_property(prop_name: &str) -> Property {
 //         T::to_property(prop_name)
 //     }
 // }

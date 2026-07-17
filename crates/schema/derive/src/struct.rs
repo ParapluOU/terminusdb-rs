@@ -552,7 +552,7 @@ pub fn process_named_fields(
                 // }
 
                 {
-                    let mut prop = <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_property(#property_name);
+                    let mut prop = <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_schema_property(#property_name);
                     #classoverride
                     #cardinality_override
                     prop

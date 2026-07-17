@@ -91,7 +91,7 @@ impl ToSchemaClass for HashMap<String, String> {
 }
 
 impl<Parent> ToSchemaProperty<Parent> for HashMap<String, String> {
-    fn to_property(field_name: &str) -> Property {
+    fn to_schema_property(field_name: &str) -> Property {
         Property {
             name: field_name.to_string(),
             r#type: Some(TypeFamily::Set(SetCardinality::None)),

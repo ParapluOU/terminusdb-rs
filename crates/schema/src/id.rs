@@ -542,7 +542,7 @@ impl<T: ToTDBSchema> Deref for EntityIDFor<T> {
 }
 
 impl<T: ToTDBSchema + ToSchemaClass, Parent> ToSchemaProperty<Parent> for EntityIDFor<T> {
-    fn to_property(prop_name: &str) -> Property {
+    fn to_schema_property(prop_name: &str) -> Property {
         Property {
             name: prop_name.to_string(),
             r#type: None,
@@ -771,7 +771,7 @@ impl<T: ToTDBSchema> ToTDBSchema for ServerIDFor<T> {
 
 // ToSchemaProperty implementation - treats it as an optional string property
 impl<T: ToTDBSchema, Parent> ToSchemaProperty<Parent> for ServerIDFor<T> {
-    fn to_property(prop_name: &str) -> Property {
+    fn to_schema_property(prop_name: &str) -> Property {
         // Same as Option<EntityIDFor<T>> would be - an optional string
         Property {
             name: prop_name.to_string(),

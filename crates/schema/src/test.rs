@@ -98,28 +98,28 @@ fn test_schema_class_generate() {
             r#abstract: false,
             inherits: vec![],
             properties: vec![
-                <u32 as ToSchemaProperty<()>>::to_property("u32"),
-                <usize as ToSchemaProperty<()>>::to_property("usize"),
-                <isize as ToSchemaProperty<()>>::to_property("isize"),
-                <f64 as ToSchemaProperty<()>>::to_property("float"),
-                <bool as ToSchemaProperty<()>>::to_property("bool"),
-                <String as ToSchemaProperty<()>>::to_property("string"),
+                <u32 as ToSchemaProperty<()>>::to_schema_property("u32"),
+                <usize as ToSchemaProperty<()>>::to_schema_property("usize"),
+                <isize as ToSchemaProperty<()>>::to_schema_property("isize"),
+                <f64 as ToSchemaProperty<()>>::to_schema_property("float"),
+                <bool as ToSchemaProperty<()>>::to_schema_property("bool"),
+                <String as ToSchemaProperty<()>>::to_schema_property("string"),
                 // Optional properties
-                <Option<u32> as ToSchemaProperty<()>>::to_property("u32_opt"),
-                <Option<usize> as ToSchemaProperty<()>>::to_property("usize_opt"),
-                <Option<isize> as ToSchemaProperty<()>>::to_property("isize_opt"),
-                <Option<f64> as ToSchemaProperty<()>>::to_property("float_opt"),
-                <Option<bool> as ToSchemaProperty<()>>::to_property("bool_opt"),
-                <Option<String> as ToSchemaProperty<()>>::to_property("string_opt"),
+                <Option<u32> as ToSchemaProperty<()>>::to_schema_property("u32_opt"),
+                <Option<usize> as ToSchemaProperty<()>>::to_schema_property("usize_opt"),
+                <Option<isize> as ToSchemaProperty<()>>::to_schema_property("isize_opt"),
+                <Option<f64> as ToSchemaProperty<()>>::to_schema_property("float_opt"),
+                <Option<bool> as ToSchemaProperty<()>>::to_schema_property("bool_opt"),
+                <Option<String> as ToSchemaProperty<()>>::to_schema_property("string_opt"),
                 // Array properties
-                <Vec<u32> as ToSchemaProperty<()>>::to_property("u32_arr"),
-                <Vec<usize> as ToSchemaProperty<()>>::to_property("usize_arr"),
-                <Vec<isize> as ToSchemaProperty<()>>::to_property("isize_arr"),
-                <Vec<f64> as ToSchemaProperty<()>>::to_property("float_arr"),
-                <Vec<bool> as ToSchemaProperty<()>>::to_property("bool_arr"),
-                <Vec<String> as ToSchemaProperty<()>>::to_property("string_arrt"),
+                <Vec<u32> as ToSchemaProperty<()>>::to_schema_property("u32_arr"),
+                <Vec<usize> as ToSchemaProperty<()>>::to_schema_property("usize_arr"),
+                <Vec<isize> as ToSchemaProperty<()>>::to_schema_property("isize_arr"),
+                <Vec<f64> as ToSchemaProperty<()>>::to_schema_property("float_arr"),
+                <Vec<bool> as ToSchemaProperty<()>>::to_schema_property("bool_arr"),
+                <Vec<String> as ToSchemaProperty<()>>::to_schema_property("string_arrt"),
                 // Class property
-                <SubModel as ToSchemaProperty<()>>::to_property("submodel"),
+                <SubModel as ToSchemaProperty<()>>::to_schema_property("submodel"),
             ],
             unfoldable: false,
         }
@@ -794,7 +794,7 @@ mod optional_entity_id_tests {
         let prop_name = "id";
         let prop = <Option<EntityIDFor<ModelWithOptionalEntityID>> as ToSchemaProperty<
             ModelWithOptionalEntityID,
-        >>::to_property(prop_name);
+        >>::to_schema_property(prop_name);
         assert_eq!(prop.name, "id");
         assert_eq!(prop.r#type, Some(TypeFamily::Optional));
         assert_eq!(prop.class, STRING);

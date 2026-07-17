@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_uuid_schema_property() {
-        let property = <Uuid as ToSchemaProperty<()>>::to_property("id");
+        let property = <Uuid as ToSchemaProperty<()>>::to_schema_property("id");
         assert_eq!(property.name, "id");
         assert_eq!(property.class, STRING);
     }

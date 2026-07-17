@@ -32,7 +32,7 @@ impl ToString for GraphType {
 }
 
 impl<Parent> ToSchemaProperty<Parent> for GraphType {
-    fn to_property(prop_name: &str) -> Property {
+    fn to_schema_property(prop_name: &str) -> Property {
         Property {
             name: prop_name.to_string(),
             r#type: None,

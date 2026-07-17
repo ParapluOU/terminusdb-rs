@@ -793,7 +793,7 @@ mod tests {
 
     #[test]
     fn test_btreemap_schema_property() {
-        let property = <BTreeMap<String, Value> as ToSchemaProperty<()>>::to_property("metadata");
+        let property = <BTreeMap<String, Value> as ToSchemaProperty<()>>::to_schema_property("metadata");
         assert_eq!(property.name, "metadata");
         assert_eq!(property.class, JSON);
     }
@@ -825,7 +825,7 @@ mod tests {
     #[test]
     fn test_entityid_btreemap_string_schema_property() {
         let property =
-            <BTreeMap<EntityIDFor<TestEntity>, String> as ToSchemaProperty<()>>::to_property(
+            <BTreeMap<EntityIDFor<TestEntity>, String> as ToSchemaProperty<()>>::to_schema_property(
                 "entity_map",
             );
         assert_eq!(property.name, "entity_map");

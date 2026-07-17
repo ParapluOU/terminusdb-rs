@@ -1002,7 +1002,7 @@ impl ToString for Schema {
        inherits: vec![],
        properties: vec![
            #(
-               <#property_field_idents as terminusdb_schema::ToSchemaProperty>::to_property( stringify!(#property_field_name_idents).to_string() )
+               <#property_field_idents as terminusdb_schema::ToSchemaProperty>::to_schema_property( stringify!(#property_field_name_idents).to_string() )
            ),*
        ]
    }

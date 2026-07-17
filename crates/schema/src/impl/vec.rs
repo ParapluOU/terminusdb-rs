@@ -72,7 +72,7 @@ impl<T: Primitive, S> ToInstanceProperty<S> for Vec<Option<T>> {
 }
 
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Vec<T> {
-    default fn to_property(name: &str) -> Property {
+    default fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             r#type: Some(TypeFamily::List),

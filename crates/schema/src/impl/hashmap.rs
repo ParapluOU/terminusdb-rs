@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_hashmap_schema_property() {
-        let property = <HashMap<String, Value> as ToSchemaProperty<()>>::to_property("metadata");
+        let property = <HashMap<String, Value> as ToSchemaProperty<()>>::to_schema_property("metadata");
         assert_eq!(property.name, "metadata");
         assert_eq!(property.class, JSON);
     }
@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn test_entityid_hashmap_string_schema_property() {
         let property =
-            <HashMap<EntityIDFor<TestEntity>, String> as ToSchemaProperty<()>>::to_property(
+            <HashMap<EntityIDFor<TestEntity>, String> as ToSchemaProperty<()>>::to_schema_property(
                 "entity_map",
             );
         assert_eq!(property.name, "entity_map");

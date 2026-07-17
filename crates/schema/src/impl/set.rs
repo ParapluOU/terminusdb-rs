@@ -38,7 +38,7 @@ impl<T: ToTDBSchema> ToTDBSchema for BTreeSet<T> {
 }
 
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for HashSet<T> {
-    fn to_property(name: &str) -> Property {
+    fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             // todo: retrieve set cardinality as macro derive attr?
@@ -49,7 +49,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for HashSet<T> {
 }
 
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for BTreeSet<T> {
-    fn to_property(name: &str) -> Property {
+    fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             // todo: retrieve set cardinality as macro derive attr?

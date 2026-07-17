@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_datetime_schema_property() {
-        let property = <DateTime<Utc> as ToSchemaProperty<()>>::to_property("created_at");
+        let property = <DateTime<Utc> as ToSchemaProperty<()>>::to_schema_property("created_at");
         assert_eq!(property.name, "created_at");
         assert_eq!(property.class, DATETIME);
     }
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_naive_time_schema_property() {
-        let property = <NaiveTime as ToSchemaProperty<()>>::to_property("start_time");
+        let property = <NaiveTime as ToSchemaProperty<()>>::to_schema_property("start_time");
         assert_eq!(property.name, "start_time");
         assert_eq!(property.class, TIME);
     }

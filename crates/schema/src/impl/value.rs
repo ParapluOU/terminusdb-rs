@@ -17,7 +17,7 @@ impl ToJson for serde_json::Value {
 }
 
 // impl<Parent> ToSchemaProperty<Parent> for Option<serde_json::Value> {
-//     fn to_property(prop_name: &str) -> Property {
+//     fn to_schema_property(prop_name: &str) -> Property {
 //         todo!()
 //     }
 // }

@@ -11,7 +11,7 @@ pub trait ToSchemaPropertyJsonValue {
 }
 
 pub trait ToSchemaProperty<Parent> {
-    fn to_property(prop_name: &str) -> crate::schema::Property;
+    fn to_schema_property(prop_name: &str) -> crate::schema::Property;
 }
 
 #[derive(Eq, PartialEq, Debug, Clone, Hash)]

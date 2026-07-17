@@ -120,7 +120,7 @@ impl<Parent> ToInstanceProperty<Parent> for ListOrVariable {
 }
 
 impl<Parent> ToSchemaProperty<Parent> for ListOrVariable {
-    fn to_property(prop_name: &str) -> Property {
+    fn to_schema_property(prop_name: &str) -> Property {
         // ListOrVariable is stored as a JSON string
         Property {
             name: prop_name.to_string(),
