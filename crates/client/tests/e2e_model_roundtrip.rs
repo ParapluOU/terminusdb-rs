@@ -224,3 +224,129 @@ async fn roundtrip_sys_json() -> Result<()> {
         })
         .await
 }
+
+// ---------------------------------------------------------------------------
+// Collections / type families: Vec (List), HashSet/BTreeSet (Set).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Collections {
+    id: EntityIDFor<Self>,
+    list: Vec<String>,
+    hset: std::collections::HashSet<i32>,
+    bset: std::collections::BTreeSet<String>,
+}
+
+#[tokio::test]
+async fn roundtrip_collections() -> Result<()> {
+    use std::collections::{BTreeSet, HashSet};
+    roundtrip(
+        "rt_collections",
+        "c1",
+        Collections {
+            id: EntityIDFor::new("c1").unwrap(),
+            list: vec!["a".into(), "b".into(), "c".into()],
+            hset: HashSet::from([1, 2, 3]),
+            bset: BTreeSet::from(["x".to_string(), "y".to_string()]),
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_collections_empty() -> Result<()> {
+    use std::collections::{BTreeSet, HashSet};
+    roundtrip(
+        "rt_collections_empty",
+        "c2",
+        Collections {
+            id: EntityIDFor::new("c2").unwrap(),
+            list: vec![],
+            hset: HashSet::new(),
+            bset: BTreeSet::new(),
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn roundtrip_collections_singleton() -> Result<()> {
+    use std::collections::{BTreeSet, HashSet};
+    roundtrip(
+        "rt_collections_single",
+        "c3",
+        Collections {
+            id: EntityIDFor::new("c3").unwrap(),
+            list: vec!["only".into()],
+            hset: HashSet::from([42]),
+            bset: BTreeSet::from(["solo".to_string()]),
+        },
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Map fields.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Maps {
+    id: EntityIDFor<Self>,
+    kv: std::collections::HashMap<String, String>,
+}
+
+// KNOWN GAP (documented, not yet fixed): HashMap<String, String> has an
+// internally inconsistent representation — it *serializes* as a Set of
+// `HashMapStringEntry` subdocuments (impl/map.rs), but its `FromInstanceProperty`
+// *deserializes* expecting a `sys:JSON` object (impl/hashmap.rs:163). So it cannot
+// roundtrip until those two sides are reconciled. The schema-tree fix in this
+// change makes the *insert* half work (HashMapStringEntry is now registered);
+// read-back still needs a matching deserializer. Ignored until then.
+#[ignore = "HashMap<String,String> serialize/deserialize representations disagree; see note"]
+#[tokio::test]
+async fn roundtrip_hashmap() -> Result<()> {
+    use std::collections::HashMap;
+    roundtrip(
+        "rt_hashmap",
+        "m1",
+        Maps {
+            id: EntityIDFor::new("m1").unwrap(),
+            kv: HashMap::from([
+                ("one".to_string(), "1".to_string()),
+                ("two".to_string(), "2".to_string()),
+            ]),
+        },
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Set cardinality (v12 @cardinality / @min_cardinality / @max_cardinality).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Cardinal {
+    id: EntityIDFor<Self>,
+    #[tdb(cardinality = 2)]
+    exactly_two: std::collections::HashSet<String>,
+    #[tdb(min_cardinality = 1)]
+    at_least_one: std::collections::HashSet<String>,
+}
+
+#[tokio::test]
+async fn roundtrip_cardinality() -> Result<()> {
+    use std::collections::HashSet;
+    roundtrip(
+        "rt_cardinality",
+        "cd1",
+        Cardinal {
+            id: EntityIDFor::new("cd1").unwrap(),
+            exactly_two: HashSet::from(["a".to_string(), "b".to_string()]),
+            at_least_one: HashSet::from(["x".to_string()]),
+        },
+    )
+    .await
+}

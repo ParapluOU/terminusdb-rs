@@ -436,6 +436,12 @@ where
             _ => Err(anyhow!("Expected an array, got {:?}", json)),
         }
     }
+
+    fn property_from_maybe_json(json: Option<Value>) -> anyhow::Result<InstanceProperty> {
+        // TerminusDB omits an empty Set from the document, so an absent field is
+        // an empty set — not a missing required value.
+        Self::property_from_json(json.unwrap_or_else(|| Value::Array(Vec::new())))
+    }
 }
 
 impl<Parent, T> InstancePropertyFromJson<Parent> for BTreeSet<T>
@@ -464,6 +470,11 @@ where
             }
             _ => Err(anyhow::anyhow!("Expected JSON array for BTreeSet")),
         }
+    }
+
+    fn property_from_maybe_json(json: Option<Value>) -> anyhow::Result<InstanceProperty> {
+        // An absent Set field is an empty set (TerminusDB omits empty sets).
+        Self::property_from_json(json.unwrap_or_else(|| Value::Array(Vec::new())))
     }
 }
 

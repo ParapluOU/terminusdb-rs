@@ -90,6 +90,15 @@ impl ToSchemaClass for HashMap<String, String> {
     }
 }
 
+// A HashMap<String, String> field is stored as a Set of `HashMapStringEntry`
+// subdocuments, so the model's schema tree must include that entry class —
+// otherwise inserting the schema fails with `not_a_class_or_base_type`.
+impl ToMaybeTDBSchema for HashMap<String, String> {
+    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+        <HashMapStringEntry as ToTDBSchema>::to_schema_tree_mut(collection);
+    }
+}
+
 impl<Parent> ToSchemaProperty<Parent> for HashMap<String, String> {
     fn to_schema_property(field_name: &str) -> Property {
         Property {
