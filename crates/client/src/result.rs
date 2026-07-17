@@ -111,7 +111,10 @@ impl<T> AsMut<T> for ResponseWithHeaders<T> {
     }
 }
 
-// Implementation for the specific HashMap result type
+// Implementation for the specific HashMap result type.
+// `TDBInsertInstanceResult` lives in the native-only `http` module, so this
+// insert-result helper is native-only.
+#[cfg(not(target_arch = "wasm32"))]
 impl ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>> {
     /// Filter and convert IDs of type T to versioned entity references.
     ///

@@ -38,11 +38,16 @@ pub mod http;
 pub mod info;
 #[cfg(not(target_arch = "wasm32"))]
 mod log;
+// `query` defines the Queryable traits, whose methods all take a
+// `&TerminusDBHttpClient` (native-only HTTP module); it is consumed solely by the
+// gated `http` module, so it is native-only too.
+#[cfg(not(target_arch = "wasm32"))]
 mod query;
 pub mod result;
 mod spec;
 mod r#trait;
 pub mod versioned_id;
+#[cfg(not(target_arch = "wasm32"))]
 pub use query::*;
 
 use serde::{Deserialize, Serialize};
@@ -230,6 +235,9 @@ fn test_commit_id_conversions() {
 }
 
 pub use self::document::GetOpts;
+// `log` is a native-only module (it drives the HTTP commit-log endpoints); its
+// re-export must be gated to match, or wasm builds fail on the missing module.
+#[cfg(not(target_arch = "wasm32"))]
 pub use self::log::{CommitLogEntry, CommitLogIterator, EntityIterator, LogEntry, LogOpts};
 
 // Re-export streams trait for convenience

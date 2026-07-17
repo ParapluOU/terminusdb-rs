@@ -36,9 +36,15 @@ sha2 = "0.10.8"
 serde_canonical_json = "1.0.0"
 pretty_assertions = "1.4.1"
 refined = "0.3.1"
-rocket = "0.5.1"
 urlencoding = "2.1"
 tracing = { workspace = true }
+
+# Rocket is a native HTTP server framework (pulls hyper/tokio-net/mio) used only
+# for the server-side `FromParam`/`FromFormField` impls on `EntityIDFor<T>` in
+# id.rs. Gate it off wasm so this schema crate stays wasm-clean (Parture's WASM
+# core depends on the serialize/schema types only). See id.rs cfg gates.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rocket = "0.5.1"
 
 [lib]
 path = "src/lib.rs"

@@ -6,7 +6,11 @@ use crate::{
     ToSchemaProperty, ToTDBSchema, TypeFamily, STRING, URI,
 };
 use anyhow::{anyhow, bail};
+// Rocket is a native-only HTTP server framework; its server-side form/param traits
+// are meaningless on wasm and it drags in hyper/tokio-net/mio, so gate it off wasm.
+#[cfg(not(target_arch = "wasm32"))]
 use rocket::form::{self, FromFormField, ValueField};
+#[cfg(not(target_arch = "wasm32"))]
 use rocket::request::FromParam;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -577,6 +581,7 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for EntityIDFor<T>
 }
 
 // todo: put behind rocket-specific feature
+#[cfg(not(target_arch = "wasm32"))]
 impl<T: ToTDBSchema> FromParam<'_> for EntityIDFor<T> {
     type Error = anyhow::Error;
 
@@ -596,6 +601,7 @@ impl<T: ToTDBSchema> FromParam<'_> for EntityIDFor<T> {
 }
 
 // Implement FromFormField for form submissions
+#[cfg(not(target_arch = "wasm32"))]
 impl<'r, T: ToTDBSchema + Send> FromFormField<'r> for EntityIDFor<T> {
     fn from_value(field: ValueField<'r>) -> form::Result<'r, Self> {
         // Use the existing new() method to parse the value
@@ -819,6 +825,7 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for ServerIDFor<T>
 }
 
 // Rocket FromParam implementation
+#[cfg(not(target_arch = "wasm32"))]
 impl<T: ToTDBSchema> FromParam<'_> for ServerIDFor<T> {
     type Error = anyhow::Error;
 
@@ -836,6 +843,7 @@ impl<T: ToTDBSchema> FromParam<'_> for ServerIDFor<T> {
 }
 
 // Rocket FromFormField implementation
+#[cfg(not(target_arch = "wasm32"))]
 impl<'r, T: ToTDBSchema + Send + Class> FromFormField<'r> for ServerIDFor<T> {
     fn from_value(field: ValueField<'r>) -> form::Result<'r, Self> {
         // Try to parse as EntityIDFor
