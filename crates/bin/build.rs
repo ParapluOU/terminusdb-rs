@@ -289,6 +289,10 @@ struct DependencyContext {
     /// Root of a provisioned GMP (contains `include/`, `lib/`) used to make the
     /// TerminusDB Rust build resilient on hosts without libgmp-dev.
     gmp_root: Option<PathBuf>,
+    /// Root of a provisioned libclang conda env (contains `lib/libclang.so` and a
+    /// co-located `libLLVM.so`) used by `bindgen` (swipl-fli) so the build does not
+    /// depend on a system libclang. Build-time only — never bundled.
+    libclang_root: Option<PathBuf>,
 }
 
 fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<DependencyContext, String> {
@@ -319,6 +323,7 @@ fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<Dependency
         path_additions: Vec::new(),
         swipl_root: None,
         gmp_root: None,
+        libclang_root: None,
     };
 
     // Handle protoc - try to bundle it
@@ -438,11 +443,96 @@ fn ensure_dependencies(platform: Platform, deps_dir: &Path) -> Result<Dependency
                      bundled SWI-Prolog runtime (install libgmp-dev if a source build needs it)."
                 );
             }
+
+            // libclang: bindgen (swipl-fli, in the TerminusDB Rust build) needs a
+            // libclang.so with a co-located libLLVM. Prefer an explicit
+            // LIBCLANG_PATH; otherwise provision a conda-forge libclang env so the
+            // build is self-contained (many split system installs put libclang and
+            // libLLVM in different dirs, which breaks bindgen's dlopen).
+            if env::var_os("LIBCLANG_PATH").is_some() {
+                println!("cargo:warning=Using libclang from LIBCLANG_PATH");
+            } else if let Some(root) = provide_libclang(&target, deps_dir) {
+                println!("cargo:warning=Provisioned libclang at {}", root.display());
+                ctx.libclang_root = Some(root);
+            } else {
+                println!(
+                    "cargo:warning=Could not provision libclang; bindgen (swipl-fli) may fail \
+                     (install libclang / set LIBCLANG_PATH)."
+                );
+            }
         }
     }
 
     println!("cargo:warning=All dependencies verified and ready");
     Ok(ctx)
+}
+
+/// Provision a build-time-only `libclang` via micromamba/conda-forge (returns the
+/// env root whose `lib/` holds `libclang.so` + a co-located `libLLVM.so`). Cached
+/// under `.deps/libclang-env/<target>`. Returns `None` (not fatal) on any failure;
+/// the caller warns and lets the build try a system libclang.
+fn provide_libclang(target: &str, deps_dir: &Path) -> Option<PathBuf> {
+    let env_root = deps_dir.join("libclang-env").join(target);
+    // A usable env needs BOTH libclang.so AND clang's builtin resource headers
+    // (lib/clang/<v>/include/stddef.h) — the bare `libclang` package omits the
+    // latter, which bindgen requires (`'stddef.h' file not found`).
+    let has_libclang = |root: &Path| -> bool {
+        let lib = root.join("lib");
+        let so = fs::read_dir(&lib)
+            .map(|rd| {
+                rd.flatten().any(|e| {
+                    e.file_name()
+                        .to_str()
+                        .map(|n| n.starts_with("libclang.so"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        let headers = fs::read_dir(lib.join("clang"))
+            .map(|rd| rd.flatten().any(|e| e.path().join("include").join("stddef.h").exists()))
+            .unwrap_or(false);
+        so && headers
+    };
+    // Cache hit.
+    if has_libclang(&env_root) {
+        println!("cargo:warning=Reusing cached libclang env at {}", env_root.display());
+        return Some(env_root);
+    }
+    // Only conda-forge linux-64/aarch64 are wired here (same as swipl).
+    if !(target.contains("linux") && (target.starts_with("x86_64") || target.starts_with("aarch64")))
+    {
+        return None;
+    }
+    let mm = ensure_micromamba(deps_dir).ok()?;
+    let root_prefix = deps_dir.join("mamba-root");
+    let _ = fs::create_dir_all(&root_prefix);
+    let _ = fs::remove_dir_all(&env_root);
+    println!("cargo:warning=Solving libclang environment with micromamba (downloads libclang + libLLVM)...");
+    let status = Command::new(&mm)
+        .args([
+            "create",
+            "-y",
+            "-p",
+            &env_root.display().to_string(),
+            "-c",
+            "conda-forge",
+            // `clang` pulls libclang.so + libLLVM + the clang resource headers
+            // (lib/clang/<v>/include/stddef.h) bindgen needs; `libclang` alone
+            // ships only the shared libs.
+            "clang",
+            "libclang",
+        ])
+        .env("MAMBA_ROOT_PREFIX", &root_prefix)
+        .env("CONDA_PKGS_DIRS", root_prefix.join("pkgs"))
+        .env_remove("CONDARC")
+        .status()
+        .ok()?;
+    if status.success() && has_libclang(&env_root) {
+        Some(env_root)
+    } else {
+        println!("cargo:warning=micromamba libclang env creation failed (status {status})");
+        None
+    }
 }
 
 fn check_gmp_macos() -> bool {
@@ -1184,6 +1274,20 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
     if let Some(ref gmp) = ctx.gmp_root {
         ld_dirs.push(gmp.join("lib"));
     }
+    // libclang's lib dir also holds its co-located libLLVM; bindgen dlopens it.
+    let libclang_lib = ctx.libclang_root.as_ref().map(|r| r.join("lib"));
+    if let Some(ref lc) = libclang_lib {
+        ld_dirs.push(lc.clone());
+    }
+    // clang's builtin resource headers (stddef.h, ...) — pass to bindgen explicitly
+    // so it finds them regardless of how it derives the resource dir from libclang.
+    let clang_resource_inc = ctx.libclang_root.as_ref().and_then(|r| {
+        fs::read_dir(r.join("lib").join("clang")).ok().and_then(|rd| {
+            rd.flatten()
+                .map(|e| e.path().join("include"))
+                .find(|p| p.join("stddef.h").exists())
+        })
+    });
     if let Ok(existing) = env::var("LD_LIBRARY_PATH") {
         ld_dirs.extend(env::split_paths(&existing));
     }
@@ -1269,6 +1373,32 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
             if let Ok(v) = pc {
                 cmd.env("PKG_CONFIG_PATH", v);
             }
+        }
+        // Force C/C++17: GMP 6.x's bundled configure (built from source by
+        // gmp-mpfr-sys/rug in the TerminusDB Rust build) fails under GCC 15's C23
+        // default ("too many arguments to function 'g'"). Append so any host flags
+        // are preserved.
+        let append_std = |var: &str, std: &str| -> std::ffi::OsString {
+            match env::var(var) {
+                Ok(v) if !v.trim().is_empty() => format!("{v} {std}").into(),
+                _ => std.into(),
+            }
+        };
+        cmd.env("CFLAGS", append_std("CFLAGS", "-std=gnu17"));
+        cmd.env("CXXFLAGS", append_std("CXXFLAGS", "-std=gnu++17"));
+        if let Some(ref lc) = libclang_lib {
+            cmd.env("LIBCLANG_PATH", lc);
+        }
+        if let Some(ref inc) = clang_resource_inc {
+            let mut val = std::ffi::OsString::from("-isystem ");
+            val.push(inc);
+            if let Ok(existing) = env::var("BINDGEN_EXTRA_CLANG_ARGS") {
+                if !existing.trim().is_empty() {
+                    val.push(" ");
+                    val.push(existing);
+                }
+            }
+            cmd.env("BINDGEN_EXTRA_CLANG_ARGS", val);
         }
     };
 
