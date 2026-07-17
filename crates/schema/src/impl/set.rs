@@ -258,7 +258,7 @@ impl<T: ToTDBSchema, S> ToTDBSchema for HashableHashSet<T, S> {
 }
 
 impl<Parent, T: ToSchemaClass, S> ToSchemaProperty<Parent> for HashableHashSet<T, S> {
-    fn to_property(name: &str) -> Property {
+    fn to_schema_property(name: &str) -> Property {
         Property {
             name: name.to_string(),
             r#type: Some(TypeFamily::Set(SetCardinality::None)),
