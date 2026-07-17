@@ -49,6 +49,35 @@ where
         .await
 }
 
+/// Same as [`roundtrip`] but retrieves **unfolded**, so nested subdocuments /
+/// tagged-union variants / content-addressed values come back inline rather than
+/// as references.
+async fn roundtrip_unfolded<M>(prefix: &str, id: &str, original: M) -> Result<()>
+where
+    M: TerminusDBModel + PartialEq + Send + Sync + 'static,
+    (M,): ToTDBSchemas,
+{
+    let server = TerminusDBServer::test_instance().await?;
+    let id = id.to_string();
+    server
+        .with_db_schema::<(M,), _, _, _>(prefix, move |client, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            client.insert_instance(&original, args).await?;
+
+            let mut de = DefaultTDBDeserializer;
+            let retrieved: M = client.get_instance_unfolded::<M>(&id, &spec, &mut de).await?;
+
+            assert_eq!(
+                retrieved,
+                original,
+                "unfolded roundtrip mismatch for {}",
+                std::any::type_name::<M>()
+            );
+            Ok(())
+        })
+        .await
+}
+
 // ---------------------------------------------------------------------------
 // Scalars: every xsd datatype that has a ToSchemaClass mapping.
 // ---------------------------------------------------------------------------
@@ -349,4 +378,174 @@ async fn roundtrip_cardinality() -> Result<()> {
         },
     )
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Links: Ref<T> / TdbLazy<T> graph edges (object properties, not values).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Author {
+    id: EntityIDFor<Self>,
+    name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Book {
+    id: EntityIDFor<Self>,
+    title: String,
+    author: Ref<Author>,
+}
+
+#[tokio::test]
+async fn roundtrip_link() -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    server
+        .with_db_schema::<(Author, Book), _, _, _>("rt_link", |client, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            let author = Author {
+                id: EntityIDFor::new("a1").unwrap(),
+                name: "Ada".into(),
+            };
+            client.insert_instance(&author, args.clone()).await?;
+
+            let book = Book {
+                id: EntityIDFor::new("b1").unwrap(),
+                title: "Notes".into(),
+                author: Ref::from(EntityIDFor::<Author>::new("a1").unwrap()),
+            };
+            client.insert_instance(&book, args).await?;
+
+            let mut de = DefaultTDBDeserializer;
+            let retrieved: Book = client.get_instance::<Book>("b1", &spec, &mut de).await?;
+            assert_eq!(retrieved.title, "Notes");
+            // The link must survive as an edge to the author document.
+            assert_eq!(retrieved.author.id().id(), "a1", "link id should roundtrip");
+            Ok(())
+        })
+        .await
+}
+
+// ---------------------------------------------------------------------------
+// Subdocuments.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(subdocument = true, key = "random")]
+struct Address {
+    street: String,
+    city: String,
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Person {
+    id: EntityIDFor<Self>,
+    name: String,
+    address: Address,
+}
+
+#[tokio::test]
+async fn roundtrip_subdocument() -> Result<()> {
+    // Subdocuments come back as references unless retrieved unfolded.
+    roundtrip_unfolded(
+        "rt_subdocument",
+        "p1",
+        Person {
+            id: EntityIDFor::new("p1").unwrap(),
+            name: "Grace".into(),
+            address: Address {
+                street: "1 Compiler Way".into(),
+                city: "Cambridge".into(),
+            },
+        },
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Simple (unit-variant) enum.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Painting {
+    id: EntityIDFor<Self>,
+    color: Color,
+}
+
+#[tokio::test]
+async fn roundtrip_simple_enum() -> Result<()> {
+    roundtrip(
+        "rt_simple_enum",
+        "pt1",
+        Painting {
+            id: EntityIDFor::new("pt1").unwrap(),
+            color: Color::Green,
+        },
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Tagged union (unit + newtype + struct variants).
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(subdocument = true)]
+enum Shape {
+    Nothing,
+    Circle(f64),
+    Rectangle { w: f64, h: f64 },
+}
+
+#[derive(Clone, Debug, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[tdb(id_field = "id", key = "random")]
+struct Drawing {
+    id: EntityIDFor<Self>,
+    shape: Shape,
+}
+
+async fn roundtrip_shape(prefix: &str, id: &str, shape: Shape) -> Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+    let id = id.to_string();
+    server
+        .with_db_schema::<(Drawing,), _, _, _>(prefix, move |client, spec| async move {
+            let original = Drawing {
+                id: EntityIDFor::new(&id).unwrap(),
+                shape,
+            };
+            let args = DocumentInsertArgs::from(spec.clone());
+            client.insert_instance(&original, args).await?;
+            let mut de = DefaultTDBDeserializer;
+            let retrieved: Drawing =
+                client.get_instance_unfolded::<Drawing>(&id, &spec, &mut de).await?;
+            assert_eq!(retrieved, original);
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test]
+async fn roundtrip_tagged_union_newtype() -> Result<()> {
+    roundtrip_shape("rt_tu_circle", "dr1", Shape::Circle(2.5)).await
+}
+
+#[tokio::test]
+async fn roundtrip_tagged_union_struct() -> Result<()> {
+    roundtrip_shape("rt_tu_rect", "dr2", Shape::Rectangle { w: 3.0, h: 4.0 }).await
+}
+
+#[tokio::test]
+async fn roundtrip_tagged_union_unit() -> Result<()> {
+    roundtrip_shape("rt_tu_nothing", "dr3", Shape::Nothing).await
 }
