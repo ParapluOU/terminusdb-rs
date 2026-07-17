@@ -19,6 +19,16 @@ pub struct DiffResponse {
     pub diffs: Vec<serde_json::Value>,
 }
 
+/// Options for the diff endpoint (`keep` / `copy_value`).
+#[derive(Debug, Clone, Default)]
+pub struct DiffOptions {
+    /// A document describing which fields *must* be copied into the final
+    /// object even when unchanged, e.g. `{"@id": true}`.
+    pub keep: Option<serde_json::Value>,
+    /// Record the exact value in list-copy operations (makes copies explicit).
+    pub copy_value: bool,
+}
+
 /// Request for applying a patch
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchRequest {
@@ -128,6 +138,51 @@ impl super::client::TerminusDBHttpClient {
         );
 
         Ok(response)
+    }
+
+    /// Diff two database states identified by their `TerminusDB-Data-Version`
+    /// (the value returned in that header on a commit, e.g.
+    /// `"branch:s7dde27..."`), covering the v12 data-version diff body forms:
+    ///
+    /// - `document_id = Some(id)` → diff just that document between the two
+    ///   versions.
+    /// - `document_id = None` → diff **all** documents between the two versions.
+    ///
+    /// Returns the raw diff JSON (an object for a single document, an array for
+    /// the all-documents form).
+    pub async fn diff_data_versions(
+        &self,
+        spec: &crate::spec::BranchSpec,
+        before_data_version: &str,
+        after_data_version: &str,
+        document_id: Option<&str>,
+        options: DiffOptions,
+    ) -> anyhow::Result<serde_json::Value> {
+        let mut body = json!({
+            "before_data_version": before_data_version,
+            "after_data_version": after_data_version,
+        });
+        if let Some(doc_id) = document_id {
+            body["document_id"] = json!(doc_id);
+        }
+        if let Some(keep) = &options.keep {
+            body["keep"] = keep.clone();
+        }
+        if options.copy_value {
+            body["copy_value"] = json!(true);
+        }
+
+        let _permit = self.acquire_read_permit().await;
+        let res = self
+            .http
+            .post(self.build_url().endpoint("diff").database(spec).build())
+            .basic_auth(&self.user, Some(&self.pass))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("failed to diff data versions")?;
+        self.parse_response(res).await
     }
 
     /// Applies a patch to a branch.

@@ -73,6 +73,7 @@ pub use client::TerminusDBHttpClient;
 pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use document::DeleteOpts;
 pub use apply::ApplyOptions;
+pub use diff::{DiffOptions, DiffResponse};
 pub use migration::{MigrationOperation, MigrationOptions, MigrationResponse};
 pub use prefix::PrefixResponse;
 pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
