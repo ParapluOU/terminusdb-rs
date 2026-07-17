@@ -447,6 +447,60 @@ impl super::client::TerminusDBHttpClient {
         Ok(response)
     }
 
+    /// Lists the names of all branches of `db` (e.g. `["main", "experiment"]`).
+    ///
+    /// The client can create/delete/reset/squash/rebase branches but has no
+    /// dedicated "enumerate branches" endpoint. This wraps
+    /// [`list_databases`](Self::list_databases) with `branches = true` — which
+    /// reports each database's branch names — and picks out the database matching
+    /// `db` in the client's current organization.
+    ///
+    /// Returns branch *names* only (no commit heads); that is all the underlying
+    /// `/api/db?branches=true` endpoint provides. Errors if `db` is not found.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let client = TerminusDBHttpClient::local_node().await;
+    /// let branches = client.list_branches("mydb").await?;
+    /// assert!(branches.contains(&"main".to_string()));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[instrument(
+        name = "terminus.branch.list",
+        skip(self),
+        fields(org = %self.org(), db = %db),
+        err
+    )]
+    pub async fn list_branches(&self, db: &str) -> anyhow::Result<Vec<String>> {
+        let databases = self.list_databases(true, false).await?;
+        let matched = databases.into_iter().find(|d| {
+            d.database_name().as_deref() == Some(db)
+                // `/api/db` may report databases across organizations; keep only
+                // the one in this client's org (when the path carries an org).
+                && d.organization()
+                    .as_deref()
+                    .map_or(true, |o| o == self.org())
+        });
+        match matched {
+            Some(d) => Ok(d.branches.unwrap_or_default()),
+            None => Err(anyhow::anyhow!(
+                "database `{}/{}` not found",
+                self.org(),
+                db
+            )),
+        }
+    }
+
+    /// Whether a branch named `branch` exists in `db`.
+    ///
+    /// Convenience over [`list_branches`](Self::list_branches).
+    pub async fn branch_exists(&self, db: &str, branch: &str) -> anyhow::Result<bool> {
+        Ok(self.list_branches(db).await?.iter().any(|b| b == branch))
+    }
+
     /// Deletes a branch.
     ///
     /// # Arguments
