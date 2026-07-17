@@ -250,6 +250,69 @@ pub fn derive_terminusdb_model(input: TokenStream) -> TokenStream {
     final_output.into()
 }
 
+/// Schema-only sibling of [`macro@TerminusDBModel`].
+///
+/// Emits **only** the schema + serialize (`ToTDBSchema` / `ToTDBInstance` /
+/// `ToSchemaClass` / `Class`) impls — i.e. exactly the `#expanded` block produced
+/// by [`macro@TerminusDBModel`] — and deliberately skips the deserialize direction
+/// (`InstanceFromJson` / `FromTDBInstance`), the generated `serde` impls, and the
+/// `{Model}Filter` / `{Model}Ordering` helpers.
+///
+/// Use this when a consumer supplies deserialization through a different mechanism
+/// (e.g. a Relational/cache bridge) and only needs the type to serialize into a
+/// TerminusDB schema/instance. It accepts the same `#[tdb(...)]` attributes as
+/// [`macro@TerminusDBModel`], and additionally supports field-less unit structs
+/// and tuple/newtype structs (both map to a class with no properties).
+#[proc_macro_derive(TerminusDBSchema, attributes(tdb))]
+pub fn derive_terminusdb_schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    // Parse the attributes using darling
+    let mut opts = match TDBModelOpts::from_derive_input(&input) {
+        Result::Ok(opts) => opts,
+        Err(err) => {
+            let error_string = err.to_string();
+            return syn::Error::new(proc_macro2::Span::call_site(), error_string)
+                .to_compile_error()
+                .into();
+        }
+    };
+
+    // Store the original input for doc extraction
+    opts.original_input = Some(input.clone());
+
+    // Check for generic parameters
+    if let Err(err) = generics::check_generics(&input) {
+        return err.to_compile_error().into();
+    }
+
+    // Generate ONLY the schema + serialize impls (the `#expanded` block). Unlike
+    // `TerminusDBModel`, no deserialize / serde / filter / ordering code is emitted.
+    let expanded = match &input.data {
+        Data::Struct(data_struct) => {
+            trace!("Implementing schema-only for struct: {}", input.ident);
+            implement_for_struct(&input, data_struct, &opts)
+        }
+        Data::Enum(data_enum) => {
+            trace!("Implementing schema-only for enum: {}", input.ident);
+            implement_for_enum(&input, data_enum, &opts)
+        }
+        Data::Union(_) => {
+            return syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "TerminusDBSchema derive macro does not support unions",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    quote! {
+        #expanded
+    }
+    .into()
+}
+
 /// Automatically derives the `FromTDBInstance` trait for a struct or enum.
 ///
 /// **NOTE: This derive is now a no-op!**

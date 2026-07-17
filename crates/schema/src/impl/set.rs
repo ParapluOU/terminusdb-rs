@@ -1,8 +1,8 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, Property,
-    RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty, ToSchemaClass,
-    ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
+    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue,
+    Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty,
+    ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
 use anyhow::anyhow;
 use serde_json::Value;
@@ -230,6 +230,67 @@ where
                 prop
             )),
         }
+    }
+}
+
+// === hashable::HashableHashSet<T> support ===
+//
+// `HashableHashSet` is a `HashSet` wrapper (from the external `hashable` crate,
+// already a dependency of this crate) that additionally implements `Hash`. It is
+// used as a set-valued model field, so it needs the same schema/instance surface
+// as `HashSet<T>`. Because it is an external type, these impls can only live here
+// (orphan rules), and they intentionally avoid the deserialize-side bounds the
+// `HashSet` impl carries.
+use hashable::HashableHashSet;
+
+impl<T: ToTDBSchema, S> ToTDBSchema for HashableHashSet<T, S> {
+    fn to_schema() -> Schema {
+        T::to_schema()
+    }
+
+    fn to_schema_tree() -> Vec<Schema> {
+        T::to_schema_tree()
+    }
+
+    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+        T::to_schema_tree_mut(collection);
+    }
+}
+
+impl<Parent, T: ToSchemaClass, S> ToSchemaProperty<Parent> for HashableHashSet<T, S> {
+    fn to_property(name: &str) -> Property {
+        Property {
+            name: name.to_string(),
+            r#type: Some(TypeFamily::Set(SetCardinality::None)),
+            class: T::to_class().to_string(),
+        }
+    }
+}
+
+impl<Parent, T: ToTDBInstance + Clone, S> ToInstanceProperty<Parent> for HashableHashSet<T, S> {
+    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        // enum members serialize as their primitive (string) value; everything
+        // else as an embedded relation instance.
+        if T::to_schema().is_enum() {
+            return InstanceProperty::Primitives(
+                self.iter()
+                    .map(|item| {
+                        PrimitiveValue::String(
+                            item.clone()
+                                .to_instance(None)
+                                .enum_value()
+                                .expect("enum should have variant property"),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+
+        InstanceProperty::Relations(
+            self.iter()
+                .map(|item| RelationValue::One(item.clone().to_instance(None)))
+                .collect(),
+        )
     }
 }
 

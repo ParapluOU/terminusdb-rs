@@ -265,7 +265,11 @@ pub fn implement_for_struct(
         }
     };
 
-    // Process the struct fields to generate property definitions for schema
+    // Process the struct fields to generate property definitions for schema.
+    // Field-less unit structs and tuple/newtype structs (any non-named shape)
+    // map to a class with no properties (`Some(vec![])`). Their instance body is
+    // likewise empty, so any tuple-field payload is intentionally not serialized
+    // in this schema path.
     let properties = match &data_struct.fields {
         Fields::Named(fields_named) => {
             // Validate id_field type if specified
@@ -274,25 +278,7 @@ pub fn implement_for_struct(
             }
             process_named_fields(fields_named, struct_name, &ty_generics)
         }
-        _ => {
-            return syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "TerminusDBModel derive macro only supports structs with named fields",
-            )
-            .to_compile_error();
-        }
-    };
-
-    // Process the struct fields to generate instance conversions
-    let fields_named = match &data_struct.fields {
-        Fields::Named(fields) => fields,
-        _ => {
-            return syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "TerminusDBModel derive macro only supports structs with named fields for instance generation",
-            )
-            .to_compile_error();
-        }
+        _ => quote! { Some(vec![]) },
     };
 
     // Collect field types for to_schema_tree
@@ -400,8 +386,12 @@ pub fn implement_for_struct(
         )
     };
 
-    // Generate the body code for the to_instance method for structs
-    let properties_code = process_fields_for_instance(fields_named, struct_name);
+    // Generate the body code for the to_instance method for structs. Non-named
+    // shapes (unit / tuple / newtype) contribute no properties.
+    let properties_code = match &data_struct.fields {
+        Fields::Named(fields_named) => process_fields_for_instance(fields_named, struct_name),
+        _ => quote! {},
+    };
     let instance_body_code = quote! {
         // Create a BTreeMap for properties
         let mut properties = std::collections::BTreeMap::new();
@@ -448,15 +438,19 @@ pub fn implement_for_struct(
         )
     };
 
-    // Generate RelationTo implementations only if relations feature is enabled
+    // Generate RelationTo implementations only if relations feature is enabled.
+    // Non-named shapes have no relation fields, so they emit nothing.
     #[cfg(feature = "relations")]
-    let relation_impls = terminusdb_relation_derive::generate_relation_impls(
-        struct_name,
-        fields_named,
-        &impl_generics,
-        &ty_generics,
-        &base_where_clause.cloned(),
-    );
+    let relation_impls = match &data_struct.fields {
+        Fields::Named(fields_named) => terminusdb_relation_derive::generate_relation_impls(
+            struct_name,
+            fields_named,
+            &impl_generics,
+            &ty_generics,
+            &base_where_clause.cloned(),
+        ),
+        _ => quote! {},
+    };
 
     #[cfg(not(feature = "relations"))]
     let relation_impls = quote! {};

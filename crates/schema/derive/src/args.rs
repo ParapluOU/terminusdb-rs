@@ -4,7 +4,10 @@ use crate::prelude::*;
 #[derive(Debug, FromDeriveInput, Clone, Default)]
 #[darling(
     attributes(tdb),
-    supports(struct_named, enum_unit, enum_newtype, enum_any)
+    // `struct_any` (was `struct_named`) so field-less unit structs and
+    // tuple/newtype structs are accepted by darling; the struct codegen in
+    // `struct.rs` maps any non-named shape to an empty-property class.
+    supports(struct_any, enum_unit, enum_newtype, enum_any)
 )]
 pub struct TDBModelOpts {
     /// Optional custom class name for the schema

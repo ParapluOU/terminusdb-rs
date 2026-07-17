@@ -56,6 +56,21 @@ impl<T: Primitive, S> ToInstanceProperty<S> for Vec<T> {
     }
 }
 
+// A list of optional primitives (e.g. `Vec<Option<usize>>`) serializes as a
+// primitives list, with `None` entries encoded as `PrimitiveValue::Null`.
+impl<T: Primitive, S> ToInstanceProperty<S> for Vec<Option<T>> {
+    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+        InstanceProperty::Primitives(
+            self.into_iter()
+                .map(|item| match item {
+                    Some(value) => value.into(),
+                    None => PrimitiveValue::Null,
+                })
+                .collect(),
+        )
+    }
+}
+
 impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Vec<T> {
     default fn to_property(name: &str) -> Property {
         Property {
