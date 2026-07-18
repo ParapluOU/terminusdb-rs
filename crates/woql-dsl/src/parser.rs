@@ -441,15 +441,15 @@ fn parse_triple_args(args: Vec<ParsedArg>) -> Result<Query, nom::Err<VerboseErro
         match &args[3] {
             ParsedArg::Value(Value::Data(XSDAnySimpleType::String(s))) => {
                 match s.as_str() {
-                    "instance" => GraphType::Instance,
-                    "schema" => GraphType::Schema,
-                    _ => GraphType::Instance,
+                    "instance" => Some(GraphType::Instance),
+                    "schema" => Some(GraphType::Schema),
+                    _ => Some(GraphType::Instance),
                 }
             }
-            _ => GraphType::Instance,
+            _ => Some(GraphType::Instance),
         }
     } else {
-        GraphType::Instance
+        Some(GraphType::Instance)
     };
 
     Ok(Query::Triple(Triple {

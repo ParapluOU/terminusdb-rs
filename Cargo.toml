@@ -22,6 +22,7 @@ members = [
     "crates/types",
     "crates/typestate",
     "crates/woql-builder",
+    "crates/woql-dsl",
     "crates/woql-js",
     "crates/woql2",
     "crates/xpath",

@@ -7108,6 +7108,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminusdb-woql-dsl"
+version = "0.1.0"
+dependencies = [
+ "nom",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "terminusdb-schema",
+ "terminusdb-woql2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "terminusdb-woql-js"
 version = "0.1.0"
 dependencies = [
