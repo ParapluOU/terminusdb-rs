@@ -1,6 +1,6 @@
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::prelude::*;
-use terminusdb_woql2::query::{And, Not, Or, Query};
+use terminusdb_woql2::query::{And, Or, Query};
 use terminusdb_woql2::triple::Triple;
 use terminusdb_woql2::value::{ListOrVariable, NodeValue, Value};
 

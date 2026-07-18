@@ -203,7 +203,7 @@ impl<T> HalfPathDirection<T> {
     }
 
     /// Internal method to build the path with the specified target variable
-    fn _build_path<U>(mut self, target_var: String) -> FullPath<T, U> {
+    fn _build_path<U>(self, target_var: String) -> FullPath<T, U> {
         // Generate the relationship triple based on direction and field
         let relation_triple = match self.direction {
             PathDirection::Forward => {

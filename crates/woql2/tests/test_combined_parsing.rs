@@ -1,5 +1,4 @@
 use terminusdb_woql2::path_builder::PathDirection;
-use terminusdb_woql2::prelude::*;
 use terminusdb_woql2::{parse_direction, parse_node_pattern};
 
 struct User;
@@ -21,7 +20,7 @@ fn test_combined_parsing() {
     // Example of how these macros can work together
 
     // Parse first node
-    let (builder1, field1): (_, Option<&str>) = parse_node_pattern!(User);
+    let (_builder1, field1): (_, Option<&str>) = parse_node_pattern!(User);
     assert!(field1.is_none());
 
     // Parse direction
@@ -29,7 +28,7 @@ fn test_combined_parsing() {
     assert_eq!(dir1, PathDirection::Forward);
 
     // Parse second node
-    let (builder2, field2): (_, Option<&str>) = parse_node_pattern!(Post.comments);
+    let (_builder2, field2): (_, Option<&str>) = parse_node_pattern!(Post.comments);
     assert_eq!(field2, Some("comments"));
 
     // Parse another direction
@@ -37,7 +36,7 @@ fn test_combined_parsing() {
     assert_eq!(dir2, PathDirection::Backward);
 
     // Parse third node
-    let (builder3, field3): (_, Option<&str>) = parse_node_pattern!(c:Comment);
+    let (_builder3, field3): (_, Option<&str>) = parse_node_pattern!(c:Comment);
     assert!(field3.is_none());
 
     println!("Successfully parsed: User > Post.comments < c:Comment");
@@ -47,7 +46,7 @@ fn test_combined_parsing() {
 macro_rules! simplified_path {
     // Simple nodes
     ($first:ident $dir:tt $second:ident) => {{
-        let (mut builder, field1): (_, Option<&str>) = parse_node_pattern!($first);
+        let (_builder, field1): (_, Option<&str>) = parse_node_pattern!($first);
         let direction = parse_direction!($dir);
         let (_builder2, field2): (_, Option<&str>) = parse_node_pattern!($second);
 
@@ -56,7 +55,7 @@ macro_rules! simplified_path {
 
     // First node with field
     ($first:ident . $field:ident $dir:tt $second:ident) => {{
-        let (mut builder, field1): (_, Option<&str>) = parse_node_pattern!($first.$field);
+        let (_builder, field1): (_, Option<&str>) = parse_node_pattern!($first.$field);
         let direction = parse_direction!($dir);
         let (_builder2, field2): (_, Option<&str>) = parse_node_pattern!($second);
 
@@ -65,7 +64,7 @@ macro_rules! simplified_path {
 
     // First node with variable
     ($var1:ident : $first:ident $dir:tt $var2:ident : $second:ident) => {{
-        let (mut builder, field1): (_, Option<&str>) = parse_node_pattern!($var1:$first);
+        let (_builder, field1): (_, Option<&str>) = parse_node_pattern!($var1:$first);
         let direction = parse_direction!($dir);
         let (_builder2, field2): (_, Option<&str>) = parse_node_pattern!($var2:$second);
 
@@ -74,7 +73,7 @@ macro_rules! simplified_path {
 
     // Mixed patterns
     ($var1:ident : $first:ident . $field:ident $dir:tt $second:ident) => {{
-        let (mut builder, field1): (_, Option<&str>) = parse_node_pattern!($var1:$first.$field);
+        let (_builder, field1): (_, Option<&str>) = parse_node_pattern!($var1:$first.$field);
         let direction = parse_direction!($dir);
         let (_builder2, field2): (_, Option<&str>) = parse_node_pattern!($second);
 

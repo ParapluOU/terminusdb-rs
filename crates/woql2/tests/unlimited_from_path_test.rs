@@ -114,6 +114,7 @@ fn test_complex_unlimited_chain() {
     struct F;
     struct G;
     struct H;
+    #[allow(dead_code)]
     struct I;
     struct J;
 

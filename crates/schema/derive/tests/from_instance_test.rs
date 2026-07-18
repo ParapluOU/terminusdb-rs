@@ -1,9 +1,8 @@
 use anyhow::*;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use terminusdb_schema::{
-    build_instance_tree, FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Key,
-    PrimitiveValue, Schema, ToTDBInstance, ToTDBInstances, ToTDBSchema,
+    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Key,
+    PrimitiveValue, Schema, ToTDBInstance, ToTDBInstances,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 

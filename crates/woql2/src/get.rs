@@ -1,6 +1,4 @@
-use serde::{Deserialize, Serialize};
 // Removed incorrect imports for TdbDataType, TdbDebug, TdbDisplay
-use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 

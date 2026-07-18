@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Basic tagged union enum

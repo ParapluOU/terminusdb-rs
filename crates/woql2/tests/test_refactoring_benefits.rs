@@ -1,11 +1,9 @@
-use terminusdb_woql2::path_builder::PathDirection;
-/// This test file demonstrates the benefits of using helper macros
-/// by showing the reduction in code duplication
-use terminusdb_woql2::prelude::*;
 use terminusdb_woql2::{parse_direction, parse_node_pattern};
 
 struct User;
+#[allow(dead_code)]
 struct Post;
+#[allow(dead_code)]
 struct Comment;
 
 #[test]
@@ -26,16 +24,16 @@ fn test_parse_helpers_reduce_duplication() {
     println!("All 4 patterns delegate to one helper:");
 
     // Demonstrate all 4 patterns work with the helper
-    let (builder1, field1): (_, Option<&str>) = parse_node_pattern!(User);
+    let (_builder1, field1): (_, Option<&str>) = parse_node_pattern!(User);
     println!("  User -> field: {:?}", field1);
 
-    let (builder2, field2): (_, Option<&str>) = parse_node_pattern!(u:User);
+    let (_builder2, field2): (_, Option<&str>) = parse_node_pattern!(u:User);
     println!("  u:User -> field: {:?}", field2);
 
-    let (builder3, field3): (_, Option<&str>) = parse_node_pattern!(User.posts);
+    let (_builder3, field3): (_, Option<&str>) = parse_node_pattern!(User.posts);
     println!("  User.posts -> field: {:?}", field3);
 
-    let (builder4, field4): (_, Option<&str>) = parse_node_pattern!(u:User.posts);
+    let (_builder4, field4): (_, Option<&str>) = parse_node_pattern!(u:User.posts);
     println!("  u:User.posts -> field: {:?}", field4);
 
     println!("\n=== Direction Handling ===\n");
@@ -101,6 +99,7 @@ fn test_extensibility_example() {
 }
 
 /// Simplified macro pattern using helpers (example)
+#[allow(unused_macros)]
 macro_rules! example_with_helpers {
     // All node patterns can share similar structure
     ($node_pattern:tt $dir:tt $next_pattern:tt) => {{

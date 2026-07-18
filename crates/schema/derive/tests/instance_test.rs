@@ -1,8 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use terminusdb_schema::{
-    Instance, InstanceProperty, Key, PrimitiveValue, Property, RelationValue, Schema,
-    SetCardinality, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
+    InstanceProperty, PrimitiveValue, RelationValue, Schema, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
 use terminusdb_schema_derive::TerminusDBModel;
 
@@ -77,7 +75,7 @@ struct StructWithId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use terminusdb_schema::ToMaybeTDBSchema;
+    
 
     #[test]
     fn test_struct_with_id_instance() {

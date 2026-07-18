@@ -1,4 +1,4 @@
-use terminusdb_woql2::query::{Call, Query};
+use terminusdb_woql2::query::Query;
 use terminusdb_woql2::*;
 
 #[test]

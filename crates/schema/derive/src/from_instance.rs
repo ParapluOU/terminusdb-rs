@@ -1,9 +1,8 @@
-use anyhow::Context;
 use darling::FromField;
 use proc_macro2;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::spanned::Spanned;
-use syn::{self, Data, DataEnum, DataStruct, Fields, FieldsNamed, Visibility};
+use syn::{self, Data, DataEnum, DataStruct, Fields, FieldsNamed};
 
 use crate::args::TDBFieldOpts;
 #[cfg(feature = "generic-derive")]
@@ -25,7 +24,7 @@ pub(crate) fn derive_from_terminusdb_instance(
     let result = match &input.data {
         Data::Struct(data_struct) => {
             match &data_struct.fields {
-                Fields::Named(fields_named) => {
+                Fields::Named(_fields_named) => {
                     // Generate implementation for struct with named fields
                     implement_from_instance_for_struct(
                         struct_name,
@@ -173,7 +172,7 @@ fn implement_from_instance_for_struct(
 /// Process named fields for deserialization
 fn process_named_fields_for_deserialization<'a>(
     fields_named: &'a FieldsNamed,
-    struct_name: &syn::Ident,
+    _struct_name: &syn::Ident,
 ) -> (proc_macro2::TokenStream, Vec<&'a syn::Ident>) {
     // Get all field names (including PhantomData)
     let all_field_names = fields_named

@@ -64,6 +64,7 @@ fn test_15_node_project_hierarchy() {
 #[test]
 fn test_20_node_forum_traversal() {
     // Very long forum discussion thread traversal
+    #[allow(dead_code)]
     struct Message;
     struct Moderator;
     struct Ban;
@@ -126,7 +127,7 @@ fn test_25_node_mixed_directions() {
 
     // Count forward vs backward relationships
     let forward_count = dsl.matches("Posts").count() + dsl.matches("s\"").count();
-    let backward_count = dsl.matches("Comments").count(); // Rough heuristic
+    let _backward_count = dsl.matches("Comments").count(); // Rough heuristic
     println!("Approximate forward relations: {}", forward_count);
 }
 

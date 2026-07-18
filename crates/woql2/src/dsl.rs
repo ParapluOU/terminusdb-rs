@@ -467,7 +467,7 @@ impl ToDSL for DeleteDocument {
 }
 
 // Arithmetic expressions and path patterns need special handling
-use crate::expression::{ArithmeticExpression, ArithmeticValue, Div, Minus, Plus, Times};
+use crate::expression::{ArithmeticExpression, ArithmeticValue};
 
 impl ToDSL for Eval {
     fn to_dsl(&self) -> String {

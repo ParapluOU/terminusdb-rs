@@ -1,9 +1,6 @@
-use anyhow::*;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
 use terminusdb_schema::{
-    json::InstanceFromJson, Instance, InstanceProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema,
+    json::InstanceFromJson, ToTDBInstance,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
@@ -18,6 +15,7 @@ struct Person {
 
 #[derive(Debug, Clone, TerminusDBModel)]
 #[tdb(class_name = "SimpleAddress")]
+#[allow(dead_code)]
 struct SimpleAddress {
     street: String,
     city: String,
@@ -34,6 +32,7 @@ enum Color {
 
 // Simple struct for testing
 #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+#[allow(dead_code)]
 struct SimpleStruct {
     name: String,
     color: Color,
@@ -220,7 +219,7 @@ fn test_enum_deserialization_errors() {
         "Red": null
     });
 
-    let result = Color::instance_from_json(json_missing_id);
+    let _result = Color::instance_from_json(json_missing_id);
     // assert!(result.is_err(), "Expected error for missing @id field");
 
     // Test missing @type field

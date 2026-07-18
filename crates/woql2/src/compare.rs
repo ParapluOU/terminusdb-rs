@@ -1,7 +1,5 @@
 use crate::prelude::*;
 use crate::value::WoqlValue;
-use serde::{Deserialize, Serialize};
-use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 

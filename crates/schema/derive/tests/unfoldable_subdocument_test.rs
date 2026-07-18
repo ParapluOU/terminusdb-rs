@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::{Key, Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
 use terminusdb_schema_derive::TerminusDBModel;
 

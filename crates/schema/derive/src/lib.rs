@@ -1,4 +1,4 @@
-#![allow(warnings)]
+#![allow(dead_code)]
 
 mod args;
 #[cfg(feature = "generic-derive")]
@@ -336,7 +336,7 @@ pub fn derive_terminusdb_schema(input: TokenStream) -> TokenStream {
 /// struct Person { ... }
 /// ```
 #[proc_macro_derive(FromTDBInstance, attributes(tdb))]
-pub fn derive_from_terminusdb_instance(input: TokenStream) -> TokenStream {
+pub fn derive_from_terminusdb_instance(_input: TokenStream) -> TokenStream {
     // This is now a no-op - all functionality has been moved to TerminusDBModel
     quote! {
         // FromTDBInstance derive is now a no-op

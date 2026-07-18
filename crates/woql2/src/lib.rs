@@ -1,4 +1,4 @@
-#![allow(warnings)]
+#![allow(dead_code)]
 
 //! WOQL AST (Abstract Syntax Tree) types generated from schema.
 

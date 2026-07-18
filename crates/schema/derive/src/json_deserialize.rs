@@ -4,8 +4,8 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, Data, DataEnum, DeriveInput, Field, Fields, FieldsNamed, GenericArgument,
-    Ident, Path, PathArguments, Type, TypePath,
+    Data, DataEnum, DeriveInput, Fields, FieldsNamed,
+    Ident,
 };
 
 /// Enum type for different kinds of enums
@@ -183,7 +183,7 @@ fn implement_instance_from_json_for_struct(
 fn implement_instance_from_json_for_simple_enum(
     enum_name: &Ident,
     data_enum: &DataEnum,
-    opts: &TDBModelOpts,
+    _opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
     let variant_matchers = data_enum
         .variants
@@ -275,7 +275,7 @@ fn implement_instance_from_json_for_simple_enum(
 fn implement_instance_from_json_for_tagged_enum(
     enum_name: &Ident,
     data_enum: &DataEnum,
-    opts: &TDBModelOpts,
+    _opts: &TDBModelOpts,
 ) -> Result<TokenStream, syn::Error> {
     // Build a list of type checks for variant-to-union deserialization
     // We only generate type checks for variants where the inner type is likely a custom struct type
@@ -388,7 +388,7 @@ fn implement_instance_from_json_for_tagged_enum(
                 }
             },
             // Multi-field tuple variant
-            Fields::Unnamed(fields) => {
+            Fields::Unnamed(_fields) => {
                 // Get the variant struct name (used for virtual structs)
                 let variant_struct_name = format!("{}{}", enum_name, variant_name_str);
 
@@ -442,7 +442,7 @@ fn implement_instance_from_json_for_tagged_enum(
                 }
             },
             // Named fields variant
-            Fields::Named(fields_named) => {
+            Fields::Named(_fields_named) => {
                 // Get the variant struct name (used for virtual structs)
                 let variant_struct_name = format!("{}{}", enum_name, variant_name_str);
 

@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
@@ -50,7 +49,7 @@ mod tests {
             .expect("Should find Person schema");
 
         // Find ContactMethod tagged union
-        let contact_method_schema = schemas
+        let _contact_method_schema = schemas
             .iter()
             .find(|s| matches!(s, Schema::TaggedUnion { id, .. } if id == "ContactMethod"))
             .expect("Should find ContactMethod schema");

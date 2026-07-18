@@ -1,7 +1,6 @@
 use crate::prelude::*;
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::ToTDBInstance;
-use terminusdb_schema::{FromTDBInstance, GraphType};
+use terminusdb_schema::GraphType;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 /// Specify an edge pattern in the graph.

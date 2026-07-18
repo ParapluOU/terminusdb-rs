@@ -1,8 +1,5 @@
 use crate::prelude::*;
 use crate::value::ListOrVariable;
-use serde::ser::SerializeStruct;
-use serde::Serializer;
-use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 

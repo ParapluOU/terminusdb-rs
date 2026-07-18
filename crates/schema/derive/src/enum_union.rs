@@ -432,7 +432,7 @@ fn generate_virtual_structs(
                 };
 
                 // Generate the schema implementation
-                let schema_impl = generate_totdbschema_impl(
+                let _schema_impl = generate_totdbschema_impl(
                     &variant_struct_ident,
                     quote! { #variant_struct_name },
                     &TDBModelOpts {
@@ -475,7 +475,7 @@ fn generate_virtual_structs(
                 );
 
                 // Generate the instance implementation
-                let instance_impl = generate_totdbinstance_impl(
+                let _instance_impl = generate_totdbinstance_impl(
                     &variant_struct_ident,
                     quote! { // This is the instance_body_code for the virtual struct
                         let mut properties = std::collections::BTreeMap::new();
@@ -592,7 +592,7 @@ fn generate_virtual_structs(
                 };
 
                 // Collect field identifiers for to_schema_tree_mut
-                let field_idents = fields
+                let _field_idents = fields
                     .named
                     .iter()
                     .filter_map(|field| field.ident.as_ref().map(|ident| ident.clone()))
@@ -658,7 +658,7 @@ fn generate_virtual_structs(
                 };
 
                 // Generate ToTDBSchema implementation for the virtual struct
-                let schema_impl = generate_totdbschema_impl(
+                let _schema_impl = generate_totdbschema_impl(
                     &variant_struct_ident,
                     quote! { #variant_struct_name },
                     &variant_opts,
@@ -690,7 +690,7 @@ fn generate_virtual_structs(
                     .collect::<Vec<_>>();
 
                 // Generate ToTDBInstance implementation for the virtual struct
-                let instance_impl = quote! {
+                let _instance_impl = quote! {
                     impl terminusdb_schema::ToTDBInstance for #variant_struct_ident {
                         fn to_instance(&self, id: Option<String>) -> terminusdb_schema::Instance {
                             let schema = <Self as terminusdb_schema::ToTDBSchema>::to_schema();

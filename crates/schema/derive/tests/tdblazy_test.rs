@@ -1,9 +1,8 @@
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
 use terminusdb_schema::{
     Client, FromTDBInstance, Instance, InstanceProperty, Key, PrimitiveValue, RelationValue,
-    Schema, TdbLazy, ToTDBInstance, ToTDBSchema,
+    Schema, TdbLazy, ToTDBInstance,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 

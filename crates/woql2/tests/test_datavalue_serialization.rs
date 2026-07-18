@@ -1,6 +1,5 @@
 use serde_json;
 use terminusdb_schema::XSDAnySimpleType;
-use terminusdb_woql2::prelude::*;
 use terminusdb_woql2::string::Concatenate;
 use terminusdb_woql2::value::{DataValue, ListOrVariable};
 

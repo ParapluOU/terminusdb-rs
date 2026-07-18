@@ -1,7 +1,5 @@
-use anyhow::*;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use terminusdb_schema::{Schema, ToMaybeTDBSchema, ToTDBInstance, ToTDBSchema, TypeFamily};
+use terminusdb_schema::{Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Address type used for nested structures

@@ -1,14 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::sync::Arc;
+use std::collections::BTreeSet;
 
-use crate::prelude::*;
-use serde::{ser::SerializeStruct, Serializer};
 use terminusdb_schema::json::{InstancePropertyFromJson, ToJson};
 use terminusdb_schema::{
     FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
     ToTDBInstance,
 };
-use terminusdb_schema::{FromTDBInstance, XSDAnySimpleType};
+use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Helper struct for DictionaryTemplate
@@ -131,13 +128,13 @@ impl<Parent> ToSchemaProperty<Parent> for ListOrVariable {
 }
 
 impl<Parent> InstancePropertyFromJson<Parent> for ListOrVariable {
-    fn property_from_json(json: serde_json::Value) -> anyhow::Result<InstanceProperty> {
+    fn property_from_json(_json: serde_json::Value) -> anyhow::Result<InstanceProperty> {
         todo!()
     }
 }
 
 impl FromInstanceProperty for ListOrVariable {
-    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+    fn from_property(_prop: &InstanceProperty) -> anyhow::Result<Self> {
         todo!()
     }
 }

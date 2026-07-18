@@ -1,6 +1,4 @@
 use crate::prelude::*;
-use serde::{Deserialize, Serialize};
-use terminusdb_schema::FromTDBInstance;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 

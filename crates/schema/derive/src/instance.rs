@@ -1,6 +1,5 @@
 use crate::prelude::*;
 use quote::format_ident;
-use syn::FieldsNamed;
 // No longer need DataEnum here
 // use syn::DataEnum;
 
@@ -128,12 +127,12 @@ pub fn process_fields_for_instance(
         })
         .map(|field| {
             let field_name = field.ident.as_ref().unwrap();
-            let field_ty = &field.ty;
+            let _field_ty = &field.ty;
             let field_opts = TDBFieldOpts::from_field(field).unwrap();
             let property_name = field_opts.name.unwrap_or_else(|| field_name.to_string());
 
             // Extract subdocument value before quote
-            let subdocument = field_opts.subdocument;
+            let _subdocument = field_opts.subdocument;
 
             // `#[tdb(default)]`: serialize a `None` Option as `T::default()`
             // rather than a null property (field type must be `Option<T>: Default`).

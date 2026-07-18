@@ -78,7 +78,7 @@ mod tests {
                 );
 
                 for prop in &properties {
-                    let expected_value = expected_props.get(&prop.name).unwrap_or_else(|| {
+                    let _expected_value = expected_props.get(&prop.name).unwrap_or_else(|| {
                         panic!(
                             "Generated property '{}' not found in spec for Class '{}'",
                             prop.name, type_id
@@ -124,7 +124,7 @@ mod tests {
                     properties.iter().map(|p| &p.name).collect::<Vec<_>>(),
                 );
                 for prop in &properties {
-                    let expected_value = expected_props.get(&prop.name).unwrap_or_else(|| {
+                    let _expected_value = expected_props.get(&prop.name).unwrap_or_else(|| {
                         panic!(
                             "Generated variant '{}' not found in spec for TaggedUnion '{}'",
                             prop.name, id

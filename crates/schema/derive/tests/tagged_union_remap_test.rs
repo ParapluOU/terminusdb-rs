@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::{
     EntityIDFor, Schema, TaggedUnion, TerminusDBModel, ToTDBInstance, ToTDBSchema,
 };
@@ -132,6 +131,7 @@ fn test_tagged_union_instance_id_type_is_union_not_variant() {
 
     // This function signature proves at compile-time that instance_id()
     // returns EntityIDFor<ActivityEvent> (the union type), not EntityIDFor<UserLoginEvent>
+    #[allow(dead_code)]
     fn verify_type_is_union_not_variant(
         activity: ActivityEvent,
     ) -> Option<EntityIDFor<ActivityEvent>> {
@@ -140,6 +140,7 @@ fn test_tagged_union_instance_id_type_is_union_not_variant() {
     }
 
     // Compile-time verification: this function only compiles if the types are correct
+    #[allow(dead_code)]
     fn verify_remap_works_for_variant_to_union(
         variant_id: EntityIDFor<UserLoginEvent>,
     ) -> EntityIDFor<ActivityEvent> {

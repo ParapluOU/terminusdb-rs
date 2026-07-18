@@ -27,10 +27,9 @@ use crate::triple::{
     DeletedLink, DeletedTriple, Link, Triple, TripleNext, TriplePrevious, TripleSlice,
     TripleSliceRev,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::Map;
 use terminusdb_schema::ToTDBInstance;
-use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBSchema};
+#[cfg(test)]
+use terminusdb_schema::ToTDBSchema; // used by test_abstract_query's Query::to_schema()
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // todo: define key type as lexical on the 'name' field
@@ -187,7 +186,7 @@ impl Query {
 
 #[test]
 fn test_abstract_query() {
-    let query = Query::And(And { and: vec![] });
+    let _query = Query::And(And { and: vec![] });
     let schema = Query::to_schema();
     assert!(schema.is_abstract());
 }

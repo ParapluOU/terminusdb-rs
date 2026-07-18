@@ -128,6 +128,7 @@ fn test_long_chain_with_fields() {
 #[test]
 fn test_original_limitation_resolved() {
     // This was the original limitation - now it should work!
+    #[allow(dead_code)]
     struct Category;
 
     // All of these should now work:

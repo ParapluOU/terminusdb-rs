@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::FromTDBInstance;
-use terminusdb_schema::{Schema, TDBEnum, ToTDBInstance, ToTDBSchema};
+use terminusdb_schema::{Schema, TDBEnum, ToTDBInstance};
 use terminusdb_schema_derive::TerminusDBModel;
 /// Color enum demonstrates a basic enum model for TerminusDB
 #[derive(TerminusDBModel, Debug)]
@@ -45,7 +44,7 @@ fn test_enum_deserde() {
 
     dbg!(&json);
 
-    let instance = Comment::from_json(json).unwrap();
+    let _instance = Comment::from_json(json).unwrap();
 
     let json = Status::Active.to_json();
 

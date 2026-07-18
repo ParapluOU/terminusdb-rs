@@ -167,7 +167,7 @@ pub fn implement_for_struct(
     let class_name_expr = quote! { #class_name };
 
     // Extract base generics for all impls
-    let (base_impl_generics, base_ty_generics, base_where_clause) = input.generics.split_for_impl();
+    let (_base_impl_generics, _base_ty_generics, base_where_clause) = input.generics.split_for_impl();
 
     // Generate bounds for each trait implementation if generics are enabled
     #[cfg(feature = "generic-derive")]
@@ -222,13 +222,13 @@ pub fn implement_for_struct(
     };
 
     #[cfg(not(feature = "generic-derive"))]
-    let bounds_for_traits: Option<
+    let _bounds_for_traits: Option<
         std::collections::HashMap<String, std::collections::HashMap<syn::Ident, Vec<String>>>,
     > = None;
 
     // For non-generic code, use empty generics
     #[cfg(not(feature = "generic-derive"))]
-    let (impl_generics, ty_generics, where_clause) =
+    let (impl_generics, ty_generics, _where_clause) =
         (quote! {}, quote! {}, None::<syn::WhereClause>);
 
     // For generic code, we'll use specific bounds for each impl
@@ -299,7 +299,7 @@ pub fn implement_for_struct(
     };
 
     // Collect field identifiers for to_schema_tree_mut
-    let field_idents = match &data_struct.fields {
+    let _field_idents = match &data_struct.fields {
         Fields::Named(fields_named) => fields_named
             .named
             .iter()
@@ -370,7 +370,7 @@ pub fn implement_for_struct(
         };
 
         #[cfg(not(feature = "generic-derive"))]
-        let schema_where_clause: Option<syn::WhereClause> = None;
+        let _schema_where_clause: Option<syn::WhereClause> = None;
 
         generate_totdbschema_impl(
             struct_name,
@@ -424,7 +424,7 @@ pub fn implement_for_struct(
         };
 
         #[cfg(not(feature = "generic-derive"))]
-        let instance_where_clause: Option<syn::WhereClause> = None;
+        let _instance_where_clause: Option<syn::WhereClause> = None;
 
         generate_totdbinstance_impl(
             struct_name,
@@ -495,7 +495,7 @@ pub fn process_named_fields(
 
             // Extract subdocument value before quote
             // todo: adjust SchemaProperty to be able to encode subdocument requirements on the property level
-            let subdocument = field_opts.subdocument;
+            let _subdocument = field_opts.subdocument;
 
             // Add class override if specified
             let classoverride = if let Some(class) = field_opts.class {
@@ -544,7 +544,7 @@ pub fn process_named_fields(
                 (None, None, None) => quote! {},
             };
 
-            let mut property = quote! {
+            let property = quote! {
                 // terminusdb_schema::Property {
                 //     name: #property_name.to_string(),
                 //     r#type: None,

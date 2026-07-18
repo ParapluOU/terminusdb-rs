@@ -1,13 +1,11 @@
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use terminusdb_schema::{ClassDocumentation, Key, Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
-use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
+use terminusdb_schema::{Key, Schema, ToTDBInstance, ToTDBSchema, TypeFamily};
+use terminusdb_schema_derive::TerminusDBModel;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
-    use terminusdb_schema::json::InstanceFromJson;
+    
+    
 
     // Basic struct test
     #[derive(TerminusDBModel, Debug, Clone, PartialEq)]
@@ -59,6 +57,7 @@ mod tests {
 
     // Struct with nested subdocument
     #[derive(TerminusDBModel, Debug, Clone)]
+    #[allow(dead_code)]
     struct PersonWithSubDocAddress {
         name: String,
         #[tdb(subdocument)]
@@ -67,6 +66,7 @@ mod tests {
 
     // Struct with Vec<SubDocument>
     #[derive(TerminusDBModel, Debug, Clone)]
+    #[allow(dead_code)]
     struct Building {
         name: String,
         #[tdb(subdocument)]
@@ -75,6 +75,7 @@ mod tests {
 
     // Struct with Vec<Link>
     #[derive(TerminusDBModel, Debug, Clone)]
+    #[allow(dead_code)]
     struct Department {
         name: String,
         locations: Vec<Address>,
@@ -139,7 +140,7 @@ mod tests {
             key,
             base,
             documentation,
-            subdocument,
+            subdocument: _,
             unfoldable,
             ..
         } = schema
