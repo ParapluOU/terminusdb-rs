@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_operation_log_ring_buffer() {
-        let mut log = OperationLog::new(3);
+        let log = OperationLog::new(3);
 
         // Add 4 entries to a log with max size 3
         for i in 0..4 {

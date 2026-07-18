@@ -1,10 +1,7 @@
 //! Diff and patch operations
 
 use {
-    crate::{
-        debug::{OperationEntry, OperationType},
-        TerminusDBAdapterError,
-    },
+    crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde::{Deserialize, Serialize},
@@ -79,7 +76,7 @@ impl super::client::TerminusDBHttpClient {
         document_id: Option<&str>,
     ) -> anyhow::Result<DiffResponse> {
         let start_time = Instant::now();
-        let mut uri_builder = self.build_url().endpoint("diff");
+        let uri_builder = self.build_url().endpoint("diff");
 
         debug!("POST /api/diff");
 

@@ -3,9 +3,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
     use terminusdb_bin::TerminusDBServer;
-    use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
+    use terminusdb_client::DocumentInsertArgs;
     use terminusdb_schema::ToTDBInstance;
     use terminusdb_schema_derive::TerminusDBModel;
 

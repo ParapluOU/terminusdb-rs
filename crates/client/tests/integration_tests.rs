@@ -4,7 +4,6 @@
 // Uses TerminusDBServer::test_instance() for auto-spawning local server
 
 use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::*;
 use terminusdb_schema::*;
 
 use serde_json::json;
@@ -190,37 +189,24 @@ fn test_deserde_404() {
 }
 
 // Make sure imports are correct for integration tests
-use anyhow::Result; // Add for async test return types
-use serde_json::Value;
-use std::collections::HashMap;
-use terminusdb_client::err::TypedErrorResponse; // Keep module path import
-use terminusdb_client::info::Info; // Keep module path import
+ // Add for async test return types
+ // Keep module path import
+ // Keep module path import
 use terminusdb_client::{
     // Imports from the client crate
     // Ensure these are included and uncommented
     BranchSpec,
-    CommitLogEntry,
-    CommitLogIterator,
-    CommitMeta,
     DocumentInsertArgs,
     // DocumentResult, // Removed - type was deleted
     GetOpts,
-    LogEntry,
-    LogOpts,
     QueryResult,
     QueryResultTypedValue,
     QueryResultVariableBinding,
-    TerminusDBClient,
-    TerminusDBHttpClient,
-    TerminusDBResult,
     // TypedErrorResponse, // Removed - Use module path import above
     // Info, // Removed - Use module path import above
 };
-use terminusdb_schema::Documents;
-use terminusdb_woql_builder::prelude::*; // Needed for QueryResult deserialization // Assuming ApiResponse::Error uses this
+ // Needed for QueryResult deserialization // Assuming ApiResponse::Error uses this
 
-use serde::{Deserialize, Serialize};
-use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
 
 #[derive(TerminusDBModel, Clone, Debug)]

@@ -3,8 +3,7 @@
 //! This example shows how to efficiently retrieve versions for multiple
 //! documents in a single WOQL query.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Serialize;
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};

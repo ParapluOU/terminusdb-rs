@@ -181,7 +181,6 @@ mod tests {
 #[cfg(test)]
 mod db_tests {
     use super::*;
-    use serde::{Deserialize as SerdeDeserialize, Serialize};
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
     use terminusdb_schema::*;

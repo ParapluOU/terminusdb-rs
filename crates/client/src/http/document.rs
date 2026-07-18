@@ -15,7 +15,7 @@ use {
     },
     ::tracing::{debug, error, instrument, trace},
     anyhow::{anyhow, Context},
-    serde_json::{json, Value},
+    serde_json::Value,
     std::{
         collections::{HashMap, HashSet},
         fmt::Debug,
@@ -23,7 +23,7 @@ use {
     },
     terminusdb_schema::ToJson,
     terminusdb_woql_builder::{
-        prelude::{node, string_literal, WoqlBuilder},
+        prelude::{node, WoqlBuilder},
         vars,
     },
 };
@@ -540,7 +540,7 @@ impl super::client::TerminusDBHttpClient {
 
                 // insert existing documents with PUT (only when skip_existence_check=false)
                 if !args.skip_existence_check && !documents_to_update_instead.is_empty() {
-                    let update_res = Box::pin(self.insert_documents_with_method(
+                    let _update_res = Box::pin(self.insert_documents_with_method(
                         documents_to_update_instead.iter().collect(),
                         args.clone(),
                         DocumentMethod::Put,
@@ -929,7 +929,7 @@ impl super::client::TerminusDBHttpClient {
     )]
     pub async fn insert_documents_by_schema_type<T: terminusdb_schema::ToTDBSchema>(
         &self,
-        mut model: Vec<&terminusdb_schema::Instance>,
+        model: Vec<&terminusdb_schema::Instance>,
         args: DocumentInsertArgs,
     ) -> anyhow::Result<ResponseWithHeaders<HashMap<String, TDBInsertInstanceResult>>> {
         // dedup_instances_by_id(&mut model);
@@ -1490,8 +1490,8 @@ impl super::client::TerminusDBHttpClient {
         debug!("Checking existence of {} IDs using WOQL", ids.len());
 
         // Create variables for the query
-        let id_var = vars!("ID");
-        let count_var = vars!("Count");
+        let _id_var = vars!("ID");
+        let _count_var = vars!("Count");
         let type_var = vars!("Type");
 
         // Build count queries for each ID

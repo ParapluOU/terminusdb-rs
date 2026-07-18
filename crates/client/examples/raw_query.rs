@@ -107,12 +107,13 @@ async fn main() -> anyhow::Result<()> {
 
     // You can also use the RawWoqlQuery builder for simpler queries
     #[derive(Debug, Deserialize)]
+    #[allow(dead_code)] // deserialization target for an illustrative-only query
     struct CountResult {
         #[serde(rename = "Count")]
         count: i32,
     }
 
-    let count_query = RawWoqlQuery::<CountResult>::new()
+    let _count_query = RawWoqlQuery::<CountResult>::new()
         .builder()
         .triple(vars!("Person"), "rdf:type", "@schema:Person")
         .count(vars!("Count"))

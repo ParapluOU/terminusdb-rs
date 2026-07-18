@@ -3,7 +3,7 @@
 use {
     crate::{
         debug::{OperationEntry, OperationType, QueryLogEntry},
-        CommitInfo, SquashResponse, TerminusDBAdapterError,
+        CommitInfo, SquashResponse,
     },
     ::tracing::{debug, error, instrument},
     anyhow::Context,
@@ -78,7 +78,7 @@ impl super::client::TerminusDBHttpClient {
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let mut request = self
+        let request = self
             .http
             .post(uri)
             .basic_auth(&self.user, Some(&self.pass))

@@ -6,7 +6,6 @@
 #[cfg(test)]
 mod tests {
     use terminusdb_bin::TerminusDBServer;
-    use terminusdb_client::*;
 
     #[tokio::test]
     async fn test_v12_prefix_crud() -> anyhow::Result<()> {

@@ -1,5 +1,5 @@
 use crate::log::Migration;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// {
 //     "@id":"ValidCommit/iviupfwgw9mlond3ax3ky728zzcdv06",

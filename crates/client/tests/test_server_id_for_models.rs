@@ -2,7 +2,6 @@
 
 #![cfg(test)]
 
-use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::TerminusDBModel;
 

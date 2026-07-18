@@ -1,10 +1,8 @@
 #![recursion_limit = "256"]
 
 use anyhow::*;
-use serde::{Deserialize, Serialize};
 use terminusdb_client::deserialize::*;
 use terminusdb_client::DefaultTDBDeserializer;
-use terminusdb_client::DocumentInsertArgs;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::*;
 

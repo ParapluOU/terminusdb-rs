@@ -6,19 +6,16 @@ use reqwest::Client;
 use {
     crate::{
         debug::{DebugConfig, OperationFilter, OperationLog, QueryLogEntry, QueryLogger},
-        Info, TerminusDBAdapterError,
+        Info,
     },
     ::tracing::{debug, instrument},
     anyhow::Context,
-    serde::{de::DeserializeOwned, Deserialize, Serialize},
     std::{
         collections::HashSet,
         env,
-        fmt::Debug,
         sync::{Arc, Mutex, RwLock},
         time::Duration,
     },
-    terminusdb_schema::{ToJson, ToTDBInstance},
     url::Url,
 };
 
@@ -175,7 +172,7 @@ impl TerminusDBHttpClient {
         ),
         err
     )]
-    pub async fn new(mut endpoint: Url, user: &str, pass: &str, org: &str) -> anyhow::Result<Self> {
+    pub async fn new(endpoint: Url, user: &str, pass: &str, org: &str) -> anyhow::Result<Self> {
         Self::new_with_timeout(endpoint, user, pass, org, None).await
     }
 
@@ -331,7 +328,7 @@ impl TerminusDBHttpClient {
         // If TERMINUSDB_DB is set, ensure the database exists
         if let Ok(db) = env::var("TERMINUSDB_DB") {
             debug!("Ensuring database '{}' exists", db);
-            let mut client = client.ensure_database(&db).await?;
+            let client = client.ensure_database(&db).await?;
 
             // If TERMINUSDB_BRANCH is set, check it out (note: this would require adding branch support)
             if let Ok(branch) = env::var("TERMINUSDB_BRANCH") {
@@ -436,7 +433,7 @@ impl TerminusDBHttpClient {
 
     /// Centralized URL builder for TerminusDB API endpoints.
     /// Handles all URL construction patterns and eliminates duplication.
-    pub(crate) fn build_url(&self) -> UrlBuilder {
+    pub(crate) fn build_url(&self) -> UrlBuilder<'_> {
         UrlBuilder::new(&self.endpoint, &self.org)
     }
 

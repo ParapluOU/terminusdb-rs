@@ -1,8 +1,8 @@
 use crate::log::{LogEntry, LogOpts};
 use crate::spec::BranchSpec;
-use crate::{CommitLogEntry, TerminusDBHttpClient};
+use crate::TerminusDBHttpClient;
 use derive_getters::Getters;
-use futures_util::{Future, Stream, StreamExt, TryStreamExt};
+use futures_util::{Future, Stream, StreamExt};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 

@@ -2,7 +2,6 @@
 
 use serde_json::{json, Value};
 use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 
 #[tokio::test]
 async fn test_insert_npq_with_woql_context() -> anyhow::Result<()> {

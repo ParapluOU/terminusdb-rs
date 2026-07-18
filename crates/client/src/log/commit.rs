@@ -1,5 +1,5 @@
 use crate::LogEntry;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::ops::Deref;
 use terminusdb_schema::ToTDBSchema;
 

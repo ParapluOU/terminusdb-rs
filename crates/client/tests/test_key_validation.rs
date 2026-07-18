@@ -2,7 +2,6 @@
 
 #[cfg(test)]
 mod test_key_validation {
-    use serde::{Deserialize, Serialize};
     use terminusdb_schema::ToTDBInstance;
     use terminusdb_schema_derive::TerminusDBModel;
 

@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests {
     use terminusdb_client::debug::{OperationEntry, OperationLog, OperationType};
-    use terminusdb_woql2::prelude::Query;
+    
     use terminusdb_woql_builder::prelude::*;
 
     #[test]

@@ -1,14 +1,10 @@
 //! User management operations
 
 use {
-    crate::{
-        debug::{OperationEntry, OperationType},
-        TerminusDBAdapterError,
-    },
+    crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
     anyhow::Context,
     serde::{Deserialize, Serialize},
-    serde_json::json,
     std::time::Instant,
 };
 

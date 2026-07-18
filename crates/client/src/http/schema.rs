@@ -1,13 +1,12 @@
 //! Schema-related operations
 
 use crate::{ResponseWithHeaders, TDBInsertInstanceResult};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tap::Pipe;
 use {
-    crate::{document::DocumentInsertArgs, document::DocumentType, Schema},
+    crate::{document::DocumentInsertArgs, Schema},
     ::tracing::{debug, instrument},
     anyhow::Context as AnyhowContext,
-    tap::{Tap, TapFallible},
     terminusdb_schema::{json::ToJson, Context as TDBContext, ToTDBSchema, ToTDBSchemas},
 };
 

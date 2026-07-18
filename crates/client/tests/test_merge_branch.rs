@@ -9,7 +9,6 @@
 //! cargo test -p terminusdb-client test_merge_branch -- --ignored --nocapture
 //! ```
 
-use serde::{Deserialize, Serialize};
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
 use terminusdb_schema::*;

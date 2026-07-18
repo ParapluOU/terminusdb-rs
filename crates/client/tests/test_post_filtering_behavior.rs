@@ -4,7 +4,6 @@
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use serde::{Deserialize, Serialize};
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
     use terminusdb_schema::*;

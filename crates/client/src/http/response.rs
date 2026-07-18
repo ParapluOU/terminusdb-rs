@@ -6,9 +6,8 @@ use reqwest::Response;
 use {
     crate::{result::ResponseWithHeaders, ApiResponse},
     ::tracing::{instrument, trace},
-    anyhow::{anyhow, Context},
-    serde::{de::DeserializeOwned, Deserialize, Serialize},
-    serde_json::{json, Value},
+    anyhow::Context,
+    serde::de::DeserializeOwned,
     std::fmt::Debug,
 };
 

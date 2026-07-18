@@ -1,17 +1,12 @@
-use crate::{err::TypedErrorResponse, BranchSpec, CommitId, TerminusDBAdapterError};
+use crate::{err::TypedErrorResponse, CommitId, TerminusDBAdapterError};
 use anyhow::anyhow;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::convert::identity;
-use std::convert::{From, Into};
-use std::error::Error;
-use std::fmt::{Debug, Formatter};
-use std::iter::FilterMap;
-use std::slice::Iter;
+use std::convert::From;
+use std::fmt::Debug;
 use terminusdb_schema::{EntityIDFor, ToTDBSchema};
-use terminusdb_woql_builder::prelude::vars;
 
 use crate::TerminusDBAdapterError::Serde;
 use crate::*;
@@ -249,7 +244,6 @@ impl QueryResult {
     pub fn woql_result(self) -> WOQLResult {
         match self {
             QueryResult::WOQL(res) => res,
-            _ => panic!("did not contain WOQL result"),
         }
     }
 }
@@ -285,7 +279,7 @@ fn test_woql_response() {
 
     let res = res.woql_result();
 
-    let values = res.get_variable_values("FileHash");
+    let _values = res.get_variable_values("FileHash");
 }
 
 /// {
@@ -320,7 +314,7 @@ pub struct WOQLResult<Binding = HashMap<String, QueryResultVariableBinding>> {
 }
 
 impl IWOQLQueryResult for WOQLResult {
-    fn get_variable_values(&self, var: impl AsRef<str>) -> QueryResultVariableBindingValues {
+    fn get_variable_values(&self, var: impl AsRef<str>) -> QueryResultVariableBindingValues<'_> {
         let values: Vec<&QueryResultVariableBinding> = self
             .bindings
             .iter()
@@ -343,7 +337,7 @@ impl IWOQLQueryResult for WOQLResult {
 }
 
 pub trait IWOQLQueryResult {
-    fn get_variable_values(&self, var: impl AsRef<str>) -> QueryResultVariableBindingValues;
+    fn get_variable_values(&self, var: impl AsRef<str>) -> QueryResultVariableBindingValues<'_>;
 
     fn get_variable_first(&self, var: impl AsRef<str>) -> Option<&QueryResultVariableBinding>;
 
@@ -357,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_woql_response_typed_var() {
-        let res: WOQLResult = serde_json::from_str(FILEHASH_RESULT_FIXTURE).unwrap();
+        let _res: WOQLResult = serde_json::from_str(FILEHASH_RESULT_FIXTURE).unwrap();
     }
 
     #[derive(Debug, Clone, TerminusDBModel)]

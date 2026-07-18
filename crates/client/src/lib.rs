@@ -1,17 +1,15 @@
-#![feature(map_first_last)]
 #![feature(specialization)]
-#![feature(associated_type_defaults)]
-#![feature(try_blocks)]
-#![feature(trait_alias)]
-#![feature(let_chains)]
 #![recursion_limit = "256"]
-#![allow(warnings)]
+// Minimal targeted lint allow-set: `dead_code` (~700 hits across the internal
+// API surface) is high-volume noise and stays allowed. `incomplete_features` is
+// unavoidable while we depend on `#![feature(specialization)]`. Everything else —
+// notably `unused_must_use`, `unused_imports`, `unreachable_code`, `unused_mut`,
+// and `unused_variables` — stays ACTIVE so real bugs surface.
+#![allow(dead_code, incomplete_features)]
 
-use enum_variant_macros::FromVariants;
 
 use terminusdb_schema::*;
 use terminusdb_schema_derive::*;
-use terminusdb_woql2::prelude::*;
 
 // Import for primitive value conversion
 use terminusdb_schema::json::InstancePropertyFromJson;
@@ -30,6 +28,10 @@ pub use http::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod debug;
 pub mod deserialize;
+// The top-level `document`/`log`/`query` modules deliberately share names with the
+// `http::{document,log,query}` submodules pulled in by `pub use http::*` above; the
+// private module wins for crate-internal paths, which is intended.
+#[allow(hidden_glob_reexports)]
 mod document;
 mod endpoint;
 pub mod err;
@@ -37,11 +39,13 @@ pub mod err;
 pub mod http;
 pub mod info;
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(hidden_glob_reexports)]
 mod log;
 // `query` defines the Queryable traits, whose methods all take a
 // `&TerminusDBHttpClient` (native-only HTTP module); it is consumed solely by the
 // gated `http` module, so it is native-only too.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(hidden_glob_reexports)]
 mod query;
 pub mod result;
 mod spec;
@@ -52,13 +56,6 @@ pub use query::*;
 
 use serde::{Deserialize, Serialize};
 use std::convert::{From, Into};
-
-#[macro_use]
-extern crate custom_derive;
-#[macro_use]
-extern crate enum_derive;
-#[macro_use]
-extern crate exec_time;
 
 // todo: move to config crate
 pub const DEFAULT_SCHEMA_STRING: &str = "http://parture.org/schema/woql#";

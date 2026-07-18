@@ -10,7 +10,7 @@ use {
     serde::Deserialize,
     terminusdb_schema::{GraphType, ToJson, ToTDBInstance},
     terminusdb_woql2::prelude::Query as Woql2Query,
-    terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
+    terminusdb_woql_builder::prelude::{node, vars, WoqlBuilder},
 };
 
 use super::TerminusDBModel;

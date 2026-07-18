@@ -100,7 +100,6 @@ mod test_document_if_exists {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod test_instance_if_exists {
-    use serde::{Deserialize, Serialize};
     use terminusdb_bin::TerminusDBServer;
     use terminusdb_client::*;
     use terminusdb_schema::ToTDBInstance;

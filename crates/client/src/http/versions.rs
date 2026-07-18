@@ -3,7 +3,6 @@
 use {
     crate::{spec::BranchSpec, CommitId, TDBInstanceDeserializer, WOQLResult},
     ::tracing::{debug, instrument, warn},
-    anyhow::{anyhow, Context},
     std::collections::HashMap,
     terminusdb_schema::{ToJson, ToTDBInstance},
     terminusdb_woql_builder::prelude::{node, vars, WoqlBuilder},

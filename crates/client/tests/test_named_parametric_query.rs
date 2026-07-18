@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
+use terminusdb_client::DocumentInsertArgs;
 use terminusdb_schema::ToTDBSchema;
 use terminusdb_woql2::query::{NamedParametricQuery, Query};
 use terminusdb_woql2::*;

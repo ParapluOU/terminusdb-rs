@@ -1,5 +1,5 @@
 use serde_json::json;
-use terminusdb_client::{ApiResponse, ApiResponseError, ErrorResponse, TypedErrorResponse};
+use terminusdb_client::{ApiResponse, ApiResponseError, TypedErrorResponse};
 
 fn main() {
     // Example of how to handle the InsertedSubdocumentAsDocument error

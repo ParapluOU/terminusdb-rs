@@ -1,6 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
 use glob::GlobError;
-use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]

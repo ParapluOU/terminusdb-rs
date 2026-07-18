@@ -93,7 +93,7 @@ impl CommitHistoryEntry {
     pub fn timestamp_datetime(&self) -> anyhow::Result<DateTime<Utc>> {
         DateTime::from_timestamp(
             self.timestamp as i64,
-            ((self.timestamp.fract() * 1_000_000_000.0) as u32),
+            (self.timestamp.fract() * 1_000_000_000.0) as u32,
         )
         .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", self.timestamp))
     }

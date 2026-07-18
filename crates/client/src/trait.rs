@@ -1,4 +1,3 @@
-use serde::de::DeserializeOwned;
 
 use crate::*;
 
@@ -42,10 +41,10 @@ pub trait TerminusDBClient {
     // todo: make specific input type that encapsulates Document and Path and Value
     fn doc_replace_all_json_file(
         &self,
-        docs: std::path::PathBuf,
-        graph_type: GraphType,
-        db: String,
-        insert_if_not_exists: bool,
+        _docs: std::path::PathBuf,
+        _graph_type: GraphType,
+        _db: String,
+        _insert_if_not_exists: bool,
     ) -> TerminusDBResult<Self::DocumentResult> {
         // println!("TDB client doc replace file: {}", docs.display());
         //
@@ -94,10 +93,10 @@ pub trait TerminusDBClient {
     // so we have to use BoxedStream
     fn doc_replace_all_json_files(
         &self,
-        docs: &std::path::Path,
-        graph_type: GraphType,
-        db: String,
-        insert_if_not_exists: bool,
+        _docs: &std::path::Path,
+        _graph_type: GraphType,
+        _db: String,
+        _insert_if_not_exists: bool,
     ) -> TerminusDBResult<()> {
         // for e in glob(format!("{}/*.json", docs.display()).as_str())
         //     .expect("Failed to read glob pattern")

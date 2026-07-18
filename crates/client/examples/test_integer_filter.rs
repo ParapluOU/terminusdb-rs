@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::TerminusDBModel;

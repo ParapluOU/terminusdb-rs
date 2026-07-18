@@ -11,7 +11,6 @@ use {
     serde::{de::DeserializeOwned, Deserialize},
     serde_json::{json, Value},
     std::{
-        collections::HashMap,
         fmt::Debug,
         time::{Duration, Instant},
     },
@@ -94,7 +93,7 @@ impl super::client::TerminusDBHttpClient {
         // Serialize the query to JSON-LD here. Graph defaults are applied at the
         // HTTP funnel (query_raw / query_raw_mut / query_raw_with_headers).
         let json_query = query.to_instance(None).to_json();
-        let woql_context = crate::Context::woql().to_json();
+        let _woql_context = crate::Context::woql().to_json();
 
         // Create operation entry with the query
         let mut operation = OperationEntry::new(
@@ -318,7 +317,7 @@ impl super::client::TerminusDBHttpClient {
         mut query: serde_json::Value,
         timeout: Option<Duration>,
     ) -> anyhow::Result<WOQLResult<T>> {
-        let start_time = Instant::now();
+        let _start_time = Instant::now();
 
         // Fill in default `graph` values: a triple serialized with `graph: null`
         // is an invalid WOQL AST. Applied here so every send path is covered,
@@ -729,7 +728,7 @@ impl super::client::TerminusDBHttpClient {
         timeout: Option<Duration>,
     ) -> anyhow::Result<ResponseWithHeaders<WOQLResult<T>>> {
         // Try to parse as JSON-LD first, then fall back to DSL
-        let (json_query, parsed_query) =
+        let (json_query, _parsed_query) =
             if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(query_string) {
                 // If it's valid JSON, use it directly as the query payload
                 // Try to parse it back to a Query for storage, but don't fail if it can't be parsed

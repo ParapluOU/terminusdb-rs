@@ -1,9 +1,13 @@
 use crate::TerminusAPIStatus;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::Value;
+// `json!` is only referenced by the `#[test]` fns below, so gate the import to
+// test builds to keep the non-test lib build warning-free.
+#[cfg(test)]
+use serde_json::json;
 use std::error::Error;
 use std::fmt::Debug;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(tag = "@type")]
@@ -362,7 +366,7 @@ fn test_deserialize_err() {
         }
     );
 
-    let res: ErrorResponse = serde_json::from_value(err.clone()).unwrap();
+    let _res: ErrorResponse = serde_json::from_value(err.clone()).unwrap();
 }
 
 #[derive(Debug, Deserialize)]

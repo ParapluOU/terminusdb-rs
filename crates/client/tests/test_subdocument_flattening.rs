@@ -1,7 +1,5 @@
 #![recursion_limit = "256"]
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use terminusdb_schema::{ToTDBInstance, ToTDBInstances, ToTDBSchema};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
@@ -199,7 +197,7 @@ fn test_nested_document_in_subdocument_is_flattened() {
 
     // Get the instance tree and flatten it
     let instance = employee.to_instance(None);
-    let mut instances = instance.to_instance_tree_flatten(true);
+    let instances = instance.to_instance_tree_flatten(true);
 
     // We should have 2 instances: Employee and Company (ContactInfo is subdocument, so not separate)
     assert_eq!(instances.len(), 2);

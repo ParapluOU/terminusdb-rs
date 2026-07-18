@@ -5,12 +5,11 @@
 
 use super::{changeset::*, client::TerminusDBHttpClient, sse_manager::SseManager};
 use crate::{document::GetOpts, spec::BranchSpec, DefaultTDBDeserializer};
-use anyhow::Context;
 use serde_json::Value;
 use std::{
     collections::HashMap,
     marker::PhantomData,
-    sync::{Arc, RwLock, Weak},
+    sync::{Arc, RwLock},
 };
 use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TdbIRI, TerminusDBModel};
 use tracing::{debug, error, warn};
@@ -171,7 +170,7 @@ where
     T: TerminusDBModel + FromTDBInstance + InstanceFromJson + Send + Sync + 'static,
     F: Fn(T) + Send + Sync + 'static,
 {
-    fn handle(&self, iri: TdbIRI, client: TerminusDBHttpClient, spec: BranchSpec, opts: &GetOpts) {
+    fn handle(&self, iri: TdbIRI, client: TerminusDBHttpClient, spec: BranchSpec, _opts: &GetOpts) {
         let callback = self.callback.clone();
         let id = iri.id().to_string();
         let iri_clone = iri.clone();
@@ -240,7 +239,7 @@ where
         changed_fields: HashMap<String, Value>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
-        opts: &GetOpts,
+        _opts: &GetOpts,
     ) {
         let callback = self.callback.clone();
         let id = iri.id().to_string();
@@ -283,7 +282,7 @@ where
         iris: Vec<TdbIRI>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
-        opts: &GetOpts,
+        _opts: &GetOpts,
     ) {
         let callback = self.callback.clone();
         let ids: Vec<String> = iris.iter().map(|iri| iri.id().to_string()).collect();
@@ -325,7 +324,7 @@ where
         items: Vec<(TdbIRI, HashMap<String, Value>)>,
         client: TerminusDBHttpClient,
         spec: BranchSpec,
-        opts: &GetOpts,
+        _opts: &GetOpts,
     ) {
         let callback = self.callback.clone();
         let ids: Vec<String> = items.iter().map(|(iri, _)| iri.id().to_string()).collect();
@@ -1109,7 +1108,7 @@ impl ChangeListenerInner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     // Note: Full integration tests require a running TerminusDB instance
     // with the changeset SSE plugin enabled

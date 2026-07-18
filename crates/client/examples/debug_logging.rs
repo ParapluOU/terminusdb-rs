@@ -1,6 +1,5 @@
 //! Example demonstrating the debug logging functionality
 
-use serde::{Deserialize, Serialize};
 use terminusdb_client::*;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::TerminusDBModel;

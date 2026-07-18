@@ -60,7 +60,7 @@ mod tests {
 
         // Use basic DocumentInsertArgs and manually set ID in JSON if needed
         let args = DocumentInsertArgs::from(spec.clone());
-        let (result, commit_id) = client
+        let (_result, commit_id) = client
             .insert_instance_with_commit_id(&person_v1, args)
             .await?;
         commit_ids.push(commit_id);
@@ -476,7 +476,7 @@ mod tests {
                     .await?;
                 let instance_id = result.root_id;
 
-                let short_id = instance_id.split('/').last().unwrap();
+                let _short_id = instance_id.split('/').last().unwrap();
                 println!("Created instance {} in commit {}", instance_id, commit_id);
 
                 // Now try to query this exact instance from this exact commit

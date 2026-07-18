@@ -7,8 +7,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use terminusdb_schema::json::InstanceFromJson;
-use terminusdb_schema::{FromTDBInstance, Instance, ToTDBInstance, ToTDBInstances, ToTDBSchemas};
+use terminusdb_schema::{ToTDBInstance, ToTDBInstances, ToTDBSchemas};
 use terminusdb_schema_derive::TerminusDBModel;
 use thiserror::Error;
 use tracing::{debug, instrument};

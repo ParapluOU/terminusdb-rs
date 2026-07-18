@@ -1,17 +1,19 @@
 use crate::{BranchSpec, TerminusDBHttpClient};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::marker::PhantomData;
 use tap::Pipe;
-use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TerminusDBModel, ToTDBSchema};
+use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TerminusDBModel};
 use terminusdb_woql2::misc::Count;
 use terminusdb_woql2::prelude::{DataValue, Query};
 use terminusdb_woql_builder::builder::WoqlBuilder;
-use terminusdb_woql_builder::prelude::{node, Var};
+use terminusdb_woql_builder::prelude::Var;
 use terminusdb_woql_builder::vars;
 
 /// contract of a self-contained query
+// These trait futures are only ever driven by our own native HTTP client, so the
+// missing `Send` bound that `async fn` in a trait can't express is not a concern.
+#[allow(async_fn_in_trait)]
 pub trait InstanceQueryable {
     /// the main user model it is returning;
     /// this can also be an ad-hoc deserializable type and is not neccessarily a TerminusDB model
@@ -35,7 +37,7 @@ pub trait InstanceQueryable {
     ) -> anyhow::Result<Vec<Self::Model>> {
         let query = self.query(limit, offset);
 
-        let v_id = vars!("Subject");
+        let _v_id = vars!("Subject");
         let v_doc = Self::doc_var();
 
         let res = client
@@ -299,6 +301,8 @@ pub enum QueryType {
 ///     }
 /// }
 /// ```
+// See `InstanceQueryable`: these futures are only driven by our own native client.
+#[allow(async_fn_in_trait)]
 pub trait RawQueryable {
     /// The custom result type that query results will be deserialized into
     type Result: DeserializeOwned;

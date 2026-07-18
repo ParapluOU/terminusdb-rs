@@ -1,10 +1,10 @@
 //! Strongly-typed instance operations
 
 use super::{
-    helpers::{dedup_instances_by_id, dump_schema, format_id},
+    helpers::format_id,
     TerminusDBModel,
 };
-use crate::{CommitId, DefaultTDBDeserializer, InsertInstanceResult};
+use crate::{CommitId, DefaultTDBDeserializer};
 use {
     crate::{
         debug::{OperationEntry, OperationType, QueryLogEntry},
@@ -17,21 +17,18 @@ use {
         IntoBoxedTDBInstances, TDBInsertInstanceResult, TDBInstanceDeserializer,
     },
     ::tracing::{debug, error, instrument, warn},
-    anyhow::{anyhow, bail, Context},
-    futures_util::StreamExt,
-    std::{collections::HashMap, fmt::Debug, time::Instant},
-    tap::{Tap, TapFallible},
+    anyhow::{anyhow, Context},
+    std::{collections::HashMap, time::Instant},
     terminusdb_schema::GraphType,
     terminusdb_schema::{
-        EntityIDFor, FromTDBInstance, Instance, InstanceFromJson, Key, ToJson, ToTDBInstance,
+        EntityIDFor, FromTDBInstance, InstanceFromJson, ToJson, ToTDBInstance,
         ToTDBInstances,
     },
-    terminusdb_woql2::prelude::Query as Woql2Query,
-    terminusdb_woql_builder::prelude::{node, vars, Var, WoqlBuilder},
+    terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::log::{CommitLogIterator, LogEntry, LogOpts};
+use crate::log::LogEntry;
 
 /// Strongly-typed instance operations for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
@@ -167,7 +164,7 @@ impl super::client::TerminusDBHttpClient {
         args: DocumentInsertArgs,
     ) -> anyhow::Result<(crate::InsertInstanceResult, CommitId)> {
         // Insert the instance - save_instance now returns InsertInstanceResult directly
-        let mut result = self.save_instance(model, args.clone()).await?;
+        let result = self.save_instance(model, args.clone()).await?;
 
         // Handle commit ID based on whether instance was inserted or already existed
         let commit_id = match &result.root_result {
@@ -969,7 +966,7 @@ impl super::client::TerminusDBHttpClient {
         // kick out all references because they will lead to schema failure errors on insertion
         instances.retain(|i| !i.is_reference());
 
-        let mut models = instances.iter().collect();
+        let models = instances.iter().collect();
 
         // dedup_instances_by_id(&mut models);
 
@@ -1103,7 +1100,7 @@ impl super::client::TerminusDBHttpClient {
         // number only, no schema class prefix
         id: &str,
         spec: &BranchSpec,
-        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
     ) -> anyhow::Result<Target>
     where
         Target:,
@@ -1174,7 +1171,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         id: &str,
         spec: &BranchSpec,
-        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
     ) -> anyhow::Result<Target>
     where
         Target:,
@@ -1243,7 +1240,7 @@ impl super::client::TerminusDBHttpClient {
         id: &str,
         spec: &BranchSpec,
         opts: GetOpts,
-        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
     ) -> anyhow::Result<Target>
     where
         Target:,
@@ -1316,7 +1313,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         id: &str,
         spec: &BranchSpec,
-        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
     ) -> anyhow::Result<ResponseWithHeaders<Target>>
     where
         Target:,
@@ -1391,7 +1388,7 @@ impl super::client::TerminusDBHttpClient {
         &self,
         id: &str,
         spec: &BranchSpec,
-        mut deserializer: &mut impl TDBInstanceDeserializer<Target>,
+        deserializer: &mut impl TDBInstanceDeserializer<Target>,
     ) -> anyhow::Result<Option<Target>>
     where
         Target:,

@@ -1,7 +1,6 @@
-use crate::log::{LogEntry, LogOpts};
-use crate::spec::BranchSpec;
-use crate::{CommitLogEntry, CommitLogIterator, TDBInstanceDeserializer, TerminusDBHttpClient};
-use futures_util::{Future, Stream, StreamExt, TryStreamExt};
+use crate::log::LogEntry;
+use crate::{CommitLogIterator, TDBInstanceDeserializer};
+use futures_util::{Future, Stream, StreamExt};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use terminusdb_schema::ToTDBInstance;
@@ -57,7 +56,7 @@ where
         }
 
         // Get the next log entry from the iterator
-        let mut log_iter = Pin::new(&mut this.log_iter);
+        let log_iter = Pin::new(&mut this.log_iter);
         match log_iter.poll_next(cx) {
             Poll::Ready(Some(Ok(log_entry))) => {
                 this.active_log_entry = Some(log_entry.clone());

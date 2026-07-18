@@ -4,7 +4,6 @@
 //! 1. Using the `schemas!` macro for flexible syntax
 //! 2. Using tuple types with `insert_schemas()` for type safety
 
-use serde::{Deserialize, Serialize};
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};

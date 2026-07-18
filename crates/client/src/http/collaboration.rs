@@ -1,13 +1,10 @@
 //! Collaboration operations (fetch, push, pull, clone)
 
 use {
-    crate::{
-        debug::{OperationEntry, OperationType},
-        TerminusDBAdapterError,
-    },
+    crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
     anyhow::Context,
-    serde::{Deserialize, Serialize},
+    serde::Serialize,
     serde_json::json,
     std::time::Instant,
 };
@@ -109,7 +106,7 @@ impl super::client::TerminusDBHttpClient {
             request = request.header("AUTHORIZATION_REMOTE", auth_header);
         }
 
-        let mut body = json!({
+        let body = json!({
             "remote": remote,
             "remote_branch": remote_branch.unwrap_or("main")
         });

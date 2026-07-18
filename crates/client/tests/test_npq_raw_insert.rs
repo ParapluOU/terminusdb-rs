@@ -1,8 +1,8 @@
 #![recursion_limit = "256"]
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
+use terminusdb_client::DocumentInsertArgs;
 use terminusdb_woql2::query::{NamedParametricQuery, Query};
 use terminusdb_woql2::*;
 
@@ -64,7 +64,7 @@ async fn test_insert_npq_raw() -> anyhow::Result<()> {
             let args2 = DocumentInsertArgs::from(spec.clone());
 
             match client.insert_instance(&param_npq, args2).await {
-                Ok(result) => {
+                Ok(_result) => {
                     println!("\nSuccessfully inserted parametric NPQ!");
 
                     // Create a call with arguments

@@ -2,9 +2,7 @@
 
 use serde_json::{json, Value};
 use terminusdb_bin::TerminusDBServer;
-use terminusdb_client::{BranchSpec, DocumentInsertArgs, TerminusDBHttpClient};
-use terminusdb_woql2::query::{NamedParametricQuery, Query};
-use terminusdb_woql2::*;
+use terminusdb_client::DocumentInsertArgs;
 
 #[tokio::test]
 async fn test_insert_npq_as_document() -> anyhow::Result<()> {
@@ -90,7 +88,7 @@ async fn test_insert_parametric_npq() -> anyhow::Result<()> {
 
             let args = DocumentInsertArgs::from(spec.clone());
             match client.insert_document(&npq_json, args).await {
-                Ok(result) => {
+                Ok(_result) => {
                     println!("Successfully inserted parametric NPQ!");
 
                     // Try to call with parameters
