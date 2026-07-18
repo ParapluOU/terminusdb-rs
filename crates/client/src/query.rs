@@ -1,14 +1,16 @@
+use crate::woql_helpers::isa_model;
 use crate::{BranchSpec, TerminusDBHttpClient};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use tap::Pipe;
-use terminusdb_schema::{FromTDBInstance, InstanceFromJson, TerminusDBModel};
-use terminusdb_woql2::misc::Count;
-use terminusdb_woql2::prelude::{DataValue, Query};
-use terminusdb_woql_builder::builder::WoqlBuilder;
-use terminusdb_woql_builder::prelude::Var;
-use terminusdb_woql_builder::vars;
+use terminusdb_schema::{
+    FromTDBInstance, GraphType, InstanceFromJson, TerminusDBModel, XSDAnySimpleType,
+};
+use terminusdb_woql2::macros::IntoNodeValue;
+use terminusdb_woql2::misc::{Count, Limit, Start};
+use terminusdb_woql2::prelude::{
+    And, DataValue, NodeValue, Query, ReadDocument, Select, Triple, True, Value,
+};
 
 /// contract of a self-contained query
 // These trait futures are only ever driven by our own native HTTP client, so the
@@ -22,9 +24,9 @@ pub trait InstanceQueryable {
     /// The variable name used to bind the read document
     const READ_DOCUMENT_BINDING: &'static str = "Doc";
 
-    /// Returns a Var for the document binding
-    fn doc_var() -> Var {
-        vars!(Self::READ_DOCUMENT_BINDING)
+    /// Returns the woql2 `Value` variable used to bind the read document.
+    fn doc_var() -> Value {
+        Value::Variable(Self::READ_DOCUMENT_BINDING.to_string())
     }
 
     /// running the query with an adapter
@@ -37,9 +39,6 @@ pub trait InstanceQueryable {
     ) -> anyhow::Result<Vec<Self::Model>> {
         let query = self.query(limit, offset);
 
-        let _v_id = vars!("Subject");
-        let v_doc = Self::doc_var();
-
         let res = client
             .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
             .await?;
@@ -47,7 +46,7 @@ pub trait InstanceQueryable {
         res.bindings
             .into_iter()
             .filter_map(|mut b| {
-                b.remove(&*v_doc)
+                b.remove(Self::READ_DOCUMENT_BINDING)
                     .map(|v| <Self::Model as FromTDBInstance>::from_json(v))
             })
             .collect()
@@ -60,8 +59,6 @@ pub trait InstanceQueryable {
     ) -> anyhow::Result<usize> {
         let query = self.query_count();
 
-        let v_count = vars!("Count");
-
         let res = client
             .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
             .await?;
@@ -70,7 +67,7 @@ pub trait InstanceQueryable {
         res.bindings
             .into_iter()
             .next()
-            .and_then(|mut binding| binding.remove(&*v_count))
+            .and_then(|mut binding| binding.remove("Count"))
             .and_then(|value| {
                 // Try to extract the count from @value field
                 if let Some(obj) = value.as_object() {
@@ -85,62 +82,84 @@ pub trait InstanceQueryable {
     }
 
     /// user-implementation goes here
-    fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder;
+    ///
+    /// Returns the implementation-specific constraints as a WOQL `Query`, given
+    /// the subject variable that binds the matched instance. Return
+    /// `Query::True` when there are no constraints.
+    fn build(&self, subject: &Value) -> Query;
+
+    /// Combine the `rdf:type` constraint for `Self::Model` with the
+    /// implementation-specific `build` constraints into a single flat `And`
+    /// (or just the type triple when there are no extra constraints).
+    fn base_query(&self, subject: &Value) -> Query {
+        let isa = isa_model::<Self::Model>(subject);
+        match self.build(subject) {
+            Query::True(_) => isa,
+            Query::And(And { and }) => {
+                let mut parts = Vec::with_capacity(and.len() + 1);
+                parts.push(isa);
+                parts.extend(and);
+                Query::And(And { and: parts })
+            }
+            other => Query::And(And {
+                and: vec![isa, other],
+            }),
+        }
+    }
 
     fn query_count(&self) -> Query {
-        let v_id = vars!("Subject");
-        let v_count = vars!("Count");
+        let subject = Value::Variable("Subject".to_string());
 
-        let query = WoqlBuilder::new()
-            // the triple was neccessary instead of the IsA
-            .isa2::<Self::Model>(
-                &v_id,
-                // "rdf:type",
-                // node(format!(
-                //     "@schema:{}",
-                //     <Self::Model as ToTDBSchema>::schema_name()
-                // )),
-            )
-            // generate the implementation-specific query
-            .pipe(|q| self.build(v_id.clone(), q))
-            .count(v_count)
-            .finalize();
-
-        query
+        Query::Count(Count {
+            query: Box::new(self.base_query(&subject)),
+            count: DataValue::Variable("Count".to_string()),
+        })
     }
 
     /// returning the query as a WOQL Query enum
     fn query(&self, limit: Option<usize>, offset: Option<usize>) -> Query {
-        let v_id = vars!("Subject");
-        let v_doc = Self::doc_var();
+        let subject = Value::Variable("Subject".to_string());
+        let doc = Self::doc_var();
 
-        let query = WoqlBuilder::new()
-            // the triple was neccessary instead of the IsA
-            .isa2::<Self::Model>(
-                &v_id,
-                // "rdf:type",
-                // node(format!(
-                //     "@schema:{}",
-                //     <Self::Model as ToTDBSchema>::schema_name()
-                // )),
-            )
-            // generate the implementation-specific query
-            .pipe(|q| self.build(v_id.clone(), q))
-            // important: this seems to HAVE to come after the triple
-            .read_document(v_id.clone(), v_doc.clone())
-            // .isa(v_id.clone(), node(T::schema_name())) // this didnt work
-            .select(vec![v_doc.clone()])
-            .pipe(|q| match offset {
-                None => q,
-                Some(o) => q.start(o as u64),
-            })
-            .pipe(|q| match limit {
-                None => q,
-                Some(l) => q.limit(l as u64),
-            })
-            .finalize();
+        // type triple + implementation constraints
+        let base = self.base_query(&subject);
 
-        query
+        // important: read_document has to come after the type triple
+        let read = Query::ReadDocument(ReadDocument {
+            identifier: subject.clone().into_node_value(),
+            document: doc.clone(),
+        });
+        let inner = match base {
+            Query::And(And { mut and }) => {
+                and.push(read);
+                Query::And(And { and })
+            }
+            other => Query::And(And {
+                and: vec![other, read],
+            }),
+        };
+
+        let selected = Query::Select(Select {
+            variables: vec![Self::READ_DOCUMENT_BINDING.to_string()],
+            query: Box::new(inner),
+        });
+
+        // pagination order: Limit { Start { Select { .. } } }
+        let with_offset = match offset {
+            None => selected,
+            Some(o) => Query::Start(Start {
+                start: o as u64,
+                query: Box::new(selected),
+            }),
+        };
+
+        match limit {
+            None => with_offset,
+            Some(l) => Query::Limit(Limit {
+                limit: l as u64,
+                query: Box::new(with_offset),
+            }),
+        }
     }
 }
 
@@ -193,63 +212,56 @@ impl<T> FilteredListModels<T> {
 impl<T: TerminusDBModel + InstanceFromJson> InstanceQueryable for FilteredListModels<T> {
     type Model = T;
 
-    fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder {
-        use terminusdb_woql_builder::prelude::WoqlInput;
-
-        // Add a triple pattern for each filter condition
-        self.filters
+    fn build(&self, subject: &Value) -> Query {
+        // One triple pattern per filter condition. The DataValue -> object
+        // mapping mirrors the previous builder conversion exactly (URI ->
+        // Node, HexBinary -> String, UnsignedInt -> Integer, Float -> Decimal,
+        // everything else -> the same xsd variant).
+        let triples: Vec<Query> = self
+            .filters
             .iter()
-            .fold(builder, |builder, (field, value)| {
-                // Convert DataValue to WoqlInput which implements IntoWoql2
-                let woql_value = match value {
-                    DataValue::Variable(v) => WoqlInput::Variable(Var::new(v)),
-                    DataValue::Data(d) => {
-                        use terminusdb_schema::XSDAnySimpleType;
-                        match d {
-                            XSDAnySimpleType::String(s) => WoqlInput::String(s.clone()),
-                            XSDAnySimpleType::Boolean(b) => WoqlInput::Boolean(*b),
-                            XSDAnySimpleType::Decimal(d) => {
-                                // For integer values stored as decimals, keep them as decimals
-                                // TerminusDB might expect exact type matching
-                                WoqlInput::Decimal(d.to_string())
-                            }
-                            XSDAnySimpleType::UnsignedInt(u) => WoqlInput::Integer(*u as i64),
-                            XSDAnySimpleType::Integer(i) => WoqlInput::Integer(*i),
-                            XSDAnySimpleType::Float(f) => {
-                                // Convert float to decimal string for WOQL
-                                WoqlInput::Decimal(f.to_string())
-                            }
-                            XSDAnySimpleType::DateTime(dt) => {
-                                // Convert datetime to ISO 8601 string
-                                WoqlInput::DateTime(dt.to_rfc3339())
-                            }
-                            XSDAnySimpleType::Date(d) => {
-                                // Convert date to ISO 8601 string
-                                WoqlInput::Date(d.to_string())
-                            }
-                            XSDAnySimpleType::Time(t) => {
-                                // Convert time to ISO 8601 string
-                                WoqlInput::Time(t.to_string())
-                            }
-                            XSDAnySimpleType::URI(uri) => {
-                                // URIs are represented as nodes
-                                WoqlInput::Node(uri.clone())
-                            }
-                            XSDAnySimpleType::HexBinary(hex) => {
-                                // Store hex binary as string
-                                WoqlInput::String(hex.clone())
-                            }
+            .map(|(field, value)| {
+                let object: Value = match value {
+                    DataValue::Variable(v) => Value::Variable(v.clone()),
+                    DataValue::Data(d) => match d {
+                        // URIs are represented as nodes
+                        XSDAnySimpleType::URI(uri) => Value::Node(uri.clone()),
+                        // Store hex binary as string
+                        XSDAnySimpleType::HexBinary(hex) => {
+                            Value::Data(XSDAnySimpleType::String(hex.clone()))
                         }
-                    }
+                        // Unsigned integers are emitted as (signed) integers
+                        XSDAnySimpleType::UnsignedInt(u) => {
+                            Value::Data(XSDAnySimpleType::Integer(*u as i64))
+                        }
+                        // Floats are emitted as decimals via their string form
+                        XSDAnySimpleType::Float(f) => Value::Data(XSDAnySimpleType::Decimal(
+                            f.to_string().parse().expect("Invalid decimal string format"),
+                        )),
+                        // String/Boolean/Integer/Decimal/DateTime/Date/Time pass
+                        // through unchanged.
+                        other => Value::Data(other.clone()),
+                    },
                     DataValue::List(_) => {
                         panic!("List values are not supported in filters")
                     }
                 };
 
                 // Properties need to be prefixed with @schema: for property lookups
-                let qualified_field = format!("@schema:{}", field);
-                builder.triple(subject.clone(), qualified_field.as_str(), woql_value)
+                Query::Triple(Triple {
+                    subject: subject.clone().into_node_value(),
+                    predicate: NodeValue::Node(format!("@schema:{}", field)),
+                    object,
+                    graph: Some(GraphType::Instance),
+                })
             })
+            .collect();
+
+        match triples.len() {
+            0 => Query::True(True {}),
+            1 => triples.into_iter().next().unwrap(),
+            _ => Query::And(And { and: triples }),
+        }
     }
 }
 
@@ -286,11 +298,11 @@ pub enum QueryType {
 ///     type Result = PersonAge;
 ///
 ///     fn query(&self) -> Query {
-///         WoqlBuilder::new()
-///             .triple(vars!("Person"), "name", vars!("Name"))
-///             .triple(vars!("Person"), "age", vars!("Age"))
-///             .select(vec![vars!("Name"), vars!("Age")])
-///             .finalize()
+///         use terminusdb_woql2::prelude::*;
+///         select!([Name, Age], and!(
+///             triple!(var!(Person), "name", var!(Name)),
+///             triple!(var!(Person), "age", var!(Age)),
+///         ))
 ///     }
 ///
 ///     fn extract_result(&self, binding: HashMap<String, serde_json::Value>) -> anyhow::Result<Self::Result> {
@@ -353,10 +365,9 @@ pub trait RawQueryable {
             Query::Count(_) => query,
             _ => {
                 // Wrap the query in a Count operation
-                let v_count = vars!("Count");
                 Query::Count(Count {
                     query: Box::new(query),
-                    count: DataValue::Variable(v_count.name().to_string()),
+                    count: DataValue::Variable("Count".to_string()),
                 })
             }
         }
@@ -369,7 +380,6 @@ pub trait RawQueryable {
         spec: &BranchSpec,
     ) -> anyhow::Result<usize> {
         let query = self.query_count();
-        let v_count = vars!("Count");
 
         let res = client
             .query::<HashMap<String, serde_json::Value>>(spec.clone().into(), query)
@@ -379,7 +389,7 @@ pub trait RawQueryable {
         res.bindings
             .into_iter()
             .next()
-            .and_then(|mut binding| binding.remove(&*v_count))
+            .and_then(|mut binding| binding.remove("Count"))
             .and_then(|value| {
                 // Try to extract the count from @value field
                 if let Some(obj) = value.as_object() {
@@ -394,24 +404,19 @@ pub trait RawQueryable {
     }
 }
 
-/// Builder for constructing raw WOQL queries with custom result types
+/// Wrapper pairing a raw woql2 [`Query`] with a custom result type
 pub struct RawWoqlQuery<T> {
-    builder: WoqlBuilder,
+    query: Query,
     _phantom: PhantomData<T>,
 }
 
 impl<T: DeserializeOwned> RawWoqlQuery<T> {
-    /// Create a new raw query builder
-    pub fn new() -> Self {
+    /// Create a new raw query from a fully-constructed woql2 [`Query`]
+    pub fn new(query: Query) -> Self {
         Self {
-            builder: WoqlBuilder::new(),
+            query,
             _phantom: PhantomData,
         }
-    }
-
-    /// Access the underlying WoqlBuilder for query construction
-    pub fn builder(self) -> WoqlBuilder {
-        self.builder
     }
 }
 
@@ -419,6 +424,6 @@ impl<T: DeserializeOwned> RawQueryable for RawWoqlQuery<T> {
     type Result = T;
 
     fn query(&self) -> Query {
-        self.builder.clone().finalize()
+        self.query.clone()
     }
 }

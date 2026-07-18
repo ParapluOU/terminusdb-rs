@@ -24,7 +24,7 @@ use {
         EntityIDFor, FromTDBInstance, InstanceFromJson, ToJson, ToTDBInstance,
         ToTDBInstances,
     },
-    terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
+    terminusdb_woql2::prelude::{AddedTriple, Limit, NodeValue, Query, Using, Value},
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -838,21 +838,24 @@ impl super::client::TerminusDBHttpClient {
             &commit_collection, &db_collection
         );
 
-        let id_var = vars!("id");
-        let type_var = vars!("type");
-
         // Query for all added triples (any type)
-        let query = WoqlBuilder::new()
-            .added_triple(
-                id_var.clone(),   // subject: variable "id"
-                "rdf:type",       // predicate: "rdf:type"
-                type_var.clone(), // object: any type
-                GraphType::Instance.into(),
-            )
-            .using(commit_collection)
-            .using(db_collection)
-            .limit(1000)
-            .finalize();
+        let added = Query::AddedTriple(AddedTriple {
+            subject: NodeValue::Variable("id".to_string()),
+            predicate: NodeValue::Node("rdf:type".to_string()),
+            object: Value::Variable("type".to_string()),
+            graph: Some(GraphType::Instance),
+        });
+        // Nest the two `using` scopes (commit inside db) then apply the limit.
+        let query = Query::Limit(Limit {
+            limit: 1000,
+            query: Box::new(Query::Using(Using {
+                collection: db_collection,
+                query: Box::new(Query::Using(Using {
+                    collection: commit_collection,
+                    query: Box::new(added),
+                })),
+            })),
+        });
 
         let json_query = query.to_instance(None).to_json();
 

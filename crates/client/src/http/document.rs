@@ -21,10 +21,9 @@ use {
         fmt::Debug,
         time::Instant,
     },
-    terminusdb_schema::ToJson,
-    terminusdb_woql_builder::{
-        prelude::{node, WoqlBuilder},
-        vars,
+    terminusdb_schema::{GraphType, ToJson},
+    terminusdb_woql2::prelude::{
+        And, Count, DataValue, NodeValue, Query, Select, Triple, Value as Woql2Value,
     },
 };
 
@@ -1489,26 +1488,32 @@ impl super::client::TerminusDBHttpClient {
 
         debug!("Checking existence of {} IDs using WOQL", ids.len());
 
-        // Create variables for the query
-        let _id_var = vars!("ID");
-        let _count_var = vars!("Count");
-        let type_var = vars!("Type");
+        // Shared object variable for the rdf:type of each candidate document
+        let type_var = Woql2Value::Variable("Type".to_string());
 
         // Build count queries for each ID
-        let mut count_queries = Vec::new();
-        let mut count_vars = Vec::new();
+        let mut count_queries: Vec<Query> = Vec::new();
+        // (id, count-variable-name) pairs, used to read results back out
+        let mut count_vars: Vec<(String, String)> = Vec::new();
 
         for (i, id) in ids.iter().enumerate() {
-            let count_var = vars!(format!("Count_{}", i));
+            let count_var = format!("Count_{}", i);
             count_vars.push((id.clone(), count_var.clone()));
 
             // Count documents where the document ID (as subject) has any rdf:type
             // This checks if the document exists
-            let sub_query =
-                WoqlBuilder::new().triple(node(id.clone()), "rdf:type", type_var.clone());
+            let sub_query = Query::Triple(Triple {
+                subject: NodeValue::Node(id.clone()),
+                predicate: NodeValue::Node("rdf:type".to_string()),
+                object: type_var.clone(),
+                graph: Some(GraphType::Instance),
+            });
 
             // Create a count query that counts the sub_query results
-            let count_query = sub_query.count(count_var);
+            let count_query = Query::Count(Count {
+                query: Box::new(sub_query),
+                count: DataValue::Variable(count_var),
+            });
             count_queries.push(count_query);
         }
 
@@ -1516,19 +1521,20 @@ impl super::client::TerminusDBHttpClient {
             return Ok(HashSet::new());
         }
 
-        // Combine all counts with and() and select the count variables
-        let select_vars: Vec<_> = count_vars.iter().map(|(_, v)| v.clone()).collect();
+        // Combine all counts with And and select the count variables
+        let select_vars: Vec<String> = count_vars.iter().map(|(_, v)| v.clone()).collect();
 
-        let query = if count_queries.len() == 1 {
+        let combined = if count_queries.len() == 1 {
             count_queries.into_iter().next().unwrap()
         } else {
-            // For multiple queries, chain them with and()
-            let mut iter = count_queries.into_iter();
-            let first = iter.next().unwrap();
-            first.and(iter.collect::<Vec<_>>())
-        }
-        .select(select_vars)
-        .finalize();
+            // For multiple queries, combine them with a flat And
+            Query::And(And { and: count_queries })
+        };
+
+        let query = Query::Select(Select {
+            variables: select_vars,
+            query: Box::new(combined),
+        });
 
         // Execute the query
         debug!("Executing WOQL count query for {} IDs", ids.len());
@@ -1543,7 +1549,7 @@ impl super::client::TerminusDBHttpClient {
         if let Some(binding) = result.bindings.first() {
             // Check each count variable
             for (id, count_var) in count_vars.iter() {
-                if let Some(count_obj) = binding.get(count_var.name()) {
+                if let Some(count_obj) = binding.get(count_var.as_str()) {
                     // Count is returned as {"@type": "xsd:decimal", "@value": Number}
                     if let Some(count_map) = count_obj.as_object() {
                         if let Some(value) = count_map.get("@value") {

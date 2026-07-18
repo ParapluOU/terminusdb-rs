@@ -4,8 +4,10 @@ use {
     crate::{spec::BranchSpec, CommitId, TDBInstanceDeserializer, WOQLResult},
     ::tracing::{debug, instrument, warn},
     std::collections::HashMap,
-    terminusdb_schema::{ToJson, ToTDBInstance},
-    terminusdb_woql_builder::prelude::{node, vars, WoqlBuilder},
+    terminusdb_schema::{GraphType, ToJson, ToTDBInstance},
+    terminusdb_woql2::prelude::{
+        And, NodeValue, Or, Query, ReadDocument, Select, Triple, Using, Value,
+    },
 };
 
 use super::{helpers::format_id, TerminusDBModel};
@@ -79,7 +81,7 @@ impl super::client::TerminusDBHttpClient {
         let full_id = format_id::<T>(instance_id);
 
         // Build individual queries for each commit
-        let mut commit_queries = Vec::new();
+        let mut commit_queries: Vec<Query> = Vec::new();
         let mut commit_map = HashMap::new();
 
         for commit_id in commit_ids {
@@ -87,14 +89,29 @@ impl super::client::TerminusDBHttpClient {
             let collection = format!("{}/{}/local/commit/{}", self.org, spec.db, &commit_id);
 
             // Create a unique variable for this commit's document
-            let doc_var = vars!(format!("Doc_{}", commit_id.as_str().replace('/', "_")));
-            commit_map.insert(doc_var.to_string(), commit_id.clone());
+            let var_name = format!("Doc_{}", commit_id.as_str().replace('/', "_"));
+            commit_map.insert(var_name.clone(), commit_id.clone());
 
-            let query = WoqlBuilder::new()
-                .triple(node(&full_id), "rdf:type", vars!("Type"))
-                .read_document(node(&full_id), doc_var.clone())
-                .select(vec![doc_var])
-                .using(&collection);
+            let query = Query::Using(Using {
+                collection,
+                query: Box::new(Query::Select(Select {
+                    variables: vec![var_name.clone()],
+                    query: Box::new(Query::And(And {
+                        and: vec![
+                            Query::Triple(Triple {
+                                subject: NodeValue::Node(full_id.clone()),
+                                predicate: NodeValue::Node("rdf:type".to_string()),
+                                object: Value::Variable("Type".to_string()),
+                                graph: Some(GraphType::Instance),
+                            }),
+                            Query::ReadDocument(ReadDocument {
+                                identifier: NodeValue::Node(full_id.clone()),
+                                document: Value::Variable(var_name),
+                            }),
+                        ],
+                    })),
+                })),
+            });
 
             commit_queries.push(query);
         }
@@ -103,14 +120,12 @@ impl super::client::TerminusDBHttpClient {
             return Ok(vec![]);
         }
 
-        // Combine all queries with OR
-        let mut commit_queries_iter = commit_queries.into_iter();
-        let mut combined_query = commit_queries_iter.next().unwrap();
-        for query in commit_queries_iter {
-            combined_query = combined_query.or([query]);
-        }
-
-        let final_query = combined_query.finalize();
+        // Combine all commit queries with a single flat OR
+        let final_query = if commit_queries.len() == 1 {
+            commit_queries.into_iter().next().unwrap()
+        } else {
+            Query::Or(Or { or: commit_queries })
+        };
         let json_query = final_query.to_instance(None).to_json();
 
         debug!(
@@ -295,7 +310,7 @@ impl super::client::TerminusDBHttpClient {
         }
 
         // Build individual queries for each document×commit combination
-        let mut all_queries = Vec::new();
+        let mut all_queries: Vec<Query> = Vec::new();
         let mut var_map: HashMap<String, (String, CommitId)> = HashMap::new();
 
         for (instance_id, commit_ids) in queries {
@@ -312,19 +327,34 @@ impl super::client::TerminusDBHttpClient {
                 // Create unique variables for this document×commit combination
                 let safe_instance_id = instance_id.replace('/', "_").replace('-', "_");
                 let safe_commit_id = commit_id.as_str().replace('/', "_").replace('-', "_");
-                let doc_var = vars!(format!("Doc_{}_{}", safe_instance_id, safe_commit_id));
+                let var_name = format!("Doc_{}_{}", safe_instance_id, safe_commit_id);
 
                 // Track which document and commit this variable represents
                 var_map.insert(
-                    doc_var.to_string(),
+                    var_name.clone(),
                     (instance_id.to_string(), commit_id.clone()),
                 );
 
-                let query = WoqlBuilder::new()
-                    .triple(node(&full_id), "rdf:type", vars!("Type"))
-                    .read_document(node(&full_id), doc_var.clone())
-                    .select(vec![doc_var])
-                    .using(&collection);
+                let query = Query::Using(Using {
+                    collection,
+                    query: Box::new(Query::Select(Select {
+                        variables: vec![var_name.clone()],
+                        query: Box::new(Query::And(And {
+                            and: vec![
+                                Query::Triple(Triple {
+                                    subject: NodeValue::Node(full_id.clone()),
+                                    predicate: NodeValue::Node("rdf:type".to_string()),
+                                    object: Value::Variable("Type".to_string()),
+                                    graph: Some(GraphType::Instance),
+                                }),
+                                Query::ReadDocument(ReadDocument {
+                                    identifier: NodeValue::Node(full_id.clone()),
+                                    document: Value::Variable(var_name),
+                                }),
+                            ],
+                        })),
+                    })),
+                });
 
                 all_queries.push(query);
             }
@@ -334,14 +364,12 @@ impl super::client::TerminusDBHttpClient {
             return Ok(HashMap::new());
         }
 
-        // Combine all queries with OR
-        let mut queries_iter = all_queries.into_iter();
-        let mut combined_query = queries_iter.next().unwrap();
-        for query in queries_iter {
-            combined_query = combined_query.or([query]);
-        }
-
-        let final_query = combined_query.finalize();
+        // Combine all queries with a single flat OR
+        let final_query = if all_queries.len() == 1 {
+            all_queries.into_iter().next().unwrap()
+        } else {
+            Query::Or(Or { or: all_queries })
+        };
         let json_query = final_query.to_instance(None).to_json();
 
         debug!(

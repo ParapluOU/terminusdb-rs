@@ -51,6 +51,9 @@ pub mod result;
 mod spec;
 mod r#trait;
 pub mod versioned_id;
+// Native-only woql2 construction helpers shared by `query` and the `http` modules.
+#[cfg(not(target_arch = "wasm32"))]
+mod woql_helpers;
 #[cfg(not(target_arch = "wasm32"))]
 pub use query::*;
 

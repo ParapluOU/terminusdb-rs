@@ -9,8 +9,9 @@ use {
     anyhow::Context,
     serde::Deserialize,
     terminusdb_schema::{GraphType, ToJson, ToTDBInstance},
-    terminusdb_woql2::prelude::Query as Woql2Query,
-    terminusdb_woql_builder::prelude::{node, vars, WoqlBuilder},
+    terminusdb_woql2::prelude::{
+        AddedTriple, Limit, NodeValue, Query as Woql2Query, Using, Value,
+    },
 };
 
 use super::TerminusDBModel;
@@ -206,27 +207,30 @@ impl super::client::TerminusDBHttpClient {
         commit: &LogEntry,
         limit: Option<usize>,
     ) -> Woql2Query {
-        // Build the query using WoqlBuilder
+        // Build the query directly as woql2 AST
         let db_collection = format!("{}/{}", &self.org, &spec.db);
         let commit_collection = format!("commit/{}", &commit.identifier);
         let type_node_str = format!("@schema:{}", T::schema_name());
 
-        let id_var = vars!("id"); // Define the variable 'id'
+        // Innermost: added rdf:type triples for this commit
+        let added = Woql2Query::AddedTriple(AddedTriple {
+            subject: NodeValue::Variable("id".to_string()),
+            predicate: NodeValue::Node("rdf:type".to_string()),
+            object: Value::Node(type_node_str),
+            graph: Some(GraphType::Instance),
+        });
 
-        // Start from the innermost query and wrap outwards
-        let query_builder = WoqlBuilder::new()
-            .added_triple(
-                id_var.clone(),             // subject: variable "id"
-                "rdf:type",                 // predicate: node "rdf:type"
-                node(&type_node_str),       // object: node "@schema:MyType" - Use T::schema_name()
-                GraphType::Instance.into(), // graph: "instance" - This makes it AddedQuad conceptually
-            )
-            .using(commit_collection) // Wrap in commit collection Using
-            .using(db_collection) // Wrap in db collection Using
-            .limit(limit.unwrap_or(1000) as u64); // Apply the limit
-
-        // Finalize the query into the woql2 structure
-        query_builder.finalize()
+        // Wrap outwards: commit Using inside db Using, then apply the limit.
+        Woql2Query::Limit(Limit {
+            limit: limit.unwrap_or(1000) as u64,
+            query: Box::new(Woql2Query::Using(Using {
+                collection: db_collection,
+                query: Box::new(Woql2Query::Using(Using {
+                    collection: commit_collection,
+                    query: Box::new(added),
+                })),
+            })),
+        })
     }
 
     #[cfg(target_arch = "wasm32")]

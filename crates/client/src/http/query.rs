@@ -14,10 +14,18 @@ use {
         fmt::Debug,
         time::{Duration, Instant},
     },
-    terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance, ToTDBSchema},
-    terminusdb_woql2::{dsl::ToDSL, json::normalize_woql_json, prelude::Query as Woql2Query},
-    terminusdb_woql_builder::prelude::{vars, WoqlBuilder},
+    terminusdb_schema::{FromTDBInstance, GraphType, ToJson, ToTDBInstance, ToTDBSchema},
+    terminusdb_woql2::{
+        dsl::ToDSL,
+        json::normalize_woql_json,
+        prelude::{
+            Count, DataValue, NodeValue, Query as Woql2Query, Select, Triple, Using,
+            Value as Woql2Value,
+        },
+    },
 };
+
+use crate::woql_helpers::isa_model;
 
 use crate::result::ResponseWithHeaders;
 
@@ -978,15 +986,16 @@ impl super::client::TerminusDBHttpClient {
         &self,
         spec: &BranchSpec,
     ) -> anyhow::Result<usize> {
-        let count_var = vars!("Count");
-        let instance_var = vars!("Instance");
+        let instance_var = Woql2Value::Variable("Instance".to_string());
 
-        // Build a query to count instances of the specific type using the isa2 shortcut
-        let query = WoqlBuilder::new()
-            .isa2::<T>(&instance_var)
-            .count(count_var.clone())
-            .select(vec![count_var.clone()])
-            .finalize();
+        // Build a query to count instances of the specific type
+        let query = Woql2Query::Select(Select {
+            variables: vec!["Count".to_string()],
+            query: Box::new(Woql2Query::Count(Count {
+                query: Box::new(isa_model::<T>(&instance_var)),
+                count: DataValue::Variable("Count".to_string()),
+            })),
+        });
 
         #[derive(Deserialize, Debug)]
         struct CountResultBinding {
@@ -1026,7 +1035,7 @@ impl super::client::TerminusDBHttpClient {
          */
         if let Some(binding) = result.bindings.first() {
             let CountResultBinding { value } = binding
-                .get(&*count_var)
+                .get("Count")
                 .ok_or_else(|| anyhow::anyhow!("Count variable not found in result"))?;
 
             return Ok(*value as usize);
@@ -1058,20 +1067,26 @@ impl super::client::TerminusDBHttpClient {
     /// # }
     /// ```
     pub async fn commits_count(&self, spec: &BranchSpec) -> anyhow::Result<usize> {
-        let count_var = vars!("Count");
-        let commit_var = vars!("Commit");
-
         // Build path to the _commits collection for this database
         // Format: organization/database/local/_commits
         let commits_collection = format!("{}/{}/local/_commits", self.org, spec.db);
 
         // Build a query to count ValidCommit instances in the _commits collection
-        let query = WoqlBuilder::new()
-            .triple(commit_var, "rdf:type", "@schema:ValidCommit")
-            .count(count_var.clone())
-            .select(vec![count_var.clone()])
-            .using(commits_collection)
-            .finalize();
+        let query = Woql2Query::Using(Using {
+            collection: commits_collection,
+            query: Box::new(Woql2Query::Select(Select {
+                variables: vec!["Count".to_string()],
+                query: Box::new(Woql2Query::Count(Count {
+                    query: Box::new(Woql2Query::Triple(Triple {
+                        subject: NodeValue::Variable("Commit".to_string()),
+                        predicate: NodeValue::Node("rdf:type".to_string()),
+                        object: Woql2Value::Node("@schema:ValidCommit".to_string()),
+                        graph: Some(GraphType::Instance),
+                    })),
+                    count: DataValue::Variable("Count".to_string()),
+                })),
+            })),
+        });
 
         #[derive(Deserialize, Debug)]
         struct CountResultBinding {
@@ -1090,7 +1105,7 @@ impl super::client::TerminusDBHttpClient {
         // Extract count from the result
         if let Some(binding) = result.bindings.first() {
             let CountResultBinding { value } = binding
-                .get(&*count_var)
+                .get("Count")
                 .ok_or_else(|| anyhow::anyhow!("Count variable not found in result"))?;
 
             return Ok(*value as usize);
@@ -1131,12 +1146,11 @@ impl super::client::TerminusDBHttpClient {
     ///     type Result = PersonSummary;
     ///
     ///     fn query(&self) -> Query {
-    ///         WoqlBuilder::new()
-    ///             .triple(vars!("Person"), "name", vars!("Name"))
-    ///             .triple(vars!("Person"), "orders", vars!("Orders"))
-    ///             .count(vars!("TotalOrders"), vars!("Orders"))
-    ///             .select(vec![vars!("Name"), vars!("TotalOrders")])
-    ///             .finalize()
+    ///         use terminusdb_woql2::prelude::*;
+    ///         select!([Name, TotalOrders], count!(and!(
+    ///             triple!(var!(Person), "name", var!(Name)),
+    ///             triple!(var!(Person), "orders", var!(Orders)),
+    ///         ), var!(TotalOrders)))
     ///     }
     /// }
     ///
