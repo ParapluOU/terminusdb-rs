@@ -18,7 +18,7 @@ __disabled_test_unfold_typed_instances = []
 [dependencies]
 serde = { workspace=true }
 serde_json = {workspace = true}
-itertools = "0.10.3"
+itertools = { workspace = true }
 
 decimal-rs = "0.1.38"
 chrono = { version = "0.4", features = ["serde"] }
@@ -33,7 +33,7 @@ futures-util = "0.3.23"
 tracing = { workspace = true }
 anyhow = "1.0"
 tap = "1.0"
-http = "0.2"
+http = { workspace = true }
 
 terminusdb-schema = { path = "../schema" }
 terminusdb-schema-derive = { path = "../schema/derive" }

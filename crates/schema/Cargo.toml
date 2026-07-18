@@ -13,7 +13,7 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-itertools = "0.10.3"
+itertools = { workspace = true }
 tempfile = "3"
 #filepath = "*"
 #subprocess = "0.2.9"
@@ -59,7 +59,7 @@ path = "src/lib.rs"
 terminusdb-schema-derive = { path = "derive" }
 terminusdb-woql2 = { path = "../woql2" }
 terminusdb-relation = { path = "../relation" }
-reqwest = "0.11"
+reqwest = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = "1"
