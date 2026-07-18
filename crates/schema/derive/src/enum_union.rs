@@ -414,6 +414,13 @@ fn generate_virtual_structs(
                     quote! {
                         #[tdb(subdocument = true, unfoldable = true, key = "value_hash")]
                     }
+                } else if parent_opts.unfoldable.unwrap_or(false) {
+                    // A non-subdocument but unfoldable parent union must let its
+                    // variant structs unfold too, otherwise `unfold=true` expands
+                    // the union but leaves the variant payload as a bare reference.
+                    quote! {
+                        #[tdb(unfoldable = true, key = "value_hash")]
+                    }
                 } else {
                     quote! {
                         #[tdb(key = "value_hash")]
@@ -440,7 +447,7 @@ fn generate_virtual_structs(
                         base: None,
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
-                        unfoldable: parent_opts.subdocument,
+                        unfoldable: parent_opts.unfoldable.or(parent_opts.subdocument),
                         subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
@@ -505,7 +512,7 @@ fn generate_virtual_structs(
                         base: None,
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
-                        unfoldable: parent_opts.subdocument,
+                        unfoldable: parent_opts.unfoldable.or(parent_opts.subdocument),
                         subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
@@ -547,6 +554,13 @@ fn generate_virtual_structs(
                     quote! {
                         #[tdb(subdocument = true, unfoldable = true, key = "value_hash")]
                     }
+                } else if parent_opts.unfoldable.unwrap_or(false) {
+                    // A non-subdocument but unfoldable parent union must let its
+                    // variant structs unfold too, otherwise `unfold=true` expands
+                    // the union but leaves the variant payload as a bare reference.
+                    quote! {
+                        #[tdb(unfoldable = true, key = "value_hash")]
+                    }
                 } else {
                     quote! {
                         #[tdb(key = "value_hash")]
@@ -570,7 +584,7 @@ fn generate_virtual_structs(
                     base: parent_opts.base.clone(),
                     key: Some("value_hash".to_string()), // Use ValueHash as default for virtual structs
                     abstract_class: None,
-                    unfoldable: parent_opts.subdocument,
+                    unfoldable: parent_opts.unfoldable.or(parent_opts.subdocument),
                     subdocument: parent_opts.subdocument,
                     inherits: None,
                     doc: Some(format!(
