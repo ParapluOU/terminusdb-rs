@@ -8,7 +8,8 @@ mod tests {
     use terminusdb_client::{CommitId, *};
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-    use terminusdb_woql_builder::prelude::*;
+    use terminusdb_woql2::prelude::*;
+    use terminusdb_woql2::using;
 
     /// Test model for experimenting with instance versions
     #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
@@ -141,12 +142,14 @@ mod tests {
                 let commit_collection = format!("commit/{}", first_commit);
 
                 // Build a simple query to get Person instances from the first commit
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
-                    .triple(vars!("Subject"), "name", vars!("Name"))
-                    .triple(vars!("Subject"), "age", vars!("Age"))
-                    .using(&commit_collection)
-                    .finalize();
+                let query = using!(
+                    &commit_collection,
+                    and!(
+                        triple!(var!(Subject), "rdf:type", "@schema:Person"),
+                        triple!(var!(Subject), "name", var!(Name)),
+                        triple!(var!(Subject), "age", var!(Age))
+                    )
+                );
 
                 // Execute the query
                 let json_query = query.to_instance(None).to_json();
@@ -195,25 +198,25 @@ mod tests {
                 for (_i, commit_id) in commit_ids.iter().enumerate() {
                     let commit_collection = format!("commit/{}", commit_id);
 
-                    let commit_query = WoqlBuilder::new()
-                        .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
-                        .triple(vars!("Subject"), "name", vars!("Name"))
-                        .triple(vars!("Subject"), "age", vars!("Age"))
-                        .using(&commit_collection);
+                    let commit_query = using!(
+                        &commit_collection,
+                        and!(
+                            triple!(var!(Subject), "rdf:type", "@schema:Person"),
+                            triple!(var!(Subject), "name", var!(Name)),
+                            triple!(var!(Subject), "age", var!(Age))
+                        )
+                    );
 
                     commit_queries.push(commit_query);
                 }
 
                 // Create OR query by starting with the first query and adding the rest
                 let main_query = if commit_queries.is_empty() {
-                    WoqlBuilder::new().finalize()
+                    Query::True(True {})
+                } else if commit_queries.len() == 1 {
+                    commit_queries.into_iter().next().unwrap()
                 } else {
-                    let mut commit_queries_iter = commit_queries.into_iter();
-                    let mut main_builder = commit_queries_iter.next().unwrap();
-                    for commit_query in commit_queries_iter {
-                        main_builder = main_builder.or([commit_query]);
-                    }
-                    main_builder.finalize()
+                    Query::Or(Or { or: commit_queries })
                 };
 
                 // Execute the query
@@ -486,10 +489,10 @@ mod tests {
 
                 // Test 1: Simple type query
                 println!("Test 1: Simple type query");
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
-                    .using(&commit_collection)
-                    .finalize();
+                let query = using!(
+                    &commit_collection,
+                    triple!(var!(Subject), "rdf:type", "@schema:Person")
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 println!(
@@ -507,11 +510,10 @@ mod tests {
 
                 // Test 2: Type query + select subject
                 println!("\nTest 2: Type query + select subject");
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
-                    .select(vec![vars!("Subject")])
-                    .using(&commit_collection)
-                    .finalize();
+                let query = using!(
+                    &commit_collection,
+                    select!([Subject], triple!(var!(Subject), "rdf:type", "@schema:Person"))
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 let result: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -524,12 +526,16 @@ mod tests {
 
                 // Test 3: Add read_document
                 println!("\nTest 3: Type query + read_document");
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
-                    .read_document(vars!("Subject"), vars!("Doc"))
-                    .select(vec![vars!("Subject"), vars!("Doc")])
-                    .using(&commit_collection)
-                    .finalize();
+                let query = using!(
+                    &commit_collection,
+                    select!(
+                        [Subject, Doc],
+                        and!(
+                            triple!(var!(Subject), "rdf:type", "@schema:Person"),
+                            read_doc!(var!(Subject), var!(Doc))
+                        )
+                    )
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 let result: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -542,11 +548,13 @@ mod tests {
 
                 // Test 4: Without using commit collection (should find the instance)
                 println!("\nTest 4: Same query without commit collection");
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:Person"))
-                    .read_document(vars!("Subject"), vars!("Doc"))
-                    .select(vec![vars!("Subject"), vars!("Doc")])
-                    .finalize();
+                let query = select!(
+                    [Subject, Doc],
+                    and!(
+                        triple!(var!(Subject), "rdf:type", "@schema:Person"),
+                        read_doc!(var!(Subject), var!(Doc))
+                    )
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 let result: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -658,12 +666,16 @@ mod tests {
                     let commit_collection = format!("admin/{}/local/commit/{}", spec.db, commit_id);
                     println!("  Using collection: {}", commit_collection);
 
-                    let simple_query = WoqlBuilder::new()
-                        .triple(vars!("Subject"), vars!("Predicate"), vars!("Object"))
-                        .select(vec![vars!("Subject"), vars!("Predicate"), vars!("Object")])
-                        .using(&commit_collection)
-                        .limit(5)
-                        .finalize();
+                    let simple_query = limit!(
+                        5,
+                        using!(
+                            &commit_collection,
+                            select!(
+                                [Subject, Predicate, Object],
+                                triple!(var!(Subject), var!(Predicate), var!(Object))
+                            )
+                        )
+                    );
 
                     let json_query_simple = simple_query.to_instance(None).to_json();
                     let simple_result: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -743,10 +755,10 @@ mod tests {
 
                 // Test 1: Query current branch without using commit collection
                 println!("\n=== Test 1: Basic query without commit collection ===");
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
-                    .select(vec![vars!("Subject")])
-                    .finalize();
+                let query = select!(
+                    [Subject],
+                    triple!(var!(Subject), "rdf:type", "@schema:PersonWithId")
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 let result: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -765,11 +777,13 @@ mod tests {
                 let commit_collection = format!("commit/{}", commit_id);
                 println!("Commit collection: {}", commit_collection);
 
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
-                    .select(vec![vars!("Subject")])
-                    .using(&commit_collection)
-                    .finalize();
+                let query = using!(
+                    &commit_collection,
+                    select!(
+                        [Subject],
+                        triple!(var!(Subject), "rdf:type", "@schema:PersonWithId")
+                    )
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 println!("Query JSON: {}", serde_json::to_string_pretty(&json_query)?);
@@ -788,10 +802,10 @@ mod tests {
                 // Test 3: Query available collections/graphs
                 println!("\n=== Test 3: Query available collections/graphs ===");
 
-                let query = WoqlBuilder::new()
-                    .triple(vars!("Graph"), "rdf:type", vars!("Type"))
-                    .select(vec![vars!("Graph"), vars!("Type")])
-                    .finalize();
+                let query = select!(
+                    [Graph, Type],
+                    triple!(var!(Graph), "rdf:type", var!(Type))
+                );
 
                 let json_query = query.to_instance(None).to_json();
                 let result: WOQLResult<HashMap<String, serde_json::Value>> = client

@@ -8,8 +8,15 @@ use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use terminusdb_woql_builder::prelude::*;
-use terminusdb_woql_builder::value::datetime_literal;
+use terminusdb_woql2::prelude::*;
+
+fn datetime_lit(s: &str) -> terminusdb_woql2::value::Value {
+    terminusdb_woql2::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("Invalid datetime format, expected RFC3339")
+            .with_timezone(&chrono::Utc),
+    ))
+}
 
 #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
@@ -51,15 +58,17 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
 
             // Query to see what was actually stored
             println!("\nQuerying all Event data...");
-            let (id, name, date, time) = vars!("ID", "Name", "Date", "Time");
+            let (id, name, date, time) = (var!(ID), var!(Name), var!(Date), var!(Time));
 
-            let query = WoqlBuilder::new()
-                .triple(id.clone(), "rdf:type", "@schema:Event")
-                .triple(id.clone(), "name", name.clone())
-                .triple(id.clone(), "event_date", date.clone())
-                .triple(id.clone(), "event_time", time.clone())
-                .select(vec![id.clone(), name.clone(), date.clone(), time.clone()])
-                .finalize();
+            let query = select!(
+                [id.clone(), name.clone(), date.clone(), time.clone()],
+                and!(
+                    triple!(id.clone(), "rdf:type", "@schema:Event"),
+                    triple!(id.clone(), "name", name.clone()),
+                    triple!(id.clone(), "event_date", date.clone()),
+                    triple!(id.clone(), "event_time", time.clone())
+                )
+            );
 
             let json_query = query.to_json();
             let results: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -88,12 +97,14 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
 
             // Test 1: Compare with datetime literal (ISO 8601 format)
             println!("\n1. DateTime literal (ISO 8601 Z suffix):");
-            let (id1, time1) = vars!("ID1", "Time1");
-            let query1 = WoqlBuilder::new()
-                .triple(id1.clone(), "event_time", time1.clone())
-                .less(time1.clone(), datetime_literal("2025-06-01T00:00:00Z"))
-                .select(vec![id1.clone()])
-                .finalize();
+            let (id1, time1) = (var!(ID1), var!(Time1));
+            let query1 = select!(
+                [id1.clone()],
+                and!(
+                    triple!(id1.clone(), "event_time", time1.clone()),
+                    less!(time1.clone(), datetime_lit("2025-06-01T00:00:00Z"))
+                )
+            );
 
             let results1: WOQLResult<HashMap<String, serde_json::Value>> = client
                 .query_raw(Some(spec.clone()), query1.to_json(), None)
@@ -105,12 +116,14 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
 
             // Test 2: Compare with full RFC3339 (offset format)
             println!("\n2. DateTime literal (RFC3339 offset format):");
-            let (id2, time2) = vars!("ID2", "Time2");
-            let query2 = WoqlBuilder::new()
-                .triple(id2.clone(), "event_time", time2.clone())
-                .less(time2.clone(), datetime_literal("2025-06-01T00:00:00+00:00"))
-                .select(vec![id2.clone()])
-                .finalize();
+            let (id2, time2) = (var!(ID2), var!(Time2));
+            let query2 = select!(
+                [id2.clone()],
+                and!(
+                    triple!(id2.clone(), "event_time", time2.clone()),
+                    less!(time2.clone(), datetime_lit("2025-06-01T00:00:00+00:00"))
+                )
+            );
 
             let results2: WOQLResult<HashMap<String, serde_json::Value>> = client
                 .query_raw(Some(spec.clone()), query2.to_json(), None)
@@ -122,12 +135,14 @@ async fn test_debug_datetime_storage() -> anyhow::Result<()> {
 
             // Test 3: Compare with datetime literal (another format)
             println!("\n3. DateTime literal (different timestamp):");
-            let (id3, time3) = vars!("ID3", "Time3");
-            let query3 = WoqlBuilder::new()
-                .triple(id3.clone(), "event_time", time3.clone())
-                .less(time3.clone(), datetime_literal("2025-06-01T00:00:00Z"))
-                .select(vec![id3.clone()])
-                .finalize();
+            let (id3, time3) = (var!(ID3), var!(Time3));
+            let query3 = select!(
+                [id3.clone()],
+                and!(
+                    triple!(id3.clone(), "event_time", time3.clone()),
+                    less!(time3.clone(), datetime_lit("2025-06-01T00:00:00Z"))
+                )
+            );
 
             let json3 = query3.to_json();
             println!(

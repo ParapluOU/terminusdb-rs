@@ -4,8 +4,7 @@
 use terminusdb_client::{FilteredListModels, InstanceQueryable};
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::TerminusDBModel;
-use terminusdb_woql_builder::builder::WoqlBuilder;
-use terminusdb_woql_builder::prelude::Var;
+use terminusdb_woql2::prelude::*;
 
 #[derive(Clone, Debug, TerminusDBModel)]
 struct ExampleModel {
@@ -21,9 +20,9 @@ impl InstanceQueryable for CustomDocumentQuery {
     // Override the default "Doc" binding to use a custom name
     const READ_DOCUMENT_BINDING: &'static str = "MyCustomDocVar";
 
-    fn build(&self, _subject: Var, builder: WoqlBuilder) -> WoqlBuilder {
+    fn build(&self, _subject: &Value) -> Query {
         // Add custom filtering logic here if needed
-        builder
+        Query::True(True {})
     }
 }
 
@@ -43,6 +42,10 @@ fn main() {
     let default_var = <FilteredListModels<ExampleModel> as InstanceQueryable>::doc_var();
     let custom_var = <CustomDocumentQuery as InstanceQueryable>::doc_var();
 
-    println!("Default var name: {}", default_var.name());
-    println!("Custom var name: {}", custom_var.name());
+    if let Value::Variable(name) = default_var {
+        println!("Default var name: {}", name);
+    }
+    if let Value::Variable(name) = custom_var {
+        println!("Custom var name: {}", name);
+    }
 }

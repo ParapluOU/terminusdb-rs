@@ -4,8 +4,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
 use terminusdb_client::RawQueryable;
-use terminusdb_woql2::prelude::Query;
-use terminusdb_woql_builder::{builder::WoqlBuilder, vars};
+use terminusdb_woql2::prelude::*;
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -20,12 +19,14 @@ impl RawQueryable for PersonQuery {
     type Result = PersonResult;
 
     fn query(&self) -> Query {
-        WoqlBuilder::new()
-            .triple(vars!("Person"), "rdf:type", "@schema:Person")
-            .triple(vars!("Person"), "@schema:name", vars!("Name"))
-            .triple(vars!("Person"), "@schema:age", vars!("Age"))
-            .select(vec![vars!("Name"), vars!("Age")])
-            .finalize()
+        select!(
+            [Name, Age],
+            and!(
+                triple!(var!(Person), "rdf:type", "@schema:Person"),
+                triple!(var!(Person), "@schema:name", var!(Name)),
+                triple!(var!(Person), "@schema:age", var!(Age)),
+            )
+        )
     }
 
     fn extract_result(
@@ -57,9 +58,7 @@ impl RawQueryable for PersonCountQuery {
     fn query(&self) -> Query {
         use terminusdb_woql2::misc::Count;
 
-        let inner_query = WoqlBuilder::new()
-            .triple(vars!("Person"), "rdf:type", "@schema:Person")
-            .finalize();
+        let inner_query = triple!(var!(Person), "rdf:type", "@schema:Person");
 
         // Return a Count query directly
         Query::Count(Count {
@@ -81,12 +80,14 @@ impl RawQueryable for PaginatedPersonQuery {
     fn query(&self) -> Query {
         use terminusdb_woql2::misc::{Limit, Start};
 
-        let base_query = WoqlBuilder::new()
-            .triple(vars!("Person"), "rdf:type", "@schema:Person")
-            .triple(vars!("Person"), "@schema:name", vars!("Name"))
-            .triple(vars!("Person"), "@schema:age", vars!("Age"))
-            .select(vec![vars!("Name"), vars!("Age")])
-            .finalize();
+        let base_query = select!(
+            [Name, Age],
+            and!(
+                triple!(var!(Person), "rdf:type", "@schema:Person"),
+                triple!(var!(Person), "@schema:name", var!(Name)),
+                triple!(var!(Person), "@schema:age", var!(Age)),
+            )
+        );
 
         // Wrap in Start and Limit for pagination
         let with_start = Query::Start(Start {

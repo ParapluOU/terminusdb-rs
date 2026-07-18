@@ -6,8 +6,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use terminusdb_client::*;
-use terminusdb_woql2::prelude::Query;
-use terminusdb_woql_builder::prelude::{vars, WoqlBuilder};
+use terminusdb_woql2::prelude::*;
 
 /// Custom result type for a join query
 #[derive(Debug, Deserialize)]
@@ -25,23 +24,19 @@ impl RawQueryable for PersonAddressQuery {
     type Result = PersonWithAddress;
 
     fn query(&self) -> Query {
-        WoqlBuilder::new()
-            // Find all persons
-            .triple(vars!("Person"), "rdf:type", "@schema:Person")
-            .triple(vars!("Person"), "@schema:name", vars!("Name"))
-            .triple(vars!("Person"), "@schema:age", vars!("Age"))
-            // Find their addresses
-            .triple(vars!("Person"), "@schema:address", vars!("Address"))
-            .triple(vars!("Address"), "@schema:street", vars!("Street"))
-            .triple(vars!("Address"), "@schema:city", vars!("City"))
-            // Select the fields we want
-            .select(vec![
-                vars!("Name"),
-                vars!("Age"),
-                vars!("Street"),
-                vars!("City"),
-            ])
-            .finalize()
+        select!(
+            [Name, Age, Street, City],
+            and!(
+                // Find all persons
+                triple!(var!(Person), "rdf:type", "@schema:Person"),
+                triple!(var!(Person), "@schema:name", var!(Name)),
+                triple!(var!(Person), "@schema:age", var!(Age)),
+                // Find their addresses
+                triple!(var!(Person), "@schema:address", var!(Address)),
+                triple!(var!(Address), "@schema:street", var!(Street)),
+                triple!(var!(Address), "@schema:city", var!(City)),
+            )
+        )
     }
 
     fn extract_result(
@@ -113,15 +108,16 @@ async fn main() -> anyhow::Result<()> {
         count: i32,
     }
 
-    let _count_query = RawWoqlQuery::<CountResult>::new()
-        .builder()
-        .triple(vars!("Person"), "rdf:type", "@schema:Person")
-        .count(vars!("Count"))
-        .select(vec![vars!("Count")])
-        .finalize();
+    let _count_query = RawWoqlQuery::<CountResult>::new(select!(
+        [Count],
+        count_into!(
+            triple!(var!(Person), "rdf:type", "@schema:Person"),
+            var!(Count)
+        )
+    ));
 
-    // This would need a custom implementation since RawWoqlQuery doesn't have query() returning the finalized query
-    // For now, this is just an example of the intended API
+    // `_count_query` implements `RawQueryable`, so it could be executed with
+    // `.count(&client, &spec)` / `.apply(&client, &spec)` against a live server.
 
     Ok(())
 }

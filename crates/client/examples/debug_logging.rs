@@ -50,12 +50,14 @@ async fn main() -> anyhow::Result<()> {
     println!("Inserted person with ID: {:?}", result);
 
     // Execute a query
-    use terminusdb_woql_builder::prelude::*;
-    let query = WoqlBuilder::new()
-        .select(vec![vars!("Name"), vars!("Age")])
-        .triple("v:Person", "name", "v:Name")
-        .triple("v:Person", "age", "v:Age")
-        .finalize();
+    use terminusdb_woql2::prelude::*;
+    let query = select!(
+        [Name, Age],
+        and!(
+            triple!(var!(Person), "name", var!(Name)),
+            triple!(var!(Person), "age", var!(Age)),
+        )
+    );
 
     let results: WOQLResult<serde_json::Value> = client.query(Some(spec), query).await?;
     println!("Query returned {} results", results.bindings.len());

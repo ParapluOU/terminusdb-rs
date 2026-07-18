@@ -9,7 +9,7 @@ use terminusdb_client::deserialize::DefaultTDBDeserializer;
 use terminusdb_client::*;
 use terminusdb_schema::{ToJson, ToTDBInstance};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use terminusdb_woql_builder::prelude::*;
+use terminusdb_woql2::prelude::*;
 
 // --- Helper Structs/Enums for Tests ---
 
@@ -141,12 +141,12 @@ async fn test_basic_woql_query_raw() -> anyhow::Result<()> {
 
             // Build WOQL query using builder, then serialize to JSON for raw query test
             // This ensures the JSON format is correct
-            let v_id = vars!("id");
-            let v_name = vars!("name");
-            let builder_query = WoqlBuilder::new()
-                .triple(v_id.clone(), "name", v_name.clone())
-                .isa(v_id.clone(), node("TestDoc"))
-                .finalize();
+            let v_id = var!("id");
+            let v_name = var!("name");
+            let builder_query = and!(
+                triple!(v_id.clone(), "name", v_name.clone()),
+                isa!(v_id.clone(), node!("TestDoc"))
+            );
 
             // Convert to JSON-LD and use query_raw to test raw query interface
             // Must use to_instance(None).to_json() to get proper JSON-LD format with @type tags
@@ -174,7 +174,7 @@ async fn test_basic_woql_query_builder() -> anyhow::Result<()> {
     let server = TerminusDBServer::test_instance().await?;
 
     server
-        .with_tmp_db("test_woql_builder", |client, spec| async move {
+        .with_tmp_db("test_basic_woql_query", |client, spec| async move {
             let args = DocumentInsertArgs::from(spec.clone());
             client.insert_entity_schema::<TestDoc>(args.clone()).await?;
 
@@ -183,12 +183,12 @@ async fn test_basic_woql_query_builder() -> anyhow::Result<()> {
             client.insert_instance(&doc, args).await?;
 
             // Build WOQL query
-            let v_id = vars!("id");
-            let v_name = vars!("name");
-            let query = WoqlBuilder::new()
-                .triple(v_id.clone(), "name", v_name.clone())
-                .isa(v_id.clone(), node("TestDoc"))
-                .finalize();
+            let v_id = var!("id");
+            let v_name = var!("name");
+            let query = and!(
+                triple!(v_id.clone(), "name", v_name.clone()),
+                isa!(v_id.clone(), node!("TestDoc"))
+            );
 
             // Execute builder query
             let response = client
@@ -220,13 +220,15 @@ async fn test_woql_read_doc() -> anyhow::Result<()> {
             client.insert_instance(&doc, args).await?;
 
             // Build WOQL query
-            let v_id = vars!("id");
-            let v_doc = vars!("doc");
-            let query = WoqlBuilder::new()
-                .read_document(v_id.clone(), v_doc.clone())
-                .isa(v_id.clone(), node("TestDoc"))
-                .select(vec![v_doc.clone()])
-                .finalize();
+            let v_id = var!("id");
+            let v_doc = var!("doc");
+            let query = select!(
+                [v_doc.clone()],
+                and!(
+                    read_doc!(v_id.clone(), v_doc.clone()),
+                    isa!(v_id.clone(), node!("TestDoc"))
+                )
+            );
 
             dbg!(&query);
 

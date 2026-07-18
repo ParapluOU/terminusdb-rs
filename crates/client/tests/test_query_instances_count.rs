@@ -7,7 +7,7 @@ mod tests {
     use terminusdb_client::*;
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-    use terminusdb_woql_builder::prelude::*;
+    use terminusdb_woql2::prelude::*;
 
     /// Test model for query count testing
     #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
@@ -27,11 +27,11 @@ mod tests {
     impl InstanceQueryable for FilterByCategoryQuery {
         type Model = CountTestModel;
 
-        fn build(&self, subject: Var, builder: WoqlBuilder) -> WoqlBuilder {
-            builder.triple(
+        fn build(&self, subject: &Value) -> Query {
+            triple!(
                 subject.clone(),
                 "@schema:category",
-                string_literal(&self.category),
+                data!(self.category.clone())
             )
         }
     }

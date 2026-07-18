@@ -6711,7 +6711,6 @@ dependencies = [
  "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
- "terminusdb-woql-builder",
  "terminusdb-woql-js",
  "terminusdb-woql2",
  "thiserror 1.0.69",

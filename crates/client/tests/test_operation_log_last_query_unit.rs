@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use terminusdb_client::debug::{OperationEntry, OperationLog, OperationType};
-    
-    use terminusdb_woql_builder::prelude::*;
+
+    use terminusdb_woql2::prelude::*;
 
     #[test]
     fn test_operation_log_get_last_query() {
@@ -22,10 +22,7 @@ mod tests {
         assert!(log.get_last_query().is_none());
 
         // Add a query operation
-        let query1 = WoqlBuilder::new()
-            .select(vec![vars!("X")])
-            .triple("v:X", "rdf:type", "owl:Class")
-            .finalize();
+        let query1 = select!([X], triple!(var!(X), "rdf:type", "owl:Class"));
 
         let query_op1 = OperationEntry::new(OperationType::Query, "/api/woql/test".to_string())
             .with_query(query1.clone());
@@ -47,10 +44,7 @@ mod tests {
         assert!(last_query2.is_some());
 
         // Add a second query
-        let query2 = WoqlBuilder::new()
-            .select(vec![vars!("Y")])
-            .triple("v:Y", "name", "v:Name")
-            .finalize();
+        let query2 = select!([Y], triple!(var!(Y), "name", var!(Name)));
 
         let query_op2 = OperationEntry::new(OperationType::Query, "/api/woql/test".to_string())
             .with_query(query2.clone());

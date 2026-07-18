@@ -8,8 +8,22 @@ use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::*;
 use terminusdb_schema::*;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-use terminusdb_woql_builder::prelude::*;
-use terminusdb_woql_builder::value::{date_literal, datetime_literal};
+use terminusdb_woql2::prelude::*;
+
+fn date_lit(s: &str) -> terminusdb_woql2::value::Value {
+    terminusdb_woql2::value::Value::Data(terminusdb_schema::XSDAnySimpleType::Date(
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .expect("Invalid date format, expected YYYY-MM-DD"),
+    ))
+}
+
+fn datetime_lit(s: &str) -> terminusdb_woql2::value::Value {
+    terminusdb_woql2::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("Invalid datetime format, expected RFC3339")
+            .with_timezone(&chrono::Utc),
+    ))
+}
 
 #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
 #[tdb(id_field = "id")]
@@ -65,14 +79,16 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
             }
 
             // Test 1: Query events with date greater than 2024-01-01
-            let (event_id, event_date_var) = vars!("EventID", "EventDate");
-            let date_cutoff = date_literal("2024-01-01");
+            let (event_id, event_date_var) = (var!(EventID), var!(EventDate));
+            let date_cutoff = date_lit("2024-01-01");
 
-            let query1 = WoqlBuilder::new()
-                .triple(event_id.clone(), "event_date", event_date_var.clone())
-                .greater(event_date_var.clone(), date_cutoff)
-                .select(vec![event_id.clone()])
-                .finalize();
+            let query1 = select!(
+                [event_id.clone()],
+                and!(
+                    triple!(event_id.clone(), "event_date", event_date_var.clone()),
+                    greater!(event_date_var.clone(), date_cutoff)
+                )
+            );
 
             let json_query1 = query1.to_instance(None).to_json();
             let results1: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -94,14 +110,16 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
             assert!(result_ids.iter().any(|id| id.contains("event3")));
 
             // Test 2: Query events with datetime less than 2025-06-01T00:00:00Z
-            let (event_id2, event_time_var) = vars!("EventID2", "EventTime");
-            let datetime_cutoff = datetime_literal("2025-06-01T00:00:00Z");
+            let (event_id2, event_time_var) = (var!(EventID2), var!(EventTime));
+            let datetime_cutoff = datetime_lit("2025-06-01T00:00:00Z");
 
-            let query2 = WoqlBuilder::new()
-                .triple(event_id2.clone(), "event_time", event_time_var.clone())
-                .less(event_time_var.clone(), datetime_cutoff)
-                .select(vec![event_id2.clone()])
-                .finalize();
+            let query2 = select!(
+                [event_id2.clone()],
+                and!(
+                    triple!(event_id2.clone(), "event_time", event_time_var.clone()),
+                    less!(event_time_var.clone(), datetime_cutoff)
+                )
+            );
 
             let json_query2 = query2.to_instance(None).to_json();
             let results2: WOQLResult<HashMap<String, serde_json::Value>> = client
@@ -123,14 +141,16 @@ async fn test_date_comparison_queries() -> anyhow::Result<()> {
             assert!(result_ids2.iter().any(|id| id.contains("event2")));
 
             // Test 3: Query for exact date match
-            let (event_id3, event_date_var3) = vars!("EventID3", "EventDate3");
-            let exact_date = date_literal("2025-01-01");
+            let (event_id3, event_date_var3) = (var!(EventID3), var!(EventDate3));
+            let exact_date = date_lit("2025-01-01");
 
-            let query3 = WoqlBuilder::new()
-                .triple(event_id3.clone(), "event_date", event_date_var3.clone())
-                .eq(event_date_var3.clone(), exact_date)
-                .select(vec![event_id3.clone()])
-                .finalize();
+            let query3 = select!(
+                [event_id3.clone()],
+                and!(
+                    triple!(event_id3.clone(), "event_date", event_date_var3.clone()),
+                    eq!(event_date_var3.clone(), exact_date)
+                )
+            );
 
             let json_query3 = query3.to_instance(None).to_json();
             let results3: WOQLResult<HashMap<String, serde_json::Value>> = client

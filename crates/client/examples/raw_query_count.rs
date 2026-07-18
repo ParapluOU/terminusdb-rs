@@ -2,8 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashMap;
 use terminusdb_client::{BranchSpec, RawQueryable, TerminusDBHttpClient};
-use terminusdb_woql2::prelude::Query;
-use terminusdb_woql_builder::{builder::WoqlBuilder, vars};
+use terminusdb_woql2::prelude::*;
 
 /// Example demonstrating the count functionality for RawQueryable
 #[derive(Debug, Deserialize)]
@@ -21,14 +20,16 @@ impl RawQueryable for BooksByAuthorQuery {
     type Result = BookInfo;
 
     fn query(&self) -> Query {
-        WoqlBuilder::new()
-            .triple(vars!("Book"), "rdf:type", "@schema:Book")
-            .triple(vars!("Book"), "@schema:author", vars!("Author"))
-            .triple(vars!("Book"), "@schema:title", vars!("Title"))
-            .triple(vars!("Book"), "@schema:pages", vars!("Pages"))
-            .eq(vars!("Author"), self.author.clone())
-            .select(vec![vars!("Title"), vars!("Pages")])
-            .finalize()
+        select!(
+            [Title, Pages],
+            and!(
+                triple!(var!(Book), "rdf:type", "@schema:Book"),
+                triple!(var!(Book), "@schema:author", var!(Author)),
+                triple!(var!(Book), "@schema:title", var!(Title)),
+                triple!(var!(Book), "@schema:pages", var!(Pages)),
+                eq!(var!(Author), self.author.clone()),
+            )
+        )
     }
 
     fn extract_result(

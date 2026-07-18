@@ -2,23 +2,38 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use terminusdb_schema::ToTDBInstance;
-use terminusdb_woql_builder::prelude::*;
-use terminusdb_woql_builder::value::{date_literal, datetime_literal};
+use terminusdb_woql2::prelude::*;
+
+fn date_lit(s: &str) -> terminusdb_woql2::value::Value {
+    terminusdb_woql2::value::Value::Data(terminusdb_schema::XSDAnySimpleType::Date(
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .expect("Invalid date format, expected YYYY-MM-DD"),
+    ))
+}
+
+fn datetime_lit(s: &str) -> terminusdb_woql2::value::Value {
+    terminusdb_woql2::value::Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(
+        chrono::DateTime::parse_from_rfc3339(s)
+            .expect("Invalid datetime format, expected RFC3339")
+            .with_timezone(&chrono::Utc),
+    ))
+}
 
 #[test]
 fn test_date_comparison_query_generation() {
     println!("\n=== Testing Date Comparison Query Generation ===\n");
 
     // Test 1: Date comparison with greater
-    let (event_id, event_date_var) = vars!("EventID", "EventDate");
-    let date_cutoff = date_literal("2024-01-01");
+    let (event_id, event_date_var) = (var!(EventID), var!(EventDate));
+    let date_cutoff = date_lit("2024-01-01");
 
-    let query1 = WoqlBuilder::new()
-        .triple(event_id.clone(), "event_date", event_date_var.clone())
-        .greater(event_date_var.clone(), date_cutoff)
-        .select(vec![event_id.clone()])
-        .finalize();
+    let query1 = select!(
+        [event_id.clone()],
+        and!(
+            triple!(event_id.clone(), "event_date", event_date_var.clone()),
+            greater!(event_date_var.clone(), date_cutoff)
+        )
+    );
 
     let json1 = query1.to_json();
     println!("Query 1 (Date greater than 2024-01-01):");
@@ -29,14 +44,16 @@ fn test_date_comparison_query_generation() {
     assert!(json_str.contains(r#""@type":"xsd:date"#) || json_str.contains("2024-01-01"));
 
     // Test 2: DateTime comparison with less
-    let (event_id2, event_time_var) = vars!("EventID2", "EventTime");
-    let datetime_cutoff = datetime_literal("2025-06-01T00:00:00Z");
+    let (event_id2, event_time_var) = (var!(EventID2), var!(EventTime));
+    let datetime_cutoff = datetime_lit("2025-06-01T00:00:00Z");
 
-    let query2 = WoqlBuilder::new()
-        .triple(event_id2.clone(), "event_time", event_time_var.clone())
-        .less(event_time_var.clone(), datetime_cutoff)
-        .select(vec![event_id2.clone()])
-        .finalize();
+    let query2 = select!(
+        [event_id2.clone()],
+        and!(
+            triple!(event_id2.clone(), "event_time", event_time_var.clone()),
+            less!(event_time_var.clone(), datetime_cutoff)
+        )
+    );
 
     let json2 = query2.to_json();
     println!("\nQuery 2 (DateTime less than 2025-06-01T00:00:00Z):");
@@ -49,14 +66,16 @@ fn test_date_comparison_query_generation() {
     );
 
     // Test 3: Date equality
-    let (event_id3, event_date_var3) = vars!("EventID3", "EventDate3");
-    let exact_date = date_literal("2025-01-01");
+    let (event_id3, event_date_var3) = (var!(EventID3), var!(EventDate3));
+    let exact_date = date_lit("2025-01-01");
 
-    let query3 = WoqlBuilder::new()
-        .triple(event_id3.clone(), "event_date", event_date_var3.clone())
-        .eq(event_date_var3.clone(), exact_date)
-        .select(vec![event_id3.clone()])
-        .finalize();
+    let query3 = select!(
+        [event_id3.clone()],
+        and!(
+            triple!(event_id3.clone(), "event_date", event_date_var3.clone()),
+            eq!(event_date_var3.clone(), exact_date)
+        )
+    );
 
     let json3 = query3.to_json();
     println!("\nQuery 3 (Date equals 2025-01-01):");

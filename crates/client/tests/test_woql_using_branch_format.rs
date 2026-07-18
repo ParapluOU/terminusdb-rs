@@ -8,7 +8,8 @@ mod tests {
     use terminusdb_client::*;
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-    use terminusdb_woql_builder::prelude::*;
+    use terminusdb_woql2::prelude::*;
+    use terminusdb_woql2::using;
 
     /// Test model with explicit ID for version history testing
     #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
@@ -29,12 +30,16 @@ mod tests {
         println!("Testing {}: {}", format_name, collection);
 
         // Build query
-        let query = WoqlBuilder::new()
-            .triple(vars!("Subject"), "rdf:type", vars!("Type"))
-            .select(vec![vars!("Subject"), vars!("Type")])
-            .using(collection)
-            .limit(10)
-            .finalize();
+        let query = limit!(
+            10,
+            using!(
+                collection,
+                select!(
+                    [Subject, Type],
+                    triple!(var!(Subject), "rdf:type", var!(Type))
+                )
+            )
+        );
 
         let json_query = query.to_instance(None).to_json();
         println!("Query JSON: {}", serde_json::to_string_pretty(&json_query)?);
@@ -91,24 +96,27 @@ mod tests {
         for commit_id in &commit_ids {
             let collection = format!("main/{}", commit_id);
 
-            let query = WoqlBuilder::new()
-                .triple(vars!("Subject"), "rdf:type", node("@schema:PersonWithId"))
-                .triple(vars!("Subject"), vars!("Prop"), vars!("Value"))
-                .select(vec![vars!("Subject"), vars!("Prop"), vars!("Value")])
-                .using(&collection);
+            let query = using!(
+                &collection,
+                select!(
+                    [Subject, Prop, Value],
+                    and!(
+                        triple!(var!(Subject), "rdf:type", "@schema:PersonWithId"),
+                        triple!(var!(Subject), var!(Prop), var!(Value))
+                    )
+                )
+            );
 
             or_queries.push(query);
         }
 
         // Combine with OR
         if !or_queries.is_empty() {
-            let mut or_queries_iter = or_queries.into_iter();
-            let mut query_builder = or_queries_iter.next().unwrap();
-            for q in or_queries_iter {
-                query_builder = query_builder.or([q]);
-            }
-
-            let final_query = query_builder.finalize();
+            let final_query = if or_queries.len() == 1 {
+                or_queries.into_iter().next().unwrap()
+            } else {
+                Query::Or(Or { or: or_queries })
+            };
             let json_query = final_query.to_instance(None).to_json();
 
             println!(

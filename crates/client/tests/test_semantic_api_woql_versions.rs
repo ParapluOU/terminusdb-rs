@@ -8,7 +8,8 @@ mod tests {
     use terminusdb_client::*;
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-    use terminusdb_woql_builder::prelude::*;
+    use terminusdb_woql2::prelude::*;
+    use terminusdb_woql2::using;
 
     /// Test model for semantic API version testing
     #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
@@ -90,23 +91,22 @@ mod tests {
                     let collection = format!("admin/{}/local/commit/{}", spec.db, commit_id);
 
                     // Query for VersionTestModel instances
-                    let query = WoqlBuilder::new()
-                        .triple(
-                            vars!("Subject"),
-                            "rdf:type",
-                            node("@schema:VersionTestModel"),
+                    let query = using!(
+                        &collection,
+                        select!(
+                            [Subject, Name, Version, Data],
+                            and!(
+                                triple!(
+                                    var!(Subject),
+                                    "rdf:type",
+                                    "@schema:VersionTestModel"
+                                ),
+                                triple!(var!(Subject), "@schema:name", var!(Name)),
+                                triple!(var!(Subject), "@schema:version", var!(Version)),
+                                triple!(var!(Subject), "@schema:data", var!(Data))
+                            )
                         )
-                        .triple(vars!("Subject"), "@schema:name", vars!("Name"))
-                        .triple(vars!("Subject"), "@schema:version", vars!("Version"))
-                        .triple(vars!("Subject"), "@schema:data", vars!("Data"))
-                        .select(vec![
-                            vars!("Subject"),
-                            vars!("Name"),
-                            vars!("Version"),
-                            vars!("Data"),
-                        ])
-                        .using(&collection)
-                        .finalize();
+                    );
 
                     let json_query = query.to_instance(None).to_json();
 
@@ -146,27 +146,30 @@ mod tests {
                 for commit_id in &commit_ids {
                     let collection = format!("admin/{}/local/commit/{}", spec.db, commit_id);
 
-                    let query = WoqlBuilder::new()
-                        .triple(
-                            vars!("Subject"),
-                            "rdf:type",
-                            node("@schema:VersionTestModel"),
+                    let query = using!(
+                        &collection,
+                        select!(
+                            [Subject, Doc],
+                            and!(
+                                triple!(
+                                    var!(Subject),
+                                    "rdf:type",
+                                    "@schema:VersionTestModel"
+                                ),
+                                read_doc!(var!(Subject), var!(Doc))
+                            )
                         )
-                        .read_document(vars!("Subject"), vars!("Doc"))
-                        .select(vec![vars!("Subject"), vars!("Doc")])
-                        .using(&collection);
+                    );
 
                     or_queries.push(query);
                 }
 
                 if !or_queries.is_empty() {
-                    let mut or_queries_iter = or_queries.into_iter();
-                    let mut combined_query = or_queries_iter.next().unwrap();
-                    for q in or_queries_iter {
-                        combined_query = combined_query.or([q]);
-                    }
-
-                    let final_query = combined_query.finalize();
+                    let final_query = if or_queries.len() == 1 {
+                        or_queries.into_iter().next().unwrap()
+                    } else {
+                        Query::Or(Or { or: or_queries })
+                    };
                     let json_query = final_query.to_instance(None).to_json();
 
                     match client

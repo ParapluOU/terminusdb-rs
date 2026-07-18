@@ -6,7 +6,7 @@
 #![cfg(feature = "__disabled_test_last_query_via_operation_log")]
 
 use terminusdb_client::*;
-use terminusdb_woql_builder::prelude::*;
+use terminusdb_woql2::prelude::*;
 
 #[tokio::test]
 async fn test_last_query_retrieval() -> anyhow::Result<()> {
@@ -21,10 +21,10 @@ async fn test_last_query_retrieval() -> anyhow::Result<()> {
     assert!(client.last_query_json().is_none());
 
     // Execute a query
-    let query = WoqlBuilder::new()
-        .select(vec![vars!("Subject"), vars!("Predicate"), vars!("Object")])
-        .triple("v:Subject", "v:Predicate", "v:Object")
-        .finalize();
+    let query = select!(
+        [Subject, Predicate, Object],
+        triple!(var!(Subject), var!(Predicate), var!(Object))
+    );
 
     let _: WOQLResult<serde_json::Value> = client.query(Some(spec.clone()), query.clone()).await?;
 
@@ -37,10 +37,7 @@ async fn test_last_query_retrieval() -> anyhow::Result<()> {
     assert!(last_query_json.is_some());
 
     // Execute another query
-    let query2 = WoqlBuilder::new()
-        .select(vec![vars!("Class")])
-        .triple("v:Class", "rdf:type", "owl:Class")
-        .finalize();
+    let query2 = select!([Class], triple!(var!(Class), "rdf:type", "owl:Class"));
 
     let _: WOQLResult<serde_json::Value> = client.query(Some(spec), query2.clone()).await?;
 

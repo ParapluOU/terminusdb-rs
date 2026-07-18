@@ -163,7 +163,8 @@ mod tests {
     // Test to debug the WOQL query generation
     #[tokio::test]
     async fn test_debug_woql_queries() {
-        use terminusdb_woql_builder::prelude::*;
+        use terminusdb_schema::XSDAnySimpleType;
+        use terminusdb_woql2::prelude::*;
 
         let server = TerminusDBServer::test_instance().await.unwrap();
 
@@ -195,48 +196,64 @@ mod tests {
                 let queries = vec![
                     (
                         "Integer as i64",
-                        WoqlBuilder::new()
-                            .triple(vars!("Item"), "rdf:type", "@schema:TestItem")
-                            .triple(vars!("Item"), "count", WoqlInput::Integer(42))
-                            .read_document(vars!("Item"), vars!("Doc"))
-                            .select(vec![vars!("Doc")])
-                            .finalize(),
+                        select!(
+                            [Doc],
+                            and!(
+                                triple!(var!(Item), "rdf:type", "@schema:TestItem"),
+                                triple!(var!(Item), "count", data!(42i64)),
+                                read_doc!(var!(Item), var!(Doc))
+                            )
+                        ),
                     ),
                     (
                         "Integer as string",
-                        WoqlBuilder::new()
-                            .triple(vars!("Item"), "rdf:type", "@schema:TestItem")
-                            .triple(vars!("Item"), "count", "42")
-                            .read_document(vars!("Item"), vars!("Doc"))
-                            .select(vec![vars!("Doc")])
-                            .finalize(),
+                        select!(
+                            [Doc],
+                            and!(
+                                triple!(var!(Item), "rdf:type", "@schema:TestItem"),
+                                triple!(var!(Item), "count", "42"),
+                                read_doc!(var!(Item), var!(Doc))
+                            )
+                        ),
                     ),
                     (
                         "Integer as decimal",
-                        WoqlBuilder::new()
-                            .triple(vars!("Item"), "rdf:type", "@schema:TestItem")
-                            .triple(vars!("Item"), "count", WoqlInput::Decimal("42".to_string()))
-                            .read_document(vars!("Item"), vars!("Doc"))
-                            .select(vec![vars!("Doc")])
-                            .finalize(),
+                        select!(
+                            [Doc],
+                            and!(
+                                triple!(var!(Item), "rdf:type", "@schema:TestItem"),
+                                triple!(
+                                    var!(Item),
+                                    "count",
+                                    Value::Data(XSDAnySimpleType::Decimal(
+                                        "42".parse().expect("Invalid decimal string format")
+                                    ))
+                                ),
+                                read_doc!(var!(Item), var!(Doc))
+                            )
+                        ),
                     ),
                     (
                         "Boolean as bool",
-                        WoqlBuilder::new()
-                            .triple(vars!("Item"), "rdf:type", "@schema:TestItem")
-                            .triple(vars!("Item"), "active", WoqlInput::Boolean(true))
-                            .read_document(vars!("Item"), vars!("Doc"))
-                            .select(vec![vars!("Doc")])
-                            .finalize(),
+                        select!(
+                            [Doc],
+                            and!(
+                                triple!(var!(Item), "rdf:type", "@schema:TestItem"),
+                                triple!(var!(Item), "active", data!(true)),
+                                read_doc!(var!(Item), var!(Doc))
+                            )
+                        ),
                     ),
                     (
                         "Boolean as string",
-                        WoqlBuilder::new()
-                            .triple(vars!("Item"), "rdf:type", "@schema:TestItem")
-                            .triple(vars!("Item"), "active", "true")
-                            .read_document(vars!("Item"), vars!("Doc"))
-                            .select(vec![vars!("Doc")])
-                            .finalize(),
+                        select!(
+                            [Doc],
+                            and!(
+                                triple!(var!(Item), "rdf:type", "@schema:TestItem"),
+                                triple!(var!(Item), "active", "true"),
+                                read_doc!(var!(Item), var!(Doc))
+                            )
+                        ),
                     ),
                 ];
 
@@ -253,11 +270,13 @@ mod tests {
 
                 // Let's also check what the actual stored values look like
                 println!("\n=== Raw triple data ===");
-                let raw_triples = WoqlBuilder::new()
-                    .triple(vars!("Subject"), vars!("Predicate"), vars!("Object"))
-                    .triple(vars!("Subject"), "rdf:type", "@schema:TestItem")
-                    .select(vec![vars!("Subject"), vars!("Predicate"), vars!("Object")])
-                    .finalize();
+                let raw_triples = select!(
+                    [Subject, Predicate, Object],
+                    and!(
+                        triple!(var!(Subject), var!(Predicate), var!(Object)),
+                        triple!(var!(Subject), "rdf:type", "@schema:TestItem")
+                    )
+                );
 
                 let triples = client
                     .query::<serde_json::Value>(spec.clone().into(), raw_triples)

@@ -9,9 +9,7 @@ mod tests {
     use terminusdb_client::*;
     use terminusdb_schema::*;
     use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
-    use terminusdb_woql2::prelude::Query;
-    use terminusdb_woql_builder::prelude::{vars, WoqlBuilder};
-    use terminusdb_woql_builder::value::string_literal;
+    use terminusdb_woql2::prelude::*;
 
     /// Test model for raw query testing
     #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
@@ -39,14 +37,16 @@ mod tests {
         type Result = BooksByAuthor;
 
         fn query(&self) -> Query {
-            WoqlBuilder::new()
-                .triple(vars!("Book"), "rdf:type", "@schema:Book")
-                .triple(vars!("Book"), "@schema:author", vars!("Author"))
-                .triple(vars!("Book"), "@schema:title", vars!("Title"))
-                .triple(vars!("Book"), "@schema:pages", vars!("Pages"))
-                .eq(vars!("Author"), string_literal(&self.author))
-                .select(vec![vars!("Title"), vars!("Pages")])
-                .finalize()
+            select!(
+                [Title, Pages],
+                and!(
+                    triple!(var!(Book), "rdf:type", "@schema:Book"),
+                    triple!(var!(Book), "@schema:author", var!(Author)),
+                    triple!(var!(Book), "@schema:title", var!(Title)),
+                    triple!(var!(Book), "@schema:pages", var!(Pages)),
+                    eq!(var!(Author), data!(self.author.clone())),
+                )
+            )
         }
 
         fn extract_result(
@@ -82,12 +82,14 @@ mod tests {
         type Result = BookSummary;
 
         fn query(&self) -> Query {
-            WoqlBuilder::new()
-                .triple(vars!("Book"), "rdf:type", "@schema:Book")
-                .triple(vars!("Book"), "@schema:title", vars!("Title"))
-                .triple(vars!("Book"), "@schema:author", vars!("Author"))
-                .select(vec![vars!("Title"), vars!("Author")])
-                .finalize()
+            select!(
+                [Title, Author],
+                and!(
+                    triple!(var!(Book), "rdf:type", "@schema:Book"),
+                    triple!(var!(Book), "@schema:title", var!(Title)),
+                    triple!(var!(Book), "@schema:author", var!(Author)),
+                )
+            )
         }
 
         fn extract_result(
