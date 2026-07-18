@@ -1,3 +1,11 @@
+//! # terminusdb-woql-builder — legacy fluent WOQL builder (maintenance-only)
+//!
+//! A fluent/builder API layered over [`terminusdb_woql2`], the canonical WOQL
+//! AST. The `terminusdb-client` crate still depends on this builder, so it is
+//! kept working — but it is **frozen**: do **not** add new query operations
+//! here. Construct new queries against `terminusdb-woql2` directly, or parse
+//! them with `terminusdb-woql-dsl`.
+
 pub mod builder;
 mod expression;
 mod path;

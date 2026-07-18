@@ -23,9 +23,17 @@ for TerminusDB:
 - **`terminusdb-orm`** - ActiveRecord-style ORM: typed filters/ordering and
   relation traversal with no hand-written GraphQL (see
   [`crates/orm/README.md`](crates/orm/README.md))
-- **`terminusdb-woql`** - WOQL (Web Object Query Language) support
-- **`terminusdb-woql2`** - Enhanced WOQL functionality
-- **`terminusdb-woql-builder`** - Builder pattern for constructing WOQL queries
+- **`terminusdb-woql2`** - Canonical WOQL (Web Object Query Language) AST;
+  build new queries against this
+- **`terminusdb-woql-builder`** - Legacy fluent builder over `woql2`
+  (maintenance-only — still used by the client; not recommended for new code)
+- **`terminusdb-woql-js`** - Bridge for parsing JavaScript-syntax WOQL via
+  `terminusdb-client-js`
+
+Also present in-tree but not currently part of the workspace build:
+`terminusdb-woql-dsl` — a standalone parser for textual WOQL-DSL source that
+produces `woql2` AST (distinct from the programmatic DSL that ships inside
+`woql2` itself).
 
 ## Installation
 

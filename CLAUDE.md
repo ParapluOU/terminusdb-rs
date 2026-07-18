@@ -64,14 +64,25 @@ with multiple interconnected crates:
    - Simplifies creation of TerminusDB-compatible types
    - Automatically implements required traits
 
-4. **terminusdb-woql2**: WOQL query language implementation
-   - Query operations (control flow, data manipulation, logic, math, string ops)
-   - Graph traversal and triple store operations
-   - Path queries
+4. **WOQL query-building crates** — there are several layers; pick the right one.
+   *Workspace members* (built by `cargo build`):
+   - **terminusdb-woql2**: the canonical WOQL AST (JSON-LD-serializable, the full
+     set of query classes: control flow, data manipulation, logic, math, string
+     ops, graph traversal, path queries). This is the source of truth — build new
+     queries against it. Every other crate depends on it. It also ships a
+     programmatic Rust DSL/builder over the AST in `src/dsl.rs` + `src/query_dsl.rs`.
+   - **terminusdb-woql-builder**: legacy fluent/builder API layered over `woql2`.
+     **Maintenance-only** — the client still depends on it, but do NOT add new
+     operations here; construct new queries with `woql2` directly instead.
+   - **terminusdb-woql-js**: bridge that parses JavaScript-syntax WOQL through the
+     official `terminusdb-client-js` into JSON-LD (used by client + mcp-server).
 
-5. **terminusdb-woql-builder**: Builder pattern for constructing WOQL queries
-   - Type-safe query construction
-   - Fluent API for building complex queries
+   *Present in-tree but NOT a workspace member* (excluded from the build; nothing
+   depends on it yet):
+   - **terminusdb-woql-dsl**: a standalone `nom` parser for **textual** WOQL-DSL
+     source that produces `woql2` AST (distinct from woql2's own programmatic
+     DSL above). In-tree but not wired into the workspace — add a path dependency
+     to use it.
 
 ### Key Design Patterns
 
