@@ -1,271 +1,274 @@
 #![recursion_limit = "256"]
-
-//! Integration tests for GraphQL functionality
+//! Integration tests for GraphQL functionality.
 //!
-//! DISABLED: These tests use create_database which doesn't exist in the current API.
-//! They also require a running TerminusDB instance.
-#![cfg(feature = "__disabled_graphql_tests")]
+//! Previously disabled behind a non-existent `__disabled_graphql_tests` feature
+//! (they used an old `create_database` signature and needed an external server).
+//! Now migrated onto `TerminusDBServer`: each test spins up the shared embedded
+//! v12.1 server and seeds a fresh, uniquely-named database with a small `Widget`
+//! schema, so they run in parallel with `cargo test` — no `#[ignore]`, no
+//! external instance.
 
-use serde_json::json;
-use terminusdb_client::http::{GraphQLRequest, TerminusDBHttpClient};
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use terminusdb_bin::TerminusDBServer;
+    use terminusdb_client::http::GraphQLRequest;
+    use terminusdb_schema::{EntityIDFor, ToTDBInstance};
+    use terminusdb_schema_derive::*;
 
-/// Test database name for GraphQL tests
-const TEST_DB: &str = "graphql_test_db";
-
-/// Helper to create a test client and ensure test database exists
-async fn setup_test_client() -> anyhow::Result<TerminusDBHttpClient> {
-    let client = TerminusDBHttpClient::local_node().await;
-
-    // Ensure test database exists
-    match client
-        .create_database(TEST_DB, "Test database for GraphQL", None, None, false)
-        .await
-    {
-        Ok(_) => println!("Created test database: {}", TEST_DB),
-        Err(e) => {
-            // Database might already exist, which is fine
-            println!("Database creation note: {}", e);
-        }
+    /// A minimal model so the seeded database has a non-trivial GraphQL schema to
+    /// introspect and query.
+    #[derive(Debug, Clone, TerminusDBModel)]
+    #[tdb(id_field = "id")]
+    struct Widget {
+        id: EntityIDFor<Self>,
+        name: String,
     }
 
-    Ok(client)
-}
+    #[tokio::test]
+    async fn test_introspection_query() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_introspect", |client, spec| async move {
+                let schema = client.introspect_schema(&spec.db, None, None).await?;
 
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_introspection_query() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
+                // Verify we got schema data
+                assert!(schema.is_object());
 
-    // Run introspection query
-    let schema = client.introspect_schema(TEST_DB, None).await?;
+                // Check for expected top-level schema field
+                let schema_obj = schema.as_object().expect("introspection result is an object");
+                assert!(schema_obj.contains_key("__schema"));
 
-    // Verify we got schema data
-    assert!(schema.is_object());
+                // Check __schema has expected fields
+                let inner_schema = &schema_obj["__schema"];
+                assert!(inner_schema.get("queryType").is_some());
+                assert!(inner_schema.get("types").is_some());
+                assert!(inner_schema.get("directives").is_some());
 
-    // Check for expected top-level schema field
-    let schema_obj = schema.as_object().unwrap();
-    assert!(schema_obj.contains_key("__schema"));
-
-    // Check __schema has expected fields
-    let inner_schema = &schema_obj["__schema"];
-    assert!(inner_schema.get("queryType").is_some());
-    assert!(inner_schema.get("types").is_some());
-    assert!(inner_schema.get("directives").is_some());
-
-    println!(
-        "Introspection successful. Found {} types.",
-        inner_schema["types"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0)
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_simple_graphql_query() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
-
-    // Simple query to get database info
-    let query = r#"
-        query {
-            __typename
-        }
-    "#;
-
-    let request = GraphQLRequest::new(query);
-    let response = client
-        .execute_graphql::<serde_json::Value>(TEST_DB, None, request)
-        .await?;
-
-    // Check response structure
-    assert!(response.data.is_some());
-    assert!(response.errors.is_none() || response.errors.as_ref().unwrap().is_empty());
-
-    println!("Simple query response: {:?}", response.data);
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_graphql_query_with_variables() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
-
-    // Query with variables (example - adjust based on actual schema)
-    let query = r#"
-        query GetType($name: String!) {
-            __type(name: $name) {
-                name
-                kind
-                description
-            }
-        }
-    "#;
-
-    let variables = json!({
-        "name": "String"
-    });
-
-    let request = GraphQLRequest::with_variables(query, variables);
-    let response = client
-        .execute_graphql::<serde_json::Value>(TEST_DB, None, request)
-        .await?;
-
-    // Check response
-    if let Some(data) = response.data {
-        println!(
-            "Type query response: {}",
-            serde_json::to_string_pretty(&data)?
-        );
+                println!(
+                    "Introspection successful. Found {} types.",
+                    inner_schema["types"].as_array().map(|a| a.len()).unwrap_or(0)
+                );
+                Ok(())
+            })
+            .await
     }
 
-    if let Some(errors) = response.errors {
-        for error in errors {
-            eprintln!("GraphQL error: {}", error.message);
-        }
+    #[tokio::test]
+    async fn test_simple_graphql_query() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_simple", |client, spec| async move {
+                // NB: a root `{ __typename }` triggers a server-side panic in
+                // TerminusDB's GraphQL (`concrete_type_name()`), so we query the
+                // schema root instead — still a full request/response round-trip.
+                let query = r#"
+                    query {
+                        __schema {
+                            queryType { name }
+                        }
+                    }
+                "#;
+
+                let request = GraphQLRequest::new(query);
+                let response = client
+                    .execute_graphql::<serde_json::Value>(&spec.db, None, request, None)
+                    .await?;
+
+                // Check response structure
+                assert!(response.data.is_some());
+                assert!(response.errors.is_none() || response.errors.as_ref().unwrap().is_empty());
+
+                println!("Simple query response: {:?}", response.data);
+                Ok(())
+            })
+            .await
     }
 
-    Ok(())
-}
+    #[tokio::test]
+    async fn test_graphql_query_with_variables() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_vars", |client, spec| async move {
+                // Query with variables against a built-in scalar type.
+                let query = r#"
+                    query GetType($name: String!) {
+                        __type(name: $name) {
+                            name
+                            kind
+                            description
+                        }
+                    }
+                "#;
 
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_graphql_error_handling() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
+                let variables = json!({ "name": "String" });
 
-    // Intentionally malformed query
-    let query = r#"
-        query {
-            thisFieldDoesNotExist
-        }
-    "#;
+                let request = GraphQLRequest::with_variables(query, variables);
+                let response = client
+                    .execute_graphql::<serde_json::Value>(&spec.db, None, request, None)
+                    .await?;
 
-    let request = GraphQLRequest::new(query);
-    let response = client
-        .execute_graphql::<serde_json::Value>(TEST_DB, None, request)
-        .await?;
-
-    // We expect errors for unknown field
-    assert!(response.errors.is_some());
-    let errors = response.errors.unwrap();
-    assert!(!errors.is_empty());
-
-    println!("Expected error received: {}", errors[0].message);
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_raw_graphql_execution() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
-
-    let query = r#"
-        query {
-            __schema {
-                queryType {
-                    name
+                if let Some(data) = &response.data {
+                    println!("Type query response: {}", serde_json::to_string_pretty(data)?);
                 }
-            }
-        }
-    "#;
-
-    let request = GraphQLRequest::new(query);
-    let raw_response = client.execute_graphql_raw(TEST_DB, None, request).await?;
-
-    // Verify raw response is valid JSON with expected structure
-    assert!(raw_response.is_object());
-    let obj = raw_response.as_object().unwrap();
-    assert!(obj.contains_key("data"));
-
-    println!(
-        "Raw response: {}",
-        serde_json::to_string_pretty(&raw_response)?
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_graphql_with_different_branch() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
-
-    // Test with explicit branch name
-    let query = r#"
-        query {
-            __typename
-        }
-    "#;
-
-    let request = GraphQLRequest::new(query);
-
-    // Test with main branch (should be same as None)
-    let response = client
-        .execute_graphql::<serde_json::Value>(TEST_DB, Some("main"), request.clone())
-        .await?;
-    assert!(response.data.is_some());
-
-    // Test with non-existent branch (might error or return empty)
-    match client
-        .execute_graphql::<serde_json::Value>(TEST_DB, Some("non-existent-branch"), request)
-        .await
-    {
-        Ok(response) => {
-            println!("Response from non-existent branch: {:?}", response);
-        }
-        Err(e) => {
-            println!("Expected error for non-existent branch: {}", e);
-        }
+                if let Some(errors) = &response.errors {
+                    for error in errors {
+                        eprintln!("GraphQL error: {}", error.message);
+                    }
+                }
+                Ok(())
+            })
+            .await
     }
 
-    Ok(())
-}
+    #[tokio::test]
+    async fn test_graphql_error_handling() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_error", |client, spec| async move {
+                // Intentionally reference a field that does not exist.
+                let query = r#"
+                    query {
+                        thisFieldDoesNotExist
+                    }
+                "#;
 
-#[tokio::test]
-#[ignore = "requires running TerminusDB instance"]
-async fn test_full_introspection_parsing() -> anyhow::Result<()> {
-    let client = setup_test_client().await?;
+                let request = GraphQLRequest::new(query);
+                let response = client
+                    .execute_graphql::<serde_json::Value>(&spec.db, None, request, None)
+                    .await?;
 
-    // Use the exact introspection query from the user's request
-    let query = r#"{
+                // We expect errors for the unknown field.
+                assert!(response.errors.is_some());
+                let errors = response.errors.unwrap();
+                assert!(!errors.is_empty());
+
+                println!("Expected error received: {}", errors[0].message);
+                Ok(())
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_raw_graphql_execution() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_raw", |client, spec| async move {
+                let query = r#"
+                    query {
+                        __schema {
+                            queryType {
+                                name
+                            }
+                        }
+                    }
+                "#;
+
+                let request = GraphQLRequest::new(query);
+                let raw_response = client
+                    .execute_graphql_raw(&spec.db, None, request, None)
+                    .await?;
+
+                // Verify raw response is valid JSON with the expected structure.
+                assert!(raw_response.is_object());
+                let obj = raw_response.as_object().expect("raw response is an object");
+                assert!(obj.contains_key("data"));
+
+                println!("Raw response: {}", serde_json::to_string_pretty(&raw_response)?);
+                Ok(())
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_graphql_with_different_branch() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_branch", |client, spec| async move {
+                // Root `__typename` panics server-side (see test_simple_graphql_query);
+                // query the schema root, which works on any branch.
+                let query = r#"
+                    query {
+                        __schema {
+                            queryType { name }
+                        }
+                    }
+                "#;
+
+                let request = GraphQLRequest::new(query);
+
+                // Explicit "main" branch should behave like the default.
+                let response = client
+                    .execute_graphql::<serde_json::Value>(
+                        &spec.db,
+                        Some("main"),
+                        request.clone(),
+                        None,
+                    )
+                    .await?;
+                assert!(response.data.is_some());
+
+                // A non-existent branch may error or return empty — either is fine.
+                match client
+                    .execute_graphql::<serde_json::Value>(
+                        &spec.db,
+                        Some("non-existent-branch"),
+                        request,
+                        None,
+                    )
+                    .await
+                {
+                    Ok(response) => println!("Response from non-existent branch: {:?}", response),
+                    Err(e) => println!("Expected error for non-existent branch: {}", e),
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_full_introspection_parsing() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        server
+            .with_db_schema::<(Widget,), _, _, _>("gql_full_introspect", |client, spec| async move {
+                // A full introspection query wrapped in the JSON envelope the
+                // GraphQL HTTP API accepts (query + operationName).
+                let query = r#"{
         "query": "\n    query IntrospectionQuery {\n      __schema {\n        \n        queryType { name }\n        mutationType { name }\n        subscriptionType { name }\n        types {\n          ...FullType\n        }\n        directives {\n          name\n          description\n          \n          locations\n          args {\n            ...InputValue\n          }\n        }\n      }\n    }\n\n    fragment FullType on __Type {\n      kind\n      name\n      description\n      \n      fields(includeDeprecated: true) {\n        name\n        description\n        args {\n          ...InputValue\n        }\n        type {\n          ...TypeRef\n        }\n        isDeprecated\n        deprecationReason\n      }\n      inputFields {\n        ...InputValue\n      }\n      interfaces {\n        ...TypeRef\n      }\n      enumValues(includeDeprecated: true) {\n        name\n        description\n        isDeprecated\n        deprecationReason\n      }\n      possibleTypes {\n        ...TypeRef\n      }\n    }\n\n    fragment InputValue on __InputValue {\n      name\n      description\n      type { ...TypeRef }\n      defaultValue\n      \n      \n    }\n\n    fragment TypeRef on __Type {\n      kind\n      name\n      ofType {\n        kind\n        name\n        ofType {\n          kind\n          name\n          ofType {\n            kind\n            name\n            ofType {\n              kind\n              name\n              ofType {\n                kind\n                name\n                ofType {\n                  kind\n                  name\n                  ofType {\n                    kind\n                    name\n                  }\n                }\n              }\n            }\n          }\n        }\n      }\n    }\n  ",
         "operationName": "IntrospectionQuery"
     }"#;
 
-    // Parse the JSON to extract query and operation name
-    let parsed: serde_json::Value = serde_json::from_str(query)?;
-    let query_str = parsed["query"].as_str().unwrap();
-    let operation_name = parsed["operationName"].as_str().map(|s| s.to_string());
+                // Parse the JSON envelope to extract the query and operation name.
+                let parsed: serde_json::Value = serde_json::from_str(query)?;
+                let query_str = parsed["query"].as_str().expect("query field is a string");
+                let operation_name = parsed["operationName"].as_str().map(|s| s.to_string());
 
-    let request = GraphQLRequest {
-        query: query_str.to_string(),
-        variables: None,
-        operation_name,
-    };
+                let request = GraphQLRequest {
+                    query: query_str.to_string(),
+                    variables: None,
+                    operation_name,
+                };
 
-    let response = client
-        .execute_graphql::<serde_json::Value>(TEST_DB, None, request)
-        .await?;
+                let response = client
+                    .execute_graphql::<serde_json::Value>(&spec.db, None, request, None)
+                    .await?;
 
-    // Verify response
-    assert!(response.data.is_some());
-    if let Some(errors) = &response.errors {
-        for error in errors {
-            eprintln!("GraphQL error: {}", error.message);
-        }
+                assert!(response.data.is_some());
+                if let Some(errors) = &response.errors {
+                    for error in errors {
+                        eprintln!("GraphQL error: {}", error.message);
+                    }
+                }
+
+                if let Some(data) = &response.data {
+                    let pretty = serde_json::to_string_pretty(data)?;
+                    println!("Full introspection result preview (first 1000 chars):");
+                    println!("{}", &pretty.chars().take(1000).collect::<String>());
+                    println!("... (truncated)");
+                }
+                Ok(())
+            })
+            .await
     }
-
-    // Save introspection result for inspection
-    if let Some(data) = &response.data {
-        let pretty = serde_json::to_string_pretty(data)?;
-        println!("Full introspection result preview (first 1000 chars):");
-        println!("{}", &pretty.chars().take(1000).collect::<String>());
-        println!("... (truncated)");
-    }
-
-    Ok(())
 }
