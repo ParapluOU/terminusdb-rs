@@ -1,6 +1,5 @@
 use crate::*;
 use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
 
 /// A struct representing a key-value entry in a HashMap<String, String>
 #[derive(Debug, Clone)]

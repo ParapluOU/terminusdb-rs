@@ -2,8 +2,11 @@
 
 use crate::*;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::Value;
+// `json!` is used only by the `#[test]` functions in this file; cargo fix's
+// non-test view cannot see those uses, so keep the import test-gated.
+#[cfg(test)]
+use serde_json::json;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
 use std::fs::File;
@@ -455,7 +458,8 @@ impl Schema {
     fn write_to_file(&self, path: impl AsRef<str>, schemas: Vec<Self>) -> std::io::Result<()> {
         let mut output = File::create(path.as_ref())?;
         let line = schemas.iter().map(|s| s.to_string()).join(", ");
-        write!(output, "[{}]", line);
+        // Propagate the write error instead of swallowing it (fn returns io::Result).
+        write!(output, "[{}]", line)?;
         Ok(())
     }
 
@@ -750,7 +754,7 @@ impl Schema {
             }
             Schema::Enum {
                 id,
-                base,
+                base: _,
                 values,
                 documentation,
             } => {
@@ -1157,7 +1161,7 @@ pub trait ToTDBSchema {
 }
 
 impl<T: ToTDBSchema> From<T> for Schema {
-    fn from(to: T) -> Self {
+    fn from(_to: T) -> Self {
         T::to_schema()
     }
 }
@@ -1202,7 +1206,7 @@ pub trait ToMaybeTDBSchema {
         vec![]
     }
 
-    fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+    fn to_schema_tree_mut(_collection: &mut HashSet<Schema>) {
         // Do nothing by default - this type might not have a schema
     }
 

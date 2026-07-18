@@ -1,11 +1,5 @@
-use rayon::prelude::*;
-use serde::Serialize;
-use serde_canonical_json;
-use serde_canonical_json::CanonicalFormatter;
-use serde_json::Serializer;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::Write;
 
 type JSONWithRefs = serde_json::Value;
 type JSONDenormalized = serde_json::Value;
@@ -26,7 +20,7 @@ pub fn normalize(instance: JSONDenormalized) -> JSONRefsAndFragments {
     let mut index = HashMap::new();
 
     // todo: skip normalizing if already normalized
-    let refs = _normalize(&mut index, instance);
+    let _refs = _normalize(&mut index, instance);
 
     serde_json::Value::Array(
         index

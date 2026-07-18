@@ -1,9 +1,9 @@
 use crate::{
     json::{InstanceFromJson, InstancePropertyFromJson},
-    FromInstanceProperty, Instance, InstanceProperty, PrimitiveValue, RelationValue,
+    FromInstanceProperty, InstanceProperty, PrimitiveValue, RelationValue,
     ToInstanceProperty, ToTDBInstance,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::marker::PhantomData;
@@ -74,7 +74,7 @@ impl<Parent> InstancePropertyFromJson<Parent> for i64 {
     fn property_from_json(json: Value) -> Result<InstanceProperty> {
         match json {
             Value::Number(n) => {
-                if let Some(i) = n.as_i64() {
+                if let Some(_i) = n.as_i64() {
                     return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
                 }
                 Err(anyhow!("Number cannot be represented as i64"))
@@ -89,7 +89,7 @@ impl<Parent> InstancePropertyFromJson<Parent> for u64 {
     fn property_from_json(json: Value) -> Result<InstanceProperty> {
         match json {
             Value::Number(n) => {
-                if let Some(u) = n.as_u64() {
+                if let Some(_u) = n.as_u64() {
                     return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
                 }
                 // Try as i64 for non-negative values
@@ -112,7 +112,7 @@ macro_rules! impl_float_deserialization {
             fn property_from_json(json: Value) -> Result<InstanceProperty> {
                 match json {
                     Value::Number(n) => {
-                        if let Some(f) = n.as_f64() {
+                        if n.as_f64().is_some() {
                             return Ok(InstanceProperty::Primitive(PrimitiveValue::Number(n)));
                         }
                         Err(anyhow!("Number cannot be represented as a float"))
@@ -153,12 +153,12 @@ where
 
 // PhantomData type
 impl<T, Parent> InstancePropertyFromJson<Parent> for PhantomData<T> {
-    fn property_from_json(json: Value) -> Result<InstanceProperty> {
+    fn property_from_json(_json: Value) -> Result<InstanceProperty> {
         // PhantomData always returns Unit regardless of input
         Ok(InstanceProperty::Primitive(PrimitiveValue::Unit))
     }
 
-    fn property_from_maybe_json(json: Option<Value>) -> Result<InstanceProperty> {
+    fn property_from_maybe_json(_json: Option<Value>) -> Result<InstanceProperty> {
         // PhantomData always returns Unit regardless of input
         Ok(InstanceProperty::Primitive(PrimitiveValue::Unit))
     }

@@ -1,5 +1,4 @@
 use crate::{json::ToJson, SetCardinality};
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Use type families to construct optionality or collections of values. Type families are List, Set, Array, and Optional.

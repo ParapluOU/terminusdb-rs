@@ -5,8 +5,7 @@
 
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty,
-    ToMaybeTDBSchema, ToSchemaClass, JSON,
+    FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, JSON,
 };
 use anyhow::anyhow;
 use serde::de::DeserializeOwned;
@@ -87,9 +86,9 @@ impl<T: Serialize + DeserializeOwned> FromInstanceProperty for HashMap<Uuid, T> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate as terminusdb_schema;
+    
     use crate::ToSchemaProperty;
-    use serde::{Deserialize, Serialize};
+    
 
     #[test]
     fn test_hashmap_uuid_string_schema_property() {

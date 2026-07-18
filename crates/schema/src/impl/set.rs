@@ -1,7 +1,7 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue,
-    Property, RelationValue, Schema, SetCardinality, TerminusDBModel, ToInstanceProperty,
+    Property, RelationValue, Schema, SetCardinality, ToInstanceProperty,
     ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
 use anyhow::anyhow;
@@ -63,14 +63,14 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for BTreeSet<T> {
 impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Hash, S>
     ToInstanceProperty<S> for HashSet<T>
 {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         // Check if T is a subdocument type
-        let is_subdocument = T::to_schema().is_subdocument();
+        let _is_subdocument = T::to_schema().is_subdocument();
 
         InstanceProperty::Relations(
             self.into_iter()
                 .map(|item| {
-                    let mut instance = item.to_instance(None);
+                    let instance = item.to_instance(None);
                     // If this is a subdocument, we need to ensure it stays embedded
                     // The flatten process will check is_subdocument() and skip flattening
                     RelationValue::One(instance)
@@ -81,21 +81,21 @@ impl<T: Eq + ToTDBInstance + FromTDBInstance + InstancePropertyFromJson<S> + Has
 }
 
 impl<T: Primitive + ToInstanceProperty<S>, S> ToInstanceProperty<S> for HashSet<T> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
     }
 }
 
 // Implement ToInstanceProperty for BTreeSet<T> where T implements ToTDBInstance
 impl<T: Ord + ToTDBInstance, S> ToInstanceProperty<S> for BTreeSet<T> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         // Check if T is a subdocument type
-        let is_subdocument = T::to_schema().is_subdocument();
+        let _is_subdocument = T::to_schema().is_subdocument();
 
         InstanceProperty::Relations(
             self.into_iter()
                 .map(|item| {
-                    let mut instance = item.to_instance(None);
+                    let instance = item.to_instance(None);
                     // If this is a subdocument, we need to ensure it stays embedded
                     // The flatten process will check is_subdocument() and skip flattening
                     RelationValue::One(instance)
@@ -106,7 +106,7 @@ impl<T: Ord + ToTDBInstance, S> ToInstanceProperty<S> for BTreeSet<T> {
 }
 
 impl<T: Primitive + Ord, S> ToInstanceProperty<S> for BTreeSet<T> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
     }
 }
@@ -268,7 +268,7 @@ impl<Parent, T: ToSchemaClass, S> ToSchemaProperty<Parent> for HashableHashSet<T
 }
 
 impl<Parent, T: ToTDBInstance + Clone, S> ToInstanceProperty<Parent> for HashableHashSet<T, S> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         // enum members serialize as their primitive (string) value; everything
         // else as an embedded relation instance.
         if T::to_schema().is_enum() {

@@ -3,7 +3,6 @@ use crate::{
     FromInstanceProperty, InstanceProperty, PrimitiveValue, Property, Schema, ToInstanceProperty,
     ToSchemaProperty, STRING,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const GRAPH_TYPE_SCHEMA: &str = "schema";
@@ -42,19 +41,19 @@ impl<Parent> ToSchemaProperty<Parent> for GraphType {
 }
 
 impl<Parent> ToInstanceProperty<Parent> for GraphType {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitive(PrimitiveValue::String(self.to_string()))
     }
 }
 
 impl<Parent> InstancePropertyFromJson<Parent> for GraphType {
-    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+    fn property_from_json(_json: Value) -> anyhow::Result<InstanceProperty> {
         todo!()
     }
 }
 
 impl FromInstanceProperty for GraphType {
-    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+    fn from_property(_prop: &InstanceProperty) -> anyhow::Result<Self> {
         todo!()
     }
 }

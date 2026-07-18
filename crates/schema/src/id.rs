@@ -2,7 +2,7 @@ use crate::iri::TdbIRI;
 use crate::json::InstancePropertyFromJson;
 use crate::{
     Class, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Property, Schema,
-    TaggedUnion, TaggedUnionVariant, TerminusDBModel, ToInstanceProperty, ToSchemaClass,
+    TaggedUnion, TaggedUnionVariant, ToInstanceProperty, ToSchemaClass,
     ToSchemaProperty, ToTDBSchema, TypeFamily, STRING, URI,
 };
 use anyhow::{anyhow, bail};
@@ -552,7 +552,7 @@ impl<T: ToTDBSchema + ToSchemaClass, Parent> ToSchemaProperty<Parent> for Entity
 }
 
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for EntityIDFor<T> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitive(PrimitiveValue::String(self.to_string()))
     }
 }
@@ -865,7 +865,6 @@ mod tests {
     use super::*;
     use crate as terminusdb_schema;
     use crate::*;
-    use serde::{Deserialize, Serialize};
     use terminusdb_schema_derive::TerminusDBModel;
 
     // Define a dummy struct for testing

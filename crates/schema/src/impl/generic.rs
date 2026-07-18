@@ -1,4 +1,3 @@
-use crate::Primitive;
 use crate::{
     json::ToJson, Instance, InstanceProperty, PrimitiveValue, Property, RelationValue, Schema,
     ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, ToSchemaProperty,
@@ -15,7 +14,7 @@ impl<T> ToMaybeTDBSchema for T {
         vec![]
     }
 
-    default fn to_schema_tree_mut(collection: &mut HashSet<Schema>) {
+    default fn to_schema_tree_mut(_collection: &mut HashSet<Schema>) {
         // Do nothing by default - this type might not have a schema
     }
 }
@@ -40,7 +39,7 @@ where
     T: ToTDBInstance,
     // Don't add extra constraints - just check that it's a ToTDBInstance
 {
-    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    default fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         let inst = self.to_instance(None);
         if Self::to_schema().is_enum() {
             return InstanceProperty::Primitive(PrimitiveValue::String(

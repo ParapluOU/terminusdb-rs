@@ -1,6 +1,6 @@
 use crate::{
-    json::InstancePropertyFromJson, EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance,
-    InstanceProperty, Primitive, PrimitiveValue, Property, RelationValue, Schema, TdbLazy,
+    EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance,
+    InstanceProperty, Primitive, PrimitiveValue, Property, RelationValue, Schema,
     ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances,
     ToTDBSchema, TypeFamily,
 };
@@ -23,7 +23,7 @@ impl<T: ToTDBSchema> ToTDBSchema for Vec<T> {
 
 // Implement ToInstanceProperty for Vec<T> where T implements ToTDBInstance
 impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Vec<T> {
-    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    default fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         // Simple enums serialize as a list of primitive strings (their TDB value)
         if T::to_schema().is_enum() {
             return InstanceProperty::Primitives(
@@ -51,7 +51,7 @@ impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Vec<T> {
 }
 
 impl<T: Primitive, S> ToInstanceProperty<S> for Vec<T> {
-    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    default fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives(self.into_iter().map(|item| item.into()).collect())
     }
 }
@@ -59,7 +59,7 @@ impl<T: Primitive, S> ToInstanceProperty<S> for Vec<T> {
 // A list of optional primitives (e.g. `Vec<Option<usize>>`) serializes as a
 // primitives list, with `None` entries encoded as `PrimitiveValue::Null`.
 impl<T: Primitive, S> ToInstanceProperty<S> for Vec<Option<T>> {
-    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    default fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives(
             self.into_iter()
                 .map(|item| match item {

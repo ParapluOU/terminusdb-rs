@@ -1,14 +1,12 @@
 use crate::{
     deserialize_property, json::InstanceFromJson, InstanceProperty, Key, RelationValue, ToTDBSchema,
 };
-use crate::{json::ToJson, Property, Schema};
+use crate::{json::ToJson, Schema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::{DefaultHasher, Hash};
-use std::sync::Arc;
 use uuid::Uuid;
 
 /// Trait for deserializing a TDBInstance back into a Rust type
@@ -331,7 +329,7 @@ impl Instance {
                     // todo: use helper
                     let gid = variant_inst.gen_id()?;
                     return Some(if !gid.contains("/") {
-                        (format!("{}/{}", self.schema.class_name(), gid))
+                        format!("{}/{}", self.schema.class_name(), gid)
                     } else {
                         gid
                     });
@@ -341,7 +339,7 @@ impl Instance {
 
         match self.schema.key() {
             Some(Key::Random) => Some(Uuid::new_v4().to_string()),
-            Some(Key::Hash(fields)) => {
+            Some(Key::Hash(_fields)) => {
                 // For hash keys with specific fields, ID is server-generated based on a hash of specified field values
                 None
             }

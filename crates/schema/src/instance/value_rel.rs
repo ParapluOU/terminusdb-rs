@@ -1,5 +1,4 @@
 use crate::{json::ToJson, Instance};
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -41,7 +40,9 @@ impl RelationValue {
     }
 
     pub fn make_ext_ref(&mut self) -> Vec<Instance> {
-        let mut new_self = self.clone();
+        // Every non-diverging match arm below assigns `new_self`, so an initial
+        // clone here would only be overwritten, never read.
+        let new_self;
         let mut to_ret = vec![];
 
         match self {
@@ -101,10 +102,10 @@ impl RelationValue {
 
                 to_ret = nesteds.into_iter().map(|nested| nested.clone()).collect();
             }
-            RelationValue::ExternalReference(r) => {
+            RelationValue::ExternalReference(_r) => {
                 // new_self = RelationValue::TransactionRef(r.clone());
             }
-            RelationValue::ExternalReferences(rs) => {
+            RelationValue::ExternalReferences(_rs) => {
                 // new_self = RelationValue::TransactionRefs(rs.clone());
             }
         }

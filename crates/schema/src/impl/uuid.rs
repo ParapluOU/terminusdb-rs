@@ -35,13 +35,13 @@ impl From<Uuid> for InstanceProperty {
 
 // Implement ToInstanceProperty for Uuid
 impl<Parent> ToInstanceProperty<Parent> for Uuid {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
 
 impl<Parent> InstancePropertyFromJson<Parent> for Uuid {
-    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+    fn property_from_json(_json: Value) -> anyhow::Result<InstanceProperty> {
         todo!()
     }
 }
@@ -58,7 +58,7 @@ impl FromInstanceProperty for Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Property;
+    
     use crate::ToSchemaProperty;
 
     #[test]

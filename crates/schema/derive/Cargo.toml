@@ -6,6 +6,10 @@ license = "AGPL-3.0"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+# See note in crates/schema/Cargo.toml: a bare `targets` key under `[package]`
+# is unrecognised by cargo (warns + ignored), so keep it under `[package.metadata]`.
+[package.metadata]
 targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]

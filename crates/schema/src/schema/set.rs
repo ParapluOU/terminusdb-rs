@@ -1,5 +1,4 @@
 use crate::json::ToJson;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 /// Use Cardinality to specify an unordered set of values of a class or datatype in which the property has a limited number of elements as specified by the cardinality constraint properties.

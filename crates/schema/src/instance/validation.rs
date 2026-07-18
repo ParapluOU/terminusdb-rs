@@ -1,5 +1,5 @@
 use crate::{
-    Instance, InstanceProperty, PrimitiveValue, RelationValue, Schema, SetCardinality, TypeFamily,
+    Instance, InstanceProperty, RelationValue, Schema, SetCardinality, TypeFamily,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -265,7 +265,7 @@ fn validate_oneof_instance(
     schema: &Schema,
     errors: &mut Vec<ValidationError>,
 ) {
-    let class_name = schema.class_name();
+    let _class_name = schema.class_name();
     let mut matched_any = false;
 
     // Check if instance matches any of the OneOf variants

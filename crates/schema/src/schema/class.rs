@@ -1,4 +1,3 @@
-use crate::PrimitiveMarker;
 
 /// when the object is a primitive, this method is called
 /// to determine to built-in schema type

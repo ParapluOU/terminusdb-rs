@@ -1,7 +1,7 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromTDBInstance, Instance, InstanceFromJson, PrimitiveValue, RelationValue, Schema,
-    TerminusDBModel, ToTDBInstance, ToTDBInstances, ToTDBSchema,
+    TerminusDBModel, ToTDBInstance, ToTDBInstances,
 };
 use crate::{InstanceProperty, ToInstanceProperty};
 
@@ -29,7 +29,7 @@ impl<T: ToTDBInstances> ToTDBInstances for Box<T> {
 
 // Implementation of ToInstanceProperty for Option<Box<T>> where T implements ToTDBInstance
 impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Option<Box<T>> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         match self {
             Some(boxed) => InstanceProperty::Relation(RelationValue::One(boxed.to_instance(None))),
             None => InstanceProperty::Primitive(PrimitiveValue::Null),

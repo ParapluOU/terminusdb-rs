@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use typestate::*;
 
 /// The @type of the object. At the schema level, this is one of: Enum, Class, TaggedUnion and Unit.

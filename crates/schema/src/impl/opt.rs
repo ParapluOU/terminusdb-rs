@@ -23,7 +23,7 @@ impl<T: ToTDBSchema> ToTDBSchema for Option<T> {
 
 // Implement ToInstanceProperty for Option<T> where T implements ToTDBInstance
 impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Option<T> {
-    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    default fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         match self {
             Some(value) => {
                 if T::to_schema().is_enum() {
@@ -39,7 +39,7 @@ impl<T: ToTDBInstance, S> ToInstanceProperty<S> for Option<T> {
 }
 
 impl<T: Primitive, S> ToInstanceProperty<S> for Option<Vec<T>> {
-    default fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    default fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitives({
             match self {
                 Some(values) => values.into_iter().map(Into::into).collect(),

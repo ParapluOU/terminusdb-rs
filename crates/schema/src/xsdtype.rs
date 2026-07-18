@@ -1,13 +1,12 @@
 use crate::{
     json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive,
-    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, ToTDBSchema, DATETIME, DECIMAL,
+    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL,
     INTEGER, TIME, UNSIGNED_INT, URI,
 };
 use chrono::Utc;
 use decimal_rs::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug)]
@@ -279,13 +278,13 @@ mod tests {
 // }
 
 impl FromInstanceProperty for XSDAnySimpleType {
-    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+    fn from_property(_prop: &InstanceProperty) -> anyhow::Result<Self> {
         todo!()
     }
 }
 
 impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         match self {
             XSDAnySimpleType::String(s) => InstanceProperty::Primitive(PrimitiveValue::String(s)),
             XSDAnySimpleType::Boolean(b) => InstanceProperty::Primitive(PrimitiveValue::Bool(b)),

@@ -1,6 +1,5 @@
-use crate::{json::ToJson, SetCardinality, TypeFamily};
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use crate::{json::ToJson, TypeFamily};
+use serde_json::Value;
 
 pub trait ToSchemaPropertyName {
     fn to_property_name(&self) -> String;

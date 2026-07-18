@@ -1,6 +1,6 @@
 use crate::{
     FromInstanceProperty, FromTDBInstance, PrimitiveValue, ToInstanceProperty, ToMaybeTDBSchema,
-    ToSchemaProperty, ToTDBInstance, ToTDBSchema,
+    ToSchemaProperty, ToTDBSchema,
 };
 
 /// marker trait

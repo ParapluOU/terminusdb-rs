@@ -1,6 +1,6 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
-    EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive,
+    EntityIDFor, FromInstanceProperty, FromTDBInstance, InstanceProperty, Primitive,
     PrimitiveValue, Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass, ToTDBInstance,
     ToTDBSchema, JSON,
 };
@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use chrono::{DateTime, NaiveTime, Utc};
 use serde;
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 // todo: this impl is redundant with the Vec<_> and BTreeMap ones.
 // what we _should_ do is implement Container1<T> for these as a marker
@@ -57,7 +57,7 @@ impl From<HashMap<String, Value>> for InstanceProperty {
 
 // Implement ToInstanceProperty for HashMap<String, Value>
 impl<Parent> ToInstanceProperty<Parent> for HashMap<String, Value> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -241,7 +241,7 @@ impl<T: ToTDBSchema> From<HashMap<EntityIDFor<T>, serde_json::Value>> for Instan
 
 // Implement ToInstanceProperty for HashMap<EntityIDFor<T>, String>
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for HashMap<EntityIDFor<T>, String> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -250,7 +250,7 @@ impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for HashMap<EntityIDFor<
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent>
     for HashMap<EntityIDFor<T>, serde_json::Value>
 {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -303,7 +303,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for HashMap<EntityIDFor<T>, serde_json
 // Implement InstancePropertyFromJson for HashMap<EntityIDFor<T>, String>
 impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for HashMap<EntityIDFor<T>, String> {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -313,7 +313,7 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
     for HashMap<EntityIDFor<T>, serde_json::Value>
 {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -348,7 +348,7 @@ impl<T: ToTDBSchema> From<HashMap<EntityIDFor<T>, i32>> for InstanceProperty {
 }
 
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for HashMap<EntityIDFor<T>, i32> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -379,7 +379,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for HashMap<EntityIDFor<T>, i32> {
 
 impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for HashMap<EntityIDFor<T>, i32> {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -412,7 +412,7 @@ impl<T: ToTDBSchema> From<HashMap<EntityIDFor<T>, bool>> for InstanceProperty {
 }
 
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for HashMap<EntityIDFor<T>, bool> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -443,7 +443,7 @@ impl<T: ToTDBSchema> FromInstanceProperty for HashMap<EntityIDFor<T>, bool> {
 
 impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent> for HashMap<EntityIDFor<T>, bool> {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -476,7 +476,7 @@ impl<T: ToTDBSchema> From<HashMap<EntityIDFor<T>, DateTime<Utc>>> for InstancePr
 }
 
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for HashMap<EntityIDFor<T>, DateTime<Utc>> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -512,7 +512,7 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
     for HashMap<EntityIDFor<T>, DateTime<Utc>>
 {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -548,7 +548,7 @@ impl<T: ToTDBSchema> From<HashMap<EntityIDFor<T>, NaiveTime>> for InstanceProper
 }
 
 impl<T: ToTDBSchema, Parent> ToInstanceProperty<Parent> for HashMap<EntityIDFor<T>, NaiveTime> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -598,7 +598,7 @@ impl<T: ToTDBSchema, Parent> InstancePropertyFromJson<Parent>
     for HashMap<EntityIDFor<T>, NaiveTime>
 {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -685,7 +685,7 @@ impl<
         Parent,
     > ToInstanceProperty<Parent> for HashMap<EntityIDFor<T>, V>
 {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -734,7 +734,7 @@ impl<
     > InstancePropertyFromJson<Parent> for HashMap<EntityIDFor<T>, V>
 {
     fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
-        let map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
+        let _map = json.as_object().ok_or(anyhow!("Expected JSON object"))?;
         Ok(InstanceProperty::Primitive(PrimitiveValue::Object(json)))
     }
 }
@@ -743,7 +743,7 @@ impl<
 mod tests {
     use super::*;
     use crate as terminusdb_schema;
-    use crate::Property;
+    
     use crate::ToSchemaProperty;
     use chrono::{DateTime, NaiveTime, TimeZone, Utc};
     use terminusdb_schema_derive::TerminusDBModel;

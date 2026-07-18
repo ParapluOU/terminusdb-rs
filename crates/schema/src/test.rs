@@ -1,7 +1,6 @@
 use crate as terminusdb_schema;
 use crate::*;
-use pretty_assertions::{assert_eq, assert_ne};
-use serde;
+use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use terminusdb_schema_derive::*;
 
@@ -415,12 +414,12 @@ mod tests {
     use crate::Instance;
     use crate::InstanceProperty;
     use crate::PrimitiveValue;
-    use crate::Property;
+    
     use crate::RelationValue;
     use crate::Schema;
-    use crate::TypeFamily;
-    use crate::{Client, FromTDBInstance, TdbLazy, ToSchemaClass, ToSchemaProperty, ToTDBSchema};
-    use pretty_assertions::{assert_eq, assert_ne};
+    
+    use crate::{Client, FromTDBInstance, TdbLazy};
+    use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
 
     // Mock client for testing
@@ -663,7 +662,7 @@ mod tests {
     #[test]
     fn test_lazy_error_handling() {
         // Test with an invalid instance (no ID)
-        let instance = create_test_instance(None, Some("Activity".to_string()), vec![]);
+        let _instance = create_test_instance(None, Some("Activity".to_string()), vec![]);
 
         // Test creating a TdbLazy directly with empty string ID (should be invalid)
         let mut lazy = TdbLazy::<Activity>::new(Some(EntityIDFor::new("").unwrap()), None);
@@ -876,7 +875,7 @@ mod optional_entity_id_tests {
             "Should be able to create TdbLazy without ID for lexical key model"
         );
 
-        let mut lazy = lazy_result.unwrap();
+        let lazy = lazy_result.unwrap();
         assert_eq!(lazy.get_expect().email, "test@example.com");
         assert_eq!(lazy.get_expect().name, "Test User");
 

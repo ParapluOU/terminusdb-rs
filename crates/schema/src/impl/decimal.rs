@@ -94,7 +94,7 @@ impl<Parent> InstancePropertyFromJson<Parent> for BigDecimal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Property, ToSchemaProperty};
+    use crate::ToSchemaProperty;
 
     #[test]
     fn test_decimal_schema_property() {

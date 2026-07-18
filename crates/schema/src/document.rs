@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
@@ -44,10 +43,10 @@ pub enum Document {
 
 impl Document {
     pub fn graph_type(&self) -> GraphType {
-        (match self {
+        match self {
             Document::Schema(_) => GraphType::Schema,
             Document::Instance(_) => GraphType::Instance,
-        })
+        }
     }
 
     pub fn to_json(self) -> serde_json::Value {
@@ -98,8 +97,8 @@ impl From<Vec<Schema>> for Documents {
 impl Documents {
     pub fn graph_type(&self) -> GraphType {
         match self {
-            Documents::Schema(schemas) => GraphType::Schema,
-            Documents::Instance(instances) => GraphType::Instance,
+            Documents::Schema(_schemas) => GraphType::Schema,
+            Documents::Instance(_instances) => GraphType::Instance,
         }
     }
 

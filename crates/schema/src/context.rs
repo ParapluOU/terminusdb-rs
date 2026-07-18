@@ -1,8 +1,11 @@
 use crate::{
-    json::ToJson, ContextDocumentation, SetCardinality, DEFAULT_BASE_STRING, DEFAULT_SCHEMA_STRING,
+    json::ToJson, ContextDocumentation, DEFAULT_BASE_STRING, DEFAULT_SCHEMA_STRING,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
+// `json!` is used only by the `#[test]` functions below; keep it test-gated so
+// cargo fix's non-test view does not flag it as unused.
+#[cfg(test)]
+use serde_json::json;
 use std::collections::BTreeMap;
 
 /// TerminusDB context object (`@type: "@context"`).

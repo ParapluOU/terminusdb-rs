@@ -1,12 +1,13 @@
-#![feature(map_first_last)]
 #![feature(specialization)]
 #![feature(associated_type_defaults)]
-#![feature(associated_type_bounds)]
-#![feature(let_chains)]
 #![feature(negative_impls, with_negative_coherence)]
-#![feature(auto_traits)]
 #![feature(trait_alias)]
-#![allow(warnings)]
+// Minimal targeted lint allow-set: `dead_code` is high-volume noise across the
+// internal API surface and stays allowed; `incomplete_features` is unavoidable
+// while we depend on `#![feature(specialization)]`. Everything else — notably
+// `unused_must_use`, `unused_imports`, `unreachable_code`, `unused_mut`, and
+// `unused_variables` — stays ACTIVE so real bugs surface.
+#![allow(dead_code, incomplete_features)]
 
 // pub use error::*;
 // pub use normalization::*;

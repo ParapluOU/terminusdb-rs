@@ -1,17 +1,8 @@
-use crate::{
-    json::ToJson, FromTDBInstance, Property, Schema, ToTDBInstance, ToTDBInstances, ToTDBSchema,
-};
-use crate::{Instance, Key, PrimitiveValue, RelationValue};
-use anyhow::Context;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use crate::{FromTDBInstance, Schema, ToTDBInstance};
+use crate::{Instance, PrimitiveValue, RelationValue};
+use serde_json::Value;
 use std::any;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::marker::PhantomData;
-use std::sync::Arc;
-use uuid::Uuid;
 
 // trait for converting any object into a Instance document property, globally
 pub trait ToInstanceProperty<Parent> {

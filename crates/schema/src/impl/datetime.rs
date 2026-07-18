@@ -15,7 +15,7 @@ impl ToSchemaClass for DateTime<Utc> {
 }
 
 impl MaybeFromTDBInstance for DateTime<Utc> {
-    fn maybe_from_instance(instance: &crate::Instance) -> anyhow::Result<Option<Self>> {
+    fn maybe_from_instance(_instance: &crate::Instance) -> anyhow::Result<Option<Self>> {
         Ok(None)
     }
 
@@ -50,7 +50,7 @@ impl From<DateTime<Utc>> for InstanceProperty {
 
 // Implement ToInstanceProperty for DateTime<Utc>
 impl<Parent> ToInstanceProperty<Parent> for DateTime<Utc> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -106,7 +106,7 @@ impl From<NaiveTime> for InstanceProperty {
 
 // Implement ToInstanceProperty for NaiveTime
 impl<Parent> ToInstanceProperty<Parent> for NaiveTime {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -233,7 +233,7 @@ impl<Parent> InstancePropertyFromJson<Parent> for NaiveDate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Property;
+    
     use crate::ToSchemaProperty;
     use chrono::Timelike;
 

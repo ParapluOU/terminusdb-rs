@@ -2,7 +2,7 @@ use crate::json::{InstancePropertyFromJson, NestedRef};
 use crate::{
     EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance, InstanceFromJson,
     InstanceProperty, Key, PrimitiveValue, Property, RelationValue, Schema, TerminusDBModel,
-    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances,
+    ToInstanceProperty, ToSchemaClass, ToTDBInstance, ToTDBInstances,
     ToTDBSchema, URI,
 };
 use anyhow::{anyhow, bail};
@@ -281,7 +281,7 @@ impl<T: TerminusDBModel> ToTDBSchema for TdbLazy<T> {
 // todo: somehow be able to determine whether the entity already exists
 // so that we dont needlessly nest Instances?
 impl<Parent, T: TerminusDBModel> ToInstanceProperty<Parent> for TdbLazy<T> {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         if self.is_loaded() {
             // When loaded, pass the ID if available (it might be None for lexical keys)
             let id = self.id.as_ref().map(|id| id.to_string());
@@ -311,7 +311,7 @@ impl<Parent, T: TerminusDBModel + ToSchemaClass + InstanceFromJson> InstanceProp
                     RelationValue::ExternalReference(id),
                 ))
             }
-            Value::Object(ref map) => {
+            Value::Object(_) => {
                 if let Ok(NestedRef::<T> {
                     type_name,
                     reference,

@@ -3,6 +3,11 @@ name = "terminusdb-schema"
 version = "0.1.0"
 edition = "2018"
 publish = false
+
+# Documents the platforms this crate targets (native + wasm). Cargo does not
+# recognise a bare `targets` key under `[package]` (it warns and ignores it), so
+# it lives under `[package.metadata]`, which cargo ignores silently.
+[package.metadata]
 targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]

@@ -4,14 +4,11 @@
 
 // todo: parse XSD instead, but where is it?
 
-use std::collections::BTreeSet;
-use std::convert::TryFrom;
-use std::marker::PhantomData;
 
 use refined::{boundable::signed::Positive, Refinement};
 
 use crate::{
-    FromInstanceProperty, Instance, InstanceProperty, Primitive, PrimitiveValue, RelationValue,
+    Instance, InstanceProperty, Primitive, PrimitiveValue, RelationValue,
     Schema, ToInstanceProperty, ToMaybeTDBSchema, ToSchemaClass,
 };
 
@@ -121,6 +118,9 @@ macro_rules! to_schema_class {
     };
 }
 
+// Deliberately lower-case to mirror the XSD-style primitive naming; scoped allow
+// keeps `non_camel_case_types` active everywhere else.
+#[allow(non_camel_case_types)]
 pub type posint = Refinement<isize, Positive>;
 
 to_schema_class!({
@@ -209,13 +209,13 @@ impl From<u128> for PrimitiveValue {
 }
 
 impl<Parent> ToInstanceProperty<Parent> for f64 {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
 
 impl<Parent> ToInstanceProperty<Parent> for f32 {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         self.into()
     }
 }
@@ -240,7 +240,7 @@ macro_rules! to_instance_prop {
         }
 
         impl<Parent> ToInstanceProperty<Parent> for $typ {
-            fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+            fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
                 self.into()
             }
         }

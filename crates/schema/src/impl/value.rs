@@ -1,9 +1,8 @@
 use crate::{
-    json::{InstancePropertyFromJson, ToJson},
-    InstanceFromJson, PrimitiveValue, ToSchemaClass, JSON,
+    json::{InstancePropertyFromJson, ToJson}, PrimitiveValue, ToSchemaClass, JSON,
 };
 use crate::{
-    FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
+    FromInstanceProperty, InstanceProperty, Schema, ToInstanceProperty,
 };
 use serde_json::{Map, Value};
 
@@ -23,7 +22,7 @@ impl ToJson for serde_json::Value {
 // }
 
 impl<Parent> ToInstanceProperty<Parent> for serde_json::Value {
-    fn to_property(self, field_name: &str, parent: &Schema) -> InstanceProperty {
+    fn to_property(self, _field_name: &str, _parent: &Schema) -> InstanceProperty {
         InstanceProperty::Primitive(PrimitiveValue::Object(self))
     }
 }

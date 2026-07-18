@@ -1,5 +1,4 @@
 use crate::{json::ToJson, Field};
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 // TDB uses "Random" as default
