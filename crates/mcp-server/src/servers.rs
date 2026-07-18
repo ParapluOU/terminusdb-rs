@@ -47,6 +47,9 @@ impl TerminusDBMcpHandler {
             test_mode: false,
             workers: None,
             request_timeout: None,
+            // `bin` added a typed `config: ServerConfig` field (commit b8d8ca2);
+            // default it here to preserve prior start behavior.
+            ..Default::default()
         };
 
         // Start the server
