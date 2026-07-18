@@ -22,8 +22,9 @@
 //! }
 //! ```
 
+use std::collections::BTreeMap;
 use std::net::TcpListener;
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use terminusdb_client::TerminusDBHttpClient;
@@ -72,6 +73,280 @@ fn find_available_port() -> std::io::Result<u16> {
     Ok(port)
 }
 
+/// Server log verbosity (`TERMINUSDB_LOG_LEVEL`).
+///
+/// The embedded server accepts `ERROR`, `WARNING`, `NOTICE`, `INFO`, `DEBUG`
+/// (default `INFO`). This enum guarantees only a valid value is emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Error,
+    Warning,
+    Notice,
+    Info,
+    Debug,
+}
+
+impl LogLevel {
+    /// The exact atom the server expects for `TERMINUSDB_LOG_LEVEL`.
+    fn as_env(self) -> &'static str {
+        match self {
+            LogLevel::Error => "ERROR",
+            LogLevel::Warning => "WARNING",
+            LogLevel::Notice => "NOTICE",
+            LogLevel::Info => "INFO",
+            LogLevel::Debug => "DEBUG",
+        }
+    }
+}
+
+/// Server log output format (`TERMINUSDB_LOG_FORMAT`).
+///
+/// The embedded server accepts `text` (default) or `json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Text,
+    Json,
+}
+
+impl LogFormat {
+    /// The exact atom the server expects for `TERMINUSDB_LOG_FORMAT`.
+    fn as_env(self) -> &'static str {
+        match self {
+            LogFormat::Text => "text",
+            LogFormat::Json => "json",
+        }
+    }
+}
+
+/// Typed configuration for the embedded TerminusDB server's runtime settings.
+///
+/// Every field maps to a `TERMINUSDB_*` environment variable that the embedded
+/// server binary reads at startup. Fields are applied **per spawned process**
+/// (never via the global process environment), so a consumer can configure the
+/// server without calling `std::env::set_var`. Any field left `None`/empty
+/// falls through to the server's own default.
+///
+/// Only the variables the embedded binary actually reads at runtime are modeled
+/// as typed fields. For anything not covered here (or added upstream later),
+/// use the [`env`](Self::env) escape hatch, and [`extra_serve_args`](Self::extra_serve_args)
+/// for extra `serve` CLI flags.
+///
+/// Note: the server's port, worker count, database path and admin password are
+/// controlled by the dedicated [`ServerOptions`] fields (`port`, `workers`,
+/// `db_path`, `password`) — do not set `TERMINUSDB_SERVER_PORT` /
+/// `_SERVER_WORKERS` / `_SERVER_DB_PATH` via [`env`](Self::env), as the harness
+/// sets those last and would override you.
+#[derive(Debug, Clone, Default)]
+pub struct ServerConfig {
+    // --- Networking / identity -------------------------------------------
+    /// Bind name/host (`TERMINUSDB_SERVER_NAME`). Default: a random string.
+    pub server_name: Option<String>,
+    /// Max retries for conflicting transactions
+    /// (`TERMINUSDB_SERVER_MAX_TRANSACTION_RETRIES`). Default: workers × 2.
+    pub max_transaction_retries: Option<u32>,
+
+    // --- Storage / paths --------------------------------------------------
+    /// Temp directory (`TERMINUSDB_SERVER_TMP_PATH`). Default: `/tmp`.
+    pub tmp_path: Option<std::path::PathBuf>,
+    /// Pack directory (`TERMINUSDB_SERVER_PACK_DIR`).
+    pub pack_dir: Option<std::path::PathBuf>,
+    /// Plugin registry file (`TERMINUSDB_SERVER_REGISTRY_PATH`).
+    pub registry_path: Option<std::path::PathBuf>,
+    /// Plugins directory (`TERMINUSDB_PLUGINS_PATH`). Default: `<db>/../plugins`.
+    pub plugins_path: Option<std::path::PathBuf>,
+    /// File-upload storage directory (`TERMINUSDB_FILE_STORAGE_PATH`).
+    pub file_storage_path: Option<std::path::PathBuf>,
+    /// System CA bundle for outbound TLS (`TERMINUSDB_SYSTEM_SSL_CERTS`).
+    pub system_ssl_certs: Option<std::path::PathBuf>,
+
+    // --- Dashboard --------------------------------------------------------
+    /// Serve the web dashboard UI (`TERMINUSDB_ENABLE_DASHBOARD`). Default: true.
+    pub enable_dashboard: Option<bool>,
+
+    // --- Auth / JWT / headers --------------------------------------------
+    /// Enable JWT authentication (`TERMINUSDB_JWT_ENABLED`). Default: false.
+    pub jwt_enabled: Option<bool>,
+    /// JWKS endpoint URL for JWT verification (`TERMINUSDB_SERVER_JWKS_ENDPOINT`).
+    pub jwks_endpoint: Option<String>,
+    /// JWT claim used as the agent name
+    /// (`TERMINUSDB_JWT_AGENT_NAME_PROPERTY`). Default: `preferred_username`.
+    pub jwt_agent_name_property: Option<String>,
+    /// Trust an upstream-set user header (`TERMINUSDB_INSECURE_USER_HEADER_ENABLED`).
+    /// Default: false. Insecure — only behind a trusted proxy.
+    pub insecure_user_header_enabled: Option<bool>,
+    /// Name of the trusted user header (`TERMINUSDB_INSECURE_USER_HEADER`).
+    pub insecure_user_header: Option<String>,
+
+    // --- Logging ----------------------------------------------------------
+    /// Log verbosity (`TERMINUSDB_LOG_LEVEL`). Default: `Info`.
+    pub log_level: Option<LogLevel>,
+    /// Log format (`TERMINUSDB_LOG_FORMAT`). Default: `Text`.
+    pub log_format: Option<LogFormat>,
+    /// Include stack traces in HTTP error responses
+    /// (`TERMINUSDB_EXPOSE_STACK_TRACES`). Default: false. Dev only.
+    pub expose_stack_traces: Option<bool>,
+
+    // --- Performance / caching -------------------------------------------
+    /// Layer LRU cache size (`TERMINUSDB_LRU_CACHE_SIZE`). Default: 512.
+    pub lru_cache_size: Option<u64>,
+    /// Per-operation cache-eviction probability, 0.0–1.0
+    /// (`TERMINUSDB_CACHE_EVICTION_PROBABILITY`). Default: 0.0 (disabled).
+    pub cache_eviction_probability: Option<f64>,
+    /// Document work limit (`TERMINUSDB_DOC_WORK_LIMIT`). Default: 500_000.
+    pub doc_work_limit: Option<u64>,
+    /// Enable query parallelization (`TERMINUSDB_PARALLELIZE_ENABLED`). Default: true.
+    pub parallelize_enabled: Option<bool>,
+    /// Worker elaboration preference, 0.0–1.0
+    /// (`TERMINUSDB_WORKER_ELABORATION_PREFERENCE`). Default: 0.5.
+    pub worker_elaboration_preference: Option<f64>,
+
+    // --- Schema / migration ----------------------------------------------
+    /// Skip loading the ref/repo schema (`TERMINUSDB_IGNORE_REF_AND_REPO_SCHEMA`).
+    pub ignore_ref_and_repo_schema: Option<bool>,
+    /// Auto-apply pending schema migrations (`TERMINUSDB_TRUST_MIGRATIONS`).
+    pub trust_migrations: Option<bool>,
+
+    // --- Pinning ----------------------------------------------------------
+    /// Databases to keep resident (`TERMINUSDB_PINNED_DATABASES`, comma-joined).
+    pub pinned_databases: Vec<String>,
+    /// Organizations to keep resident (`TERMINUSDB_PINNED_ORGANIZATIONS`, comma-joined).
+    pub pinned_organizations: Vec<String>,
+
+    // --- Integrations -----------------------------------------------------
+    /// gRPC label-service endpoint (`TERMINUSDB_GRPC_LABEL_ENDPOINT`).
+    pub grpc_label_endpoint: Option<String>,
+    /// Semantic indexer endpoint (`TERMINUSDB_SEMANTIC_INDEXER_ENDPOINT`).
+    pub semantic_indexer_endpoint: Option<String>,
+
+    // --- Escape hatches ---------------------------------------------------
+    /// Arbitrary extra environment variables set on the server process.
+    /// Applied after the typed fields above (so an entry here overrides them),
+    /// but before the harness-controlled port/workers/db_path. Use for any
+    /// `TERMINUSDB_*` var not modeled as a typed field.
+    pub env: BTreeMap<String, String>,
+    /// Extra positional arguments appended to the `serve` command line.
+    pub extra_serve_args: Vec<String>,
+}
+
+impl ServerConfig {
+    /// Apply every configured setting as an environment variable on `cmd`.
+    ///
+    /// Only `Some`/non-empty fields are set, so unset fields fall through to the
+    /// server's own defaults. The generic [`env`](Self::env) map is applied last
+    /// and therefore overrides any typed field it collides with.
+    fn apply_env(&self, cmd: &mut Command) {
+        // Booleans are emitted as the atoms the server compares against.
+        fn b(v: bool) -> &'static str {
+            if v {
+                "true"
+            } else {
+                "false"
+            }
+        }
+
+        if let Some(ref v) = self.server_name {
+            cmd.env("TERMINUSDB_SERVER_NAME", v);
+        }
+        if let Some(v) = self.max_transaction_retries {
+            cmd.env("TERMINUSDB_SERVER_MAX_TRANSACTION_RETRIES", v.to_string());
+        }
+
+        if let Some(ref v) = self.tmp_path {
+            cmd.env("TERMINUSDB_SERVER_TMP_PATH", v);
+        }
+        if let Some(ref v) = self.pack_dir {
+            cmd.env("TERMINUSDB_SERVER_PACK_DIR", v);
+        }
+        if let Some(ref v) = self.registry_path {
+            cmd.env("TERMINUSDB_SERVER_REGISTRY_PATH", v);
+        }
+        if let Some(ref v) = self.plugins_path {
+            cmd.env("TERMINUSDB_PLUGINS_PATH", v);
+        }
+        if let Some(ref v) = self.file_storage_path {
+            cmd.env("TERMINUSDB_FILE_STORAGE_PATH", v);
+        }
+        if let Some(ref v) = self.system_ssl_certs {
+            cmd.env("TERMINUSDB_SYSTEM_SSL_CERTS", v);
+        }
+
+        if let Some(v) = self.enable_dashboard {
+            cmd.env("TERMINUSDB_ENABLE_DASHBOARD", b(v));
+        }
+
+        if let Some(v) = self.jwt_enabled {
+            cmd.env("TERMINUSDB_JWT_ENABLED", b(v));
+        }
+        if let Some(ref v) = self.jwks_endpoint {
+            cmd.env("TERMINUSDB_SERVER_JWKS_ENDPOINT", v);
+        }
+        if let Some(ref v) = self.jwt_agent_name_property {
+            cmd.env("TERMINUSDB_JWT_AGENT_NAME_PROPERTY", v);
+        }
+        if let Some(v) = self.insecure_user_header_enabled {
+            cmd.env("TERMINUSDB_INSECURE_USER_HEADER_ENABLED", b(v));
+        }
+        if let Some(ref v) = self.insecure_user_header {
+            cmd.env("TERMINUSDB_INSECURE_USER_HEADER", v);
+        }
+
+        if let Some(v) = self.log_level {
+            cmd.env("TERMINUSDB_LOG_LEVEL", v.as_env());
+        }
+        if let Some(v) = self.log_format {
+            cmd.env("TERMINUSDB_LOG_FORMAT", v.as_env());
+        }
+        if let Some(v) = self.expose_stack_traces {
+            cmd.env("TERMINUSDB_EXPOSE_STACK_TRACES", b(v));
+        }
+
+        if let Some(v) = self.lru_cache_size {
+            cmd.env("TERMINUSDB_LRU_CACHE_SIZE", v.to_string());
+        }
+        if let Some(v) = self.cache_eviction_probability {
+            cmd.env("TERMINUSDB_CACHE_EVICTION_PROBABILITY", v.to_string());
+        }
+        if let Some(v) = self.doc_work_limit {
+            cmd.env("TERMINUSDB_DOC_WORK_LIMIT", v.to_string());
+        }
+        if let Some(v) = self.parallelize_enabled {
+            cmd.env("TERMINUSDB_PARALLELIZE_ENABLED", b(v));
+        }
+        if let Some(v) = self.worker_elaboration_preference {
+            cmd.env("TERMINUSDB_WORKER_ELABORATION_PREFERENCE", v.to_string());
+        }
+
+        if let Some(v) = self.ignore_ref_and_repo_schema {
+            cmd.env("TERMINUSDB_IGNORE_REF_AND_REPO_SCHEMA", b(v));
+        }
+        if let Some(v) = self.trust_migrations {
+            cmd.env("TERMINUSDB_TRUST_MIGRATIONS", b(v));
+        }
+
+        if !self.pinned_databases.is_empty() {
+            cmd.env("TERMINUSDB_PINNED_DATABASES", self.pinned_databases.join(","));
+        }
+        if !self.pinned_organizations.is_empty() {
+            cmd.env(
+                "TERMINUSDB_PINNED_ORGANIZATIONS",
+                self.pinned_organizations.join(","),
+            );
+        }
+
+        if let Some(ref v) = self.grpc_label_endpoint {
+            cmd.env("TERMINUSDB_GRPC_LABEL_ENDPOINT", v);
+        }
+        if let Some(ref v) = self.semantic_indexer_endpoint {
+            cmd.env("TERMINUSDB_SEMANTIC_INDEXER_ENDPOINT", v);
+        }
+
+        // Generic passthrough last so callers can override any typed field.
+        for (k, v) in &self.env {
+            cmd.env(k, v);
+        }
+    }
+}
+
 /// Options for starting a TerminusDB server.
 #[derive(Debug, Clone, Default)]
 pub struct ServerOptions {
@@ -97,6 +372,10 @@ pub struct ServerOptions {
     /// If None in test_mode, defaults to 15 minutes.
     /// If None otherwise, uses TERMINUSDB_DEFAULT_REQUEST_TIMEOUT or 60 seconds.
     pub request_timeout: Option<Duration>,
+    /// Typed configuration for the embedded server's runtime `TERMINUSDB_*`
+    /// settings (logging, auth, caching, paths, …). Applied per-process, so the
+    /// server can be fully configured without setting real environment vars.
+    pub config: ServerConfig,
 }
 
 /// Default worker count for test mode (reduced to minimize resource contention).
@@ -482,11 +761,12 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
         };
 
         eprintln!("[terminusdb-bin] Initializing store in {:?}...", path);
-        let mut init_cmd = std::process::Command::new(&binary_path);
-        init_cmd
-            .args(["store", "init"])
-            .current_dir(&path)
-            .env("TERMINUSDB_SERVER_DB_PATH", &path);
+        let mut init_cmd = Command::new(&binary_path);
+        init_cmd.args(["store", "init"]).current_dir(&path);
+        // Apply typed/generic config first; the db path is set last so it stays
+        // authoritative even if a caller put a value in `config.env`.
+        opts.config.apply_env(&mut init_cmd);
+        init_cmd.env("TERMINUSDB_SERVER_DB_PATH", &path);
         crate::apply_runtime_env(&mut init_cmd)?;
         let init_output = init_cmd.output()?;
         // The terminusdb binary always exits non-zero due to a SWI-Prolog
@@ -519,6 +799,8 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
         args.push("--memory".to_string());
         args.push(password.to_string());
     }
+    // Any extra positional `serve` flags requested by the caller.
+    args.extend(opts.config.extra_serve_args.iter().cloned());
 
     let stdout = if opts.quiet {
         Stdio::null()
@@ -529,17 +811,18 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
     eprintln!("[terminusdb-bin] Spawning server with args: {:?}", args);
 
     // Build command
-    let mut cmd = std::process::Command::new(&binary_path);
-    cmd.args(&args)
-        .stdout(stdout)
-        .stderr(Stdio::piped())
-        .env("TERMINUSDB_SERVER_PORT", port.to_string());
+    let mut cmd = Command::new(&binary_path);
+    cmd.args(&args).stdout(stdout).stderr(Stdio::piped());
 
-    // Set worker count if specified
+    // Apply the caller's typed/generic server config first...
+    opts.config.apply_env(&mut cmd);
+
+    // ...then the harness-controlled settings last, so port/workers/db_path
+    // always win over anything set via `config` (e.g. a stray `config.env`).
+    cmd.env("TERMINUSDB_SERVER_PORT", port.to_string());
     if let Some(w) = workers {
         cmd.env("TERMINUSDB_SERVER_WORKERS", w.to_string());
     }
-
     if let Some(ref path) = db_path {
         cmd.current_dir(path);
         cmd.env("TERMINUSDB_SERVER_DB_PATH", path);
@@ -825,6 +1108,87 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ServerConfig::apply_env` should set exactly the configured vars (typed +
+    /// generic passthrough), leave unset fields untouched, and let the generic
+    /// `env` map override a typed field. No live server required.
+    #[test]
+    fn server_config_apply_env_maps_fields() {
+        use std::collections::HashMap;
+
+        let cfg = ServerConfig {
+            jwt_enabled: Some(true),
+            enable_dashboard: Some(false),
+            log_level: Some(LogLevel::Debug),
+            log_format: Some(LogFormat::Json),
+            lru_cache_size: Some(1024),
+            worker_elaboration_preference: Some(0.25),
+            pinned_databases: vec!["admin/foo".into(), "admin/bar".into()],
+            // Collides with a typed field on purpose: the map wins.
+            env: BTreeMap::from([
+                ("TERMINUSDB_LOG_LEVEL".to_string(), "WARNING".to_string()),
+                ("TERMINUSDB_CUSTOM".to_string(), "x".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let mut cmd = Command::new("true");
+        cfg.apply_env(&mut cmd);
+
+        let envs: HashMap<String, String> = cmd
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+            .collect();
+
+        assert_eq!(envs.get("TERMINUSDB_JWT_ENABLED").map(String::as_str), Some("true"));
+        assert_eq!(
+            envs.get("TERMINUSDB_ENABLE_DASHBOARD").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(envs.get("TERMINUSDB_LOG_FORMAT").map(String::as_str), Some("json"));
+        assert_eq!(envs.get("TERMINUSDB_LRU_CACHE_SIZE").map(String::as_str), Some("1024"));
+        assert_eq!(
+            envs.get("TERMINUSDB_WORKER_ELABORATION_PREFERENCE").map(String::as_str),
+            Some("0.25")
+        );
+        assert_eq!(
+            envs.get("TERMINUSDB_PINNED_DATABASES").map(String::as_str),
+            Some("admin/foo,admin/bar")
+        );
+        assert_eq!(envs.get("TERMINUSDB_CUSTOM").map(String::as_str), Some("x"));
+        // Generic map applied last, so it overrides the typed LogLevel::Debug.
+        assert_eq!(envs.get("TERMINUSDB_LOG_LEVEL").map(String::as_str), Some("WARNING"));
+        // Unset fields must not be emitted (fall through to server defaults).
+        assert!(!envs.contains_key("TERMINUSDB_TRUST_MIGRATIONS"));
+        assert!(!envs.contains_key("TERMINUSDB_SERVER_TMP_PATH"));
+    }
+
+    /// End-to-end: a memory server started with several `config` options set
+    /// must still boot and respond. This exercises the full spawn path with the
+    /// new `TERMINUSDB_*` env vars applied (not just the pure mapping unit test).
+    #[tokio::test]
+    async fn test_server_starts_with_typed_config() -> anyhow::Result<()> {
+        let server = start_server(ServerOptions {
+            memory: true,
+            quiet: true,
+            test_mode: true,
+            config: ServerConfig {
+                log_format: Some(LogFormat::Json),
+                log_level: Some(LogLevel::Warning),
+                enable_dashboard: Some(false),
+                lru_cache_size: Some(1024),
+                parallelize_enabled: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await?;
+
+        // Server accepted the config and is serving requests.
+        let client = server.client().await?;
+        client.info().await?;
+        Ok(())
+    }
 
     /// Test that memory mode via TerminusDBServer::test() doesn't write files to disk.
     #[tokio::test]

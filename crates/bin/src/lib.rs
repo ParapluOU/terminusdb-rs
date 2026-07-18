@@ -64,7 +64,9 @@ pub mod api;
 pub mod server;
 
 // Re-export server API for convenience
-pub use server::{start_server, with_server, ServerOptions, TerminusDBServer};
+pub use server::{
+    start_server, with_server, LogFormat, LogLevel, ServerConfig, ServerOptions, TerminusDBServer,
+};
 
 /// The embedded TerminusDB binary.
 /// This is compiled during the build process and embedded into this crate.
