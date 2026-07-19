@@ -43,7 +43,10 @@ impl super::client::TerminusDBHttpClient {
         let uri = self
             .build_url()
             .endpoint("log")
-            .simple_database(&spec.db)
+            // Respect the branch in `spec` (defaults to main). Using
+            // `simple_database` ignored it, so `log`/`get_latest_commit_id` always
+            // read main regardless of the requested branch.
+            .database_with_branch(spec)
             .log_params(offset.unwrap_or_default(), count.unwrap_or(10), verbose)
             .build();
 
