@@ -1,8 +1,7 @@
 use crate::args::{TDBFieldOpts, TDBModelOpts};
 use crate::prelude::*;
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned};
-use syn::spanned::Spanned;
+use quote::quote;
 use syn::{
     Data, DataEnum, DeriveInput, Fields, FieldsNamed,
     Ident,
