@@ -9,6 +9,8 @@ use {
     crate::spec::BranchSpec,
     anyhow::Context,
     std::future::Future,
+    std::sync::Arc,
+    tokio::sync::Mutex,
     tracing::{debug, error, instrument},
 };
 
@@ -23,6 +25,16 @@ pub struct MergeBranchOptions {
     pub squash_message: Option<String>,
     /// Message for rebase/merge commit
     pub merge_message: Option<String>,
+    /// Optional lock serializing the final rebase onto the target branch.
+    ///
+    /// The insert + squash on the temporary branch parallelize freely, but the
+    /// rebase moves the *target* branch's HEAD. When many merge-branches rebase
+    /// onto the same target concurrently they race on that HEAD and the server
+    /// answers "Unexpected failure in request handler". Sharing one lock across
+    /// all concurrent `with_merge_branch` calls that target the same branch
+    /// serializes just the (cheap) rebase step while keeping the (expensive)
+    /// elaboration parallel. `None` preserves the prior unsynchronized behavior.
+    pub merge_lock: Option<Arc<Mutex<()>>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -147,14 +159,41 @@ impl TerminusDBHttpClient {
 
                 debug!("Rebasing {} onto {}", temp_branch_path, origin_path);
 
-                let rebase_result = self
-                    .rebase(
-                        &origin_path,      // target branch to rebase onto
-                        &temp_branch_path, // source of commits
-                        &options.author,
-                        &merge_msg,
-                    )
-                    .await;
+                // Serialize the rebase if a shared merge lock was supplied:
+                // concurrent rebases onto the same target race on its HEAD. The
+                // temp branch's commits survive a failed rebase, so we retry the
+                // rebase (not the insert) with backoff — under contention the
+                // server intermittently answers "Unexpected failure in request
+                // handler", which clears once other writers settle.
+                let rebase_result = {
+                    let _merge_guard = match &options.merge_lock {
+                        Some(lock) => Some(lock.lock().await),
+                        None => None,
+                    };
+                    let backoffs_ms = [150u64, 400, 900, 2000, 4000];
+                    let mut attempt = 0;
+                    loop {
+                        let r = self
+                            .rebase(&origin_path, &temp_branch_path, &options.author, &merge_msg)
+                            .await;
+                        match r {
+                            Ok(v) => break Ok(v),
+                            Err(e) if attempt < backoffs_ms.len() => {
+                                debug!(
+                                    "Rebase of {} attempt {} failed ({e:#}); retrying",
+                                    temp_branch_path,
+                                    attempt + 1
+                                );
+                                tokio::time::sleep(std::time::Duration::from_millis(
+                                    backoffs_ms[attempt],
+                                ))
+                                .await;
+                                attempt += 1;
+                            }
+                            Err(e) => break Err(e),
+                        }
+                    }
+                };
 
                 // Cleanup: delete temp branch regardless of rebase outcome
                 debug!("Cleaning up temporary branch {}", temp_branch_path);
