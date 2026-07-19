@@ -43,6 +43,7 @@ pub mod insert_result;
 pub mod instance;
 pub mod log;
 pub mod merge_branch;
+pub mod merge_pool;
 pub mod migration;
 pub mod prefix;
 pub mod open;
@@ -83,6 +84,8 @@ pub use helpers::{
 };
 pub use insert_result::InsertInstanceResult;
 pub use merge_branch::MergeBranchOptions;
+#[cfg(not(target_arch = "wasm32"))]
+pub use merge_pool::{BranchMergePool, MergePoolOptions, MergePoolStats};
 pub use organization::{
     Capability, Organization, OrganizationDatabase, OrganizationResponse, OrganizationUser,
     Role as OrganizationRole, UserRoleRequest,
