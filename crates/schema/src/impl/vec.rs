@@ -185,7 +185,8 @@ impl<I: ToTDBInstance> ToTDBInstances for Vec<I> {
 }
 
 impl<T: FromInstanceProperty + FromTDBInstance + ToTDBSchema> FromInstanceProperty for Vec<T> {
-    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+    // `default` so the `Vec<Option<T>>` specialization below can override it.
+    default fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
         match prop {
             InstanceProperty::Primitives(arr) => {
                 if arr.is_empty() {
@@ -231,6 +232,33 @@ impl<T: FromInstanceProperty + FromTDBInstance + ToTDBSchema> FromInstanceProper
                 todo!()
             }
             _ => unimplemented!(),
+        }
+    }
+}
+
+// Deserialize counterpart to `Vec<Option<T>>: ToInstanceProperty` (a primitives
+// list with `None` encoded as `PrimitiveValue::Null`). Concrete `usize` case
+// (Parture's `Fret = usize`); it specializes the `default` generic `Vec<T>`.
+impl FromInstanceProperty for Vec<Option<usize>> {
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitives(prims) => prims
+                .iter()
+                .map(|pv| match pv {
+                    PrimitiveValue::Null => Ok(None),
+                    other => {
+                        <usize as FromInstanceProperty>::from_property(
+                            &InstanceProperty::Primitive(other.clone()),
+                        )
+                        .map(Some)
+                    }
+                })
+                .collect(),
+            InstanceProperty::Primitive(PrimitiveValue::Null) => Ok(vec![None]),
+            other => Err(anyhow::anyhow!(
+                "Vec<Option<usize>>::from_property expected a primitives list, got {:?}",
+                other
+            )),
         }
     }
 }

@@ -294,6 +294,106 @@ impl<Parent, T: ToTDBInstance + Clone, S> ToInstanceProperty<Parent> for Hashabl
     }
 }
 
+// Deserialize side, mirroring `HashSet<T>` above — each element decodes via its
+// own `FromInstanceProperty` (so `UniqSet<T>` = `HashableHashSet<Uniq<T>>` works
+// through the blanket `Uniq` impl). Collected via `FromIterator`.
+impl<T, S> FromInstanceProperty for HashableHashSet<T, S>
+where
+    T: FromInstanceProperty + Eq + Hash,
+    S: std::hash::BuildHasher + Default,
+{
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        let mut items: Vec<T> = Vec::new();
+        match prop {
+            InstanceProperty::Primitives(primitives) => {
+                for prim in primitives {
+                    items.push(T::from_property(&InstanceProperty::Primitive(prim.clone()))?);
+                }
+            }
+            InstanceProperty::Relations(relations) => {
+                for rel in relations {
+                    match rel {
+                        RelationValue::One(_) => {
+                            items.push(T::from_property(&InstanceProperty::Relation(rel.clone()))?);
+                        }
+                        _ => {
+                            return Err(anyhow!("Unsupported relation type for HashableHashSet"))
+                        }
+                    }
+                }
+            }
+            InstanceProperty::Any(any_values) => {
+                for value in any_values {
+                    items.push(T::from_property(value)?);
+                }
+            }
+            _ => {
+                return Err(anyhow!(
+                    "Expected Primitives, Relations, or Any for HashableHashSet, got {:?}",
+                    prop
+                ))
+            }
+        }
+        Ok(items.into_iter().collect())
+    }
+}
+
+// JSON-LD property deserialize for a set, mirroring the `Vec<T>` impl (container
+// kind decided by the first element). Needed so `UniqSet<T>` fields deserialize
+// under the `InstanceFromJson` derive.
+impl<T, S, Parent> InstancePropertyFromJson<Parent> for HashableHashSet<T, S>
+where
+    T: InstancePropertyFromJson<Parent>,
+    HashableHashSet<T, S>: ToInstanceProperty<Parent>,
+{
+    // An absent set field means the empty set (an empty/rest collection is not
+    // written out), so decode `None` to empty rather than erroring like the
+    // default does for required properties.
+    fn property_from_maybe_json(
+        json: Option<Value>,
+    ) -> anyhow::Result<InstanceProperty> {
+        match json {
+            Some(v) => Self::property_from_json(v),
+            None => Ok(InstanceProperty::Relations(Vec::new())),
+        }
+    }
+
+    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+        match json {
+            Value::Array(array) => {
+                let mut properties = Vec::with_capacity(array.len());
+                for value in array {
+                    properties.push(T::property_from_json(value)?);
+                }
+                if properties.is_empty() {
+                    Ok(InstanceProperty::Primitives(Vec::new()))
+                } else if properties[0].is_primitive() {
+                    let primitives = properties
+                        .into_iter()
+                        .map(|p| match p {
+                            InstanceProperty::Primitive(pv) => Ok(pv),
+                            _ => Err(anyhow!("Expected all set elements to be primitive values")),
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    Ok(InstanceProperty::Primitives(primitives))
+                } else if properties[0].is_relation() {
+                    let relations = properties
+                        .into_iter()
+                        .map(|p| match p {
+                            InstanceProperty::Relation(rv) => Ok(rv),
+                            _ => Err(anyhow!("Expected all set elements to be relations")),
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    Ok(InstanceProperty::Relations(relations))
+                } else {
+                    Ok(InstanceProperty::Any(properties))
+                }
+            }
+            _ => Err(anyhow!("Expected an array for HashableHashSet, got {:?}", json)),
+        }
+    }
+}
+
 // // === InstancePropertyFromJson implementations ===
 //
 // impl<Parent, T> InstancePropertyFromJson<Parent> for HashSet<T>

@@ -574,8 +574,14 @@ fn generate_field_deserializers(
         // Use property_from_maybe_json for all fields, letting the trait implementation
         // handle the differences between Option and non-Option types
         let deserializer = if is_id_field {
-            // Special handling for id_field - use the extracted @id value
-            quote_spanned! {field.span()=>
+            // Special handling for id_field - use the extracted @id value.
+            // NOTE: use `quote!` (not `quote_spanned!` on `field.span()`): these
+            // statements reference the `json_map` / `_properties` locals defined
+            // in the generated fn body. When the struct is itself produced by
+            // another macro (e.g. Parture's `model_struct!`), the field span
+            // carries that macro's hygiene and the shared locals become
+            // inaccessible ("not accessible due to macro hygiene").
+            quote! {
                 // For id_field, create a Value::String from the extracted @id
                 let json_value = id.as_ref().map(|id_str| Value::String(id_str.clone()));
 
@@ -592,7 +598,9 @@ fn generate_field_deserializers(
                 _properties.insert(#json_key_name.to_string(), _prop?);
             }
         } else {
-            quote_spanned! {field.span()=>
+            // `quote!` (not `quote_spanned!`) — see the hygiene note above; these
+            // statements reference the `json_map` / `_properties` locals.
+            quote! {
                 // let err = concat!("Failed to deserialize field '{}' for type '{}'", #json_key_name, #expected_type_name);
 
                 let json_value = json_map.remove(#json_key_name);
