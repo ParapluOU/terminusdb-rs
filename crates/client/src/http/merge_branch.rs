@@ -14,6 +14,51 @@ use {
     tracing::{debug, error, instrument},
 };
 
+/// How [`TerminusDBHttpClient::with_merge_branch`] integrates the temporary
+/// branch back into the target. TerminusDB has no 3-way merge, and the two
+/// options fail in different ways (see [`MergeError`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MergeStrategy {
+    /// Replay the temp branch's commits onto the target HEAD (linear history).
+    /// Simple, but fails (`unexpected_rebase_failure`) when the target HEAD moved
+    /// since the branch forked — even for disjoint changes.
+    #[default]
+    Rebase,
+    /// Apply the content diff (fork-point → temp HEAD) onto the target's *current*
+    /// state. Tolerates a moved HEAD, but reports document-level conflicts when
+    /// the diff re-touches docs already present on the target. Needs a commit-id
+    /// lookup for the fork point + temp HEAD.
+    Apply,
+}
+
+/// The distinct failure shapes of the two [`MergeStrategy`] variants. Returned
+/// (via `anyhow`, so `err.downcast_ref::<MergeError>()`) from the merge step of
+/// [`TerminusDBHttpClient::with_merge_branch`].
+#[derive(Debug, thiserror::Error)]
+pub enum MergeError {
+    /// `Rebase` onto the target failed (commonly a diverged HEAD).
+    #[error("rebase of merge branch onto '{target}' failed: {source:#}")]
+    RebaseFailed {
+        target: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    /// `Apply` reported document-level conflicts; `witnesses` are the server's
+    /// `api:witnesses`, e.g. `{"@id_already_exists": "...", "@op": "InsertConflict"}`.
+    #[error("apply of merge branch onto '{target}' hit {} document conflict(s)", .witnesses.len())]
+    ApplyConflict {
+        target: String,
+        witnesses: Vec<serde_json::Value>,
+    },
+    /// `Apply` failed for another reason (transport, auth, missing commit, …).
+    #[error("apply of merge branch onto '{target}' failed: {source:#}")]
+    ApplyFailed {
+        target: String,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
 /// Options for the merge branch operation
 #[derive(Debug, Clone, Default)]
 pub struct MergeBranchOptions {
@@ -25,6 +70,10 @@ pub struct MergeBranchOptions {
     pub squash_message: Option<String>,
     /// Message for rebase/merge commit
     pub merge_message: Option<String>,
+    /// Which strategy the final merge uses (default: [`MergeStrategy::Rebase`]).
+    pub strategy: MergeStrategy,
+    /// Conflict handling for [`MergeStrategy::Apply`] (`keep` / `match_final_state`).
+    pub apply_options: crate::ApplyOptions,
     /// Optional lock serializing the final rebase onto the target branch.
     ///
     /// The insert + squash on the temporary branch parallelize freely, but the
@@ -120,9 +169,22 @@ impl TerminusDBHttpClient {
             ref_commit: None,
         };
 
+        // For the apply strategy, capture the fork-point commit (== the temp
+        // branch's HEAD right after creation) as apply's diff base.
+        let fork_commit = if options.strategy == MergeStrategy::Apply {
+            Some(
+                self.get_latest_commit_id(&working_spec)
+                    .await
+                    .context("merge branch: read fork-point commit for apply")?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
         let branch_client = BranchClient::new(
             self.clone(),
-            working_spec,
+            working_spec.clone(),
             spec.clone(),
             temp_branch_name.clone(),
         );
@@ -152,54 +214,124 @@ impl TerminusDBHttpClient {
                     }
                 }
 
-                // Rebase onto target
                 let merge_msg = options
                     .merge_message
                     .unwrap_or_else(|| "Merge from temporary branch".to_string());
+                let target_name = spec.branch.as_deref().unwrap_or("main").to_string();
 
-                debug!("Rebasing {} onto {}", temp_branch_path, origin_path);
-
-                // Serialize the rebase if a shared merge lock was supplied:
-                // concurrent rebases onto the same target race on its HEAD. The
-                // temp branch's commits survive a failed rebase, so we retry the
-                // rebase (not the insert) with backoff — under contention the
-                // server intermittently answers "Unexpected failure in request
-                // handler", which clears once other writers settle.
-                let rebase_result = {
-                    let _merge_guard = match &options.merge_lock {
-                        Some(lock) => Some(lock.lock().await),
-                        None => None,
-                    };
-                    let backoffs_ms = [150u64, 400, 900, 2000, 4000];
-                    let mut attempt = 0;
-                    loop {
-                        let r = self
-                            .rebase(&origin_path, &temp_branch_path, &options.author, &merge_msg)
-                            .await;
-                        match r {
-                            Ok(v) => break Ok(v),
-                            Err(e) if attempt < backoffs_ms.len() => {
-                                debug!(
-                                    "Rebase of {} attempt {} failed ({e:#}); retrying",
-                                    temp_branch_path,
-                                    attempt + 1
-                                );
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    backoffs_ms[attempt],
-                                ))
-                                .await;
-                                attempt += 1;
+                let merge_err: Option<MergeError> = match options.strategy {
+                    MergeStrategy::Rebase => {
+                        debug!("Rebasing {} onto {}", temp_branch_path, origin_path);
+                        // Serialize the rebase if a shared merge lock was supplied:
+                        // concurrent rebases onto the same target race on its HEAD.
+                        // The temp branch's commits survive a failed rebase, so we
+                        // retry the rebase (not the insert) with backoff — under
+                        // contention the server intermittently answers "Unexpected
+                        // failure in request handler", which clears as writers settle.
+                        let rebase_result = {
+                            let _merge_guard = match &options.merge_lock {
+                                Some(lock) => Some(lock.lock().await),
+                                None => None,
+                            };
+                            let backoffs_ms = [150u64, 400, 900, 2000, 4000];
+                            let mut attempt = 0;
+                            loop {
+                                let r = self
+                                    .rebase(
+                                        &origin_path,
+                                        &temp_branch_path,
+                                        &options.author,
+                                        &merge_msg,
+                                    )
+                                    .await;
+                                match r {
+                                    Ok(v) => break Ok(v),
+                                    Err(e) if attempt < backoffs_ms.len() => {
+                                        debug!(
+                                            "Rebase of {} attempt {} failed ({e:#}); retrying",
+                                            temp_branch_path,
+                                            attempt + 1
+                                        );
+                                        tokio::time::sleep(std::time::Duration::from_millis(
+                                            backoffs_ms[attempt],
+                                        ))
+                                        .await;
+                                        attempt += 1;
+                                    }
+                                    Err(e) => break Err(e),
+                                }
                             }
-                            Err(e) => break Err(e),
+                        };
+                        rebase_result.err().map(|source| MergeError::RebaseFailed {
+                            target: target_name.clone(),
+                            source,
+                        })
+                    }
+                    MergeStrategy::Apply => {
+                        debug!("Applying {} diff onto {}", temp_branch_path, origin_path);
+                        // `before` = fork point (captured after create); `after` =
+                        // the temp branch HEAD (post-squash if squashed).
+                        let before =
+                            fork_commit.expect("fork_commit is captured for MergeStrategy::Apply");
+                        match self.get_latest_commit_id(&working_spec).await {
+                            Err(source) => Some(MergeError::ApplyFailed {
+                                target: target_name.clone(),
+                                source,
+                            }),
+                            Ok(after) => {
+                                let _merge_guard = match &options.merge_lock {
+                                    Some(lock) => Some(lock.lock().await),
+                                    None => None,
+                                };
+                                match self
+                                    .apply_commit_diff(
+                                        spec,
+                                        &before,
+                                        &after.to_string(),
+                                        &options.author,
+                                        &merge_msg,
+                                        options.apply_options.clone(),
+                                    )
+                                    .await
+                                {
+                                    Err(source) => Some(MergeError::ApplyFailed {
+                                        target: target_name.clone(),
+                                        source,
+                                    }),
+                                    // apply_commit_diff returns Ok even when the
+                                    // server reports a document conflict — inspect it.
+                                    Ok(v) => {
+                                        if v.get("api:status").and_then(|s| s.as_str())
+                                            == Some("api:conflict")
+                                        {
+                                            let witnesses = v
+                                                .get("api:witnesses")
+                                                .and_then(|w| w.as_array())
+                                                .cloned()
+                                                .unwrap_or_default();
+                                            Some(MergeError::ApplyConflict {
+                                                target: target_name.clone(),
+                                                witnesses,
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 };
 
-                // Cleanup: delete temp branch regardless of rebase outcome
+                // Cleanup: delete temp branch regardless of merge outcome
                 debug!("Cleaning up temporary branch {}", temp_branch_path);
                 let _ = self.delete_branch(&temp_branch_path).await;
 
-                rebase_result.context("Failed to rebase merge branch onto target")?;
+                if let Some(e) = merge_err {
+                    // Wrapped in anyhow so the signature is unchanged; downcast to
+                    // `MergeError` to distinguish RebaseFailed / ApplyConflict / …
+                    return Err(anyhow::Error::new(e));
+                }
 
                 Ok(value)
             }

@@ -83,7 +83,7 @@ pub use helpers::{
     format_id,
 };
 pub use insert_result::InsertInstanceResult;
-pub use merge_branch::MergeBranchOptions;
+pub use merge_branch::{MergeBranchOptions, MergeError, MergeStrategy};
 #[cfg(not(target_arch = "wasm32"))]
 pub use merge_pool::{BranchMergePool, MergePoolOptions, MergePoolStats};
 pub use organization::{

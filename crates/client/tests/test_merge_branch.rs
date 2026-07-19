@@ -68,6 +68,7 @@ async fn test_with_merge_branch_success() -> anyhow::Result<()> {
                 author: "test".into(),
                 squash_message: Some("Squashed test changes".into()),
                 merge_message: Some("Merged test branch".into()),
+                ..Default::default()
             },
             |branch_client| async move {
                 let person2 = TestPerson {
@@ -91,6 +92,65 @@ async fn test_with_merge_branch_success() -> anyhow::Result<()> {
     // Cleanup
     client.delete_database(&db_name).await?;
 
+    Ok(())
+}
+
+/// Same happy path as `test_with_merge_branch_success`, but integrating with the
+/// `Apply` strategy (diff fork-point → temp HEAD onto the current target) instead
+/// of the default `Rebase`. Disjoint documents apply cleanly.
+#[tokio::test]
+async fn test_with_merge_branch_apply_strategy() -> anyhow::Result<()> {
+    let server = TerminusDBServer::test_instance().await?;
+
+    let client = server.client().await?;
+    let db_name = unique_db_name();
+    let client = client.ensure_database(&db_name).await?;
+    let spec = BranchSpec::new(&db_name);
+
+    let args = DocumentInsertArgs::from(spec.clone());
+    client
+        .insert_entity_schema::<TestPerson>(args.clone())
+        .await?;
+
+    let person1 = TestPerson {
+        id: EntityIDFor::new("person_alice").unwrap(),
+        name: "Alice".to_string(),
+        age: 30,
+    };
+    client.save_instance(&person1, args.clone()).await?;
+    assert_eq!(client.count_instances::<TestPerson>(&spec).await?, 1);
+
+    let result = client
+        .with_merge_branch(
+            &spec,
+            MergeBranchOptions {
+                squash: true,
+                author: "test".into(),
+                strategy: MergeStrategy::Apply,
+                ..Default::default()
+            },
+            |branch_client| async move {
+                let person2 = TestPerson {
+                    id: EntityIDFor::new("person_bob").unwrap(),
+                    name: "Bob".to_string(),
+                    age: 25,
+                };
+                let args = DocumentInsertArgs::from(branch_client.spec_clone());
+                branch_client.save_instance(&person2, args).await?;
+                Ok("applied")
+            },
+        )
+        .await?;
+
+    assert_eq!(result, "applied");
+
+    let final_count = client.count_instances::<TestPerson>(&spec).await?;
+    assert_eq!(
+        final_count, 2,
+        "Should have 2 persons after apply-strategy merge"
+    );
+
+    client.delete_database(&db_name).await?;
     Ok(())
 }
 
