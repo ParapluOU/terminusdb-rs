@@ -148,6 +148,9 @@ pub use terminusdb_schema::{ToMaybeTDBSchema, ToSchemaClass};
 /// Instance property conversion traits
 pub use terminusdb_schema::{FromInstanceProperty, ToInstanceProperty};
 
+/// Generic RDF Turtle serialization for derived TerminusDB models.
+pub use terminusdb_turtle::{to_turtle, to_turtle_with, TurtleError, TurtleOptions};
+
 /// Multiple schema generation
 pub use terminusdb_schema::ToTDBSchemas;
 

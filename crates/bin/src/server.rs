@@ -324,7 +324,10 @@ impl ServerConfig {
         }
 
         if !self.pinned_databases.is_empty() {
-            cmd.env("TERMINUSDB_PINNED_DATABASES", self.pinned_databases.join(","));
+            cmd.env(
+                "TERMINUSDB_PINNED_DATABASES",
+                self.pinned_databases.join(","),
+            );
         }
         if !self.pinned_organizations.is_empty() {
             cmd.env(
@@ -401,6 +404,11 @@ impl TerminusDBServer {
     /// Get the port this server is listening on.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Get the operating-system process id of the running embedded server.
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
     }
 
     /// Start a new test server with default test settings.
@@ -1140,15 +1148,25 @@ mod tests {
             .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
             .collect();
 
-        assert_eq!(envs.get("TERMINUSDB_JWT_ENABLED").map(String::as_str), Some("true"));
+        assert_eq!(
+            envs.get("TERMINUSDB_JWT_ENABLED").map(String::as_str),
+            Some("true")
+        );
         assert_eq!(
             envs.get("TERMINUSDB_ENABLE_DASHBOARD").map(String::as_str),
             Some("false")
         );
-        assert_eq!(envs.get("TERMINUSDB_LOG_FORMAT").map(String::as_str), Some("json"));
-        assert_eq!(envs.get("TERMINUSDB_LRU_CACHE_SIZE").map(String::as_str), Some("1024"));
         assert_eq!(
-            envs.get("TERMINUSDB_WORKER_ELABORATION_PREFERENCE").map(String::as_str),
+            envs.get("TERMINUSDB_LOG_FORMAT").map(String::as_str),
+            Some("json")
+        );
+        assert_eq!(
+            envs.get("TERMINUSDB_LRU_CACHE_SIZE").map(String::as_str),
+            Some("1024")
+        );
+        assert_eq!(
+            envs.get("TERMINUSDB_WORKER_ELABORATION_PREFERENCE")
+                .map(String::as_str),
             Some("0.25")
         );
         assert_eq!(
@@ -1157,7 +1175,10 @@ mod tests {
         );
         assert_eq!(envs.get("TERMINUSDB_CUSTOM").map(String::as_str), Some("x"));
         // Generic map applied last, so it overrides the typed LogLevel::Debug.
-        assert_eq!(envs.get("TERMINUSDB_LOG_LEVEL").map(String::as_str), Some("WARNING"));
+        assert_eq!(
+            envs.get("TERMINUSDB_LOG_LEVEL").map(String::as_str),
+            Some("WARNING")
+        );
         // Unset fields must not be emitted (fall through to server defaults).
         assert!(!envs.contains_key("TERMINUSDB_TRUST_MIGRATIONS"));
         assert!(!envs.contains_key("TERMINUSDB_SERVER_TMP_PATH"));
@@ -1345,11 +1366,7 @@ mod tests {
                     // Query to verify using list_instances
                     let results: Vec<ParallelTestModel> =
                         client.list_instances(&spec, None, None).await?;
-                    eprintln!(
-                        "[test] Server {} queried {} instances",
-                        i,
-                        results.len()
-                    );
+                    eprintln!("[test] Server {} queried {} instances", i, results.len());
 
                     // Verify we got our instance back
                     assert_eq!(results.len(), 1, "Server {} should have 1 instance", i);

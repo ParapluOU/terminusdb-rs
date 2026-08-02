@@ -1,0 +1,22 @@
+[package]
+name = "terminusdb-turtle"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Generic TerminusDB model to RDF Turtle serialization"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+terminusdb-schema = { path = "../schema" }
+serde_json.workspace = true
+thiserror.workspace = true
+urlencoding.workspace = true
+
+[dev-dependencies]
+terminusdb-schema-derive = { path = "../schema/derive" }
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true

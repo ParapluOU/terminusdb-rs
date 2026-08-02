@@ -19,6 +19,7 @@ members = [
     "crates/terminusdb",
     "crates/test",
     "crates/test/macros",
+    "crates/turtle",
     "crates/types",
     "crates/typestate",
     "crates/woql-builder",

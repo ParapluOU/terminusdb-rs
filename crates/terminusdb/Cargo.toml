@@ -12,5 +12,6 @@ categories.workspace = true
 [dependencies]
 terminusdb-client = { path = "../client" }
 terminusdb-schema = { path = "../schema" }
+terminusdb-turtle = { path = "../turtle" }
 terminusdb-types = { path = "../types" }
 terminusdb-bin = { path = "../bin" }
