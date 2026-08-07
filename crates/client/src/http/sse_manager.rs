@@ -3,6 +3,7 @@
 //! This module provides a centralized manager for SSE connections that routes
 //! changeset events to registered listeners based on their resource paths.
 
+use super::auth::AuthMethod;
 use super::change_listener::ChangeListenerInner;
 use super::changeset::ChangesetEvent;
 use anyhow::{anyhow, Context};
@@ -24,20 +25,44 @@ struct SseManagerInner {
     endpoint: String,
     user: String,
     pass: String,
+    /// Auth override for the SSE connection
+    auth: Option<AuthMethod>,
     /// Registry of listeners by resource path (e.g., "admin/dev/local/branch/main")
     listeners: RwLock<HashMap<String, Vec<Weak<ChangeListenerInner>>>>,
     /// Handle to the background SSE processing task
     task_handle: RwLock<Option<JoinHandle<()>>>,
 }
 
+trait SseAuthApply {
+    fn apply_sse_auth(self, manager: &SseManagerInner) -> reqwest::RequestBuilder;
+}
+
+impl SseAuthApply for reqwest::RequestBuilder {
+    fn apply_sse_auth(self, manager: &SseManagerInner) -> reqwest::RequestBuilder {
+        match &manager.auth {
+            Some(AuthMethod::Bearer(token)) => self.bearer_auth(token),
+            Some(AuthMethod::ApiKey(key)) => {
+                self.header("Authorization", format!("Apikey {key}"))
+            }
+            _ => self.basic_auth(&manager.user, Some(&manager.pass)),
+        }
+    }
+}
+
 impl SseManager {
     /// Create a new SSE manager
-    pub fn new(endpoint: String, user: String, pass: String) -> Self {
+    pub fn new(
+        endpoint: String,
+        user: String,
+        pass: String,
+        auth: Option<AuthMethod>,
+    ) -> Self {
         Self {
             inner: Arc::new(SseManagerInner {
                 endpoint,
                 user,
                 pass,
+                auth,
                 listeners: RwLock::new(HashMap::new()),
                 task_handle: RwLock::new(None),
             }),
@@ -142,7 +167,7 @@ impl SseManagerInner {
         // Create authenticated request
         let request = client
             .get(&url)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_sse_auth(self)
             .header("Accept", "text/event-stream");
 
         // Create EventSource from the request

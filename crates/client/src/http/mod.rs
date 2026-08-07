@@ -28,6 +28,9 @@
 
 // Public modules
 pub mod apply;
+pub mod auth;
+#[cfg(test)]
+mod auth_tests;
 pub mod branch;
 pub mod branch_client;
 pub mod change_listener;

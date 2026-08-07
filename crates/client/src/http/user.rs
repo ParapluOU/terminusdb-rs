@@ -1,5 +1,6 @@
 //! User management operations
 
+use super::auth::AuthApply;
 use {
     crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
@@ -110,7 +111,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -182,7 +183,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to get user")?;
@@ -274,7 +275,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .put(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&request)
             .send()
@@ -346,7 +347,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .delete(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to delete user")?;
@@ -406,7 +407,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to list users")?;

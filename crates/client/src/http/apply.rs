@@ -2,6 +2,7 @@
 //! between two commits and apply it to a branch — cherry-pick a change or
 //! squash-merge between branches. See `docs/terminusdb/document-insertion.md`.
 
+use super::auth::AuthApply;
 use anyhow::Context;
 use serde::Serialize;
 use serde_json::Value;
@@ -68,7 +69,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .json(&body)
             .send()
             .await

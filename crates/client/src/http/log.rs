@@ -1,5 +1,6 @@
 //! Log and commit tracking operations
 
+use super::auth::AuthApply;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::log::{CommitLogIterator, EntityIterator, LogEntry, LogOpts};
 
@@ -55,7 +56,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await?;
 

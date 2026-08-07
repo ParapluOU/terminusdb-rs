@@ -1,5 +1,6 @@
 //! Untyped document CRUD operations
 
+use super::auth::AuthApply;
 use anyhow::bail;
 use tap::TapFallible;
 
@@ -275,7 +276,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await?;
 
@@ -351,7 +352,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .header("X-HTTP-Method-Override", "GET")
             .body(body)
@@ -524,7 +525,7 @@ impl super::client::TerminusDBHttpClient {
                 let mut request = self
                     .http
                     .post(uri)
-                    .basic_auth(&self.user, Some(&self.pass))
+                    .apply_auth(self)
                     .header("Content-Type", "application/json")
                     .body(json.clone());
 
@@ -574,7 +575,7 @@ impl super::client::TerminusDBHttpClient {
                 let mut request = self
                     .http
                     .put(uri)
-                    .basic_auth(&self.user, Some(&self.pass))
+                    .apply_auth(self)
                     .header("Content-Type", "application/json")
                     .body(json.clone());
 
@@ -606,7 +607,7 @@ impl super::client::TerminusDBHttpClient {
                 let mut request = self
                     .http
                     .put(uri)
-                    .basic_auth(&self.user, Some(&self.pass))
+                    .apply_auth(self)
                     .header("Content-Type", "application/json")
                     .body(json.clone());
 
@@ -814,7 +815,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .put(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(json.to_string())
             .send()
@@ -1005,7 +1006,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await?;
 
@@ -1143,7 +1144,7 @@ impl super::client::TerminusDBHttpClient {
             let mut request = self
                 .http
                 .post(base_uri)
-                .basic_auth(&self.user, Some(&self.pass))
+                .apply_auth(self)
                 .header("Content-Type", "application/json")
                 .header("X-HTTP-Method-Override", "GET")
                 .body(query_json);
@@ -1156,7 +1157,7 @@ impl super::client::TerminusDBHttpClient {
             request.send().await?
         } else {
             // Use GET for smaller requests
-            let mut request = self.http.get(uri).basic_auth(&self.user, Some(&self.pass));
+            let mut request = self.http.get(uri).apply_auth(self);
 
             // Apply timeout if provided
             if let Some(timeout) = opts.timeout {
@@ -1201,7 +1202,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await?;
 
@@ -1315,7 +1316,7 @@ impl super::client::TerminusDBHttpClient {
             let mut request = self
                 .http
                 .post(base_uri)
-                .basic_auth(&self.user, Some(&self.pass))
+                .apply_auth(self)
                 .header("Content-Type", "application/json")
                 .header("X-HTTP-Method-Override", "GET")
                 .body(query_json);
@@ -1328,7 +1329,7 @@ impl super::client::TerminusDBHttpClient {
             request.send().await?
         } else {
             // Use GET for smaller requests
-            let mut request = self.http.get(uri).basic_auth(&self.user, Some(&self.pass));
+            let mut request = self.http.get(uri).apply_auth(self);
 
             // Apply timeout if provided
             if let Some(timeout) = opts.timeout {
@@ -1434,7 +1435,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .delete(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await?;
 

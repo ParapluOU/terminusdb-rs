@@ -1,5 +1,6 @@
 //! Database administration operations
 
+use super::auth::AuthApply;
 use {
     crate::{
         debug::{OperationEntry, OperationType, QueryLogEntry},
@@ -97,7 +98,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(
                 json!({
@@ -253,7 +254,7 @@ impl super::client::TerminusDBHttpClient {
         let result = self
             .http
             .delete(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to delete database");
@@ -414,7 +415,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri.clone())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context(format!("Failed to list databases from {}", &uri))?;
@@ -555,7 +556,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .put(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -631,7 +632,7 @@ impl super::client::TerminusDBHttpClient {
         // Acquire concurrency permit for write operations
         let _permit = self.acquire_write_permit().await;
 
-        let mut request = self.http.post(uri).basic_auth(&self.user, Some(&self.pass));
+        let mut request = self.http.post(uri).apply_auth(self);
 
         // Apply timeout if provided
         if let Some(timeout) = timeout {
@@ -711,7 +712,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .get(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to get prefixes")?;

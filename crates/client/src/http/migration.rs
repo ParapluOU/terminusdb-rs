@@ -6,6 +6,7 @@
 //!
 //! See `docs/terminusdb/schema-migration-reference-guide.md`.
 
+use super::auth::AuthApply;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -164,7 +165,7 @@ impl TerminusDBHttpClient {
         let request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .query(&query)
             .json(&body);
 

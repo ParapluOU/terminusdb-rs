@@ -3,6 +3,7 @@
 //! This module provides support for executing GraphQL queries against TerminusDB's GraphQL endpoint.
 //! It includes utilities for introspection, query execution, and response handling.
 
+use super::auth::AuthApply;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -249,7 +250,7 @@ impl TerminusDBHttpClient {
         let mut http_request = self
             .http
             .post(url)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&request);
 

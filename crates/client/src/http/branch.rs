@@ -1,5 +1,6 @@
 //! Branch management operations
 
+use super::auth::AuthApply;
 use {
     crate::{
         debug::{OperationEntry, OperationType, QueryLogEntry},
@@ -81,7 +82,7 @@ impl super::client::TerminusDBHttpClient {
         let request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json");
 
         // Apply timeout: use provided timeout or default to 8 hours for squash operations
@@ -320,7 +321,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(
                 json!({
@@ -410,7 +411,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(
                 json!({
@@ -545,7 +546,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .delete(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to delete branch")?;
@@ -639,7 +640,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(
                 json!({

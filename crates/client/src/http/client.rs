@@ -1,5 +1,6 @@
 //! Core HTTP client struct and constructors
 
+use super::auth::AuthApply;
 #[cfg(not(target_arch = "wasm32"))]
 use reqwest::Client;
 
@@ -19,6 +20,7 @@ use {
     url::Url,
 };
 
+use super::auth::AuthMethod;
 use super::url_builder::UrlBuilder;
 
 /// Check if SSE (Server-Sent Events) is enabled via environment variable.
@@ -51,6 +53,8 @@ pub struct TerminusDBHttpClient {
     pub(crate) pass: String,
     /// organization that we are logging in for
     pub(crate) org: String,
+    /// optional advanced-auth override (Bearer/API-key); defaults to Basic
+    pub(crate) auth_override: Option<AuthMethod>,
     /// Operation log for debugging
     pub(crate) operation_log: OperationLog,
     /// Query logger for persistent logging
@@ -239,6 +243,7 @@ impl TerminusDBHttpClient {
             endpoint: endpoint.clone(),
             http: Client::builder().timeout(timeout).build()?,
             org: org.to_string(),
+            auth_override: None,
             operation_log: OperationLog::default(),
             query_logger: Arc::new(RwLock::new(None)),
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),
@@ -460,7 +465,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .get(uri.clone())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context(format!("failed to parse response for {}", &uri))?;
@@ -495,7 +500,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .get(uri.clone())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context(format!("failed to parse response for {}", &uri))?;
@@ -822,6 +827,7 @@ impl TerminusDBHttpClient {
                     self.endpoint.to_string(),
                     self.user.clone(),
                     self.pass.clone(),
+                    self.auth_override().cloned(),
                 ));
                 *manager_lock = Some(manager.clone());
                 manager
@@ -836,6 +842,28 @@ impl TerminusDBHttpClient {
 }
 
 // Manual Debug implementation
+impl TerminusDBHttpClient {
+    /// Switch this client to Bearer-token authentication (e.g. DFRNT hub
+    /// Personal Access Tokens — TERMINUSDB_ACCESS_TOKEN). Additive: Basic is
+    /// preserved as the default.
+    pub fn with_bearer(mut self, token: impl Into<String>) -> Self {
+        self.auth_override = Some(AuthMethod::Bearer(token.into()));
+        self
+    }
+
+    /// Switch this client to API-key authentication
+    /// (`Authorization: Apikey <key>`). Additive: Basic is preserved as the
+    /// default.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.auth_override = Some(AuthMethod::ApiKey(key.into()));
+        self
+    }
+
+    pub(crate) fn auth_override(&self) -> Option<&AuthMethod> {
+        self.auth_override.as_ref()
+    }
+}
+
 impl std::fmt::Debug for TerminusDBHttpClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TerminusDBHttpClient")
@@ -870,6 +898,7 @@ impl TerminusDBHttpClient {
             user: user.to_string(),
             pass: pass.to_string(),
             org: org.to_string(),
+            auth_override: None,
             operation_log: OperationLog::default(),
             query_logger: Arc::new(RwLock::new(None)),
             debug_config: Arc::new(RwLock::new(DebugConfig::default())),

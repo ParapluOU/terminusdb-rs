@@ -4,6 +4,7 @@
 //!
 //! See `docs/terminusdb/prefix-management.md`.
 
+use super::auth::AuthApply;
 use anyhow::Context;
 use serde::Deserialize;
 
@@ -42,7 +43,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .get(self.prefix_url(spec, name))
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to send prefix GET")?;
@@ -64,7 +65,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .post(self.prefix_url(spec, name))
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .json(&serde_json::json!({ "uri": uri }))
             .send()
             .await
@@ -93,7 +94,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .put(builder.build())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .json(&serde_json::json!({ "uri": uri }))
             .send()
             .await
@@ -131,7 +132,7 @@ impl TerminusDBHttpClient {
         let res = self
             .http
             .delete(self.prefix_url(spec, name))
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .send()
             .await
             .context("failed to send prefix DELETE")?;

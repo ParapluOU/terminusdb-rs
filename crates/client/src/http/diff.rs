@@ -1,5 +1,6 @@
 //! Diff and patch operations
 
+use super::auth::AuthApply;
 use {
     crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
@@ -101,7 +102,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri_builder.build())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -173,7 +174,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(self.build_url().endpoint("diff").database(spec).build())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -256,7 +257,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&patch_request)
             .send()
