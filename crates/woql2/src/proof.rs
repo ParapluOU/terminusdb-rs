@@ -41,7 +41,7 @@ use terminus_store::ValueTriple;
 
 use crate::misc::InRange;
 use crate::query::Query;
-use crate::triple::{Data, Link, Triple, TripleSlice};
+use crate::triple::{Data, Link, Triple};
 use crate::value::{DataValue, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
@@ -314,6 +314,7 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::If(_) => "If",
         Query::WoqlOptional(_) => "Optional",
         Query::Once(_) => "Once",
+        Query::Immediately(_) => "Immediately",
         Query::OrderBy(_) => "OrderBy",
         Query::GroupBy(_) => "GroupBy",
         Query::Limit(_) => "Limit",
@@ -370,13 +371,16 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                 selections.push((select.variables.as_slice(), count_variable.is_none()));
                 select.query.as_ref()
             }
-            Query::Using(using) if collection.is_none() => {
+            Query::Using(using) => {
+                // Nested Using scopes replace the active collection for their inner query;
+                // the innermost scope is therefore the layer-routing metadata we retain.
                 collection = Some(using.collection.clone());
                 using.query.as_ref()
             }
             Query::From(from) if from.graph.eq_ignore_ascii_case("instance") => from.query.as_ref(),
             Query::From(_) => return Err(BgpPlanError::SchemaGraphUnsupported),
             Query::Pin(pin) => pin.query.as_ref(),
+            Query::Immediately(immediately) => immediately.query.as_ref(),
             Query::Count(count) if count_variable.is_none() => {
                 count_variable = match &count.count {
                     DataValue::Variable(variable) => Some(variable.clone()),
@@ -390,7 +394,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
 
     if !matches!(
         body,
-        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_) | Query::TripleSlice(_)
+        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
     ) {
         return Err(BgpPlanError::UnsupportedConstruct {
             construct: query_variant_name(body),
@@ -500,11 +504,14 @@ fn collect_conjunct<'a>(
             comparisons.push(normalize_comparison(query)?)
         }
         Query::InRange(range) => comparisons.push(normalize_in_range(range)?),
-        Query::TripleSlice(slice) => {
-            let (triple, range) = normalize_triple_slice(slice)?;
-            triples.push(triple);
-            comparisons.push(range);
+        Query::Pin(pin) => collect_conjunct(pin.query.as_ref(), triples, comparisons)?,
+        Query::Immediately(immediately) => {
+            collect_conjunct(immediately.query.as_ref(), triples, comparisons)?
         }
+        Query::From(from) if from.graph.eq_ignore_ascii_case("instance") => {
+            collect_conjunct(from.query.as_ref(), triples, comparisons)?
+        }
+        Query::From(_) => return Err(BgpPlanError::SchemaGraphUnsupported),
         Query::True(_) | Query::Comment(_) => {}
         other => {
             return Err(BgpPlanError::ConjunctNotTriple {
@@ -781,31 +788,6 @@ fn normalize_in_range(range: &InRange) -> Result<NormalizedRange, BgpPlanError> 
             },
         ],
     })
-}
-
-fn normalize_triple_slice(slice: &TripleSlice) -> Result<(Triple, NormalizedRange), BgpPlanError> {
-    let variable = match &slice.object {
-        Value::Variable(var) => var.clone(),
-        _ => return Err(BgpPlanError::InRangeValueNotVariable),
-    };
-    let as_data = |value: &Value| match value {
-        Value::Data(value) => Ok(DataValue::Data(value.clone())),
-        _ => Err(BgpPlanError::InRangeBoundNotConstant),
-    };
-    let range = normalize_in_range(&InRange {
-        value: DataValue::Variable(variable),
-        start: as_data(&slice.low)?,
-        end: as_data(&slice.high)?,
-    })?;
-    Ok((
-        Triple {
-            subject: slice.subject.clone(),
-            predicate: slice.predicate.clone(),
-            object: slice.object.clone(),
-            graph: slice.graph.clone(),
-        },
-        range,
-    ))
 }
 
 /// Build the store's typed dict entry for a woql2 SCALAR literal, routing each supported

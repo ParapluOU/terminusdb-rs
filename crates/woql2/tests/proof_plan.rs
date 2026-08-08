@@ -5,7 +5,7 @@ mod proof_common;
 use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
-use terminusdb_woql2::control::{Distinct, From, Pin, Select, Using};
+use terminusdb_woql2::control::{Distinct, From, Immediately, Pin, Select, Using};
 use terminusdb_woql2::misc::{Comment, Count, InRange};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
@@ -238,6 +238,40 @@ fn retains_using_scope_and_strips_instance_from_and_pin() {
         Some("admin/music/local/branch/main")
     );
     assert_eq!(c.schema, vec!["x", "y"]);
+}
+
+#[test]
+fn nested_using_retains_the_innermost_collection_scope() {
+    let q = Query::Using(Using {
+        collection: "admin/outer/local/branch/main".into(),
+        query: Box::new(Query::Using(Using {
+            collection: "admin/inner/local/branch/main".into(),
+            query: Box::new(tv("x", "p", "y")),
+        })),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(
+        c.collection.as_deref(),
+        Some("admin/inner/local/branch/main")
+    );
+}
+
+#[test]
+fn transparent_execution_controls_can_wrap_individual_conjuncts() {
+    let q = and_of(vec![
+        Query::Pin(Pin {
+            query: Box::new(tv("x", "p", "y")),
+        }),
+        Query::Immediately(Immediately {
+            query: Box::new(Query::From(From {
+                graph: "instance".into(),
+                query: Box::new(tv("y", "q", "z")),
+            })),
+        }),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y", "z"]);
+    assert_eq!(c.plan.atoms.len(), 2);
 }
 
 #[test]
@@ -871,7 +905,7 @@ fn in_range_compiles_to_half_open_bounds() {
 }
 
 #[test]
-fn triple_slice_normalizes_to_a_ranged_triple() {
+fn triple_slice_rejects_until_result_order_is_authenticated() {
     let q = Query::TripleSlice(TripleSlice {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("age")),
@@ -880,11 +914,12 @@ fn triple_slice_normalizes_to_a_ranged_triple() {
         high: Value::Data(terminusdb_schema::XSDAnySimpleType::UnsignedInt(40)),
         graph: None,
     });
-    let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "a"]);
-    let range = range_of(&c, "age").unwrap();
-    assert_uint32_range(range, RangeOp::Ge, 18);
-    assert_eq!(range.second.as_ref().unwrap().op, RangeOp::Lt);
+    reject(
+        q,
+        BgpPlanError::UnsupportedConstruct {
+            construct: "TripleSlice",
+        },
+    );
 }
 
 #[test]
