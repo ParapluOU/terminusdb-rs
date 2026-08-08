@@ -3,6 +3,13 @@ name = "terminusdb-woql2"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+# Compile WOQL queries into and execute the authenticated Dory/sumcheck query
+# arguments implemented by the Parture terminus-store fork. Keeping this optional
+# prevents ordinary AST/client users from pulling the cryptographic stack.
+proof = ["dep:dory-pcs", "dep:tdb-succinct", "dep:terminus-store", "dep:thiserror"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -18,6 +25,14 @@ tap = "1.0"
 derive_builder = "0.20.2"
 decimal-rs = { version = "0.1.43", features = ["serde"] }
 tracing = { workspace = true }
+
+# Optional Proof-of-WOQL compiler/executor dependencies. These are deliberately
+# feature-gated: the canonical AST remains lightweight unless a caller explicitly
+# asks for proof support.
+dory-pcs = { version = "0.4.0", default-features = false, features = ["arkworks"], optional = true }
+tdb-succinct = { version = "0.1.2", optional = true }
+terminus-store = { path = "../../../terminusdb-store-paraplu", optional = true }
+thiserror = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = "1.0"

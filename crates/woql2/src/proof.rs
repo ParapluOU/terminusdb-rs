@@ -1,4 +1,4 @@
-//! Compile a woql2 conjunctive BGP AST into a safe, variable-blind [`LayerBgpPlan`].
+//! Compile a WOQL conjunctive BGP AST into a safe, variable-blind [`LayerBgpPlan`].
 //!
 //! See the crate docs for why the PLAN is the sole safety line. This module accepts
 //! only the fragment the single-key left-deep join chain can encode *faithfully* and
@@ -6,7 +6,7 @@
 //!
 //! * an optional single outer [`Select`] (projection is read-side only — the proof
 //!   still proves the FULL BGP), wrapping
-//! * an [`And`] (nested `And`s flattened) of `k >= 2` [`Triple`]s, each a
+//! * an [`And`] (nested `And`s flattened) of `k >= 1` [`Triple`]s, each a
 //!   `<subj> <constant predicate IRI> <obj>` atom where the predicate is a constant IRI
 //!   and each of subject/object is EITHER a query VARIABLE (a kept output column) OR an
 //!   aligned CONSTANT — a subject/object node IRI ([`AtomTerm::NodeConstant`]) or an
@@ -24,19 +24,24 @@
 //! to how the store stored it (node IRIs by their IRI bytes; `xsd:string` literals by
 //! routing through the store's own value construction).
 
-use dory_pcs::backends::arkworks::ArkFr;
+use dory_pcs::backends::arkworks::{ArkFr, ArkGT};
 use dory_pcs::primitives::arithmetic::Field;
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 use terminus_store::proof::bgp::JoinStep;
-use terminus_store::proof::query::{AtomTerm, LayerBgpAtom, LayerBgpPlan, ObjectRangeSpec};
+use terminus_store::proof::commitment::LayerCommitment;
+use terminus_store::proof::query::{
+    prove_layer_bgp, verify_layer_bgp, AtomTerm, LayerBgpAtom, LayerBgpPlan, LayerBgpProof,
+    ObjectRangeSpec,
+};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
-use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
+use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
+use terminus_store::store::sync::SyncStoreLayer;
 use terminus_store::ValueTriple;
 
+use crate::query::Query;
+use crate::triple::{Data, Link, Triple};
+use crate::value::{DataValue, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
-use terminusdb_woql2::query::Query;
-use terminusdb_woql2::triple::Triple;
-use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
 /// A compiled, variable-blind BGP plan plus the metadata a caller needs to read the
 /// proof's result columns.
@@ -51,13 +56,107 @@ pub struct CompiledBgp {
     /// `schema`. The proof still proves the FULL BGP; projection is which output
     /// columns the caller reads (sound — a projection of the true answer).
     pub projection: Option<Vec<usize>>,
+    /// Query-routing metadata retained from outer WOQL wrappers. The cryptographic
+    /// statement is anchored to the layer root supplied by the caller; integrations
+    /// must use this collection when resolving that layer.
+    pub collection: Option<String>,
+}
+
+/// An in-memory proof result produced only when a caller explicitly invokes
+/// [`CompiledBgp::prove`] or [`CompiledBgp::prove_on_layer`]. It intentionally contains
+/// no scheduling or persistence policy; applications own when and where proving runs.
+#[derive(Debug)]
+pub struct ProvedBgp {
+    pub proof: LayerBgpProof,
+    pub result_commitments: Vec<ArkGT>,
+    pub result_len: usize,
+    pub predicate_ids: Vec<u64>,
+}
+
+impl ProvedBgp {
+    /// Verify against a caller-selected, independently trusted root.
+    pub fn verify(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+    ) -> std::io::Result<()> {
+        verify_layer_bgp(
+            layer,
+            expected_root,
+            &compiled.plan,
+            &self.predicate_ids,
+            &self.result_commitments,
+            self.result_len,
+            &self.proof,
+        )
+    }
+
+    /// Commitments selected by an outer WOQL `Select`, or every result commitment when
+    /// the query has no projection.
+    pub fn projected_commitments<'a>(
+        &'a self,
+        compiled: &'a CompiledBgp,
+    ) -> impl Iterator<Item = &'a ArkGT> + 'a {
+        let projection = compiled
+            .projection
+            .clone()
+            .unwrap_or_else(|| (0..self.result_commitments.len()).collect());
+        projection
+            .into_iter()
+            .map(|index| &self.result_commitments[index])
+    }
+}
+
+/// Errors at the explicit compile/load/prove boundary.
+#[derive(Debug, thiserror::Error)]
+pub enum QueryProofError {
+    #[error(transparent)]
+    Plan(#[from] BgpPlanError),
+    #[error(transparent)]
+    Store(#[from] std::io::Error),
+    #[error("the selected layer has no authenticated proof commitment")]
+    LayerNotProofEnabled,
+}
+
+impl CompiledBgp {
+    /// Generate a proof against an already loaded authenticated commitment.
+    pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
+        let (proof, result_commitments, result_len, predicate_ids) =
+            prove_layer_bgp(layer, &self.plan)?;
+        Ok(ProvedBgp {
+            proof,
+            result_commitments,
+            result_len,
+            predicate_ids,
+        })
+    }
+
+    /// Explicitly load the commitment from a synchronous Store layer and prove. Calling
+    /// this method is the lifecycle decision; no worker or background job is started.
+    pub fn prove_on_layer(&self, layer: &SyncStoreLayer) -> Result<ProvedBgp, QueryProofError> {
+        let commitment = layer
+            .proof_commitment()?
+            .ok_or(QueryProofError::LayerNotProofEnabled)?;
+        Ok(self.prove(&commitment)?)
+    }
+}
+
+/// Convenience for app/domain callers that want one explicit compile-and-prove call.
+pub fn compile_and_prove(
+    query: &Query,
+    layer: &SyncStoreLayer,
+) -> Result<(CompiledBgp, ProvedBgp), QueryProofError> {
+    let compiled = plan_bgp(query)?;
+    let proof = compiled.prove_on_layer(layer)?;
+    Ok((compiled, proof))
 }
 
 /// Every reason [`plan_bgp`] refuses a query. One variant per rejection reason.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BgpPlanError {
-    /// A construct that is not a conjunction-of-triples appeared where the BGP body
-    /// was expected (the top-level query after unwrapping an optional `Select`).
+    /// A construct that is not a supported proof wrapper, triple pattern, conjunction,
+    /// or comparison appeared in the query body.
     #[error(
         "unsupported construct `{construct}`: only a conjunction (And) of triples is supported"
     )]
@@ -109,9 +208,8 @@ pub enum BgpPlanError {
     #[error("more than one range filter on variable `?{var}` (at most one is supported)")]
     DuplicateRangeOnVariable { var: String },
 
-    /// Fewer than two atoms. A single triple (k=1) is a documented follow-up via the
-    /// per-atom filter path; it is rejected here for now.
-    #[error("BGP needs at least two atoms, found {count}")]
+    /// No triple atoms remain after normalization.
+    #[error("BGP needs at least one atom, found {count}")]
     TooFewAtoms { count: usize },
 
     /// The predicate position held a variable. Predicate variables are unsupported.
@@ -221,41 +319,59 @@ struct Atom {
 
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
-/// Accepts an optional single outer [`Select`] wrapping an `And` of `>= 2` triples of
+/// Accepts an optional single outer [`Select`] wrapping an `And` of `>= 1` triples of
 /// the form `?subj <constant IRI> ?obj` (`subj != obj`), whose atoms connect into a
 /// single-key left-deep join tree (each step shares exactly one variable). Everything
 /// else is rejected closed with a descriptive [`BgpPlanError`].
 pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
-    // (1) Unwrap an optional single outer Select; record its projection variables.
-    let (selected, body): (Option<&[String]>, &Query) = match query {
-        Query::Select(select) => (Some(select.variables.as_slice()), select.query.as_ref()),
-        other => (None, other),
-    };
+    // (1) Unwrap proof-transparent outer controls. `Using` is not discarded: it is
+    // retained as routing metadata so an integration can resolve the intended layer.
+    // `From(instance)` is safe for the instance-layer proof path; schema or wildcard
+    // reads reject closed. `Pin` affects optimization order, not query semantics.
+    let mut selected: Option<&[String]> = None;
+    let mut collection: Option<String> = None;
+    let mut body = query;
+    loop {
+        body = match body {
+            Query::Select(select) if selected.is_none() => {
+                selected = Some(select.variables.as_slice());
+                select.query.as_ref()
+            }
+            Query::Using(using) if collection.is_none() => {
+                collection = Some(using.collection.clone());
+                using.query.as_ref()
+            }
+            Query::From(from) if from.graph.eq_ignore_ascii_case("instance") => from.query.as_ref(),
+            Query::From(_) => return Err(BgpPlanError::SchemaGraphUnsupported),
+            Query::Pin(pin) => pin.query.as_ref(),
+            _ => break,
+        };
+    }
 
-    // The body must be an And (a conjunction).
-    let and = match body {
-        Query::And(and) => and,
-        other => {
-            return Err(BgpPlanError::UnsupportedConstruct {
-                construct: query_variant_name(other),
-            })
-        }
-    };
+    if !matches!(
+        body,
+        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
+    ) {
+        return Err(BgpPlanError::UnsupportedConstruct {
+            construct: query_variant_name(body),
+        });
+    }
 
-    // (1b) Flatten nested Ands; every leaf conjunct must be a Triple or a numeric
-    // comparison (Greater/Less/Gte/Lte). Comparisons become object-value range filters.
-    let mut triples: Vec<&Triple> = Vec::new();
+    // (1b) Flatten nested Ands. Triple/Link/Data share one canonical Triple
+    // representation here; comparisons become object-value range filters. True and
+    // Comment contribute no bindings and are proof-transparent conjunction leaves.
+    let mut triples: Vec<Triple> = Vec::new();
     let mut comparisons: Vec<&Query> = Vec::new();
-    collect_conjuncts(&and.and, &mut triples, &mut comparisons)?;
+    collect_conjunct(body, &mut triples, &mut comparisons)?;
 
     // (2) Lift each triple to an Atom, with all per-atom safety checks.
     let mut atoms: Vec<Atom> = triples
         .iter()
-        .map(|t| atom_from_triple(t))
+        .map(atom_from_triple)
         .collect::<Result<_, _>>()?;
 
     let k = atoms.len();
-    if k < 2 {
+    if k == 0 {
         return Err(BgpPlanError::TooFewAtoms { count: k });
     }
 
@@ -287,34 +403,66 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         plan,
         schema,
         projection,
+        collection,
     })
 }
 
-/// Flatten an `And` body (recursively), partitioning leaf conjuncts into `triples` (the
-/// BGP atoms) and `comparisons` (`Greater`/`Less`/`Gte`/`Lte`, later routed to object-value
-/// range filters). Any other conjunct rejects closed.
-fn collect_conjuncts<'a>(
-    conjuncts: &'a [Query],
-    triples: &mut Vec<&'a Triple>,
+/// Flatten a query body recursively, partitioning leaves into canonical triple patterns
+/// and comparisons. Any other construct rejects closed.
+fn collect_conjunct<'a>(
+    query: &'a Query,
+    triples: &mut Vec<Triple>,
     comparisons: &mut Vec<&'a Query>,
 ) -> Result<(), BgpPlanError> {
-    for q in conjuncts {
-        match q {
-            Query::Triple(t) => triples.push(t),
-            Query::And(inner) => collect_conjuncts(&inner.and, triples, comparisons)?,
-            // Numeric comparison conjuncts (Phase 7.4): kept aside, then normalized to a
-            // `(var, op, constant)` object-value range in `attach_ranges`.
-            Query::Greater(_) | Query::Less(_) | Query::Gte(_) | Query::Lte(_) => {
-                comparisons.push(q)
+    match query {
+        Query::Triple(triple) => triples.push(triple.clone()),
+        Query::Link(link) => triples.push(triple_from_link(link)),
+        Query::Data(data) => triples.push(triple_from_data(data)),
+        Query::And(inner) => {
+            for query in &inner.and {
+                collect_conjunct(query, triples, comparisons)?;
             }
-            other => {
-                return Err(BgpPlanError::ConjunctNotTriple {
-                    construct: query_variant_name(other),
-                })
-            }
+        }
+        Query::Greater(_) | Query::Less(_) | Query::Gte(_) | Query::Lte(_) => {
+            comparisons.push(query)
+        }
+        Query::True(_) | Query::Comment(_) => {}
+        other => {
+            return Err(BgpPlanError::ConjunctNotTriple {
+                construct: query_variant_name(other),
+            })
         }
     }
     Ok(())
+}
+
+fn triple_from_link(link: &Link) -> Triple {
+    Triple {
+        subject: link.subject.clone(),
+        predicate: link.predicate.clone(),
+        object: match &link.object {
+            NodeValue::Node(node) => Value::Node(node.clone()),
+            NodeValue::Variable(var) => Value::Variable(var.clone()),
+        },
+        graph: Some(link.graph.clone()),
+    }
+}
+
+fn triple_from_data(data: &Data) -> Triple {
+    Triple {
+        subject: data.subject.clone(),
+        predicate: data.predicate.clone(),
+        object: value_from_data_value(&data.object),
+        graph: Some(data.graph.clone()),
+    }
+}
+
+fn value_from_data_value(value: &DataValue) -> Value {
+    match value {
+        DataValue::Data(value) => Value::Data(value.clone()),
+        DataValue::Variable(var) => Value::Variable(var.clone()),
+        DataValue::List(values) => Value::List(values.iter().map(value_from_data_value).collect()),
+    }
 }
 
 /// Lift one `Triple` to an [`Atom`]: the predicate must be a constant IRI; the subject

@@ -1,4 +1,4 @@
-//! Shared woql2 AST builders for the woql-proof test suites.
+//! Shared WOQL AST builders for the proof-enabled woql2 test suites.
 
 #![allow(dead_code)]
 

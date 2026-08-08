@@ -30,6 +30,8 @@ pub mod value;
 // pub mod macros_refactored;
 // pub mod macros_refactored2;
 pub mod path_builder;
+#[cfg(feature = "proof")]
+pub mod proof;
 pub mod query_dsl;
 
 pub mod prelude {

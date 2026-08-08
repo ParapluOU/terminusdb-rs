@@ -1,13 +1,16 @@
 //! CP2 — `plan_bgp` shape guard: accept the safe fragment, reject everything else
 //! closed. No proving here (see `prove.rs` for the end-to-end faithfulness tests).
 
-mod common;
-use common::*;
+mod proof_common;
+use proof_common::*;
 
-use terminusdb_woql2::control::{Distinct, Select};
+use terminusdb_schema::GraphType;
+use terminusdb_woql2::control::{Distinct, From, Pin, Select, Using};
+use terminusdb_woql2::misc::Comment;
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
-use terminusdb_woql2::query::{Not, Or, Path, Query};
-use terminusdb_woql2::value::Value;
+use terminusdb_woql2::query::{Not, Or, Path, Query, True};
+use terminusdb_woql2::triple::{Data, Link};
+use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
 use terminus_store::proof::query::{AtomTerm, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
@@ -19,7 +22,7 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
-use woql_proof::{plan_bgp, BgpPlanError, CompiledBgp};
+use terminusdb_woql2::proof::{plan_bgp, BgpPlanError, CompiledBgp};
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
 /// `PartialEq` — the plan types are foreign — so compare only the error.)
@@ -148,6 +151,61 @@ fn select_records_projection_indices() {
     assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
     // Proof still proves the FULL BGP; projection just names read columns.
     assert_eq!(c.projection, Some(vec![0, 3]));
+}
+
+#[test]
+fn accepts_link_and_data_as_typed_triple_patterns() {
+    let q = and_of(vec![
+        Query::Link(Link {
+            subject: NodeValue::Variable("x".into()),
+            predicate: NodeValue::Node(iri("knows")),
+            object: NodeValue::Variable("y".into()),
+            graph: GraphType::Instance,
+        }),
+        Query::Data(Data {
+            subject: NodeValue::Variable("x".into()),
+            predicate: NodeValue::Node(iri("active")),
+            object: DataValue::Variable("active".into()),
+            graph: GraphType::Instance,
+        }),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["y", "x", "active"]);
+    assert_eq!(c.plan.atoms.len(), 2);
+}
+
+#[test]
+fn retains_using_scope_and_strips_instance_from_and_pin() {
+    let q = Query::Using(Using {
+        collection: "admin/music/local/branch/main".into(),
+        query: Box::new(Query::From(From {
+            graph: "instance".into(),
+            query: Box::new(Query::Pin(Pin {
+                query: Box::new(and_of(vec![tv("x", "p", "y")])),
+            })),
+        })),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(
+        c.collection.as_deref(),
+        Some("admin/music/local/branch/main")
+    );
+    assert_eq!(c.schema, vec!["x", "y"]);
+}
+
+#[test]
+fn true_and_comment_are_binding_free_conjuncts() {
+    let q = and_of(vec![
+        Query::True(True {}),
+        Query::Comment(Comment {
+            comment: dstr("why this query exists"),
+            query: Some(Box::new(tv("ignored", "ignored", "ignored_too"))),
+        }),
+        tv("x", "p", "y"),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.plan.atoms.len(), 1);
 }
 
 #[test]
@@ -365,9 +423,12 @@ fn rejects_disconnected() {
 }
 
 #[test]
-fn rejects_single_atom() {
+fn accepts_single_atom() {
     let q = and_of(vec![tv("x", "p", "y")]);
-    reject(q, BgpPlanError::TooFewAtoms { count: 1 });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.plan.atoms.len(), 1);
+    assert!(c.plan.joins.is_empty());
 }
 
 #[test]
@@ -390,15 +451,11 @@ fn rejects_selected_variable_not_in_bgp() {
 }
 
 #[test]
-fn rejects_bare_triple_body() {
-    // A single Triple (not wrapped in And) is not a conjunction.
+fn accepts_bare_triple_body() {
     let q = tv("x", "p", "y");
-    reject(
-        q,
-        BgpPlanError::UnsupportedConstruct {
-            construct: "Triple",
-        },
-    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.plan.atoms.len(), 1);
 }
 
 // ----------------------------------------------------------------------------
@@ -407,7 +464,7 @@ fn rejects_bare_triple_body() {
 // ----------------------------------------------------------------------------
 
 /// The ObjectRangeSpec attached to the compiled atom whose predicate is `iri(pred)`.
-fn range_of<'a>(c: &'a woql_proof::CompiledBgp, pred: &str) -> Option<&'a ObjectRangeSpec> {
+fn range_of<'a>(c: &'a CompiledBgp, pred: &str) -> Option<&'a ObjectRangeSpec> {
     let term = iri(pred).into_bytes();
     c.plan
         .atoms
@@ -445,7 +502,7 @@ fn assert_range(spec: &ObjectRangeSpec, op: RangeOp, datatype: CanonicalDatatype
 }
 
 /// Compile `t(?x,age,?a), t(?x,name,?n)` plus one comparison conjunct.
-fn age_name_range(cmp: Query) -> woql_proof::CompiledBgp {
+fn age_name_range(cmp: Query) -> CompiledBgp {
     let q = and_of(vec![tv("x", "age", "a"), tv("x", "name", "n"), cmp]);
     plan_bgp(&q).unwrap()
 }

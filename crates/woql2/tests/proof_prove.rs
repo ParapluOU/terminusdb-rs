@@ -4,8 +4,8 @@
 //! not a superset). Plus the audit's key risk: a demonstration that the shape guard
 //! is exactly what prevents a wrong-but-verifying superset.
 
-mod common;
-use common::*;
+mod proof_common;
+use proof_common::*;
 
 use std::sync::Arc;
 
@@ -25,7 +25,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
-use woql_proof::plan_bgp;
+use terminusdb_woql2::proof::plan_bgp;
 
 // ----------------------------------------------------------------------------
 // Store + independent-join helpers (mirror the store's own query.rs tests).
@@ -159,6 +159,17 @@ fn assert_true_join_end_to_end(lc: &LayerCommitment, q: &terminusdb_woql2::query
 // ----------------------------------------------------------------------------
 // ACCEPT + CORRECT plan, proven end-to-end, equal to the TRUE join.
 // ----------------------------------------------------------------------------
+
+#[test]
+fn single_atom_proves_the_complete_filtered_relation() {
+    let lc = build_layer(&[
+        ("a", "knows", "b"),
+        ("b", "knows", "c"),
+        ("x", "likes", "y"),
+    ]);
+    let q = and_of(vec![tv("s", "knows", "o")]);
+    assert_true_join_end_to_end(&lc, &q);
+}
 
 #[test]
 fn path_three_atoms_proves_true_join() {
@@ -369,7 +380,7 @@ fn composite_key_single_key_plan_is_a_verifying_superset_but_guard_refuses_it() 
     let q = and_of(vec![tv("x", "p", "y"), tv("x", "q", "y")]);
     assert_eq!(
         plan_bgp(&q).unwrap_err(),
-        woql_proof::BgpPlanError::CompositeOrCyclicKey
+        terminusdb_woql2::proof::BgpPlanError::CompositeOrCyclicKey
     );
 }
 
@@ -386,7 +397,7 @@ fn cycle_triangle_would_superset_but_guard_refuses_it() {
     ]);
     assert_eq!(
         plan_bgp(&q).unwrap_err(),
-        woql_proof::BgpPlanError::CompositeOrCyclicKey
+        terminusdb_woql2::proof::BgpPlanError::CompositeOrCyclicKey
     );
 }
 

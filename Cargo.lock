@@ -7327,9 +7327,12 @@ dependencies = [
  "chrono",
  "decimal-rs",
  "derive_builder",
+ "dory-pcs",
  "serde",
  "serde_json",
  "tap",
+ "tdb-succinct",
+ "terminus-store 0.21.8",
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "thiserror 1.0.69",
@@ -8719,18 +8722,6 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
-
-[[package]]
-name = "woql-proof"
-version = "0.1.0"
-dependencies = [
- "dory-pcs",
- "tdb-succinct",
- "terminus-store 0.21.8",
- "terminusdb-schema",
- "terminusdb-woql2",
- "thiserror 1.0.69",
-]
 
 [[package]]
 name = "writeable"

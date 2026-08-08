@@ -25,7 +25,6 @@ members = [
     "crates/woql-builder",
     "crates/woql-dsl",
     "crates/woql-js",
-    "crates/woql-proof",
     "crates/woql2",
     "crates/xpath",
     "crates/xsd",
