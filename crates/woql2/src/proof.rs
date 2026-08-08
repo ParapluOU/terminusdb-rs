@@ -63,6 +63,10 @@ pub struct CompiledBgp {
     /// An outer WOQL `Count` binding. The proven BGP result length is the count, so no
     /// additional cryptographic argument is required.
     pub count_variable: Option<String>,
+    /// True when a WOQL `Distinct` was proven redundant because it names the complete
+    /// BGP schema. Full natural-join assignments over set-valued triple relations are
+    /// already unique; subset/projection distinctness still requires a dedup argument.
+    pub full_row_distinct: bool,
 }
 
 /// An in-memory proof result produced only when a caller explicitly invokes
@@ -273,6 +277,12 @@ pub enum BgpPlanError {
     /// that are not represented by the current result metadata.
     #[error("Count output must be a variable")]
     CountOutputNotVariable,
+
+    #[error("Distinct is currently supported only without Select or Count wrappers")]
+    DistinctWithProjectionOrCount,
+
+    #[error("Distinct variables must name the complete BGP schema")]
+    DistinctNotFullSchema,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -350,6 +360,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let mut selections: Vec<(&[String], bool)> = Vec::new();
     let mut collection: Option<String> = None;
     let mut count_variable: Option<String> = None;
+    let mut distincts: Vec<&[String]> = Vec::new();
     let mut body = query;
     loop {
         body = match body {
@@ -367,6 +378,10 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             Query::From(_) => return Err(BgpPlanError::SchemaGraphUnsupported),
             Query::Pin(pin) => pin.query.as_ref(),
             Query::Immediately(immediately) => immediately.query.as_ref(),
+            Query::Distinct(distinct) => {
+                distincts.push(distinct.variables.as_slice());
+                distinct.query.as_ref()
+            }
             Query::Count(count) if count_variable.is_none() => {
                 count_variable = match &count.count {
                     DataValue::Variable(variable) => Some(variable.clone()),
@@ -413,6 +428,29 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // (3) Shape guard + left-deep planner: the safety-critical core.
     let (plan, schema) = plan_left_deep(&atoms)?;
 
+    // A full BGP binding is already unique: for a fixed assignment every triple atom
+    // identifies at most one row in the Store's set-valued triple relation. Therefore
+    // Distinct over exactly the full schema is proof-transparent. Distinct over a subset
+    // (or around projection/count) needs an authenticated deduplication operator.
+    if !distincts.is_empty() {
+        if !selections.is_empty() || count_variable.is_some() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        for variables in &distincts {
+            let covers_schema = variables.len() == schema.len()
+                && schema.iter().all(|schema_var| {
+                    variables
+                        .iter()
+                        .filter(|candidate| *candidate == schema_var)
+                        .count()
+                        == 1
+                });
+            if !covers_schema {
+                return Err(BgpPlanError::DistinctNotFullSchema);
+            }
+        }
+    }
+
     // (4) Validate every nested projection against what its inner query exposes. The
     // proof still authenticates the complete BGP; only the outermost visible Select
     // determines which committed columns the caller reads.
@@ -452,6 +490,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         projection,
         collection,
         count_variable,
+        full_row_distinct: !distincts.is_empty(),
     })
 }
 

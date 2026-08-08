@@ -26,6 +26,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::XSDAnySimpleType;
+use terminusdb_woql2::control::Distinct;
 use terminusdb_woql2::proof::plan_bgp;
 use terminusdb_woql2::{
     misc::{Count, InRange},
@@ -173,6 +174,18 @@ fn single_atom_proves_the_complete_filtered_relation() {
         ("x", "likes", "y"),
     ]);
     let q = and_of(vec![tv("s", "knows", "o")]);
+    assert_true_join_end_to_end(&lc, &q);
+}
+
+#[test]
+fn full_schema_distinct_is_proof_transparent_end_to_end() {
+    let lc = build_layer(&[("a", "p", "b"), ("a", "p", "c"), ("d", "p", "c")]);
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(tv("x", "p", "y")),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert!(compiled.full_row_distinct);
     assert_true_join_end_to_end(&lc, &q);
 }
 

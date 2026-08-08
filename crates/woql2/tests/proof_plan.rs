@@ -401,17 +401,35 @@ fn rejects_path_star() {
 }
 
 #[test]
-fn rejects_distinct() {
+fn rejects_distinct_on_a_schema_subset() {
     let q = Query::Distinct(Distinct {
         variables: vec!["x".into()],
         query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")])),
     });
-    reject(
-        q,
-        BgpPlanError::UnsupportedConstruct {
-            construct: "Distinct",
-        },
-    );
+    reject(q, BgpPlanError::DistinctNotFullSchema);
+}
+
+#[test]
+fn accepts_distinct_on_the_complete_bgp_schema() {
+    let q = Query::Distinct(Distinct {
+        variables: vec!["z".into(), "x".into(), "y".into()],
+        query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")])),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert!(compiled.full_row_distinct);
+    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
+}
+
+#[test]
+fn rejects_distinct_combined_with_projection_until_dedup_is_proven() {
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into(), "z".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into(), "y".into(), "z".into()],
+            query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")])),
+        })),
+    });
+    reject(q, BgpPlanError::DistinctWithProjectionOrCount);
 }
 
 #[test]
