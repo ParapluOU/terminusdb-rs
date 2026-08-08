@@ -361,8 +361,6 @@ pub enum QueryProofError {
     Plan(#[from] BgpPlanError),
     #[error(transparent)]
     Store(#[from] std::io::Error),
-    #[error("the selected layer has no authenticated proof commitment")]
-    LayerNotProofEnabled,
 }
 
 impl CompiledBgp {
@@ -383,9 +381,7 @@ impl CompiledBgp {
     /// Explicitly load the commitment from a synchronous Store layer and prove. Calling
     /// this method is the lifecycle decision; no worker or background job is started.
     pub fn prove_on_layer(&self, layer: &SyncStoreLayer) -> Result<ProvedBgp, QueryProofError> {
-        let commitment = layer
-            .proof_commitment()?
-            .ok_or(QueryProofError::LayerNotProofEnabled)?;
+        let commitment = layer.proof_commitment()?;
         Ok(self.prove(&commitment)?)
     }
 }

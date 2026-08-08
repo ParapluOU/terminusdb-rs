@@ -46,8 +46,8 @@ fn build_layer(triples: &[(&str, &str, &str)]) -> Arc<LayerCommitment> {
             .add_value_triple(ValueTriple::new_node(&iri(s), &iri(p), &iri(o)))
             .unwrap();
     }
-    let (layer, _state) = builder.commit_with_proof().unwrap();
-    layer.proof_commitment().unwrap().unwrap()
+    let layer = builder.commit().unwrap();
+    layer.proof_commitment().unwrap()
 }
 
 /// Build a materialized base layer from arbitrary `ValueTriple`s (node OR value objects).
@@ -57,8 +57,8 @@ fn build_layer_triples(triples: Vec<ValueTriple>) -> Arc<LayerCommitment> {
     for t in triples {
         builder.add_value_triple(t).unwrap();
     }
-    let (layer, _state) = builder.commit_with_proof().unwrap();
-    layer.proof_commitment().unwrap().unwrap()
+    let layer = builder.commit().unwrap();
+    layer.proof_commitment().unwrap()
 }
 
 fn padded_len(real_rows: usize) -> usize {
@@ -327,8 +327,8 @@ fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
             u32::make_entry(&7),
         ))
         .unwrap();
-    let (layer, _) = builder.commit_with_proof().unwrap();
-    let lc = layer.proof_commitment().unwrap().unwrap();
+    let layer = builder.commit().unwrap();
+    let lc = layer.proof_commitment().unwrap();
     let q = and_of(vec![tv("person", "age", "age")]);
     let compiled = plan_bgp(&q).unwrap();
     let proved = compiled.prove(&lc).unwrap();
@@ -1032,8 +1032,8 @@ fn build_val_knows_layer(
             .add_value_triple(ValueTriple::new_node(&iri(s), &iri("knows"), &iri(o)))
             .unwrap();
     }
-    let (layer, _state) = builder.commit_with_proof().unwrap();
-    layer.proof_commitment().unwrap().unwrap()
+    let layer = builder.commit().unwrap();
+    layer.proof_commitment().unwrap()
 }
 
 /// Assert `term` is a `ValueConstant` byte-identical to the store's own canonicalization of
@@ -1252,8 +1252,8 @@ fn build_age_name_layer(people: &[(&str, u32)]) -> Arc<LayerCommitment> {
             ))
             .unwrap();
     }
-    let (layer, _state) = builder.commit_with_proof().unwrap();
-    layer.proof_commitment().unwrap().unwrap()
+    let layer = builder.commit().unwrap();
+    layer.proof_commitment().unwrap()
 }
 
 /// The UInt32 value behind a node/value dict id (its OP encoding is the big-endian u32),
@@ -1519,8 +1519,8 @@ fn build_val_name_layer(pred: &str, people: Vec<(&str, TypedDictEntry)>) -> Arc<
             ))
             .unwrap();
     }
-    let (layer, _state) = builder.commit_with_proof().unwrap();
-    layer.proof_commitment().unwrap().unwrap()
+    let layer = builder.commit().unwrap();
+    layer.proof_commitment().unwrap()
 }
 
 /// The committed `(datatype, order-preserving u64)` behind a node/value dict id, or `None`
