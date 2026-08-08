@@ -29,8 +29,9 @@ use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::query::{
-    prove_layer_bgp_with_result, verify_layer_bgp, verify_result_columns, AtomTerm, LayerBgpAtom,
-    LayerBgpPlan, LayerBgpProof, ObjectRangeBound, ObjectRangeSpec,
+    prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp, verify_result_columns,
+    verify_result_objects, AtomTerm, LayerBgpAtom, LayerBgpPlan, LayerBgpProof, ObjectRangeBound,
+    ObjectRangeSpec,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
@@ -112,6 +113,31 @@ impl ProvedBgp {
             self.result_len,
             self.result_log_domain,
         )
+    }
+
+    /// Verify the query proof and resolve every proven Store ID to the exact canonical
+    /// node IRI or typed literal in the root-authenticated node/value dictionary.
+    pub fn verify_and_resolve(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+    ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
+        self.verify(compiled, layer, expected_root)?;
+        resolve_result_objects(layer, expected_root, &self.result_columns)
+    }
+
+    /// Verify caller-delivered canonical node IRIs/typed literals against the query
+    /// proof, its committed result IDs, and the root-authenticated Store dictionary.
+    pub fn verify_objects(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+        objects: &[Vec<CanonicalObject>],
+    ) -> std::io::Result<()> {
+        self.verify(compiled, layer, expected_root)?;
+        verify_result_objects(layer, expected_root, &self.result_columns, objects)
     }
 
     /// Commitments selected by an outer WOQL `Select`, or every result commitment when

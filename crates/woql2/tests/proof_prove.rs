@@ -224,6 +224,68 @@ fn repeated_variable_atom_proves_same_row_equality() {
     let mut tampered = proved.result_columns.clone();
     tampered[0][0] = tampered[0][0] + ArkFr::one();
     assert!(proved.verify_columns(&tampered).is_err());
+
+    let objects = proved
+        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    assert_eq!(
+        objects,
+        vec![vec![
+            CanonicalObject::Node(iri("a").into_bytes()),
+            CanonicalObject::Node(iri("c").into_bytes()),
+        ]]
+    );
+    let mut tampered_objects = objects.clone();
+    tampered_objects[0][0] = CanonicalObject::Node(iri("b").into_bytes());
+    assert!(proved
+        .verify_objects(&compiled, &lc, lc.state.commitment_root, &tampered_objects,)
+        .is_err());
+}
+
+#[test]
+fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_value(
+            &iri("a"),
+            &iri("age"),
+            u32::make_entry(&42),
+        ))
+        .unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_value(
+            &iri("b"),
+            &iri("age"),
+            u32::make_entry(&7),
+        ))
+        .unwrap();
+    let (layer, _) = builder.commit_with_proof().unwrap();
+    let lc = layer.proof_commitment().unwrap().unwrap();
+    let q = and_of(vec![tv("person", "age", "age")]);
+    let compiled = plan_bgp(&q).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    let objects = proved
+        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+
+    assert_eq!(objects.len(), 2);
+    assert!(objects[1].iter().all(|object| matches!(
+        object,
+        CanonicalObject::Value {
+            datatype: CanonicalDatatype::UInt32,
+            ..
+        }
+    )));
+
+    let mut tampered = objects.clone();
+    tampered[1][0] = CanonicalObject::Value {
+        datatype: CanonicalDatatype::String,
+        lexical: b"42".to_vec(),
+    };
+    assert!(proved
+        .verify_objects(&compiled, &lc, lc.state.commitment_root, &tampered)
+        .is_err());
 }
 
 #[test]
