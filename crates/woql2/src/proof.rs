@@ -60,6 +60,9 @@ pub struct CompiledBgp {
     /// statement is anchored to the layer root supplied by the caller; integrations
     /// must use this collection when resolving that layer.
     pub collection: Option<String>,
+    /// An outer WOQL `Count` binding. The proven BGP result length is the count, so no
+    /// additional cryptographic argument is required.
+    pub count_variable: Option<String>,
 }
 
 /// An in-memory proof result produced only when a caller explicitly invokes
@@ -105,6 +108,14 @@ impl ProvedBgp {
         projection
             .into_iter()
             .map(|index| &self.result_commitments[index])
+    }
+
+    /// Return the variable/value pair bound by an outer WOQL `Count`, if present.
+    pub fn count_binding<'a>(&self, compiled: &'a CompiledBgp) -> Option<(&'a str, usize)> {
+        compiled
+            .count_variable
+            .as_deref()
+            .map(|variable| (variable, self.result_len))
     }
 }
 
@@ -261,6 +272,11 @@ pub enum BgpPlanError {
     /// A `Select`ed variable does not occur in the BGP body.
     #[error("selected variable `?{var}` does not occur in the BGP")]
     SelectedVariableNotInBgp { var: String },
+
+    /// Count output must be a variable; constant/list outputs need unification semantics
+    /// that are not represented by the current result metadata.
+    #[error("Count output must be a variable")]
+    CountOutputNotVariable,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -329,12 +345,15 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // `From(instance)` is safe for the instance-layer proof path; schema or wildcard
     // reads reject closed. `Pin` affects optimization order, not query semantics.
     let mut selected: Option<&[String]> = None;
+    let mut select_outside_count = false;
     let mut collection: Option<String> = None;
+    let mut count_variable: Option<String> = None;
     let mut body = query;
     loop {
         body = match body {
             Query::Select(select) if selected.is_none() => {
                 selected = Some(select.variables.as_slice());
+                select_outside_count = count_variable.is_none();
                 select.query.as_ref()
             }
             Query::Using(using) if collection.is_none() => {
@@ -344,6 +363,13 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             Query::From(from) if from.graph.eq_ignore_ascii_case("instance") => from.query.as_ref(),
             Query::From(_) => return Err(BgpPlanError::SchemaGraphUnsupported),
             Query::Pin(pin) => pin.query.as_ref(),
+            Query::Count(count) if count_variable.is_none() => {
+                count_variable = match &count.count {
+                    DataValue::Variable(variable) => Some(variable.clone()),
+                    _ => return Err(BgpPlanError::CountOutputNotVariable),
+                };
+                count.query.as_ref()
+            }
             _ => break,
         };
     }
@@ -384,9 +410,19 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let (plan, schema) = plan_left_deep(&atoms)?;
 
     // (4) Projection: map each selected variable to its result-column index.
-    let projection = match selected {
-        None => None,
-        Some(vars) => {
+    let projection = match (selected, count_variable.as_deref()) {
+        (None, None) => None,
+        (None, Some(_)) => Some(Vec::new()),
+        (Some(vars), Some(count)) if select_outside_count => {
+            for var in vars {
+                if var != count {
+                    return Err(BgpPlanError::SelectedVariableNotInBgp { var: var.clone() });
+                }
+            }
+            Some(Vec::new())
+        }
+        (Some(_), Some(_)) => Some(Vec::new()),
+        (Some(vars), None) => {
             let mut cols = Vec::with_capacity(vars.len());
             for v in vars {
                 let idx = schema
@@ -404,6 +440,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         schema,
         projection,
         collection,
+        count_variable,
     })
 }
 

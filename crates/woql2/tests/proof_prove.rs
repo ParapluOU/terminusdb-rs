@@ -26,6 +26,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_woql2::proof::plan_bgp;
+use terminusdb_woql2::{misc::Count, query::Query};
 
 // ----------------------------------------------------------------------------
 // Store + independent-join helpers (mirror the store's own query.rs tests).
@@ -169,6 +170,26 @@ fn single_atom_proves_the_complete_filtered_relation() {
     ]);
     let q = and_of(vec![tv("s", "knows", "o")]);
     assert_true_join_end_to_end(&lc, &q);
+}
+
+#[test]
+fn count_binds_the_proven_relation_cardinality() {
+    let lc = build_layer(&[
+        ("a", "knows", "b"),
+        ("b", "knows", "c"),
+        ("x", "likes", "y"),
+    ]);
+    let q = Query::Count(Count {
+        query: Box::new(and_of(vec![tv("s", "knows", "o")])),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
+    assert_eq!(proved.projected_commitments(&compiled).count(), 0);
 }
 
 #[test]

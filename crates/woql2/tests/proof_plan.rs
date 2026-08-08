@@ -6,7 +6,7 @@ use proof_common::*;
 
 use terminusdb_schema::GraphType;
 use terminusdb_woql2::control::{Distinct, From, Pin, Select, Using};
-use terminusdb_woql2::misc::Comment;
+use terminusdb_woql2::misc::{Comment, Count};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
 use terminusdb_woql2::triple::{Data, Link};
@@ -206,6 +206,42 @@ fn true_and_comment_are_binding_free_conjuncts() {
     let c = plan_bgp(&q).unwrap();
     assert_eq!(c.schema, vec!["x", "y"]);
     assert_eq!(c.plan.atoms.len(), 1);
+}
+
+#[test]
+fn count_retains_the_output_binding_and_hides_inner_columns() {
+    let q = Query::Count(Count {
+        query: Box::new(and_of(vec![tv("x", "p", "y")])),
+        count: dvar("count"),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.projection, Some(Vec::new()));
+    assert_eq!(c.count_variable.as_deref(), Some("count"));
+}
+
+#[test]
+fn rejects_count_into_a_constant() {
+    let q = Query::Count(Count {
+        query: Box::new(and_of(vec![tv("x", "p", "y")])),
+        count: dstr("not-a-variable"),
+    });
+    reject(q, BgpPlanError::CountOutputNotVariable);
+}
+
+#[test]
+fn count_accepts_an_inner_projection_but_exposes_only_the_count() {
+    let inner = Query::Select(Select {
+        variables: vec!["x".into()],
+        query: Box::new(and_of(vec![tv("x", "p", "y")])),
+    });
+    let q = Query::Count(Count {
+        query: Box::new(inner),
+        count: dvar("count"),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.count_variable.as_deref(), Some("count"));
+    assert_eq!(c.projection, Some(Vec::new()));
 }
 
 #[test]
