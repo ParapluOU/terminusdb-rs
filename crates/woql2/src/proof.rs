@@ -189,6 +189,81 @@ impl ProvedBgp {
         verify_result_objects(layer, expected_root, &self.result_columns, objects)
     }
 
+    /// Verify rows produced by the ordinary WOQL executor against this proof. The
+    /// executor supplies Store dictionary IDs in its public variable order. WOQL BGP
+    /// results are unordered, so comparison is an exact row-multiset comparison after
+    /// both sides resolve through the authenticated dictionary.
+    pub fn verify_executed_rows(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+        variables: &[String],
+        rows: &[Vec<u64>],
+    ) -> std::io::Result<()> {
+        if compiled.count_variable.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Count execution results are not Store-ID rows",
+            ));
+        }
+        let projection = compiled
+            .projection
+            .clone()
+            .unwrap_or_else(|| (0..compiled.schema.len()).collect());
+        let expected_variables: Vec<&str> = projection
+            .iter()
+            .map(|index| compiled.schema[*index].as_str())
+            .collect();
+        if variables.iter().map(String::as_str).collect::<Vec<_>>() != expected_variables {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "executed result variables do not match the compiled projection",
+            ));
+        }
+        if rows.iter().any(|row| row.len() != projection.len()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "executed result row width does not match the compiled projection",
+            ));
+        }
+
+        let proven_objects = self.verify_and_resolve(compiled, layer, expected_root)?;
+        let mut expected_rows: Vec<Vec<CanonicalObject>> = (0..self.result_len)
+            .map(|row| {
+                projection
+                    .iter()
+                    .map(|column| proven_objects[*column][row].clone())
+                    .collect()
+            })
+            .collect();
+
+        let mut delivered_columns = vec![Vec::with_capacity(rows.len()); projection.len()];
+        for row in rows {
+            for (column, id) in row.iter().enumerate() {
+                delivered_columns[column].push(ArkFr::from_u64(*id));
+            }
+        }
+        let delivered_objects = resolve_result_objects(layer, expected_root, &delivered_columns)?;
+        let mut delivered_rows: Vec<Vec<CanonicalObject>> = (0..rows.len())
+            .map(|row| {
+                (0..projection.len())
+                    .map(|column| delivered_objects[column][row].clone())
+                    .collect()
+            })
+            .collect();
+
+        expected_rows.sort();
+        delivered_rows.sort();
+        if expected_rows != delivered_rows {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ordinary WOQL result rows do not match the proven result multiset",
+            ));
+        }
+        Ok(())
+    }
+
     /// Encode a self-contained result envelope only after checking the proof, result IDs,
     /// and canonical lexical values against the caller-selected root.
     pub fn encode_envelope(

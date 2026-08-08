@@ -22,6 +22,17 @@ impl GraphType {
             Self::Instance => GRAPH_TYPE_INSTANCE,
         }
     }
+
+    fn parse(value: &str) -> anyhow::Result<Self> {
+        match value {
+            GRAPH_TYPE_SCHEMA => Ok(Self::Schema),
+            GRAPH_TYPE_INSTANCE => Ok(Self::Instance),
+            _ => Err(anyhow::anyhow!(
+                "Expected graph type \"schema\" or \"instance\", got {:?}",
+                value
+            )),
+        }
+    }
 }
 
 impl ToString for GraphType {
@@ -47,19 +58,73 @@ impl<Parent> ToInstanceProperty<Parent> for GraphType {
 }
 
 impl<Parent> InstancePropertyFromJson<Parent> for GraphType {
-    fn property_from_json(_json: Value) -> anyhow::Result<InstanceProperty> {
-        todo!()
+    fn property_from_json(json: Value) -> anyhow::Result<InstanceProperty> {
+        match json {
+            Value::String(value) => {
+                Self::parse(&value)?;
+                Ok(InstanceProperty::Primitive(PrimitiveValue::String(value)))
+            }
+            _ => Err(anyhow::anyhow!(
+                "Expected graph type string, got {:?}",
+                json
+            )),
+        }
     }
 }
 
 impl FromInstanceProperty for GraphType {
-    fn from_property(_prop: &InstanceProperty) -> anyhow::Result<Self> {
-        todo!()
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        match prop {
+            InstanceProperty::Primitive(PrimitiveValue::String(value)) => Self::parse(value),
+            _ => Err(anyhow::anyhow!(
+                "Expected graph type string primitive, got {:?}",
+                prop
+            )),
+        }
     }
 }
 
 impl crate::ToSchemaClass for GraphType {
     fn to_class() -> String {
         STRING.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_type_json_is_exact_and_fail_closed() {
+        let schema = <GraphType as InstancePropertyFromJson<()>>::property_from_json(
+            Value::String("schema".into()),
+        )
+        .unwrap();
+        let instance = <GraphType as InstancePropertyFromJson<()>>::property_from_json(
+            Value::String("instance".into()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            GraphType::from_property(&schema).unwrap(),
+            GraphType::Schema
+        );
+        assert_eq!(
+            GraphType::from_property(&instance).unwrap(),
+            GraphType::Instance
+        );
+        assert!(
+            <GraphType as InstancePropertyFromJson<()>>::property_from_json(Value::String(
+                "Schema".into()
+            ))
+            .is_err()
+        );
+        assert!(
+            <GraphType as InstancePropertyFromJson<()>>::property_from_json(Value::Null).is_err()
+        );
+        assert!(
+            GraphType::from_property(&InstanceProperty::Primitive(PrimitiveValue::Bool(true)))
+                .is_err()
+        );
     }
 }

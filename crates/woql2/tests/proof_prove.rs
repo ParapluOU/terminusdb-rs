@@ -255,6 +255,52 @@ fn repeated_variable_atom_proves_same_row_equality() {
         decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root,).is_err()
     );
 
+    let id = |name: &str| {
+        lc.node_value_catalog
+            .iter()
+            .find(|record| record.triple.object == CanonicalObject::Node(iri(name).into_bytes()))
+            .unwrap()
+            .object_id
+    };
+    // The ordinary executor is free to enumerate the same relation in another order.
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["x".into()],
+            &[vec![id("c")], vec![id("a")]],
+        )
+        .unwrap();
+    // Sorting normalizes enumeration order, but it must not collapse duplicates.
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["x".into()],
+            &[vec![id("a")], vec![id("a")]],
+        )
+        .is_err());
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["x".into()],
+            &[vec![id("a")], vec![id("b")]],
+        )
+        .is_err());
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["wrong".into()],
+            &[vec![id("a")], vec![id("c")]],
+        )
+        .is_err());
+
     let mut renamed_schema = compiled.clone();
     renamed_schema.schema[0] = "not_x".into();
     assert!(
