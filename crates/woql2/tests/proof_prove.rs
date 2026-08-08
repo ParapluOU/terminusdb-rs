@@ -25,6 +25,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
+use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::proof::plan_bgp;
 use terminusdb_woql2::{misc::Count, query::Query};
 
@@ -801,6 +802,37 @@ fn assert_value_constant_matches(term: &AtomTerm, entry: TypedDictEntry) {
         }
         other => panic!("expected a ValueConstant, got {other:?}"),
     }
+}
+
+#[test]
+fn object_decimal_literal_proves_true_join() {
+    let wanted: decimal_rs::Decimal = "123.450".parse().unwrap();
+    let other: decimal_rs::Decimal = "98.5".parse().unwrap();
+    let store_decimal = |value: &decimal_rs::Decimal| {
+        let value = tdb_succinct::Decimal::new(value.to_string()).unwrap();
+        tdb_succinct::Decimal::make_entry(&value)
+    };
+    let lc = build_val_knows_layer(
+        "balance",
+        vec![
+            ("a", store_decimal(&wanted)),
+            ("b", store_decimal(&wanted)),
+            ("c", store_decimal(&other)),
+        ],
+        vec![("a", "m"), ("b", "n"), ("c", "o")],
+    );
+    let q = and_of(vec![
+        Query::Triple(terminusdb_woql2::triple::Triple {
+            subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
+            predicate: terminusdb_woql2::value::NodeValue::Node(iri("balance")),
+            object: terminusdb_woql2::value::Value::Data(XSDAnySimpleType::Decimal(wanted.clone())),
+            graph: None,
+        }),
+        tv("x", "knows", "z"),
+    ]);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_value_constant_matches(&compiled.plan.atoms[0].object, store_decimal(&wanted));
+    assert_const_join_end_to_end(&lc, &q, 2);
 }
 
 #[test]

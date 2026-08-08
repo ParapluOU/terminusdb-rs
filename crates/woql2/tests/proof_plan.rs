@@ -4,7 +4,7 @@
 mod proof_common;
 use proof_common::*;
 
-use terminusdb_schema::GraphType;
+use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{Distinct, From, Pin, Select, Using};
 use terminusdb_woql2::misc::{Comment, Count};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
@@ -19,6 +19,8 @@ use terminus_store::ValueTriple;
 
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
+use chrono::{NaiveDate, NaiveTime, TimeZone, Utc};
+use decimal_rs::Decimal;
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
@@ -29,6 +31,18 @@ use terminusdb_woql2::proof::{plan_bgp, BgpPlanError, CompiledBgp};
 #[track_caller]
 fn reject(q: Query, want: BgpPlanError) {
     assert_eq!(plan_bgp(&q).unwrap_err(), want);
+}
+
+fn typed_object_query(value: XSDAnySimpleType) -> Query {
+    and_of(vec![
+        Query::Triple(terminusdb_woql2::triple::Triple {
+            subject: NodeValue::Variable("x".into()),
+            predicate: NodeValue::Node(iri("p")),
+            object: Value::Data(value),
+            graph: None,
+        }),
+        tv("x", "q", "z"),
+    ])
 }
 
 /// The store's own canonicalization (datatype tag + lexical bytes) of a typed dict entry —
@@ -154,6 +168,39 @@ fn select_records_projection_indices() {
 }
 
 #[test]
+fn nested_selects_compose_and_outermost_controls_visible_columns() {
+    let bgp = and_of(vec![tv("x", "p", "y"), tv("y", "q", "z")]);
+    let inner = Query::Select(Select {
+        variables: vec!["x".into(), "z".into()],
+        query: Box::new(bgp),
+    });
+    let q = Query::Select(Select {
+        variables: vec!["z".into()],
+        query: Box::new(inner),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y", "z"]);
+    assert_eq!(c.projection, Some(vec![2]));
+}
+
+#[test]
+fn nested_select_rejects_a_variable_hidden_by_its_inner_select() {
+    let bgp = and_of(vec![tv("x", "p", "y"), tv("y", "q", "z")]);
+    let inner = Query::Select(Select {
+        variables: vec!["x".into()],
+        query: Box::new(bgp),
+    });
+    let q = Query::Select(Select {
+        variables: vec!["z".into()],
+        query: Box::new(inner),
+    });
+    reject(
+        q,
+        BgpPlanError::SelectedVariableNotInBgp { var: "z".into() },
+    );
+}
+
+#[test]
 fn accepts_link_and_data_as_typed_triple_patterns() {
     let q = and_of(vec![
         Query::Link(Link {
@@ -242,6 +289,30 @@ fn count_accepts_an_inner_projection_but_exposes_only_the_count() {
     let c = plan_bgp(&q).unwrap();
     assert_eq!(c.count_variable.as_deref(), Some("count"));
     assert_eq!(c.projection, Some(Vec::new()));
+}
+
+#[test]
+fn select_outside_count_can_only_expose_the_count_binding() {
+    let count = Query::Count(Count {
+        query: Box::new(and_of(vec![tv("x", "p", "y")])),
+        count: dvar("count"),
+    });
+    let valid = Query::Select(Select {
+        variables: vec!["count".into()],
+        query: Box::new(count.clone()),
+    });
+    let c = plan_bgp(&valid).unwrap();
+    assert_eq!(c.count_variable.as_deref(), Some("count"));
+    assert_eq!(c.projection, Some(Vec::new()));
+
+    let invalid = Query::Select(Select {
+        variables: vec!["x".into()],
+        query: Box::new(count),
+    });
+    reject(
+        invalid,
+        BgpPlanError::SelectedVariableNotInBgp { var: "x".into() },
+    );
 }
 
 #[test]
@@ -414,6 +485,48 @@ fn accepts_object_string_literal() {
         AtomTerm::ValueConstant(_, _)
     ));
     assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
+}
+
+#[test]
+fn accepts_remaining_store_aligned_scalar_equalities() {
+    let decimal: Decimal = "123.450".parse().unwrap();
+    let datetime = Utc.with_ymd_and_hms(2025, 6, 7, 8, 9, 10).unwrap();
+    let date = NaiveDate::from_ymd_opt(2025, 6, 7).unwrap();
+    let time = NaiveTime::from_hms_opt(8, 9, 10).unwrap();
+    let cases = [
+        (
+            XSDAnySimpleType::Decimal(decimal.clone()),
+            tdb_succinct::Decimal::make_entry(
+                &tdb_succinct::Decimal::new(decimal.to_string()).unwrap(),
+            ),
+        ),
+        (
+            XSDAnySimpleType::URI("https://example.com/value".into()),
+            tdb_succinct::AnyURI::make_entry(&"https://example.com/value"),
+        ),
+        (
+            XSDAnySimpleType::DateTime(datetime),
+            chrono::NaiveDateTime::make_entry(&datetime.naive_utc()),
+        ),
+        (
+            XSDAnySimpleType::Date(date),
+            tdb_succinct::Date::make_entry(&tdb_succinct::Date {
+                year: 2025,
+                month: 6,
+                day: 7,
+                offset: 0,
+            }),
+        ),
+        (
+            XSDAnySimpleType::Time(time),
+            chrono::NaiveTime::make_entry(&time),
+        ),
+    ];
+
+    for (value, expected) in cases {
+        let compiled = plan_bgp(&typed_object_query(value)).unwrap();
+        assert_value_constant(&compiled, "p", expected);
+    }
 }
 
 #[test]

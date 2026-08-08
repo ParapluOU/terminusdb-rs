@@ -4,15 +4,15 @@
 //! only the fragment the single-key left-deep join chain can encode *faithfully* and
 //! rejects everything else closed:
 //!
-//! * an optional single outer [`Select`] (projection is read-side only — the proof
+//! * zero or more nested outer [`Select`]s (projection is read-side only — the proof
 //!   still proves the FULL BGP), wrapping
 //! * an [`And`] (nested `And`s flattened) of `k >= 1` [`Triple`]s, each a
 //!   `<subj> <constant predicate IRI> <obj>` atom where the predicate is a constant IRI
 //!   and each of subject/object is EITHER a query VARIABLE (a kept output column) OR an
 //!   aligned CONSTANT — a subject/object node IRI ([`AtomTerm::NodeConstant`]) or an
 //!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`]:
-//!   `xsd:string`, and — via the store's typed-value construction — `boolean`, `unsignedInt`,
-//!   `integer`, `float`/`double`). Each atom keeps one output column per variable (S,O order);
+//!   all scalar `XSDAnySimpleType` variants except `hexBinary`, routed through the Store's
+//!   typed-value construction). Each atom keeps one output column per variable (S,O order);
 //!   the atoms join into a left-deep chain where every step shares EXACTLY ONE variable
 //!   with the evolving accumulator schema.
 //!
@@ -24,9 +24,10 @@
 //! to how the store stored it (node IRIs by their IRI bytes; `xsd:string` literals by
 //! routing through the store's own value construction).
 
+use chrono::Datelike;
 use dory_pcs::backends::arkworks::{ArkFr, ArkGT};
 use dory_pcs::primitives::arithmetic::Field;
-use tdb_succinct::{TdbDataType, TypedDictEntry};
+use tdb_succinct::{AnyURI, Date, TdbDataType, TypedDictEntry};
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::query::{
@@ -335,7 +336,8 @@ struct Atom {
 
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
-/// Accepts an optional single outer [`Select`] wrapping an `And` of `>= 1` triples of
+/// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
+/// `And` of `>= 1` triples of
 /// the form `?subj <constant IRI> ?obj` (`subj != obj`), whose atoms connect into a
 /// single-key left-deep join tree (each step shares exactly one variable). Everything
 /// else is rejected closed with a descriptive [`BgpPlanError`].
@@ -344,16 +346,17 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // retained as routing metadata so an integration can resolve the intended layer.
     // `From(instance)` is safe for the instance-layer proof path; schema or wildcard
     // reads reject closed. `Pin` affects optimization order, not query semantics.
-    let mut selected: Option<&[String]> = None;
-    let mut select_outside_count = false;
+    // Traversal is outer-to-inner. The bool records whether the Select is outside a
+    // Count (and therefore selects the Count binding) or inside it (and therefore
+    // projects the counted relation before its cardinality is taken).
+    let mut selections: Vec<(&[String], bool)> = Vec::new();
     let mut collection: Option<String> = None;
     let mut count_variable: Option<String> = None;
     let mut body = query;
     loop {
         body = match body {
-            Query::Select(select) if selected.is_none() => {
-                selected = Some(select.variables.as_slice());
-                select_outside_count = count_variable.is_none();
+            Query::Select(select) => {
+                selections.push((select.variables.as_slice(), count_variable.is_none()));
                 select.query.as_ref()
             }
             Query::Using(using) if collection.is_none() => {
@@ -409,30 +412,37 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // (3) Shape guard + left-deep planner: the safety-critical core.
     let (plan, schema) = plan_left_deep(&atoms)?;
 
-    // (4) Projection: map each selected variable to its result-column index.
-    let projection = match (selected, count_variable.as_deref()) {
-        (None, None) => None,
-        (None, Some(_)) => Some(Vec::new()),
-        (Some(vars), Some(count)) if select_outside_count => {
-            for var in vars {
-                if var != count {
-                    return Err(BgpPlanError::SelectedVariableNotInBgp { var: var.clone() });
-                }
-            }
-            Some(Vec::new())
-        }
-        (Some(_), Some(_)) => Some(Vec::new()),
-        (Some(vars), None) => {
-            let mut cols = Vec::with_capacity(vars.len());
-            for v in vars {
-                let idx = schema
-                    .iter()
-                    .position(|s| s == v)
-                    .ok_or_else(|| BgpPlanError::SelectedVariableNotInBgp { var: v.clone() })?;
-                cols.push(idx);
-            }
-            Some(cols)
-        }
+    // (4) Validate every nested projection against what its inner query exposes. The
+    // proof still authenticates the complete BGP; only the outermost visible Select
+    // determines which committed columns the caller reads.
+    let projection = if let Some(count) = count_variable.as_deref() {
+        let outside: Vec<&[String]> = selections
+            .iter()
+            .filter_map(|(vars, outside)| outside.then_some(*vars))
+            .collect();
+        let inside: Vec<&[String]> = selections
+            .iter()
+            .filter_map(|(vars, outside)| (!outside).then_some(*vars))
+            .collect();
+        validate_selection_chain(&inside, &schema)?;
+        validate_selection_chain(&outside, &[count.to_owned()])?;
+        Some(Vec::new())
+    } else if selections.is_empty() {
+        None
+    } else {
+        let selections: Vec<&[String]> = selections.iter().map(|(vars, _)| *vars).collect();
+        validate_selection_chain(&selections, &schema)?;
+        Some(
+            selections[0]
+                .iter()
+                .map(|var| {
+                    schema
+                        .iter()
+                        .position(|candidate| candidate == var)
+                        .expect("validated outer projection must occur in the BGP schema")
+                })
+                .collect(),
+        )
     };
 
     Ok(CompiledBgp {
@@ -442,6 +452,21 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         collection,
         count_variable,
     })
+}
+
+/// Validate nested Selects listed outer-to-inner. Each Select may only name variables
+/// exposed by its directly nested query; the innermost Select reads from `base`.
+fn validate_selection_chain(selections: &[&[String]], base: &[String]) -> Result<(), BgpPlanError> {
+    let mut available = base;
+    for selected in selections.iter().rev() {
+        for var in *selected {
+            if !available.iter().any(|candidate| candidate == var) {
+                return Err(BgpPlanError::SelectedVariableNotInBgp { var: var.clone() });
+            }
+        }
+        available = selected;
+    }
+    Ok(())
 }
 
 /// Flatten a query body recursively, partitioning leaves into canonical triple patterns
@@ -685,11 +710,9 @@ fn normalize_comparison(q: &Query) -> Result<(String, RangeOp, ArkFr, ArkFr), Bg
 /// rule). Returns the entry, or the xsd datatype name for a literal this compiler does not
 /// support (the caller wraps that name into the right rejection error).
 ///
-/// Supported: `xsd:boolean` (`bool` → store `Boolean`), `xsd:unsignedInt` (`u32` → `UInt32`),
-/// `xsd:integer` (`i64` → `Int64`), `xsd:float`/`double` (`f64` → `Float64`). `xsd:string` is
-/// handled separately by the caller via [`ValueTriple::new_string_value`]. Every other
-/// datatype (decimal/hexBinary/anyURI/date/time/dateTime) is unsupported here and rejects
-/// closed — no store-routed construction is verified for it yet.
+/// `xsd:string` is handled separately by the caller via
+/// [`ValueTriple::new_string_value`]. `hexBinary` remains unsupported until its textual
+/// WOQL form is decoded and round-trip tested against the Store type.
 fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static str> {
     Ok(match xsd {
         XSDAnySimpleType::Boolean(b) => bool::make_entry(b),
@@ -704,6 +727,23 @@ fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static s
         // The woql2 `Float` variant carries an `f64` → store `Float64` (8-byte IEEE
         // total-order OP encoding).
         XSDAnySimpleType::Float(f) => f64::make_entry(f),
+        XSDAnySimpleType::Decimal(decimal) => {
+            let value = tdb_succinct::Decimal::new(decimal.to_string()).map_err(|_| "decimal")?;
+            tdb_succinct::Decimal::make_entry(&value)
+        }
+        XSDAnySimpleType::URI(uri) => AnyURI::make_entry(uri),
+        // The WOQL AST carries a UTC DateTime; the Store's xsd:dateTime entry is its
+        // timezone-free UTC representation.
+        XSDAnySimpleType::DateTime(datetime) => {
+            chrono::NaiveDateTime::make_entry(&datetime.naive_utc())
+        }
+        XSDAnySimpleType::Date(date) => Date::make_entry(&Date {
+            year: i64::from(date.year()),
+            month: date.month() as u8,
+            day: date.day() as u8,
+            offset: 0,
+        }),
+        XSDAnySimpleType::Time(time) => chrono::NaiveTime::make_entry(time),
         other => return Err(xsd_datatype_name(other)),
     })
 }
@@ -811,12 +851,10 @@ fn xsd_datatype_name(xsd: &XSDAnySimpleType) -> &'static str {
 /// no re-implementation of the tdb-succinct encoding):
 /// * `xsd:string` via [`ValueTriple::new_string_value`] (the exact path the store uses to
 ///   store a string value);
-/// * `xsd:boolean`/`unsignedInt`/`integer`/`float`(`double`) via [`xsd_scalar_entry`] →
-///   [`ValueTriple::new_value`] (`bool`/`u32`/`i64`/`f64` typed entries).
+/// * every other supported WOQL scalar via [`xsd_scalar_entry`] →
+///   [`ValueTriple::new_value`] using its matching `tdb-succinct` typed entry.
 ///
-/// See the `object_*_literal_*` round-trip tests. Rejected closed (alignment unproven):
-/// every other `XSDAnySimpleType` (decimal/hexBinary/anyURI/date/time/dateTime). Adding one
-/// requires a store-routed construction in [`xsd_scalar_entry`] plus a round-trip test.
+/// See the `object_*_literal_*` round-trip tests. `hexBinary` remains rejected closed.
 fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError> {
     // Build the store object via the store's OWN construction path for each datatype. String
     // uses the dedicated string-value constructor; every other supported scalar goes through
