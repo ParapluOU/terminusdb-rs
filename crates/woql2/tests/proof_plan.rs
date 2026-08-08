@@ -589,10 +589,17 @@ fn accepts_remaining_store_aligned_scalar_equalities() {
 }
 
 #[test]
-fn rejects_fully_ground_atom() {
-    // t(<s>, p, <o>): both positions are constants — no variables at all.
-    let q = and_of(vec![tv_ground("s", "p", "o"), tv("y", "q", "z")]);
-    reject(q, BgpPlanError::GroundAtom);
+fn accepts_single_ground_atom_and_rejects_its_unproved_composition() {
+    // t(<s>, p, <o>) is a zero-arity existence relation whose authenticated UNIT
+    // result column remains hidden from the WOQL schema.
+    let c = plan_bgp(&tv_ground("s", "p", "o")).unwrap();
+    assert!(c.schema.is_empty());
+    assert_eq!(c.projection, Some(Vec::new()));
+    assert_eq!(c.plan.atoms.len(), 1);
+    assert!(c.plan.joins.is_empty());
+
+    let composed = and_of(vec![tv_ground("s", "p", "o"), tv("y", "q", "z")]);
+    reject(composed, BgpPlanError::GroundAtom);
 }
 
 #[test]

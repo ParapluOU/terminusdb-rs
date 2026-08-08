@@ -17,6 +17,7 @@ authenticated.
 | `Distinct` | Implemented only for the complete BGP schema | Full natural-join assignments over set-valued triples are already unique. Projection/subset distinct needs authenticated deduplication. |
 | `Comment`, `True` inside `And` | Implemented | They add no bindings and do not change conjunction solutions. |
 | `Count` | Implemented | The authenticated complete result length is the count. The ordinary executor must deliver exactly the declared count variable and one nonnegative `u64` value. |
+| Standalone fully-ground `Triple`/`Link`/`Data` | Implemented | The Store's internal UNIT column authenticates the zero-arity relation: one empty binding when the triple exists, none when it does not. Triple absence is supported when all three constants are dictionary members; absent dictionary terms still fail closed. |
 | `Link`, `Data`, `Triple` | Implemented | Normalized to the same instance-triple statement with node/data typing preserved. |
 
 Write/routing constructs (`Into`, `Add*`, `Delete*`, document mutations) are not
@@ -32,7 +33,8 @@ composition is implemented.
 |---|---|---|
 | `Start`, `Limit` | result-column commitments, compaction, relocation, count identities | Authenticate the exact selected slice. Without an authenticated order, arbitrary BGP pagination is not a declarative set result. |
 | `OrderBy`, `TripleSlice`, `TripleSliceRev`, `TripleNext`, `TriplePrevious` | strict-sort, range, membership, relocation, multiset/LogUp gadgets | Prove a permutation of the complete input, lexicographic typed ordering, and exact prefix/range boundaries. Sortedness alone is insufficient. |
-| Fully-ground `Triple`/`Link`/`Data` and non-membership | complete constant filter, dictionary membership, authenticated result length | Represent a zero-column relation/existence bit and compose it into conjunction. |
+| Ground atoms inside a conjunction | complete constant filter, authenticated UNIT relation/result length | Compose the zero-arity existence bit with the other relation without an unauthenticated post-filter. |
+| Dictionary non-membership | dictionary commitments and membership | Prove that a ground term itself is absent from the predicate or node/value dictionary. Current proof generation fails closed rather than treating missing membership as triple absence. |
 | `Once` | complete BGP plus count/existence and authenticated selection | Define and authenticate TerminusDB's first-solution order; without it, stripping `Once` is unsound. |
 | Full-schema `Equals` and variable equality filters | atom equality filter and sumcheck | General cross-atom equality routing beyond natural join and constant unification. |
 | `Or` | complete branch proofs, multiset/compaction gadgets | Authenticated bag union with correct overlap multiplicity and compatible schemas. |

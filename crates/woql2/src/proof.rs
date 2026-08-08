@@ -17,7 +17,9 @@
 //!   with the evolving accumulator schema. Two-variable graph keys use the Store's
 //!   injective two-u64 packing and remain bound to the original columns.
 //!
-//! A disconnected step or fully-ground atom (no variables) remains out of scope. Every emitted constant is one the store
+//! A disconnected step remains out of scope. A single fully-ground atom is an
+//! authenticated zero-arity existence relation; composing it with other atoms remains
+//! out of scope. Every emitted constant is one the store
 //! can authenticate against its committed node/value dictionary, canonicalized IDENTICALLY
 //! to how the store stored it (node IRIs by their IRI bytes; `xsd:string` literals by
 //! routing through the store's own value construction).
@@ -173,7 +175,11 @@ impl ProvedBgp {
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
         self.verify(compiled, layer, expected_root)?;
-        resolve_result_objects(layer, expected_root, &self.result_columns)
+        if compiled.schema.is_empty() {
+            Ok(Vec::new())
+        } else {
+            resolve_result_objects(layer, expected_root, &self.result_columns)
+        }
     }
 
     /// Verify caller-delivered canonical node IRIs/typed literals against the query
@@ -186,7 +192,18 @@ impl ProvedBgp {
         objects: &[Vec<CanonicalObject>],
     ) -> std::io::Result<()> {
         self.verify(compiled, layer, expected_root)?;
-        verify_result_objects(layer, expected_root, &self.result_columns, objects)
+        if compiled.schema.is_empty() {
+            if objects.is_empty() {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ground result exposes no dictionary-object columns",
+                ))
+            }
+        } else {
+            verify_result_objects(layer, expected_root, &self.result_columns, objects)
+        }
     }
 
     /// Verify rows produced by the ordinary WOQL executor against this proof. The
@@ -219,6 +236,19 @@ impl ProvedBgp {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "ordinary WOQL Count binding does not equal the proven result cardinality",
+                ));
+            }
+            return Ok(());
+        }
+        if compiled.schema.is_empty() {
+            self.verify(compiled, layer, expected_root)?;
+            if !variables.is_empty()
+                || rows.len() != self.result_len
+                || rows.iter().any(|row| !row.is_empty())
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary ground-query rows do not match the proven existence relation",
                 ));
             }
             return Ok(());
@@ -499,10 +529,9 @@ pub enum BgpPlanError {
     #[error("unsupported value datatype `{datatype}`: no round-trip-aligned encoding")]
     UnsupportedValueDatatype { datatype: &'static str },
 
-    /// An atom had no variables at all (both subject and object are constants). A
-    /// fully-ground atom is an existence check, not a join relation — out of v1 scope
-    /// (the store rejects it too).
-    #[error("fully-ground atom (no variables): existence checks are unsupported")]
+    /// A ground existence relation appeared alongside another atom. Its zero-arity
+    /// boolean composition needs a dedicated authenticated product operation.
+    #[error("fully-ground atoms are supported only as a single-atom existence query")]
     GroundAtom,
 
     /// The triple targeted the schema graph.
@@ -712,7 +741,9 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         validate_selection_chain(&outside, &[count.to_owned()])?;
         Some(Vec::new())
     } else if selections.is_empty() {
-        None
+        // A single ground atom uses the Store filter's internal UNIT column to
+        // authenticate cardinality. It is not a WOQL variable and stays hidden.
+        schema.is_empty().then(Vec::new)
     } else {
         let selections: Vec<&[String]> = selections.iter().map(|(vars, _)| *vars).collect();
         validate_selection_chain(&selections, &schema)?;
@@ -832,7 +863,7 @@ fn value_from_data_value(value: &DataValue) -> Value {
 ///   (CP3, via [`value_constant_term`]).
 ///
 /// Rejected closed: predicate variables, schema-graph triples, dictionary/list object
-/// values, unaligned typed-literal datatypes, and a fully-ground atom (no variables). A
+/// values, and unaligned typed-literal datatypes. A
 /// value-literal SUBJECT is unrepresentable — woql2's
 /// subject is a [`NodeValue`] (node/variable only) — so the store's `validate_atom`
 /// value-subject guard is unreachable through this compiler by construction.
@@ -878,11 +909,6 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
             kept.push(o.clone());
         }
     }
-    // A fully-ground atom (no variables) is an existence check, out of scope.
-    if kept.is_empty() {
-        return Err(BgpPlanError::GroundAtom);
-    }
-
     Ok(Atom {
         layer_atom: LayerBgpAtom {
             subject: subject_term,
@@ -1261,6 +1287,10 @@ fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError>
 /// empty for a 1-variable atom).
 fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlanError> {
     let k = atoms.len();
+
+    if k > 1 && atoms.iter().any(|atom| atom.kept.is_empty()) {
+        return Err(BgpPlanError::GroundAtom);
+    }
 
     // Deterministic start atom: input order 0. Its kept variables seed the accumulator.
     let mut acc_vars: Vec<String> = atoms[0].kept.clone();

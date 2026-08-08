@@ -403,6 +403,63 @@ fn count_binds_the_proven_relation_cardinality() {
 }
 
 #[test]
+fn ground_triple_authenticates_presence_absence_and_zero_arity_rows() {
+    // Every constant occurs somewhere in the authenticated dictionaries, while only
+    // (a,knows,b) is present. This exercises triple non-membership rather than the
+    // deliberately separate dictionary-nonmembership problem.
+    let lc = build_layer(&[("a", "knows", "b"), ("a", "likes", "c")]);
+
+    for (query, expected_len) in [
+        (tv_ground("a", "knows", "b"), 1usize),
+        (tv_ground("a", "likes", "b"), 0usize),
+    ] {
+        let compiled = plan_bgp(&query).unwrap();
+        let proved = compiled.prove(&lc).unwrap();
+        proved
+            .verify(&compiled, &lc, lc.state.commitment_root)
+            .unwrap();
+        assert_eq!(proved.result_len, expected_len);
+        assert_eq!(proved.result_commitments.len(), 1); // hidden UNIT
+        assert_eq!(proved.projected_commitments(&compiled).count(), 0);
+        assert!(proved
+            .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+            .unwrap()
+            .is_empty());
+
+        let rows = vec![Vec::new(); expected_len];
+        proved
+            .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &rows)
+            .unwrap();
+        let wrong_rows = vec![Vec::new(); 1 - expected_len];
+        assert!(proved
+            .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &wrong_rows)
+            .is_err());
+
+        let encoded = proved
+            .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+            .unwrap();
+        let decoded =
+            decode_and_verify_envelope(&encoded, &compiled, &lc, lc.state.commitment_root).unwrap();
+        assert!(decoded.result_objects.is_empty());
+
+        let count_query = Query::Count(Count {
+            query: Box::new(query),
+            count: dvar("count"),
+        });
+        let count_compiled = plan_bgp(&count_query).unwrap();
+        proved
+            .verify_executed_rows(
+                &count_compiled,
+                &lc,
+                lc.state.commitment_root,
+                &["count".into()],
+                &[vec![expected_len as u64]],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
 fn path_three_atoms_proves_true_join() {
     // knows/likes/owns chain; BGP t(?x,knows,?y), t(?y,likes,?z), t(?z,owns,?w).
     // Paths (x,y,z,w): (a,b,g,k), (c,b,g,k), (e,f,h,m).
