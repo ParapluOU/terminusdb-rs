@@ -32,15 +32,16 @@ use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::query::{
     prove_layer_bgp, verify_layer_bgp, AtomTerm, LayerBgpAtom, LayerBgpPlan, LayerBgpProof,
-    ObjectRangeSpec,
+    ObjectRangeBound, ObjectRangeSpec,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 use terminus_store::store::sync::SyncStoreLayer;
 use terminus_store::ValueTriple;
 
+use crate::misc::InRange;
 use crate::query::Query;
-use crate::triple::{Data, Link, Triple};
+use crate::triple::{Data, Link, Triple, TripleSlice};
 use crate::value::{DataValue, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
@@ -215,10 +216,18 @@ pub enum BgpPlanError {
     #[error("range variable `?{var}` is the object of more than one atom")]
     RangeVariableObjectOfMultiple { var: String },
 
-    /// More than one range filter targets the same variable. v1 supports at most one range
-    /// per variable (the store's `ObjectRangeSpec` carries a single operator).
-    #[error("more than one range filter on variable `?{var}` (at most one is supported)")]
+    /// More than two range bounds target the same variable.
+    #[error("more than two range bounds on variable `?{var}`")]
     DuplicateRangeOnVariable { var: String },
+
+    #[error("InRange value must be a variable")]
+    InRangeValueNotVariable,
+
+    #[error("InRange bounds must be scalar constants")]
+    InRangeBoundNotConstant,
+
+    #[error("range bounds for `?{var}` use different datatypes")]
+    RangeDatatypeMismatch { var: String },
 
     /// No triple atoms remain after normalization.
     #[error("BGP needs at least one atom, found {count}")]
@@ -310,6 +319,8 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::Limit(_) => "Limit",
         Query::Start(_) => "Start",
         Query::Count(_) => "Count",
+        Query::InRange(_) => "InRange",
+        Query::TripleSlice(_) => "TripleSlice",
         Query::Sum(_) => "Sum",
         Query::Member(_) => "Member",
         Query::Get(_) => "Get",
@@ -379,7 +390,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
 
     if !matches!(
         body,
-        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
+        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_) | Query::TripleSlice(_)
     ) {
         return Err(BgpPlanError::UnsupportedConstruct {
             construct: query_variant_name(body),
@@ -390,7 +401,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // representation here; comparisons become object-value range filters. True and
     // Comment contribute no bindings and are proof-transparent conjunction leaves.
     let mut triples: Vec<Triple> = Vec::new();
-    let mut comparisons: Vec<&Query> = Vec::new();
+    let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
 
     // (2) Lift each triple to an Atom, with all per-atom safety checks.
@@ -474,7 +485,7 @@ fn validate_selection_chain(selections: &[&[String]], base: &[String]) -> Result
 fn collect_conjunct<'a>(
     query: &'a Query,
     triples: &mut Vec<Triple>,
-    comparisons: &mut Vec<&'a Query>,
+    comparisons: &mut Vec<NormalizedRange>,
 ) -> Result<(), BgpPlanError> {
     match query {
         Query::Triple(triple) => triples.push(triple.clone()),
@@ -486,7 +497,13 @@ fn collect_conjunct<'a>(
             }
         }
         Query::Greater(_) | Query::Less(_) | Query::Gte(_) | Query::Lte(_) => {
-            comparisons.push(query)
+            comparisons.push(normalize_comparison(query)?)
+        }
+        Query::InRange(range) => comparisons.push(normalize_in_range(range)?),
+        Query::TripleSlice(slice) => {
+            let (triple, range) = normalize_triple_slice(slice)?;
+            triples.push(triple);
+            comparisons.push(range);
         }
         Query::True(_) | Query::Comment(_) => {}
         other => {
@@ -615,18 +632,12 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
 ///    operator so `c` is always on the right (`k > ?a` ⇒ `?a < k`), rejecting closed a
 ///    var-vs-var / const-vs-const comparison or an unsupported constant datatype.
 /// 2. v1 constraints (all reject closed): `var` must be the object of EXACTLY ONE atom,
-///    must NOT appear as any atom's subject, and each `var` may carry at most one range.
+///    must NOT appear as any atom's subject, and each `var` may carry at most two bounds.
 /// 3. The [`ObjectRangeSpec`] attaches to that atom's object (its object stays a kept
 ///    variable — the range is a filter, not a projection change).
-fn attach_ranges(atoms: &mut [Atom], comparisons: &[&Query]) -> Result<(), BgpPlanError> {
-    let mut ranged: Vec<String> = Vec::new();
-    for cmp in comparisons {
-        let (var, op, datatype, c) = normalize_comparison(cmp)?;
-
-        // At most one range per variable.
-        if ranged.iter().any(|v| v == &var) {
-            return Err(BgpPlanError::DuplicateRangeOnVariable { var });
-        }
+fn attach_ranges(atoms: &mut [Atom], comparisons: &[NormalizedRange]) -> Result<(), BgpPlanError> {
+    for comparison in comparisons {
+        let var = comparison.var.clone();
         // The ranged variable may not occupy a subject position anywhere.
         if atoms
             .iter()
@@ -650,15 +661,46 @@ fn attach_ranges(atoms: &mut [Atom], comparisons: &[&Query]) -> Result<(), BgpPl
         // The matched atom's object is a Variable by construction (obj_var is Some only
         // for a variable object), so a range never lands on a constant object here.
         debug_assert!(matches!(atoms[idx].layer_atom.object, AtomTerm::Variable));
-        atoms[idx].layer_atom.object_range = Some(ObjectRangeSpec {
-            op,
-            datatype,
-            c,
-            b_bits: OBJECT_RANGE_B_BITS,
-        });
-        ranged.push(var);
+        for bound in &comparison.bounds {
+            match &mut atoms[idx].layer_atom.object_range {
+                None => {
+                    atoms[idx].layer_atom.object_range = Some(ObjectRangeSpec {
+                        op: bound.op,
+                        datatype: comparison.datatype,
+                        c: bound.c,
+                        b_bits: OBJECT_RANGE_B_BITS,
+                        second: None,
+                    });
+                }
+                Some(existing) => {
+                    if existing.datatype != comparison.datatype {
+                        return Err(BgpPlanError::RangeDatatypeMismatch { var });
+                    }
+                    if existing.second.is_some() {
+                        return Err(BgpPlanError::DuplicateRangeOnVariable { var });
+                    }
+                    existing.second = Some(ObjectRangeBound {
+                        op: bound.op,
+                        c: bound.c,
+                    });
+                }
+            }
+        }
     }
     Ok(())
+}
+
+#[derive(Clone)]
+struct NormalizedBound {
+    op: RangeOp,
+    c: ArkFr,
+}
+
+#[derive(Clone)]
+struct NormalizedRange {
+    var: String,
+    datatype: ArkFr,
+    bounds: Vec<NormalizedBound>,
 }
 
 /// Normalize a numeric comparison conjunct into `(var, op, datatype, c)`, where `op` is
@@ -669,7 +711,7 @@ fn attach_ranges(atoms: &mut [Atom], comparisons: &[&Query]) -> Result<(), BgpPl
 /// Rejects closed: both sides variables ([`BgpPlanError::RangeBothVariables`]), neither
 /// side a variable ([`BgpPlanError::RangeBothConstants`]), or a constant that is not a
 /// supported order-preserving numeric literal ([`BgpPlanError::UnsupportedRangeDatatype`]).
-fn normalize_comparison(q: &Query) -> Result<(String, RangeOp, ArkFr, ArkFr), BgpPlanError> {
+fn normalize_comparison(q: &Query) -> Result<NormalizedRange, BgpPlanError> {
     // `op_var_left` is the operator when the VARIABLE is the left operand; `op_var_right`
     // is its flip (variable on the right) — the same relation with the sides swapped.
     let (left, right, op_var_left, op_var_right) = match q {
@@ -700,7 +742,70 @@ fn normalize_comparison(q: &Query) -> Result<(String, RangeOp, ArkFr, ArkFr), Bg
         DataValue::Variable(_) => unreachable!(),
     };
     let (datatype, c) = encode_range_constant(xsd)?;
-    Ok((var, op, datatype, c))
+    Ok(NormalizedRange {
+        var,
+        datatype,
+        bounds: vec![NormalizedBound { op, c }],
+    })
+}
+
+fn normalize_in_range(range: &InRange) -> Result<NormalizedRange, BgpPlanError> {
+    let var = match &range.value {
+        DataValue::Variable(var) => var.clone(),
+        _ => return Err(BgpPlanError::InRangeValueNotVariable),
+    };
+    let start = match &range.start {
+        DataValue::Data(value) => value,
+        _ => return Err(BgpPlanError::InRangeBoundNotConstant),
+    };
+    let end = match &range.end {
+        DataValue::Data(value) => value,
+        _ => return Err(BgpPlanError::InRangeBoundNotConstant),
+    };
+    let (start_datatype, start_c) = encode_range_constant(start)?;
+    let (end_datatype, end_c) = encode_range_constant(end)?;
+    if start_datatype != end_datatype {
+        return Err(BgpPlanError::RangeDatatypeMismatch { var });
+    }
+    Ok(NormalizedRange {
+        var,
+        datatype: start_datatype,
+        bounds: vec![
+            NormalizedBound {
+                op: RangeOp::Ge,
+                c: start_c,
+            },
+            NormalizedBound {
+                op: RangeOp::Lt,
+                c: end_c,
+            },
+        ],
+    })
+}
+
+fn normalize_triple_slice(slice: &TripleSlice) -> Result<(Triple, NormalizedRange), BgpPlanError> {
+    let variable = match &slice.object {
+        Value::Variable(var) => var.clone(),
+        _ => return Err(BgpPlanError::InRangeValueNotVariable),
+    };
+    let as_data = |value: &Value| match value {
+        Value::Data(value) => Ok(DataValue::Data(value.clone())),
+        _ => Err(BgpPlanError::InRangeBoundNotConstant),
+    };
+    let range = normalize_in_range(&InRange {
+        value: DataValue::Variable(variable),
+        start: as_data(&slice.low)?,
+        end: as_data(&slice.high)?,
+    })?;
+    Ok((
+        Triple {
+            subject: slice.subject.clone(),
+            predicate: slice.predicate.clone(),
+            object: slice.object.clone(),
+            graph: slice.graph.clone(),
+        },
+        range,
+    ))
 }
 
 /// Build the store's typed dict entry for a woql2 SCALAR literal, routing each supported

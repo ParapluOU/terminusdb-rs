@@ -27,7 +27,10 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::proof::plan_bgp;
-use terminusdb_woql2::{misc::Count, query::Query};
+use terminusdb_woql2::{
+    misc::{Count, InRange},
+    query::Query,
+};
 
 // ----------------------------------------------------------------------------
 // Store + independent-join helpers (mirror the store's own query.rs tests).
@@ -1214,6 +1217,32 @@ fn object_range_le_boundary_proves_true_filtered_join() {
 fn object_range_excludes_everything_m_zero() {
     // Nothing satisfies ?a > 1000 -> the ranged relation is empty, so the join is too.
     check_range_end_to_end(&age_name_fixture(), RangeOp::Gt, 1000, 0);
+}
+
+#[test]
+fn woql_in_range_proves_half_open_filtered_join() {
+    // [18, 40) includes both 18-boundary rows and 30, but excludes 15 and the exclusive
+    // 40 boundary. This exercises compilation plus both authenticated masks.
+    let lc = age_name_fixture();
+    let q = and_of(vec![
+        tv("x", "age", "a"),
+        tv("x", "name", "n"),
+        Query::InRange(InRange {
+            value: dvar("a"),
+            start: duint(18),
+            end: duint(40),
+        }),
+    ]);
+    let compiled = plan_bgp(&q).unwrap();
+    let range = compiled.plan.atoms[0].object_range.as_ref().unwrap();
+    assert_eq!(range.op, RangeOp::Ge);
+    assert_eq!(range.second.as_ref().unwrap().op, RangeOp::Lt);
+
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.result_len, 3);
+    proved
+        .verify(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
 }
 
 // ----------------------------------------------------------------------------

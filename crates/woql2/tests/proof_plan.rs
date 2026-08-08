@@ -6,10 +6,10 @@ use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{Distinct, From, Pin, Select, Using};
-use terminusdb_woql2::misc::{Comment, Count};
+use terminusdb_woql2::misc::{Comment, Count, InRange};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
-use terminusdb_woql2::triple::{Data, Link};
+use terminusdb_woql2::triple::{Data, Link, TripleSlice};
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
 use terminus_store::proof::query::{AtomTerm, ObjectRangeSpec};
@@ -836,12 +836,65 @@ fn rejects_range_on_object_of_two_atoms() {
 }
 
 #[test]
-fn rejects_two_ranges_on_one_variable() {
+fn accepts_two_ranges_on_one_variable_as_an_intersection() {
     let q = and_of(vec![
         tv("x", "age", "a"),
         tv("x", "name", "n"),
         greater(dvar("a"), duint(5)),
         less(dvar("a"), duint(20)),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    let range = range_of(&c, "age").unwrap();
+    assert_uint32_range(range, RangeOp::Gt, 5);
+    let second = range.second.as_ref().unwrap();
+    assert_eq!(second.op, RangeOp::Lt);
+    assert_eq!(second.c, ArkFr::from_u64(20));
+}
+
+#[test]
+fn in_range_compiles_to_half_open_bounds() {
+    let q = and_of(vec![
+        tv("x", "age", "a"),
+        tv("x", "name", "n"),
+        Query::InRange(InRange {
+            value: dvar("a"),
+            start: duint(18),
+            end: duint(40),
+        }),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    let range = range_of(&c, "age").unwrap();
+    assert_uint32_range(range, RangeOp::Ge, 18);
+    let second = range.second.as_ref().unwrap();
+    assert_eq!(second.op, RangeOp::Lt);
+    assert_eq!(second.c, ArkFr::from_u64(40));
+}
+
+#[test]
+fn triple_slice_normalizes_to_a_ranged_triple() {
+    let q = Query::TripleSlice(TripleSlice {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("age")),
+        object: Value::Variable("a".into()),
+        low: Value::Data(terminusdb_schema::XSDAnySimpleType::UnsignedInt(18)),
+        high: Value::Data(terminusdb_schema::XSDAnySimpleType::UnsignedInt(40)),
+        graph: None,
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "a"]);
+    let range = range_of(&c, "age").unwrap();
+    assert_uint32_range(range, RangeOp::Ge, 18);
+    assert_eq!(range.second.as_ref().unwrap().op, RangeOp::Lt);
+}
+
+#[test]
+fn rejects_a_third_range_on_one_variable() {
+    let q = and_of(vec![
+        tv("x", "age", "a"),
+        tv("x", "name", "n"),
+        greater(dvar("a"), duint(5)),
+        less(dvar("a"), duint(20)),
+        less(dvar("a"), duint(30)),
     ]);
     reject(
         q,
