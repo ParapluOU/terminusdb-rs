@@ -53,12 +53,33 @@ pub fn tv_obj_node(subj: &str, pred: &str, obj: &str) -> Query {
     })
 }
 
-/// A triple whose OBJECT is a data literal (xsd:boolean — an unaligned datatype).
+/// A triple whose OBJECT is a data literal of a STILL-unsupported datatype (xsd:hexBinary),
+/// used to exercise the reject-closed path.
 pub fn tv_obj_data(subj: &str, pred: &str) -> Query {
     Query::Triple(Triple {
         subject: NodeValue::Variable(subj.to_string()),
         predicate: NodeValue::Node(iri(pred)),
-        object: Value::Data(XSDAnySimpleType::Boolean(true)),
+        object: Value::Data(XSDAnySimpleType::HexBinary("deadbeef".to_string())),
+        graph: None,
+    })
+}
+
+/// A triple whose OBJECT is an xsd:boolean literal (`t(?subj, <iri(pred)>, b)`).
+pub fn tv_obj_bool(subj: &str, pred: &str, b: bool) -> Query {
+    Query::Triple(Triple {
+        subject: NodeValue::Variable(subj.to_string()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Data(XSDAnySimpleType::Boolean(b)),
+        graph: None,
+    })
+}
+
+/// A triple whose OBJECT is an xsd:float/double literal (`t(?subj, <iri(pred)>, f)`).
+pub fn tv_obj_float(subj: &str, pred: &str, f: f64) -> Query {
+    Query::Triple(Triple {
+        subject: NodeValue::Variable(subj.to_string()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Data(XSDAnySimpleType::Float(f)),
         graph: None,
     })
 }
@@ -73,7 +94,17 @@ pub fn tv_obj_string(subj: &str, pred: &str, value: &str) -> Query {
     })
 }
 
-/// A triple whose OBJECT is an xsd:integer literal (an unaligned datatype).
+/// A triple whose OBJECT is an xsd:unsignedInt literal (`t(?subj, <iri(pred)>, value)`).
+pub fn tv_obj_uint(subj: &str, pred: &str, value: usize) -> Query {
+    Query::Triple(Triple {
+        subject: NodeValue::Variable(subj.to_string()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Data(XSDAnySimpleType::UnsignedInt(value)),
+        graph: None,
+    })
+}
+
+/// A triple whose OBJECT is an xsd:integer literal (`t(?subj, <iri(pred)>, value)`).
 pub fn tv_obj_integer(subj: &str, pred: &str, value: i64) -> Query {
     Query::Triple(Triple {
         subject: NodeValue::Variable(subj.to_string()),
@@ -113,9 +144,24 @@ pub fn dstr(s: &str) -> DataValue {
     DataValue::Data(XSDAnySimpleType::String(s.to_string()))
 }
 
-/// A `DataValue::Data(xsd:integer)` constant (an UNSUPPORTED range datatype).
+/// A `DataValue::Data(xsd:integer)` constant — the `Int64` order-preserving range datatype.
 pub fn dint(k: i64) -> DataValue {
     DataValue::Data(XSDAnySimpleType::Integer(k))
+}
+
+/// A `DataValue::Data(xsd:boolean)` constant — the `Boolean` order-preserving range datatype.
+pub fn dbool(b: bool) -> DataValue {
+    DataValue::Data(XSDAnySimpleType::Boolean(b))
+}
+
+/// A `DataValue::Data(xsd:float/double)` constant — the `Float64` order-preserving range datatype.
+pub fn dfloat(f: f64) -> DataValue {
+    DataValue::Data(XSDAnySimpleType::Float(f))
+}
+
+/// A `DataValue::Data(xsd:hexBinary)` constant (an UNSUPPORTED range datatype).
+pub fn dhex(s: &str) -> DataValue {
+    DataValue::Data(XSDAnySimpleType::HexBinary(s.to_string()))
 }
 
 /// A `DataValue::List` (an unsupported range operand).

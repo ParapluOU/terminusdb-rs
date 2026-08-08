@@ -10,8 +10,9 @@
 //!   `<subj> <constant predicate IRI> <obj>` atom where the predicate is a constant IRI
 //!   and each of subject/object is EITHER a query VARIABLE (a kept output column) OR an
 //!   aligned CONSTANT — a subject/object node IRI ([`AtomTerm::NodeConstant`]) or an
-//!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`],
-//!   currently `xsd:string`). Each atom keeps one output column per variable (S,O order);
+//!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`]:
+//!   `xsd:string`, and — via the store's typed-value construction — `boolean`, `unsignedInt`,
+//!   `integer`, `float`/`double`). Each atom keeps one output column per variable (S,O order);
 //!   the atoms join into a left-deep chain where every step shares EXACTLY ONE variable
 //!   with the evolving accumulator schema.
 //!
@@ -57,7 +58,9 @@ pub struct CompiledBgp {
 pub enum BgpPlanError {
     /// A construct that is not a conjunction-of-triples appeared where the BGP body
     /// was expected (the top-level query after unwrapping an optional `Select`).
-    #[error("unsupported construct `{construct}`: only a conjunction (And) of triples is supported")]
+    #[error(
+        "unsupported construct `{construct}`: only a conjunction (And) of triples is supported"
+    )]
     UnsupportedConstruct { construct: &'static str },
 
     /// A conjunct inside the `And` was neither a `Triple` (or nested `And`) nor a numeric
@@ -75,10 +78,13 @@ pub enum BgpPlanError {
     RangeBothConstants,
 
     /// A comparison's constant is not a round-trip-aligned order-preserving numeric literal.
-    /// Only `xsd:unsignedInt` (store `UInt32`) is supported; strings, other datatypes, and
+    /// Supported: `xsd:boolean` (`Boolean`), `xsd:unsignedInt` (`UInt32`), `xsd:integer`
+    /// (`Int64`), `xsd:float`/`double` (`Float64`). Strings, decimals, other datatypes, and
     /// list operands reject closed — a range over a non-order-preserving encoding would
     /// compare a sentinel and is unsound at the query level.
-    #[error("unsupported range constant `{datatype}`: no round-trip-aligned order-preserving encoding")]
+    #[error(
+        "unsupported range constant `{datatype}`: no round-trip-aligned order-preserving encoding"
+    )]
     UnsupportedRangeDatatype { datatype: &'static str },
 
     /// A ranged variable is not the object of any atom, so there is no object-binding atom
@@ -88,7 +94,9 @@ pub enum BgpPlanError {
 
     /// A ranged variable also occupies a SUBJECT position. v1 attaches a range only to a
     /// variable that is purely an atom's object (never a join key on the subject side).
-    #[error("range variable `?{var}` appears as a subject: only a pure object variable can be ranged")]
+    #[error(
+        "range variable `?{var}` appears as a subject: only a pure object variable can be ranged"
+    )]
     RangeVariableIsSubject { var: String },
 
     /// A ranged variable is the object of MORE THAN ONE atom. v1 requires a unique
@@ -113,7 +121,9 @@ pub enum BgpPlanError {
     /// The object position held a compound value the store's node/value dictionary does
     /// not model as a single constant (a `Dictionary` or `List`). Node IRIs and aligned
     /// typed literals are accepted; these are not.
-    #[error("unsupported object value `{kind}`: only node IRIs and aligned typed literals are allowed")]
+    #[error(
+        "unsupported object value `{kind}`: only node IRIs and aligned typed literals are allowed"
+    )]
     UnsupportedObjectValue { kind: &'static str },
 
     /// The object was a typed literal whose xsd datatype is not one this compiler can
@@ -135,7 +145,9 @@ pub enum BgpPlanError {
 
     /// A single atom used the same variable in subject and object (`t(?x, P, ?x)`),
     /// a self-loop the single-key relation cannot express.
-    #[error("repeated variable within atom `?{var}`: single-key relations cannot express a self-loop")]
+    #[error(
+        "repeated variable within atom `?{var}`: single-key relations cannot express a self-loop"
+    )]
     RepeatedVariableWithinAtom { var: String },
 
     /// A join step would share two or more variables with the accumulator — a
@@ -481,33 +493,56 @@ fn normalize_comparison(q: &Query) -> Result<(String, RangeOp, ArkFr, ArkFr), Bg
     Ok((var, op, datatype, c))
 }
 
+/// Build the store's typed dict entry for a woql2 SCALAR literal, routing each supported
+/// xsd datatype through its `terminus_store`/`tdb-succinct` typed-value constructor (the
+/// [`TdbDataType::make_entry`] family) so the resulting canonicalization is byte-identical
+/// to a stored value of the same literal (no hand-rolled byte layouts — the 7.5c alignment
+/// rule). Returns the entry, or the xsd datatype name for a literal this compiler does not
+/// support (the caller wraps that name into the right rejection error).
+///
+/// Supported: `xsd:boolean` (`bool` → store `Boolean`), `xsd:unsignedInt` (`u32` → `UInt32`),
+/// `xsd:integer` (`i64` → `Int64`), `xsd:float`/`double` (`f64` → `Float64`). `xsd:string` is
+/// handled separately by the caller via [`ValueTriple::new_string_value`]. Every other
+/// datatype (decimal/hexBinary/anyURI/date/time/dateTime) is unsupported here and rejects
+/// closed — no store-routed construction is verified for it yet.
+fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static str> {
+    Ok(match xsd {
+        XSDAnySimpleType::Boolean(b) => bool::make_entry(b),
+        // xsd:unsignedInt is the 32-bit unsigned type → store `UInt32`.
+        XSDAnySimpleType::UnsignedInt(u) => {
+            let v = u32::try_from(*u).map_err(|_| "unsignedInt (exceeds u32)")?;
+            u32::make_entry(&v)
+        }
+        // The woql2 `Integer` variant carries an `i64` → store `Int64` (fixed-width,
+        // order-preserving via offset-binary — so it also supports range).
+        XSDAnySimpleType::Integer(i) => i64::make_entry(i),
+        // The woql2 `Float` variant carries an `f64` → store `Float64` (8-byte IEEE
+        // total-order OP encoding).
+        XSDAnySimpleType::Float(f) => f64::make_entry(f),
+        other => return Err(xsd_datatype_name(other)),
+    })
+}
+
 /// Encode a numeric range constant to `(datatype_tag, c)` matching the store's committed
 /// node/value dictionary encoding EXACTLY, by routing through the store's OWN value
-/// canonicalization (7.5c alignment trick): build the typed value via [`TdbDataType::make_entry`]
+/// canonicalization (7.5c alignment trick): build the typed value via [`xsd_scalar_entry`]
 /// + [`ValueTriple::new_value`], read back its [`CanonicalObject::Value`] via
 /// [`CanonicalObject::from_store_object`], take its [`CanonicalDatatype`] discriminant as the
 /// datatype tag, and compute `c` as the big-endian unsigned integer of its order-preserving
 /// `to_lexical` bytes — the SAME conversion `terminus_store`'s (private) `node_value_op_value`
 /// applies to the committed dict value column.
 ///
-/// Supported (round-trip-verified): `xsd:unsignedInt` → store `UInt32` (4-byte big-endian OP
-/// encoding). Every other `XSDAnySimpleType` rejects closed: a range over a
+/// Supported (round-trip-verified, all order-preserving fixed-width): `xsd:boolean`
+/// (`Boolean`), `xsd:unsignedInt` (`UInt32`), `xsd:integer` (`Int64`), `xsd:float`/`double`
+/// (`Float64`). Every other `XSDAnySimpleType` rejects closed: a range over a
 /// non-order-preserving or variable-width datatype (string/decimal/…) would compare a
 /// `0` sentinel in the store, which is unsound at the query level. Adding a datatype
-/// requires a store-routed construction here PLUS a round-trip alignment test.
+/// requires a store-routed construction in [`xsd_scalar_entry`], an
+/// [`op_preserving_width`] entry, PLUS a round-trip alignment test.
 fn encode_range_constant(xsd: &XSDAnySimpleType) -> Result<(ArkFr, ArkFr), BgpPlanError> {
-    match xsd {
-        // xsd:unsignedInt is the 32-bit unsigned type → store `UInt32`.
-        XSDAnySimpleType::UnsignedInt(u) => {
-            let v = u32::try_from(*u).map_err(|_| BgpPlanError::UnsupportedRangeDatatype {
-                datatype: "unsignedInt (exceeds u32)",
-            })?;
-            encode_via_store(u32::make_entry(&v))
-        }
-        other => Err(BgpPlanError::UnsupportedRangeDatatype {
-            datatype: xsd_datatype_name(other),
-        }),
-    }
+    let entry = xsd_scalar_entry(xsd)
+        .map_err(|datatype| BgpPlanError::UnsupportedRangeDatatype { datatype })?;
+    encode_via_store(entry)
 }
 
 /// Canonicalize a `TypedDictEntry` through the store's own value path and derive the
@@ -543,14 +578,22 @@ fn encode_via_store(entry: TypedDictEntry) -> Result<(ArkFr, ArkFr), BgpPlanErro
 }
 
 /// Fixed byte width of a SUPPORTED order-preserving numeric datatype, or `None` for any
-/// datatype this compiler has not round-trip-verified. Mirrors (a subset of)
-/// `terminus_store`'s private `order_preserving_numeric_width`. Extend ONLY alongside a
-/// new round-trip alignment test in `prove.rs`.
+/// datatype whose lexical is variable-width or not order-preserving. Mirrors
+/// `terminus_store`'s private `order_preserving_numeric_width` EXACTLY: for each of these
+/// the store's `to_lexical` writes exactly `width` bytes whose big-endian unsigned read is
+/// monotone in value (`Boolean` 0/1; `(U)Int8/16/32/64` raw-BE / offset-binary;
+/// `Float32/64` IEEE total-order), so `node_value_op_value` and this compiler compute the
+/// SAME `c`. A range over any other datatype rejects closed (see [`encode_range_constant`]).
 fn op_preserving_width(datatype: CanonicalDatatype) -> Option<usize> {
-    match datatype {
-        CanonicalDatatype::UInt32 => Some(4),
-        _ => None,
-    }
+    use CanonicalDatatype::*;
+    Some(match datatype {
+        Boolean => 1,
+        UInt8 | Int8 => 1,
+        UInt16 | Int16 => 2,
+        UInt32 | Int32 | Float32 => 4,
+        UInt64 | Int64 | Float64 => 8,
+        _ => return None,
+    })
 }
 
 /// The xsd datatype name of a woql2 typed literal, for descriptive rejection messages.
@@ -577,36 +620,39 @@ fn xsd_datatype_name(xsd: &XSDAnySimpleType) -> &'static str {
 /// (a misaligned `(datatype, lexical)` would `hash_object` to the wrong dictionary row, so
 /// membership would fail — or, worse, authenticate the wrong constant).
 ///
-/// Supported (round-trip-verified): `xsd:string`, canonicalized by routing the Rust
-/// `String` through the store's OWN [`ValueTriple::new_string_value`] →
-/// [`CanonicalObject::from_store_object`] path — the exact path the store uses when it
-/// stores a string value — so the bytes match BY CONSTRUCTION (no re-implementation of the
-/// tdb-succinct encoding). See the `object_string_literal_*` round-trip tests.
+/// Equality does NOT require order-preservation (it is id-based via dictionary membership),
+/// so ANY datatype the store can canonicalize is sound here. Supported (round-trip-verified,
+/// each routed through the store's OWN value construction so the bytes match BY CONSTRUCTION,
+/// no re-implementation of the tdb-succinct encoding):
+/// * `xsd:string` via [`ValueTriple::new_string_value`] (the exact path the store uses to
+///   store a string value);
+/// * `xsd:boolean`/`unsignedInt`/`integer`/`float`(`double`) via [`xsd_scalar_entry`] →
+///   [`ValueTriple::new_value`] (`bool`/`u32`/`i64`/`f64` typed entries).
 ///
-/// Rejected closed (alignment unproven): every other `XSDAnySimpleType`
-/// (boolean/integer/decimal/float/dateTime/…). Adding one requires a store-routed
-/// construction plus its own round-trip alignment test.
+/// See the `object_*_literal_*` round-trip tests. Rejected closed (alignment unproven):
+/// every other `XSDAnySimpleType` (decimal/hexBinary/anyURI/date/time/dateTime). Adding one
+/// requires a store-routed construction in [`xsd_scalar_entry`] plus a round-trip test.
 fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError> {
-    match xsd {
-        XSDAnySimpleType::String(s) => {
-            // Route through the store's own string-value construction: the resulting
-            // (CanonicalDatatype::String, lexical) is byte-identical to a stored
-            // `new_string_value(_, _, s)`. Subject/predicate are irrelevant to the object
-            // canonicalization, so empty placeholders are fine.
-            let triple = ValueTriple::new_string_value("", "", s);
-            match CanonicalObject::from_store_object(&triple.object) {
-                CanonicalObject::Value { datatype, lexical } => {
-                    Ok(AtomTerm::ValueConstant(datatype, lexical))
-                }
-                // Unreachable: `new_string_value` always yields a `Value` object. Fail
-                // closed rather than emit an unaligned constant.
-                CanonicalObject::Node(_) => Err(BgpPlanError::UnsupportedValueDatatype {
-                    datatype: "string",
-                }),
-            }
+    // Build the store object via the store's OWN construction path for each datatype. String
+    // uses the dedicated string-value constructor; every other supported scalar goes through
+    // its typed dict entry. Subject/predicate are irrelevant to the object canonicalization,
+    // so empty placeholders are fine.
+    let object = match xsd {
+        XSDAnySimpleType::String(s) => ValueTriple::new_string_value("", "", s).object,
+        _ => {
+            let entry = xsd_scalar_entry(xsd)
+                .map_err(|datatype| BgpPlanError::UnsupportedValueDatatype { datatype })?;
+            ValueTriple::new_value("", "", entry).object
         }
-        other => Err(BgpPlanError::UnsupportedValueDatatype {
-            datatype: xsd_datatype_name(other),
+    };
+    match CanonicalObject::from_store_object(&object) {
+        CanonicalObject::Value { datatype, lexical } => {
+            Ok(AtomTerm::ValueConstant(datatype, lexical))
+        }
+        // Unreachable: a value construction always yields a `Value` object. Fail closed
+        // rather than emit an unaligned constant.
+        CanonicalObject::Node(_) => Err(BgpPlanError::UnsupportedValueDatatype {
+            datatype: xsd_datatype_name(xsd),
         }),
     }
 }

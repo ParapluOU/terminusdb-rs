@@ -19,9 +19,11 @@ use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
     prove_layer_bgp, verify_layer_bgp, AtomTerm, LayerBgpAtom, LayerBgpPlan,
 };
-use terminus_store::proof::range::RangeOp;
+use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::{open_sync_memory_store, ValueTriple};
+
+use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use woql_proof::plan_bgp;
 
@@ -80,11 +82,7 @@ fn atom_relation(lc: &LayerCommitment, pred_id: u64) -> Vec<Vec<ArkFr>> {
 /// Independently recompute the COMPLETE BGP result columns (real length) and the final
 /// join domain by folding the plaintext binary join over the plan's steps — the
 /// faithfulness oracle. Same structure as the store's own `expected_layer_bgp`.
-fn expected_bgp(
-    lc: &LayerCommitment,
-    ids: &[u64],
-    joins: &[JoinStep],
-) -> (Vec<Vec<ArkFr>>, usize) {
+fn expected_bgp(lc: &LayerCommitment, ids: &[u64], joins: &[JoinStep]) -> (Vec<Vec<ArkFr>>, usize) {
     let split = |cols: &[Vec<ArkFr>], key: usize| -> (Vec<ArkFr>, Vec<Vec<ArkFr>>) {
         let k = cols[key].clone();
         let other = cols
@@ -143,7 +141,11 @@ fn assert_true_join_end_to_end(lc: &LayerCommitment, q: &terminusdb_woql2::query
         "one commitment per schema column"
     );
     assert_eq!(exp_cols.len(), compiled.schema.len());
-    assert_eq!(m, exp_cols[0].len(), "proven row count == true join row count");
+    assert_eq!(
+        m,
+        exp_cols[0].len(),
+        "proven row count == true join row count"
+    );
     for (c, col) in exp_cols.iter().enumerate() {
         assert_eq!(
             commit_column(&pad(col, domain)).unwrap(),
@@ -237,11 +239,7 @@ fn variable_in_three_atoms_mixed_positions_proves_true_join() {
 fn dsl_macro_bgp_proves_true_join() {
     // Real-AST compatibility: the same path BGP built with woql2's DSL macros.
     use terminusdb_woql2::{and, t, triple, var};
-    let lc = build_layer(&[
-        ("a", "knows", "b"),
-        ("b", "likes", "g"),
-        ("g", "owns", "k"),
-    ]);
+    let lc = build_layer(&[("a", "knows", "b"), ("b", "likes", "g"), ("g", "owns", "k")]);
     let knows = iri("knows");
     let likes = iri("likes");
     let owns = iri("owns");
@@ -259,11 +257,7 @@ fn select_projection_reads_true_columns() {
     use terminusdb_woql2::control::Select;
     use terminusdb_woql2::query::Query;
 
-    let lc = build_layer(&[
-        ("a", "knows", "b"),
-        ("b", "likes", "g"),
-        ("g", "owns", "k"),
-    ]);
+    let lc = build_layer(&[("a", "knows", "b"), ("b", "likes", "g"), ("g", "owns", "k")]);
     let bgp = and_of(vec![
         tv("x", "knows", "y"),
         tv("y", "likes", "z"),
@@ -341,7 +335,10 @@ fn composite_key_single_key_plan_is_a_verifying_superset_but_guard_refuses_it() 
             LayerBgpAtom::all_variables(iri("p").into_bytes()),
             LayerBgpAtom::all_variables(iri("q").into_bytes()),
         ],
-        joins: vec![JoinStep { acc_key: 0, rel_key: 0 }],
+        joins: vec![JoinStep {
+            acc_key: 0,
+            rel_key: 0,
+        }],
     };
     let (proof, result_coms, m_bogus, ids) = prove_layer_bgp(&lc, &bogus).unwrap();
     // It VERIFIES — the crypto is faithful to the (wrong) plan.
@@ -463,8 +460,15 @@ fn expected_const_bgp(
             .collect();
         (k, other)
     };
-    let rel =
-        |i: usize| kept_relation(lc, &atoms[i], predicate_ids[i], subject_ids[i], object_ids[i]);
+    let rel = |i: usize| {
+        kept_relation(
+            lc,
+            &atoms[i],
+            predicate_ids[i],
+            subject_ids[i],
+            object_ids[i],
+        )
+    };
     let mut acc = rel(0);
     let mut acc_len = acc[0].len();
     let mut domain = padded_len(lc.additions.len());
@@ -524,7 +528,11 @@ fn assert_const_join_end_to_end(
         "one commitment per schema column"
     );
     assert_eq!(exp_cols.len(), compiled.schema.len());
-    assert_eq!(m, exp_cols[0].len(), "proven count == true filtered-join count");
+    assert_eq!(
+        m,
+        exp_cols[0].len(),
+        "proven count == true filtered-join count"
+    );
     for (c, col) in exp_cols.iter().enumerate() {
         assert_eq!(
             commit_column(&pad(col, domain)).unwrap(),
@@ -572,7 +580,10 @@ fn subject_node_constant_proves_true_join() {
         ("b", "likes", "o"),
         ("c", "likes", "n"),
     ]);
-    let q = and_of(vec![tv_subj_const("a", "knows", "y"), tv("y", "likes", "z")]);
+    let q = and_of(vec![
+        tv_subj_const("a", "knows", "y"),
+        tv("y", "likes", "z"),
+    ]);
     let c = plan_bgp(&q).unwrap();
     assert_eq!(c.schema, vec!["y", "z"]);
     assert!(matches!(c.plan.atoms[0].subject, AtomTerm::NodeConstant(_)));
@@ -605,7 +616,10 @@ fn absent_node_constant_fails_closed() {
     // The object constant <absent> compiles fine, but proving fails closed because it is
     // not in the layer's node/value dictionary (non-membership proofs are deferred).
     let lc = build_layer(&[("a", "knows", "b"), ("b", "likes", "c")]);
-    let q = and_of(vec![tv("x", "knows", "y"), tv_obj_node("y", "likes", "absent")]);
+    let q = and_of(vec![
+        tv("x", "knows", "y"),
+        tv_obj_node("y", "likes", "absent"),
+    ]);
     let compiled = plan_bgp(&q).unwrap();
     let err = prove_layer_bgp(&lc, &compiled.plan).unwrap_err();
     assert!(err
@@ -638,11 +652,17 @@ fn object_string_literal_proves_true_join() {
         ValueTriple::new_node(&iri("a"), &iri("knows"), &iri("o")),
         ValueTriple::new_node(&iri("c"), &iri("knows"), &iri("n")),
     ]);
-    let q = and_of(vec![tv_obj_string("x", "name", "hi"), tv("x", "knows", "z")]);
+    let q = and_of(vec![
+        tv_obj_string("x", "name", "hi"),
+        tv("x", "knows", "z"),
+    ]);
     // Plan sanity: the object is an aligned value constant; schema is [x, z].
     let c = plan_bgp(&q).unwrap();
     assert_eq!(c.schema, vec!["x", "z"]);
-    assert!(matches!(c.plan.atoms[0].object, AtomTerm::ValueConstant(_, _)));
+    assert!(matches!(
+        c.plan.atoms[0].object,
+        AtomTerm::ValueConstant(_, _)
+    ));
     // The compiled value constant is exactly the store's canonicalization of "hi".
     match &c.plan.atoms[0].object {
         AtomTerm::ValueConstant(dt, lex) => {
@@ -674,7 +694,10 @@ fn object_string_literal_discriminates_by_content() {
         ValueTriple::new_node(&iri("d"), &iri("knows"), &iri("z2")),
         ValueTriple::new_node(&iri("a"), &iri("knows"), &iri("m")),
     ]);
-    let q = and_of(vec![tv_obj_string("x", "name", "bye"), tv("x", "knows", "z")]);
+    let q = and_of(vec![
+        tv_obj_string("x", "name", "bye"),
+        tv("x", "knows", "z"),
+    ]);
     // d named "bye"; d knows {z1,z2} -> 2 rows (a named "hi", excluded).
     assert_const_join_end_to_end(&lc, &q, 2);
 }
@@ -688,12 +711,168 @@ fn absent_string_literal_fails_closed() {
         ValueTriple::new_string_value(&iri("a"), &name, "hi"),
         ValueTriple::new_node(&iri("a"), &iri("knows"), &iri("m")),
     ]);
-    let q = and_of(vec![tv_obj_string("x", "name", "nope"), tv("x", "knows", "z")]);
+    let q = and_of(vec![
+        tv_obj_string("x", "name", "nope"),
+        tv("x", "knows", "z"),
+    ]);
     let compiled = plan_bgp(&q).unwrap();
     let err = prove_layer_bgp(&lc, &compiled.plan).unwrap_err();
     assert!(err
         .to_string()
         .contains("constant not in layer node/value dictionary"));
+}
+
+// ----------------------------------------------------------------------------
+// Wave A — EQUALITY over more object-literal datatypes (boolean / integer(Int64) /
+// float(Float64) / unsignedInt(UInt32)), each routed through the store's OWN typed-value
+// construction. Each test STORES value triples of that datatype via the store API, compiles
+// a woql2 equality query whose object is the MATCHING `Value::Data(..)` literal, and proves
+// it selects EXACTLY the rows with that literal. A misaligned `(datatype, lexical)` would
+// resolve to a wrong/absent id: proving fails closed or the result differs from the oracle.
+// ----------------------------------------------------------------------------
+
+/// A base layer of `t(person, <pred>, <typed value>)` + `t(person, knows, <node>)` edges.
+fn build_val_knows_layer(
+    pred: &str,
+    vals: Vec<(&str, TypedDictEntry)>,
+    knows: Vec<(&str, &str)>,
+) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (s, entry) in vals {
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri(s), &iri(pred), entry))
+            .unwrap();
+    }
+    for (s, o) in knows {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(s), &iri("knows"), &iri(o)))
+            .unwrap();
+    }
+    let (layer, _state) = builder.commit_with_proof().unwrap();
+    layer.proof_commitment().unwrap().unwrap()
+}
+
+/// Assert `term` is a `ValueConstant` byte-identical to the store's own canonicalization of
+/// `entry` (the round-trip alignment guarantee at the compile boundary).
+#[track_caller]
+fn assert_value_constant_matches(term: &AtomTerm, entry: TypedDictEntry) {
+    let (edt, elex) =
+        match CanonicalObject::from_store_object(&ValueTriple::new_value("", "", entry).object) {
+            CanonicalObject::Value { datatype, lexical } => (datatype, lexical),
+            CanonicalObject::Node(_) => unreachable!(),
+        };
+    match term {
+        AtomTerm::ValueConstant(dt, lex) => {
+            assert_eq!(*dt, edt, "value-constant datatype tag");
+            assert_eq!(*lex, elex, "value-constant lexical bytes");
+        }
+        other => panic!("expected a ValueConstant, got {other:?}"),
+    }
+}
+
+#[test]
+fn object_boolean_literal_proves_true_join() {
+    // t(?x, active, true), t(?x, knows, ?z): active flag true AND x knows z.
+    // active: a->true, c->true, d->false ; knows: a->m, a->o, c->n. true => {a,c}.
+    // Join on x -> (a,m),(a,o),(c,n) = 3 rows.
+    let lc = build_val_knows_layer(
+        "active",
+        vec![
+            ("a", bool::make_entry(&true)),
+            ("c", bool::make_entry(&true)),
+            ("d", bool::make_entry(&false)),
+        ],
+        vec![("a", "m"), ("a", "o"), ("c", "n")],
+    );
+    let q = and_of(vec![
+        tv_obj_bool("x", "active", true),
+        tv("x", "knows", "z"),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_value_constant_matches(&c.plan.atoms[0].object, bool::make_entry(&true));
+    assert_const_join_end_to_end(&lc, &q, 3);
+}
+
+#[test]
+fn object_boolean_literal_discriminates_by_value() {
+    // Same layer, but query `false`: it must select EXACTLY d (the only false row).
+    let lc = build_val_knows_layer(
+        "active",
+        vec![
+            ("a", bool::make_entry(&true)),
+            ("c", bool::make_entry(&true)),
+            ("d", bool::make_entry(&false)),
+        ],
+        vec![("d", "z1"), ("d", "z2"), ("a", "m")],
+    );
+    let q = and_of(vec![
+        tv_obj_bool("x", "active", false),
+        tv("x", "knows", "z"),
+    ]);
+    // d active=false; d knows {z1,z2} -> 2 rows (a active=true, excluded).
+    assert_const_join_end_to_end(&lc, &q, 2);
+}
+
+#[test]
+fn object_integer_literal_proves_true_join() {
+    // t(?x, count, 42), t(?x, knows, ?z): count==42 AND x knows z. Uses Int64 (incl. a
+    // negative value in the layer to exercise the offset-binary encoding of siblings).
+    let lc = build_val_knows_layer(
+        "count",
+        vec![
+            ("a", i64::make_entry(&42i64)),
+            ("c", i64::make_entry(&42i64)),
+            ("d", i64::make_entry(&-7i64)),
+        ],
+        vec![("a", "m"), ("a", "o"), ("c", "n")],
+    );
+    let q = and_of(vec![
+        tv_obj_integer("x", "count", 42),
+        tv("x", "knows", "z"),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_value_constant_matches(&c.plan.atoms[0].object, i64::make_entry(&42i64));
+    assert_const_join_end_to_end(&lc, &q, 3);
+}
+
+#[test]
+fn object_integer_negative_literal_proves_true_join() {
+    // Querying a negative Int64 selects exactly the matching negative-valued rows.
+    let lc = build_val_knows_layer(
+        "count",
+        vec![
+            ("a", i64::make_entry(&42i64)),
+            ("d", i64::make_entry(&-7i64)),
+        ],
+        vec![("d", "z1"), ("a", "m")],
+    );
+    let q = and_of(vec![
+        tv_obj_integer("x", "count", -7),
+        tv("x", "knows", "z"),
+    ]);
+    assert_const_join_end_to_end(&lc, &q, 1);
+}
+
+#[test]
+fn object_float_literal_proves_true_join() {
+    // t(?x, score, 3.5), t(?x, knows, ?z): score==3.5 AND x knows z. Float64.
+    let lc = build_val_knows_layer(
+        "score",
+        vec![
+            ("a", f64::make_entry(&3.5f64)),
+            ("c", f64::make_entry(&3.5f64)),
+            ("d", f64::make_entry(&-1.25f64)),
+        ],
+        vec![("a", "m"), ("a", "o"), ("c", "n")],
+    );
+    let q = and_of(vec![tv_obj_float("x", "score", 3.5), tv("x", "knows", "z")]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_value_constant_matches(&c.plan.atoms[0].object, f64::make_entry(&3.5f64));
+    assert_const_join_end_to_end(&lc, &q, 3);
 }
 
 // ----------------------------------------------------------------------------
@@ -714,7 +893,11 @@ fn build_age_name_layer(people: &[(&str, u32)]) -> Arc<LayerCommitment> {
     let name = iri("name");
     for (person, a) in people {
         builder
-            .add_value_triple(ValueTriple::new_value(&iri(person), &age, u32::make_entry(a)))
+            .add_value_triple(ValueTriple::new_value(
+                &iri(person),
+                &age,
+                u32::make_entry(a),
+            ))
             .unwrap();
         builder
             .add_value_triple(ValueTriple::new_node(
@@ -877,7 +1060,11 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
     let (exp_cols, domain) = expected_range_join(lc, ids[age_idx], ids[name_idx], op, k as u64);
     assert_eq!(coms.len(), compiled.schema.len());
     assert_eq!(exp_cols.len(), compiled.schema.len());
-    assert_eq!(m, exp_cols[0].len(), "proven count == true filtered-join count");
+    assert_eq!(
+        m,
+        exp_cols[0].len(),
+        "proven count == true filtered-join count"
+    );
     for (c, col) in exp_cols.iter().enumerate() {
         assert_eq!(
             commit_column(&pad(col, domain)).unwrap(),
@@ -895,7 +1082,13 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
 // ages: alice=30, bob=15, carol=18, dave=40, erin=18 (each with one name). k=18 straddles
 // them and hits the boundary (carol, erin == 18) — Ge/Le include it, Gt/Lt exclude it.
 fn age_name_fixture() -> Arc<LayerCommitment> {
-    build_age_name_layer(&[("alice", 30), ("bob", 15), ("carol", 18), ("dave", 40), ("erin", 18)])
+    build_age_name_layer(&[
+        ("alice", 30),
+        ("bob", 15),
+        ("carol", 18),
+        ("dave", 40),
+        ("erin", 18),
+    ])
 }
 
 #[test]
@@ -926,4 +1119,325 @@ fn object_range_le_boundary_proves_true_filtered_join() {
 fn object_range_excludes_everything_m_zero() {
     // Nothing satisfies ?a > 1000 -> the ranged relation is empty, so the join is too.
     check_range_end_to_end(&age_name_fixture(), RangeOp::Gt, 1000, 0);
+}
+
+// ----------------------------------------------------------------------------
+// Wave A — numeric object-value RANGE filters over MORE order-preserving fixed-width
+// datatypes (Boolean / Int64 / Float64, including NEGATIVE Int64/Float64 to exercise the
+// store's offset-binary / IEEE total-order encodings). Each test builds a homogeneous
+// `t(person, <pred>, <typed>)` + `t(person, name, <node>)` layer, compiles a range query,
+// proves+verifies it, checks the committed columns against an independent range-filtered
+// join oracle, and asserts the compiled `c`/datatype tag match the store's committed dict
+// OP encoding. Range routes through the SAME store construction the equality path uses.
+// ----------------------------------------------------------------------------
+
+/// A base layer of `t(person, <pred>, <typed value>)` + `t(person, name, <node>)`.
+fn build_val_name_layer(pred: &str, people: Vec<(&str, TypedDictEntry)>) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    let name = iri("name");
+    for (person, entry) in people {
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri(person), &iri(pred), entry))
+            .unwrap();
+        builder
+            .add_value_triple(ValueTriple::new_node(
+                &iri(person),
+                &name,
+                &iri(&format!("{person}_n")),
+            ))
+            .unwrap();
+    }
+    let (layer, _state) = builder.commit_with_proof().unwrap();
+    layer.proof_commitment().unwrap().unwrap()
+}
+
+/// The committed `(datatype, order-preserving u64)` behind a node/value dict id, or `None`
+/// for a `Node` object. The OP value is the big-endian read of the fixed-width lexical —
+/// the SAME encoding the store's range gadget compares.
+fn op_value_of(lc: &LayerCommitment, object_id: u64) -> Option<(CanonicalDatatype, u64)> {
+    lc.node_value_catalog
+        .iter()
+        .find(|r| r.object_id == object_id)
+        .and_then(|r| match &r.triple.object {
+            CanonicalObject::Value { datatype, lexical } => {
+                let mut buf = [0u8; 8];
+                buf[8 - lexical.len()..].copy_from_slice(lexical);
+                Some((*datatype, u64::from_be_bytes(buf)))
+            }
+            CanonicalObject::Node(_) => None,
+        })
+}
+
+/// The store's committed OP encoding of a typed dict entry as a `u64` (big-endian read of
+/// its fixed-width `to_lexical`). The compiler's emitted `c` must equal this.
+fn store_op_value(entry: TypedDictEntry) -> u64 {
+    match CanonicalObject::from_store_object(&ValueTriple::new_value("", "", entry).object) {
+        CanonicalObject::Value { lexical, .. } => {
+            let mut buf = [0u8; 8];
+            buf[8 - lexical.len()..].copy_from_slice(&lexical);
+            u64::from_be_bytes(buf)
+        }
+        CanonicalObject::Node(_) => unreachable!(),
+    }
+}
+
+/// Independently recompute `t(?x,<val>,?a)[?a op c], t(?x,name,?n)`: the range-filtered
+/// value `[S,O]` pairs (stored order, masked to `datatype` and `op c` on the OP value) joined
+/// with the name pairs on the shared x. Returns result columns `[a, x, n]` and the domain.
+fn expected_range_join_generic(
+    lc: &LayerCommitment,
+    val_id: u64,
+    name_id: u64,
+    op: RangeOp,
+    c_op: u64,
+    datatype: CanonicalDatatype,
+) -> (Vec<Vec<ArkFr>>, usize) {
+    let (mut vs, mut vo) = (Vec::new(), Vec::new());
+    for rec in &lc.additions {
+        if rec.predicate_id == val_id {
+            if let Some((dt, v)) = op_value_of(lc, rec.object_id) {
+                if dt == datatype && cmp_op(op, v, c_op) {
+                    vs.push(ArkFr::from_u64(rec.subject_id));
+                    vo.push(ArkFr::from_u64(rec.object_id));
+                }
+            }
+        }
+    }
+    let (mut ns, mut no) = (Vec::new(), Vec::new());
+    for rec in &lc.additions {
+        if rec.predicate_id == name_id {
+            ns.push(ArkFr::from_u64(rec.subject_id));
+            no.push(ArkFr::from_u64(rec.object_id));
+        }
+    }
+    let w = compute_binary_join(&vs, &[vo.as_slice()], &ns, &[no.as_slice()]);
+    let domain = binary_join_domain(vs.len(), ns.len(), w.m_j, w.n_u).unwrap();
+    let mut cols = w.r_other_out.clone(); // [a]
+    cols.push(w.key.clone()); // x
+    cols.extend(w.s_other_out.clone()); // [n]
+    (cols, domain)
+}
+
+/// Compile `select ?x ?n where { t(?x,<val_pred>,?a). t(?x,name,?n). cmp }`, prove+verify,
+/// assert the committed columns equal the independent range-filtered join, and assert the
+/// compiled `(op, datatype tag, c, b_bits)` match the store's committed OP encoding.
+fn check_range_generic(
+    lc: &LayerCommitment,
+    val_pred: &str,
+    cmp: terminusdb_woql2::query::Query,
+    op: RangeOp,
+    datatype: CanonicalDatatype,
+    c_op: u64,
+    expected_m: usize,
+) {
+    use terminusdb_woql2::control::Select;
+    use terminusdb_woql2::query::Query;
+
+    let bgp = and_of(vec![tv("x", val_pred, "a"), tv("x", "name", "n"), cmp]);
+    let q = Query::Select(Select {
+        variables: vec!["x".into(), "n".into()],
+        query: Box::new(bgp),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+
+    // Round-trip alignment: the compiled range spec matches the store's OWN encoding.
+    let val_atom = compiled
+        .plan
+        .atoms
+        .iter()
+        .find(|a| a.object_range.is_some())
+        .expect("the value atom carries the range");
+    let spec = val_atom.object_range.as_ref().unwrap();
+    assert_eq!(spec.op, op, "operator");
+    assert_eq!(
+        spec.datatype,
+        ArkFr::from_u64(datatype as u64),
+        "datatype tag"
+    );
+    assert_eq!(spec.c, ArkFr::from_u64(c_op), "constant c");
+    assert_eq!(spec.b_bits, OBJECT_RANGE_B_BITS, "bit-width");
+
+    let (proof, coms, m, ids) = prove_layer_bgp(lc, &compiled.plan).unwrap();
+    verify_layer_bgp(
+        lc,
+        lc.state.commitment_root,
+        &compiled.plan,
+        &ids,
+        &coms,
+        m,
+        &proof,
+    )
+    .unwrap();
+    assert_eq!(m, expected_m, "proven row count (op {:?})", op);
+
+    let val_idx = compiled
+        .plan
+        .atoms
+        .iter()
+        .position(|a| a.object_range.is_some())
+        .unwrap();
+    let name_idx = 1 - val_idx;
+    let (exp_cols, domain) =
+        expected_range_join_generic(lc, ids[val_idx], ids[name_idx], op, c_op, datatype);
+    assert_eq!(coms.len(), compiled.schema.len());
+    assert_eq!(exp_cols.len(), compiled.schema.len());
+    assert_eq!(
+        m,
+        exp_cols[0].len(),
+        "proven count == true filtered-join count"
+    );
+    for (c, col) in exp_cols.iter().enumerate() {
+        assert_eq!(
+            commit_column(&pad(col, domain)).unwrap(),
+            coms[c],
+            "result column {c} ({}) is EXACTLY the true range-filtered join",
+            compiled.schema[c]
+        );
+    }
+    assert_eq!(compiled.schema, vec!["a", "x", "n"]);
+    assert_eq!(compiled.projection, Some(vec![1, 2]));
+}
+
+#[test]
+fn object_range_boolean_gt_false_selects_true_rows() {
+    // active: alice=true, bob=false, carol=true, dave=false. ?a > false -> {alice, carol}.
+    let lc = build_val_name_layer(
+        "active",
+        vec![
+            ("alice", bool::make_entry(&true)),
+            ("bob", bool::make_entry(&false)),
+            ("carol", bool::make_entry(&true)),
+            ("dave", bool::make_entry(&false)),
+        ],
+    );
+    check_range_generic(
+        &lc,
+        "active",
+        greater(dvar("a"), dbool(false)),
+        RangeOp::Gt,
+        CanonicalDatatype::Boolean,
+        store_op_value(bool::make_entry(&false)),
+        2,
+    );
+}
+
+#[test]
+fn object_range_boolean_lt_true_selects_false_rows() {
+    // ?a < true -> the false rows {bob, dave}.
+    let lc = build_val_name_layer(
+        "active",
+        vec![
+            ("alice", bool::make_entry(&true)),
+            ("bob", bool::make_entry(&false)),
+            ("carol", bool::make_entry(&true)),
+            ("dave", bool::make_entry(&false)),
+        ],
+    );
+    check_range_generic(
+        &lc,
+        "active",
+        less(dvar("a"), dbool(true)),
+        RangeOp::Lt,
+        CanonicalDatatype::Boolean,
+        store_op_value(bool::make_entry(&true)),
+        2,
+    );
+}
+
+/// ages as Int64, including negatives: alice=30, bob=-5, carol=0, dave=100, erin=18.
+fn int64_fixture() -> Arc<LayerCommitment> {
+    build_val_name_layer(
+        "count",
+        vec![
+            ("alice", i64::make_entry(&30i64)),
+            ("bob", i64::make_entry(&-5i64)),
+            ("carol", i64::make_entry(&0i64)),
+            ("dave", i64::make_entry(&100i64)),
+            ("erin", i64::make_entry(&18i64)),
+        ],
+    )
+}
+
+#[test]
+fn object_range_int64_gt_zero_excludes_negatives_and_zero() {
+    // ?a > 0 -> {alice(30), dave(100), erin(18)} = 3 (bob=-5, carol=0 excluded).
+    check_range_generic(
+        &int64_fixture(),
+        "count",
+        greater(dvar("a"), dint(0)),
+        RangeOp::Gt,
+        CanonicalDatatype::Int64,
+        store_op_value(i64::make_entry(&0i64)),
+        3,
+    );
+}
+
+#[test]
+fn object_range_int64_ge_negative_includes_boundary() {
+    // ?a >= -5 -> everyone (min is bob=-5) = 5.
+    check_range_generic(
+        &int64_fixture(),
+        "count",
+        gte(dvar("a"), dint(-5)),
+        RangeOp::Ge,
+        CanonicalDatatype::Int64,
+        store_op_value(i64::make_entry(&-5i64)),
+        5,
+    );
+}
+
+#[test]
+fn object_range_int64_lt_zero_selects_only_negatives() {
+    // ?a < 0 -> {bob(-5)} = 1.
+    check_range_generic(
+        &int64_fixture(),
+        "count",
+        less(dvar("a"), dint(0)),
+        RangeOp::Lt,
+        CanonicalDatatype::Int64,
+        store_op_value(i64::make_entry(&0i64)),
+        1,
+    );
+}
+
+/// scores as Float64, including negatives: alice=1.5, bob=-2.5, carol=0.0, dave=3.0.
+fn float64_fixture() -> Arc<LayerCommitment> {
+    build_val_name_layer(
+        "score",
+        vec![
+            ("alice", f64::make_entry(&1.5f64)),
+            ("bob", f64::make_entry(&-2.5f64)),
+            ("carol", f64::make_entry(&0.0f64)),
+            ("dave", f64::make_entry(&3.0f64)),
+        ],
+    )
+}
+
+#[test]
+fn object_range_float64_gt_zero_excludes_negatives_and_zero() {
+    // ?a > 0.0 -> {alice(1.5), dave(3.0)} = 2.
+    check_range_generic(
+        &float64_fixture(),
+        "score",
+        greater(dvar("a"), dfloat(0.0)),
+        RangeOp::Gt,
+        CanonicalDatatype::Float64,
+        store_op_value(f64::make_entry(&0.0f64)),
+        2,
+    );
+}
+
+#[test]
+fn object_range_float64_le_boundary_includes_equal() {
+    // ?a <= 1.5 -> {alice(1.5), bob(-2.5), carol(0.0)} = 3 (boundary 1.5 INCLUDED).
+    check_range_generic(
+        &float64_fixture(),
+        "score",
+        lte(dvar("a"), dfloat(1.5)),
+        RangeOp::Le,
+        CanonicalDatatype::Float64,
+        store_op_value(f64::make_entry(&1.5f64)),
+        3,
+    );
 }

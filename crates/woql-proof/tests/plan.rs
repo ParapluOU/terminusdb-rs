@@ -11,18 +11,60 @@ use terminusdb_woql2::value::Value;
 
 use terminus_store::proof::query::{AtomTerm, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
-use terminus_store::proof::CanonicalDatatype;
+use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
+use terminus_store::ValueTriple;
+
+use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
-use woql_proof::{plan_bgp, BgpPlanError};
+use woql_proof::{plan_bgp, BgpPlanError, CompiledBgp};
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
 /// `PartialEq` — the plan types are foreign — so compare only the error.)
 #[track_caller]
 fn reject(q: Query, want: BgpPlanError) {
     assert_eq!(plan_bgp(&q).unwrap_err(), want);
+}
+
+/// The store's own canonicalization (datatype tag + lexical bytes) of a typed dict entry —
+/// the bytes the compiler must emit for a matching object value constant.
+fn store_value_of(entry: TypedDictEntry) -> (CanonicalDatatype, Vec<u8>) {
+    match CanonicalObject::from_store_object(&ValueTriple::new_value("", "", entry).object) {
+        CanonicalObject::Value { datatype, lexical } => (datatype, lexical),
+        CanonicalObject::Node(_) => unreachable!("a value entry canonicalizes to a Value object"),
+    }
+}
+
+/// The store's committed order-preserving encoding of a typed dict entry as a `u64` (the
+/// big-endian read of its fixed-width `to_lexical` bytes) — the compiler's `c` must match.
+fn store_op_value(entry: TypedDictEntry) -> u64 {
+    let (_dt, lexical) = store_value_of(entry);
+    let mut buf = [0u8; 8];
+    buf[8 - lexical.len()..].copy_from_slice(&lexical);
+    u64::from_be_bytes(buf)
+}
+
+/// Assert the compiled atom for `pred` carries a `ValueConstant` byte-identical to the
+/// store's own canonicalization of `entry` (datatype tag + lexical).
+#[track_caller]
+fn assert_value_constant(c: &CompiledBgp, pred: &str, entry: TypedDictEntry) {
+    let term = iri(pred).into_bytes();
+    let atom = c
+        .plan
+        .atoms
+        .iter()
+        .find(|a| a.predicate_term == term)
+        .expect("an atom with that predicate");
+    let (edt, elex) = store_value_of(entry);
+    match &atom.object {
+        AtomTerm::ValueConstant(dt, lex) => {
+            assert_eq!(*dt, edt, "value-constant datatype tag");
+            assert_eq!(*lex, elex, "value-constant lexical bytes");
+        }
+        other => panic!("expected a ValueConstant object, got {other:?}"),
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -32,7 +74,11 @@ fn reject(q: Query, want: BgpPlanError) {
 #[test]
 fn accepts_three_atom_path_with_correct_plan() {
     // t(?x,p,?y), t(?y,p,?z), t(?z,p,?w)
-    let q = and_of(vec![tv("x", "p", "y"), tv("y", "p", "z"), tv("z", "p", "w")]);
+    let q = and_of(vec![
+        tv("x", "p", "y"),
+        tv("y", "p", "z"),
+        tv("z", "p", "w"),
+    ]);
     let c = plan_bgp(&q).unwrap();
 
     assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
@@ -40,14 +86,8 @@ fn accepts_three_atom_path_with_correct_plan() {
     assert_eq!(c.plan.joins.len(), 2);
     // Left-deep on the shared middle variable each step: matches the store's own
     // `layer_bgp_three_atom_path_end_to_end` plan (JoinStep{1,0}, {2,0}).
-    assert_eq!(
-        (c.plan.joins[0].acc_key, c.plan.joins[0].rel_key),
-        (1, 0)
-    );
-    assert_eq!(
-        (c.plan.joins[1].acc_key, c.plan.joins[1].rel_key),
-        (2, 0)
-    );
+    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (1, 0));
+    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (2, 0));
     // Predicate terms are the IRI bytes, in placement order.
     assert_eq!(c.plan.atoms[0].predicate_term, iri("p").into_bytes());
     assert!(c.projection.is_none());
@@ -56,35 +96,31 @@ fn accepts_three_atom_path_with_correct_plan() {
 #[test]
 fn accepts_star_shared_subject_three_atoms() {
     // t(?c,p,?a), t(?c,q,?b), t(?c,r,?d) — c is the shared key in all three atoms.
-    let q = and_of(vec![tv("c", "p", "a"), tv("c", "q", "b"), tv("c", "r", "d")]);
+    let q = and_of(vec![
+        tv("c", "p", "a"),
+        tv("c", "q", "b"),
+        tv("c", "r", "d"),
+    ]);
     let c = plan_bgp(&q).unwrap();
 
     assert_eq!(c.schema, vec!["a", "b", "c", "d"]);
-    assert_eq!(
-        (c.plan.joins[0].acc_key, c.plan.joins[0].rel_key),
-        (0, 0)
-    );
-    assert_eq!(
-        (c.plan.joins[1].acc_key, c.plan.joins[1].rel_key),
-        (1, 0)
-    );
+    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
+    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (1, 0));
 }
 
 #[test]
 fn accepts_variable_shared_by_three_atoms_mixed_positions() {
     // t(?a,p,?x), t(?x,q,?b), t(?x,r,?c) — x appears in 3 atoms (object then subject).
-    let q = and_of(vec![tv("a", "p", "x"), tv("x", "q", "b"), tv("x", "r", "c")]);
+    let q = and_of(vec![
+        tv("a", "p", "x"),
+        tv("x", "q", "b"),
+        tv("x", "r", "c"),
+    ]);
     let c = plan_bgp(&q).unwrap();
 
     assert_eq!(c.schema, vec!["a", "b", "x", "c"]);
-    assert_eq!(
-        (c.plan.joins[0].acc_key, c.plan.joins[0].rel_key),
-        (1, 0)
-    );
-    assert_eq!(
-        (c.plan.joins[1].acc_key, c.plan.joins[1].rel_key),
-        (1, 0)
-    );
+    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (1, 0));
+    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (1, 0));
 }
 
 #[test]
@@ -99,7 +135,11 @@ fn flattens_nested_ands() {
 
 #[test]
 fn select_records_projection_indices() {
-    let bgp = and_of(vec![tv("x", "p", "y"), tv("y", "p", "z"), tv("z", "p", "w")]);
+    let bgp = and_of(vec![
+        tv("x", "p", "y"),
+        tv("y", "p", "z"),
+        tv("z", "p", "w"),
+    ]);
     let q = Query::Select(Select {
         variables: vec!["x".into(), "w".into()],
         query: Box::new(bgp),
@@ -123,10 +163,7 @@ fn dsl_macro_ast_compiles_identically() {
     let c = plan_bgp(&q).unwrap();
     assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
     assert_eq!(c.plan.atoms.len(), 3);
-    assert_eq!(
-        (c.plan.joins[1].acc_key, c.plan.joins[1].rel_key),
-        (2, 0)
-    );
+    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (2, 0));
 }
 
 // ----------------------------------------------------------------------------
@@ -170,7 +207,12 @@ fn rejects_distinct() {
         variables: vec!["x".into()],
         query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")])),
     });
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "Distinct" });
+    reject(
+        q,
+        BgpPlanError::UnsupportedConstruct {
+            construct: "Distinct",
+        },
+    );
 }
 
 #[test]
@@ -217,22 +259,54 @@ fn accepts_object_node_constant() {
 
 #[test]
 fn rejects_object_data_unaligned_datatype() {
-    // xsd:boolean object literal: not a round-trip-aligned datatype (CP3 aligns only string).
+    // xsd:hexBinary object literal: not a round-trip-aligned datatype -> reject closed.
     let q = and_of(vec![tv_obj_data("x", "p"), tv("x", "q", "z")]);
     reject(
         q,
-        BgpPlanError::UnsupportedValueDatatype { datatype: "boolean" },
+        BgpPlanError::UnsupportedValueDatatype {
+            datatype: "hexBinary",
+        },
     );
 }
 
 #[test]
-fn rejects_object_integer_literal_unaligned_datatype() {
-    // xsd:integer object literal: only xsd:string is round-trip-aligned in CP3.
+fn accepts_object_integer_literal() {
+    // xsd:integer object literal -> store Int64 value constant (byte-aligned).
     let q = and_of(vec![tv_obj_integer("x", "p", 42), tv("x", "q", "z")]);
-    reject(
-        q,
-        BgpPlanError::UnsupportedValueDatatype { datatype: "integer" },
-    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert!(matches!(
+        c.plan.atoms[0].object,
+        AtomTerm::ValueConstant(_, _)
+    ));
+    assert_value_constant(&c, "p", i64::make_entry(&42i64));
+}
+
+#[test]
+fn accepts_object_boolean_literal() {
+    // xsd:boolean object literal -> store Boolean value constant.
+    let q = and_of(vec![tv_obj_bool("x", "p", true), tv("x", "q", "z")]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_value_constant(&c, "p", bool::make_entry(&true));
+}
+
+#[test]
+fn accepts_object_float_literal() {
+    // xsd:float/double object literal -> store Float64 value constant.
+    let q = and_of(vec![tv_obj_float("x", "p", 3.5), tv("x", "q", "z")]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_value_constant(&c, "p", f64::make_entry(&3.5f64));
+}
+
+#[test]
+fn accepts_object_unsigned_int_literal() {
+    // xsd:unsignedInt object literal -> store UInt32 value constant.
+    let q = and_of(vec![tv_obj_uint("x", "p", 7), tv("x", "q", "z")]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_value_constant(&c, "p", u32::make_entry(&7u32));
 }
 
 #[test]
@@ -241,7 +315,10 @@ fn accepts_object_string_literal() {
     let q = and_of(vec![tv_obj_string("x", "p", "hi"), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
     assert_eq!(c.schema, vec!["x", "z"]);
-    assert!(matches!(c.plan.atoms[0].object, AtomTerm::ValueConstant(_, _)));
+    assert!(matches!(
+        c.plan.atoms[0].object,
+        AtomTerm::ValueConstant(_, _)
+    ));
     assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
 }
 
@@ -256,7 +333,10 @@ fn rejects_fully_ground_atom() {
 fn rejects_repeated_variable_within_atom() {
     // t(?x, p, ?x) — a self-loop the single-key relation cannot express.
     let q = and_of(vec![tv("x", "p", "x"), tv("x", "q", "y")]);
-    reject(q, BgpPlanError::RepeatedVariableWithinAtom { var: "x".into() });
+    reject(
+        q,
+        BgpPlanError::RepeatedVariableWithinAtom { var: "x".into() },
+    );
 }
 
 #[test]
@@ -303,14 +383,22 @@ fn rejects_selected_variable_not_in_bgp() {
         variables: vec!["nope".into()],
         query: Box::new(bgp),
     });
-    reject(q, BgpPlanError::SelectedVariableNotInBgp { var: "nope".into() });
+    reject(
+        q,
+        BgpPlanError::SelectedVariableNotInBgp { var: "nope".into() },
+    );
 }
 
 #[test]
 fn rejects_bare_triple_body() {
     // A single Triple (not wrapped in And) is not a conjunction.
     let q = tv("x", "p", "y");
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "Triple" });
+    reject(
+        q,
+        BgpPlanError::UnsupportedConstruct {
+            construct: "Triple",
+        },
+    );
 }
 
 // ----------------------------------------------------------------------------
@@ -339,6 +427,20 @@ fn assert_uint32_range(spec: &ObjectRangeSpec, op: RangeOp, k: u64) {
         "datatype tag"
     );
     assert_eq!(spec.c, ArkFr::from_u64(k), "order-preserving constant c");
+    assert_eq!(spec.b_bits, OBJECT_RANGE_B_BITS, "bit-width");
+}
+
+/// Assert a range has `op`, `datatype` tag, and a `c` equal to the store's committed OP
+/// encoding `c_op` (plus the pinned bit-width).
+#[track_caller]
+fn assert_range(spec: &ObjectRangeSpec, op: RangeOp, datatype: CanonicalDatatype, c_op: u64) {
+    assert_eq!(spec.op, op, "operator");
+    assert_eq!(
+        spec.datatype,
+        ArkFr::from_u64(datatype as u64),
+        "datatype tag"
+    );
+    assert_eq!(spec.c, ArkFr::from_u64(c_op), "order-preserving constant c");
     assert_eq!(spec.b_bits, OBJECT_RANGE_B_BITS, "bit-width");
 }
 
@@ -402,7 +504,10 @@ fn range_all_ops_constant_on_left_flip() {
 
 #[test]
 fn rejects_range_const_vs_const() {
-    reject_range(greater(duint(1), duint(2)), BgpPlanError::RangeBothConstants);
+    reject_range(
+        greater(duint(1), duint(2)),
+        BgpPlanError::RangeBothConstants,
+    );
 }
 
 #[test]
@@ -414,11 +519,61 @@ fn rejects_range_string_datatype() {
 }
 
 #[test]
-fn rejects_range_integer_datatype() {
-    // xsd:integer is not the round-trip-aligned unsignedInt; reject closed.
+fn accepts_range_integer_datatype() {
+    // xsd:integer range -> store Int64 order-preserving constant.
+    let c = age_name_range(greater(dvar("a"), dint(5)));
+    assert_range(
+        range_of(&c, "age").unwrap(),
+        RangeOp::Gt,
+        CanonicalDatatype::Int64,
+        store_op_value(i64::make_entry(&5i64)),
+    );
+}
+
+#[test]
+fn accepts_range_integer_negative_datatype() {
+    // A negative Int64 constant uses the store's offset-binary OP encoding.
+    let c = age_name_range(gte(dvar("a"), dint(-5)));
+    assert_range(
+        range_of(&c, "age").unwrap(),
+        RangeOp::Ge,
+        CanonicalDatatype::Int64,
+        store_op_value(i64::make_entry(&-5i64)),
+    );
+}
+
+#[test]
+fn accepts_range_boolean_datatype() {
+    // xsd:boolean range -> store Boolean order-preserving constant (false=0 < true=1).
+    let c = age_name_range(greater(dvar("a"), dbool(false)));
+    assert_range(
+        range_of(&c, "age").unwrap(),
+        RangeOp::Gt,
+        CanonicalDatatype::Boolean,
+        store_op_value(bool::make_entry(&false)),
+    );
+}
+
+#[test]
+fn accepts_range_float_datatype() {
+    // xsd:float/double range -> store Float64 IEEE total-order constant.
+    let c = age_name_range(greater(dvar("a"), dfloat(1.5)));
+    assert_range(
+        range_of(&c, "age").unwrap(),
+        RangeOp::Gt,
+        CanonicalDatatype::Float64,
+        store_op_value(f64::make_entry(&1.5f64)),
+    );
+}
+
+#[test]
+fn rejects_range_hexbinary_datatype() {
+    // xsd:hexBinary is variable-width and not order-preserving; reject closed.
     reject_range(
-        greater(dvar("a"), dint(5)),
-        BgpPlanError::UnsupportedRangeDatatype { datatype: "integer" },
+        greater(dvar("a"), dhex("deadbeef")),
+        BgpPlanError::UnsupportedRangeDatatype {
+            datatype: "hexBinary",
+        },
     );
 }
 
@@ -475,5 +630,8 @@ fn rejects_two_ranges_on_one_variable() {
         greater(dvar("a"), duint(5)),
         less(dvar("a"), duint(20)),
     ]);
-    reject(q, BgpPlanError::DuplicateRangeOnVariable { var: "a".into() });
+    reject(
+        q,
+        BgpPlanError::DuplicateRangeOnVariable { var: "a".into() },
+    );
 }
