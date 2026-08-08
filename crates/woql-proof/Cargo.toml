@@ -1,0 +1,35 @@
+[package]
+name = "woql-proof"
+version = "0.1.0"
+edition = "2021"
+description = "Compile a woql2 conjunctive BGP AST into a safe, variable-blind terminus-store LayerBgpPlan (Proof-of-WOQL Phase 7.8)."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+# The canonical WOQL AST (sibling workspace crate).
+terminusdb-woql2 = { path = "../woql2" }
+# Only for naming `GraphType` (instance/schema) when inspecting a Triple's graph.
+# Already in the graph as a woql2 transitive dep, so this adds no build cost.
+terminusdb-schema = { path = "../schema" }
+# The audited Proof-of-WOQL API (prove/verify_layer_bgp + LayerBgpPlan). This is
+# the paraplu terminus-store fork, referenced by path (up 3 from crates/woql-proof
+# to modules/, then into the fork). Its own `[patch.crates-io]` for tdb-succinct is
+# ignored on a path dependency; the terminusdb-rs workspace-root manifest already
+# carries the matching `[patch.crates-io] tdb-succinct` at the same git rev, so the
+# fork compiles against the pinned succinct implementation.
+terminus-store = { path = "../../../terminusdb-store-paraplu" }
+# thiserror is declared in the workspace; inherit it to match the workspace style.
+thiserror = { workspace = true }
+# Build the `ArkFr` datatype-tag + order-preserving constant `c` of an
+# `ObjectRangeSpec` (Phase 7.4 numeric range filters). Same source/version/features
+# as terminus-store's dory-pcs, so `ArkFr`/`ArkGT` unify to one crate identity across
+# the shared build graph (the dev-tests recompute joins/commitments with it too).
+# Not declared in the workspace; kept crate-local (crate-specific crypto stack).
+dory-pcs = { version = "0.4.0", default-features = false, features = ["arkworks"] }
+# Canonicalize a numeric range constant through the store's OWN value encoding
+# (`u32::make_entry` -> `ValueTriple::new_value`), so the emitted `(datatype, c)`
+# matches the committed node/value dict column byte-for-byte. Declared `"0.1.2"` but
+# resolved to the git rev by the workspace-root `[patch.crates-io]` (identical to
+# terminus-store's), so `TypedDictEntry`/`Datatype` unify to one crate identity.
+tdb-succinct = "0.1.2"
