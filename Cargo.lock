@@ -7331,6 +7331,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tap",
  "tdb-succinct",
  "terminus-store 0.21.8",

@@ -27,7 +27,7 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::control::Distinct;
-use terminusdb_woql2::proof::plan_bgp;
+use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp};
 use terminusdb_woql2::{
     misc::{Count, InRange},
     query::Query,
@@ -240,6 +240,27 @@ fn repeated_variable_atom_proves_same_row_equality() {
     assert!(proved
         .verify_objects(&compiled, &lc, lc.state.commitment_root, &tampered_objects,)
         .is_err());
+
+    let encoded = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    let decoded =
+        decode_and_verify_envelope(&encoded, &compiled, &lc, lc.state.commitment_root).unwrap();
+    assert_eq!(decoded.proved.result_len, proved.result_len);
+    assert_eq!(decoded.result_objects, objects);
+
+    let mut corrupt = encoded.clone();
+    corrupt[20] ^= 1;
+    assert!(
+        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root,).is_err()
+    );
+
+    let mut renamed_schema = compiled.clone();
+    renamed_schema.schema[0] = "not_x".into();
+    assert!(
+        decode_and_verify_envelope(&encoded, &renamed_schema, &lc, lc.state.commitment_root,)
+            .is_err()
+    );
 }
 
 #[test]

@@ -25,9 +25,11 @@
 use chrono::Datelike;
 use dory_pcs::backends::arkworks::{ArkFr, ArkGT};
 use dory_pcs::primitives::arithmetic::Field;
+use sha2::{Digest, Sha256};
 use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
+use terminus_store::proof::envelope::{plan_digest, LayerBgpEnvelope};
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp, verify_result_columns,
     verify_result_objects, AtomTerm, LayerBgpAtom, LayerBgpPlan, LayerBgpProof, ObjectRangeBound,
@@ -82,6 +84,53 @@ pub struct ProvedBgp {
     pub result_log_domain: usize,
     pub result_len: usize,
     pub predicate_ids: Vec<u64>,
+}
+
+/// A decoded envelope that has already been checked against the caller's query, trusted
+/// root and layer. Canonical results remain alongside the reconstructed proof result.
+#[derive(Debug)]
+pub struct VerifiedBgpEnvelope {
+    pub proved: ProvedBgp,
+    pub result_objects: Vec<Vec<CanonicalObject>>,
+}
+
+fn digest_bytes(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// Stable identity of all public WOQL interpretation metadata layered over the Store
+/// plan. This prevents reusing one envelope under a different schema, projection,
+/// collection, count binding, or `Distinct` interpretation.
+pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHash> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"terminusdb-woql2/query-proof-envelope/v1");
+    hasher.update(plan_digest(&compiled.plan)?);
+    hasher.update((compiled.schema.len() as u64).to_le_bytes());
+    for name in &compiled.schema {
+        digest_bytes(&mut hasher, name.as_bytes());
+    }
+    match &compiled.projection {
+        None => hasher.update([0]),
+        Some(indices) => {
+            hasher.update([1]);
+            hasher.update((indices.len() as u64).to_le_bytes());
+            for index in indices {
+                hasher.update((*index as u64).to_le_bytes());
+            }
+        }
+    }
+    for value in [&compiled.collection, &compiled.count_variable] {
+        match value {
+            None => hasher.update([0]),
+            Some(value) => {
+                hasher.update([1]);
+                digest_bytes(&mut hasher, value.as_bytes());
+            }
+        }
+    }
+    hasher.update([compiled.full_row_distinct as u8]);
+    Ok(hasher.finalize().into())
 }
 
 impl ProvedBgp {
@@ -140,6 +189,29 @@ impl ProvedBgp {
         verify_result_objects(layer, expected_root, &self.result_columns, objects)
     }
 
+    /// Encode a self-contained result envelope only after checking the proof, result IDs,
+    /// and canonical lexical values against the caller-selected root.
+    pub fn encode_envelope(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+    ) -> std::io::Result<Vec<u8>> {
+        LayerBgpEnvelope::new_verified(
+            layer,
+            expected_root,
+            &compiled.plan,
+            compiled_query_digest(compiled)?,
+            self.proof.clone(),
+            self.result_commitments.clone(),
+            self.result_columns.clone(),
+            self.result_log_domain,
+            self.result_len,
+            self.predicate_ids.clone(),
+        )?
+        .encode()
+    }
+
     /// Commitments selected by an outer WOQL `Select`, or every result commitment when
     /// the query has no projection.
     pub fn projected_commitments<'a>(
@@ -177,6 +249,34 @@ impl ProvedBgp {
             .as_deref()
             .map(|variable| (variable, self.result_len))
     }
+}
+
+/// Decode and verify a portable envelope against an independently compiled query and
+/// caller-selected trusted root. Parsing alone never confers verification status.
+pub fn decode_and_verify_envelope(
+    bytes: &[u8],
+    compiled: &CompiledBgp,
+    layer: &LayerCommitment,
+    expected_root: ProofHash,
+) -> std::io::Result<VerifiedBgpEnvelope> {
+    let envelope = LayerBgpEnvelope::decode(bytes)?;
+    envelope.verify(
+        layer,
+        expected_root,
+        &compiled.plan,
+        compiled_query_digest(compiled)?,
+    )?;
+    Ok(VerifiedBgpEnvelope {
+        proved: ProvedBgp {
+            proof: envelope.proof,
+            result_commitments: envelope.result_commitments,
+            result_columns: envelope.result_columns,
+            result_log_domain: envelope.result_log_domain,
+            result_len: envelope.result_len,
+            predicate_ids: envelope.predicate_ids,
+        },
+        result_objects: envelope.result_objects,
+    })
 }
 
 /// Errors at the explicit compile/load/prove boundary.
