@@ -16,8 +16,8 @@
 //!   the atoms join into a left-deep chain where every step shares EXACTLY ONE variable
 //!   with the evolving accumulator schema.
 //!
-//! A composite/cyclic key (a step sharing >= 2 variables), a repeated variable inside
-//! one atom, a disconnected step, or a fully-ground atom (no variables) are exactly the
+//! A composite/cyclic key (a step sharing >= 2 variables), a disconnected step, or a
+//! fully-ground atom (no variables) are exactly the
 //! shapes that would make the single-key chain prove a wrong-but-verifying superset (or
 //! are out of v1 scope) — so they are rejected. Every emitted constant is one the store
 //! can authenticate against its committed node/value dictionary, canonicalized IDENTICALLY
@@ -261,13 +261,6 @@ pub enum BgpPlanError {
     /// The triple targeted the schema graph.
     #[error("schema-graph triples unsupported: only the instance graph is queried")]
     SchemaGraphUnsupported,
-
-    /// A single atom used the same variable in subject and object (`t(?x, P, ?x)`),
-    /// a self-loop the single-key relation cannot express.
-    #[error(
-        "repeated variable within atom `?{var}`: single-key relations cannot express a self-loop"
-    )]
-    RepeatedVariableWithinAtom { var: String },
 
     /// A join step would share two or more variables with the accumulator — a
     /// composite key or a cycle, which the single-key chain cannot encode faithfully.
@@ -562,8 +555,8 @@ fn value_from_data_value(value: &DataValue) -> Value {
 ///   (CP3, via [`value_constant_term`]).
 ///
 /// Rejected closed: predicate variables, schema-graph triples, dictionary/list object
-/// values, unaligned typed-literal datatypes, a repeated variable within one atom, and a
-/// fully-ground atom (no variables). A value-literal SUBJECT is unrepresentable — woql2's
+/// values, unaligned typed-literal datatypes, and a fully-ground atom (no variables). A
+/// value-literal SUBJECT is unrepresentable — woql2's
 /// subject is a [`NodeValue`] (node/variable only) — so the store's `validate_atom`
 /// value-subject guard is unreachable through this compiler by construction.
 fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
@@ -596,13 +589,7 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
         Value::List(_) => return Err(BgpPlanError::UnsupportedObjectValue { kind: "list" }),
     };
 
-    // A repeated variable within one atom is a self-loop the single-key relation cannot
-    // express (only possible when BOTH positions are variables).
-    if let (Some(s), Some(o)) = (&subj_var, &obj_var) {
-        if s == o {
-            return Err(BgpPlanError::RepeatedVariableWithinAtom { var: s.clone() });
-        }
-    }
+    let subject_object_equal = matches!((&subj_var, &obj_var), (Some(s), Some(o)) if s == o);
 
     // Kept (variable) columns in S,O order — one per variable position.
     let mut kept = Vec::with_capacity(2);
@@ -610,7 +597,9 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
         kept.push(s.clone());
     }
     if let Some(o) = &obj_var {
-        kept.push(o.clone());
+        if !kept.contains(o) {
+            kept.push(o.clone());
+        }
     }
     // A fully-ground atom (no variables) is an existence check, out of scope.
     if kept.is_empty() {
@@ -625,6 +614,7 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
             // CP-D Step 1 (migration): every atom starts with no object range. Step 2
             // fills this in for atoms whose object variable a comparison conjunct ranges.
             object_range: None,
+            subject_object_equal,
         },
         kept,
         subj_var,
@@ -1079,8 +1069,9 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
 }
 
 /// How many of an atom's KEPT (variable) columns occur in the accumulator schema. Because
-/// an atom's kept names are distinct (a repeated variable within one atom is rejected) and
-/// `acc_vars` holds distinct names, this is an exact shared-variable count in `0..=kept.len()`.
+/// repeated variables within an atom are represented once after their same-row equality
+/// constraint is recorded, and `acc_vars` also holds distinct names, so this is an exact
+/// shared-variable count in `0..=kept.len()`.
 fn shared_count(acc_vars: &[String], kept: &[String]) -> usize {
     kept.iter()
         .filter(|kv| acc_vars.iter().any(|a| a == *kv))

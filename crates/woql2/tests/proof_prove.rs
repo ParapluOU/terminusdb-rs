@@ -177,6 +177,37 @@ fn single_atom_proves_the_complete_filtered_relation() {
 }
 
 #[test]
+fn repeated_variable_atom_proves_same_row_equality() {
+    let lc = build_layer(&[
+        ("a", "knows", "a"),
+        ("a", "knows", "b"),
+        ("c", "knows", "c"),
+        ("x", "likes", "x"),
+    ]);
+    let q = and_of(vec![tv("x", "knows", "x")]);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.schema, vec!["x"]);
+    assert!(compiled.plan.atoms[0].subject_object_equal);
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.result_len, 2);
+    proved
+        .verify(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+
+    let predicate_id = proved.predicate_ids[0];
+    let expected: Vec<ArkFr> = lc
+        .additions
+        .iter()
+        .filter(|row| row.predicate_id == predicate_id && row.subject_id == row.object_id)
+        .map(|row| ArkFr::from_u64(row.subject_id))
+        .collect();
+    assert_eq!(
+        proved.result_commitments[0],
+        commit_column(&pad(&expected, padded_len(lc.additions.len()))).unwrap()
+    );
+}
+
+#[test]
 fn count_binds_the_proven_relation_cardinality() {
     let lc = build_layer(&[
         ("a", "knows", "b"),

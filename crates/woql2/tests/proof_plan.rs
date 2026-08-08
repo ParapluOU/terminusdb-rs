@@ -578,13 +578,12 @@ fn rejects_fully_ground_atom() {
 }
 
 #[test]
-fn rejects_repeated_variable_within_atom() {
-    // t(?x, p, ?x) — a self-loop the single-key relation cannot express.
+fn accepts_repeated_variable_as_same_row_equality() {
     let q = and_of(vec![tv("x", "p", "x"), tv("x", "q", "y")]);
-    reject(
-        q,
-        BgpPlanError::RepeatedVariableWithinAtom { var: "x".into() },
-    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y"]);
+    assert!(c.plan.atoms[0].subject_object_equal);
+    assert_eq!(c.plan.joins.len(), 1);
 }
 
 #[test]
