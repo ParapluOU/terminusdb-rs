@@ -214,10 +214,16 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .filter(|row| row.predicate_id == predicate_id && row.subject_id == row.object_id)
         .map(|row| ArkFr::from_u64(row.subject_id))
         .collect();
+    assert_eq!(proved.result_columns, vec![expected.clone()]);
+    assert_eq!(proved.projected_columns(&compiled).count(), 1);
     assert_eq!(
         proved.result_commitments[0],
         commit_column(&pad(&expected, padded_len(lc.additions.len()))).unwrap()
     );
+
+    let mut tampered = proved.result_columns.clone();
+    tampered[0][0] = tampered[0][0] + ArkFr::one();
+    assert!(proved.verify_columns(&tampered).is_err());
 }
 
 #[test]

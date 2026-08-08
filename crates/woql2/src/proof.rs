@@ -29,8 +29,8 @@ use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::query::{
-    prove_layer_bgp, verify_layer_bgp, AtomTerm, LayerBgpAtom, LayerBgpPlan, LayerBgpProof,
-    ObjectRangeBound, ObjectRangeSpec,
+    prove_layer_bgp_with_result, verify_layer_bgp, verify_result_columns, AtomTerm, LayerBgpAtom,
+    LayerBgpPlan, LayerBgpProof, ObjectRangeBound, ObjectRangeSpec,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
@@ -76,6 +76,9 @@ pub struct CompiledBgp {
 pub struct ProvedBgp {
     pub proof: LayerBgpProof,
     pub result_commitments: Vec<ArkGT>,
+    /// Real, unpadded Store ID columns in the compiled schema order.
+    pub result_columns: Vec<Vec<ArkFr>>,
+    pub result_log_domain: usize,
     pub result_len: usize,
     pub predicate_ids: Vec<u64>,
 }
@@ -96,6 +99,18 @@ impl ProvedBgp {
             &self.result_commitments,
             self.result_len,
             &self.proof,
+        )?;
+        self.verify_columns(&self.result_columns)
+    }
+
+    /// Verify arbitrary caller-delivered Store ID columns against the result commitments
+    /// authenticated by this proof. A changed, reordered, inserted, or omitted row fails.
+    pub fn verify_columns(&self, columns: &[Vec<ArkFr>]) -> std::io::Result<()> {
+        verify_result_columns(
+            &self.result_commitments,
+            columns,
+            self.result_len,
+            self.result_log_domain,
         )
     }
 
@@ -112,6 +127,21 @@ impl ProvedBgp {
         projection
             .into_iter()
             .map(|index| &self.result_commitments[index])
+    }
+
+    /// Result ID columns selected by an outer WOQL `Select`, or every column when there
+    /// is no projection. `Count` exposes no underlying columns.
+    pub fn projected_columns<'a>(
+        &'a self,
+        compiled: &'a CompiledBgp,
+    ) -> impl Iterator<Item = &'a [ArkFr]> + 'a {
+        let projection = compiled
+            .projection
+            .clone()
+            .unwrap_or_else(|| (0..self.result_columns.len()).collect());
+        projection
+            .into_iter()
+            .map(|index| self.result_columns[index].as_slice())
     }
 
     /// Return the variable/value pair bound by an outer WOQL `Count`, if present.
@@ -137,13 +167,15 @@ pub enum QueryProofError {
 impl CompiledBgp {
     /// Generate a proof against an already loaded authenticated commitment.
     pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
-        let (proof, result_commitments, result_len, predicate_ids) =
-            prove_layer_bgp(layer, &self.plan)?;
+        let result = prove_layer_bgp_with_result(layer, &self.plan)?;
+        let result_columns = result.real_columns();
         Ok(ProvedBgp {
-            proof,
-            result_commitments,
-            result_len,
-            predicate_ids,
+            proof: result.proof,
+            result_commitments: result.result_commitments,
+            result_columns,
+            result_log_domain: result.result_log_domain,
+            result_len: result.result_len,
+            predicate_ids: result.predicate_ids,
         })
     }
 
