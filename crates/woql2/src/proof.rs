@@ -1,7 +1,7 @@
 //! Compile a WOQL conjunctive BGP AST into a safe, variable-blind [`LayerBgpPlan`].
 //!
 //! See the crate docs for why the PLAN is the sole safety line. This module accepts
-//! only the fragment the single-key left-deep join chain can encode *faithfully* and
+//! only the fragment the authenticated left-deep join chain can encode faithfully and
 //! rejects everything else closed:
 //!
 //! * zero or more nested outer [`Select`]s (projection is read-side only — the proof
@@ -13,13 +13,11 @@
 //!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`]:
 //!   all scalar `XSDAnySimpleType` variants, routed through the Store's
 //!   typed-value construction). Each atom keeps one output column per variable (S,O order);
-//!   the atoms join into a left-deep chain where every step shares EXACTLY ONE variable
-//!   with the evolving accumulator schema.
+//!   the atoms join into a left-deep chain where every step shares one or more variables
+//!   with the evolving accumulator schema. Two-variable graph keys use the Store's
+//!   injective two-u64 packing and remain bound to the original columns.
 //!
-//! A composite/cyclic key (a step sharing >= 2 variables), a disconnected step, or a
-//! fully-ground atom (no variables) are exactly the
-//! shapes that would make the single-key chain prove a wrong-but-verifying superset (or
-//! are out of v1 scope) — so they are rejected. Every emitted constant is one the store
+//! A disconnected step or fully-ground atom (no variables) remains out of scope. Every emitted constant is one the store
 //! can authenticate against its committed node/value dictionary, canonicalized IDENTICALLY
 //! to how the store stored it (node IRIs by their IRI bytes; `xsd:string` literals by
 //! routing through the store's own value construction).
@@ -262,11 +260,6 @@ pub enum BgpPlanError {
     #[error("schema-graph triples unsupported: only the instance graph is queried")]
     SchemaGraphUnsupported,
 
-    /// A join step would share two or more variables with the accumulator — a
-    /// composite key or a cycle, which the single-key chain cannot encode faithfully.
-    #[error("composite-key/cyclic BGP (needs 7.3)")]
-    CompositeOrCyclicKey,
-
     /// A remaining atom shares no variable with the accumulator: the BGP is not
     /// connected, so it is not a single natural-join tree.
     #[error("disconnected BGP")]
@@ -343,8 +336,8 @@ struct Atom {
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
 /// `And` of `>= 1` triples of
-/// the form `?subj <constant IRI> ?obj` (`subj != obj`), whose atoms connect into a
-/// single-key left-deep join tree (each step shares exactly one variable). Everything
+/// the form `?subj <constant IRI> ?obj`, whose atoms connect into a
+/// left-deep join tree (each step shares one or two variables). Everything
 /// else is rejected closed with a descriptive [`BgpPlanError`].
 pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // (1) Unwrap proof-transparent outer controls. `Using` is not discarded: it is
@@ -995,13 +988,13 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
 
     let mut placed_count = 1usize;
     while placed_count < k {
-        // Find an unplaced atom sharing EXACTLY ONE variable with the accumulator.
+        // Find an unplaced atom sharing at least one variable with the accumulator.
         let mut chosen: Option<usize> = None;
         for (i, atom) in atoms.iter().enumerate() {
             if placed[i] {
                 continue;
             }
-            if shared_count(&acc_vars, &atom.kept) == 1 {
+            if shared_count(&acc_vars, &atom.kept) >= 1 {
                 chosen = Some(i);
                 break;
             }
@@ -1010,50 +1003,54 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
         let i = match chosen {
             Some(i) => i,
             None => {
-                // No atom shares exactly one variable. Distinguish cycle/composite key
-                // (some unplaced atom shares >= 2) from a disconnected BGP (shares 0).
-                let any_multi = atoms
-                    .iter()
-                    .enumerate()
-                    .any(|(i, atom)| !placed[i] && shared_count(&acc_vars, &atom.kept) >= 2);
-                if any_multi {
-                    return Err(BgpPlanError::CompositeOrCyclicKey);
-                } else {
-                    return Err(BgpPlanError::DisconnectedBgp);
-                }
+                return Err(BgpPlanError::DisconnectedBgp);
             }
         };
 
-        // Join accumulator (schema `acc_vars`) with atom i (kept columns `atom.kept`) on
-        // the single shared variable `v`. `rel_key` is `v`'s index within `atom.kept`.
+        // Join on every shared variable. The first pair remains the scalar-key fields;
+        // further pairs activate the Store chain's authenticated composite-key mode.
         let atom = &atoms[i];
-        let rel_key = atom
+        let shared: Vec<(usize, usize)> = atom
             .kept
             .iter()
-            .position(|kv| acc_vars.iter().any(|a| a == kv))
-            .expect("exactly one kept variable is shared with the accumulator");
+            .enumerate()
+            .filter_map(|(rel, variable)| {
+                acc_vars
+                    .iter()
+                    .position(|acc| acc == variable)
+                    .map(|acc| (acc, rel))
+            })
+            .collect();
+        let (acc_key, rel_key) = shared[0];
         let v = atom.kept[rel_key].clone();
-        let acc_key = acc_vars
-            .iter()
-            .position(|a| a == &v)
-            .expect("shared variable is present in the accumulator");
+        let additional_keys = shared[1..].to_vec();
 
-        // r_other = acc_vars with acc_key removed (order preserved).
-        let mut r_other: Vec<String> = acc_vars.clone();
-        r_other.remove(acc_key);
-        // s_other = the atom's remaining kept columns (all but rel_key), order preserved.
-        // Empty when the atom has a single variable (its other position is a constant).
-        let mut s_other: Vec<String> = atom.kept.clone();
-        s_other.remove(rel_key);
+        if additional_keys.is_empty() {
+            // Scalar path preserves the audited binary-join output ordering.
+            let mut r_other = acc_vars.clone();
+            r_other.remove(acc_key);
+            let mut s_other = atom.kept.clone();
+            s_other.remove(rel_key);
+            r_other.push(v);
+            r_other.extend(s_other);
+            acc_vars = r_other;
+        } else {
+            // Composite path retains the accumulator in place and appends only variables
+            // not already represented by one of the shared key columns.
+            acc_vars.extend(
+                atom.kept
+                    .iter()
+                    .filter(|variable| !acc_vars.contains(variable))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+        }
 
-        // New accumulator schema: [r_other.., key, s_other..] — MUST match bgp.rs's
-        // output_commitments ordering.
-        let mut new_acc = r_other;
-        new_acc.push(v);
-        new_acc.extend(s_other);
-        acc_vars = new_acc;
-
-        joins.push(JoinStep { acc_key, rel_key });
+        joins.push(JoinStep {
+            acc_key,
+            rel_key,
+            additional_keys,
+        });
         ordered_atoms.push(atom.layer_atom.clone());
         placed[i] = true;
         placed_count += 1;

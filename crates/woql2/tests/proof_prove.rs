@@ -360,12 +360,12 @@ fn select_projection_reads_true_columns() {
 }
 
 // ----------------------------------------------------------------------------
-// GUARD MITIGATION — the audit's key risk made explicit.
+// COMPOSITE/CYCLIC KEYS — the audit's key risk made explicit.
 //
 // A composite-key BGP joined on a SINGLE key yields a wrong-but-VERIFYING superset.
 // We (a) hand-build that bogus single-key plan, prove+verify it, and show its result
 // STRICTLY contains rows the true BGP excludes; then (b) show plan_bgp REFUSES to emit
-// such a plan — the guard is the whole mitigation.
+// such a plan; the compiler now emits the authenticated two-column key.
 // ----------------------------------------------------------------------------
 
 /// The TRUE composite-key result count: pairs where BOTH subject and object agree
@@ -385,7 +385,7 @@ fn true_composite_count(lc: &LayerCommitment, p_id: u64, q_id: u64) -> usize {
 }
 
 #[test]
-fn composite_key_single_key_plan_is_a_verifying_superset_but_guard_refuses_it() {
+fn composite_key_compiler_proves_exact_result_not_single_key_superset() {
     // p: x1->y1, x1->y2 ;  q: x1->y1, x1->y3.
     // True BGP t(?x,p,?y) AND t(?x,q,?y) needs x AND y equal -> exactly {(x1,y1)} = 1 row.
     let lc = build_layer(&[
@@ -405,6 +405,7 @@ fn composite_key_single_key_plan_is_a_verifying_superset_but_guard_refuses_it() 
         joins: vec![JoinStep {
             acc_key: 0,
             rel_key: 0,
+            additional_keys: Vec::new(),
         }],
     };
     let (proof, result_coms, m_bogus, ids) = prove_layer_bgp(&lc, &bogus).unwrap();
@@ -430,31 +431,98 @@ fn composite_key_single_key_plan_is_a_verifying_superset_but_guard_refuses_it() 
         "single-key plan must over-produce vs the true composite join"
     );
 
-    // (b) The guard is the mitigation: plan_bgp REFUSES to emit any single-key plan
-    // for the composite-key BGP, so this wrong-but-verifying result is unreachable
-    // through the compiler.
+    // (b) The compiler retains both shared variables in the public join key.
     let q = and_of(vec![tv("x", "p", "y"), tv("x", "q", "y")]);
-    assert_eq!(
-        plan_bgp(&q).unwrap_err(),
-        terminusdb_woql2::proof::BgpPlanError::CompositeOrCyclicKey
-    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.plan.joins[0].additional_keys, vec![(1, 1)]);
+    let (exact_proof, exact_coms, exact_m, exact_ids) =
+        prove_layer_bgp(&lc, &compiled.plan).unwrap();
+    verify_layer_bgp(
+        &lc,
+        lc.state.commitment_root,
+        &compiled.plan,
+        &exact_ids,
+        &exact_coms,
+        exact_m,
+        &exact_proof,
+    )
+    .unwrap();
+    assert_eq!(exact_m, true_count);
+    assert_eq!(exact_coms.len(), 2);
+
+    let p_rows = atom_relation(&lc, exact_ids[0]);
+    let q_rows = atom_relation(&lc, exact_ids[1]);
+    let mut x = Vec::new();
+    let mut y = Vec::new();
+    for a in 0..p_rows[0].len() {
+        if (0..q_rows[0].len())
+            .any(|b| p_rows[0][a] == q_rows[0][b] && p_rows[1][a] == q_rows[1][b])
+        {
+            x.push(p_rows[0][a]);
+            y.push(p_rows[1][a]);
+        }
+    }
+    let domain = 4;
+    assert_eq!(exact_coms[0], commit_column(&pad(&x, domain)).unwrap());
+    assert_eq!(exact_coms[1], commit_column(&pad(&y, domain)).unwrap());
 }
 
 #[test]
-fn cycle_triangle_would_superset_but_guard_refuses_it() {
-    // Triangle t(?x,p,?y), t(?y,q,?z), t(?z,r,?x). A left-deep single-key chain can
-    // only place two of the three joins (x-y, then y-z); the closing z==x edge cannot
-    // be a single-key step (?z and ?x are both already bound) -> it would be dropped,
-    // yielding a superset. The guard refuses before any such plan exists.
+fn cycle_triangle_proves_authenticated_closing_edge() {
+    // The closing atom shares z AND x with the accumulator. Both column pairs must be
+    // present in the public final join step or the plan would prove a superset.
     let q = and_of(vec![
         tv("x", "p", "y"),
         tv("y", "q", "z"),
         tv("z", "r", "x"),
     ]);
-    assert_eq!(
-        plan_bgp(&q).unwrap_err(),
-        terminusdb_woql2::proof::BgpPlanError::CompositeOrCyclicKey
-    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
+    assert_eq!(compiled.plan.joins[1].additional_keys, vec![(0, 1)]);
+
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("a", "p", "c"),
+        ("b", "q", "d"),
+        ("c", "q", "d"),
+        ("d", "r", "a"),
+        ("d", "r", "e"),
+    ]);
+    let (proof, commitments, result_len, ids) =
+        prove_layer_bgp(&lc, &compiled.plan).unwrap();
+    verify_layer_bgp(
+        &lc,
+        lc.state.commitment_root,
+        &compiled.plan,
+        &ids,
+        &commitments,
+        result_len,
+        &proof,
+    )
+    .unwrap();
+
+    let p = atom_relation(&lc, ids[0]);
+    let q_rel = atom_relation(&lc, ids[1]);
+    let r = atom_relation(&lc, ids[2]);
+    let (mut x, mut y, mut z) = (Vec::new(), Vec::new(), Vec::new());
+    for a in 0..p[0].len() {
+        for b in 0..q_rel[0].len() {
+            for c in 0..r[0].len() {
+                if p[1][a] == q_rel[0][b]
+                    && q_rel[1][b] == r[0][c]
+                    && p[0][a] == r[1][c]
+                {
+                    x.push(p[0][a]);
+                    y.push(p[1][a]);
+                    z.push(q_rel[1][b]);
+                }
+            }
+        }
+    }
+    assert_eq!(result_len, 2);
+    assert_eq!(commitments[0], commit_column(&pad(&x, 2)).unwrap());
+    assert_eq!(commitments[1], commit_column(&pad(&y, 2)).unwrap());
+    assert_eq!(commitments[2], commit_column(&pad(&z, 2)).unwrap());
 }
 
 // ----------------------------------------------------------------------------

@@ -587,21 +587,26 @@ fn accepts_repeated_variable_as_same_row_equality() {
 }
 
 #[test]
-fn rejects_composite_key() {
+fn accepts_composite_key() {
     // t(?x,p,?y), t(?x,q,?y) — the second atom shares BOTH x and y.
     let q = and_of(vec![tv("x", "p", "y"), tv("x", "q", "y")]);
-    reject(q, BgpPlanError::CompositeOrCyclicKey);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.plan.joins[0].additional_keys, vec![(1, 1)]);
 }
 
 #[test]
-fn rejects_triangle_cycle() {
+fn accepts_triangle_cycle() {
     // t(?x,p,?y), t(?y,q,?z), t(?z,r,?x) — a 3-cycle.
     let q = and_of(vec![
         tv("x", "p", "y"),
         tv("y", "q", "z"),
         tv("z", "r", "x"),
     ]);
-    reject(q, BgpPlanError::CompositeOrCyclicKey);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y", "z"]);
+    assert_eq!(c.plan.joins.len(), 2);
+    assert_eq!(c.plan.joins[1].additional_keys, vec![(0, 1)]);
 }
 
 #[test]
