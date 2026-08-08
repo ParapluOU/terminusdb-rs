@@ -423,13 +423,20 @@ fn accepts_object_node_constant() {
 }
 
 #[test]
-fn rejects_object_data_unaligned_datatype() {
-    // xsd:hexBinary object literal: not a round-trip-aligned datatype -> reject closed.
+fn accepts_object_hexbinary_literal() {
     let q = and_of(vec![tv_obj_data("x", "p"), tv("x", "q", "z")]);
+    let c = plan_bgp(&q).unwrap();
+    let expected = tdb_succinct::HexBinary(vec![0xde, 0xad, 0xbe, 0xef]);
+    assert_value_constant(&c, "p", tdb_succinct::HexBinary::make_entry(&expected));
+}
+
+#[test]
+fn rejects_invalid_hexbinary_lexical_value() {
+    let q = typed_object_query(XSDAnySimpleType::HexBinary("not-hex".into()));
     reject(
         q,
         BgpPlanError::UnsupportedValueDatatype {
-            datatype: "hexBinary",
+            datatype: "hexBinary (invalid lexical value)",
         },
     );
 }

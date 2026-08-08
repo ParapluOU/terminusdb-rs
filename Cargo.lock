@@ -7328,6 +7328,7 @@ dependencies = [
  "decimal-rs",
  "derive_builder",
  "dory-pcs",
+ "hex",
  "serde",
  "serde_json",
  "tap",

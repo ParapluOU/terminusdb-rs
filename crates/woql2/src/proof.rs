@@ -11,7 +11,7 @@
 //!   and each of subject/object is EITHER a query VARIABLE (a kept output column) OR an
 //!   aligned CONSTANT — a subject/object node IRI ([`AtomTerm::NodeConstant`]) or an
 //!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`]:
-//!   all scalar `XSDAnySimpleType` variants except `hexBinary`, routed through the Store's
+//!   all scalar `XSDAnySimpleType` variants, routed through the Store's
 //!   typed-value construction). Each atom keeps one output column per variable (S,O order);
 //!   the atoms join into a left-deep chain where every step shares EXACTLY ONE variable
 //!   with the evolving accumulator schema.
@@ -27,7 +27,7 @@
 use chrono::Datelike;
 use dory_pcs::backends::arkworks::{ArkFr, ArkGT};
 use dory_pcs::primitives::arithmetic::Field;
-use tdb_succinct::{AnyURI, Date, TdbDataType, TypedDictEntry};
+use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::query::{
@@ -711,8 +711,7 @@ fn normalize_comparison(q: &Query) -> Result<(String, RangeOp, ArkFr, ArkFr), Bg
 /// support (the caller wraps that name into the right rejection error).
 ///
 /// `xsd:string` is handled separately by the caller via
-/// [`ValueTriple::new_string_value`]. `hexBinary` remains unsupported until its textual
-/// WOQL form is decoded and round-trip tested against the Store type.
+/// [`ValueTriple::new_string_value`]. Invalid scalar lexical forms reject closed.
 fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static str> {
     Ok(match xsd {
         XSDAnySimpleType::Boolean(b) => bool::make_entry(b),
@@ -744,6 +743,10 @@ fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static s
             offset: 0,
         }),
         XSDAnySimpleType::Time(time) => chrono::NaiveTime::make_entry(time),
+        XSDAnySimpleType::HexBinary(value) => {
+            let bytes = hex::decode(value).map_err(|_| "hexBinary (invalid lexical value)")?;
+            HexBinary::make_entry(&HexBinary(bytes))
+        }
         other => return Err(xsd_datatype_name(other)),
     })
 }
@@ -765,6 +768,17 @@ fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static s
 /// requires a store-routed construction in [`xsd_scalar_entry`], an
 /// [`op_preserving_width`] entry, PLUS a round-trip alignment test.
 fn encode_range_constant(xsd: &XSDAnySimpleType) -> Result<(ArkFr, ArkFr), BgpPlanError> {
+    if !matches!(
+        xsd,
+        XSDAnySimpleType::Boolean(_)
+            | XSDAnySimpleType::UnsignedInt(_)
+            | XSDAnySimpleType::Integer(_)
+            | XSDAnySimpleType::Float(_)
+    ) {
+        return Err(BgpPlanError::UnsupportedRangeDatatype {
+            datatype: xsd_datatype_name(xsd),
+        });
+    }
     let entry = xsd_scalar_entry(xsd)
         .map_err(|datatype| BgpPlanError::UnsupportedRangeDatatype { datatype })?;
     encode_via_store(entry)
@@ -854,7 +868,7 @@ fn xsd_datatype_name(xsd: &XSDAnySimpleType) -> &'static str {
 /// * every other supported WOQL scalar via [`xsd_scalar_entry`] →
 ///   [`ValueTriple::new_value`] using its matching `tdb-succinct` typed entry.
 ///
-/// See the `object_*_literal_*` round-trip tests. `hexBinary` remains rejected closed.
+/// See the `object_*_literal_*` round-trip tests. Invalid scalar lexical forms reject closed.
 fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError> {
     // Build the store object via the store's OWN construction path for each datatype. String
     // uses the dedicated string-value constructor; every other supported scalar goes through

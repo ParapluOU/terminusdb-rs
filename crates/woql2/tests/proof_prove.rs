@@ -836,6 +836,37 @@ fn object_decimal_literal_proves_true_join() {
 }
 
 #[test]
+fn object_hexbinary_literal_proves_true_join() {
+    let entry = |bytes: Vec<u8>| {
+        let value = tdb_succinct::HexBinary(bytes);
+        tdb_succinct::HexBinary::make_entry(&value)
+    };
+    let lc = build_val_knows_layer(
+        "digest",
+        vec![
+            ("a", entry(vec![0xde, 0xad])),
+            ("b", entry(vec![0xde, 0xad])),
+            ("c", entry(vec![0xbe, 0xef])),
+        ],
+        vec![("a", "m"), ("b", "n"), ("c", "o")],
+    );
+    let q = and_of(vec![
+        Query::Triple(terminusdb_woql2::triple::Triple {
+            subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
+            predicate: terminusdb_woql2::value::NodeValue::Node(iri("digest")),
+            object: terminusdb_woql2::value::Value::Data(XSDAnySimpleType::HexBinary(
+                "dead".into(),
+            )),
+            graph: None,
+        }),
+        tv("x", "knows", "z"),
+    ]);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_value_constant_matches(&compiled.plan.atoms[0].object, entry(vec![0xde, 0xad]));
+    assert_const_join_end_to_end(&lc, &q, 2);
+}
+
+#[test]
 fn object_boolean_literal_proves_true_join() {
     // t(?x, active, true), t(?x, knows, ?z): active flag true AND x knows z.
     // active: a->true, c->true, d->false ; knows: a->m, a->o, c->n. true => {a,c}.

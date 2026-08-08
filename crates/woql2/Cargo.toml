@@ -8,7 +8,7 @@ default = []
 # Compile WOQL queries into and execute the authenticated Dory/sumcheck query
 # arguments implemented by the Parture terminus-store fork. Keeping this optional
 # prevents ordinary AST/client users from pulling the cryptographic stack.
-proof = ["dep:chrono", "dep:dory-pcs", "dep:tdb-succinct", "dep:terminus-store", "dep:thiserror"]
+proof = ["dep:chrono", "dep:dory-pcs", "dep:hex", "dep:tdb-succinct", "dep:terminus-store", "dep:thiserror"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,6 +26,7 @@ derive_builder = "0.20.2"
 decimal-rs = { version = "0.1.43", features = ["serde"] }
 tracing = { workspace = true }
 chrono = { workspace = true, optional = true }
+hex = { version = "0.4", optional = true }
 
 # Optional Proof-of-WOQL compiler/executor dependencies. These are deliberately
 # feature-gated: the canonical AST remains lightweight unless a caller explicitly
