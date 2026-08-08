@@ -373,6 +373,33 @@ fn count_binds_the_proven_relation_cardinality() {
         .unwrap();
     assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
     assert_eq!(proved.projected_commitments(&compiled).count(), 0);
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["count".into()],
+            &[vec![2]],
+        )
+        .unwrap();
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["wrong".into()],
+            &[vec![2]],
+        )
+        .is_err());
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["count".into()],
+            &[vec![1]],
+        )
+        .is_err());
 }
 
 #[test]

@@ -201,11 +201,27 @@ impl ProvedBgp {
         variables: &[String],
         rows: &[Vec<u64>],
     ) -> std::io::Result<()> {
-        if compiled.count_variable.is_some() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Count execution results are not Store-ID rows",
-            ));
+        if let Some(count_variable) = compiled.count_variable.as_deref() {
+            self.verify(compiled, layer, expected_root)?;
+            if variables != [count_variable] {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "executed Count variable does not match the compiled count binding",
+                ));
+            }
+            let count = u64::try_from(self.result_len).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "proven Count result does not fit the execution boundary",
+                )
+            })?;
+            if rows != [vec![count]] {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary WOQL Count binding does not equal the proven result cardinality",
+                ));
+            }
+            return Ok(());
         }
         let projection = compiled
             .projection
