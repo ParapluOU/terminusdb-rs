@@ -50,6 +50,9 @@ use terminus_store::proof::envelope::{
 use terminus_store::proof::equality::{
     prove_relation_equality, verify_relation_equality, RelationEqualityProof,
 };
+use terminus_store::proof::group::{
+    prove_group_extrema, verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
+};
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
     verify_layer_bgp, verify_layer_bgp_result_log_domain, verify_result_columns, AtomTerm,
@@ -121,6 +124,13 @@ pub enum CompiledRelationStatement {
     Equality {
         input: Box<CompiledRelation>,
         constraint: RelationEqualityPlan,
+    },
+    GroupExtrema {
+        input: Box<CompiledRelation>,
+        key_column: usize,
+        value_column: usize,
+        datatype: CanonicalDatatype,
+        kind: GroupExtremaKind,
     },
 }
 
@@ -242,6 +252,10 @@ pub enum ProvedQueryStatement {
         input: Box<ProvedBgp>,
         proof: Box<RelationEqualityProof>,
     },
+    GroupExtrema {
+        input: Box<ProvedBgp>,
+        proof: Box<GroupExtremaProof>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -344,6 +358,14 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(b"/equality");
             hasher.update(relation_query_digest(input)?);
             digest_equality_plan(&mut hasher, constraint);
+        }
+        CompiledRelationStatement::GroupExtrema { input, key_column, value_column, datatype, kind } => {
+            hasher.update(b"/group-extrema");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*key_column as u64).to_le_bytes());
+            hasher.update((*value_column as u64).to_le_bytes());
+            hasher.update([*datatype as u8]);
+            hasher.update([match kind { GroupExtremaKind::Min => 0, GroupExtremaKind::Max => 1 }]);
         }
     }
     Ok(hasher.finalize().into())
@@ -462,6 +484,11 @@ fn relation_result_descriptors(
             Ok(descriptors)
         }
         CompiledRelationStatement::Equality { input, .. } => relation_result_descriptors(input),
+        CompiledRelationStatement::GroupExtrema { input, key_column, .. } => {
+            let child = relation_result_descriptors(input)?;
+            let key = *child.get(*key_column).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema key column out of range"))?;
+            Ok(vec![key, ResultColumnDescriptor { namespace: ResultIdNamespace::NodeValue, nullable: false }])
+        }
     }
 }
 
@@ -501,6 +528,10 @@ fn relation_proof_plan(
                 key_pairs: key_pairs.clone(),
             }
         }
+        CompiledRelationStatement::GroupExtrema { input, key_column, value_column, datatype, kind } => RelationProofPlanKind::GroupExtrema {
+            input: Box::new(child(input)?), key_column: *key_column, value_column: *value_column,
+            datatype: *datatype, kind: *kind,
+        },
     };
     Ok(RelationProofPlan { query_digest, kind })
 }
@@ -760,6 +791,17 @@ impl ProvedBgp {
                     proof,
                     &mut transcript,
                 )?;
+            }
+            (
+                ProvedQueryStatement::GroupExtrema { input, proof },
+                CompiledRelationStatement::GroupExtrema { input: input_plan, key_column, value_column, datatype, kind },
+            ) => {
+                input.verify_relation(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?;
+                let rows = group_output_rows(&self.result_columns, self.result_len, compiled, layer)?;
+                let mut transcript = Transcript254::new(b"parture-group-extrema-envelope");
+                transcript.append_bytes(b"pow/group-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/group-envelope/query", &query_digest);
+                verify_group_extrema(&input.relation_commit(None)?, *key_column, *value_column, *datatype, *kind, &rows, layer, proof, &mut transcript)?;
             }
             _ => {
                 return Err(std::io::Error::new(
@@ -1157,6 +1199,13 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::GroupExtrema { input, proof },
+                CompiledRelationStatement::GroupExtrema { input: input_plan, .. },
+            ) => RecursiveRelationProof::GroupExtrema {
+                input: Box::new(input.recursive_envelope(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?),
+                proof: proof.clone(),
+            },
+            (
                 ProvedQueryStatement::LeftAnti { left, right, proof },
                 CompiledRelationStatement::LeftAnti {
                     left: left_plan,
@@ -1357,6 +1406,10 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             }
         }
         RecursiveRelationProof::Equality { input, proof } => ProvedQueryStatement::Equality {
+            input: Box::new(proved_from_recursive(*input)),
+            proof,
+        },
+        RecursiveRelationProof::GroupExtrema { input, proof } => ProvedQueryStatement::GroupExtrema {
             input: Box::new(proved_from_recursive(*input)),
             proof,
         },
@@ -1561,7 +1614,89 @@ fn prove_compiled_relation(
                 result_len: result.n,
             })
         }
+        CompiledRelationStatement::GroupExtrema { input, key_column, value_column, datatype, kind } => {
+            let input_proved = prove_compiled_relation(input, layer, relation_query_digest(input)?)?;
+            let witness = relation_witness(&input_proved);
+            let rows = honest_group_rows(&input_proved, input, *key_column, *value_column, *datatype, *kind, layer)?;
+            let mut transcript = Transcript254::new(b"parture-group-extrema-envelope");
+            transcript.append_bytes(b"pow/group-envelope/root", &layer.state.commitment_root);
+            transcript.append_bytes(b"pow/group-envelope/query", &query_digest);
+            let result = prove_group_extrema(&witness, *key_column, *value_column, *datatype, *kind, &rows, layer, &mut transcript)?;
+            Ok(ProvedBgp {
+                statement: ProvedQueryStatement::GroupExtrema { input: Box::new(input_proved), proof: Box::new(result.proof) },
+                result_commitments: result.commitments,
+                result_columns: result.columns.iter().map(|c| c[..result.n].to_vec()).collect(),
+                result_log_domain: result.log_domain,
+                result_len: result.n,
+            })
+        }
     }
+}
+
+fn store_id_for_field(
+    field: ArkFr,
+    namespace: ResultIdNamespace,
+    layer: &impl VerifierLayer,
+) -> std::io::Result<u64> {
+    let view = layer.verifier_view();
+    match namespace {
+        ResultIdNamespace::Predicate => view.predicate_catalog.iter()
+            .find(|r| ArkFr::from_u64(r.predicate_id) == field).map(|r| r.predicate_id),
+        ResultIdNamespace::NodeValue => view.node_value_catalog.iter()
+            .find(|r| ArkFr::from_u64(r.object_id) == field).map(|r| r.object_id),
+    }.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema Store id absent from planned namespace"))
+}
+
+fn group_output_rows(
+    columns: &[Vec<ArkFr>], n: usize, relation: &CompiledRelation,
+    layer: &impl VerifierLayer,
+) -> std::io::Result<Vec<(u64,u64)>> {
+    if columns.len() != 2 || columns.iter().any(|c| c.len() < n) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema output shape mismatch"));
+    }
+    let namespace = relation_result_descriptors(relation)?[0].namespace;
+    (0..n).map(|i| Ok((
+        store_id_for_field(columns[0][i], namespace, layer)?,
+        store_id_for_field(columns[1][i], ResultIdNamespace::NodeValue, layer)?,
+    ))).collect()
+}
+
+fn literal_op_u64(object: &CanonicalObject, datatype: CanonicalDatatype) -> std::io::Result<u64> {
+    match object {
+        CanonicalObject::Value { datatype: actual, lexical } if *actual == datatype && lexical.len() <= 8 => {
+            let mut bytes = [0u8;8]; bytes[8-lexical.len()..].copy_from_slice(lexical);
+            Ok(u64::from_be_bytes(bytes))
+        }
+        _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema value lacks exact fixed-width datatype")),
+    }
+}
+
+fn honest_group_rows(
+    proved: &ProvedBgp, input: &CompiledRelation, key_column: usize, value_column: usize,
+    datatype: CanonicalDatatype, kind: GroupExtremaKind, layer: &LayerCommitment,
+) -> std::io::Result<Vec<(u64,u64)>> {
+    use std::collections::BTreeMap;
+    if key_column >= proved.result_columns.len() || value_column >= proved.result_columns.len() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema input column out of range"));
+    }
+    let namespace = relation_result_descriptors(input)?[key_column].namespace;
+    let mut groups: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for row in 0..proved.result_len {
+        let key = store_id_for_field(proved.result_columns[key_column][row], namespace, layer)?;
+        let value = store_id_for_field(proved.result_columns[value_column][row], ResultIdNamespace::NodeValue, layer)?;
+        groups.entry(key).or_default().push(value);
+    }
+    let view = layer.verifier_view();
+    groups.into_iter().map(|(key, values)| {
+        let selected = values.into_iter().map(|id| {
+            let record = view.node_value_catalog.iter().find(|r| r.object_id == id)
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema value id absent"))?;
+            Ok((literal_op_u64(&record.triple.object, datatype)?, id))
+        }).collect::<std::io::Result<Vec<_>>>()?.into_iter()
+          .min_by_key(|x| if kind == GroupExtremaKind::Min { x.0 } else { u64::MAX - x.0 })
+          .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "empty group"))?;
+        Ok((key, selected.1))
+    }).collect()
 }
 
 #[inline(never)]
@@ -1855,6 +1990,12 @@ pub enum BgpPlanError {
     #[error("cross-datatype numeric Equals uses coercive executor semantics")]
     EqualsCoerciveNumeric,
 
+    #[error("GroupBy proof coverage requires exactly one scalar key and an immediately consuming RangeMin/RangeMax over the hidden grouped list")]
+    GroupExtremaUnsupportedShape,
+
+    #[error("GroupBy extrema template must be a nonnullable variable with an exact fixed-width order-preserving datatype")]
+    GroupExtremaUnsupportedValue,
+
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
@@ -1950,6 +2091,52 @@ struct TypedTriple {
     object_kind: Option<ObjectKindConstraint>,
 }
 
+fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query { Query::And(and) if and.and.len() == 2 => &and.and, _ => return Ok(None) };
+    let (group, range, kind) = match (&conjuncts[0], &conjuncts[1]) {
+        (Query::GroupBy(group), Query::RangeMin(range)) => (group, (&range.list, &range.result), GroupExtremaKind::Min),
+        (Query::GroupBy(group), Query::RangeMax(range)) => (group, (&range.list, &range.result), GroupExtremaKind::Max),
+        (Query::RangeMin(range), Query::GroupBy(group)) => (group, (&range.list, &range.result), GroupExtremaKind::Min),
+        (Query::RangeMax(range), Query::GroupBy(group)) => (group, (&range.list, &range.result), GroupExtremaKind::Max),
+        _ => return Ok(None),
+    };
+    if group.group_by.len() != 1 { return Err(BgpPlanError::GroupExtremaUnsupportedShape); }
+    let template = match &group.template { Value::Variable(v) => v.clone(), _ => return Err(BgpPlanError::GroupExtremaUnsupportedValue) };
+    let hidden = match &group.grouped_value { Value::Variable(v) => v, _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape) };
+    let list = match range.0 { DataValue::Variable(v) => v, _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape) };
+    let result = match range.1 { DataValue::Variable(v) => v.clone(), _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape) };
+    if hidden != list || hidden == &result || group.group_by[0] == result || group.group_by[0] == *hidden {
+        return Err(BgpPlanError::GroupExtremaUnsupportedShape);
+    }
+    let child = plan_bgp(&group.query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::GroupExtremaUnsupportedShape);
+    }
+    let key_column = child.relation.schema.iter().position(|v| v == &group.group_by[0]).ok_or(BgpPlanError::GroupExtremaUnsupportedShape)?;
+    let value_column = child.relation.schema.iter().position(|v| v == &template).ok_or(BgpPlanError::GroupExtremaUnsupportedValue)?;
+    if key_column == value_column { return Err(BgpPlanError::GroupExtremaUnsupportedShape); }
+    let datatype = match child.relation.domains.get(value_column).and_then(|d| *d) {
+        Some(EqualityValueDomain::Datatype(dt)) if matches!(dt,
+            CanonicalDatatype::UInt8 | CanonicalDatatype::Int8 |
+            CanonicalDatatype::UInt16 | CanonicalDatatype::Int16 | CanonicalDatatype::UInt32 |
+            CanonicalDatatype::Int32 | CanonicalDatatype::Float32 | CanonicalDatatype::UInt64 |
+            CanonicalDatatype::Int64 | CanonicalDatatype::Float64) => dt,
+        _ => return Err(BgpPlanError::GroupExtremaUnsupportedValue),
+    };
+    let key_domain = child.relation.domains[key_column];
+    let collection = child.collection;
+    Ok(Some(CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec![group.group_by[0].clone(), result],
+            domains: vec![key_domain, Some(EqualityValueDomain::Datatype(datatype))],
+            statement: CompiledRelationStatement::GroupExtrema {
+                input: Box::new(child.relation), key_column, value_column, datatype, kind,
+            },
+        },
+        projection: None, collection, count_variable: None, full_row_distinct: false,
+    }))
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -2009,6 +2196,20 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             count_variable,
             &distincts,
         );
+    }
+
+    if let Some(mut aggregate) = plan_group_extrema_form(body)? {
+        if collection.is_some() {
+            if aggregate.collection.is_some() && aggregate.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            aggregate.collection = collection;
+        }
+        aggregate.count_variable = count_variable;
+        aggregate.projection = compile_projection(&selections, aggregate.count_variable.as_deref(), &aggregate.relation.schema)?;
+        if !distincts.is_empty() { return Err(BgpPlanError::DistinctWithProjectionOrCount); }
+        validate_compiled_structure(&aggregate.relation)?;
+        return Ok(aggregate);
     }
 
     if has_top_level_read_operator(body) {
@@ -2585,6 +2786,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::Equality { input, .. } => {
                 visit(input, depth + 1, nodes)
             }
+            CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;
@@ -3353,6 +3555,57 @@ fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError>
         CanonicalObject::Node(_) => Err(BgpPlanError::UnsupportedValueDatatype {
             datatype: xsd_datatype_name(xsd),
         }),
+    }
+}
+
+#[cfg(test)]
+mod group_extrema_planner_tests {
+    use super::*;
+    use crate::compare::Gte;
+    use crate::misc::RangeMin;
+    use crate::order::GroupBy;
+    use crate::query::And;
+
+    fn exact_min() -> Query {
+        let child = Query::And(And { and: vec![
+            Query::Triple(Triple {
+                subject: NodeValue::Variable("Person".into()),
+                predicate: NodeValue::Node("http://ex/age".into()),
+                object: Value::Variable("Age".into()), graph: None,
+            }),
+            Query::Gte(Gte { left: DataValue::Variable("Age".into()), right: DataValue::Data(XSDAnySimpleType::UnsignedInt(0)) }),
+        ]});
+        Query::And(And { and: vec![
+            Query::GroupBy(GroupBy { template: Value::Variable("Age".into()), group_by: vec!["Person".into()], grouped_value: Value::Variable("Ages".into()), query: Box::new(child) }),
+            Query::RangeMin(RangeMin { list: DataValue::Variable("Ages".into()), result: DataValue::Variable("Youngest".into()) }),
+        ]})
+    }
+
+    #[test]
+    fn exact_scalar_group_min_is_compiled_without_exposing_hidden_list() {
+        let compiled = plan_bgp(&exact_min()).unwrap();
+        assert_eq!(compiled.relation.schema, ["Person", "Youngest"]);
+        match compiled.relation.statement {
+            CompiledRelationStatement::GroupExtrema { key_column, value_column, datatype, kind, .. } => {
+                assert_ne!(key_column, value_column);
+                assert_eq!(datatype, CanonicalDatatype::UInt32);
+                assert_eq!(kind, GroupExtremaKind::Min);
+            }
+            _ => panic!("expected group-extrema statement"),
+        }
+    }
+
+    #[test]
+    fn composite_key_or_unconsumed_hidden_list_rejects() {
+        let mut composite = exact_min();
+        if let Query::And(and) = &mut composite {
+            if let Query::GroupBy(group) = &mut and.and[0] { group.group_by.push("Age".into()); }
+        }
+        assert!(matches!(plan_bgp(&composite), Err(BgpPlanError::GroupExtremaUnsupportedShape)));
+        assert!(matches!(plan_bgp(&Query::GroupBy(GroupBy {
+            template: Value::Variable("Age".into()), group_by: vec!["Person".into()],
+            grouped_value: Value::Variable("Ages".into()), query: Box::new(exact_min()),
+        })), Err(BgpPlanError::UnsupportedConstruct { .. })));
     }
 }
 
