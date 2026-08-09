@@ -39,7 +39,9 @@ use terminus_store::proof::anti::{
 };
 use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
-use terminus_store::proof::commitment::{LayerCommitment, VerifierCommitment, VerifierLayer};
+use terminus_store::proof::commitment::{
+    LayerCommitment, VerifierCommitment, VerifierLayer, NODE_DATATYPE_TAG,
+};
 use terminus_store::proof::envelope::{
     plan_digest, resolve_relation_equality_constraint, EqualityValueDomain, LayerBgpEnvelope,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
@@ -1856,6 +1858,9 @@ pub enum BgpPlanError {
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
+    #[error("variable `?{var}` is constrained as both a node and a literal")]
+    ObjectKindConflict { var: String },
+
     /// A `Select`ed variable does not occur in the BGP body.
     #[error("selected variable `?{var}` does not occur in the BGP")]
     SelectedVariableNotInBgp { var: String },
@@ -1930,6 +1935,19 @@ struct Atom {
     /// The object variable name, if the object is a variable (else a constant). A numeric
     /// range attaches to the unique atom whose `obj_var` is the compared variable.
     obj_var: Option<String>,
+    declared_object_kind: Option<ObjectKindConstraint>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ObjectKindConstraint {
+    Node,
+    Value,
+}
+
+#[derive(Clone)]
+struct TypedTriple {
+    triple: Triple,
+    object_kind: Option<ObjectKindConstraint>,
 }
 
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
@@ -2016,7 +2034,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // declared node/literal kind is not yet authenticated. Comparisons become
     // object-value range filters. True and Comment contribute no bindings and are
     // proof-transparent conjunction leaves.
-    let mut triples: Vec<Triple> = Vec::new();
+    let mut triples: Vec<TypedTriple> = Vec::new();
     let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
 
@@ -2036,6 +2054,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // object of the (unique) atom that binds the compared variable. Consumes the
     // comparisons; the ranged variable stays a kept output column.
     attach_ranges(&mut atoms, &comparisons)?;
+    attach_object_kind_constraints(&mut atoms)?;
 
     // The Store's mixed-arity plan is a relational prefix followed by zero-arity
     // existence bits. Stable ordering preserves query order within both groups.
@@ -2103,6 +2122,11 @@ fn infer_schema_domains(
                 .iter()
                 .any(|atom| atom.subj_var.as_ref() == Some(variable))
             {
+                Some(EqualityValueDomain::Node)
+            } else if atoms.iter().any(|atom| {
+                atom.obj_var.as_ref() == Some(variable)
+                    && atom.declared_object_kind == Some(ObjectKindConstraint::Node)
+            }) {
                 Some(EqualityValueDomain::Node)
             } else {
                 comparisons
@@ -2754,13 +2778,22 @@ fn validate_selection_chain(selections: &[&[String]], base: &[String]) -> Result
 /// and comparisons. Any other construct rejects closed.
 fn collect_conjunct<'a>(
     query: &'a Query,
-    triples: &mut Vec<Triple>,
+    triples: &mut Vec<TypedTriple>,
     comparisons: &mut Vec<NormalizedRange>,
 ) -> Result<(), BgpPlanError> {
     match query {
-        Query::Triple(triple) => triples.push(triple.clone()),
-        Query::Link(link) => triples.push(triple_from_link(link)?),
-        Query::Data(data) => triples.push(triple_from_data(data)?),
+        Query::Triple(triple) => triples.push(TypedTriple {
+            triple: triple.clone(),
+            object_kind: None,
+        }),
+        Query::Link(link) => triples.push(TypedTriple {
+            triple: triple_from_link(link)?,
+            object_kind: Some(ObjectKindConstraint::Node),
+        }),
+        Query::Data(data) => triples.push(TypedTriple {
+            triple: triple_from_data(data)?,
+            object_kind: Some(ObjectKindConstraint::Value),
+        }),
         Query::And(inner) => {
             for query in &inner.and {
                 collect_conjunct(query, triples, comparisons)?;
@@ -2791,9 +2824,7 @@ fn collect_conjunct<'a>(
 fn triple_from_link(link: &Link) -> Result<Triple, BgpPlanError> {
     let object = match &link.object {
         NodeValue::Node(node) => Value::Node(node.clone()),
-        NodeValue::Variable(_) => {
-            return Err(BgpPlanError::TypedObjectVariable { construct: "Link" })
-        }
+        NodeValue::Variable(variable) => Value::Variable(variable.clone()),
     };
     Ok(Triple {
         subject: link.subject.clone(),
@@ -2807,9 +2838,7 @@ fn triple_from_data(data: &Data) -> Result<Triple, BgpPlanError> {
     let object = match &data.object {
         DataValue::Data(value) => Value::Data(value.clone()),
         DataValue::List(values) => Value::List(values.iter().map(value_from_data_value).collect()),
-        DataValue::Variable(_) => {
-            return Err(BgpPlanError::TypedObjectVariable { construct: "Data" })
-        }
+        DataValue::Variable(variable) => Value::Variable(variable.clone()),
     };
     Ok(Triple {
         subject: data.subject.clone(),
@@ -2842,7 +2871,8 @@ fn value_from_data_value(value: &DataValue) -> Value {
 /// value-literal SUBJECT is unrepresentable — woql2's
 /// subject is a [`NodeValue`] (node/variable only) — so the store's `validate_atom`
 /// value-subject guard is unreachable through this compiler by construction.
-fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
+fn atom_from_triple(typed: &TypedTriple) -> Result<Atom, BgpPlanError> {
+    let t = &typed.triple;
     // Graph: None (defaults to instance) or explicit Instance only.
     match &t.graph {
         None | Some(GraphType::Instance) => {}
@@ -2908,6 +2938,7 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
         subj_var,
         pred_var,
         obj_var,
+        declared_object_kind: typed.object_kind,
     })
 }
 
@@ -2985,6 +3016,48 @@ fn attach_ranges(atoms: &mut [Atom], comparisons: &[NormalizedRange]) -> Result<
                         op: bound.op,
                         c: bound.c,
                     });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Authenticate the executor's typed triple variants. `Link` is exactly the reserved
+/// node datatype tag, expressed through the existing dictionary lookup + datatype mask;
+/// `Data` is accepted only when a numeric comparison already pins one exact literal
+/// datatype. Plain variable `Data` still needs a value-vs-node union/range discriminator.
+fn attach_object_kind_constraints(atoms: &mut [Atom]) -> Result<(), BgpPlanError> {
+    for index in 0..atoms.len() {
+        let Some(variable) = atoms[index].obj_var.clone() else {
+            continue;
+        };
+        let Some(kind) = atoms[index].declared_object_kind else {
+            continue;
+        };
+        if atoms.iter().any(|candidate| {
+            candidate.obj_var.as_ref() == Some(&variable)
+                && candidate.declared_object_kind.is_some()
+                && candidate.declared_object_kind != Some(kind)
+        }) {
+            return Err(BgpPlanError::ObjectKindConflict { var: variable });
+        }
+        match kind {
+            ObjectKindConstraint::Node => {
+                if atoms[index].layer_atom.object_range.is_some() {
+                    return Err(BgpPlanError::ObjectKindConflict { var: variable });
+                }
+                atoms[index].layer_atom.object_range = Some(ObjectRangeSpec {
+                    datatype: ArkFr::from_u64(NODE_DATATYPE_TAG),
+                    op: RangeOp::Ge,
+                    c: ArkFr::zero(),
+                    b_bits: OBJECT_RANGE_B_BITS,
+                    second: None,
+                });
+            }
+            ObjectKindConstraint::Value => {
+                if atoms[index].layer_atom.object_range.is_none() {
+                    return Err(BgpPlanError::TypedObjectVariable { construct: "Data" });
                 }
             }
         }

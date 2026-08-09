@@ -205,7 +205,7 @@ fn nested_select_rejects_a_variable_hidden_by_its_inner_select() {
 }
 
 #[test]
-fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
+fn accepts_authenticated_link_variables_and_ranged_data_variables() {
     let link = Query::Link(Link {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("knows")),
@@ -244,9 +244,22 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         object: NodeValue::Variable("y".into()),
         graph: GraphType::Instance,
     });
-    reject(
-        variable_link,
-        BgpPlanError::TypedObjectVariable { construct: "Link" },
+    let compiled_link = plan_bgp(&variable_link).unwrap();
+    assert_eq!(compiled_link.relation.schema, vec!["x", "y"]);
+    assert_eq!(
+        compiled_link.relation.domains,
+        vec![
+            Some(terminus_store::proof::envelope::EqualityValueDomain::Node),
+            Some(terminus_store::proof::envelope::EqualityValueDomain::Node),
+        ]
+    );
+    assert_eq!(
+        compiled_link.relation.as_bgp().unwrap().atoms[0]
+            .object_range
+            .as_ref()
+            .unwrap()
+            .datatype,
+        ArkFr::from_u64(255)
     );
 
     let variable_data = Query::Data(Data {
@@ -256,8 +269,19 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         graph: GraphType::Instance,
     });
     reject(
-        variable_data,
+        variable_data.clone(),
         BgpPlanError::TypedObjectVariable { construct: "Data" },
+    );
+    let ranged_data = and_of(vec![
+        variable_data,
+        greater(dvar("active"), duint(0)),
+    ]);
+    let compiled_data = plan_bgp(&ranged_data).unwrap();
+    assert_eq!(
+        compiled_data.relation.domains[1],
+        Some(terminus_store::proof::envelope::EqualityValueDomain::Datatype(
+            CanonicalDatatype::UInt32,
+        ))
     );
 }
 

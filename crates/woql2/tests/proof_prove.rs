@@ -26,7 +26,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
-use terminusdb_schema::XSDAnySimpleType;
+use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::WoqlOptional;
 use terminusdb_woql2::control::{Distinct, Select};
 use terminusdb_woql2::proof::{
@@ -38,6 +38,7 @@ use terminusdb_woql2::{
     query::{Not, Or, Query},
     value::DataValue,
 };
+use terminusdb_woql2::triple::{Data, Link};
 
 #[test]
 fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
@@ -132,6 +133,45 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     assert!(fake_null
         .verify(&compiled, &layer, layer.state.commitment_root)
         .is_err());
+}
+
+#[test]
+fn variable_link_authenticates_node_kind_and_excludes_literal_objects() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("p"), &iri("b")))
+        .unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("c"), &iri("p"), &iri("d")))
+        .unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_value(
+            &iri("literal"),
+            &iri("p"),
+            u32::make_entry(&7),
+        ))
+        .unwrap();
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = Query::Link(Link {
+        subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
+        predicate: terminusdb_woql2::value::NodeValue::Node(iri("p")),
+        object: terminusdb_woql2::value::NodeValue::Variable("y".into()),
+        graph: GraphType::Instance,
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 2);
+    let values = proved
+        .verify_and_resolve(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(values[1]
+        .iter()
+        .all(|value| matches!(value, CanonicalObject::Node(_))));
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
 }
 
 #[test]
@@ -2777,7 +2817,13 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
         RangeOp::Ge => gte(dvar("a"), duint(k)),
         RangeOp::Le => lte(dvar("a"), duint(k)),
     };
-    let bgp = and_of(vec![tv("x", "age", "a"), tv("x", "name", "n"), cmp]);
+    let age_data = Query::Data(Data {
+        subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
+        predicate: terminusdb_woql2::value::NodeValue::Node(iri("age")),
+        object: DataValue::Variable("a".into()),
+        graph: GraphType::Instance,
+    });
+    let bgp = and_of(vec![age_data, tv("x", "name", "n"), cmp]);
     let q = Query::Select(Select {
         variables: vec!["x".into(), "n".into()],
         query: Box::new(bgp),
