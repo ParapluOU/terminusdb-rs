@@ -803,10 +803,10 @@ impl ProvedBgp {
         variables: &[String],
         rows: &[Vec<ExecutedResultValue>],
     ) -> std::io::Result<()> {
-        if compiled.optional_join.is_none() || compiled.count_variable.is_some() {
+        if compiled.count_variable.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "typed nullable rows are supported only for non-Count Optional queries",
+                "Count bindings use the scalar execution boundary, not Store result values",
             ));
         }
         let projection = compiled
