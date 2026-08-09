@@ -17,14 +17,33 @@ policy, not Store policy.
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
 | `modules/terminusdb-store-paraplu` | `7b5e889` | Recursive v15 GroupSum adds a distinct signed generated-decimal domain and exact Int8/16/32/64 accumulation. |
-| `modules/terminusdb-rs` | this checkpoint | Immediate zero-/one-node-key `GroupBy`→`Sum` through signed/unsigned 64-bit integers, signed executor/envelope integration, actual-overflow rejection, and fail-closed coercion rules. |
-| `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
+| `modules/terminusdb-rs` | `272553b` | Descriptor-driven foreign executor inputs distinguish Store IDs, nullable cells, and canonical generated decimals; immediate zero-/one-node-key `GroupBy`→`Sum` supports signed/unsigned 64-bit integers. |
+| `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
 boundary parsed JSON is decoded with the schema crate's explicit
 `Query::from_json` decoder (not serde-derived AST decoding). Prolog is the
 leading definition of WOQL shapes; update that decoder and `woql2` when the
 server's accepted structure differs.
+
+The running-node result boundary is likewise descriptor-driven. Plain positive
+integers are Store dictionary IDs. Generated integral aggregate outputs use the
+explicit lexical `generated_decimal/1` Prolog term, and `null` remains the only
+nullable marker. Rust never infers signedness from the lexical sign: the
+independently compiled result descriptor selects generated U64 or I64 and then
+enforces canonical lexical form and bounds. Count keeps its existing scalar
+verification internally, but raw Count input must also carry the explicit
+generated marker, including zero.
+
+The fresh debug `terminusdb-dylib` built and loaded on Linux without replacing
+the checked-in `src/rust/librust.so`. The focused structural suite passed, and
+the live release fixture reached `count_native_verify_complete` after Prolog
+execution, foreign parsing, CPU proof generation, and native verification. That
+run also established that authoritative Prolog JSON may omit the default
+instance graph; the server trust boundary now accepts exactly that equivalence
+while retaining unknown-field rejection. Archive/tamper continuation beyond
+the decisive Count stage was stopped to keep this checkpoint bounded; the
+previous full CPU release-suite result remains the broad regression baseline.
 
 ## Benchmark commands
 
@@ -101,6 +120,14 @@ cargo test -p terminusdb-woql2 --features proof --test proof_plan \
   count_accepts_exact_projected_distinct_over_one_or_two_known_domains -- --exact
 cargo test -p terminusdb-woql2 --features proof --test proof_prove \
   count_projected_distinct_proves_duplicate_classes_and_rejects_tamper -- --exact
+cargo test -p terminusdb-woql2 --features proof --test proof_plan \
+  generated_decimal_foreign_inputs_are_descriptor_driven_and_canonical -- --exact
+
+cd ../terminusdb/src/rust
+cargo test -p terminusdb-query-proof --test explicit_control \
+  prolog_omitted_default_graph_is_canonical_but_unknown_fields_still_fail_closed -- --exact
+cargo test -p terminusdb-query-proof --lib \
+  count_scalar_boundary_is_exhaustive_and_never_reinterprets_generated_domains -- --exact
 ```
 
 For a meaningful portability check, retain a Linux-generated envelope and
