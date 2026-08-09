@@ -17,7 +17,7 @@ policy, not Store policy.
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
 | `modules/terminusdb-store-paraplu` | `65bd38c` | Exact contiguous ordered slices over the authenticated scalar order, including canonical empty results, recursive wire format, and content/plan tamper rejection. |
-| `modules/terminusdb-rs` | `835c080` plus this documentation commit | Canonical Prolog-shaped `Start`/`Limit` decoding, inside-out planner nesting, recursive envelope integration, and empty/substitution/reorder coverage. |
+| `modules/terminusdb-rs` | `e0fd19c` plus this documentation commit | Ordered `Once` lowering reuses the exact slice proof while retaining a digest identity distinct from `Limit(1)`; canonical decoding and unordered rejection are covered. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -151,6 +151,7 @@ duplicate-generating recursive children.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending `OrderBy` over a complete one-column leaf result.
 - [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
+- [x] `Once` over an authenticated ordered child, digest-distinct from `Limit(1)`.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
