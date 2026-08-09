@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `9f3901e` | Store wire v17 authenticates immediate zero-/one-/two-node-key grouped-list cardinality and shares canonical tuple grouping with grouped sums. |
-| `modules/terminusdb-rs` | `9b242c9` | WOQL planning and verification cover immediate `GroupBy`→`Length`, generated-U64 comparisons, and outer result wrappers. |
+| `modules/terminusdb-store-paraplu` | `4129c07` | Store wire v18 authenticates immediate collected-list cardinality with `findall`'s distinct empty policy. |
+| `modules/terminusdb-rs` | this checkpoint | WOQL planning and verification cover immediate `Collect`→`Length`, comparisons, recursive children, and outer result wrappers. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -470,9 +470,8 @@ form. `Length` is present in the canonical woql2 AST and leading Prolog decoder 
 reported as `xsd:decimal`. Because only bag cardinality survives, neither list order nor
 template contents are observable. Store wire version 17 reuses the canonical node-tuple
 grouping shared with grouped sum, counts authenticated child row indices including
-duplicates, and emits `GeneratedDecimalU64`. Global empty `bagof` still yields no row;
-`Collect`→`Length` is deliberately deferred because `findall` instead yields one zero row
-on empty input. `Member`, slices, list-to-set, and set operators expose elements, ordering,
+duplicates, and emits `GeneratedDecimalU64`. Global empty `bagof` still yields no row.
+`Member`, slices, list-to-set, and set operators expose elements, ordering,
 or equality semantics and remain behind the authenticated-list/value-contract boundary.
 A direct SWI 10.0.2 probe produced `[[a,2],[z,1]]` for duplicate keyed solutions and `[]`
 for a global empty child. The post-refactor Store proof gate passed in 130.88s. The focused
@@ -480,6 +479,21 @@ planner and decoder gates passed in 0.00s, and the filtered two-key WOQL E2E pas
 311.09s. Generalizing woql2's generated-U64 verifier during that E2E also removed its stale
 one-row TripleCount assumption; the original TripleCount comparison regression remained
 green in 12.38s.
+
+Immediate `Collect`→`Length` is now represented by the wire- and digest-distinct
+`CollectionCount` plan in Store wire version 18. Leading Prolog's canonical fields are
+`template`, `into`, and `query`; `findall/3` appends one copied template per child solution,
+including identical ground templates and fresh unbound templates, then returns `[]` when
+the child has no solutions. Since only immediate `length/2` remains observable, the proof
+authenticates exactly the child solution count and deliberately ignores private element
+contents and order. The shared cardinality helper uses `emit_zero_for_empty=true` here and
+`false` for zero-key GroupBy-Length. A direct SWI 10.0.2 probe returned counts `[3,2,0]`
+for ground duplicate, unbound-template, and empty collections respectively. Private-list
+alias/leak/reuse, reversed or non-immediate consumers, and result-wrapped children reject.
+The Store focused proof passed in 40.82s. The canonical decoder and planner gates passed
+in 0.00s, including a recursively proven bag-union child, and the WOQL E2E passed in
+84.55s with identical private elements, empty-zero behavior, comparison, envelope
+round-trip, GroupBy-Length substitution rejection, and recommitted-result tamper.
 
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
@@ -535,6 +549,9 @@ green in 12.38s.
 - [x] Authenticate immediate zero-/one-/two-node-key `GroupBy`→`Length` as exact bag
   cardinality with generated nonnegative decimal output and reusable comparisons/Count,
   without exposing private list order or elements.
+- [x] Authenticate immediate `Collect`→`Length` with `findall`'s distinct empty policy:
+  one generated zero row for empty input, duplicate child solutions counted, and no
+  observable private list order or template contents.
 - [x] Replace the pessimistic grouped-sum datatype-maximum bound with exact authenticated
   value accumulation, accepting UInt64 totals through `u64::MAX` and rejecting actual
   overflow without field-modulus ambiguity.

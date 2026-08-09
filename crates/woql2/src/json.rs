@@ -72,7 +72,7 @@ pub fn normalize_woql_json(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use crate::collection::{Length, Sum};
-    use crate::misc::TripleCount;
+    use crate::misc::{Collect, TripleCount};
     use crate::order::{GroupBy, Order};
     use crate::prelude::{DataValue, NodeValue, Query, Triple, True, When};
     use crate::query::And;
@@ -239,6 +239,34 @@ mod tests {
         assert_eq!(
             Query::from_json(json)
                 .expect("domain decoder accepts canonical immediate GroupBy followed by Length"),
+            query,
+        );
+    }
+
+    #[test]
+    fn immediate_collect_length_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::Collect(Collect {
+                    template: WoqlValue::Variable("object".into()),
+                    into: WoqlValue::Variable("objects".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Length(Length {
+                    list: DataValue::Variable("objects".into()),
+                    length: DataValue::Variable("cardinality".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][0]["@type"], "Collect");
+        assert!(json["and"][0].get("template").is_some());
+        assert!(json["and"][0].get("into").is_some());
+        assert!(json["and"][0].get("query").is_some());
+        assert_eq!(json["and"][1]["@type"], "Length");
+        assert_eq!(
+            Query::from_json(json)
+                .expect("domain decoder accepts canonical immediate Collect followed by Length"),
             query,
         );
     }

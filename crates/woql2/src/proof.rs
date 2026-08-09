@@ -204,6 +204,9 @@ pub enum CompiledRelationStatement {
         input: Box<CompiledRelation>,
         key_columns: Vec<usize>,
     },
+    CollectionCount {
+        input: Box<CompiledRelation>,
+    },
 }
 
 impl CompiledRelation {
@@ -509,6 +512,9 @@ pub enum ProvedQueryStatement {
     GroupCount {
         input: Box<ProvedBgp>,
     },
+    CollectionCount {
+        input: Box<ProvedBgp>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -763,6 +769,10 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 hasher.update((*key_column as u64).to_le_bytes());
             }
         }
+        CompiledRelationStatement::CollectionCount { input } => {
+            hasher.update(b"/collection-count");
+            hasher.update(relation_query_digest(input)?);
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -1006,6 +1016,10 @@ fn relation_result_descriptors(
             });
             Ok(result)
         }
+        CompiledRelationStatement::CollectionCount { .. } => Ok(vec![ResultColumnDescriptor {
+            namespace: ResultIdNamespace::GeneratedDecimalU64,
+            nullable: false,
+        }]),
     }
 }
 
@@ -1142,6 +1156,11 @@ fn relation_proof_plan(
             RelationProofPlanKind::GroupCount {
                 input: Box::new(child(input)?),
                 key_columns: key_columns.clone(),
+            }
+        }
+        CompiledRelationStatement::CollectionCount { input } => {
+            RelationProofPlanKind::CollectionCount {
+                input: Box::new(child(input)?),
             }
         }
     };
@@ -1493,13 +1512,7 @@ fn expected_group_count_columns(
     expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     if key_columns.is_empty() {
-        return if input.result_len == 0 {
-            Ok(vec![Vec::new()])
-        } else {
-            Ok(vec![vec![ArkFr::from_u64(u64::try_from(input.result_len).map_err(
-                |_| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-count exceeds u64"),
-            )?)]])
-        };
+        return expected_cardinality_column(input.result_len, false);
     }
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
@@ -1562,6 +1575,21 @@ fn expected_group_count_columns(
         output[key_columns.len()].push(ArkFr::from_u64(*count));
     }
     Ok(output)
+}
+
+fn expected_cardinality_column(
+    result_len: usize,
+    emit_zero_for_empty: bool,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    if result_len == 0 && !emit_zero_for_empty {
+        return Ok(vec![Vec::new()]);
+    }
+    Ok(vec![vec![ArkFr::from_u64(u64::try_from(result_len).map_err(
+        |_| std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "collection cardinality exceeds u64",
+        ),
+    )?)]])
 }
 
 impl ProvedBgp {
@@ -2121,6 +2149,27 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL group-count result is not the exact derived aggregate",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::CollectionCount { input },
+                CompiledRelationStatement::CollectionCount { input: input_plan },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_cardinality_column(input.result_len, true)?;
+                if self.result_len != 1
+                    || self.result_log_domain != 1
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL collection-count result is not the exact derived cardinality",
                     ));
                 }
             }
@@ -2742,6 +2791,17 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::CollectionCount { input },
+                CompiledRelationStatement::CollectionCount { input: input_plan },
+            ) => RecursiveRelationProof::CollectionCount {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -3056,6 +3116,11 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
         RecursiveRelationProof::GroupCount { input } => ProvedQueryStatement::GroupCount {
             input: Box::new(proved_from_recursive(*input)),
         },
+        RecursiveRelationProof::CollectionCount { input } => {
+            ProvedQueryStatement::CollectionCount {
+                input: Box::new(proved_from_recursive(*input)),
+            }
+        }
     };
     ProvedBgp {
         statement,
@@ -3392,6 +3457,9 @@ pub enum BgpPlanError {
     #[error("GroupBy Length template must be a nonnullable bound Store-ID variable")]
     GroupCountUnsupportedValue,
 
+    #[error("Collect followed by Length requires one private collected-list variable consumed immediately once and one distinct result variable")]
+    CollectionCountUnsupportedShape,
+
     #[error("generated GroupBy-Sum comparisons require the sum source before comparisons of that result variable to exact integral xsd:decimal constants")]
     GroupSumComparisonUnsupportedShape,
 
@@ -3515,6 +3583,7 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::Sum(_) => "Sum",
         Query::Length(_) => "Length",
         Query::Member(_) => "Member",
+        Query::Collect(_) => "Collect",
         Query::Get(_) => "Get",
         _ => "unsupported",
     }
@@ -3724,6 +3793,96 @@ fn generated_group_sum_constraint(
         }
         _ => Err(BgpPlanError::GroupSumComparisonUnsupportedShape),
     }
+}
+
+fn plan_collection_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) if and.and.len() >= 2 => &and.and,
+        _ => return Ok(None),
+    };
+    if conjuncts.iter().skip(2).any(|query| {
+        matches!(query, Query::If(_) | Query::WoqlOptional(_) | Query::Not(_))
+    }) {
+        return Ok(None);
+    }
+    let (Query::Collect(collect), Query::Length(length)) = (&conjuncts[0], &conjuncts[1]) else {
+        if matches!(conjuncts.first(), Some(Query::GroupBy(_))) {
+            return Ok(None);
+        }
+        if conjuncts
+            .iter()
+            .any(|query| matches!(query, Query::Collect(_) | Query::Length(_)))
+        {
+            return Err(BgpPlanError::CollectionCountUnsupportedShape);
+        }
+        return Ok(None);
+    };
+    let hidden = match &collect.into {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionCountUnsupportedShape),
+    };
+    let list = match &length.list {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionCountUnsupportedShape),
+    };
+    let result = match &length.length {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionCountUnsupportedShape),
+    };
+    if hidden != list || hidden == result {
+        return Err(BgpPlanError::CollectionCountUnsupportedShape);
+    }
+    if matches!(&collect.template, Value::Variable(variable) if variable == hidden || variable == result)
+    {
+        return Err(BgpPlanError::CollectionCountUnsupportedShape);
+    }
+    let child = plan_bgp(&collect.query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::CollectionCountUnsupportedShape);
+    }
+    if child
+        .relation
+        .schema
+        .iter()
+        .any(|variable| variable == hidden || variable == result)
+    {
+        return Err(BgpPlanError::CollectionCountUnsupportedShape);
+    }
+    let collection = child.collection;
+    let mut relation = CompiledRelation {
+        schema: vec![result.clone()],
+        domains: vec![None],
+        statement: CompiledRelationStatement::CollectionCount {
+            input: Box::new(child.relation),
+        },
+    };
+    for comparison in conjuncts.iter().skip(2) {
+        let (op, domain, constant, constant_on_left) =
+            generated_group_sum_constraint(comparison, result, false)?;
+        if domain != ResultIdNamespace::GeneratedDecimalU64 {
+            return Err(BgpPlanError::GroupSumComparisonUnsupportedConstant);
+        }
+        let input = relation;
+        relation = CompiledRelation {
+            schema: input.schema.clone(),
+            domains: input.domains.clone(),
+            statement: CompiledRelationStatement::GeneratedU64Filter {
+                input: Box::new(input),
+                column: 0,
+                op,
+                constant: u64::try_from(constant)
+                    .map_err(|_| BgpPlanError::GroupSumComparisonUnsupportedConstant)?,
+                constant_on_left,
+            },
+        };
+    }
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
 }
 
 fn plan_group_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
@@ -4745,6 +4904,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         );
     }
 
+    if let Some(mut aggregate) = plan_collection_count_form(body)? {
+        if collection.is_some() {
+            if aggregate.collection.is_some() && aggregate.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            aggregate.collection = collection;
+        }
+        aggregate.count_variable = count_variable;
+        aggregate.projection = compile_projection(
+            &selections,
+            aggregate.count_variable.as_deref(),
+            &aggregate.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&aggregate.relation)?;
+        return Ok(aggregate);
+    }
+
     if let Some(mut aggregate) = plan_group_count_form(body)? {
         if collection.is_some() {
             if aggregate.collection.is_some() && aggregate.collection != collection {
@@ -5538,6 +5717,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::GroupSum { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::GroupCount { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::CollectionCount { input } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;

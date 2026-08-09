@@ -38,7 +38,7 @@ use terminusdb_woql2::proof::{
 };
 use terminusdb_woql2::triple::{Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::{
-    misc::{Count, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
+    misc::{Collect, Count, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
     query::{Not, Or, Query},
     value::{DataValue, NodeValue, Value},
@@ -1096,6 +1096,135 @@ fn two_key_group_count_query() -> Query {
             DataValue::Data(XSDAnySimpleType::Decimal("3".parse().unwrap())),
         ),
     ])
+}
+
+fn collect_length_for_predicate(predicate: &str, minimum: Option<&str>) -> Query {
+    let mut queries = vec![
+        Query::Collect(Collect {
+            // A ground template deliberately makes every collected element identical;
+            // Length must still count every child solution.
+            template: Value::Node(iri("same")),
+            into: Value::Variable("items".into()),
+            query: Box::new(Query::Link(Link {
+                subject: NodeValue::Variable("subject".into()),
+                predicate: NodeValue::Node(iri(predicate)),
+                object: NodeValue::Variable("object".into()),
+                graph: GraphType::Instance,
+            })),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("items".into()),
+            length: DataValue::Variable("cardinality".into()),
+        }),
+    ];
+    if let Some(minimum) = minimum {
+        queries.push(gte(
+            dvar("cardinality"),
+            DataValue::Data(XSDAnySimpleType::Decimal(minimum.parse().unwrap())),
+        ));
+    }
+    and_of(queries)
+}
+
+fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for object in ["x", "y", "z"] {
+        builder
+            .add_value_triple(ValueTriple::new_node(
+                &iri("a"),
+                &iri("p"),
+                &iri(object),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = collect_length_for_predicate("p", Some("3"));
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(proved.result_len, 1);
+    assert_eq!(
+        values,
+        vec![vec![CanonicalResultValue::GeneratedDecimalU64(3)]]
+    );
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let group_query = and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("object".into()),
+            group_by: Vec::new(),
+            grouped_value: Value::Variable("items".into()),
+            query: Box::new(Query::Link(Link {
+                subject: NodeValue::Variable("subject".into()),
+                predicate: NodeValue::Node(iri("p")),
+                object: NodeValue::Variable("object".into()),
+                graph: GraphType::Instance,
+            })),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("items".into()),
+            length: DataValue::Variable("cardinality".into()),
+        }),
+        gte(
+            dvar("cardinality"),
+            DataValue::Data(XSDAnySimpleType::Decimal("3".parse().unwrap())),
+        ),
+    ]);
+    let group = plan_bgp(&group_query).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &group,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(4);
+    tampered.result_values[0][0] = CanonicalResultValue::GeneratedDecimalU64(4);
+    tampered.result_commitments[0] =
+        commit_column(&[ArkFr::from_u64(4), ArkFr::zero()]).unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let empty_query = collect_length_for_predicate("missing", None);
+    let empty_compiled = plan_bgp(&empty_query).unwrap();
+    let empty = empty_compiled.prove(&layer).unwrap();
+    let empty_values = empty
+        .verify_and_resolve_values(
+            &empty_compiled,
+            &layer,
+            layer.state.commitment_root,
+        )
+        .unwrap();
+    assert_eq!(empty.result_len, 1);
+    assert_eq!(
+        empty_values,
+        vec![vec![CanonicalResultValue::GeneratedDecimalU64(0)]]
+    );
+}
+
+#[test]
+fn collect_length_proves_duplicates_empty_policy_and_substitution() {
+    std::thread::Builder::new()
+        .name("woql-collect-length-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_collect_length_proves_duplicates_empty_policy_and_substitution)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 fn assert_two_key_group_count_proves_duplicate_cardinality_and_comparison() {

@@ -9,7 +9,7 @@ use terminusdb_woql2::control::{
     Distinct, From, Immediately, Once, Pin, Select, Using, When, WoqlOptional,
 };
 use terminusdb_woql2::collection::{Length, Sum};
-use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Size, Start, TripleCount};
+use terminusdb_woql2::misc::{Collect, Comment, Count, InRange, Limit, Size, Start, TripleCount};
 use terminusdb_woql2::order::{GroupBy, Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
@@ -290,6 +290,87 @@ fn two_node_key_count_with_bound(bound: DataValue) -> Query {
             length: DataValue::Variable("cardinality".into()),
         }),
     ])
+}
+
+fn collect_length_query() -> Query {
+    and_of(vec![
+        Query::Collect(Collect {
+            template: Value::Variable("score".into()),
+            into: Value::Variable("scores".into()),
+            query: Box::new(and_of(vec![
+                tv("subject", "score", "score"),
+                gte(dvar("score"), duint(0)),
+            ])),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("scores".into()),
+            length: DataValue::Variable("cardinality".into()),
+        }),
+    ])
+}
+
+#[test]
+fn immediate_collect_length_compiles_distinct_empty_policy_and_wrappers() {
+    let compiled = plan_bgp(&collect_length_query()).unwrap();
+    assert_eq!(compiled.relation.schema, ["cardinality"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CollectionCount { .. }
+    ));
+
+    let Query::And(mut nested) = collect_length_query() else {
+        unreachable!()
+    };
+    let Query::Collect(collect) = &mut nested.and[0] else {
+        unreachable!()
+    };
+    let branch = (*collect.query).clone();
+    collect.query = Box::new(Query::Or(Or {
+        or: vec![branch.clone(), branch],
+    }));
+    let nested = plan_bgp(&Query::And(nested)).unwrap();
+    assert!(matches!(
+        nested.relation.statement,
+        CompiledRelationStatement::CollectionCount { input }
+            if matches!(input.statement, CompiledRelationStatement::BagUnion { .. })
+    ));
+
+    let Query::And(mut filtered) = collect_length_query() else {
+        unreachable!()
+    };
+    filtered
+        .and
+        .push(gte(dvar("cardinality"), decimal_value("2")));
+    let filtered = plan_bgp(&Query::Count(Count {
+        query: Box::new(Query::And(filtered)),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(filtered.count_variable.as_deref(), Some("rows"));
+    assert!(matches!(
+        filtered.relation.statement,
+        CompiledRelationStatement::GeneratedU64Filter { column: 0, .. }
+    ));
+
+    let Query::And(valid) = collect_length_query() else {
+        unreachable!()
+    };
+    reject(
+        and_of(vec![valid.and[1].clone(), valid.and[0].clone()]),
+        BgpPlanError::CollectionCountUnsupportedShape,
+    );
+    let Query::Length(mut wrong_list) = valid.and[1].clone() else {
+        unreachable!()
+    };
+    wrong_list.list = DataValue::Variable("other".into());
+    reject(
+        and_of(vec![valid.and[0].clone(), Query::Length(wrong_list)]),
+        BgpPlanError::CollectionCountUnsupportedShape,
+    );
+    reject(
+        valid.and[1].clone(),
+        BgpPlanError::UnsupportedConstruct { construct: "Length" },
+    );
 }
 
 #[test]
