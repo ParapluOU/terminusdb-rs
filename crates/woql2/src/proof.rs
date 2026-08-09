@@ -36,7 +36,7 @@ use terminus_store::proof::anti::{
     verify_inner_join_with_keys, verify_left_outer_join_with_keys, InnerJoinProof,
     LeftAntiJoinProof, LeftOuterJoinProof,
 };
-use terminus_store::proof::argument::{StoreProverContext, Transcript254};
+use terminus_store::proof::argument::{commit_column, StoreProverContext, Transcript254};
 use terminus_store::proof::bgp::{JoinStep, RelationCommit};
 use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
@@ -109,6 +109,7 @@ pub struct CompiledRelation {
 #[derive(Clone, Debug)]
 pub enum CompiledRelationStatement {
     Bgp(LayerBgpPlan),
+    LayerTripleCount,
     BagUnion {
         branches: Vec<CompiledRelation>,
         /// Public output column -> child relation column, per ordered branch.
@@ -293,11 +294,14 @@ pub struct ProvedBgp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutedResultValue {
     Id(u64),
+    /// A generated nonnegative integral xsd:decimal, not a Store dictionary ID.
+    GeneratedDecimalU64(u64),
     Null,
 }
 
 #[derive(Debug)]
 pub enum ProvedQueryStatement {
+    LayerTripleCount,
     Single {
         proof: Box<LayerBgpProof>,
         predicate_ids: Vec<u64>,
@@ -415,10 +419,14 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
         hasher.update([match descriptor.namespace {
             ResultIdNamespace::NodeValue => 0,
             ResultIdNamespace::Predicate => 1,
+            ResultIdNamespace::GeneratedDecimalU64 => 2,
         }]);
         hasher.update([descriptor.nullable as u8]);
     }
     match &relation.statement {
+        CompiledRelationStatement::LayerTripleCount => {
+            hasher.update(b"/layer-triple-count");
+        }
         CompiledRelationStatement::Bgp(plan) => {
             hasher.update(b"/bgp");
             hasher.update(plan_digest(plan)?);
@@ -607,6 +615,10 @@ fn relation_result_descriptors(
     relation: &CompiledRelation,
 ) -> std::io::Result<Vec<ResultColumnDescriptor>> {
     match &relation.statement {
+        CompiledRelationStatement::LayerTripleCount => Ok(vec![ResultColumnDescriptor {
+            namespace: ResultIdNamespace::GeneratedDecimalU64,
+            nullable: false,
+        }]),
         CompiledRelationStatement::Bgp(plan) => {
             terminus_store::proof::query::result_column_descriptors(plan)
         }
@@ -730,6 +742,7 @@ fn relation_proof_plan(
         relation_proof_plan(relation, digest)
     };
     let kind = match &relation.statement {
+        CompiledRelationStatement::LayerTripleCount => RelationProofPlanKind::LayerTripleCount,
         CompiledRelationStatement::Bgp(plan) => RelationProofPlanKind::Bgp(plan.clone()),
         CompiledRelationStatement::BagUnion { branches, mappings } => {
             RelationProofPlanKind::BagUnion {
@@ -882,6 +895,24 @@ impl ProvedBgp {
             return self.verify_relation(expanded, layer, expected_root, query_digest);
         }
         match (&self.statement, &compiled.statement) {
+            (
+                ProvedQueryStatement::LayerTripleCount,
+                CompiledRelationStatement::LayerTripleCount,
+            ) => {
+                let count = layer.verifier_view().state.materialized_count;
+                let mut column = vec![ArkFr::zero(); 2];
+                column[0] = ArkFr::from_u64(count);
+                if self.result_len != 1
+                    || self.result_log_domain != 1
+                    || self.result_columns != vec![vec![column[0]]]
+                    || self.result_commitments != vec![commit_column(&column)?]
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL layer triple-count result does not match trusted root",
+                    ));
+                }
+            }
             (
                 ProvedQueryStatement::Single {
                     proof,
@@ -1558,15 +1589,37 @@ impl ProvedBgp {
         let mut delivered_columns = vec![Vec::with_capacity(rows.len()); projection.len()];
         for row in rows {
             for (column, value) in row.iter().enumerate() {
-                delivered_columns[column].push(match value {
-                    ExecutedResultValue::Id(id) if *id != 0 => ArkFr::from_u64(*id),
-                    ExecutedResultValue::Null => ArkFr::zero(),
-                    ExecutedResultValue::Id(_) => {
+                let descriptor = projected_descriptors[column];
+                delivered_columns[column].push(match (value, descriptor.namespace) {
+                    (
+                        ExecutedResultValue::GeneratedDecimalU64(value),
+                        ResultIdNamespace::GeneratedDecimalU64,
+                    ) => ArkFr::from_u64(*value),
+                    (
+                        ExecutedResultValue::Id(id),
+                        ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate,
+                    ) if *id != 0 => {
+                        ArkFr::from_u64(*id)
+                    }
+                    (ExecutedResultValue::Null, ResultIdNamespace::GeneratedDecimalU64) => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            "executed Store ID zero must be represented as typed Null",
+                            "generated decimal zero is not a nullable result",
                         ))
                     }
+                    (ExecutedResultValue::Null, _) => ArkFr::zero(),
+                    (ExecutedResultValue::Id(_), ResultIdNamespace::GeneratedDecimalU64)
+                    | (ExecutedResultValue::GeneratedDecimalU64(_), _)
+                    | (ExecutedResultValue::Id(0), _) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "executed generated scalar/Store-ID kind does not match compiled descriptor",
+                        ))
+                    }
+                    (
+                        ExecutedResultValue::Id(_),
+                        ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate,
+                    ) => unreachable!("zero Store IDs are rejected by the preceding arm"),
                 });
             }
         }
@@ -1633,6 +1686,10 @@ impl ProvedBgp {
             );
         }
         let proof = match (&self.statement, &compiled.statement) {
+            (
+                ProvedQueryStatement::LayerTripleCount,
+                CompiledRelationStatement::LayerTripleCount,
+            ) => RecursiveRelationProof::LayerTripleCount,
             (
                 ProvedQueryStatement::Single {
                     proof,
@@ -1917,7 +1974,10 @@ pub fn decode_and_verify_envelope(
         .result_descriptors
         .iter()
         .any(|descriptor| descriptor.nullable);
-    let result_objects = if nullable {
+    let generated = envelope.result_descriptors.iter().any(|descriptor| {
+        descriptor.namespace == ResultIdNamespace::GeneratedDecimalU64
+    });
+    let result_objects = if nullable || generated {
         Vec::new()
     } else {
         envelope
@@ -1932,12 +1992,18 @@ pub fn decode_and_verify_envelope(
                             std::io::ErrorKind::InvalidData,
                             "null value in a nonnullable recursive result",
                         )),
+                        CanonicalResultValue::GeneratedDecimalU64(_) => Err(
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "generated scalar is not a Store dictionary object",
+                            ),
+                        ),
                     })
                     .collect()
             })
             .collect::<std::io::Result<_>>()?
     };
-    let result_values = nullable.then(|| envelope.result_values.clone());
+    let result_values = (nullable || generated).then(|| envelope.result_values.clone());
     Ok(VerifiedBgpEnvelope {
         proved: proved_from_recursive(envelope),
         result_objects,
@@ -1960,6 +2026,7 @@ pub fn decode_verifier_commitment_and_verify_envelope(
 
 fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
     let statement = match envelope.proof {
+        RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::Bgp(leaf) => ProvedQueryStatement::Single {
             proof: Box::new(leaf.proof),
             predicate_ids: leaf.predicate_ids,
@@ -2055,6 +2122,7 @@ fn store_id_for_field(
             .iter()
             .find(|r| ArkFr::from_u64(r.object_id) == field)
             .map(|r| r.object_id),
+        ResultIdNamespace::GeneratedDecimalU64 => None,
     }
     .ok_or_else(|| {
         std::io::Error::new(
@@ -2358,6 +2426,12 @@ pub enum BgpPlanError {
     #[error("ordered triple-value proof coverage requires fixed-width numeric literal bounds of one datatype")]
     TripleValueOrderUnsupportedValue,
 
+    #[error("TripleCount proof coverage requires an explicit instance-graph resource")]
+    TripleCountUnsupportedResource,
+
+    #[error("TripleCount output must be a variable")]
+    TripleCountOutputNotVariable,
+
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
@@ -2435,6 +2509,8 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::Limit(_) => "Limit",
         Query::Start(_) => "Start",
         Query::Count(_) => "Count",
+        Query::TripleCount(_) => "TripleCount",
+        Query::Size(_) => "Size",
         Query::InRange(_) => "InRange",
         Query::TripleSlice(_) => "TripleSlice",
         Query::TripleSliceRev(_) => "TripleSliceRev",
@@ -2988,6 +3064,31 @@ fn plan_ordered_triple_value_construct(
     Ok(Some(compiled))
 }
 
+fn plan_layer_triple_count(
+    count: &crate::misc::TripleCount,
+) -> Result<CompiledBgp, BgpPlanError> {
+    let collection = count
+        .resource
+        .strip_suffix("/instance")
+        .filter(|collection| !collection.is_empty())
+        .ok_or(BgpPlanError::TripleCountUnsupportedResource)?;
+    let variable = match &count.count {
+        DataValue::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::TripleCountOutputNotVariable),
+    };
+    Ok(CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec![variable],
+            domains: vec![None],
+            statement: CompiledRelationStatement::LayerTripleCount,
+        },
+        projection: None,
+        collection: Some(collection.to_owned()),
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -3101,6 +3202,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         if compiled.collection.is_none() {
             compiled.collection = collection;
         }
+        let (relation, full_row_distinct) = compile_distinct_relation(
+            compiled.relation,
+            &distincts,
+            &selections,
+            count_variable.as_deref(),
+        )?;
+        compiled.projection = compile_projection(
+            &selections,
+            count_variable.as_deref(),
+            &relation.schema,
+        )?;
+        compiled.relation = relation;
+        compiled.count_variable = count_variable;
+        compiled.full_row_distinct = full_row_distinct;
+        validate_compiled_structure(&compiled.relation)?;
+        return Ok(compiled);
+    }
+
+    if let Query::TripleCount(triple_count) = body {
+        let mut compiled = plan_layer_triple_count(triple_count)?;
         let (relation, full_row_distinct) = compile_distinct_relation(
             compiled.relation,
             &distincts,
@@ -3843,7 +3964,8 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
         }
         *nodes += 1;
         match &relation.statement {
-            CompiledRelationStatement::Bgp(_) => Ok(()),
+            CompiledRelationStatement::Bgp(_)
+            | CompiledRelationStatement::LayerTripleCount => Ok(()),
             CompiledRelationStatement::BagUnion { branches, .. } => {
                 for branch in branches {
                     visit(branch, depth + 1, nodes)?;

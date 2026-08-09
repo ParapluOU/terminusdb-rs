@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `bea5b24` | Recursive exact unordered distinct-class partitions for one or two nonnullable Store-ID columns, with v9 wire coverage. |
-| `modules/terminusdb-rs` | `3535898` plus this documentation commit | Canonical `Count(Distinct(...))` planning authenticates projected one-/two-witness class counts over recursive relations while keeping first-occurrence order unobservable. |
+| `modules/terminusdb-store-paraplu` | `43e0757` | Recursive v10 `LayerTripleCount` derives one generated decimal-u64 scalar from the trusted root's logical `materialized_count`; generated values have a domain distinct from Store IDs. |
+| `modules/terminusdb-rs` | this checkpoint | Canonical explicit-instance `TripleCount` planning, generated-scalar verification/executor boundary, envelope integration, and fail-closed resource rules. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -298,6 +298,22 @@ triple, dictionary absence, and forward/reverse query substitution in 322.94s wi
 `RUST_MIN_STACK=33554432`. Ground immediate-next success, non-nearest rejection, and
 next/previous query substitution passed in 150.28s.
 
+Leading Prolog's explicit-graph `TripleCount(Resource, Count)` reads the selected
+graph object's logical visible triple count and returns a nonnegative `xsd:decimal`.
+Store checkpoint `43e0757` adds recursive wire v10 `LayerTripleCount`: its sole field
+is verifier-derived from the trusted root's committed `materialized_count`, including
+child additions/removals. A distinct `GeneratedDecimalU64` descriptor prevents that
+field—including zero—from being resolved or accepted as a Store dictionary ID.
+
+The woql2 checkpoint accepts only a resource ending in `/instance` and a variable
+output, preserving the branch collection in query identity. Graphless database counts,
+schema graphs, other resources, and constant-output unification reject closed. `Size`
+remains unsupported because leading Prolog measures physical layer-file bytes outside
+the logical root commitment. Focused gates passed: three planner tests, the canonical
+non-serde domain-decoder test, and two E2E tests covering empty and child-layer counts,
+generated executor values, portable envelope round-trip, wrong resource/root, and a
+forged/recommitted result (10.90s for the E2E pair).
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -335,6 +351,13 @@ next/previous query substitution passed in 150.28s.
 - [x] Authenticate fully-ground slices and next/previous adjacency as exact zero-column
   UNIT/empty relations, including equality after nearest-value `Limit(1)`, boundary,
   missing-triple, dictionary-absence, datatype, and query-direction guards.
+- [x] Authenticate explicit instance-graph `TripleCount` directly from the trusted
+  root's logical visible count, with a generated-decimal result domain, child stacks,
+  envelope/executor integration, and resource/root/tamper guards.
+- [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
+  selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
+- [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage
+  accounting commitment is deliberately introduced.
 - [ ] Extend ordered triple values to variable S/P or visible full triples only after
   authenticating complete tie order; add variable-width string collation, schema routing,
   and broader datatype families separately.

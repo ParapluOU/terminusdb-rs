@@ -72,7 +72,8 @@ pub fn normalize_woql_json(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use crate::order::Order;
-    use crate::prelude::{NodeValue, Query, Triple, True, When};
+    use crate::misc::TripleCount;
+    use crate::prelude::{DataValue, NodeValue, Query, Triple, True, When};
     use crate::value::Value as WoqlValue;
     use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance};
 
@@ -148,6 +149,25 @@ mod tests {
         };
         assert_eq!(start.start, 1);
         assert!(matches!(*start.query, Query::True(_)));
+    }
+
+    #[test]
+    fn triple_count_uses_domain_decoder_and_prolog_resource_shape() {
+        let query = Query::TripleCount(TripleCount {
+            resource: "admin/db/local/branch/main/instance".into(),
+            count: DataValue::Variable("Count".into()),
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["@type"], "TripleCount");
+        assert_eq!(json["resource"], "admin/db/local/branch/main/instance");
+
+        let decoded = Query::from_json(json)
+            .expect("domain decoder accepts the leading Prolog TripleCount shape");
+        let Query::TripleCount(decoded) = decoded else {
+            panic!("expected decoded TripleCount domain AST");
+        };
+        assert_eq!(decoded.resource, "admin/db/local/branch/main/instance");
+        assert_eq!(decoded.count, DataValue::Variable("Count".into()));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{
     Distinct, From, Immediately, Once, Pin, Select, Using, When, WoqlOptional,
 };
-use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Start};
+use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Size, Start, TripleCount};
 use terminusdb_woql2::order::{Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
@@ -39,6 +39,83 @@ use terminusdb_woql2::proof::{
 #[track_caller]
 fn reject(q: Query, want: BgpPlanError) {
     assert_eq!(plan_bgp(&q).unwrap_err(), want);
+}
+
+fn triple_count(resource: &str, output: DataValue) -> Query {
+    Query::TripleCount(TripleCount {
+        resource: resource.into(),
+        count: output,
+    })
+}
+
+#[test]
+fn explicit_instance_triple_count_compiles_as_authenticated_generated_scalar() {
+    let resource = "admin/db/local/branch/main/instance";
+    let compiled = plan_bgp(&triple_count(
+        resource,
+        DataValue::Variable("Count".into()),
+    ))
+    .unwrap();
+
+    assert_eq!(compiled.relation.schema, ["Count"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::LayerTripleCount
+    ));
+    assert_eq!(
+        compiled.collection.as_deref(),
+        Some("admin/db/local/branch/main")
+    );
+}
+
+#[test]
+fn triple_count_composes_with_select_and_outer_count() {
+    let source = triple_count(
+        "admin/db/local/branch/main/instance",
+        DataValue::Variable("Count".into()),
+    );
+    let selected = plan_bgp(&Query::Select(Select {
+        variables: vec!["Count".into()],
+        query: Box::new(source.clone()),
+    }))
+    .unwrap();
+    assert_eq!(selected.projection, Some(vec![0]));
+
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(source),
+        count: DataValue::Variable("Rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(counted.count_variable.as_deref(), Some("Rows"));
+}
+
+#[test]
+fn triple_count_rejects_uncommitted_resource_semantics_and_constant_output() {
+    reject(
+        triple_count("admin/db", DataValue::Variable("Count".into())),
+        BgpPlanError::TripleCountUnsupportedResource,
+    );
+    reject(
+        triple_count(
+            "admin/db/local/branch/main/schema",
+            DataValue::Variable("Count".into()),
+        ),
+        BgpPlanError::TripleCountUnsupportedResource,
+    );
+    reject(
+        triple_count(
+            "admin/db/local/branch/main/instance",
+            DataValue::Data(XSDAnySimpleType::UnsignedLong(3)),
+        ),
+        BgpPlanError::TripleCountOutputNotVariable,
+    );
+    reject(
+        Query::Size(Size {
+            resource: "admin/db/local/branch/main/instance".into(),
+            size: DataValue::Variable("Size".into()),
+        }),
+        BgpPlanError::UnsupportedConstruct { construct: "Size" },
+    );
 }
 
 fn typed_object_query(value: XSDAnySimpleType) -> Query {

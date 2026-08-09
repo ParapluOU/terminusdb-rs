@@ -37,7 +37,7 @@ use terminusdb_woql2::proof::{
 };
 use terminusdb_woql2::triple::{Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::{
-    misc::{Count, InRange, Limit, RangeMax, RangeMin, Start},
+    misc::{Count, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
     query::{Not, Or, Query},
     value::{DataValue, NodeValue, Value},
@@ -69,6 +69,154 @@ fn resolved_u32_column(values: &[Vec<CanonicalResultValue>]) -> Vec<u32> {
             other => panic!("unexpected ordered triple value {other:?}"),
         })
         .collect()
+}
+
+fn triple_count_query(resource: &str) -> Query {
+    Query::TripleCount(TripleCount {
+        resource: resource.into(),
+        count: DataValue::Variable("Count".into()),
+    })
+}
+
+#[test]
+fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() {
+    let store = open_sync_memory_store();
+    let base_builder = store.create_base_layer().unwrap();
+    base_builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("p"), &iri("b")))
+        .unwrap();
+    let base = base_builder.commit().unwrap();
+    let base_commitment = base.proof_commitment().unwrap();
+    let child_builder = base.open_write().unwrap();
+    child_builder
+        .add_value_triple(ValueTriple::new_node(&iri("c"), &iri("p"), &iri("d")))
+        .unwrap();
+    child_builder
+        .add_value_triple(ValueTriple::new_node(&iri("e"), &iri("q"), &iri("f")))
+        .unwrap();
+    let child = child_builder.commit().unwrap();
+    let layer = child.proof_commitment().unwrap();
+
+    let compiled = plan_bgp(&triple_count_query(
+        "admin/db/local/branch/main/instance",
+    ))
+    .unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 1);
+    assert_eq!(
+        proved
+            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .unwrap(),
+        vec![vec![CanonicalResultValue::GeneratedDecimalU64(3)]]
+    );
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["Count".into()],
+            &[vec![ExecutedResultValue::GeneratedDecimalU64(3)]],
+        )
+        .unwrap();
+    for wrong in [
+        ExecutedResultValue::GeneratedDecimalU64(4),
+        ExecutedResultValue::Id(3),
+        ExecutedResultValue::Null,
+    ] {
+        assert!(proved
+            .verify_executed_values(
+                &compiled,
+                &layer,
+                layer.state.commitment_root,
+                &["Count".into()],
+                &[vec![wrong]],
+            )
+            .is_err());
+    }
+
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let decoded = decode_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    assert!(decoded.result_objects.is_empty());
+    assert_eq!(
+        decoded.result_values,
+        Some(vec![vec![CanonicalResultValue::GeneratedDecimalU64(3)]])
+    );
+
+    // Both the selected resource and trusted layer root are part of the statement.
+    let other_resource = plan_bgp(&triple_count_query(
+        "admin/other/local/branch/main/instance",
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &other_resource,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &base_commitment,
+        base_commitment.state.commitment_root,
+    )
+    .is_err());
+
+    // Recommitting a forged result does not bypass the root-derived count check.
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(4);
+    tampered.result_commitments[0] = commit_column(&pad(
+        &tampered.result_columns[0],
+        1usize << tampered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn explicit_instance_triple_count_proves_zero_as_a_value_not_null() {
+    let store = open_sync_memory_store();
+    let layer = store
+        .create_base_layer()
+        .unwrap()
+        .commit()
+        .unwrap()
+        .proof_commitment()
+        .unwrap();
+    let compiled = plan_bgp(&triple_count_query(
+        "admin/db/local/branch/main/instance",
+    ))
+    .unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(
+        proved
+            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .unwrap(),
+        vec![vec![CanonicalResultValue::GeneratedDecimalU64(0)]]
+    );
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["Count".into()],
+            &[vec![ExecutedResultValue::GeneratedDecimalU64(0)]],
+        )
+        .unwrap();
 }
 
 fn triple_slice_query(reverse: bool) -> Query {
@@ -1548,7 +1696,7 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
     let mut forged_predicate = rows;
     let object_id = match forged_predicate[0][0] {
         ExecutedResultValue::Id(id) => id,
-        ExecutedResultValue::Null => unreachable!(),
+        ExecutedResultValue::GeneratedDecimalU64(_) | ExecutedResultValue::Null => unreachable!(),
     };
     forged_predicate[0][3] = ExecutedResultValue::Id(object_id);
     assert!(proved
