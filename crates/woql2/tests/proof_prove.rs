@@ -982,6 +982,85 @@ fn grouped_u32_sum_query() -> Query {
     and_of(vec![group, sum])
 }
 
+fn global_u32_sum_query() -> Query {
+    let Query::And(mut query) = grouped_u32_sum_query() else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &mut query.and[0] else {
+        unreachable!()
+    };
+    group.group_by.clear();
+    Query::And(query)
+}
+
+fn assert_global_u32_sum_proves_one_generated_decimal_row() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, value) in [("a", 2u32), ("b", 3u32)] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri(subject),
+                &iri("p"),
+                u32::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&global_u32_sum_query()).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 1);
+    assert_eq!(
+        proved
+            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .unwrap(),
+        vec![vec![CanonicalResultValue::GeneratedDecimalU64(5)]]
+    );
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["total".into()],
+            &[vec![ExecutedResultValue::GeneratedDecimalU64(5)]],
+        )
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let keyed = plan_bgp(&grouped_u32_sum_query()).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &keyed,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(6);
+    tampered.result_commitments[0] =
+        commit_column(&[ArkFr::from_u64(6), ArkFr::zero()]).unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn global_u32_sum_proves_one_generated_decimal_row() {
+    std::thread::Builder::new()
+        .name("woql-global-sum-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_global_u32_sum_proves_one_generated_decimal_row)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_key_order() {
     let store = open_sync_memory_store();
     let base_builder = store.create_base_layer().unwrap();
@@ -1119,7 +1198,7 @@ fn assert_grouped_u32_sum_empty_and_outer_count_are_exact() {
         .unwrap();
     let layer = builder.commit().unwrap().proof_commitment().unwrap();
     let compiled = plan_bgp(&Query::Count(Count {
-        query: Box::new(grouped_u32_sum_query()),
+        query: Box::new(global_u32_sum_query()),
         count: DataValue::Variable("groups".into()),
     }))
     .unwrap();

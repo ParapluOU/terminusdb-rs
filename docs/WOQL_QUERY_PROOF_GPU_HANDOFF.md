@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `758d94f`, order fix `69f28cd` | Recursive v12 grouped UInt8/16/32 sums derive exact duplicate-preserving generated decimals and sort node groups by authenticated canonical IRI rather than append-order Store IDs. |
-| `modules/terminusdb-rs` | this checkpoint | Immediate node-key `GroupBy`→`Sum` planning, canonical decoder, generated-scalar executor/envelope integration, checked arithmetic boundary, and fail-closed list/coercion rules. |
+| `modules/terminusdb-store-paraplu` | `0f7f52d` | Recursive v13 GroupSum supports zero or one key: global nonempty input emits one generated decimal and empty input emits no row, without a synthetic key. |
+| `modules/terminusdb-rs` | this checkpoint | Immediate zero-/one-node-key `GroupBy`→`Sum`, canonical decoder, generated-scalar executor/envelope integration, checked arithmetic boundary, and fail-closed list/coercion rules. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -351,6 +351,20 @@ Two WOQL E2E tests passed in 138.52s, covering duplicate 2+2, zero, `u32::MAX`, 
 key order, generated-decimal resolution, mixed executor values, outer Count, empty input,
 envelope round-trip, forged/recommitted sum, and `Sum`/`RangeMax` substitution.
 
+Store checkpoint `0f7f52d` extends the same statement and recursive wire to v13 with an
+optional key. Empty `group_by` follows zero-free-variable `bagof`: all duplicate template
+solutions form one private bag when the child is nonempty, while an empty child fails and
+therefore produces no aggregate row. The result is one `GeneratedDecimalU64` column with
+no synthetic UNIT/key. The same row-count × UInt8/16/32 maximum bound proves the total
+fits `u64` and the field. The combined keyed/global Store gate passed in 18.60s, including
+`u32::MAX + 4`, zero, empty input, and a forged/recommitted global total.
+
+woql2 binds keyed/global arity into its relation and query digest. The three planner gates
+passed, including visible global output and outer Count. The canonical non-serde decoder
+round-trips an empty `group_by` array. The nonempty global E2E proved generated decimal 5,
+executor matching, envelope round-trip, keyed/global substitution rejection, and tamper in
+89.07s; the empty global outer-Count gate proved zero rows/groups in 35.45s.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -397,6 +411,8 @@ envelope round-trip, forged/recommitted sum, and `Sum`/`RangeMax` substitution.
 - [x] Authenticate immediate one-node-key `GroupBy`→`Sum` for UInt8/UInt16/UInt32,
   preserving duplicate multiplicity, canonical SWI-compatible node group order, checked
   no-wrap arithmetic, and generated-decimal result typing without exposing the list.
+- [x] Extend immediate `GroupBy`→`Sum` to the zero-key/global form: one sum row iff the
+  authenticated child is nonempty, no row when empty, and no synthetic key/list leakage.
 - [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
   selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
 - [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage

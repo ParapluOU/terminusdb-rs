@@ -199,6 +199,21 @@ mod tests {
         let decoded = Query::from_json(json)
             .expect("domain decoder accepts canonical immediate GroupBy followed by Sum");
         assert_eq!(decoded, query);
+
+        let Query::And(mut global) = query else {
+            unreachable!()
+        };
+        let Query::GroupBy(group) = &mut global.and[0] else {
+            unreachable!()
+        };
+        group.group_by.clear();
+        let global = Query::And(global);
+        let json = global.to_woql_json();
+        assert_eq!(json["and"][0]["group_by"], serde_json::json!([]));
+        assert_eq!(
+            Query::from_json(json).expect("domain decoder accepts zero-key GroupBy"),
+            global,
+        );
     }
 
     #[test]

@@ -248,7 +248,7 @@ fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
     assert!(matches!(
         compiled.relation.statement,
         CompiledRelationStatement::GroupSum {
-            key_column: 0,
+            key_column: Some(0),
             value_column: 1,
             datatype: CanonicalDatatype::UInt32,
             ..
@@ -278,6 +278,38 @@ fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
             CompiledRelationStatement::GroupSum { datatype, .. } if datatype == expected
         ));
     }
+}
+
+fn global_u32_sum() -> Query {
+    let Query::And(mut query) = grouped_u32_sum() else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &mut query.and[0] else {
+        unreachable!()
+    };
+    group.group_by.clear();
+    Query::And(query)
+}
+
+#[test]
+fn immediate_zero_key_group_sum_compiles_one_generated_decimal_column() {
+    let compiled = plan_bgp(&global_u32_sum()).unwrap();
+    assert_eq!(compiled.relation.schema, ["total"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::GroupSum {
+            key_column: None,
+            value_column: 1,
+            datatype: CanonicalDatatype::UInt32,
+            ..
+        }
+    ));
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(global_u32_sum()),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(counted.count_variable.as_deref(), Some("rows"));
 }
 
 #[test]
