@@ -17,7 +17,7 @@ policy, not Store policy.
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
 | `modules/terminusdb-store-paraplu` | `4129c07` | Store wire v18 authenticates immediate collected-list cardinality with `findall`'s distinct empty policy. |
-| `modules/terminusdb-rs` | this checkpoint | WOQL planning and verification cover immediate `Collect`→`Length`, comparisons, recursive children, and outer result wrappers. |
+| `modules/terminusdb-rs` | `20690a6` | WOQL planning and verification cover immediate `Collect`→`Length`, comparisons, recursive children, and outer result wrappers. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
