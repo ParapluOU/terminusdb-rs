@@ -117,13 +117,12 @@ fn test_control_flow_macros() {
     let limit_query = limit!(10, triple!(var!(x), "rdf:type", "Person"));
     assert!(matches!(limit_query, Query::Limit(ref l) if l.limit == 10));
 
-    // Test if_then_else! macro
-    let if_query = if_then_else!(
+    // Test authoritative Prolog when/2 macro
+    let when_query = when!(
         greater!(var!(age), data!(18)),
-        triple!(var!(x), "status", "adult"),
-        triple!(var!(x), "status", "minor")
+        triple!(var!(x), "status", "adult")
     );
-    assert!(matches!(if_query, Query::If(_)));
+    assert!(matches!(when_query, Query::If(_)));
 }
 
 #[test]

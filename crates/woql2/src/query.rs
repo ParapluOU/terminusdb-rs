@@ -4,7 +4,7 @@ use crate::collection::{
 };
 use crate::compare::{Equals, Greater, Gte, IsA, Less, Lte, Subsumption, TypeOf, Typecast};
 use crate::control::{
-    Distinct, From, If, Immediately, Into, Once, Pin, Select, Using, WoqlOptional,
+    Distinct, From, Immediately, Into, Once, Pin, Select, Using, When, WoqlOptional,
 };
 use crate::document::{DeleteDocument, InsertDocument, ReadDocument, UpdateDocument};
 use crate::expression::{ArithmeticExpression, ArithmeticValue};
@@ -121,7 +121,7 @@ pub enum Query {
     Select(Select),
     Distinct(Distinct),
     Pin(Pin),
-    If(If),
+    If(When),
     WoqlOptional(WoqlOptional),
     Once(Once),
     Immediately(Immediately),

@@ -529,24 +529,22 @@ macro_rules! delete_doc {
     };
 }
 
-/// Create an If-Then-Else query
+/// Create a Prolog `when(Query, Consequent)` query.
 ///
 /// # Examples
 /// ```
 /// # use terminusdb_woql2::*;
-/// let q = if_then_else!(
+/// let q = when!(
 ///     greater!(var!(age), data!(18)),
-///     triple!(var!(x), "status", "adult"),
-///     triple!(var!(x), "status", "minor")
+///     triple!(var!(x), "status", "adult")
 /// );
 /// ```
 #[macro_export]
-macro_rules! if_then_else {
-    ($if_query:expr, $then_query:expr, $else_query:expr) => {
-        $crate::query::Query::If($crate::control::If {
-            test: Box::new($if_query),
-            then_query: Box::new($then_query),
-            else_query: Box::new($else_query),
+macro_rules! when {
+    ($query:expr, $consequent:expr) => {
+        $crate::query::Query::If($crate::control::When {
+            query: Box::new($query),
+            consequent: Box::new($consequent),
         })
     };
 }

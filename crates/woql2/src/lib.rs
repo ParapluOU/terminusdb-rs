@@ -42,7 +42,7 @@ pub mod prelude {
     };
     pub use super::compare::{Equals, Greater, Gte, IsA, Less, Lte, Subsumption, TypeOf, Typecast};
     pub use super::control::{
-        Distinct, From, If, Immediately, Into, Once, Pin, Select, Using, WoqlOptional,
+        Distinct, From, If, Immediately, Into, Once, Pin, Select, Using, When, WoqlOptional,
     };
     pub use super::document::{DeleteDocument, InsertDocument, ReadDocument, UpdateDocument};
     pub use super::expression::{
@@ -100,7 +100,6 @@ pub mod prelude {
         from_path,
         greater,
         id,
-        if_then_else,
         immediately,
         in_between,
         insert_doc,
@@ -142,6 +141,7 @@ pub mod prelude {
         update_doc,
         v,
         var,
+        when,
     };
 
     // Potentially re-export common traits if needed

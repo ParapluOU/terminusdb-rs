@@ -6,7 +6,7 @@ use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{
-    Distinct, From, If, Immediately, Once, Pin, Select, Using, WoqlOptional,
+    Distinct, From, Immediately, Once, Pin, Select, Using, When, WoqlOptional,
 };
 use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Start};
 use terminusdb_woql2::order::{Order, OrderBy, OrderTemplate};
@@ -884,11 +884,10 @@ fn planner_rejects_recursive_depth_and_node_bombs() {
 }
 
 #[test]
-fn rejects_if_until_the_executor_json_ast_has_matching_semantics() {
-    let q = Query::If(If {
-        test: Box::new(tv("a", "p", "b")),
-        then_query: Box::new(tv("x", "q", "y")),
-        else_query: Box::new(tv("x", "r", "y")),
+fn rejects_when_until_the_proof_planner_has_matching_semantics() {
+    let q = Query::If(When {
+        query: Box::new(tv("a", "p", "b")),
+        consequent: Box::new(tv("x", "q", "y")),
     });
     reject(q, BgpPlanError::UnsupportedConstruct { construct: "If" });
 }

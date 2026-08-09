@@ -60,19 +60,18 @@ pub struct Pin {
     pub query: Box<Query>,
 }
 
-/// A conditional which runs the then clause for every success from the test clause, otherwise runs the else clause.
+/// Run the consequent for every success of the condition; succeed unchanged if it fails.
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
-
-pub struct If {
-    /// A query which will provide bindings for the then clause.
-    pub test: Box<Query>,
-    /// A query which will run for every solution of test with associated bindings.
-    #[tdb(name = "then")]
-    pub then_query: Box<Query>,
-    /// A query which runs whenever test fails.
-    #[tdb(name = "else")]
-    pub else_query: Box<Query>,
+pub struct When {
+    /// A query which provides bindings for the consequent.
+    pub query: Box<Query>,
+    /// A query run for every solution of `query`.
+    pub consequent: Box<Query>,
 }
+
+/// Temporary Rust spelling retained while the proof planner's quarantined source
+/// still matches `Query::If`; both names encode the authoritative `When` class.
+pub type If = When;
 
 // Renamed from Optional due to Rust keyword conflict
 /// A query which will succeed (without bindings) even in the case of failure.

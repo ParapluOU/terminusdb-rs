@@ -71,9 +71,27 @@ pub fn normalize_woql_json(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use crate::prelude::{NodeValue, Query, Triple};
+    use crate::prelude::{NodeValue, Query, Triple, True, When};
     use crate::value::Value as WoqlValue;
-    use terminusdb_schema::{ToJson, ToTDBInstance};
+    use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance};
+
+    #[test]
+    fn when_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
+        let query = Query::If(When {
+            query: Box::new(Query::True(True {})),
+            consequent: Box::new(Query::True(True {})),
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["@type"], "When");
+        assert!(json.get("query").is_some());
+        assert!(json.get("consequent").is_some());
+        assert!(json.get("test").is_none());
+        assert!(json.get("then").is_none());
+        assert!(json.get("else").is_none());
+
+        let decoded = Query::from_json(json).expect("domain decoder accepts Prolog When JSON");
+        assert!(matches!(decoded, Query::If(_)));
+    }
 
     #[test]
     fn none_graph_serializes_as_instance() {
