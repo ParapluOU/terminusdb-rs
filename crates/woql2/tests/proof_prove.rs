@@ -734,6 +734,72 @@ fn sequential_optional_then_not_filters_on_nonnullable_key() {
 }
 
 #[test]
+fn dictionary_absence_composes_through_sequential_not_and_optional() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("anchor", "q", "value"),
+        ("anchor", "r", "value"),
+    ]);
+    let branch = |predicate: &str, optional_subject: &str| {
+        and_of(vec![
+            tv("x", predicate, "y"),
+            Query::Not(Not {
+                query: Box::new(tv_obj_node("y", "q", "missing")),
+            }),
+            Query::WoqlOptional(WoqlOptional {
+                query: Box::new(tv_subj_const(optional_subject, "r", "z")),
+            }),
+        ])
+    };
+    let query = branch("p", "missing");
+    let compiled = plan_bgp(&query).unwrap();
+    assert_eq!(compiled.relation.schema, vec!["x", "y", "z"]);
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 2);
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(values[2]
+        .iter()
+        .all(|value| *value == CanonicalResultValue::Null));
+
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+
+    // The absence claim is part of the recursive query statement. Replacing one absent
+    // subject with a dictionary-present subject changes both semantics and the digest.
+    let substituted = plan_bgp(&branch("p", "anchor")).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &substituted,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn dictionary_absence_is_an_exact_empty_or_branch() {
+    let layer = build_layer(&[("a", "p", "b"), ("c", "p", "d")]);
+    let query = Query::Or(Or {
+        or: vec![tv("x", "p", "y"), tv("x", "absent-predicate", "y")],
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 2);
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+}
+
+#[test]
 fn composite_key_optional_requires_both_keys_and_preserves_right_duplicates() {
     let layer = build_layer(&[
         ("a", "p", "b"),
@@ -2547,19 +2613,36 @@ fn object_constant_joined_on_object_variable_proves_true_join() {
 }
 
 #[test]
-fn absent_node_constant_fails_closed() {
-    // The object constant <absent> compiles fine, but proving fails closed because it is
-    // not in the layer's node/value dictionary (non-membership proofs are deferred).
+fn absent_node_constant_authenticates_empty_join_and_envelope() {
     let lc = build_layer(&[("a", "knows", "b"), ("b", "likes", "c")]);
     let q = and_of(vec![
         tv("x", "knows", "y"),
         tv_obj_node("y", "likes", "absent"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    let err = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("constant not in layer node/value dictionary"));
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.result_len, 0);
+    assert_eq!(proved.result_commitments.len(), 2);
+    proved
+        .verify(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+
+    let present_variant = plan_bgp(&and_of(vec![
+        tv("x", "knows", "y"),
+        tv_obj_node("y", "likes", "c"),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &present_variant,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
 }
 
 // ----------------------------------------------------------------------------
@@ -2638,9 +2721,7 @@ fn object_string_literal_discriminates_by_content() {
 }
 
 #[test]
-fn absent_string_literal_fails_closed() {
-    // A string literal not present in the layer's value dictionary fails closed at prove
-    // time (the compiled value constant is well-formed, but resolves to no dictionary id).
+fn absent_string_literal_authenticates_empty_join() {
     let name = iri("name");
     let lc = build_layer_triples(vec![
         ValueTriple::new_string_value(&iri("a"), &name, "hi"),
@@ -2651,10 +2732,11 @@ fn absent_string_literal_fails_closed() {
         tv("x", "knows", "z"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    let err = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("constant not in layer node/value dictionary"));
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.result_len, 0);
+    proved
+        .verify(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
 }
 
 // ----------------------------------------------------------------------------

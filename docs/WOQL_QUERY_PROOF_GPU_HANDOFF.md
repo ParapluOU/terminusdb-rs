@@ -16,9 +16,9 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `46607d4` | Prover context threaded through recursive Store proof gadgets; explicit setup tier/runtime config and caller-owned exact G2 provider seam. |
-| `modules/terminusdb-rs` | `ad11de8` | Canonical WOQL planner integration and hardware benchmark runner. |
-| `modules/terminusdb` | `b746dcda` | Owned CPU/Blitzar query provers and Prolog bridge. |
+| `modules/terminusdb-store-paraplu` | `30789c3` | Prover context plus caller-owned exact G2 provider seam; root-authenticated dictionary absence now produces exact empty relations at any BGP arity. |
+| `modules/terminusdb-rs` | This semantic checkpoint (parent `0a509c8`) | Canonical WOQL planner integration, hardware benchmark runner, and recursive absence coverage/docs. |
+| `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
 boundary parsed JSON is decoded with the schema crate's explicit
@@ -134,7 +134,34 @@ libraries, while ICICLE v4's Rust build invokes CMake. The optional
 `icicle-gpu` provider must be compiled, linked, and equivalence-tested first on
 the prepared cloud server.
 
-## Ordered continuation plan
+## Active WOQL coverage checklist
+
+GPU implementation is parked until WOQL completeness is substantially higher. The
+current semantic checkpoint generalizes Store dictionary-absence openings from one
+ground atom to any constant-bearing BGP atom. Its focused Store tests cover node/value
+and predicate absence, exact relational arity, invalid-plan rejection, wire tags, forged
+atom indices/positions, and forged commitment shape. The woql2 checkpoint covers absent
+node and typed-literal joins, sequential `Not`/`Optional`, an exact-empty `Or` branch,
+envelope round-trip, null-extension, and query substitution rejection.
+
+- [x] Exact non-ground dictionary absence, recursively composable.
+- [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
+  time permits; focused semantic tests are the commit gate because full Arkworks runs
+  take minutes.
+- [ ] Implement authenticated ordering/permutation, then exact slices (`OrderBy`,
+  `Start`/`Limit`, triple navigation). This unlocks deterministic `Once` as well.
+- [ ] Implement Prolog `When` exactly. `compile_wf(when(A,B), ((ProgA,ProgB);true))`
+  proves it is not conventional if/else: matched `A,B` rows are bag-unioned with the
+  unchanged outer solution. Do not normalize it to the existing left-outer gadget.
+- [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
+  generalize `GroupBy`/`Collect`/`Sum` and list-consuming extrema.
+- [ ] Add operators requiring new value circuits/data models in the order recorded in
+  the coverage matrix; keep every unsupported case fail-closed.
+- [ ] Resume ICICLE/GPU work only after the semantic items above or when proving
+  performance becomes the explicit active milestone. Mac remains a portable CPU and
+  proof-compatibility target, not a CUDA target.
+
+## Ordered acceleration continuation plan
 
 1. Run the Mac CPU validation above and record the exact environment and output.
 2. On Linux/NVIDIA, run CPU, Blitzar CPU, and Blitzar GPU with identical inputs.
@@ -153,10 +180,7 @@ the prepared cloud server.
    production use. Its build script downloads a release `.so` without enforcing
    a checksum. See `modules/dory/PROVENANCE.md` for pinned versions and the
    observed Linux artifact digest.
-7. Continue WOQL coverage in the order suggested by the coverage matrix:
-   authenticated ordering/permutation and slicing; `If`; general grouped/list
-   results; then operators requiring new value circuits or authenticated data
-   models. Keep unsupported semantics fail-closed.
+7. Resume this acceleration plan only after the active WOQL checklist above.
 8. Publish or register the Dory fork and Store fork so a fresh checkout resolves
    the exact committed sources rather than relying on sibling directories.
 
