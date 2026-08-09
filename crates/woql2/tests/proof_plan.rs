@@ -525,6 +525,16 @@ fn optional_requires_outer_bindings_and_compiles_correlated_join() {
     let counted = plan_bgp(&counted).unwrap();
     assert_eq!(counted.count_variable.as_deref(), Some("count"));
     assert!(counted.optional_join.is_some());
+
+    let global = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("a", "q", "b")),
+        }),
+    ]);
+    let global = plan_bgp(&global).unwrap();
+    assert_eq!(global.schema, vec!["x", "y", "a", "b"]);
+    assert!(global.optional_join.unwrap().key_pairs.is_empty());
 }
 
 #[test]

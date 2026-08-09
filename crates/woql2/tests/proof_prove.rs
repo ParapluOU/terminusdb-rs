@@ -130,6 +130,164 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
 }
 
 #[test]
+fn composite_key_optional_requires_both_keys_and_preserves_right_duplicates() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("e", "p", "f"),
+        ("a", "q", "b"),
+        ("c", "q", "d"),
+        ("a", "q", "c"), // partial-key match only for the first left row
+        ("b", "r", "u"),
+        ("b", "r", "v"),
+        ("c", "r", "partial"),
+        ("d", "r", "w"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(and_of(vec![tv("x", "q", "y"), tv("y", "r", "z")])),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    assert_eq!(
+        compiled.optional_join.as_ref().unwrap().key_pairs,
+        vec![(0, 0), (1, 1)]
+    );
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 4);
+    assert_eq!(
+        proved.result_columns[2]
+            .iter()
+            .take(proved.result_len)
+            .filter(|value| value.is_zero())
+            .count(),
+        1
+    );
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let mut swapped = compiled.clone();
+    swapped.optional_join.as_mut().unwrap().key_pairs.swap(0, 1);
+    assert!(proved
+        .verify(&swapped, &layer, layer.state.commitment_root)
+        .is_err());
+    let mut fake_null = proved;
+    let matched = fake_null.result_columns[2]
+        .iter()
+        .position(|value| !value.is_zero())
+        .unwrap();
+    fake_null.result_columns[2][matched] = ArkFr::zero();
+    assert!(fake_null
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
+    let layer = build_layer(&[("a", "p", "b"), ("c", "p", "d")]);
+    // The first right atom exposes a predicate variable. Joining its object to the
+    // subject of a p-edge makes the authenticated right relation empty in this layer.
+    let right = and_of(vec![tv_pred_var("r", "pred", "o"), tv("o", "p", "z")]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(right),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    assert!(compiled.optional_join.as_ref().unwrap().key_pairs.is_empty());
+    assert_eq!(compiled.schema, vec!["x", "y", "r", "pred", "o", "z"]);
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 2);
+    assert!(proved.result_columns[2..]
+        .iter()
+        .all(|column| column[..proved.result_len].iter().all(Field::is_zero)));
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(values[2..]
+        .iter()
+        .all(|column| column.iter().all(|value| *value == CanonicalResultValue::Null)));
+
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+
+    let rows: Vec<Vec<ExecutedResultValue>> = (0..proved.result_len)
+        .map(|row| {
+            let node_id = |column: usize| {
+                layer
+                    .node_value_catalog
+                    .iter()
+                    .find(|record| {
+                        ArkFr::from_u64(record.object_id) == proved.result_columns[column][row]
+                    })
+                    .unwrap()
+                    .object_id
+            };
+            vec![
+                ExecutedResultValue::Id(node_id(0)),
+                ExecutedResultValue::Id(node_id(1)),
+                ExecutedResultValue::Null,
+                ExecutedResultValue::Null,
+                ExecutedResultValue::Null,
+                ExecutedResultValue::Null,
+            ]
+        })
+        .collect();
+    let variables = ["x", "y", "r", "pred", "o", "z"].map(str::to_string);
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &variables,
+            &rows,
+        )
+        .unwrap();
+    let mut missing = rows.clone();
+    missing.pop();
+    assert!(proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &variables,
+            &missing,
+        )
+        .is_err());
+    let mut extra = rows.clone();
+    extra.push(rows[0].clone());
+    assert!(proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &variables,
+            &extra,
+        )
+        .is_err());
+    let mut forged_predicate = rows;
+    let object_id = match forged_predicate[0][0] {
+        ExecutedResultValue::Id(id) => id,
+        ExecutedResultValue::Null => unreachable!(),
+    };
+    forged_predicate[0][3] = ExecutedResultValue::Id(object_id);
+    assert!(proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &variables,
+            &forged_predicate,
+        )
+        .is_err());
+}
+
+#[test]
 fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
     let layer = build_layer(&[
         ("a", "knows", "b"),

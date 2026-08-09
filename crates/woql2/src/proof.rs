@@ -32,9 +32,10 @@ use dory_pcs::primitives::transcript::Transcript;
 use sha2::{Digest, Sha256};
 use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
 use terminus_store::proof::anti::{
-    prove_global_not, prove_left_anti_join_with_keys, prove_left_outer_join_with_keys,
-    verify_global_not, verify_left_anti_join_with_keys, verify_left_outer_join_with_keys,
-    LeftAntiJoinProof, LeftOuterJoinProof,
+    prove_global_left_outer_join, prove_global_not, prove_left_anti_join_with_keys,
+    prove_left_outer_join_with_keys, verify_global_left_outer_join, verify_global_not,
+    verify_left_anti_join_with_keys, verify_left_outer_join_with_keys, LeftAntiJoinProof,
+    LeftOuterJoinProof,
 };
 use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
@@ -385,24 +386,38 @@ impl ProvedBgp {
             let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
             transcript.append_bytes(b"pow/outer-envelope/root", &expected_root);
             transcript.append_bytes(b"pow/outer-envelope/query", &digest);
-            verify_left_outer_join_with_keys(
-                &RelationCommit {
+            let left_commit = RelationCommit {
                     commitments: proved.left.result_commitments.clone(),
                     log_domain: proved.left.result_log_domain,
                     n: proved.left.result_len,
-                },
-                &RelationCommit {
+                };
+            let right_commit = RelationCommit {
                     commitments: proved.right.result_commitments.clone(),
                     log_domain: proved.right.result_log_domain,
                     n: proved.right.result_len,
-                },
-                &optional.key_pairs,
-                &self.result_commitments,
-                self.result_len,
-                self.result_log_domain,
-                &proved.proof,
-                &mut transcript,
-            )?;
+                };
+            if optional.key_pairs.is_empty() {
+                verify_global_left_outer_join(
+                    &left_commit,
+                    &right_commit,
+                    &self.result_commitments,
+                    self.result_len,
+                    self.result_log_domain,
+                    &proved.proof,
+                    &mut transcript,
+                )?;
+            } else {
+                verify_left_outer_join_with_keys(
+                    &left_commit,
+                    &right_commit,
+                    &optional.key_pairs,
+                    &self.result_commitments,
+                    self.result_len,
+                    self.result_log_domain,
+                    &proved.proof,
+                    &mut transcript,
+                )?;
+            }
             return self.verify_columns(&self.result_columns);
         }
         if let ProvedQueryStatement::LeftAntiJoin(proved) = &self.statement {
@@ -1255,12 +1270,16 @@ impl CompiledBgp {
             let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
             transcript.append_bytes(b"pow/outer-envelope/root", &layer.state.commitment_root);
             transcript.append_bytes(b"pow/outer-envelope/query", &digest);
-            let result = prove_left_outer_join_with_keys(
-                &left_witness,
-                &right_witness,
-                &optional.key_pairs,
-                &mut transcript,
-            )?;
+            let result = if optional.key_pairs.is_empty() {
+                prove_global_left_outer_join(&left_witness, &right_witness, &mut transcript)?
+            } else {
+                prove_left_outer_join_with_keys(
+                    &left_witness,
+                    &right_witness,
+                    &optional.key_pairs,
+                    &mut transcript,
+                )?
+            };
             let branch = |result: terminus_store::proof::query::LayerBgpResult| {
                 let real_columns = result.real_columns();
                 ProvedBagUnionBranch {
@@ -1851,7 +1870,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                     .map(|right_index| (name, left_index, right_index))
             })
             .collect();
-        if !(1..=2).contains(&shared.len()) {
+        if shared.len() > 2 {
             return Err(BgpPlanError::OptionalSharedVariableCount {
                 count: shared.len(),
             });
