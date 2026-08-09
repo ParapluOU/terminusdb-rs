@@ -1153,6 +1153,32 @@ fn collect_signed_sum_for_predicate(predicate: &str, compare_negative: bool) -> 
     and_of(queries)
 }
 
+fn collect_signed_extrema_for_predicate(predicate: &str, max: bool) -> Query {
+    let collect = Query::Collect(Collect {
+        template: Value::Variable("score".into()),
+        into: Value::Variable("scores".into()),
+        query: Box::new(and_of(vec![
+            tv("subject", predicate, "score"),
+            gte(
+                dvar("score"),
+                DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+            ),
+        ])),
+    });
+    let range = if max {
+        Query::RangeMax(RangeMax {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("extreme".into()),
+        })
+    } else {
+        Query::RangeMin(RangeMin {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("extreme".into()),
+        })
+    };
+    and_of(vec![collect, range])
+}
+
 fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();
@@ -1262,6 +1288,81 @@ fn collect_sum_proves_cancellation_empty_and_substitution() {
         .name("woql-collect-sum-proof".into())
         .stack_size(32 * 1024 * 1024)
         .spawn(assert_collect_sum_proves_cancellation_empty_and_substitution)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_collect_extrema_preserves_store_id_empty_and_query_identity() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, value) in [("a", i64::MIN), ("b", -3), ("c", -3), ("d", i64::MAX)] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri(subject),
+                &iri("score"),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let min_query = collect_signed_extrema_for_predicate("score", false);
+    let compiled = plan_bgp(&min_query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let expected = CanonicalResultValue::Object(CanonicalObject::from_store_object(
+        &ValueTriple::new_value("", "", i64::make_entry(&i64::MIN)).object,
+    ));
+    assert_eq!(proved.result_len, 1);
+    assert_eq!(values, vec![vec![expected]]);
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let max = plan_bgp(&collect_signed_extrema_for_predicate("score", true)).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &max,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let other_predicate =
+        plan_bgp(&collect_signed_extrema_for_predicate("other", false)).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &other_predicate,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let empty_compiled =
+        plan_bgp(&collect_signed_extrema_for_predicate("missing", false)).unwrap();
+    let empty = empty_compiled.prove(&layer).unwrap();
+    assert_eq!(empty.result_len, 0);
+    assert_eq!(
+        empty
+            .verify_and_resolve_values(
+                &empty_compiled,
+                &layer,
+                layer.state.commitment_root,
+            )
+            .unwrap(),
+        vec![Vec::new()]
+    );
+}
+
+#[test]
+fn collect_extrema_preserves_store_id_empty_and_query_identity() {
+    std::thread::Builder::new()
+        .name("woql-collect-extrema-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_collect_extrema_preserves_store_id_empty_and_query_identity)
         .unwrap()
         .join()
         .unwrap();

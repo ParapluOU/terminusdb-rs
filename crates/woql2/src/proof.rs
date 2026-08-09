@@ -212,6 +212,12 @@ pub enum CompiledRelationStatement {
         template: CollectionSumTemplate,
         datatype: CanonicalDatatype,
     },
+    CollectionExtrema {
+        input: Box<CompiledRelation>,
+        value_column: usize,
+        datatype: CanonicalDatatype,
+        kind: GroupExtremaKind,
+    },
 }
 
 impl CompiledRelation {
@@ -523,6 +529,9 @@ pub enum ProvedQueryStatement {
     CollectionSum {
         input: Box<ProvedBgp>,
     },
+    CollectionExtrema {
+        input: Box<ProvedBgp>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -804,6 +813,21 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             }
             hasher.update([*datatype as u8]);
         }
+        CompiledRelationStatement::CollectionExtrema {
+            input,
+            value_column,
+            datatype,
+            kind,
+        } => {
+            hasher.update(b"/collection-extrema");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*value_column as u64).to_le_bytes());
+            hasher.update([*datatype as u8]);
+            hasher.update([match kind {
+                GroupExtremaKind::Min => 0,
+                GroupExtremaKind::Max => 1,
+            }]);
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -1067,6 +1091,17 @@ fn relation_result_descriptors(
                 nullable: false,
             }])
         }
+        CompiledRelationStatement::CollectionExtrema {
+            input, value_column, ..
+        } => {
+            let child = relation_result_descriptors(input)?;
+            Ok(vec![*child.get(*value_column).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "collection-extrema value column out of range",
+                )
+            })?])
+        }
     }
 }
 
@@ -1218,6 +1253,17 @@ fn relation_proof_plan(
             input: Box::new(child(input)?),
             template: *template,
             datatype: *datatype,
+        },
+        CompiledRelationStatement::CollectionExtrema {
+            input,
+            value_column,
+            datatype,
+            kind,
+        } => RelationProofPlanKind::CollectionExtrema {
+            input: Box::new(child(input)?),
+            value_column: *value_column,
+            datatype: *datatype,
+            kind: *kind,
         },
     };
     Ok(RelationProofPlan { query_digest, kind })
@@ -1399,6 +1445,17 @@ impl GroupSumValue {
                     "group-sum signed result exceeds i64",
                 ),
             )?)),
+        }
+    }
+
+    fn cmp_same_domain(self, rhs: Self) -> std::io::Result<std::cmp::Ordering> {
+        match (self, rhs) {
+            (Self::Unsigned(left), Self::Unsigned(right)) => Ok(left.cmp(&right)),
+            (Self::Signed(left), Self::Signed(right)) => Ok(left.cmp(&right)),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "collection-extrema mixes signed and unsigned values",
+            )),
         }
     }
 }
@@ -1694,6 +1751,57 @@ fn expected_collection_sum_column(
         }
     }
     Ok(vec![vec![sum.field()?]])
+}
+
+fn expected_collection_extrema_column(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    value_column: usize,
+    datatype: CanonicalDatatype,
+    kind: GroupExtremaKind,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let descriptors = relation_result_descriptors(input_plan)?;
+    let values = resolve_result_values(
+        layer,
+        expected_root,
+        &input.result_columns,
+        &descriptors,
+    )?;
+    let values = values.get(value_column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "collection-extrema value column out of range",
+        )
+    })?;
+    let fields = input.result_columns.get(value_column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "collection-extrema field column out of range",
+        )
+    })?;
+    if values.len() != input.result_len || fields.len() != input.result_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "collection-extrema input column length mismatch",
+        ));
+    }
+    let mut selected: Option<(ArkFr, GroupSumValue)> = None;
+    for (field, value) in fields.iter().zip(values) {
+        let numeric = integral_group_sum_value(value, datatype)?;
+        let replace = match selected {
+            None => true,
+            Some((_, current)) => match kind {
+                GroupExtremaKind::Min => numeric.cmp_same_domain(current)?.is_lt(),
+                GroupExtremaKind::Max => numeric.cmp_same_domain(current)?.is_gt(),
+            },
+        };
+        if replace {
+            selected = Some((*field, numeric));
+        }
+    }
+    Ok(vec![selected.map(|(field, _)| vec![field]).unwrap_or_default()])
 }
 
 impl ProvedBgp {
@@ -2306,6 +2414,41 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL collection-sum result is not the exact derived aggregate",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::CollectionExtrema { input },
+                CompiledRelationStatement::CollectionExtrema {
+                    input: input_plan,
+                    value_column,
+                    datatype,
+                    kind,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_collection_extrema_column(
+                    input,
+                    input_plan,
+                    *value_column,
+                    *datatype,
+                    *kind,
+                    layer,
+                    expected_root,
+                )?;
+                let expected_len = expected_columns[0].len();
+                if self.result_len != expected_len
+                    || self.result_log_domain != 1
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL collection-extrema result is not the exact derived extremum",
                     ));
                 }
             }
@@ -2951,6 +3094,19 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::CollectionExtrema { input },
+                CompiledRelationStatement::CollectionExtrema {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::CollectionExtrema {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -3273,6 +3429,11 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
         RecursiveRelationProof::CollectionSum { input } => ProvedQueryStatement::CollectionSum {
             input: Box::new(proved_from_recursive(*input)),
         },
+        RecursiveRelationProof::CollectionExtrema { input } => {
+            ProvedQueryStatement::CollectionExtrema {
+                input: Box::new(proved_from_recursive(*input)),
+            }
+        }
     };
     ProvedBgp {
         statement,
@@ -3618,6 +3779,12 @@ pub enum BgpPlanError {
     #[error("Collect-Sum template must be an exact fixed-width integral constant or nonnullable child-bound variable")]
     CollectionSumUnsupportedValue,
 
+    #[error("Collect followed by RangeMin/RangeMax requires one private list consumed immediately once and one distinct result variable")]
+    CollectionExtremaUnsupportedShape,
+
+    #[error("Collect extrema template must be one exact nonnullable fixed-width integral child variable")]
+    CollectionExtremaUnsupportedValue,
+
     #[error("generated GroupBy-Sum comparisons require the sum source before comparisons of that result variable to exact integral xsd:decimal constants")]
     GroupSumComparisonUnsupportedShape,
 
@@ -3739,6 +3906,8 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::TripleNext(_) => "TripleNext",
         Query::TriplePrevious(_) => "TriplePrevious",
         Query::Sum(_) => "Sum",
+        Query::RangeMin(_) => "RangeMin",
+        Query::RangeMax(_) => "RangeMax",
         Query::Length(_) => "Length",
         Query::Member(_) => "Member",
         Query::Collect(_) => "Collect",
@@ -3866,6 +4035,104 @@ fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlan
             statement: CompiledRelationStatement::GroupExtrema {
                 input: Box::new(child.relation),
                 key_column,
+                value_column,
+                datatype,
+                kind,
+            },
+        },
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+fn plan_collection_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) if and.and.len() == 2 => &and.and,
+        _ => return Ok(None),
+    };
+    let (collect, range, kind) = match (&conjuncts[0], &conjuncts[1]) {
+        (Query::Collect(collect), Query::RangeMin(range)) => {
+            (collect, (&range.list, &range.result), GroupExtremaKind::Min)
+        }
+        (Query::Collect(collect), Query::RangeMax(range)) => {
+            (collect, (&range.list, &range.result), GroupExtremaKind::Max)
+        }
+        // GroupBy extrema has its own planner and remains reachable.
+        (Query::GroupBy(_), Query::RangeMin(_) | Query::RangeMax(_)) => return Ok(None),
+        _ if conjuncts
+            .iter()
+            .any(|query| matches!(query, Query::Collect(_) | Query::RangeMin(_) | Query::RangeMax(_))) =>
+        {
+            return Err(BgpPlanError::CollectionExtremaUnsupportedShape)
+        }
+        _ => return Ok(None),
+    };
+    let template = match &collect.template {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionExtremaUnsupportedValue),
+    };
+    let hidden = match &collect.into {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionExtremaUnsupportedShape),
+    };
+    let list = match range.0 {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionExtremaUnsupportedShape),
+    };
+    let result = match range.1 {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionExtremaUnsupportedShape),
+    };
+    if hidden != list || hidden == result || template == hidden || template == result {
+        return Err(BgpPlanError::CollectionExtremaUnsupportedShape);
+    }
+    let child = plan_bgp(&collect.query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::CollectionExtremaUnsupportedShape);
+    }
+    if child
+        .relation
+        .schema
+        .iter()
+        .any(|variable| variable == hidden || variable == result)
+    {
+        return Err(BgpPlanError::CollectionExtremaUnsupportedShape);
+    }
+    let value_column = child
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == template)
+        .ok_or(BgpPlanError::CollectionExtremaUnsupportedValue)?;
+    let descriptors = relation_result_descriptors(&child.relation)
+        .map_err(|_| BgpPlanError::CollectionExtremaUnsupportedShape)?;
+    if descriptors[value_column].nullable
+        || descriptors[value_column].namespace != ResultIdNamespace::NodeValue
+    {
+        return Err(BgpPlanError::CollectionExtremaUnsupportedValue);
+    }
+    let datatype = match child.relation.domains.get(value_column).copied().flatten() {
+        Some(EqualityValueDomain::Datatype(
+            datatype @ (CanonicalDatatype::UInt8
+            | CanonicalDatatype::UInt16
+            | CanonicalDatatype::UInt32
+            | CanonicalDatatype::UInt64
+            | CanonicalDatatype::Int8
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Int64),
+        )) => datatype,
+        _ => return Err(BgpPlanError::CollectionExtremaUnsupportedValue),
+    };
+    let collection = child.collection;
+    Ok(Some(CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec![result.clone()],
+            domains: vec![Some(EqualityValueDomain::Datatype(datatype))],
+            statement: CompiledRelationStatement::CollectionExtrema {
+                input: Box::new(child.relation),
                 value_column,
                 datatype,
                 kind,
@@ -5252,6 +5519,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         );
     }
 
+    if let Some(mut aggregate) = plan_collection_extrema_form(body)? {
+        if collection.is_some() {
+            if aggregate.collection.is_some() && aggregate.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            aggregate.collection = collection;
+        }
+        aggregate.count_variable = count_variable;
+        aggregate.projection = compile_projection(
+            &selections,
+            aggregate.count_variable.as_deref(),
+            &aggregate.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&aggregate.relation)?;
+        return Ok(aggregate);
+    }
+
     if let Some(mut aggregate) = plan_collection_sum_form(body)? {
         if collection.is_some() {
             if aggregate.collection.is_some() && aggregate.collection != collection {
@@ -6087,6 +6374,9 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::GroupCount { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::CollectionCount { input } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::CollectionSum { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::CollectionExtrema { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
         }
     }
     let mut nodes = 0;
@@ -7026,6 +7316,130 @@ mod group_extrema_planner_tests {
                 query: Box::new(exact_min()),
             })),
             Err(BgpPlanError::UnsupportedConstruct { .. })
+        ));
+    }
+}
+
+#[cfg(test)]
+mod collection_extrema_planner_tests {
+    use super::*;
+    use crate::compare::Gte;
+    use crate::misc::{Collect, RangeMax, RangeMin};
+    use crate::query::And;
+
+    fn exact_extrema(max: bool) -> Query {
+        let child = Query::And(And {
+            and: vec![
+                Query::Triple(Triple {
+                    subject: NodeValue::Variable("Person".into()),
+                    predicate: NodeValue::Node("http://ex/age".into()),
+                    object: Value::Variable("Age".into()),
+                    graph: None,
+                }),
+                Query::Gte(Gte {
+                    left: DataValue::Variable("Age".into()),
+                    right: DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+                }),
+            ],
+        });
+        let collect = Query::Collect(Collect {
+            template: Value::Variable("Age".into()),
+            into: Value::Variable("Ages".into()),
+            query: Box::new(child),
+        });
+        let range = if max {
+            Query::RangeMax(RangeMax {
+                list: DataValue::Variable("Ages".into()),
+                result: DataValue::Variable("Extreme".into()),
+            })
+        } else {
+            Query::RangeMin(RangeMin {
+                list: DataValue::Variable("Ages".into()),
+                result: DataValue::Variable("Extreme".into()),
+            })
+        };
+        Query::And(And {
+            and: vec![collect, range],
+        })
+    }
+
+    #[test]
+    fn immediate_collect_extrema_compiles_to_one_exact_store_id() {
+        for (max, expected_kind) in [
+            (false, GroupExtremaKind::Min),
+            (true, GroupExtremaKind::Max),
+        ] {
+            let compiled = plan_bgp(&exact_extrema(max)).unwrap();
+            assert_eq!(compiled.relation.schema, ["Extreme"]);
+            assert_eq!(
+                compiled.relation.domains,
+                [Some(EqualityValueDomain::Datatype(CanonicalDatatype::Int64))]
+            );
+            match compiled.relation.statement {
+                CompiledRelationStatement::CollectionExtrema {
+                    value_column,
+                    datatype,
+                    kind,
+                    ..
+                } => {
+                    assert_eq!(value_column, 1);
+                    assert_eq!(datatype, CanonicalDatatype::Int64);
+                    assert_eq!(kind, expected_kind);
+                }
+                _ => panic!("expected collection-extrema statement"),
+            }
+        }
+    }
+
+    #[test]
+    fn reversed_mismatched_and_unbound_collection_extrema_reject_closed() {
+        let mut reversed = exact_extrema(false);
+        if let Query::And(and) = &mut reversed {
+            and.and.swap(0, 1);
+        }
+        assert!(matches!(
+            plan_bgp(&reversed),
+            Err(BgpPlanError::CollectionExtremaUnsupportedShape)
+        ));
+
+        let mut mismatched = exact_extrema(false);
+        if let Query::And(and) = &mut mismatched {
+            if let Query::RangeMin(range) = &mut and.and[1] {
+                range.list = DataValue::Variable("Other".into());
+            }
+        }
+        assert!(matches!(
+            plan_bgp(&mismatched),
+            Err(BgpPlanError::CollectionExtremaUnsupportedShape)
+        ));
+
+        let mut unbound = exact_extrema(false);
+        if let Query::And(and) = &mut unbound {
+            if let Query::Collect(collect) = &mut and.and[0] {
+                collect.template = Value::Variable("Missing".into());
+            }
+        }
+        assert!(matches!(
+            plan_bgp(&unbound),
+            Err(BgpPlanError::CollectionExtremaUnsupportedValue)
+        ));
+    }
+
+    #[test]
+    fn floating_collection_extrema_rejects_until_exact_semantics_are_pinned() {
+        let mut query = exact_extrema(false);
+        if let Query::And(and) = &mut query {
+            if let Query::Collect(collect) = &mut and.and[0] {
+                if let Query::And(child) = collect.query.as_mut() {
+                    if let Query::Gte(bound) = &mut child.and[1] {
+                        bound.right = DataValue::Data(XSDAnySimpleType::Float(0.0));
+                    }
+                }
+            }
+        }
+        assert!(matches!(
+            plan_bgp(&query),
+            Err(BgpPlanError::CollectionExtremaUnsupportedValue)
         ));
     }
 }

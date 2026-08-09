@@ -72,7 +72,7 @@ pub fn normalize_woql_json(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use crate::collection::{Length, Sum};
-    use crate::misc::{Collect, TripleCount};
+    use crate::misc::{Collect, RangeMax, RangeMin, TripleCount};
     use crate::order::{GroupBy, Order};
     use crate::prelude::{DataValue, NodeValue, Query, Triple, True, When};
     use crate::query::And;
@@ -294,6 +294,44 @@ mod tests {
                 .expect("domain decoder accepts canonical immediate Collect followed by Sum"),
             query,
         );
+    }
+
+    #[test]
+    fn immediate_collect_extrema_use_canonical_domain_decoder_shapes() {
+        for range in [
+            Query::RangeMin(RangeMin {
+                list: DataValue::Variable("scores".into()),
+                result: DataValue::Variable("extreme".into()),
+            }),
+            Query::RangeMax(RangeMax {
+                list: DataValue::Variable("scores".into()),
+                result: DataValue::Variable("extreme".into()),
+            }),
+        ] {
+            let query = Query::And(And {
+                and: vec![
+                    Query::Collect(Collect {
+                        template: WoqlValue::Variable("score".into()),
+                        into: WoqlValue::Variable("scores".into()),
+                        query: Box::new(Query::True(True {})),
+                    }),
+                    range,
+                ],
+            });
+            let json = query.to_woql_json();
+            assert_eq!(json["and"][0]["@type"], "Collect");
+            assert!(matches!(
+                json["and"][1]["@type"].as_str(),
+                Some("RangeMin" | "RangeMax")
+            ));
+            assert!(json["and"][1].get("list").is_some());
+            assert!(json["and"][1].get("result").is_some());
+            assert_eq!(
+                Query::from_json(json)
+                    .expect("domain decoder accepts canonical immediate collected extrema"),
+                query,
+            );
+        }
     }
 
     #[test]

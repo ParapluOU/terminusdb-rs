@@ -5,7 +5,7 @@ Keep the semantic coverage matrix in
 [`WOQL_QUERY_PROOF_COVERAGE.md`](WOQL_QUERY_PROOF_COVERAGE.md) authoritative;
 this file records cross-repository state, performance work, and validation.
 
-## Current checkpoint (2026-08-09)
+## Current checkpoint (2026-08-10)
 
 The proof wire format is independent of the prover backend. The caller owns one
 `StoreProverContext` and passes it through `CompiledBgp::prove_with_context`.
@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `05024d7` | Store wire v19 authenticates exact fixed-width integral `Collect`→`Sum`, including typed empty zero and checked arithmetic. |
-| `modules/terminusdb-rs` | `7851d2a` | WOQL planning and verification cover variable/ground-template `Collect`→`Sum`, comparisons, and outer result wrappers. |
+| `modules/terminusdb-store-paraplu` | `90ce857` | Store wire v20 authenticates immediate exact-integral `Collect`→`RangeMin`/`RangeMax`, preserving an original typed Store ID and emitting no row for empty input. |
+| `modules/terminusdb-rs` | this checkpoint | WOQL planning and verification cover strict forward immediate collected extrema with exact datatype, alias, and private-list guards. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -513,6 +513,21 @@ precedence regressions remained green. The signed WOQL E2E passed in 92.24s with
 cancellation, comparison, empty zero, GroupBy-Sum and Collection-Length substitution,
 envelope round-trip, and recommitted-result tamper.
 
+Immediate `Collect`→`RangeMin`/`RangeMax` is represented by the wire- and digest-distinct
+`CollectionExtrema` plan in Store wire version 20. Leading Prolog uses `findall/3` followed
+by a `foldl` with `woql_less/2`: equal candidates retain the first value and an empty list
+fails, yielding no row. The bounded proof accepts one nonnullable child-bound
+UInt8/16/32/64 or Int8/16/32/64 value variable, authenticates every candidate through the
+root value catalog, compares Store order-preserving lexical values, and emits the original
+selected Store ID. The plan binds child column, exact datatype, and Min/Max kind. Ground,
+nullable, floating/coercive, reversed, aliased, and non-immediate forms remain rejected.
+The Store focused proof passed in 46.27s, including signed extrema, duplicates, empty input,
+wire round-trip, kind substitution, and recommitted non-extreme result tamper. The focused
+WOQL planner gate passed three acceptance/rejection tests, and the canonical non-serde
+decoder round-trip passed for both extrema variants. The signed WOQL E2E passed in 88.81s,
+covering original Store-value resolution, empty no-row behavior, portable-envelope
+verification, and Min/Max plus predicate/query substitution rejection.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -573,6 +588,9 @@ envelope round-trip, and recommitted-result tamper.
 - [x] Authenticate immediate exact-integral `Collect`→`Sum` for child-bound and ground
   templates, including typed empty zero, duplicate multiplicity, signed cancellation,
   checked overflow, comparisons/Count, and aggregate-plan substitution rejection.
+- [x] Authenticate immediate exact-integral `Collect`→`RangeMin`/`RangeMax` for one
+  child-bound value variable, retaining the original typed Store ID and Prolog's empty
+  no-row behavior without exposing the private list.
 - [x] Replace the pessimistic grouped-sum datatype-maximum bound with exact authenticated
   value accumulation, accepting UInt64 totals through `u64::MAX` and rejecting actual
   overflow without field-modulus ambiguity.
@@ -594,7 +612,8 @@ envelope round-trip, and recommitted-result tamper.
 - [ ] Extend `When` to observable branch-local variables only after defining an
   authenticated Prolog-unbound output representation and its later-correlation semantics.
 - [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
-  generalize `GroupBy`/`Collect`/`Sum` and list-consuming extrema.
+  generalize live `GroupBy`/`Collect`, standalone/coercive `Sum`, and arbitrary list
+  consumers beyond the immediate bounded forms.
 - [ ] Add operators requiring new value circuits/data models in the order recorded in
   the coverage matrix; keep every unsupported case fail-closed.
 - [ ] Resume ICICLE/GPU work only after the semantic items above or when proving
