@@ -17,7 +17,8 @@ use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
-    prove_layer_bgp, verify_layer_bgp, AtomTerm, LayerBgpAtom, LayerBgpPlan,
+    prove_layer_bgp, verify_layer_bgp, AtomTerm, CanonicalResultValue, LayerBgpAtom,
+    LayerBgpPlan,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -27,11 +28,65 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::control::{Distinct, Select};
+use terminusdb_woql2::control::WoqlOptional;
 use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp};
 use terminusdb_woql2::{
     misc::{Count, InRange},
     query::{Not, Or, Query},
 };
+
+#[test]
+fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("b", "q", "u"),
+        ("b", "q", "v"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
+    assert_eq!(proved.result_len, 3);
+    assert_eq!(proved.result_columns[2][2], ArkFr::zero());
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(values[2][2], CanonicalResultValue::Null);
+    assert!(values[2][..2]
+        .iter()
+        .all(|value| matches!(value, CanonicalResultValue::Object(_))));
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified = decode_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    assert_eq!(verified.result_values.as_ref().unwrap()[2][2], CanonicalResultValue::Null);
+    let non_optional = plan_bgp(&tv("x", "p", "y")).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &non_optional,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut fake_null = proved;
+    fake_null.result_columns[2][0] = ArkFr::zero();
+    assert!(fake_null
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
 
 #[test]
 fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {

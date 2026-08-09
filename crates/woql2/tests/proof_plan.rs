@@ -491,11 +491,24 @@ fn accepts_global_and_two_key_not() {
 }
 
 #[test]
-fn rejects_optional_until_unbound_null_has_an_authenticated_representation() {
+fn optional_requires_outer_bindings_and_compiles_correlated_join() {
     let q = Query::WoqlOptional(WoqlOptional {
         query: Box::new(tv("x", "p", "y")),
     });
-    reject(q, BgpPlanError::OptionalUnboundRepresentation);
+    reject(q, BgpPlanError::OptionalMissingOuter);
+
+    let q = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+    ]);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
+    assert_eq!(
+        compiled.optional_join.unwrap().key_pairs,
+        vec![(1, 0)]
+    );
 }
 
 #[test]
