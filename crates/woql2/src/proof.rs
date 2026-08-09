@@ -59,7 +59,7 @@ use terminus_store::proof::multiorder::{verify_exact_multi_order, ExactMultiOrde
 use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
-    verify_result_columns, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    verify_result_columns, generated_decimal_i64_field, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
     LayerBgpProof, ObjectKindFilter, ObjectRangeBound, ObjectRangeSpec,
     ResultColumnDescriptor, ResultIdNamespace,
 };
@@ -310,6 +310,8 @@ pub enum ExecutedResultValue {
     Id(u64),
     /// A generated nonnegative integral xsd:decimal, not a Store dictionary ID.
     GeneratedDecimalU64(u64),
+    /// A generated signed integral xsd:decimal, not a Store dictionary ID.
+    GeneratedDecimalI64(i64),
     Null,
 }
 
@@ -440,6 +442,7 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             ResultIdNamespace::NodeValue => 0,
             ResultIdNamespace::Predicate => 1,
             ResultIdNamespace::GeneratedDecimalU64 => 2,
+            ResultIdNamespace::GeneratedDecimalI64 => 3,
         }]);
         hasher.update([descriptor.nullable as u8]);
     }
@@ -792,11 +795,21 @@ fn relation_result_descriptors(
             ])
         }
         CompiledRelationStatement::GroupSum {
-            input, key_column, ..
+            input, key_column, datatype, ..
         } => {
             let child = relation_result_descriptors(input)?;
             let generated = ResultColumnDescriptor {
-                namespace: ResultIdNamespace::GeneratedDecimalU64,
+                namespace: if matches!(
+                    datatype,
+                    CanonicalDatatype::Int8
+                        | CanonicalDatatype::Int16
+                        | CanonicalDatatype::Int32
+                        | CanonicalDatatype::Int64
+                ) {
+                    ResultIdNamespace::GeneratedDecimalI64
+                } else {
+                    ResultIdNamespace::GeneratedDecimalU64
+                },
                 nullable: false,
             };
             match key_column {
@@ -997,10 +1010,70 @@ fn expected_generated_u64_filter_columns(
         .collect()
 }
 
-fn bounded_group_sum_value(
+#[derive(Clone, Copy)]
+enum GroupSumValue {
+    Unsigned(u64),
+    Signed(i128),
+}
+
+impl GroupSumValue {
+    fn zero(datatype: CanonicalDatatype) -> std::io::Result<Self> {
+        match datatype {
+            CanonicalDatatype::UInt8
+            | CanonicalDatatype::UInt16
+            | CanonicalDatatype::UInt32
+            | CanonicalDatatype::UInt64 => Ok(Self::Unsigned(0)),
+            CanonicalDatatype::Int8
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Int64 => Ok(Self::Signed(0)),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum datatype is outside the integral subset",
+            )),
+        }
+    }
+
+    fn checked_add(self, rhs: Self) -> std::io::Result<Self> {
+        match (self, rhs) {
+            (Self::Unsigned(left), Self::Unsigned(right)) => left
+                .checked_add(right)
+                .map(Self::Unsigned)
+                .ok_or_else(|| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-sum unsigned result exceeds u64",
+                )),
+            (Self::Signed(left), Self::Signed(right)) => left
+                .checked_add(right)
+                .map(Self::Signed)
+                .ok_or_else(|| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-sum signed accumulator exceeds i128",
+                )),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum mixes signed and unsigned values",
+            )),
+        }
+    }
+
+    fn field(self) -> std::io::Result<ArkFr> {
+        match self {
+            Self::Unsigned(value) => Ok(ArkFr::from_u64(value)),
+            Self::Signed(value) => Ok(generated_decimal_i64_field(i64::try_from(value).map_err(
+                |_| std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-sum signed result exceeds i64",
+                ),
+            )?)),
+        }
+    }
+}
+
+fn integral_group_sum_value(
     value: &CanonicalResultValue,
     datatype: CanonicalDatatype,
-) -> std::io::Result<u64> {
+) -> std::io::Result<GroupSumValue> {
     let CanonicalResultValue::Object(CanonicalObject::Value {
         datatype: actual,
         lexical,
@@ -1018,20 +1091,39 @@ fn bounded_group_sum_value(
         ));
     }
     Ok(match datatype {
-        CanonicalDatatype::UInt8 if lexical.len() == 1 => u64::from(lexical[0]),
+        CanonicalDatatype::UInt8 if lexical.len() == 1 => GroupSumValue::Unsigned(u64::from(lexical[0])),
         CanonicalDatatype::UInt16 if lexical.len() == 2 => {
-            u64::from(u16::from_be_bytes(lexical.as_slice().try_into().unwrap()))
+            GroupSumValue::Unsigned(u64::from(u16::from_be_bytes(lexical.as_slice().try_into().unwrap())))
         }
         CanonicalDatatype::UInt32 if lexical.len() == 4 => {
-            u64::from(u32::from_be_bytes(lexical.as_slice().try_into().unwrap()))
+            GroupSumValue::Unsigned(u64::from(u32::from_be_bytes(lexical.as_slice().try_into().unwrap())))
         }
         CanonicalDatatype::UInt64 if lexical.len() == 8 => {
-            u64::from_be_bytes(lexical.as_slice().try_into().unwrap())
+            GroupSumValue::Unsigned(u64::from_be_bytes(lexical.as_slice().try_into().unwrap()))
+        }
+        CanonicalDatatype::Int8 if lexical.len() == 1 => {
+            GroupSumValue::Signed(i128::from((lexical[0] ^ 0x80) as i8))
+        }
+        CanonicalDatatype::Int16 if lexical.len() == 2 => {
+            let encoded = u16::from_be_bytes(lexical.as_slice().try_into().unwrap());
+            GroupSumValue::Signed(i128::from((encoded ^ (1 << 15)) as i16))
+        }
+        CanonicalDatatype::Int32 if lexical.len() == 4 => {
+            let encoded = u32::from_be_bytes(lexical.as_slice().try_into().unwrap());
+            GroupSumValue::Signed(i128::from((encoded ^ (1 << 31)) as i32))
+        }
+        CanonicalDatatype::Int64 if lexical.len() == 8 => {
+            let encoded = u64::from_be_bytes(lexical.as_slice().try_into().unwrap());
+            GroupSumValue::Signed(i128::from((encoded ^ (1 << 63)) as i64))
         }
         CanonicalDatatype::UInt8
         | CanonicalDatatype::UInt16
         | CanonicalDatatype::UInt32
-        | CanonicalDatatype::UInt64 => {
+        | CanonicalDatatype::UInt64
+        | CanonicalDatatype::Int8
+        | CanonicalDatatype::Int16
+        | CanonicalDatatype::Int32
+        | CanonicalDatatype::Int64 => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "group-sum input has a noncanonical lexical width",
@@ -1040,7 +1132,7 @@ fn bounded_group_sum_value(
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "group-sum datatype is outside the bounded unsigned subset",
+                "group-sum datatype is outside the integral subset",
             ))
         }
     })
@@ -1075,16 +1167,11 @@ fn expected_group_sum_columns(
         if input.result_len == 0 {
             return Ok(vec![Vec::new()]);
         }
-        let mut sum = 0u64;
+        let mut sum = GroupSumValue::zero(datatype)?;
         for number in numbers {
-            sum = sum.checked_add(bounded_group_sum_value(number, datatype)?).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "global group-sum exceeds u64",
-                )
-            })?;
+            sum = sum.checked_add(integral_group_sum_value(number, datatype)?)?;
         }
-        return Ok(vec![vec![ArkFr::from_u64(sum)]]);
+        return Ok(vec![vec![sum.field()?]]);
     };
     let keys = values.get(key_column).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key out of range")
@@ -1098,7 +1185,7 @@ fn expected_group_sum_columns(
             "group-sum key length mismatch",
         ));
     }
-    let mut sums = std::collections::BTreeMap::<Vec<u8>, (ArkFr, u64)>::new();
+    let mut sums = std::collections::BTreeMap::<Vec<u8>, (ArkFr, GroupSumValue)>::new();
     for row in 0..input.result_len {
         let CanonicalResultValue::Object(CanonicalObject::Node(iri)) = &keys[row] else {
             return Err(std::io::Error::new(
@@ -1106,21 +1193,21 @@ fn expected_group_sum_columns(
                 "group-sum key is not a node IRI",
             ));
         };
-        let value = bounded_group_sum_value(&numbers[row], datatype)?;
-        let entry = sums.entry(iri.clone()).or_insert((key_fields[row], 0));
+        let value = integral_group_sum_value(&numbers[row], datatype)?;
+        let entry = sums
+            .entry(iri.clone())
+            .or_insert((key_fields[row], GroupSumValue::zero(datatype)?));
         if entry.0 != key_fields[row] {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "group-sum canonical node maps to multiple Store IDs",
             ));
         }
-        entry.1 = entry.1.checked_add(value).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum exceeds u64")
-        })?;
+        entry.1 = entry.1.checked_add(value)?;
     }
     Ok(vec![
         sums.values().map(|(key, _)| *key).collect(),
-        sums.values().map(|(_, sum)| ArkFr::from_u64(*sum)).collect(),
+        sums.values().map(|(_, sum)| sum.field()).collect::<std::io::Result<Vec<_>>>()?,
     ])
 }
 
@@ -1971,30 +2058,34 @@ impl ProvedBgp {
                         ResultIdNamespace::GeneratedDecimalU64,
                     ) => ArkFr::from_u64(*value),
                     (
+                        ExecutedResultValue::GeneratedDecimalI64(value),
+                        ResultIdNamespace::GeneratedDecimalI64,
+                    ) => generated_decimal_i64_field(*value),
+                    (
                         ExecutedResultValue::Id(id),
                         ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate,
                     ) if *id != 0 => {
                         ArkFr::from_u64(*id)
                     }
-                    (ExecutedResultValue::Null, ResultIdNamespace::GeneratedDecimalU64) => {
+                    (
+                        ExecutedResultValue::Null,
+                        ResultIdNamespace::GeneratedDecimalU64
+                        | ResultIdNamespace::GeneratedDecimalI64,
+                    ) => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "generated decimal zero is not a nullable result",
                         ))
                     }
                     (ExecutedResultValue::Null, _) => ArkFr::zero(),
-                    (ExecutedResultValue::Id(_), ResultIdNamespace::GeneratedDecimalU64)
+                    (ExecutedResultValue::Id(_), _)
                     | (ExecutedResultValue::GeneratedDecimalU64(_), _)
-                    | (ExecutedResultValue::Id(0), _) => {
+                    | (ExecutedResultValue::GeneratedDecimalI64(_), _) => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "executed generated scalar/Store-ID kind does not match compiled descriptor",
                         ))
                     }
-                    (
-                        ExecutedResultValue::Id(_),
-                        ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate,
-                    ) => unreachable!("zero Store IDs are rejected by the preceding arm"),
                 });
             }
         }
@@ -2376,7 +2467,11 @@ pub fn decode_and_verify_envelope(
         .iter()
         .any(|descriptor| descriptor.nullable);
     let generated = envelope.result_descriptors.iter().any(|descriptor| {
-        descriptor.namespace == ResultIdNamespace::GeneratedDecimalU64
+        matches!(
+            descriptor.namespace,
+            ResultIdNamespace::GeneratedDecimalU64
+                | ResultIdNamespace::GeneratedDecimalI64
+        )
     });
     let result_objects = if nullable || generated {
         Vec::new()
@@ -2394,6 +2489,12 @@ pub fn decode_and_verify_envelope(
                             "null value in a nonnullable recursive result",
                         )),
                         CanonicalResultValue::GeneratedDecimalU64(_) => Err(
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "generated scalar is not a Store dictionary object",
+                            ),
+                        ),
+                        CanonicalResultValue::GeneratedDecimalI64(_) => Err(
                             std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
                                 "generated scalar is not a Store dictionary object",
@@ -2531,7 +2632,8 @@ fn store_id_for_field(
             .iter()
             .find(|r| ArkFr::from_u64(r.object_id) == field)
             .map(|r| r.object_id),
-        ResultIdNamespace::GeneratedDecimalU64 => None,
+        ResultIdNamespace::GeneratedDecimalU64
+        | ResultIdNamespace::GeneratedDecimalI64 => None,
     }
     .ok_or_else(|| {
         std::io::Error::new(
@@ -2820,7 +2922,7 @@ pub enum BgpPlanError {
     #[error("GroupBy followed by Sum requires zero keys or one node key, one private grouped-list variable, and one distinct result variable")]
     GroupSumUnsupportedShape,
 
-    #[error("GroupBy Sum template must be an exact UInt8, UInt16, UInt32, or UInt64 variable")]
+    #[error("GroupBy Sum template must be an exact fixed-width signed or unsigned integer variable")]
     GroupSumUnsupportedValue,
 
     #[error("OrderBy proof coverage requires one ascending key naming the complete one-column result of a leaf BGP")]
@@ -3156,7 +3258,11 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
             datatype @ (CanonicalDatatype::UInt8
             | CanonicalDatatype::UInt16
             | CanonicalDatatype::UInt32
-            | CanonicalDatatype::UInt64),
+            | CanonicalDatatype::UInt64
+            | CanonicalDatatype::Int8
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Int64),
         )) => datatype,
         _ => return Err(BgpPlanError::GroupSumUnsupportedValue),
     };

@@ -18,8 +18,8 @@ use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::RecursiveRelationEnvelope;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
-    prove_layer_bgp, verify_layer_bgp, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
-    ObjectKindFilter,
+    prove_layer_bgp, verify_layer_bgp, generated_decimal_i64_field, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    ObjectKindFilter, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -1015,6 +1015,39 @@ fn global_u64_sum_query() -> Query {
     ])
 }
 
+fn grouped_i64_sum_query() -> Query {
+    let child = and_of(vec![
+        tv_pred_var("category", "predicate", "score"),
+        gte(
+            dvar("score"),
+            DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+        ),
+    ]);
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("score".into()),
+            group_by: vec!["category".into()],
+            grouped_value: Value::Variable("scores".into()),
+            query: Box::new(child),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ])
+}
+
+fn global_i64_sum_query() -> Query {
+    let Query::And(mut query) = grouped_i64_sum_query() else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &mut query.and[0] else {
+        unreachable!()
+    };
+    group.group_by.clear();
+    Query::And(query)
+}
+
 fn assert_global_u32_sum_proves_one_generated_decimal_row() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();
@@ -1141,6 +1174,131 @@ fn global_u64_sum_accepts_exact_max_and_rejects_actual_overflow() {
         .name("woql-global-u64-sum-proof".into())
         .stack_size(32 * 1024 * 1024)
         .spawn(assert_global_u64_sum_accepts_exact_max_and_rejects_actual_overflow)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
+    let store = open_sync_memory_store();
+    let base_builder = store.create_base_layer().unwrap();
+    for (predicate, value) in [("p", i64::MIN), ("q", i64::MAX)] {
+        base_builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("b"),
+                &iri(predicate),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let base = base_builder.commit().unwrap();
+    let child_builder = base.open_write().unwrap();
+    for (predicate, value) in [("p", -2i64), ("q", -2), ("r", 5), ("z", 0)] {
+        child_builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("a"),
+                &iri(predicate),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let layer = child_builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&grouped_i64_sum_query()).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(
+        values[0],
+        vec![
+            CanonicalResultValue::Object(CanonicalObject::Node(iri("a").into_bytes())),
+            CanonicalResultValue::Object(CanonicalObject::Node(iri("b").into_bytes())),
+        ]
+    );
+    assert_eq!(
+        values[1],
+        vec![
+            CanonicalResultValue::GeneratedDecimalI64(1),
+            CanonicalResultValue::GeneratedDecimalI64(-1),
+        ]
+    );
+    let executed = (0..proved.result_len)
+        .map(|row| {
+            let key_id = layer
+                .node_value_catalog
+                .iter()
+                .find(|record| ArkFr::from_u64(record.object_id) == proved.result_columns[0][row])
+                .unwrap()
+                .object_id;
+            let CanonicalResultValue::GeneratedDecimalI64(sum) = values[1][row] else {
+                unreachable!()
+            };
+            vec![
+                ExecutedResultValue::Id(key_id),
+                ExecutedResultValue::GeneratedDecimalI64(sum),
+            ]
+        })
+        .collect::<Vec<_>>();
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["category".into(), "total".into()],
+            &executed,
+        )
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[1][1] = generated_decimal_i64_field(1);
+    tampered.result_commitments[1] = commit_column(&pad(
+        &tampered.result_columns[1],
+        1usize << tampered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let mut wrong_domain = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    wrong_domain.result_descriptors[1].namespace = ResultIdNamespace::GeneratedDecimalU64;
+    assert!(decode_and_verify_envelope(
+        &wrong_domain.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let overflow_store = open_sync_memory_store();
+    let overflow_builder = overflow_store.create_base_layer().unwrap();
+    for (predicate, value) in [("p", i64::MAX), ("q", 1)] {
+        overflow_builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("a"),
+                &iri(predicate),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let overflow = overflow_builder.commit().unwrap().proof_commitment().unwrap();
+    let global = plan_bgp(&global_i64_sum_query()).unwrap();
+    assert!(global.prove(&overflow).is_err());
+}
+
+#[test]
+fn grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
+    std::thread::Builder::new()
+        .name("woql-grouped-i64-sum-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow)
         .unwrap()
         .join()
         .unwrap();
@@ -2140,7 +2298,9 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
     let mut forged_predicate = rows;
     let object_id = match forged_predicate[0][0] {
         ExecutedResultValue::Id(id) => id,
-        ExecutedResultValue::GeneratedDecimalU64(_) | ExecutedResultValue::Null => unreachable!(),
+        ExecutedResultValue::GeneratedDecimalU64(_)
+        | ExecutedResultValue::GeneratedDecimalI64(_)
+        | ExecutedResultValue::Null => unreachable!(),
     };
     forged_predicate[0][3] = ExecutedResultValue::Id(object_id);
     assert!(proved

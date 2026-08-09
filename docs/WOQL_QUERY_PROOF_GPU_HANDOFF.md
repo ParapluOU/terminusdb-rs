@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `7428496` | Recursive v14 GroupSum supports exact UInt64 values with verifier-derived actual-value checked accumulation through `u64::MAX`. |
-| `modules/terminusdb-rs` | this checkpoint | Immediate zero-/one-node-key `GroupBy`→`Sum` through UInt64, canonical decoder, generated-scalar executor/envelope integration, actual-overflow rejection, and fail-closed list/coercion rules. |
+| `modules/terminusdb-store-paraplu` | `7b5e889` | Recursive v15 GroupSum adds a distinct signed generated-decimal domain and exact Int8/16/32/64 accumulation. |
+| `modules/terminusdb-rs` | this checkpoint | Immediate zero-/one-node-key `GroupBy`→`Sum` through signed/unsigned 64-bit integers, signed executor/envelope integration, actual-overflow rejection, and fail-closed coercion rules. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -381,6 +381,28 @@ public values and checked-adds them. Planner/check gates passed, and the 83.90s 
 proved a partitioned `u64::MAX`, matched the generated executor value, round-tripped the
 portable envelope, and rejected authenticated `u64::MAX + 1` input during proving.
 
+Store checkpoint `7b5e889` adds exact Int8/Int16/Int32/Int64 grouped sums and recursive
+wire v15. Signed results use a separate `GeneratedDecimalI64` descriptor/value/wire tag;
+their canonical field is `Fr(v)` for nonnegative values and `-Fr(abs(v))` for negatives.
+Resolution checks that exact canonical image before returning a signed decimal, and the
+descriptor—not field zero—controls nullability, so generated signed zero is nonnull.
+Store signed lexical bytes are order-preserving sign-bit-flipped encodings and are decoded
+accordingly only after exact root-catalog datatype/width authentication. Accumulation uses
+i128 so Prolog-valid cancellation is not rejected by an intermediate i64 overflow; the
+four-million-item envelope cap gives magnitude below 2^85, and final conversion requires
+the result to fit i64. The 18.20s Store gate covers duplicates, zero, negative/positive
+cancellation, i64 minimum/maximum inputs, child-stack key order, wire round-trip, sign and
+domain tamper, exact datatype, and positive/negative actual overflow. The unsigned
+regression gate remained green in 14.84s.
+
+woql2 accepts canonical `byte`, `short`, `int`, `long`, and its bounded-i64 `integer`
+forms without cross-datatype coercion, and returns `GeneratedDecimalI64` through result
+resolution and `ExecutedResultValue`. Planner gates passed. The 136.91s E2E gate proves
+visible signed keyed sums over a child stack, including duplicates, zero, i64 boundaries,
+negative executor output, envelope round-trip, sign/recommit tamper, descriptor-domain
+substitution, and actual global overflow rejection. Generated signed-decimal comparisons
+are intentionally still unsupported and reject closed.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -432,6 +454,11 @@ portable envelope, and rejected authenticated `u64::MAX + 1` input during provin
 - [x] Replace the pessimistic grouped-sum datatype-maximum bound with exact authenticated
   value accumulation, accepting UInt64 totals through `u64::MAX` and rejecting actual
   overflow without field-modulus ambiguity.
+- [x] Add exact signed Int8/16/32/64 grouped sums with a distinct generated-I64 domain,
+  canonical signed field encoding, cancellation-safe accumulation, and signed executor
+  resolution.
+- [ ] Add bounded comparisons over generated signed decimals; current generated-u64
+  comparison lowering deliberately rejects the signed result domain.
 - [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
   selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
 - [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage

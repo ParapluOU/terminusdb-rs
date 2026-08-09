@@ -275,6 +275,26 @@ fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
             DataValue::Data(XSDAnySimpleType::UnsignedLong(0)),
             CanonicalDatatype::UInt64,
         ),
+        (
+            DataValue::Data(XSDAnySimpleType::Byte(0)),
+            CanonicalDatatype::Int8,
+        ),
+        (
+            DataValue::Data(XSDAnySimpleType::Short(0)),
+            CanonicalDatatype::Int16,
+        ),
+        (
+            DataValue::Data(XSDAnySimpleType::Int(0)),
+            CanonicalDatatype::Int32,
+        ),
+        (
+            DataValue::Data(XSDAnySimpleType::Long(0)),
+            CanonicalDatatype::Int64,
+        ),
+        (
+            DataValue::Data(XSDAnySimpleType::Integer(0)),
+            CanonicalDatatype::Int64,
+        ),
     ] {
         let compiled = plan_bgp(&grouped_sum_with_bound(bound)).unwrap();
         assert!(matches!(
@@ -335,18 +355,21 @@ fn immediate_group_sum_rejects_list_leak_order_wrong_type_and_non_node_key() {
         BgpPlanError::GroupSumUnsupportedShape,
     );
 
-    let signed_child = and_of(vec![
+    let unsupported_child = and_of(vec![
         tv("category", "score", "score"),
-        gte(dvar("score"), dint(0)),
+        gte(
+            dvar("score"),
+            DataValue::Data(XSDAnySimpleType::Float(0.0)),
+        ),
     ]);
-    let signed_group = Query::GroupBy(GroupBy {
+    let unsupported_group = Query::GroupBy(GroupBy {
         template: Value::Variable("score".into()),
         group_by: vec!["category".into()],
         grouped_value: Value::Variable("scores".into()),
-        query: Box::new(signed_child),
+        query: Box::new(unsupported_child),
     });
     reject(
-        and_of(vec![signed_group, valid.and[1].clone()]),
+        and_of(vec![unsupported_group, valid.and[1].clone()]),
         BgpPlanError::GroupSumUnsupportedValue,
     );
 
