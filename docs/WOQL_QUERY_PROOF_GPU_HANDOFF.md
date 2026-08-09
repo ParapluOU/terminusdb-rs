@@ -15,8 +15,8 @@ policy, not Store policy.
 
 | Repository | Checkpoint | State |
 | --- | --- | --- |
-| `modules/dory` | `07ea32d` | Caller-owned Arkworks/Blitzar backend; Blitzar accelerates BN254 G1 MSM and preserves CPU proof bytes. |
-| `modules/terminusdb-store-paraplu` | `426486b` | Prover context threaded through recursive Store proof gadgets; explicit setup tier/runtime config. |
+| `modules/dory` | `8fdf2c5` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
+| `modules/terminusdb-store-paraplu` | `46607d4` | Prover context threaded through recursive Store proof gadgets; explicit setup tier/runtime config and caller-owned exact G2 provider seam. |
 | `modules/terminusdb-rs` | `ad11de8` | Canonical WOQL planner integration and hardware benchmark runner. |
 | `modules/terminusdb` | `b746dcda` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
@@ -97,6 +97,7 @@ fixed layer/query. Do not claim GPU validation from the Mac CPU run.
 | Blitzar CPU, Dory unit level | Edge scalar lengths/values, fallback paths, commitments, and full proof bytes equal Arkworks. | Passed on Linux x86-64. |
 | Blitzar CPU, recursive WOQL envelope | Envelope bytes equal CPU and verify against the same root/query. | Passed on Linux x86-64. |
 | Blitzar GPU feature, all Rust layers | Dory, Store, woql2, QueryProver, and Prolog bridge compile. | Passed on Linux x86-64; execution not tested. |
+| Caller-owned G2 provider seam | Edge MSMs and a complete opening equal Arkworks, serialized bytes match, and Store reports G2 work after type erasure. | Passed on Linux; hardware provider pending. |
 | Blitzar GPU hardware | Benchmark all three scenarios, exact proof/envelope equality, verification, repeated-run stability, and peak memory. | Pending NVIDIA host. |
 | macOS portable CPU | Benchmark plus `proof_plan` and `proof_prove`; verify portable fixtures when added. | Pending Mac. |
 | TerminusDB running node | Opt-in release suite from `modules/terminusdb/docs/QUERY_PROOF_RELEASE_TESTS.md`. | Passed for CPU; accelerated prover integration needs a hardware run. |
@@ -104,14 +105,32 @@ fixed layer/query. Do not claim GPU validation from the Mac CPU run.
 Hardware results are acceptable only if verification succeeds and proof and
 envelope bytes remain identical to the CPU run. Performance alone is not a pass.
 
+## BN254 G2 assessment
+
+Blitzar cannot safely accelerate Dory's G2 work. In Blitzar 4.3.0,
+`ElementP2<C>` denotes short-Weierstrass projective coordinates, not a pairing
+curve's second source group. Its `SXT_CURVE_BN_254` ABI accepts
+`sxt_bn254_g1_p2`; neither the Rust curve map nor `blitzar-sys` 1.81.0 exposes a
+BN254 G2/Fq2 curve identifier or point ABI. Never reinterpret `ArkG2` as that
+type.
+
+Dory checkpoints `82e9611` and `8fdf2c5` instead expose a generic exact G2
+provider plus `ProfiledBackend` and a retainable observation handle. Store
+checkpoint `46607d4` threads it through `StoreProverContext` using
+`cpu_with_g2_backend` and `blitzar_with_g2_backend`. Edge-size/scalar tests and
+a complete Dory opening establish exact Arkworks and serialized proof-byte
+equivalence. A real accelerator must implement `ProverBackend<ArkG2>` and pass
+the same acceptance tests; no proof or lifecycle changes are required.
+
 ## Ordered continuation plan
 
 1. Run the Mac CPU validation above and record the exact environment and output.
 2. On Linux/NVIDIA, run CPU, Blitzar CPU, and Blitzar GPU with identical inputs.
    Repeat enough times to separate initialization from steady-state proving.
-3. Profile the remaining wall time. Today only BN254 G1 MSM is accelerated;
-   G2 MSM, pairings, sumcheck, relation construction, and vector work remain on
-   CPU. Use measurements before choosing the next kernel/backend.
+3. Profile the remaining wall time and retain separate G1/G2 backend snapshots.
+   Today only BN254 G1 MSM is accelerated; G2 MSM, pairings, sumcheck, relation
+   construction, and vector work remain on CPU. Use measurements before choosing
+   a G2 CUDA provider or the next kernel/backend.
 4. Tune a minimum offload size and precomputation count. Preserve explicit
    application-owned backend creation; do not add automatic lifecycle policy to
    Store.
@@ -152,7 +171,8 @@ envelope bytes remain identical to the CPU run. Performance alone is not a pass.
   initialization is process-global and the first configuration fixes it for the
   process. There is no shutdown path.
 - The adapter accelerates matching setup-prefix G1 bases. Other bases and G2
-  work fall back to Arkworks CPU.
+  work fall back to Arkworks CPU. A future G2 provider plugs into Dory/Store's
+  exact `ArkG2` boundary; Blitzar's BN254 G1 ABI is not usable for it.
 - Storage proof support is unconditional. Acceleration is an optional prover
   backend and must not create alternate layer or proof formats.
 - Proof generation lifecycle, scheduling, caching, and admission control belong
