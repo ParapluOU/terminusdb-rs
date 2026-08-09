@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `30789c3` | Prover context plus caller-owned exact G2 provider seam; root-authenticated dictionary absence now produces exact empty relations at any BGP arity. |
-| `modules/terminusdb-rs` | This semantic checkpoint (parent `0a509c8`) | Canonical WOQL planner integration, hardware benchmark runner, and recursive absence coverage/docs. |
+| `modules/terminusdb-store-paraplu` | `0a264d5` | Full-row permutation plus exact scalar ascending-order composition: root-authenticated dictionary lookup/datatype completeness and strict ordering, recursively encoded and verified. |
+| `modules/terminusdb-rs` | `e9f6bc8` plus this documentation commit | Canonical Prolog-shaped `OrderBy` decoding and bounded planner/proof integration, with recursive envelope and substitution coverage. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -137,19 +137,26 @@ the prepared cloud server.
 ## Active WOQL coverage checklist
 
 GPU implementation is parked until WOQL completeness is substantially higher. The
-current semantic checkpoint generalizes Store dictionary-absence openings from one
-ground atom to any constant-bearing BGP atom. Its focused Store tests cover node/value
-and predicate absence, exact relational arity, invalid-plan rejection, wire tags, forged
-atom indices/positions, and forged commitment shape. The woql2 checkpoint covers absent
-node and typed-literal joins, sequential `Not`/`Optional`, an exact-empty `Or` branch,
-envelope round-trip, null-extension, and query substitution rejection.
+current semantic checkpoint adds an exact scalar ascending `OrderBy` slice on top of the
+existing recursively composable read relation. The Store proof covers full-row
+permutation (including duplicate preservation), root-authenticated dictionary lookup,
+datatype completeness, strict ordering, recursive wire round-trip, and plan tamper
+rejection. The woql2 planner accepts only the complete one-column, nonnullable,
+exact-datatype leaf-BGP form. Its tests cover canonical domain decoding, outer routing,
+resolved ordered results, envelope round-trip, datatype/query/row-order substitution,
+and fail-closed descending, multikey, partial-key, nullable, unknown-domain, and
+duplicate-generating recursive children.
 
 - [x] Exact non-ground dictionary absence, recursively composable.
+- [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
+- [x] Bounded exact scalar ascending `OrderBy` over a complete one-column leaf result.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
-- [ ] Implement authenticated ordering/permutation, then exact slices (`OrderBy`,
-  `Start`/`Limit`, triple navigation). This unlocks deterministic `Once` as well.
+- [ ] Implement `Start`/`Limit` first over the bounded authenticated `OrderBy` relation:
+  prove an exact offset/limit slice with source/output length and boundary binding. Then
+  extend general lexicographic/descending/stable-tie ordering and triple navigation.
+  This unlocks deterministic `Once` only for relations with an authenticated order.
 - [ ] Implement Prolog `When` exactly. `compile_wf(when(A,B), ((ProgA,ProgB);true))`
   proves it is not conventional if/else: matched `A,B` rows are bag-unioned with the
   unchanged outer solution. Do not normalize it to the existing left-outer gadget.
