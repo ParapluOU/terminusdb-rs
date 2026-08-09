@@ -2242,7 +2242,6 @@ fn plan_exact_scalar_order(
         || child.count_variable.is_some()
         || child.full_row_distinct
         || child.relation.schema.len() != order_by.ordering.len()
-        || child.relation.as_bgp().is_none()
     {
         return Err(BgpPlanError::OrderByUnsupportedShape);
     }

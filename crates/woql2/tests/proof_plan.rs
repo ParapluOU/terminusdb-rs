@@ -1607,7 +1607,7 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
             ],
             query: Box::new(two_columns),
         }),
-        BgpPlanError::OrderByUnsupportedShape,
+        BgpPlanError::OrderByUnsupportedValue,
     );
 
     let duplicate_generating_union = Query::Or(terminusdb_woql2::query::Or {
@@ -1622,16 +1622,14 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
             ]),
         ],
     });
-    reject(
-        Query::OrderBy(OrderBy {
+    let duplicate_order = plan_bgp(&Query::OrderBy(OrderBy {
             ordering: vec![OrderTemplate {
                 variable: "score".into(),
                 order: Order::Asc,
             }],
             query: Box::new(duplicate_generating_union),
-        }),
-        BgpPlanError::OrderByUnsupportedShape,
-    );
+        })).unwrap();
+    assert!(duplicate_order.relation.as_exact_scalar_order().unwrap().0.as_bag_union().is_some());
 
     let nullable_child = and_of(vec![
         tv_subj_const("metric", "score", "score"),
@@ -1688,6 +1686,16 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
     assert!(matches!(compiled.relation.statement,
         terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
             if key_indices == &[1, 0]));
+    let duplicate_union = Query::Or(Or { or: vec![child.clone(), child.clone()] });
+    let duplicate_compiled = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![
+            OrderTemplate { variable: "y".into(), order: Order::Desc },
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+        ],
+        query: Box::new(duplicate_union),
+    })).unwrap();
+    let terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { input, .. } = &duplicate_compiled.relation.statement else { unreachable!() };
+    assert!(input.as_bag_union().is_some());
     for ordering in [
         vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
         vec![OrderTemplate { variable: "x".into(), order: Order::Asc }, OrderTemplate { variable: "x".into(), order: Order::Desc }],
