@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `0a264d5` | Full-row permutation plus exact scalar ascending-order composition: root-authenticated dictionary lookup/datatype completeness and strict ordering, recursively encoded and verified. |
-| `modules/terminusdb-rs` | `e9f6bc8` plus this documentation commit | Canonical Prolog-shaped `OrderBy` decoding and bounded planner/proof integration, with recursive envelope and substitution coverage. |
+| `modules/terminusdb-store-paraplu` | `65bd38c` | Exact contiguous ordered slices over the authenticated scalar order, including canonical empty results, recursive wire format, and content/plan tamper rejection. |
+| `modules/terminusdb-rs` | `835c080` plus this documentation commit | Canonical Prolog-shaped `Start`/`Limit` decoding, inside-out planner nesting, recursive envelope integration, and empty/substitution/reorder coverage. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -150,13 +150,13 @@ duplicate-generating recursive children.
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending `OrderBy` over a complete one-column leaf result.
+- [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
-- [ ] Implement `Start`/`Limit` first over the bounded authenticated `OrderBy` relation:
-  prove an exact offset/limit slice with source/output length and boundary binding. Then
-  extend general lexicographic/descending/stable-tie ordering and triple navigation.
-  This unlocks deterministic `Once` only for relations with an authenticated order.
+- [ ] Extend general lexicographic/descending/stable-tie ordering and triple navigation.
+  `Once` can now be implemented exactly as `Limit(1)` only when its child already has an
+  authenticated order; unordered first-solution semantics remain unsupported.
 - [ ] Implement Prolog `When` exactly. `compile_wf(when(A,B), ((ProgA,ProgB);true))`
   proves it is not conventional if/else: matched `A,B` rows are bag-unioned with the
   unchanged outer solution. Do not normalize it to the existing left-outer gadget.
