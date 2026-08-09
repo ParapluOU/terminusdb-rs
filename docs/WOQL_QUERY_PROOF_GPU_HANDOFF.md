@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `4326f27` | Recursive signed generated-decimal filters derive exact Eq/Lt/Le/Gt/Ge selections and commitments from authenticated I64 aggregate values. |
-| `modules/terminusdb-rs` | `196a27c` | Descriptor-driven signed/unsigned generated-decimal comparisons after immediate `GroupBy`→`Sum`, plus the explicit foreign executor input boundary. |
+| `modules/terminusdb-store-paraplu` | `3653a34` | Recursive zero-/one-/two-node-key grouped sums bind ordered key mappings and derive SWI-compatible canonical tuple order. |
+| `modules/terminusdb-rs` | this checkpoint | WOQL planning, proving, verification, and signed generated-result filtering cover immediate two-key `GroupBy`→`Sum`. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -449,6 +449,21 @@ signed WOQL E2E passed in 156.46s, proving `< 0`, resolving the negative executo
 round-tripping the envelope, and rejecting operand/query substitution, descriptor-domain
 substitution, and signed-result tamper.
 
+Store wire version 16 and woql2 now extend the same immediate aggregate to exactly two
+distinct nonnullable node keys. The relation plan binds the ordered child-column mapping,
+and both prover and verifier resolve each key through the root-authenticated node catalog
+before sorting canonical expanded-IRI byte tuples. This matches SWI `group_by/4`: the
+declared key list determines lexicographic priority, independently of child schema order or
+layer-local numeric IDs. Output retains the declared keys in that order followed by the
+generated U64/I64 sum; duplicate value rows retain bag multiplicity. Empty input produces
+zero rows with the exact three-column schema. Duplicate, out-of-range, value-aliasing,
+non-node, and three-key plans reject closed, while swapping the declared key order rejects
+an existing envelope. The focused Store positive gate passed in 140.11s; the signed WOQL
+E2E passed in 309.72s and covered lexical order, negative filtering, envelope round-trip,
+key-order substitution, and signed result/recommit tamper. A direct SWI 10.0.2 probe also
+confirmed that `[K1,K2]` and `[K2,K1]` produce the corresponding distinct tuple-priority
+orders.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -497,6 +512,9 @@ substitution, and signed-result tamper.
   no-wrap arithmetic, and generated-decimal result typing without exposing the list.
 - [x] Extend immediate `GroupBy`→`Sum` to the zero-key/global form: one sum row iff the
   authenticated child is nonempty, no row when empty, and no synthetic key/list leakage.
+- [x] Extend immediate signed/unsigned `GroupBy`→`Sum` to two node keys, binding declared
+  key priority independently of child schema order, sorting canonical expanded-IRI tuples,
+  preserving duplicates, and rejecting key-order, mapping, arity, and result tamper.
 - [x] Replace the pessimistic grouped-sum datatype-maximum bound with exact authenticated
   value accumulation, accepting UInt64 totals through `u64::MAX` and rejecting actual
   overflow without field-modulus ambiguity.

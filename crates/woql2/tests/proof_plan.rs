@@ -242,6 +242,91 @@ fn grouped_u32_sum() -> Query {
     grouped_sum_with_bound(duint(0))
 }
 
+fn two_node_key_sum_with_bound(bound: DataValue) -> Query {
+    let child = and_of(vec![
+        Query::Link(Link {
+            subject: NodeValue::Variable("left".into()),
+            predicate: NodeValue::Node(iri("link")),
+            object: NodeValue::Variable("right".into()),
+            graph: GraphType::Instance,
+        }),
+        tv("right", "score", "score"),
+        gte(dvar("score"), bound),
+    ]);
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("score".into()),
+            group_by: vec!["right".into(), "left".into()],
+            grouped_value: Value::Variable("scores".into()),
+            query: Box::new(child),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ])
+}
+
+#[test]
+fn two_node_key_group_sum_binds_declared_priority_domains_and_result_order() {
+    for (bound, datatype) in [
+        (duint(0), CanonicalDatatype::UInt32),
+        (
+            DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+            CanonicalDatatype::Int64,
+        ),
+    ] {
+        let compiled = plan_bgp(&two_node_key_sum_with_bound(bound)).unwrap();
+        assert_eq!(compiled.relation.schema, ["right", "left", "total"]);
+        assert!(matches!(
+            compiled.relation.statement,
+            CompiledRelationStatement::GroupSum {
+                ref key_columns,
+                value_column: 2,
+                datatype: actual,
+                ..
+            } if key_columns == &[1, 0] && actual == datatype
+        ));
+    }
+
+    let Query::And(mut filtered) = two_node_key_sum_with_bound(DataValue::Data(
+        XSDAnySimpleType::Long(i64::MIN),
+    )) else {
+        unreachable!()
+    };
+    filtered
+        .and
+        .push(less(dvar("total"), decimal_value("0")));
+    let filtered = plan_bgp(&Query::Count(Count {
+        query: Box::new(Query::And(filtered)),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(filtered.count_variable.as_deref(), Some("rows"));
+    assert!(matches!(
+        filtered.relation.statement,
+        CompiledRelationStatement::GeneratedI64Filter { column: 2, .. }
+    ));
+
+    let Query::And(valid) = two_node_key_sum_with_bound(duint(0)) else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &valid.and[0] else {
+        unreachable!()
+    };
+    for group_by in [
+        vec!["left".into(), "left".into()],
+        vec!["left".into(), "right".into(), "extra".into()],
+    ] {
+        let mut invalid = group.clone();
+        invalid.group_by = group_by;
+        reject(
+            and_of(vec![Query::GroupBy(invalid), valid.and[1].clone()]),
+            BgpPlanError::GroupSumUnsupportedShape,
+        );
+    }
+}
+
 #[test]
 fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
     let compiled = plan_bgp(&grouped_u32_sum()).unwrap();
@@ -249,11 +334,11 @@ fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
     assert!(matches!(
         compiled.relation.statement,
         CompiledRelationStatement::GroupSum {
-            key_column: Some(0),
+            ref key_columns,
             value_column: 1,
             datatype: CanonicalDatatype::UInt32,
             ..
-        }
+        } if key_columns == &[0]
     ));
 
     let counted = plan_bgp(&Query::Count(Count {
@@ -424,11 +509,11 @@ fn immediate_zero_key_group_sum_compiles_one_generated_decimal_column() {
     assert!(matches!(
         compiled.relation.statement,
         CompiledRelationStatement::GroupSum {
-            key_column: None,
+            ref key_columns,
             value_column: 1,
             datatype: CanonicalDatatype::UInt32,
             ..
-        }
+        } if key_columns.is_empty()
     ));
     let counted = plan_bgp(&Query::Count(Count {
         query: Box::new(global_u32_sum()),

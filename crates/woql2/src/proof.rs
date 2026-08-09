@@ -195,7 +195,7 @@ pub enum CompiledRelationStatement {
     },
     GroupSum {
         input: Box<CompiledRelation>,
-        key_column: Option<usize>,
+        key_columns: Vec<usize>,
         value_column: usize,
         datatype: CanonicalDatatype,
     },
@@ -734,18 +734,15 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
         }
         CompiledRelationStatement::GroupSum {
             input,
-            key_column,
+            key_columns,
             value_column,
             datatype,
         } => {
             hasher.update(b"/group-sum");
             hasher.update(relation_query_digest(input)?);
-            match key_column {
-                Some(key_column) => {
-                    hasher.update([1]);
-                    hasher.update((*key_column as u64).to_le_bytes());
-                }
-                None => hasher.update([0]),
+            hasher.update((key_columns.len() as u64).to_le_bytes());
+            for key_column in key_columns {
+                hasher.update((*key_column as u64).to_le_bytes());
             }
             hasher.update((*value_column as u64).to_le_bytes());
             hasher.update([*datatype as u8]);
@@ -943,7 +940,7 @@ fn relation_result_descriptors(
             ])
         }
         CompiledRelationStatement::GroupSum {
-            input, key_column, datatype, ..
+            input, key_columns, datatype, ..
         } => {
             let child = relation_result_descriptors(input)?;
             let generated = ResultColumnDescriptor {
@@ -960,18 +957,19 @@ fn relation_result_descriptors(
                 },
                 nullable: false,
             };
-            match key_column {
-                Some(key_column) => {
-                    let key = *child.get(*key_column).ok_or_else(|| {
+            let mut result = key_columns
+                .iter()
+                .map(|key_column| {
+                    child.get(*key_column).copied().ok_or_else(|| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "group-sum key column out of range",
                         )
-                    })?;
-                    Ok(vec![key, generated])
-                }
-                None => Ok(vec![generated]),
-            }
+                    })
+                })
+                .collect::<std::io::Result<Vec<_>>>()?;
+            result.push(generated);
+            Ok(result)
         }
     }
 }
@@ -1096,12 +1094,12 @@ fn relation_proof_plan(
         },
         CompiledRelationStatement::GroupSum {
             input,
-            key_column,
+            key_columns,
             value_column,
             datatype,
         } => RelationProofPlanKind::GroupSum {
             input: Box::new(child(input)?),
-            key_column: *key_column,
+            key_columns: key_columns.clone(),
             value_column: *value_column,
             datatype: *datatype,
         },
@@ -1358,7 +1356,7 @@ fn integral_group_sum_value(
 fn expected_group_sum_columns(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
-    key_column: Option<usize>,
+    key_columns: &[usize],
     value_column: usize,
     datatype: CanonicalDatatype,
     layer: &impl VerifierLayer,
@@ -1380,7 +1378,7 @@ fn expected_group_sum_columns(
             "group-sum input length mismatch",
         ));
     }
-    let Some(key_column) = key_column else {
+    if key_columns.is_empty() {
         if input.result_len == 0 {
             return Ok(vec![Vec::new()]);
         }
@@ -1389,43 +1387,59 @@ fn expected_group_sum_columns(
             sum = sum.checked_add(integral_group_sum_value(number, datatype)?)?;
         }
         return Ok(vec![vec![sum.field()?]]);
-    };
-    let keys = values.get(key_column).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key out of range")
-    })?;
-    let key_fields = input.result_columns.get(key_column).ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key field out of range")
-    })?;
-    if keys.len() != input.result_len || key_fields.len() != input.result_len {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "group-sum key length mismatch",
-        ));
     }
-    let mut sums = std::collections::BTreeMap::<Vec<u8>, (ArkFr, GroupSumValue)>::new();
+    let keys = key_columns
+        .iter()
+        .map(|key_column| {
+            let keys = values.get(*key_column).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key out of range")
+            })?;
+            let fields = input.result_columns.get(*key_column).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key field out of range")
+            })?;
+            if keys.len() != input.result_len || fields.len() != input.result_len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-sum key length mismatch",
+                ));
+            }
+            Ok((keys, fields))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut sums = std::collections::BTreeMap::<Vec<Vec<u8>>, (Vec<ArkFr>, GroupSumValue)>::new();
     for row in 0..input.result_len {
-        let CanonicalResultValue::Object(CanonicalObject::Node(iri)) = &keys[row] else {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "group-sum key is not a node IRI",
-            ));
-        };
+        let mut canonical = Vec::with_capacity(keys.len());
+        let mut fields = Vec::with_capacity(keys.len());
+        for (values, key_fields) in &keys {
+            let CanonicalResultValue::Object(CanonicalObject::Node(iri)) = &values[row] else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-sum key is not a node IRI",
+                ));
+            };
+            canonical.push(iri.clone());
+            fields.push(key_fields[row]);
+        }
         let value = integral_group_sum_value(&numbers[row], datatype)?;
         let entry = sums
-            .entry(iri.clone())
-            .or_insert((key_fields[row], GroupSumValue::zero(datatype)?));
-        if entry.0 != key_fields[row] {
+            .entry(canonical)
+            .or_insert((fields.clone(), GroupSumValue::zero(datatype)?));
+        if entry.0 != fields {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "group-sum canonical node maps to multiple Store IDs",
+                "group-sum canonical node tuple maps to multiple Store IDs",
             ));
         }
         entry.1 = entry.1.checked_add(value)?;
     }
-    Ok(vec![
-        sums.values().map(|(key, _)| *key).collect(),
-        sums.values().map(|(_, sum)| sum.field()).collect::<std::io::Result<Vec<_>>>()?,
-    ])
+    let mut output = vec![Vec::with_capacity(sums.len()); key_columns.len() + 1];
+    for (fields, sum) in sums.values() {
+        for (column, field) in output.iter_mut().zip(fields) {
+            column.push(*field);
+        }
+        output[key_columns.len()].push(sum.field()?);
+    }
+    Ok(output)
 }
 
 impl ProvedBgp {
@@ -1917,7 +1931,7 @@ impl ProvedBgp {
                 ProvedQueryStatement::GroupSum { input },
                 CompiledRelationStatement::GroupSum {
                     input: input_plan,
-                    key_column,
+                    key_columns,
                     value_column,
                     datatype,
                 },
@@ -1931,7 +1945,7 @@ impl ProvedBgp {
                 let expected_columns = expected_group_sum_columns(
                     input,
                     input_plan,
-                    *key_column,
+                    key_columns,
                     *value_column,
                     *datatype,
                     layer,
@@ -3193,7 +3207,7 @@ pub enum BgpPlanError {
     #[error("GroupBy extrema template must be a nonnullable variable with an exact fixed-width order-preserving datatype")]
     GroupExtremaUnsupportedValue,
 
-    #[error("GroupBy followed by Sum requires zero keys or one node key, one private grouped-list variable, and one distinct result variable")]
+    #[error("GroupBy followed by Sum requires zero to two unique node keys, one private grouped-list variable, and one distinct result variable")]
     GroupSumUnsupportedShape,
 
     #[error("GroupBy Sum template must be an exact fixed-width signed or unsigned integer variable")]
@@ -3551,7 +3565,9 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
         }
         return Ok(None);
     };
-    if group.group_by.len() > 1 {
+    if group.group_by.len() > 2
+        || (group.group_by.len() == 2 && group.group_by[0] == group.group_by[1])
+    {
         return Err(BgpPlanError::GroupSumUnsupportedShape);
     }
     let template = match &group.template {
@@ -3570,9 +3586,11 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
         DataValue::Variable(variable) => variable,
         _ => return Err(BgpPlanError::GroupSumUnsupportedShape),
     };
-    let key = group.group_by.first();
     if hidden != list
-        || key.is_some_and(|key| key == template || key == hidden || key == result)
+        || group
+            .group_by
+            .iter()
+            .any(|key| key == template || key == hidden || key == result)
         || template == hidden
         || template == result
         || hidden == result
@@ -3583,7 +3601,9 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
     if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
         return Err(BgpPlanError::GroupSumUnsupportedShape);
     }
-    let key_column = key
+    let key_columns = group
+        .group_by
+        .iter()
         .map(|key| {
             child
                 .relation
@@ -3592,25 +3612,25 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
                 .position(|variable| variable == key)
                 .ok_or(BgpPlanError::GroupSumUnsupportedShape)
         })
-        .transpose()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let value_column = child
         .relation
         .schema
         .iter()
         .position(|variable| variable == template)
         .ok_or(BgpPlanError::GroupSumUnsupportedValue)?;
-    if key_column.is_some_and(|key_column| {
-        key_column == value_column
-            || child.relation.domains.get(key_column).copied().flatten()
+    if key_columns.iter().any(|key_column| {
+        *key_column == value_column
+            || child.relation.domains.get(*key_column).copied().flatten()
                 != Some(EqualityValueDomain::Node)
     }) {
         return Err(BgpPlanError::GroupSumUnsupportedShape);
     }
     let descriptors = relation_result_descriptors(&child.relation)
         .map_err(|_| BgpPlanError::GroupSumUnsupportedShape)?;
-    if key_column.is_some_and(|key_column| {
-        descriptors[key_column].namespace != ResultIdNamespace::NodeValue
-            || descriptors[key_column].nullable
+    if key_columns.iter().any(|key_column| {
+        descriptors[*key_column].namespace != ResultIdNamespace::NodeValue
+            || descriptors[*key_column].nullable
     }) || descriptors[value_column].namespace != ResultIdNamespace::NodeValue
         || descriptors[value_column].nullable
     {
@@ -3629,13 +3649,12 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
         )) => datatype,
         _ => return Err(BgpPlanError::GroupSumUnsupportedValue),
     };
-    let key_domain = key_column.map(|column| child.relation.domains[column]);
     let collection = child.collection;
-    let mut schema = Vec::with_capacity(usize::from(key.is_some()) + 1);
+    let mut schema = Vec::with_capacity(key_columns.len() + 1);
     let mut domains = Vec::with_capacity(schema.capacity());
-    if let (Some(key), Some(key_domain)) = (key, key_domain) {
+    for (key, key_column) in group.group_by.iter().zip(&key_columns) {
         schema.push(key.clone());
-        domains.push(key_domain);
+        domains.push(child.relation.domains[*key_column]);
     }
     schema.push(result.clone());
     domains.push(None);
@@ -3651,7 +3670,7 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
             domains,
             statement: CompiledRelationStatement::GroupSum {
                 input: Box::new(child.relation),
-                key_column,
+                key_columns: key_columns.clone(),
                 value_column,
                 datatype,
             },
@@ -3667,7 +3686,7 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
                 ResultIdNamespace::GeneratedDecimalU64 => {
                     CompiledRelationStatement::GeneratedU64Filter {
                         input: Box::new(input),
-                        column: usize::from(key.is_some()),
+                        column: key_columns.len(),
                         op,
                         constant: u64::try_from(constant).map_err(|_| {
                             BgpPlanError::GroupSumComparisonUnsupportedConstant
@@ -3678,7 +3697,7 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
                 ResultIdNamespace::GeneratedDecimalI64 => {
                     CompiledRelationStatement::GeneratedI64Filter {
                         input: Box::new(input),
-                        column: usize::from(key.is_some()),
+                        column: key_columns.len(),
                         op,
                         constant: i64::try_from(constant).map_err(|_| {
                             BgpPlanError::GroupSumComparisonUnsupportedConstant

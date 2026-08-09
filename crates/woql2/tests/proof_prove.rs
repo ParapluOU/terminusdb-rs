@@ -1037,6 +1037,144 @@ fn grouped_i64_sum_query() -> Query {
     ])
 }
 
+fn two_key_i64_sum_query() -> Query {
+    let child = and_of(vec![
+        Query::Link(Link {
+            subject: NodeValue::Variable("left".into()),
+            predicate: NodeValue::Node(iri("link")),
+            object: NodeValue::Variable("right".into()),
+            graph: GraphType::Instance,
+        }),
+        tv("right", "score", "score"),
+        gte(
+            dvar("score"),
+            DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+        ),
+    ]);
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("score".into()),
+            group_by: vec!["right".into(), "left".into()],
+            grouped_value: Value::Variable("scores".into()),
+            query: Box::new(child),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+        less(
+            dvar("total"),
+            DataValue::Data(XSDAnySimpleType::Decimal("0".parse().unwrap())),
+        ),
+    ])
+}
+
+fn assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("z"), &iri("link"), &iri("z")))
+        .unwrap();
+    for value in [-1i64, 1] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("z"),
+                &iri("score"),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let base = builder.commit().unwrap();
+    let builder = base.open_write().unwrap();
+    for (left, right) in [("a", "a"), ("a", "z"), ("z", "a")] {
+        builder
+            .add_value_triple(ValueTriple::new_node(
+                &iri(left),
+                &iri("link"),
+                &iri(right),
+            ))
+            .unwrap();
+    }
+    for value in [-3i64, 1] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("a"),
+                &iri("score"),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = two_key_i64_sum_query();
+    let compiled = plan_bgp(&query).unwrap();
+    assert_eq!(compiled.relation.schema, ["right", "left", "total"]);
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let node = |name: &str| {
+        CanonicalResultValue::Object(CanonicalObject::Node(iri(name).into_bytes()))
+    };
+    assert_eq!(proved.result_len, 2);
+    assert_eq!(values[0], vec![node("a"), node("a")]);
+    assert_eq!(values[1], vec![node("a"), node("z")]);
+    assert_eq!(
+        values[2],
+        vec![
+            CanonicalResultValue::GeneratedDecimalI64(-2),
+            CanonicalResultValue::GeneratedDecimalI64(-2),
+        ]
+    );
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let Query::And(mut swapped) = query else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &mut swapped.and[0] else {
+        unreachable!()
+    };
+    group.group_by.swap(0, 1);
+    let swapped = plan_bgp(&Query::And(swapped)).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &swapped,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[2][0] = generated_decimal_i64_field(-1);
+    tampered.result_values[2][0] = CanonicalResultValue::GeneratedDecimalI64(-1);
+    tampered.result_commitments[2] = commit_column(&pad(
+        &tampered.result_columns[2],
+        1usize << tampered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn two_key_signed_sum_proves_declared_tuple_order_and_comparison() {
+    std::thread::Builder::new()
+        .name("woql-two-key-signed-sum-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn global_i64_sum_query() -> Query {
     let Query::And(mut query) = grouped_i64_sum_query() else {
         unreachable!()
@@ -1135,10 +1273,10 @@ fn assert_global_u64_sum_accepts_exact_max_and_rejects_actual_overflow() {
     assert!(matches!(
         compiled.relation.statement,
         CompiledRelationStatement::GroupSum {
-            key_column: None,
+            ref key_columns,
             datatype: CanonicalDatatype::UInt64,
             ..
-        }
+        } if key_columns.is_empty()
     ));
 
     let exact = layer_with(&[("p", u64::MAX - 5), ("q", 5)]);
