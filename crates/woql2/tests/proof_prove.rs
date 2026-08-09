@@ -30,7 +30,8 @@ use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::control::WoqlOptional;
 use terminusdb_woql2::control::{Distinct, Select};
 use terminusdb_woql2::proof::{
-    decode_and_verify_envelope, plan_bgp, CompiledRelationStatement, ExecutedResultValue,
+    decode_and_verify_envelope, decode_verifier_commitment_and_verify_envelope, plan_bgp,
+    CompiledRelationStatement, ExecutedResultValue,
 };
 use terminusdb_woql2::{
     misc::{Count, InRange},
@@ -331,6 +332,19 @@ fn exact_equals_filters_after_recursive_optional_and_not() {
         .encode_envelope(&compiled, &layer, layer.state.commitment_root)
         .unwrap();
     decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+
+    // Simulate archive/reopen, derive the compact public view, then perform remote-style
+    // decode + verification without retaining any native/materialized witness records.
+    let reopened = LayerCommitment::decode(&layer.encode().unwrap()).unwrap();
+    let compact = reopened.verifier_commitment().unwrap().encode().unwrap();
+    let verified = decode_verifier_commitment_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &compact,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    assert_eq!(verified.proved.result_len, 1);
 }
 
 #[test]
@@ -402,6 +416,15 @@ fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
         2,
         "overlapping Optional branches retain bag multiplicity",
     );
+    let compact = layer.verifier_commitment().unwrap().encode().unwrap();
+    let compact_verified = decode_verifier_commitment_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &compact,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    assert_eq!(compact_verified.proved.result_len, 5);
 
     let mut wrong_nullability = RecursiveRelationEnvelope::decode(&envelope).unwrap();
     wrong_nullability.result_descriptors[2].nullable = false;

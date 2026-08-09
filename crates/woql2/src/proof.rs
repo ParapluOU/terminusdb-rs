@@ -39,7 +39,7 @@ use terminus_store::proof::anti::{
 };
 use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
-use terminus_store::proof::commitment::LayerCommitment;
+use terminus_store::proof::commitment::{LayerCommitment, VerifierCommitment, VerifierLayer};
 use terminus_store::proof::envelope::{
     plan_digest, resolve_relation_equality_constraint, EqualityValueDomain, LayerBgpEnvelope,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
@@ -525,7 +525,7 @@ impl ProvedBgp {
     pub fn verify(
         &self,
         compiled: &CompiledBgp,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
     ) -> std::io::Result<()> {
         self.verify_relation(
@@ -561,7 +561,7 @@ impl ProvedBgp {
     fn verify_relation(
         &self,
         compiled: &CompiledRelation,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
         query_digest: ProofHash,
     ) -> std::io::Result<()> {
@@ -786,7 +786,7 @@ impl ProvedBgp {
     pub fn verify_and_resolve(
         &self,
         compiled: &CompiledBgp,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
         let descriptors = compiled_result_descriptors(compiled)?;
@@ -811,7 +811,7 @@ impl ProvedBgp {
     pub fn verify_and_resolve_values(
         &self,
         compiled: &CompiledBgp,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
         self.verify(compiled, layer, expected_root)?;
@@ -832,7 +832,7 @@ impl ProvedBgp {
     pub fn verify_objects(
         &self,
         compiled: &CompiledBgp,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
         objects: &[Vec<CanonicalObject>],
     ) -> std::io::Result<()> {
@@ -874,7 +874,7 @@ impl ProvedBgp {
     pub fn verify_executed_rows(
         &self,
         compiled: &CompiledBgp,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
         variables: &[String],
         rows: &[Vec<u64>],
@@ -994,7 +994,7 @@ impl ProvedBgp {
     pub fn verify_executed_values(
         &self,
         compiled: &CompiledBgp,
-        layer: &LayerCommitment,
+        layer: &impl VerifierLayer,
         expected_root: ProofHash,
         variables: &[String],
         rows: &[Vec<ExecutedResultValue>],
@@ -1276,7 +1276,7 @@ impl ProvedBgp {
 pub fn decode_and_verify_envelope(
     bytes: &[u8],
     compiled: &CompiledBgp,
-    layer: &LayerCommitment,
+    layer: &impl VerifierLayer,
     expected_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let envelope = RecursiveRelationEnvelope::decode(bytes)?;
@@ -1313,6 +1313,19 @@ pub fn decode_and_verify_envelope(
         result_objects,
         result_values,
     })
+}
+
+/// Decode both portable inputs and verify without loading native Store witness tables.
+/// The trusted root remains a separate caller-selected input; the artifact cannot choose
+/// its own trust anchor merely by decoding successfully.
+pub fn decode_verifier_commitment_and_verify_envelope(
+    envelope_bytes: &[u8],
+    compiled: &CompiledBgp,
+    verifier_commitment_bytes: &[u8],
+    expected_root: ProofHash,
+) -> std::io::Result<VerifiedBgpEnvelope> {
+    let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
+    decode_and_verify_envelope(envelope_bytes, compiled, &commitment, expected_root)
 }
 
 fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
