@@ -30,7 +30,9 @@ use decimal_rs::Decimal;
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
-use terminusdb_woql2::proof::{compiled_query_digest, plan_bgp, BgpPlanError, CompiledBgp};
+use terminusdb_woql2::proof::{
+    compiled_query_digest, plan_bgp, BgpPlanError, CompiledBgp, CompiledRelationStatement,
+};
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
 /// `PartialEq` — the plan types are foreign — so compare only the error.)
@@ -1935,6 +1937,74 @@ fn ordered_triple_value_constructs_reject_schema_strings_and_two_variables() {
             graph: Some(GraphType::Schema),
         }),
         BgpPlanError::TripleValueOrderUnsupportedShape,
+    );
+}
+
+#[test]
+fn ground_triple_slices_compile_equality_then_exact_empty_projection() {
+    let query = |reverse| {
+        let subject = NodeValue::Node(iri("metric"));
+        let predicate = NodeValue::Node(iri("age"));
+        let object = Value::Data(XSDAnySimpleType::UnsignedInt(20));
+        let low = Value::Data(XSDAnySimpleType::UnsignedInt(15));
+        let high = Value::Data(XSDAnySimpleType::UnsignedInt(40));
+        if reverse {
+            Query::TripleSliceRev(TripleSliceRev { subject, predicate, object, low, high, graph: None })
+        } else {
+            Query::TripleSlice(TripleSlice { subject, predicate, object, low, high, graph: None })
+        }
+    };
+    let forward = plan_bgp(&query(false)).unwrap();
+    let reverse = plan_bgp(&query(true)).unwrap();
+    for compiled in [&forward, &reverse] {
+        assert!(compiled.relation.schema.is_empty());
+        assert_eq!(compiled.projection, Some(Vec::new()));
+        let CompiledRelationStatement::BagProjection { input, indices } = &compiled.relation.statement else {
+            panic!("expected ground bag projection")
+        };
+        assert!(indices.is_empty());
+        let CompiledRelationStatement::Equality { input, .. } = &input.statement else {
+            panic!("expected exact ground-object equality")
+        };
+        assert!(input.as_exact_scalar_order().is_some());
+    }
+    assert_ne!(compiled_query_digest(&forward).unwrap(), compiled_query_digest(&reverse).unwrap());
+}
+
+#[test]
+fn fully_ground_next_previous_compile_limit_one_equality_unit_and_reject_wrong_type() {
+    let subject = NodeValue::Node(iri("metric"));
+    let predicate = NodeValue::Node(iri("age"));
+    for query in [
+        Query::TripleNext(TripleNext {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: Value::Data(XSDAnySimpleType::UnsignedInt(20)),
+            next: Value::Data(XSDAnySimpleType::UnsignedInt(30)), graph: None,
+        }),
+        Query::TriplePrevious(TriplePrevious {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: Value::Data(XSDAnySimpleType::UnsignedInt(30)),
+            previous: Value::Data(XSDAnySimpleType::UnsignedInt(20)), graph: None,
+        }),
+    ] {
+        let compiled = plan_bgp(&query).unwrap();
+        let CompiledRelationStatement::BagProjection { input, indices } = &compiled.relation.statement else {
+            panic!("expected ground bag projection")
+        };
+        assert!(indices.is_empty());
+        let CompiledRelationStatement::Equality { input, .. } = &input.statement else {
+            panic!("expected adjacency equality")
+        };
+        assert!(input.as_exact_ordered_slice().is_some());
+    }
+
+    reject(
+        Query::TripleNext(TripleNext {
+            subject, predicate,
+            object: Value::Data(XSDAnySimpleType::UnsignedInt(20)),
+            next: Value::Data(XSDAnySimpleType::Int(30)), graph: None,
+        }),
+        BgpPlanError::EqualsDomainMismatch,
     );
 }
 

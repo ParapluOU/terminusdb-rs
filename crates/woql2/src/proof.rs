@@ -957,28 +957,38 @@ impl ProvedBgp {
                     expected_root,
                     relation_query_digest(input_plan)?,
                 )?;
-                let expected_commitments = indices
-                    .iter()
-                    .map(|index| {
-                        input.result_commitments.get(*index).copied().ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "WOQL bag projection index out of range",
-                            )
+                let (expected_commitments, expected_columns) = if indices.is_empty() {
+                    let mut unit = vec![ArkFr::zero(); 1usize << input.result_log_domain];
+                    unit[..input.result_len].fill(ArkFr::one());
+                    (
+                        vec![terminus_store::proof::argument::commit_column(&unit)?],
+                        vec![unit[..input.result_len].to_vec()],
+                    )
+                } else {
+                    let commitments = indices
+                        .iter()
+                        .map(|index| {
+                            input.result_commitments.get(*index).copied().ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "WOQL bag projection index out of range",
+                                )
+                            })
                         })
-                    })
-                    .collect::<std::io::Result<Vec<_>>>()?;
-                let expected_columns = indices
-                    .iter()
-                    .map(|index| {
-                        input.result_columns.get(*index).cloned().ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "WOQL bag projection index out of range",
-                            )
+                        .collect::<std::io::Result<Vec<_>>>()?;
+                    let columns = indices
+                        .iter()
+                        .map(|index| {
+                            input.result_columns.get(*index).cloned().ok_or_else(|| {
+                                std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "WOQL bag projection index out of range",
+                                )
+                            })
                         })
-                    })
-                    .collect::<std::io::Result<Vec<_>>>()?;
+                        .collect::<std::io::Result<Vec<_>>>()?;
+                    (commitments, columns)
+                };
                 if self.result_commitments != expected_commitments
                     || self.result_columns != expected_columns
                     || self.result_len != input.result_len
@@ -2816,6 +2826,43 @@ fn compile_ordered_triple_slice(
     )
 }
 
+fn constrain_ordered_triple_value_to_ground(
+    compiled: CompiledBgp,
+    variable: &str,
+    expected: &Value,
+) -> Result<CompiledBgp, BgpPlanError> {
+    let Value::Data(expected) = expected else {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
+    };
+    let equals = crate::compare::Equals {
+        left: Value::Variable(variable.to_owned()),
+        right: Value::Data(expected.clone()),
+    };
+    let constraint = compile_equality_constraint(&compiled.relation, &equals)?;
+    let equality = CompiledRelation {
+        schema: compiled.relation.schema.clone(),
+        domains: compiled.relation.domains.clone(),
+        statement: CompiledRelationStatement::Equality {
+            input: Box::new(compiled.relation),
+            constraint,
+        },
+    };
+    Ok(CompiledBgp {
+        relation: CompiledRelation {
+            schema: Vec::new(),
+            domains: Vec::new(),
+            statement: CompiledRelationStatement::BagProjection {
+                input: Box::new(equality),
+                indices: Vec::new(),
+            },
+        },
+        projection: Some(Vec::new()),
+        collection: compiled.collection,
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
 /// Compile the largest currently exact ordered-value subset shared by the four
 /// TerminusDB 12 cursor constructs.  Constant S/P leaves one complete object column,
 /// so the existing range, exact-order, and exact-slice arguments prove both membership
@@ -2824,36 +2871,73 @@ fn plan_ordered_triple_value_construct(
     query: &Query,
 ) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let compiled = match query {
-        Query::TripleSlice(slice) => compile_ordered_triple_slice(
-            &slice.subject,
-            &slice.predicate,
-            &slice.object,
-            &slice.low,
-            &slice.high,
-            &slice.graph,
-            OrderDirection::Ascending,
-        )?,
-        Query::TripleSliceRev(slice) => compile_ordered_triple_slice(
-            &slice.subject,
-            &slice.predicate,
-            &slice.object,
-            &slice.low,
-            &slice.high,
-            &slice.graph,
-            OrderDirection::Descending,
-        )?,
+        Query::TripleSlice(slice) => match &slice.object {
+            Value::Variable(_) => compile_ordered_triple_slice(
+                &slice.subject,
+                &slice.predicate,
+                &slice.object,
+                &slice.low,
+                &slice.high,
+                &slice.graph,
+                OrderDirection::Ascending,
+            )?,
+            Value::Data(_) => {
+                const HIDDEN: &str = "__woql_proof_ground_triple_value";
+                let hidden = Value::Variable(HIDDEN.to_owned());
+                let compiled = compile_ordered_triple_slice(
+                    &slice.subject,
+                    &slice.predicate,
+                    &hidden,
+                    &slice.low,
+                    &slice.high,
+                    &slice.graph,
+                    OrderDirection::Ascending,
+                )?;
+                constrain_ordered_triple_value_to_ground(compiled, HIDDEN, &slice.object)?
+            }
+            _ => return Err(BgpPlanError::TripleValueOrderUnsupportedShape),
+        },
+        Query::TripleSliceRev(slice) => match &slice.object {
+            Value::Variable(_) => compile_ordered_triple_slice(
+                &slice.subject,
+                &slice.predicate,
+                &slice.object,
+                &slice.low,
+                &slice.high,
+                &slice.graph,
+                OrderDirection::Descending,
+            )?,
+            Value::Data(_) => {
+                const HIDDEN: &str = "__woql_proof_ground_triple_value";
+                let hidden = Value::Variable(HIDDEN.to_owned());
+                let compiled = compile_ordered_triple_slice(
+                    &slice.subject,
+                    &slice.predicate,
+                    &hidden,
+                    &slice.low,
+                    &slice.high,
+                    &slice.graph,
+                    OrderDirection::Descending,
+                )?;
+                constrain_ordered_triple_value_to_ground(compiled, HIDDEN, &slice.object)?
+            }
+            _ => return Err(BgpPlanError::TripleValueOrderUnsupportedShape),
+        },
         Query::TripleNext(next) => {
-            let (variable, reference, op, direction) = match (&next.object, &next.next) {
+            let (variable, reference, expected, op, direction) = match (&next.object, &next.next) {
                 (Value::Data(reference), Value::Variable(variable)) => {
-                    (variable, Value::Data(reference.clone()), RangeOp::Gt, OrderDirection::Ascending)
+                    (variable.as_str(), Value::Data(reference.clone()), None, RangeOp::Gt, OrderDirection::Ascending)
                 }
                 (Value::Variable(variable), Value::Data(reference)) => {
-                    (variable, Value::Data(reference.clone()), RangeOp::Lt, OrderDirection::Descending)
+                    (variable.as_str(), Value::Data(reference.clone()), None, RangeOp::Lt, OrderDirection::Descending)
+                }
+                (Value::Data(reference), Value::Data(expected)) => {
+                    ("__woql_proof_ground_triple_value", Value::Data(reference.clone()), Some(Value::Data(expected.clone())), RangeOp::Gt, OrderDirection::Ascending)
                 }
                 _ => return Err(BgpPlanError::TripleValueOrderUnsupportedShape),
             };
             let (datatype, c, canonical) = encoded_ordered_triple_value(&reference)?;
-            compile_ordered_triple_value_scan(
+            let compiled = compile_ordered_triple_value_scan(
                 &next.subject,
                 &next.predicate,
                 &next.graph,
@@ -2863,20 +2947,27 @@ fn plan_ordered_triple_value_construct(
                 vec![NormalizedBound { op, c }],
                 direction,
                 true,
-            )?
+            )?;
+            match expected {
+                Some(expected) => constrain_ordered_triple_value_to_ground(compiled, variable, &expected)?,
+                None => compiled,
+            }
         }
         Query::TriplePrevious(previous) => {
-            let (variable, reference, op, direction) = match (&previous.object, &previous.previous) {
+            let (variable, reference, expected, op, direction) = match (&previous.object, &previous.previous) {
                 (Value::Data(reference), Value::Variable(variable)) => {
-                    (variable, Value::Data(reference.clone()), RangeOp::Lt, OrderDirection::Descending)
+                    (variable.as_str(), Value::Data(reference.clone()), None, RangeOp::Lt, OrderDirection::Descending)
                 }
                 (Value::Variable(variable), Value::Data(reference)) => {
-                    (variable, Value::Data(reference.clone()), RangeOp::Gt, OrderDirection::Ascending)
+                    (variable.as_str(), Value::Data(reference.clone()), None, RangeOp::Gt, OrderDirection::Ascending)
+                }
+                (Value::Data(reference), Value::Data(expected)) => {
+                    ("__woql_proof_ground_triple_value", Value::Data(reference.clone()), Some(Value::Data(expected.clone())), RangeOp::Lt, OrderDirection::Descending)
                 }
                 _ => return Err(BgpPlanError::TripleValueOrderUnsupportedShape),
             };
             let (datatype, c, canonical) = encoded_ordered_triple_value(&reference)?;
-            compile_ordered_triple_value_scan(
+            let compiled = compile_ordered_triple_value_scan(
                 &previous.subject,
                 &previous.predicate,
                 &previous.graph,
@@ -2886,7 +2977,11 @@ fn plan_ordered_triple_value_construct(
                 vec![NormalizedBound { op, c }],
                 direction,
                 true,
-            )?
+            )?;
+            match expected {
+                Some(expected) => constrain_ordered_triple_value_to_ground(compiled, variable, &expected)?,
+                None => compiled,
+            }
         }
         _ => return Ok(None),
     };

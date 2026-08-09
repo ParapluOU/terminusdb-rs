@@ -33,7 +33,7 @@ use terminusdb_woql2::control::{Distinct, Select, Using};
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
-    BgpPlanError, CompiledRelationStatement, ExecutedResultValue,
+    BgpPlanError, CompiledBgp, CompiledRelationStatement, ExecutedResultValue,
 };
 use terminusdb_woql2::triple::{Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::{
@@ -143,6 +143,116 @@ fn triple_next_previous_and_end_cursor_prove_nearest_strict_value() {
             .unwrap();
         assert_eq!(resolved_u32_column(&values), expected);
     }
+}
+
+fn ground_triple_slice_query(object: u32, reverse: bool) -> Query {
+    let subject = NodeValue::Node(iri("metric"));
+    let predicate = NodeValue::Node(iri("score"));
+    let object = Value::Data(XSDAnySimpleType::UnsignedInt(object as usize));
+    let low = Value::Data(XSDAnySimpleType::UnsignedInt(15));
+    let high = Value::Data(XSDAnySimpleType::UnsignedInt(40));
+    if reverse {
+        Query::TripleSliceRev(TripleSliceRev { subject, predicate, object, low, high, graph: None })
+    } else {
+        Query::TripleSlice(TripleSlice { subject, predicate, object, low, high, graph: None })
+    }
+}
+
+fn assert_ground_navigation_result(
+    layer: &Arc<LayerCommitment>,
+    query: &Query,
+    expected_len: usize,
+) -> (CompiledBgp, terminusdb_woql2::proof::ProvedBgp) {
+    let compiled = plan_bgp(query).unwrap();
+    assert!(compiled.relation.schema.is_empty());
+    let proved = compiled.prove(layer).unwrap();
+    proved
+        .verify(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(proved.result_len, expected_len);
+    assert_eq!(proved.result_columns.len(), 1);
+    assert_eq!(proved.result_columns[0], vec![ArkFr::one(); expected_len]);
+    (compiled, proved)
+}
+
+#[test]
+fn ground_triple_slice_proves_membership_boundaries_absence_and_direction_identity() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for score in [10u32, 20, 40] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("metric"), &iri("score"), u32::make_entry(&score),
+            ))
+            .unwrap();
+    }
+    // Present in the dictionary but not for the selected S/P.
+    builder
+        .add_value_triple(ValueTriple::new_value(
+            &iri("other"), &iri("score"), u32::make_entry(&35),
+        ))
+        .unwrap();
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+
+    let (forward, proof) = assert_ground_navigation_result(
+        &layer, &ground_triple_slice_query(20, false), 1,
+    );
+    // Existing triple at the exclusive high boundary is outside [15, 40).
+    assert_ground_navigation_result(&layer, &ground_triple_slice_query(40, false), 0);
+    // Dictionary-present but missing selected S/P triple.
+    assert_ground_navigation_result(&layer, &ground_triple_slice_query(35, false), 0);
+    // Dictionary-absent in-range constant remains an authenticated empty result.
+    assert_ground_navigation_result(&layer, &ground_triple_slice_query(25, false), 0);
+
+    let reverse = plan_bgp(&ground_triple_slice_query(20, true)).unwrap();
+    let envelope = proof
+        .encode_envelope(&forward, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope, &reverse, &layer, layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn fully_ground_cursor_proves_immediate_adjacency_and_rejects_non_nearest() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for score in [10u32, 20, 30, 40] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("metric"), &iri("score"), u32::make_entry(&score),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let next = |candidate| Query::TripleNext(TripleNext {
+        subject: NodeValue::Node(iri("metric")),
+        predicate: NodeValue::Node(iri("score")),
+        object: Value::Data(XSDAnySimpleType::UnsignedInt(20)),
+        next: Value::Data(XSDAnySimpleType::UnsignedInt(candidate)),
+        graph: None,
+    });
+
+    let (compiled, proof) = assert_ground_navigation_result(&layer, &next(30), 1);
+    // 40 is greater but not the immediate successor of 20.
+    assert_ground_navigation_result(&layer, &next(40), 0);
+
+    let previous = plan_bgp(&Query::TriplePrevious(TriplePrevious {
+        subject: NodeValue::Node(iri("metric")),
+        predicate: NodeValue::Node(iri("score")),
+        object: Value::Data(XSDAnySimpleType::UnsignedInt(20)),
+        previous: Value::Data(XSDAnySimpleType::UnsignedInt(30)),
+        graph: None,
+    }))
+    .unwrap();
+    let envelope = proof
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope, &previous, &layer, layer.state.commitment_root,
+    )
+    .is_err());
 }
 
 fn build_grouped_score_layer() -> Arc<LayerCommitment> {

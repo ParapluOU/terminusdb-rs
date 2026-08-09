@@ -281,6 +281,23 @@ next, previous, and empty end-cursor proving passed in 162.06s. These nested tes
 `RUST_MIN_STACK=16777216` on this Linux host; the default Rust test-thread stack overflow
 is a recorded CPU/stack-pressure optimization target, not a verifier relaxation.
 
+The fully-ground continuation uses exact zero-column projection rather than exposing a
+synthetic value. Store checkpoint `a9fddb5` permits an empty exact `BagProjection` from a
+non-ground child and derives the canonical hidden UNIT column (one on each real row,
+zero on padding) from the authenticated child length/domain. The verifier independently
+recomputes its content and commitment; rows, order, domain, and multiplicity remain
+unchanged. Direct positive, empty dictionary-absence, wire, and UNIT-content tamper
+coverage passed in 35.43s.
+
+Ground slices prove the ranged ordered S/P scan, exact equality to the supplied object,
+then project the hidden match to UNIT. Ground next/previous prove the strict ordered scan
+and `Limit(1)` before equality, so a greater-but-non-nearest candidate cannot verify.
+Fixed-width same-datatype guards remain unchanged. The focused ground slice run proved
+presence, exclusive-high rejection, a dictionary-present value missing the chosen S/P
+triple, dictionary absence, and forward/reverse query substitution in 322.94s with
+`RUST_MIN_STACK=33554432`. Ground immediate-next success, non-nearest rejection, and
+next/previous query substitution passed in 150.28s.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -315,9 +332,12 @@ is a recorded CPU/stack-pressure optimization target, not a verifier relaxation.
   `TripleNext`/`TriplePrevious` for constant S/P and one fixed-width numeric object column,
   including global child-layer order, half-open/strict boundaries, reverse order, limit
   one, empty endpoints, and direction substitution.
+- [x] Authenticate fully-ground slices and next/previous adjacency as exact zero-column
+  UNIT/empty relations, including equality after nearest-value `Limit(1)`, boundary,
+  missing-triple, dictionary-absence, datatype, and query-direction guards.
 - [ ] Extend ordered triple values to variable S/P or visible full triples only after
   authenticating complete tie order; add variable-width string collation, schema routing,
-  and the all-ground zero-column adjacency form separately.
+  and broader datatype families separately.
 - [ ] Expose visible projected `Distinct` only after authenticating SWI first-occurrence
   order, first-row non-witness bindings, and Prolog-unbound variant equality.
 - [ ] Extend `When` to observable branch-local variables only after defining an
