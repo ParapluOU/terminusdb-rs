@@ -27,7 +27,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
-use terminusdb_woql2::control::WoqlOptional;
+use terminusdb_woql2::control::{When, WoqlOptional};
 use terminusdb_woql2::control::{Distinct, Select, Using};
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_and_verify_envelope,
@@ -323,6 +323,44 @@ fn assert_multikey_order_nested_limit_e2e() {
 fn multikey_order_nested_limit_e2e() {
     std::thread::Builder::new().name("woql-multikey-order".into()).stack_size(32*1024*1024)
         .spawn(assert_multikey_order_nested_limit_e2e).unwrap().join().unwrap();
+}
+
+fn assert_bounded_when_success_plus_true_e2e() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, predicate, object) in [
+        ("a", "p", "b"), ("c", "p", "d"),
+        ("a", "q", "b"), ("a", "r", "b"),
+    ] {
+        builder.add_value_triple(ValueTriple::new_node(&iri(subject), &iri(predicate), &iri(object))).unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = |consequent: &str| and_of(vec![
+        tv("x", "p", "y"),
+        Query::If(When {
+            query: Box::new(tv("x", "q", "y")),
+            consequent: Box::new(tv("x", consequent, "y")),
+        }),
+    ]);
+    let compiled = plan_bgp(&query("r")).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved.verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root).unwrap();
+    let node = |value: &CanonicalResultValue| match value {
+        CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => String::from_utf8(bytes.clone()).unwrap(),
+        other => panic!("unexpected {other:?}"),
+    };
+    let rows = (0..proved.result_len).map(|row| (node(&values[0][row]), node(&values[1][row]))).collect::<Vec<_>>();
+    assert_eq!(rows, vec![(iri("a"), iri("b")), (iri("a"), iri("b")), (iri("c"), iri("d"))]);
+    let envelope = proved.encode_envelope(&compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    let substituted = plan_bgp(&query("s")).unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &substituted, &layer, layer.state.commitment_root).is_err());
+}
+
+#[test]
+fn bounded_when_success_plus_true_e2e() {
+    std::thread::Builder::new().name("woql-when-proof".into()).stack_size(48 * 1024 * 1024)
+        .spawn(assert_bounded_when_success_plus_true_e2e).unwrap().join().unwrap();
 }
 
 #[test]

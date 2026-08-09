@@ -828,12 +828,60 @@ fn planner_rejects_recursive_depth_and_node_bombs() {
 }
 
 #[test]
-fn rejects_when_until_the_proof_planner_has_matching_semantics() {
-    let q = Query::If(When {
-        query: Box::new(tv("a", "p", "b")),
-        consequent: Box::new(tv("x", "q", "y")),
+fn bounded_when_compiles_prolog_success_plus_true_semantics_and_rejects_new_variables() {
+    let when = Query::If(When {
+        query: Box::new(tv("x", "q", "y")),
+        consequent: Box::new(tv("x", "r", "y")),
     });
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "When" });
+    let compiled = plan_bgp(&and_of(vec![tv("x", "p", "y"), when.clone()])).unwrap();
+    assert_eq!(compiled.relation.schema, ["x", "y"]);
+    let terminusdb_woql2::proof::CompiledRelationStatement::When { expanded } = &compiled.relation.statement else { panic!("expected canonical When wrapper") };
+    let terminusdb_woql2::proof::CompiledRelationStatement::BagUnion { branches, mappings } = &expanded.statement else { panic!("expected successful branch bag-unioned with true") };
+    assert_eq!(branches.len(), 2);
+    assert_eq!(mappings, &[vec![0, 1], vec![0, 1]]);
+    assert!(matches!(branches[0].statement, terminusdb_woql2::proof::CompiledRelationStatement::InnerJoin { .. }));
+
+    reject(when, BgpPlanError::WhenMissingOuter);
+    reject(
+        and_of(vec![
+            tv("x", "p", "y"),
+            Query::If(When {
+                query: Box::new(tv("x", "q", "y")),
+                consequent: Box::new(tv("x", "r", "z")),
+            }),
+        ]),
+        BgpPlanError::WhenUnsupportedVariables,
+    );
+}
+
+#[test]
+fn bounded_when_composes_in_or_optional_not_and_preserves_fail_closed_nullable_scope() {
+    let bounded = || Query::If(When {
+        query: Box::new(Query::Or(Or { or: vec![tv("x", "q", "y"), tv("x", "q", "y")] })),
+        consequent: Box::new(tv("x", "r", "y")),
+    });
+    let branch = and_of(vec![tv("x", "p", "y"), bounded()]);
+    assert!(plan_bgp(&Query::Or(Or { or: vec![branch.clone(), tv("x", "p", "y")] })).is_ok());
+    assert!(plan_bgp(&and_of(vec![
+        tv("x", "outer", "y"),
+        Query::Not(Not { query: Box::new(branch.clone()) }),
+    ])).is_ok());
+    assert!(plan_bgp(&and_of(vec![
+        tv("x", "outer", "y"),
+        Query::WoqlOptional(WoqlOptional { query: Box::new(branch) }),
+    ])).is_ok());
+
+    reject(
+        and_of(vec![
+            tv_subj_const("root", "p", "x"),
+            Query::WoqlOptional(WoqlOptional { query: Box::new(tv("x", "q", "y")) }),
+            Query::If(When {
+                query: Box::new(tv("x", "r", "y")),
+                consequent: Box::new(tv("x", "s", "y")),
+            }),
+        ]),
+        BgpPlanError::WhenUnsupportedSubplan,
+    );
 }
 
 #[test]
