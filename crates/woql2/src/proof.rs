@@ -41,12 +41,13 @@ use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::{
-    plan_digest, BagUnionEnvelope, LayerBgpEnvelope, LeftAntiJoinEnvelope, LeftOuterJoinEnvelope,
+    plan_digest, LayerBgpEnvelope, RecursiveRelationEnvelope, RecursiveRelationProof,
+    RelationProofPlan, RelationProofPlanKind,
 };
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
-    result_id_namespaces, verify_layer_bgp, verify_layer_bgp_result_log_domain,
-    verify_result_columns, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    verify_layer_bgp, verify_layer_bgp_result_log_domain, verify_result_columns, AtomTerm,
+    CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
     LayerBgpProof, ObjectRangeBound, ObjectRangeSpec, ResultColumnDescriptor, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
@@ -65,24 +66,10 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 /// proof's result columns.
 #[derive(Clone, Debug)]
 pub struct CompiledBgp {
-    /// The variable-blind plan handed to `prove_layer_bgp` / `verify_layer_bgp`.
-    pub plan: LayerBgpPlan,
-    /// Ordered branch plans for an outer WOQL `Or`. Empty denotes the ordinary
-    /// single-plan path; otherwise `plan` is the first branch for compatibility.
-    pub union_plans: Vec<LayerBgpPlan>,
-    /// For each union branch, public-schema column -> branch-result column. This aligns
-    /// compatible variable sets whose internal left-deep plans produce different order.
-    pub union_schema_mappings: Vec<Vec<usize>>,
-    /// A correlated `Not` compiled as a scalar-key left anti-join. The ordinary
-    /// `plan` is the positive outer relation; this metadata names the independently
-    /// authenticated negated relation and the one shared variable column.
-    pub anti_join: Option<CompiledAntiJoin>,
-    pub optional_join: Option<CompiledOptionalJoin>,
-    /// Result column index -> BGP variable name, in the proof's output order
-    /// (`[r_other.., key, s_other..]` folded over the join steps).
-    pub schema: Vec<String>,
+    /// The one authoritative recursive authenticated relation.
+    pub relation: CompiledRelation,
     /// If a `Select` wrapped the BGP, the selected variables' column indices into
-    /// `schema`. The proof still proves the FULL BGP; projection is which output
+    /// `relation.schema`. The proof still proves the full relation; projection is which output
     /// columns the caller reads (sound — a projection of the true answer).
     pub projection: Option<Vec<usize>>,
     /// Query-routing metadata retained from outer WOQL wrappers. The cryptographic
@@ -98,75 +85,95 @@ pub struct CompiledBgp {
     pub full_row_distinct: bool,
 }
 
-fn compiled_result_namespaces(compiled: &CompiledBgp) -> std::io::Result<Vec<ResultIdNamespace>> {
-    if let Some(optional) = &compiled.optional_join {
-        let mut namespaces = result_id_namespaces(&compiled.plan)?;
-        let right = result_id_namespaces(&optional.right_plan)?;
-        let shared_right: Vec<usize> = optional.key_pairs.iter().map(|pair| pair.1).collect();
-        namespaces.extend(
-            right
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, namespace)| {
-                    (!shared_right.contains(&index)).then_some(namespace)
-                }),
-        );
-        return Ok(namespaces);
-    }
-    if compiled.union_plans.is_empty() {
-        result_id_namespaces(&compiled.plan)
-    } else {
-        let mut expected: Option<Vec<ResultIdNamespace>> = None;
-        for (plan, mapping) in compiled
-            .union_plans
-            .iter()
-            .zip(&compiled.union_schema_mappings)
-        {
-            let branch = result_id_namespaces(plan)?;
-            let mapped: Vec<_> = mapping.iter().map(|index| branch[*index]).collect();
-            if expected.as_ref().is_some_and(|kinds| kinds != &mapped) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "WOQL union branches expose incompatible Store ID namespaces",
-                ));
-            }
-            expected = Some(mapped);
+#[derive(Clone, Debug)]
+pub struct CompiledRelation {
+    pub schema: Vec<String>,
+    pub statement: CompiledRelationStatement,
+}
+
+#[derive(Clone, Debug)]
+pub enum CompiledRelationStatement {
+    Bgp(LayerBgpPlan),
+    BagUnion {
+        branches: Vec<CompiledRelation>,
+        /// Public output column -> child relation column, per ordered branch.
+        mappings: Vec<Vec<usize>>,
+    },
+    LeftAnti {
+        left: Box<CompiledRelation>,
+        right: Box<CompiledRelation>,
+        key_pairs: Vec<(usize, usize)>,
+    },
+    LeftOuter {
+        left: Box<CompiledRelation>,
+        right: Box<CompiledRelation>,
+        key_pairs: Vec<(usize, usize)>,
+    },
+}
+
+impl CompiledRelation {
+    pub fn as_bgp(&self) -> Option<&LayerBgpPlan> {
+        match &self.statement {
+            CompiledRelationStatement::Bgp(plan) => Some(plan),
+            _ => None,
         }
-        Ok(expected.unwrap_or_default())
+    }
+
+    pub fn as_bag_union(&self) -> Option<(&[CompiledRelation], &[Vec<usize>])> {
+        match &self.statement {
+            CompiledRelationStatement::BagUnion { branches, mappings } => {
+                Some((branches, mappings))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_left_anti(&self) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
+        match &self.statement {
+            CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
+                Some((left, right, key_pairs))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_left_anti_mut(&mut self) -> Option<&mut Vec<(usize, usize)>> {
+        match &mut self.statement {
+            CompiledRelationStatement::LeftAnti { key_pairs, .. } => Some(key_pairs),
+            _ => None,
+        }
+    }
+
+    pub fn as_left_outer(&self) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
+        match &self.statement {
+            CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+                Some((left, right, key_pairs))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_left_outer_mut(&mut self) -> Option<&mut Vec<(usize, usize)>> {
+        match &mut self.statement {
+            CompiledRelationStatement::LeftOuter { key_pairs, .. } => Some(key_pairs),
+            _ => None,
+        }
+    }
+}
+
+impl CompiledBgp {
+    /// Return the Store plan only when the authoritative relation is a leaf BGP.
+    pub fn bgp_plan(&self) -> &LayerBgpPlan {
+        self.relation
+            .as_bgp()
+            .expect("compiled relation is not a leaf BGP")
     }
 }
 
 fn compiled_result_descriptors(
     compiled: &CompiledBgp,
 ) -> std::io::Result<Vec<ResultColumnDescriptor>> {
-    let namespaces = compiled_result_namespaces(compiled)?;
-    let left_arity = result_id_namespaces(&compiled.plan)?.len();
-    Ok(namespaces
-        .into_iter()
-        .enumerate()
-        .map(|(index, namespace)| ResultColumnDescriptor {
-            namespace,
-            nullable: compiled.optional_join.is_some() && index >= left_arity,
-        })
-        .collect())
-}
-
-#[derive(Clone, Debug)]
-pub struct CompiledAntiJoin {
-    pub right_plan: LayerBgpPlan,
-    /// Negated branch schema, bound into the public query digest even though local
-    /// variables are not exposed by Prolog negation.
-    pub right_schema: Vec<String>,
-    /// Ordered `(outer, negated)` schema-column pairs. Two pairs use the Store's
-    /// injective two-u64 composite key in this exact order.
-    pub key_pairs: Vec<(usize, usize)>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CompiledOptionalJoin {
-    pub right_plan: LayerBgpPlan,
-    pub right_schema: Vec<String>,
-    pub key_pairs: Vec<(usize, usize)>,
+    relation_result_descriptors(&compiled.relation)
 }
 
 /// An in-memory proof result produced only when a caller explicitly invokes
@@ -191,44 +198,24 @@ pub enum ExecutedResultValue {
 #[derive(Debug)]
 pub enum ProvedQueryStatement {
     Single {
-        proof: LayerBgpProof,
+        proof: Box<LayerBgpProof>,
         predicate_ids: Vec<u64>,
     },
-    BagUnion(ProvedBagUnion),
-    LeftAntiJoin(ProvedLeftAntiJoin),
-    LeftOuterJoin(ProvedLeftOuterJoin),
-}
-
-#[derive(Debug)]
-pub struct ProvedLeftOuterJoin {
-    pub left: ProvedBagUnionBranch,
-    pub right: ProvedBagUnionBranch,
-    pub proof: LeftOuterJoinProof,
-}
-
-#[derive(Debug)]
-pub struct ProvedLeftAntiJoin {
-    pub left: ProvedBagUnionBranch,
-    pub right: ProvedBagUnionBranch,
-    /// Present for correlated anti-joins. Global Not is pinned entirely by the
-    /// independently authenticated right length and carries no extra witness.
-    pub proof: Option<LeftAntiJoinProof>,
-}
-
-#[derive(Debug)]
-pub struct ProvedBagUnionBranch {
-    pub proof: LayerBgpProof,
-    pub result_commitments: Vec<ArkGT>,
-    pub result_columns: Vec<Vec<ArkFr>>,
-    pub result_log_domain: usize,
-    pub result_len: usize,
-    pub predicate_ids: Vec<u64>,
-}
-
-#[derive(Debug)]
-pub struct ProvedBagUnion {
-    pub branches: Vec<ProvedBagUnionBranch>,
-    pub proof: BagUnionProof,
+    BagUnion {
+        branches: Vec<ProvedBgp>,
+        proof: Box<BagUnionProof>,
+    },
+    LeftAnti {
+        left: Box<ProvedBgp>,
+        right: Box<ProvedBgp>,
+        /// Correlated anti joins carry a proof; global Not is length-pinned.
+        proof: Option<Box<LeftAntiJoinProof>>,
+    },
+    LeftOuter {
+        left: Box<ProvedBgp>,
+        right: Box<ProvedBgp>,
+        proof: Box<LeftOuterJoinProof>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -250,53 +237,8 @@ fn digest_bytes(hasher: &mut Sha256, bytes: &[u8]) {
 /// collection, count binding, or `Distinct` interpretation.
 pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHash> {
     let mut hasher = Sha256::new();
-    hasher.update(b"terminusdb-woql2/query-proof-envelope/v1");
-    hasher.update(plan_digest(&compiled.plan)?);
-    if !compiled.union_plans.is_empty() {
-        hasher.update(b"/bag-union/v1");
-        hasher.update((compiled.union_plans.len() as u64).to_le_bytes());
-        for (plan, mapping) in compiled
-            .union_plans
-            .iter()
-            .zip(&compiled.union_schema_mappings)
-        {
-            hasher.update(plan_digest(plan)?);
-            hasher.update((mapping.len() as u64).to_le_bytes());
-            for index in mapping {
-                hasher.update((*index as u64).to_le_bytes());
-            }
-        }
-    }
-    if let Some(anti) = &compiled.anti_join {
-        hasher.update(b"/left-anti-join/v0");
-        hasher.update(plan_digest(&anti.right_plan)?);
-        hasher.update((anti.right_schema.len() as u64).to_le_bytes());
-        for name in &anti.right_schema {
-            digest_bytes(&mut hasher, name.as_bytes());
-        }
-        hasher.update((anti.key_pairs.len() as u64).to_le_bytes());
-        for (left, right) in &anti.key_pairs {
-            hasher.update((*left as u64).to_le_bytes());
-            hasher.update((*right as u64).to_le_bytes());
-        }
-    }
-    if let Some(optional) = &compiled.optional_join {
-        hasher.update(b"/left-outer-join/v0");
-        hasher.update(plan_digest(&optional.right_plan)?);
-        hasher.update((optional.right_schema.len() as u64).to_le_bytes());
-        for name in &optional.right_schema {
-            digest_bytes(&mut hasher, name.as_bytes());
-        }
-        hasher.update((optional.key_pairs.len() as u64).to_le_bytes());
-        for (left, right) in &optional.key_pairs {
-            hasher.update((*left as u64).to_le_bytes());
-            hasher.update((*right as u64).to_le_bytes());
-        }
-    }
-    hasher.update((compiled.schema.len() as u64).to_le_bytes());
-    for name in &compiled.schema {
-        digest_bytes(&mut hasher, name.as_bytes());
-    }
+    hasher.update(b"terminusdb-woql2/query-proof-envelope/v2");
+    hasher.update(relation_query_digest(&compiled.relation)?);
     match &compiled.projection {
         None => hasher.update([0]),
         Some(indices) => {
@@ -320,6 +262,144 @@ pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHas
     Ok(hasher.finalize().into())
 }
 
+fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHash> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"terminusdb-woql2/relation/v1");
+    hasher.update((relation.schema.len() as u64).to_le_bytes());
+    for name in &relation.schema {
+        digest_bytes(&mut hasher, name.as_bytes());
+    }
+    for descriptor in relation_result_descriptors(relation)? {
+        hasher.update([match descriptor.namespace {
+            ResultIdNamespace::NodeValue => 0,
+            ResultIdNamespace::Predicate => 1,
+        }]);
+        hasher.update([descriptor.nullable as u8]);
+    }
+    match &relation.statement {
+        CompiledRelationStatement::Bgp(plan) => {
+            hasher.update(b"/bgp");
+            hasher.update(plan_digest(plan)?);
+        }
+        CompiledRelationStatement::BagUnion { branches, mappings } => {
+            hasher.update(b"/bag-union");
+            hasher.update((branches.len() as u64).to_le_bytes());
+            for (branch, mapping) in branches.iter().zip(mappings) {
+                hasher.update(relation_query_digest(branch)?);
+                hasher.update((mapping.len() as u64).to_le_bytes());
+                for index in mapping {
+                    hasher.update((*index as u64).to_le_bytes());
+                }
+            }
+        }
+        CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
+            hasher.update(b"/left-anti");
+            hasher.update(relation_query_digest(left)?);
+            hasher.update(relation_query_digest(right)?);
+            digest_key_pairs(&mut hasher, key_pairs);
+        }
+        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+            hasher.update(b"/left-outer");
+            hasher.update(relation_query_digest(left)?);
+            hasher.update(relation_query_digest(right)?);
+            digest_key_pairs(&mut hasher, key_pairs);
+        }
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn digest_key_pairs(hasher: &mut Sha256, key_pairs: &[(usize, usize)]) {
+    hasher.update((key_pairs.len() as u64).to_le_bytes());
+    for (left, right) in key_pairs {
+        hasher.update((*left as u64).to_le_bytes());
+        hasher.update((*right as u64).to_le_bytes());
+    }
+}
+
+fn relation_result_descriptors(
+    relation: &CompiledRelation,
+) -> std::io::Result<Vec<ResultColumnDescriptor>> {
+    match &relation.statement {
+        CompiledRelationStatement::Bgp(plan) => {
+            terminus_store::proof::query::result_column_descriptors(plan)
+        }
+        CompiledRelationStatement::BagUnion { branches, mappings } => {
+            let mut expected = None;
+            for (branch, mapping) in branches.iter().zip(mappings) {
+                let descriptors = relation_result_descriptors(branch)?;
+                let mapped = mapping
+                    .iter()
+                    .map(|index| {
+                        descriptors.get(*index).copied().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "WOQL union schema mapping out of range",
+                            )
+                        })
+                    })
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                if expected.as_ref().is_some_and(|prior| prior != &mapped) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL union branch descriptor mismatch",
+                    ));
+                }
+                expected = Some(mapped);
+            }
+            Ok(expected.unwrap_or_default())
+        }
+        CompiledRelationStatement::LeftAnti { left, .. } => relation_result_descriptors(left),
+        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+            let mut descriptors = relation_result_descriptors(left)?;
+            let right_descriptors = relation_result_descriptors(right)?;
+            let shared_right: Vec<_> = key_pairs.iter().map(|pair| pair.1).collect();
+            descriptors.extend(right_descriptors.into_iter().enumerate().filter_map(
+                |(index, descriptor)| {
+                    (!shared_right.contains(&index)).then_some(ResultColumnDescriptor {
+                        namespace: descriptor.namespace,
+                        nullable: true,
+                    })
+                },
+            ));
+            Ok(descriptors)
+        }
+    }
+}
+
+fn relation_proof_plan(
+    relation: &CompiledRelation,
+    query_digest: ProofHash,
+) -> std::io::Result<RelationProofPlan> {
+    let child = |relation: &CompiledRelation| {
+        let digest = relation_query_digest(relation)?;
+        relation_proof_plan(relation, digest)
+    };
+    let kind = match &relation.statement {
+        CompiledRelationStatement::Bgp(plan) => RelationProofPlanKind::Bgp(plan.clone()),
+        CompiledRelationStatement::BagUnion { branches, mappings } => {
+            RelationProofPlanKind::BagUnion {
+                branches: branches.iter().map(child).collect::<std::io::Result<_>>()?,
+                mappings: mappings.clone(),
+            }
+        }
+        CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
+            RelationProofPlanKind::LeftAnti {
+                left: Box::new(child(left)?),
+                right: Box::new(child(right)?),
+                key_pairs: key_pairs.clone(),
+            }
+        }
+        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+            RelationProofPlanKind::LeftOuter {
+                left: Box::new(child(left)?),
+                right: Box::new(child(right)?),
+                key_pairs: key_pairs.clone(),
+            }
+        }
+    };
+    Ok(RelationProofPlan { query_digest, kind })
+}
+
 impl ProvedBgp {
     pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
         match &self.statement {
@@ -327,18 +407,14 @@ impl ProvedBgp {
                 proof,
                 predicate_ids,
             } => Some((proof, predicate_ids)),
-            ProvedQueryStatement::BagUnion(_) => None,
-            ProvedQueryStatement::LeftAntiJoin(_) => None,
-            ProvedQueryStatement::LeftOuterJoin(_) => None,
+            _ => None,
         }
     }
 
-    pub fn as_bag_union(&self) -> Option<&ProvedBagUnion> {
+    pub fn as_bag_union(&self) -> Option<(&[ProvedBgp], &BagUnionProof)> {
         match &self.statement {
-            ProvedQueryStatement::Single { .. } => None,
-            ProvedQueryStatement::BagUnion(union) => Some(union),
-            ProvedQueryStatement::LeftAntiJoin(_) => None,
-            ProvedQueryStatement::LeftOuterJoin(_) => None,
+            ProvedQueryStatement::BagUnion { branches, proof } => Some((branches, proof)),
+            _ => None,
         }
     }
 
@@ -349,254 +425,220 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<()> {
-        if let ProvedQueryStatement::LeftOuterJoin(proved) = &self.statement {
-            let optional = compiled.optional_join.as_ref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "left outer proof supplied for a non-Optional query",
-                )
-            })?;
-            for (branch, plan) in [
-                (&proved.left, &compiled.plan),
-                (&proved.right, &optional.right_plan),
-            ] {
+        self.verify_relation(
+            &compiled.relation,
+            layer,
+            expected_root,
+            compiled_query_digest(compiled)?,
+        )
+    }
+
+    fn relation_commit(&self, mapping: Option<&[usize]>) -> std::io::Result<RelationCommit> {
+        let commitments = match mapping {
+            Some(mapping) => mapping
+                .iter()
+                .map(|index| {
+                    self.result_commitments.get(*index).copied().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "WOQL recursive relation mapping out of range",
+                        )
+                    })
+                })
+                .collect::<std::io::Result<Vec<_>>>()?,
+            None => self.result_commitments.clone(),
+        };
+        Ok(RelationCommit {
+            commitments,
+            log_domain: self.result_log_domain,
+            n: self.result_len,
+        })
+    }
+
+    fn verify_relation(
+        &self,
+        compiled: &CompiledRelation,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+        query_digest: ProofHash,
+    ) -> std::io::Result<()> {
+        match (&self.statement, &compiled.statement) {
+            (
+                ProvedQueryStatement::Single {
+                    proof,
+                    predicate_ids,
+                },
+                CompiledRelationStatement::Bgp(plan),
+            ) => {
                 verify_layer_bgp(
                     layer,
                     expected_root,
                     plan,
-                    &branch.predicate_ids,
-                    &branch.result_commitments,
-                    branch.result_len,
-                    &branch.proof,
+                    predicate_ids,
+                    &self.result_commitments,
+                    self.result_len,
+                    proof,
                 )?;
                 verify_layer_bgp_result_log_domain(
                     layer,
                     plan,
-                    &branch.proof,
-                    branch.result_log_domain,
-                )?;
-                verify_result_columns(
-                    &branch.result_commitments,
-                    &branch.result_columns,
-                    branch.result_len,
-                    branch.result_log_domain,
+                    proof,
+                    self.result_log_domain,
                 )?;
             }
-            let digest = compiled_query_digest(compiled)?;
-            let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
-            transcript.append_bytes(b"pow/outer-envelope/root", &expected_root);
-            transcript.append_bytes(b"pow/outer-envelope/query", &digest);
-            let left_commit = RelationCommit {
-                    commitments: proved.left.result_commitments.clone(),
-                    log_domain: proved.left.result_log_domain,
-                    n: proved.left.result_len,
-                };
-            let right_commit = RelationCommit {
-                    commitments: proved.right.result_commitments.clone(),
-                    log_domain: proved.right.result_log_domain,
-                    n: proved.right.result_len,
-                };
-            if optional.key_pairs.is_empty() {
-                verify_global_left_outer_join(
-                    &left_commit,
-                    &right_commit,
-                    &self.result_commitments,
-                    self.result_len,
-                    self.result_log_domain,
-                    &proved.proof,
-                    &mut transcript,
-                )?;
-            } else {
-                verify_left_outer_join_with_keys(
-                    &left_commit,
-                    &right_commit,
-                    &optional.key_pairs,
-                    &self.result_commitments,
-                    self.result_len,
-                    self.result_log_domain,
-                    &proved.proof,
-                    &mut transcript,
-                )?;
-            }
-            return self.verify_columns(&self.result_columns);
-        }
-        if let ProvedQueryStatement::LeftAntiJoin(proved) = &self.statement {
-            let anti = compiled.anti_join.as_ref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "left anti-join proof supplied for a non-Not query",
-                )
-            })?;
-            for (branch, plan) in [
-                (&proved.left, &compiled.plan),
-                (&proved.right, &anti.right_plan),
-            ] {
-                verify_layer_bgp(
-                    layer,
-                    expected_root,
-                    plan,
-                    &branch.predicate_ids,
-                    &branch.result_commitments,
-                    branch.result_len,
-                    &branch.proof,
-                )?;
-                verify_layer_bgp_result_log_domain(
-                    layer,
-                    plan,
-                    &branch.proof,
-                    branch.result_log_domain,
-                )?;
-                verify_result_columns(
-                    &branch.result_commitments,
-                    &branch.result_columns,
-                    branch.result_len,
-                    branch.result_log_domain,
-                )?;
-            }
-            let digest = compiled_query_digest(compiled)?;
-            let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
-            transcript.append_bytes(b"pow/anti-envelope/root", &expected_root);
-            transcript.append_bytes(b"pow/anti-envelope/query", &digest);
-            let left_commit = RelationCommit {
-                commitments: proved.left.result_commitments.clone(),
-                log_domain: proved.left.result_log_domain,
-                n: proved.left.result_len,
-            };
-            let right_commit = RelationCommit {
-                commitments: proved.right.result_commitments.clone(),
-                log_domain: proved.right.result_log_domain,
-                n: proved.right.result_len,
-            };
-            match (anti.key_pairs.is_empty(), proved.proof.as_ref()) {
-                (true, None) => verify_global_not(
-                    &left_commit,
-                    &right_commit,
-                    &self.result_commitments,
-                    self.result_len,
-                    self.result_log_domain,
-                )?,
-                (false, Some(proof)) => verify_left_anti_join_with_keys(
-                    &left_commit,
-                    &right_commit,
-                    &anti.key_pairs,
+            (
+                ProvedQueryStatement::BagUnion { branches, proof },
+                CompiledRelationStatement::BagUnion {
+                    branches: branch_plans,
+                    mappings,
+                },
+            ) => {
+                if branches.len() < 2
+                    || branches.len() != branch_plans.len()
+                    || branches.len() != mappings.len()
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL recursive union branch mismatch",
+                    ));
+                }
+                let mut inputs = Vec::with_capacity(branches.len());
+                for ((branch, branch_plan), mapping) in
+                    branches.iter().zip(branch_plans).zip(mappings)
+                {
+                    branch.verify_relation(
+                        branch_plan,
+                        layer,
+                        expected_root,
+                        relation_query_digest(branch_plan)?,
+                    )?;
+                    inputs.push(if compiled.schema.is_empty() {
+                        branch.relation_commit(None)?
+                    } else {
+                        branch.relation_commit(Some(mapping))?
+                    });
+                }
+                let mut transcript = Transcript254::new(b"parture-union-envelope");
+                transcript.append_bytes(b"pow/union-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/union-envelope/query", &query_digest);
+                verify_bag_union(
+                    &inputs,
                     &self.result_commitments,
                     self.result_len,
                     self.result_log_domain,
                     proof,
                     &mut transcript,
-                )?,
-                _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "WOQL Not key/proof variant mismatch",
-                    ))
-                }
+                )?;
             }
-            return self.verify_columns(&self.result_columns);
-        }
-        if let ProvedQueryStatement::BagUnion(union) = &self.statement {
-            if compiled.union_plans.len() != union.branches.len()
-                || compiled.union_schema_mappings.len() != union.branches.len()
-                || union.branches.len() < 2
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "WOQL bag-union branch shape mismatch",
-                ));
-            }
-            let mut inputs = Vec::with_capacity(union.branches.len());
-            for ((branch, plan), mapping) in union
-                .branches
-                .iter()
-                .zip(&compiled.union_plans)
-                .zip(&compiled.union_schema_mappings)
-            {
-                verify_layer_bgp(
+            (
+                ProvedQueryStatement::LeftAnti { left, right, proof },
+                CompiledRelationStatement::LeftAnti {
+                    left: left_plan,
+                    right: right_plan,
+                    key_pairs,
+                },
+            ) => {
+                left.verify_relation(
+                    left_plan,
                     layer,
                     expected_root,
-                    plan,
-                    &branch.predicate_ids,
-                    &branch.result_commitments,
-                    branch.result_len,
-                    &branch.proof,
+                    relation_query_digest(left_plan)?,
                 )?;
-                verify_layer_bgp_result_log_domain(
+                right.verify_relation(
+                    right_plan,
                     layer,
-                    plan,
-                    &branch.proof,
-                    branch.result_log_domain,
+                    expected_root,
+                    relation_query_digest(right_plan)?,
                 )?;
-                verify_result_columns(
-                    &branch.result_commitments,
-                    &branch.result_columns,
-                    branch.result_len,
-                    branch.result_log_domain,
-                )?;
-                let union_arity = compiled.schema.len().max(1);
-                if mapping.len() != union_arity
-                    || mapping
-                        .iter()
-                        .any(|index| *index >= branch.result_columns.len())
-                {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "WOQL bag-union schema mapping mismatch",
-                    ));
+                let left_commit = left.relation_commit(None)?;
+                let right_commit = right.relation_commit(None)?;
+                let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
+                transcript.append_bytes(b"pow/anti-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/anti-envelope/query", &query_digest);
+                match (key_pairs.is_empty(), proof.as_ref()) {
+                    (true, None) => verify_global_not(
+                        &left_commit,
+                        &right_commit,
+                        &self.result_commitments,
+                        self.result_len,
+                        self.result_log_domain,
+                    )?,
+                    (false, Some(proof)) => verify_left_anti_join_with_keys(
+                        &left_commit,
+                        &right_commit,
+                        key_pairs,
+                        &self.result_commitments,
+                        self.result_len,
+                        self.result_log_domain,
+                        proof,
+                        &mut transcript,
+                    )?,
+                    _ => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "WOQL recursive anti proof variant mismatch",
+                        ))
+                    }
                 }
-                inputs.push(RelationCommit {
-                    commitments: mapping
-                        .iter()
-                        .map(|index| branch.result_commitments[*index])
-                        .collect(),
-                    log_domain: branch.result_log_domain,
-                    n: branch.result_len,
-                });
             }
-            let digest = compiled_query_digest(compiled)?;
-            let mut transcript = Transcript254::new(b"parture-union-envelope");
-            transcript.append_bytes(b"pow/union-envelope/root", &expected_root);
-            transcript.append_bytes(b"pow/union-envelope/query", &digest);
-            verify_bag_union(
-                &inputs,
-                &self.result_commitments,
-                self.result_len,
-                self.result_log_domain,
-                &union.proof,
-                &mut transcript,
-            )?;
-            return self.verify_columns(&self.result_columns);
+            (
+                ProvedQueryStatement::LeftOuter { left, right, proof },
+                CompiledRelationStatement::LeftOuter {
+                    left: left_plan,
+                    right: right_plan,
+                    key_pairs,
+                },
+            ) => {
+                left.verify_relation(
+                    left_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(left_plan)?,
+                )?;
+                right.verify_relation(
+                    right_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(right_plan)?,
+                )?;
+                let left_commit = left.relation_commit(None)?;
+                let right_commit = right.relation_commit(None)?;
+                let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
+                transcript.append_bytes(b"pow/outer-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/outer-envelope/query", &query_digest);
+                if key_pairs.is_empty() {
+                    verify_global_left_outer_join(
+                        &left_commit,
+                        &right_commit,
+                        &self.result_commitments,
+                        self.result_len,
+                        self.result_log_domain,
+                        proof,
+                        &mut transcript,
+                    )?;
+                } else {
+                    verify_left_outer_join_with_keys(
+                        &left_commit,
+                        &right_commit,
+                        key_pairs,
+                        &self.result_commitments,
+                        self.result_len,
+                        self.result_log_domain,
+                        proof,
+                        &mut transcript,
+                    )?;
+                }
+            }
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL recursive proof/plan variant mismatch",
+                ))
+            }
         }
-        let ProvedQueryStatement::Single {
-            proof,
-            predicate_ids,
-        } = &self.statement
-        else {
-            unreachable!("bag-union statement returned from its verification branch")
-        };
-        if !compiled.union_plans.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "single BGP proof cannot verify a compiled WOQL bag union",
-            ));
-        }
-        if compiled.anti_join.is_some() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "single BGP proof cannot verify a compiled WOQL Not",
-            ));
-        }
-        verify_layer_bgp(
-            layer,
-            expected_root,
-            &compiled.plan,
-            predicate_ids,
-            &self.result_commitments,
-            self.result_len,
-            proof,
-        )?;
-        verify_layer_bgp_result_log_domain(layer, &compiled.plan, proof, self.result_log_domain)?;
         self.verify_columns(&self.result_columns)
     }
+
 
     /// Verify arbitrary caller-delivered Store ID columns against the result commitments
     /// authenticated by this proof. A changed, reordered, inserted, or omitted row fails.
@@ -617,22 +659,22 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
-        if compiled.optional_join.is_some() {
+        let descriptors = compiled_result_descriptors(compiled)?;
+        if descriptors.iter().any(|descriptor| descriptor.nullable) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "nullable Optional results require verify_and_resolve_values",
             ));
         }
         self.verify(compiled, layer, expected_root)?;
-        if compiled.schema.is_empty() {
+        if compiled.relation.schema.is_empty() {
             Ok(Vec::new())
         } else {
-            resolve_typed_result_objects(
-                layer,
-                expected_root,
-                &self.result_columns,
-                &compiled_result_namespaces(compiled)?,
-            )
+            let namespaces = descriptors
+                .into_iter()
+                .map(|descriptor| descriptor.namespace)
+                .collect::<Vec<_>>();
+            resolve_typed_result_objects(layer, expected_root, &self.result_columns, &namespaces)
         }
     }
 
@@ -643,7 +685,7 @@ impl ProvedBgp {
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
         self.verify(compiled, layer, expected_root)?;
-        if compiled.schema.is_empty() {
+        if compiled.relation.schema.is_empty() {
             Ok(Vec::new())
         } else {
             resolve_result_values(
@@ -665,7 +707,7 @@ impl ProvedBgp {
         objects: &[Vec<CanonicalObject>],
     ) -> std::io::Result<()> {
         self.verify(compiled, layer, expected_root)?;
-        if compiled.schema.is_empty() {
+        if compiled.relation.schema.is_empty() {
             if objects.is_empty() {
                 Ok(())
             } else {
@@ -679,7 +721,10 @@ impl ProvedBgp {
                 layer,
                 expected_root,
                 &self.result_columns,
-                &compiled_result_namespaces(compiled)?,
+                &compiled_result_descriptors(compiled)?
+                    .into_iter()
+                    .map(|descriptor| descriptor.namespace)
+                    .collect::<Vec<_>>(),
             )?;
             if resolved == objects {
                 Ok(())
@@ -726,13 +771,16 @@ impl ProvedBgp {
             }
             return Ok(());
         }
-        if compiled.optional_join.is_some() {
+        if compiled_result_descriptors(compiled)?
+            .iter()
+            .any(|descriptor| descriptor.nullable)
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "nullable Optional rows require verify_executed_values",
             ));
         }
-        if compiled.schema.is_empty() {
+        if compiled.relation.schema.is_empty() {
             self.verify(compiled, layer, expected_root)?;
             if !variables.is_empty()
                 || rows.len() != self.result_len
@@ -748,10 +796,10 @@ impl ProvedBgp {
         let projection = compiled
             .projection
             .clone()
-            .unwrap_or_else(|| (0..compiled.schema.len()).collect());
+            .unwrap_or_else(|| (0..compiled.relation.schema.len()).collect());
         let expected_variables: Vec<&str> = projection
             .iter()
-            .map(|index| compiled.schema[*index].as_str())
+            .map(|index| compiled.relation.schema[*index].as_str())
             .collect();
         if variables.iter().map(String::as_str).collect::<Vec<_>>() != expected_variables {
             return Err(std::io::Error::new(
@@ -782,7 +830,10 @@ impl ProvedBgp {
                 delivered_columns[column].push(ArkFr::from_u64(*id));
             }
         }
-        let namespaces = compiled_result_namespaces(compiled)?;
+        let namespaces: Vec<_> = compiled_result_descriptors(compiled)?
+            .into_iter()
+            .map(|descriptor| descriptor.namespace)
+            .collect();
         let projected_namespaces: Vec<_> =
             projection.iter().map(|index| namespaces[*index]).collect();
         let delivered_objects = resolve_typed_result_objects(
@@ -827,10 +878,10 @@ impl ProvedBgp {
         let projection = compiled
             .projection
             .clone()
-            .unwrap_or_else(|| (0..compiled.schema.len()).collect());
+            .unwrap_or_else(|| (0..compiled.relation.schema.len()).collect());
         let expected_variables: Vec<&str> = projection
             .iter()
-            .map(|index| compiled.schema[*index].as_str())
+            .map(|index| compiled.relation.schema[*index].as_str())
             .collect();
         if variables.iter().map(String::as_str).collect::<Vec<_>>() != expected_variables
             || rows.iter().any(|row| row.len() != projection.len())
@@ -899,158 +950,143 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<u8>> {
-        if let ProvedQueryStatement::LeftOuterJoin(proved) = &self.statement {
-            let optional = compiled.optional_join.as_ref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "left outer proof supplied for a non-Optional query",
-                )
-            })?;
-            let digest = compiled_query_digest(compiled)?;
-            let branch_envelope = |branch: &ProvedBagUnionBranch,
-                                   plan: &LayerBgpPlan|
-             -> std::io::Result<LayerBgpEnvelope> {
-                LayerBgpEnvelope::new_verified(
-                    layer,
-                    expected_root,
-                    plan,
-                    digest,
-                    branch.proof.clone(),
-                    branch.result_commitments.clone(),
-                    branch.result_columns.clone(),
-                    branch.result_log_domain,
-                    branch.result_len,
-                    branch.predicate_ids.clone(),
-                )
-            };
-            return LeftOuterJoinEnvelope::new_verified(
-                layer,
-                expected_root,
-                &compiled.plan,
-                &optional.right_plan,
-                digest,
-                branch_envelope(&proved.left, &compiled.plan)?,
-                branch_envelope(&proved.right, &optional.right_plan)?,
-                optional.key_pairs.clone(),
-                proved.proof.clone(),
-                self.result_commitments.clone(),
-                self.result_columns.clone(),
-                self.result_log_domain,
-                self.result_len,
-            )?
-            .encode();
-        }
-        if let ProvedQueryStatement::LeftAntiJoin(proved) = &self.statement {
-            let anti = compiled.anti_join.as_ref().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "left anti-join proof supplied for a non-Not query",
-                )
-            })?;
-            let digest = compiled_query_digest(compiled)?;
-            let branch_envelope = |branch: &ProvedBagUnionBranch,
-                                   plan: &LayerBgpPlan|
-             -> std::io::Result<LayerBgpEnvelope> {
-                LayerBgpEnvelope::new_verified(
-                    layer,
-                    expected_root,
-                    plan,
-                    digest,
-                    branch.proof.clone(),
-                    branch.result_commitments.clone(),
-                    branch.result_columns.clone(),
-                    branch.result_log_domain,
-                    branch.result_len,
-                    branch.predicate_ids.clone(),
-                )
-            };
-            return LeftAntiJoinEnvelope::new_verified(
-                layer,
-                expected_root,
-                &compiled.plan,
-                &anti.right_plan,
-                digest,
-                branch_envelope(&proved.left, &compiled.plan)?,
-                branch_envelope(&proved.right, &anti.right_plan)?,
-                anti.key_pairs.clone(),
-                proved.proof.clone(),
-                self.result_commitments.clone(),
-                self.result_columns.clone(),
-                self.result_log_domain,
-                self.result_len,
-                compiled.schema.is_empty(),
-            )?
-            .encode();
-        }
-        if let ProvedQueryStatement::BagUnion(union) = &self.statement {
-            let digest = compiled_query_digest(compiled)?;
-            if union.branches.len() != compiled.union_plans.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "WOQL bag-union branch count mismatch",
-                ));
-            }
-            let branches: Vec<LayerBgpEnvelope> = union
-                .branches
-                .iter()
-                .zip(&compiled.union_plans)
-                .map(|(branch, plan)| {
-                    LayerBgpEnvelope::new_verified(
-                        layer,
-                        expected_root,
-                        plan,
-                        digest,
-                        branch.proof.clone(),
-                        branch.result_commitments.clone(),
-                        branch.result_columns.clone(),
-                        branch.result_log_domain,
-                        branch.result_len,
-                        branch.predicate_ids.clone(),
-                    )
-                })
-                .collect::<std::io::Result<_>>()?;
-            return BagUnionEnvelope::new_verified(
-                layer,
-                expected_root,
-                &compiled.union_plans,
-                digest,
-                branches,
-                union.proof.clone(),
-                self.result_commitments.clone(),
-                self.result_columns.clone(),
-                self.result_log_domain,
-                self.result_len,
-                compiled.schema.is_empty(),
-            )?
-            .encode();
-        }
-        let ProvedQueryStatement::Single {
-            proof,
-            predicate_ids,
-        } = &self.statement
-        else {
-            unreachable!("bag-union statement returned from its encoding branch")
-        };
-        if !compiled.union_plans.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "single BGP proof cannot encode as a WOQL bag union",
-            ));
-        }
-        LayerBgpEnvelope::new_verified(
+        let digest = compiled_query_digest(compiled)?;
+        let envelope = self.recursive_envelope(
+            &compiled.relation,
             layer,
             expected_root,
-            &compiled.plan,
-            compiled_query_digest(compiled)?,
-            proof.clone(),
-            self.result_commitments.clone(),
-            self.result_columns.clone(),
-            self.result_log_domain,
-            self.result_len,
-            predicate_ids.clone(),
-        )?
-        .encode()
+            digest,
+        )?;
+        let plan = relation_proof_plan(&compiled.relation, digest)?;
+        envelope.verify(layer, expected_root, &plan)?;
+        envelope.encode()
     }
+
+    fn recursive_envelope(
+        &self,
+        compiled: &CompiledRelation,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+        query_digest: ProofHash,
+    ) -> std::io::Result<RecursiveRelationEnvelope> {
+        self.verify_relation(compiled, layer, expected_root, query_digest)?;
+        let proof = match (&self.statement, &compiled.statement) {
+            (
+                ProvedQueryStatement::Single {
+                    proof,
+                    predicate_ids,
+                },
+                CompiledRelationStatement::Bgp(plan),
+            ) => RecursiveRelationProof::Bgp(Box::new(LayerBgpEnvelope::new_verified(
+                layer,
+                expected_root,
+                plan,
+                query_digest,
+                *proof.clone(),
+                self.result_commitments.clone(),
+                self.result_columns.clone(),
+                self.result_log_domain,
+                self.result_len,
+                predicate_ids.clone(),
+            )?)),
+            (
+                ProvedQueryStatement::BagUnion { branches, proof },
+                CompiledRelationStatement::BagUnion {
+                    branches: branch_plans,
+                    ..
+                },
+            ) => RecursiveRelationProof::BagUnion {
+                branches: branches
+                    .iter()
+                    .zip(branch_plans)
+                    .map(|(branch, plan)| {
+                        branch.recursive_envelope(
+                            plan,
+                            layer,
+                            expected_root,
+                            relation_query_digest(plan)?,
+                        )
+                    })
+                    .collect::<std::io::Result<_>>()?,
+                proof: proof.clone(),
+            },
+            (
+                ProvedQueryStatement::LeftAnti { left, right, proof },
+                CompiledRelationStatement::LeftAnti {
+                    left: left_plan,
+                    right: right_plan,
+                    ..
+                },
+            ) => RecursiveRelationProof::LeftAnti {
+                left: Box::new(left.recursive_envelope(
+                    left_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(left_plan)?,
+                )?),
+                right: Box::new(right.recursive_envelope(
+                    right_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(right_plan)?,
+                )?),
+                proof: proof.clone(),
+            },
+            (
+                ProvedQueryStatement::LeftOuter { left, right, proof },
+                CompiledRelationStatement::LeftOuter {
+                    left: left_plan,
+                    right: right_plan,
+                    ..
+                },
+            ) => RecursiveRelationProof::LeftOuter {
+                left: Box::new(left.recursive_envelope(
+                    left_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(left_plan)?,
+                )?),
+                right: Box::new(right.recursive_envelope(
+                    right_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(right_plan)?,
+                )?),
+                proof: proof.clone(),
+            },
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL recursive envelope proof/plan mismatch",
+                ))
+            }
+        };
+        let result_descriptors = relation_result_descriptors(compiled)?;
+        let ground_result = compiled.schema.is_empty();
+        let result_values = if ground_result {
+            Vec::new()
+        } else {
+            resolve_result_values(
+                layer,
+                expected_root,
+                &self.result_columns,
+                &result_descriptors,
+            )?
+        };
+        Ok(RecursiveRelationEnvelope {
+            layer_root: expected_root,
+            query_digest,
+            proof,
+            result_commitments: self.result_commitments.clone(),
+            result_columns: self.result_columns.clone(),
+            result_log_domain: self.result_log_domain,
+            result_len: self.result_len,
+            ground_result,
+            result_descriptors,
+            result_values,
+        })
+    }
+
 
     /// Commitments selected by an outer WOQL `Select`, or every result commitment when
     /// the query has no projection.
@@ -1099,139 +1135,78 @@ pub fn decode_and_verify_envelope(
     layer: &LayerCommitment,
     expected_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
-    if let Some(optional) = &compiled.optional_join {
-        let envelope = LeftOuterJoinEnvelope::decode(bytes)?;
-        let digest = compiled_query_digest(compiled)?;
-        envelope.verify(
-            layer,
-            expected_root,
-            &compiled.plan,
-            &optional.right_plan,
-            digest,
-            &optional.key_pairs,
-        )?;
-        let branch = |envelope: LayerBgpEnvelope| ProvedBagUnionBranch {
-            proof: envelope.proof,
-            result_commitments: envelope.result_commitments,
-            result_columns: envelope.result_columns,
-            result_log_domain: envelope.result_log_domain,
-            result_len: envelope.result_len,
-            predicate_ids: envelope.predicate_ids,
-        };
-        return Ok(VerifiedBgpEnvelope {
-            proved: ProvedBgp {
-                statement: ProvedQueryStatement::LeftOuterJoin(ProvedLeftOuterJoin {
-                    left: branch(envelope.left),
-                    right: branch(envelope.right),
-                    proof: envelope.outer_proof,
-                }),
-                result_commitments: envelope.result_commitments,
-                result_columns: envelope.result_columns,
-                result_log_domain: envelope.result_log_domain,
-                result_len: envelope.result_len,
-            },
-            result_objects: Vec::new(),
-            result_values: Some(envelope.result_values),
-        });
-    }
-    if let Some(anti) = &compiled.anti_join {
-        let envelope = LeftAntiJoinEnvelope::decode(bytes)?;
-        let digest = compiled_query_digest(compiled)?;
-        envelope.verify(
-            layer,
-            expected_root,
-            &compiled.plan,
-            &anti.right_plan,
-            digest,
-            &anti.key_pairs,
-            compiled.schema.is_empty(),
-        )?;
-        let branch = |envelope: LayerBgpEnvelope| ProvedBagUnionBranch {
-            proof: envelope.proof,
-            result_commitments: envelope.result_commitments,
-            result_columns: envelope.result_columns,
-            result_log_domain: envelope.result_log_domain,
-            result_len: envelope.result_len,
-            predicate_ids: envelope.predicate_ids,
-        };
-        return Ok(VerifiedBgpEnvelope {
-            proved: ProvedBgp {
-                statement: ProvedQueryStatement::LeftAntiJoin(ProvedLeftAntiJoin {
-                    left: branch(envelope.left),
-                    right: branch(envelope.right),
-                    proof: envelope.anti_proof,
-                }),
-                result_commitments: envelope.result_commitments,
-                result_columns: envelope.result_columns,
-                result_log_domain: envelope.result_log_domain,
-                result_len: envelope.result_len,
-            },
-            result_objects: envelope.result_objects,
-            result_values: None,
-        });
-    }
-    if !compiled.union_plans.is_empty() {
-        let envelope = BagUnionEnvelope::decode(bytes)?;
-        let digest = compiled_query_digest(compiled)?;
-        envelope.verify(
-            layer,
-            expected_root,
-            &compiled.union_plans,
-            digest,
-            compiled.schema.is_empty(),
-        )?;
-        let branches: Vec<ProvedBagUnionBranch> = envelope
-            .branches
-            .into_iter()
-            .map(|branch| ProvedBagUnionBranch {
-                proof: branch.proof,
-                result_commitments: branch.result_commitments,
-                result_columns: branch.result_columns,
-                result_log_domain: branch.result_log_domain,
-                result_len: branch.result_len,
-                predicate_ids: branch.predicate_ids,
+    let envelope = RecursiveRelationEnvelope::decode(bytes)?;
+    let digest = compiled_query_digest(compiled)?;
+    let plan = relation_proof_plan(&compiled.relation, digest)?;
+    envelope.verify(layer, expected_root, &plan)?;
+    let nullable = envelope
+        .result_descriptors
+        .iter()
+        .any(|descriptor| descriptor.nullable);
+    let result_objects = if nullable {
+        Vec::new()
+    } else {
+        envelope
+            .result_values
+            .iter()
+            .map(|column| {
+                column
+                    .iter()
+                    .map(|value| match value {
+                        CanonicalResultValue::Object(object) => Ok(object.clone()),
+                        CanonicalResultValue::Null => Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "null value in a nonnullable recursive result",
+                        )),
+                    })
+                    .collect()
             })
-            .collect();
-        branches.first().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "empty bag-union envelope")
-        })?;
-        return Ok(VerifiedBgpEnvelope {
-            proved: ProvedBgp {
-                statement: ProvedQueryStatement::BagUnion(ProvedBagUnion {
-                    branches,
-                    proof: envelope.union_proof,
-                }),
-                result_commitments: envelope.result_commitments,
-                result_columns: envelope.result_columns,
-                result_log_domain: envelope.result_log_domain,
-                result_len: envelope.result_len,
-            },
-            result_objects: envelope.result_objects,
-            result_values: None,
-        });
-    }
-    let envelope = LayerBgpEnvelope::decode(bytes)?;
-    envelope.verify(
-        layer,
-        expected_root,
-        &compiled.plan,
-        compiled_query_digest(compiled)?,
-    )?;
+            .collect::<std::io::Result<_>>()?
+    };
+    let result_values = nullable.then(|| envelope.result_values.clone());
     Ok(VerifiedBgpEnvelope {
-        proved: ProvedBgp {
-            statement: ProvedQueryStatement::Single {
-                proof: envelope.proof,
-                predicate_ids: envelope.predicate_ids,
-            },
-            result_commitments: envelope.result_commitments,
-            result_columns: envelope.result_columns,
-            result_log_domain: envelope.result_log_domain,
-            result_len: envelope.result_len,
-        },
-        result_objects: envelope.result_objects,
-        result_values: None,
+        proved: proved_from_recursive(envelope),
+        result_objects,
+        result_values,
     })
 }
+
+fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
+    let statement = match envelope.proof {
+        RecursiveRelationProof::Bgp(leaf) => ProvedQueryStatement::Single {
+            proof: Box::new(leaf.proof),
+            predicate_ids: leaf.predicate_ids,
+        },
+        RecursiveRelationProof::BagUnion { branches, proof } => {
+            ProvedQueryStatement::BagUnion {
+                branches: branches.into_iter().map(proved_from_recursive).collect(),
+                proof,
+            }
+        }
+        RecursiveRelationProof::LeftAnti { left, right, proof } => {
+            ProvedQueryStatement::LeftAnti {
+                left: Box::new(proved_from_recursive(*left)),
+                right: Box::new(proved_from_recursive(*right)),
+                proof,
+            }
+        }
+        RecursiveRelationProof::LeftOuter { left, right, proof } => {
+            ProvedQueryStatement::LeftOuter {
+                left: Box::new(proved_from_recursive(*left)),
+                right: Box::new(proved_from_recursive(*right)),
+                proof,
+            }
+        }
+    };
+    ProvedBgp {
+        statement,
+        result_commitments: envelope.result_commitments,
+        result_columns: envelope.result_columns,
+        result_log_domain: envelope.result_log_domain,
+        result_len: envelope.result_len,
+    }
+}
+
 
 /// Errors at the explicit compile/load/prove boundary.
 #[derive(Debug, thiserror::Error)]
@@ -1242,61 +1217,58 @@ pub enum QueryProofError {
     Store(#[from] std::io::Error),
 }
 
-impl CompiledBgp {
-    /// Generate a proof against an already loaded authenticated commitment.
-    pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
-        if let Some(optional) = &self.optional_join {
-            if !self.union_plans.is_empty() || self.anti_join.is_some() {
+fn prove_compiled_relation(
+    compiled: &CompiledRelation,
+    layer: &LayerCommitment,
+    query_digest: ProofHash,
+) -> std::io::Result<ProvedBgp> {
+    match &compiled.statement {
+        CompiledRelationStatement::Bgp(plan) => {
+            let result = prove_layer_bgp_with_result(layer, plan)?;
+            let result_columns = result.real_columns();
+            Ok(ProvedBgp {
+                statement: ProvedQueryStatement::Single {
+                    proof: Box::new(result.proof),
+                    predicate_ids: result.predicate_ids,
+                },
+                result_commitments: result.result_commitments,
+                result_columns,
+                result_log_domain: result.result_log_domain,
+                result_len: result.result_len,
+            })
+        }
+        CompiledRelationStatement::BagUnion { branches, mappings } => {
+            if branches.len() < 2 || branches.len() != mappings.len() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "WOQL Optional cannot also carry union or Not plans",
+                    "compiled recursive union branch mismatch",
                 ));
             }
-            let left = prove_layer_bgp_with_result(layer, &self.plan)?;
-            let right = prove_layer_bgp_with_result(layer, &optional.right_plan)?;
-            let left_witness = RelationWitness {
-                columns: left.result_columns.clone(),
-                commitments: left.result_commitments.clone(),
-                log_domain: left.result_log_domain,
-                n: left.result_len,
-            };
-            let right_witness = RelationWitness {
-                columns: right.result_columns.clone(),
-                commitments: right.result_commitments.clone(),
-                log_domain: right.result_log_domain,
-                n: right.result_len,
-            };
-            let digest = compiled_query_digest(self)?;
-            let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
-            transcript.append_bytes(b"pow/outer-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/outer-envelope/query", &digest);
-            let result = if optional.key_pairs.is_empty() {
-                prove_global_left_outer_join(&left_witness, &right_witness, &mut transcript)?
-            } else {
-                prove_left_outer_join_with_keys(
-                    &left_witness,
-                    &right_witness,
-                    &optional.key_pairs,
-                    &mut transcript,
-                )?
-            };
-            let branch = |result: terminus_store::proof::query::LayerBgpResult| {
-                let real_columns = result.real_columns();
-                ProvedBagUnionBranch {
-                    proof: result.proof,
-                    result_commitments: result.result_commitments,
-                    result_columns: real_columns,
-                    result_log_domain: result.result_log_domain,
-                    result_len: result.result_len,
-                    predicate_ids: result.predicate_ids,
-                }
-            };
-            return Ok(ProvedBgp {
-                statement: ProvedQueryStatement::LeftOuterJoin(ProvedLeftOuterJoin {
-                    left: branch(left),
-                    right: branch(right),
-                    proof: result.proof,
-                }),
+            let mut proved = Vec::with_capacity(branches.len());
+            let mut inputs = Vec::with_capacity(branches.len());
+            for (branch, mapping) in branches.iter().zip(mappings) {
+                let result = prove_compiled_relation(
+                    branch,
+                    layer,
+                    relation_query_digest(branch)?,
+                )?;
+                let selected: Vec<usize> = if compiled.schema.is_empty() {
+                    vec![0]
+                } else {
+                    mapping.clone()
+                };
+                inputs.push(relation_witness_selected(&result, &selected));
+                proved.push(result);
+            }
+            let mut transcript = Transcript254::new(b"parture-union-envelope");
+            transcript.append_bytes(b"pow/union-envelope/root", &layer.state.commitment_root);
+            transcript.append_bytes(b"pow/union-envelope/query", &query_digest);
+            let result = prove_bag_union(&inputs, &mut transcript)?;
+            Ok(ProvedBgp {
+                statement: ProvedQueryStatement::BagUnion {
+                    branches: proved,
+                    proof: Box::new(result.proof),
+                },
                 result_commitments: result.commitments,
                 result_columns: result
                     .columns
@@ -1305,150 +1277,137 @@ impl CompiledBgp {
                     .collect(),
                 result_log_domain: result.log_domain,
                 result_len: result.n,
-            });
+            })
         }
-        if let Some(anti) = &self.anti_join {
-            if !self.union_plans.is_empty() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "WOQL Not cannot also carry bag-union plans",
-                ));
-            }
-            let left = prove_layer_bgp_with_result(layer, &self.plan)?;
-            let right = prove_layer_bgp_with_result(layer, &anti.right_plan)?;
-            let left_witness = RelationWitness {
-                columns: left.result_columns.clone(),
-                commitments: left.result_commitments.clone(),
-                log_domain: left.result_log_domain,
-                n: left.result_len,
-            };
-            let right_witness = RelationWitness {
-                columns: right.result_columns.clone(),
-                commitments: right.result_commitments.clone(),
-                log_domain: right.result_log_domain,
-                n: right.result_len,
-            };
-            let digest = compiled_query_digest(self)?;
+        CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
+            let left_proved = prove_compiled_relation(
+                left,
+                layer,
+                relation_query_digest(left)?,
+            )?;
+            let right_proved = prove_compiled_relation(
+                right,
+                layer,
+                relation_query_digest(right)?,
+            )?;
+            let left_witness = relation_witness(&left_proved);
+            let right_witness = relation_witness(&right_proved);
             let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
             transcript.append_bytes(b"pow/anti-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/anti-envelope/query", &digest);
-            let (operator_proof, commitments, columns, result_log_domain, result_len) =
-                if anti.key_pairs.is_empty() {
-                    let (commitments, columns, log_domain, n) =
-                        prove_global_not(&left_witness, &right_witness)?;
-                    (None, commitments, columns, log_domain, n)
-                } else {
-                    let result = prove_left_anti_join_with_keys(
-                        &left_witness,
-                        &right_witness,
-                        &anti.key_pairs,
-                        &mut transcript,
-                    )?;
-                    (
-                        Some(result.proof),
-                        result.commitments,
-                        result.columns,
-                        result.log_domain,
-                        result.n,
-                    )
-                };
-            let branch = |result: terminus_store::proof::query::LayerBgpResult| {
-                let real_columns = result.real_columns();
-                ProvedBagUnionBranch {
-                    proof: result.proof,
-                    result_commitments: result.result_commitments,
-                    result_columns: real_columns,
-                    result_log_domain: result.result_log_domain,
-                    result_len: result.result_len,
-                    predicate_ids: result.predicate_ids,
-                }
+            transcript.append_bytes(b"pow/anti-envelope/query", &query_digest);
+            let (proof, commitments, columns, log_domain, n) = if key_pairs.is_empty() {
+                let (commitments, columns, log_domain, n) =
+                    prove_global_not(&left_witness, &right_witness)?;
+                (None, commitments, columns, log_domain, n)
+            } else {
+                let result = prove_left_anti_join_with_keys(
+                    &left_witness,
+                    &right_witness,
+                    key_pairs,
+                    &mut transcript,
+                )?;
+                (
+                    Some(result.proof),
+                    result.commitments,
+                    result.columns,
+                    result.log_domain,
+                    result.n,
+                )
             };
-            return Ok(ProvedBgp {
-                statement: ProvedQueryStatement::LeftAntiJoin(ProvedLeftAntiJoin {
-                    left: branch(left),
-                    right: branch(right),
-                    proof: operator_proof,
-                }),
+            Ok(ProvedBgp {
+                statement: ProvedQueryStatement::LeftAnti {
+                    left: Box::new(left_proved),
+                    right: Box::new(right_proved),
+                    proof: proof.map(Box::new),
+                },
                 result_commitments: commitments,
                 result_columns: columns
                     .iter()
-                    .map(|column| column[..result_len].to_vec())
+                    .map(|column| column[..n].to_vec())
                     .collect(),
-                result_log_domain,
-                result_len,
-            });
+                result_log_domain: log_domain,
+                result_len: n,
+            })
         }
-        if !self.union_plans.is_empty() {
-            if self.union_plans.len() != self.union_schema_mappings.len()
-                || self.union_plans.len() < 2
-            {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "compiled WOQL bag-union branch shape mismatch",
-                ));
-            }
-            let mut branches = Vec::with_capacity(self.union_plans.len());
-            let mut inputs = Vec::with_capacity(self.union_plans.len());
-            for (plan, mapping) in self.union_plans.iter().zip(&self.union_schema_mappings) {
-                let result = prove_layer_bgp_with_result(layer, plan)?;
-                let mapped_columns: Vec<Vec<ArkFr>> = mapping
+        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+            let left_proved = prove_compiled_relation(
+                left,
+                layer,
+                relation_query_digest(left)?,
+            )?;
+            let right_proved = prove_compiled_relation(
+                right,
+                layer,
+                relation_query_digest(right)?,
+            )?;
+            let left_witness = relation_witness(&left_proved);
+            let right_witness = relation_witness(&right_proved);
+            let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
+            transcript.append_bytes(b"pow/outer-envelope/root", &layer.state.commitment_root);
+            transcript.append_bytes(b"pow/outer-envelope/query", &query_digest);
+            let result = if key_pairs.is_empty() {
+                prove_global_left_outer_join(&left_witness, &right_witness, &mut transcript)?
+            } else {
+                prove_left_outer_join_with_keys(
+                    &left_witness,
+                    &right_witness,
+                    key_pairs,
+                    &mut transcript,
+                )?
+            };
+            Ok(ProvedBgp {
+                statement: ProvedQueryStatement::LeftOuter {
+                    left: Box::new(left_proved),
+                    right: Box::new(right_proved),
+                    proof: Box::new(result.proof),
+                },
+                result_commitments: result.commitments,
+                result_columns: result
+                    .columns
                     .iter()
-                    .map(|index| result.result_columns[*index].clone())
-                    .collect();
-                let mapped_commitments: Vec<ArkGT> = mapping
-                    .iter()
-                    .map(|index| result.result_commitments[*index])
-                    .collect();
-                inputs.push(RelationWitness {
-                    columns: mapped_columns,
-                    commitments: mapped_commitments,
-                    log_domain: result.result_log_domain,
-                    n: result.result_len,
-                });
-                let real_columns = result.real_columns();
-                branches.push(ProvedBagUnionBranch {
-                    proof: result.proof,
-                    result_commitments: result.result_commitments,
-                    result_columns: real_columns,
-                    result_log_domain: result.result_log_domain,
-                    result_len: result.result_len,
-                    predicate_ids: result.predicate_ids,
-                });
-            }
-            let digest = compiled_query_digest(self)?;
-            let mut transcript = Transcript254::new(b"parture-union-envelope");
-            transcript.append_bytes(b"pow/union-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/union-envelope/query", &digest);
-            let union_result = prove_bag_union(&inputs, &mut transcript)?;
-            let result_columns: Vec<Vec<ArkFr>> = union_result
-                .columns
-                .iter()
-                .map(|column| column[..union_result.n].to_vec())
-                .collect();
-            return Ok(ProvedBgp {
-                statement: ProvedQueryStatement::BagUnion(ProvedBagUnion {
-                    branches,
-                    proof: union_result.proof,
-                }),
-                result_commitments: union_result.commitments,
-                result_columns,
-                result_log_domain: union_result.log_domain,
-                result_len: union_result.n,
-            });
+                    .map(|column| column[..result.n].to_vec())
+                    .collect(),
+                result_log_domain: result.log_domain,
+                result_len: result.n,
+            })
         }
-        let result = prove_layer_bgp_with_result(layer, &self.plan)?;
-        let result_columns = result.real_columns();
-        Ok(ProvedBgp {
-            statement: ProvedQueryStatement::Single {
-                proof: result.proof,
-                predicate_ids: result.predicate_ids,
-            },
-            result_commitments: result.result_commitments,
-            result_columns,
-            result_log_domain: result.result_log_domain,
-            result_len: result.result_len,
-        })
     }
+}
+
+fn relation_witness(proved: &ProvedBgp) -> RelationWitness {
+    relation_witness_selected(proved, &(0..proved.result_columns.len()).collect::<Vec<_>>())
+}
+
+fn relation_witness_selected(proved: &ProvedBgp, selected: &[usize]) -> RelationWitness {
+    let domain = 1usize << proved.result_log_domain;
+    RelationWitness {
+        columns: selected
+            .iter()
+            .map(|index| {
+                let mut column = proved.result_columns[*index].clone();
+                column.resize(domain, ArkFr::zero());
+                column
+            })
+            .collect(),
+        commitments: selected
+            .iter()
+            .map(|index| proved.result_commitments[*index])
+            .collect(),
+        log_domain: proved.result_log_domain,
+        n: proved.result_len,
+    }
+}
+
+impl CompiledBgp {
+    /// Generate a proof against an already loaded authenticated commitment.
+    pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
+        prove_compiled_relation(
+            &self.relation,
+            layer,
+            compiled_query_digest(self)?,
+        )
+    }
+
 
     /// Explicitly load the commitment from a synchronous Store layer and prove. Calling
     /// this method is the lifecycle decision; no worker or background job is started.
@@ -1747,342 +1706,45 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     }
 
     if let Query::Or(disjunction) = body {
-        if disjunction.or.len() < 2 {
-            return Err(BgpPlanError::OrTooFewBranches {
-                count: disjunction.or.len(),
-            });
-        }
-        // Distinct over an Or is not transparent: overlapping branches deliberately
-        // preserve duplicate multiplicity and need a separate authenticated dedup.
-        if !distincts.is_empty() {
-            return Err(BgpPlanError::DistinctWithProjectionOrCount);
-        }
-        let mut branches = Vec::with_capacity(disjunction.or.len());
-        for branch_query in &disjunction.or {
-            let branch = plan_bgp(branch_query)?;
-            let branch_has_projection = branch.projection.is_some() && !branch.schema.is_empty();
-            if branch_has_projection
-                || branch.count_variable.is_some()
-                || !branch.union_plans.is_empty()
-                || branch.anti_join.is_some()
-                || branch.optional_join.is_some()
-            {
-                return Err(BgpPlanError::OrUnsupportedBranchWrapper);
-            }
-            branches.push(branch);
-        }
-        let schema = branches[0].schema.clone();
-        if branches.iter().any(|branch| branch.schema != schema) {
-            return Err(BgpPlanError::OrIncompatibleSchema);
-        }
-        let first_namespaces = result_id_namespaces(&branches[0].plan)
-            .map_err(|_| BgpPlanError::OrIncompatibleNamespaces)?;
-        if branches.iter().skip(1).any(|branch| {
-            result_id_namespaces(&branch.plan)
-                .map(|namespaces| namespaces != first_namespaces)
-                .unwrap_or(true)
-        }) {
-            return Err(BgpPlanError::OrIncompatibleNamespaces);
-        }
-
-        let mut effective_collection = collection.clone();
-        for branch in &branches {
-            match (&effective_collection, &branch.collection) {
-                (Some(expected), Some(actual)) if expected != actual => {
-                    return Err(BgpPlanError::OrRoutingConflict)
-                }
-                (None, Some(actual)) => effective_collection = Some(actual.clone()),
-                _ => {}
-            }
-        }
-        if branches.iter().any(|branch| {
-            branch.collection.as_ref().or(collection.as_ref()) != effective_collection.as_ref()
-        }) {
-            return Err(BgpPlanError::OrRoutingConflict);
-        }
-
-        let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
-        let union_plans: Vec<LayerBgpPlan> =
-            branches.iter().map(|branch| branch.plan.clone()).collect();
-        let union_arity = schema.len().max(1);
-        let union_schema_mappings = (0..branches.len())
-            .map(|_| (0..union_arity).collect())
-            .collect();
-        return Ok(CompiledBgp {
-            plan: union_plans[0].clone(),
-            union_plans,
-            union_schema_mappings,
-            anti_join: None,
-            optional_join: None,
-            schema,
-            projection,
-            collection: effective_collection,
+        return plan_or_relation(
+            disjunction,
+            &selections,
+            collection,
             count_variable,
-            full_row_distinct: false,
-        });
+            &distincts,
+        );
     }
+
 
     let mut optional_positive = Vec::new();
     let mut optionals = Vec::new();
     split_top_level_optional(body, &mut optional_positive, &mut optionals);
     if !optionals.is_empty() {
-        if optionals.len() != 1 {
-            return Err(BgpPlanError::OptionalConjunctCount {
-                count: optionals.len(),
-            });
-        }
-        if optional_positive.is_empty() {
-            return Err(BgpPlanError::OptionalMissingOuter);
-        }
-        let left_query = if optional_positive.len() == 1 {
-            optional_positive.pop().unwrap()
-        } else {
-            Query::And(crate::query::And {
-                and: optional_positive,
-            })
-        };
-        let left = plan_bgp(&left_query)?;
-        let right = plan_bgp(&optionals.pop().unwrap())?;
-        if left.projection.is_some()
-            || left.count_variable.is_some()
-            || left.full_row_distinct
-            || !left.union_plans.is_empty()
-            || left.anti_join.is_some()
-            || left.optional_join.is_some()
-            || right.projection.is_some()
-            || right.count_variable.is_some()
-            || right.full_row_distinct
-            || !right.union_plans.is_empty()
-            || right.anti_join.is_some()
-            || right.optional_join.is_some()
-        {
-            return Err(BgpPlanError::OptionalUnsupportedSubplan);
-        }
-        let shared: Vec<(&String, usize, usize)> = left
-            .schema
-            .iter()
-            .enumerate()
-            .filter_map(|(left_index, name)| {
-                right
-                    .schema
-                    .iter()
-                    .position(|candidate| candidate == name)
-                    .map(|right_index| (name, left_index, right_index))
-            })
-            .collect();
-        if shared.len() > 2 {
-            return Err(BgpPlanError::OptionalSharedVariableCount {
-                count: shared.len(),
-            });
-        }
-        let left_namespaces = result_id_namespaces(&left.plan)
-            .map_err(|_| BgpPlanError::OptionalUnsupportedSubplan)?;
-        let right_namespaces = result_id_namespaces(&right.plan)
-            .map_err(|_| BgpPlanError::OptionalUnsupportedSubplan)?;
-        if let Some((name, _, _)) = shared
-            .iter()
-            .find(|(_, left, right)| left_namespaces[*left] != right_namespaces[*right])
-        {
-            return Err(BgpPlanError::VariableNamespaceConflict {
-                var: (*name).clone(),
-            });
-        }
-        let effective_collection = [
-            collection.as_ref(),
-            left.collection.as_ref(),
-            right.collection.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .next()
-        .cloned();
-        if [
-            collection.as_ref(),
-            left.collection.as_ref(),
-            right.collection.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|candidate| Some(candidate) != effective_collection.as_ref())
-        {
-            return Err(BgpPlanError::OptionalRoutingConflict);
-        }
-        let mut schema = left.schema.clone();
-        schema.extend(
-            right
-                .schema
-                .iter()
-                .filter(|name| !left.schema.contains(name))
-                .cloned(),
-        );
-        if !distincts.is_empty() {
-            if !selections.is_empty() || count_variable.is_some() {
-                return Err(BgpPlanError::DistinctWithProjectionOrCount);
-            }
-            for variables in &distincts {
-                let covers = variables.len() == schema.len()
-                    && schema.iter().all(|name| {
-                        variables
-                            .iter()
-                            .filter(|candidate| *candidate == name)
-                            .count()
-                            == 1
-                    });
-                if !covers {
-                    return Err(BgpPlanError::DistinctNotFullSchema);
-                }
-            }
-        }
-        let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
-        return Ok(CompiledBgp {
-            plan: left.plan,
-            union_plans: Vec::new(),
-            union_schema_mappings: Vec::new(),
-            anti_join: None,
-            optional_join: Some(CompiledOptionalJoin {
-                right_plan: right.plan,
-                right_schema: right.schema,
-                key_pairs: shared
-                    .iter()
-                    .map(|(_, left, right)| (*left, *right))
-                    .collect(),
-            }),
-            schema,
-            projection,
-            collection: effective_collection,
+        return plan_optional_relations(
+            optional_positive,
+            optionals,
+            &selections,
+            collection,
             count_variable,
-            full_row_distinct: !distincts.is_empty(),
-        });
+            &distincts,
+        );
     }
 
-    // Correlated Prolog negation is a left anti-join: evaluate the positive BGP,
-    // evaluate the negated BGP, and retain exactly the outer rows whose shared key has
-    // no right match. This first sound slice deliberately accepts one shared variable;
-    // two-variable correlation needs the composite-key anti-join extension.
+    // Prolog negation is a left anti-join over complete authenticated child relations.
+    // Zero shared variables use global existence; one or two use ordered correlation
+    // keys. Multiple top-level Not conjuncts fold left-to-right.
     let mut positive = Vec::new();
     let mut negatives = Vec::new();
     split_top_level_not(body, &mut positive, &mut negatives);
     if !negatives.is_empty() {
-        if negatives.len() != 1 {
-            return Err(BgpPlanError::NotConjunctCount {
-                count: negatives.len(),
-            });
-        }
-        if positive.is_empty() {
-            return Err(BgpPlanError::NotMissingOuter);
-        }
-        let positive_query = if positive.len() == 1 {
-            positive.pop().unwrap()
-        } else {
-            Query::And(crate::query::And { and: positive })
-        };
-        let left = plan_bgp(&positive_query)?;
-        let right = plan_bgp(&negatives.pop().unwrap())?;
-        if left.projection.is_some()
-            || left.count_variable.is_some()
-            || left.full_row_distinct
-            || !left.union_plans.is_empty()
-            || left.anti_join.is_some()
-            || left.optional_join.is_some()
-            || right.projection.is_some()
-            || right.count_variable.is_some()
-            || right.full_row_distinct
-            || !right.union_plans.is_empty()
-            || right.anti_join.is_some()
-            || right.optional_join.is_some()
-        {
-            return Err(BgpPlanError::NotUnsupportedSubplan);
-        }
-        let shared: Vec<(&String, usize, usize)> = left
-            .schema
-            .iter()
-            .enumerate()
-            .filter_map(|(left_index, name)| {
-                right
-                    .schema
-                    .iter()
-                    .position(|candidate| candidate == name)
-                    .map(|right_index| (name, left_index, right_index))
-            })
-            .collect();
-        let left_namespaces = result_id_namespaces(&left.plan).map_err(|_| {
-            BgpPlanError::VariableNamespaceConflict {
-                var: "unknown".into(),
-            }
-        })?;
-        let right_namespaces = result_id_namespaces(&right.plan).map_err(|_| {
-            BgpPlanError::VariableNamespaceConflict {
-                var: "unknown".into(),
-            }
-        })?;
-        if let Some((name, _, _)) = shared
-            .iter()
-            .find(|(_, left, right)| left_namespaces[*left] != right_namespaces[*right])
-        {
-            return Err(BgpPlanError::VariableNamespaceConflict {
-                var: (*name).clone(),
-            });
-        }
-        if shared.len() > 2 {
-            return Err(BgpPlanError::NotSharedVariableCount {
-                count: shared.len(),
-            });
-        }
-        let effective_collection = [
-            collection.as_ref(),
-            left.collection.as_ref(),
-            right.collection.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .next()
-        .cloned();
-        if [
-            collection.as_ref(),
-            left.collection.as_ref(),
-            right.collection.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|candidate| Some(candidate) != effective_collection.as_ref())
-        {
-            return Err(BgpPlanError::NotRoutingConflict);
-        }
-        if !distincts.is_empty() {
-            if !selections.is_empty() || count_variable.is_some() {
-                return Err(BgpPlanError::DistinctWithProjectionOrCount);
-            }
-            for variables in &distincts {
-                let covers = variables.len() == left.schema.len()
-                    && left
-                        .schema
-                        .iter()
-                        .all(|name| variables.iter().filter(|v| *v == name).count() == 1);
-                if !covers {
-                    return Err(BgpPlanError::DistinctNotFullSchema);
-                }
-            }
-        }
-        let projection = compile_projection(&selections, count_variable.as_deref(), &left.schema)?;
-        return Ok(CompiledBgp {
-            plan: left.plan,
-            union_plans: Vec::new(),
-            union_schema_mappings: Vec::new(),
-            anti_join: Some(CompiledAntiJoin {
-                right_plan: right.plan,
-                key_pairs: shared
-                    .iter()
-                    .map(|(_, left, right)| (*left, *right))
-                    .collect(),
-                right_schema: right.schema,
-            }),
-            optional_join: None,
-            schema: left.schema,
-            projection,
-            collection: effective_collection,
+        return plan_not_relations(
+            positive,
+            negatives,
+            &selections,
+            collection,
             count_variable,
-            full_row_distinct: !distincts.is_empty(),
-        });
+            &distincts,
+        );
     }
 
     if !matches!(
@@ -2156,17 +1818,352 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
 
     Ok(CompiledBgp {
-        plan,
-        union_plans: Vec::new(),
-        union_schema_mappings: Vec::new(),
-        anti_join: None,
-        optional_join: None,
-        schema,
+        relation: CompiledRelation {
+            schema: schema.clone(),
+            statement: CompiledRelationStatement::Bgp(plan),
+        },
         projection,
         collection,
         count_variable,
         full_row_distinct: !distincts.is_empty(),
     })
+}
+
+fn plan_or_relation(
+    disjunction: &crate::query::Or,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    if disjunction.or.len() < 2 {
+        return Err(BgpPlanError::OrTooFewBranches {
+            count: disjunction.or.len(),
+        });
+    }
+    if !distincts.is_empty() {
+        return Err(BgpPlanError::DistinctWithProjectionOrCount);
+    }
+    let mut compiled = Vec::with_capacity(disjunction.or.len());
+    for query in &disjunction.or {
+        let branch = plan_bgp(query)?;
+        if branch.projection.is_some()
+            || branch.count_variable.is_some()
+            || branch.full_row_distinct
+        {
+            return Err(BgpPlanError::OrUnsupportedBranchWrapper);
+        }
+        compiled.push(branch);
+    }
+    let schema = compiled[0].relation.schema.clone();
+    let mut effective_collection = collection;
+    for branch in &compiled {
+        merge_collection(
+            &mut effective_collection,
+            branch.collection.as_ref(),
+            BgpPlanError::OrRoutingConflict,
+        )?;
+    }
+
+    let mut branches = Vec::new();
+    let mut mappings = Vec::new();
+    let mut expected_descriptors = None;
+    for branch in compiled {
+        let mapping = schema_mapping(&schema, &branch.relation.schema)
+            .ok_or(BgpPlanError::OrIncompatibleSchema)?;
+        let descriptors = relation_result_descriptors(&branch.relation)
+            .map_err(|_| BgpPlanError::OrIncompatibleNamespaces)?;
+        let mapped: Vec<_> = mapping.iter().map(|index| descriptors[*index]).collect();
+        if expected_descriptors
+            .as_ref()
+            .is_some_and(|expected| expected != &mapped)
+        {
+            return Err(BgpPlanError::OrIncompatibleNamespaces);
+        }
+        expected_descriptors = Some(mapped);
+        match branch.relation.statement {
+            CompiledRelationStatement::BagUnion {
+                branches: nested,
+                mappings: nested_mappings,
+            } => {
+                for (nested, nested_mapping) in nested.into_iter().zip(nested_mappings) {
+                    mappings.push(
+                        mapping
+                            .iter()
+                            .map(|index| nested_mapping[*index])
+                            .collect(),
+                    );
+                    branches.push(nested);
+                }
+            }
+            statement => {
+                mappings.push(if schema.is_empty() { Vec::new() } else { mapping });
+                branches.push(CompiledRelation {
+                    schema: branch.relation.schema,
+                    statement,
+                });
+            }
+        }
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &schema)?;
+    Ok(CompiledBgp {
+        relation: CompiledRelation {
+            schema,
+            statement: CompiledRelationStatement::BagUnion { branches, mappings },
+        },
+        projection,
+        collection: effective_collection,
+        count_variable,
+        full_row_distinct: false,
+    })
+}
+
+fn plan_optional_relations(
+    mut positive: Vec<Query>,
+    optionals: Vec<Query>,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    if positive.is_empty() {
+        return Err(BgpPlanError::OptionalMissingOuter);
+    }
+    let positive_query = if positive.len() == 1 {
+        positive.pop().unwrap()
+    } else {
+        Query::And(crate::query::And { and: positive })
+    };
+    let left = plan_bgp(&positive_query)?;
+    reject_subplan_wrappers(&left, true)?;
+    let mut relation = left.relation;
+    let mut effective_collection = collection;
+    merge_collection(
+        &mut effective_collection,
+        left.collection.as_ref(),
+        BgpPlanError::OptionalRoutingConflict,
+    )?;
+    for optional in optionals {
+        let right = plan_bgp(&optional)?;
+        reject_subplan_wrappers(&right, true)?;
+        merge_collection(
+            &mut effective_collection,
+            right.collection.as_ref(),
+            BgpPlanError::OptionalRoutingConflict,
+        )?;
+        let key_pairs = shared_key_pairs(&relation, &right.relation, true)?;
+        let mut schema = relation.schema.clone();
+        schema.extend(
+            right
+                .relation
+                .schema
+                .iter()
+                .filter(|name| !relation.schema.contains(name))
+                .cloned(),
+        );
+        relation = CompiledRelation {
+            schema,
+            statement: CompiledRelationStatement::LeftOuter {
+                left: Box::new(relation),
+                right: Box::new(right.relation),
+                key_pairs,
+            },
+        };
+    }
+    validate_distincts(distincts, selections, count_variable.as_deref(), &relation.schema)?;
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    Ok(CompiledBgp {
+        relation,
+        projection,
+        collection: effective_collection,
+        count_variable,
+        full_row_distinct: !distincts.is_empty(),
+    })
+}
+
+fn plan_not_relations(
+    mut positive: Vec<Query>,
+    negatives: Vec<Query>,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    if positive.is_empty() {
+        return Err(BgpPlanError::NotMissingOuter);
+    }
+    let positive_query = if positive.len() == 1 {
+        positive.pop().unwrap()
+    } else {
+        Query::And(crate::query::And { and: positive })
+    };
+    let left = plan_bgp(&positive_query)?;
+    reject_subplan_wrappers(&left, false)?;
+    let mut relation = left.relation;
+    let mut effective_collection = collection;
+    merge_collection(
+        &mut effective_collection,
+        left.collection.as_ref(),
+        BgpPlanError::NotRoutingConflict,
+    )?;
+    for negative in negatives {
+        let right = plan_bgp(&negative)?;
+        reject_subplan_wrappers(&right, false)?;
+        merge_collection(
+            &mut effective_collection,
+            right.collection.as_ref(),
+            BgpPlanError::NotRoutingConflict,
+        )?;
+        let key_pairs = shared_key_pairs(&relation, &right.relation, false)?;
+        let schema = relation.schema.clone();
+        relation = CompiledRelation {
+            schema,
+            statement: CompiledRelationStatement::LeftAnti {
+                left: Box::new(relation),
+                right: Box::new(right.relation),
+                key_pairs,
+            },
+        };
+    }
+    validate_distincts(distincts, selections, count_variable.as_deref(), &relation.schema)?;
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    Ok(CompiledBgp {
+        relation,
+        projection,
+        collection: effective_collection,
+        count_variable,
+        full_row_distinct: !distincts.is_empty(),
+    })
+}
+
+fn reject_subplan_wrappers(compiled: &CompiledBgp, optional: bool) -> Result<(), BgpPlanError> {
+    if compiled.projection.is_some()
+        || compiled.count_variable.is_some()
+        || compiled.full_row_distinct
+    {
+        Err(if optional {
+            BgpPlanError::OptionalUnsupportedSubplan
+        } else {
+            BgpPlanError::NotUnsupportedSubplan
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn shared_key_pairs(
+    left: &CompiledRelation,
+    right: &CompiledRelation,
+    optional: bool,
+) -> Result<Vec<(usize, usize)>, BgpPlanError> {
+    let shared: Vec<_> = left
+        .schema
+        .iter()
+        .enumerate()
+        .filter_map(|(left_index, name)| {
+            right
+                .schema
+                .iter()
+                .position(|candidate| candidate == name)
+                .map(|right_index| (name, left_index, right_index))
+        })
+        .collect();
+    if shared.len() > 2 {
+        return Err(if optional {
+            BgpPlanError::OptionalSharedVariableCount {
+                count: shared.len(),
+            }
+        } else {
+            BgpPlanError::NotSharedVariableCount {
+                count: shared.len(),
+            }
+        });
+    }
+    let left_descriptors = relation_result_descriptors(left).map_err(|_| {
+        if optional {
+            BgpPlanError::OptionalUnsupportedSubplan
+        } else {
+            BgpPlanError::NotUnsupportedSubplan
+        }
+    })?;
+    let right_descriptors = relation_result_descriptors(right).map_err(|_| {
+        if optional {
+            BgpPlanError::OptionalUnsupportedSubplan
+        } else {
+            BgpPlanError::NotUnsupportedSubplan
+        }
+    })?;
+    for (name, left_index, right_index) in &shared {
+        if left_descriptors[*left_index].namespace != right_descriptors[*right_index].namespace {
+            return Err(BgpPlanError::VariableNamespaceConflict {
+                var: (*name).clone(),
+            });
+        }
+        // Independent authenticated child relations model equality correlation. A
+        // nullable outer binding is Prolog-unbound and would instead become bindable,
+        // so this composition is deliberately rejected closed.
+        if left_descriptors[*left_index].nullable {
+            return Err(if optional {
+                BgpPlanError::OptionalUnsupportedSubplan
+            } else {
+                BgpPlanError::NotUnsupportedSubplan
+            });
+        }
+    }
+    Ok(shared
+        .into_iter()
+        .map(|(_, left, right)| (left, right))
+        .collect())
+}
+
+fn schema_mapping(expected: &[String], actual: &[String]) -> Option<Vec<usize>> {
+    if expected.len() != actual.len() {
+        return None;
+    }
+    expected
+        .iter()
+        .map(|name| actual.iter().position(|candidate| candidate == name))
+        .collect()
+}
+
+fn merge_collection(
+    current: &mut Option<String>,
+    candidate: Option<&String>,
+    error: BgpPlanError,
+) -> Result<(), BgpPlanError> {
+    match (&current, candidate) {
+        (Some(expected), Some(actual)) if expected != actual => Err(error),
+        (None, Some(actual)) => {
+            *current = Some(actual.clone());
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_distincts(
+    distincts: &[&[String]],
+    selections: &[(&[String], bool)],
+    count_variable: Option<&str>,
+    schema: &[String],
+) -> Result<(), BgpPlanError> {
+    if !distincts.is_empty() && (!selections.is_empty() || count_variable.is_some()) {
+        return Err(BgpPlanError::DistinctWithProjectionOrCount);
+    }
+    for variables in distincts {
+        if variables.len() != schema.len()
+            || !schema.iter().all(|name| {
+                variables
+                    .iter()
+                    .filter(|candidate| *candidate == name)
+                    .count()
+                    == 1
+            })
+        {
+            return Err(BgpPlanError::DistinctNotFullSchema);
+        }
+    }
+    Ok(())
 }
 
 fn split_top_level_not(query: &Query, positive: &mut Vec<Query>, negative: &mut Vec<Query>) {

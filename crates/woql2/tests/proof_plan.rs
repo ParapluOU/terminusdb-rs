@@ -72,7 +72,7 @@ fn store_op_value(entry: TypedDictEntry) -> u64 {
 fn assert_value_constant(c: &CompiledBgp, pred: &str, entry: TypedDictEntry) {
     let term = iri(pred).into_bytes();
     let atom = c
-        .plan
+        .bgp_plan()
         .atoms
         .iter()
         .find(|a| a.predicate_term == term)
@@ -101,15 +101,15 @@ fn accepts_three_atom_path_with_correct_plan() {
     ]);
     let c = plan_bgp(&q).unwrap();
 
-    assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
-    assert_eq!(c.plan.atoms.len(), 3);
-    assert_eq!(c.plan.joins.len(), 2);
+    assert_eq!(c.relation.schema, vec!["x", "y", "z", "w"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 3);
+    assert_eq!(c.bgp_plan().joins.len(), 2);
     // Left-deep on the shared middle variable each step: matches the store's own
     // `layer_bgp_three_atom_path_end_to_end` plan (JoinStep{1,0}, {2,0}).
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (1, 0));
-    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (2, 0));
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (1, 0));
+    assert_eq!((c.bgp_plan().joins[1].acc_key, c.bgp_plan().joins[1].rel_key), (2, 0));
     // Predicate terms are the IRI bytes, in placement order.
-    assert_eq!(c.plan.atoms[0].predicate_term, iri("p").into_bytes());
+    assert_eq!(c.bgp_plan().atoms[0].predicate_term, iri("p").into_bytes());
     assert!(c.projection.is_none());
 }
 
@@ -123,9 +123,9 @@ fn accepts_star_shared_subject_three_atoms() {
     ]);
     let c = plan_bgp(&q).unwrap();
 
-    assert_eq!(c.schema, vec!["a", "b", "c", "d"]);
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
-    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (1, 0));
+    assert_eq!(c.relation.schema, vec!["a", "b", "c", "d"]);
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (0, 0));
+    assert_eq!((c.bgp_plan().joins[1].acc_key, c.bgp_plan().joins[1].rel_key), (1, 0));
 }
 
 #[test]
@@ -138,9 +138,9 @@ fn accepts_variable_shared_by_three_atoms_mixed_positions() {
     ]);
     let c = plan_bgp(&q).unwrap();
 
-    assert_eq!(c.schema, vec!["a", "b", "x", "c"]);
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (1, 0));
-    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (1, 0));
+    assert_eq!(c.relation.schema, vec!["a", "b", "x", "c"]);
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (1, 0));
+    assert_eq!((c.bgp_plan().joins[1].acc_key, c.bgp_plan().joins[1].rel_key), (1, 0));
 }
 
 #[test]
@@ -149,8 +149,8 @@ fn flattens_nested_ands() {
     let inner = and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")]);
     let q = and_of(vec![inner, tv("z", "p", "w")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
-    assert_eq!(c.plan.atoms.len(), 3);
+    assert_eq!(c.relation.schema, vec!["x", "y", "z", "w"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 3);
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn select_records_projection_indices() {
         query: Box::new(bgp),
     });
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
+    assert_eq!(c.relation.schema, vec!["x", "y", "z", "w"]);
     // Proof still proves the FULL BGP; projection just names read columns.
     assert_eq!(c.projection, Some(vec![0, 3]));
 }
@@ -182,7 +182,7 @@ fn nested_selects_compose_and_outermost_controls_visible_columns() {
         query: Box::new(inner),
     });
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "y", "z"]);
     assert_eq!(c.projection, Some(vec![2]));
 }
 
@@ -211,7 +211,7 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         object: NodeValue::Node(iri("y")),
         graph: GraphType::Instance,
     });
-    assert_eq!(plan_bgp(&link).unwrap().schema, vec!["x"]);
+    assert_eq!(plan_bgp(&link).unwrap().relation.schema, vec!["x"]);
 
     let predicate_link = Query::Link(Link {
         subject: NodeValue::Variable("x".into()),
@@ -219,7 +219,7 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         object: NodeValue::Node(iri("y")),
         graph: GraphType::Instance,
     });
-    assert_eq!(plan_bgp(&predicate_link).unwrap().schema, vec!["x", "p"]);
+    assert_eq!(plan_bgp(&predicate_link).unwrap().relation.schema, vec!["x", "p"]);
 
     let data = Query::Data(Data {
         subject: NodeValue::Variable("x".into()),
@@ -227,7 +227,7 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         object: DataValue::Data(XSDAnySimpleType::Boolean(true)),
         graph: GraphType::Instance,
     });
-    assert_eq!(plan_bgp(&data).unwrap().schema, vec!["x"]);
+    assert_eq!(plan_bgp(&data).unwrap().relation.schema, vec!["x"]);
 
     let predicate_data = Query::Data(Data {
         subject: NodeValue::Variable("x".into()),
@@ -235,7 +235,7 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         object: DataValue::Data(XSDAnySimpleType::Boolean(true)),
         graph: GraphType::Instance,
     });
-    assert_eq!(plan_bgp(&predicate_data).unwrap().schema, vec!["x", "p"]);
+    assert_eq!(plan_bgp(&predicate_data).unwrap().relation.schema, vec!["x", "p"]);
 
     let variable_link = Query::Link(Link {
         subject: NodeValue::Variable("x".into()),
@@ -276,7 +276,7 @@ fn retains_using_scope_and_strips_instance_from_and_pin() {
         c.collection.as_deref(),
         Some("admin/music/local/branch/main")
     );
-    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
 }
 
 #[test]
@@ -309,8 +309,8 @@ fn transparent_execution_controls_can_wrap_individual_conjuncts() {
         }),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z"]);
-    assert_eq!(c.plan.atoms.len(), 2);
+    assert_eq!(c.relation.schema, vec!["x", "y", "z"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 2);
 }
 
 #[test]
@@ -324,8 +324,8 @@ fn true_and_comment_are_binding_free_conjuncts() {
         tv("x", "p", "y"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
-    assert_eq!(c.plan.atoms.len(), 1);
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 1);
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn count_retains_the_output_binding_and_hides_inner_columns() {
         count: dvar("count"),
     });
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
     assert_eq!(c.projection, Some(Vec::new()));
     assert_eq!(c.count_variable.as_deref(), Some("count"));
 }
@@ -399,9 +399,9 @@ fn dsl_macro_ast_compiles_identically() {
         t!(var!(z), p.as_str(), var!(w)),
     );
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
-    assert_eq!(c.plan.atoms.len(), 3);
-    assert_eq!((c.plan.joins[1].acc_key, c.plan.joins[1].rel_key), (2, 0));
+    assert_eq!(c.relation.schema, vec!["x", "y", "z", "w"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 3);
+    assert_eq!((c.bgp_plan().joins[1].acc_key, c.bgp_plan().joins[1].rel_key), (2, 0));
 }
 
 // ----------------------------------------------------------------------------
@@ -414,9 +414,10 @@ fn accepts_compatible_or_and_rejects_incompatible_schemas() {
         or: vec![tv("x", "p", "y"), tv("x", "q", "y")],
     });
     let compiled = plan_bgp(&q).unwrap();
-    assert_eq!(compiled.schema, vec!["x", "y"]);
-    assert_eq!(compiled.union_plans.len(), 2);
-    assert_eq!(compiled.union_schema_mappings, vec![vec![0, 1], vec![0, 1]]);
+    assert_eq!(compiled.relation.schema, vec!["x", "y"]);
+    let (branches, mappings) = compiled.relation.as_bag_union().unwrap();
+    assert_eq!(branches.len(), 2);
+    assert_eq!(mappings, [vec![0, 1], vec![0, 1]]);
 
     let complex = Query::Or(Or {
         or: vec![
@@ -425,11 +426,14 @@ fn accepts_compatible_or_and_rejects_incompatible_schemas() {
         ],
     });
     let complex = plan_bgp(&complex).unwrap();
-    assert_eq!(complex.schema, vec!["x", "y", "a", "b"]);
+    assert_eq!(complex.relation.schema, vec!["x", "y", "a", "b"]);
     assert!(complex
-        .union_plans
+        .relation
+        .as_bag_union()
+        .unwrap()
+        .0
         .iter()
-        .all(|plan| plan.joins[0].is_cross_product()));
+        .all(|branch| branch.as_bgp().unwrap().joins[0].is_cross_product()));
 
     let incompatible = Query::Or(Or {
         or: vec![tv("x", "p", "y"), tv("x", "q", "z")],
@@ -465,9 +469,8 @@ fn accepts_correlated_not_as_scalar_left_anti_join() {
         }),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_eq!(compiled.schema, vec!["x", "y"]);
-    let anti = compiled.anti_join.as_ref().unwrap();
-    assert_eq!(anti.key_pairs, vec![(1, 0)]);
+    assert_eq!(compiled.relation.schema, vec!["x", "y"]);
+    assert_eq!(compiled.relation.as_left_anti().unwrap().2, [(1, 0)]);
 }
 
 #[test]
@@ -479,7 +482,7 @@ fn accepts_global_and_two_key_not() {
         }),
     ]);
     let global = plan_bgp(&uncorrelated).unwrap();
-    assert!(global.anti_join.unwrap().key_pairs.is_empty());
+    assert!(global.relation.as_left_anti().unwrap().2.is_empty());
     let two_keys = and_of(vec![
         tv("x", "p", "y"),
         Query::Not(Not {
@@ -487,7 +490,7 @@ fn accepts_global_and_two_key_not() {
         }),
     ]);
     let compiled = plan_bgp(&two_keys).unwrap();
-    assert_eq!(compiled.anti_join.unwrap().key_pairs, vec![(0, 0), (1, 1)]);
+    assert_eq!(compiled.relation.as_left_anti().unwrap().2, [(0, 0), (1, 1)]);
 }
 
 #[test]
@@ -504,11 +507,8 @@ fn optional_requires_outer_bindings_and_compiles_correlated_join() {
         }),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
-    assert_eq!(
-        compiled.optional_join.unwrap().key_pairs,
-        vec![(1, 0)]
-    );
+    assert_eq!(compiled.relation.schema, vec!["x", "y", "z"]);
+    assert_eq!(compiled.relation.as_left_outer().unwrap().2, [(1, 0)]);
 
     let selected = Query::Select(Select {
         variables: vec!["x".into(), "z".into()],
@@ -516,7 +516,7 @@ fn optional_requires_outer_bindings_and_compiles_correlated_join() {
     });
     let selected = plan_bgp(&selected).unwrap();
     assert_eq!(selected.projection, Some(vec![0, 2]));
-    assert!(selected.optional_join.is_some());
+    assert!(selected.relation.as_left_outer().is_some());
 
     let counted = Query::Count(Count {
         query: Box::new(q),
@@ -524,7 +524,7 @@ fn optional_requires_outer_bindings_and_compiles_correlated_join() {
     });
     let counted = plan_bgp(&counted).unwrap();
     assert_eq!(counted.count_variable.as_deref(), Some("count"));
-    assert!(counted.optional_join.is_some());
+    assert!(counted.relation.as_left_outer().is_some());
 
     let global = and_of(vec![
         tv("x", "p", "y"),
@@ -533,8 +533,113 @@ fn optional_requires_outer_bindings_and_compiles_correlated_join() {
         }),
     ]);
     let global = plan_bgp(&global).unwrap();
-    assert_eq!(global.schema, vec!["x", "y", "a", "b"]);
-    assert!(global.optional_join.unwrap().key_pairs.is_empty());
+    assert_eq!(global.relation.schema, vec!["x", "y", "a", "b"]);
+    assert!(global.relation.as_left_outer().unwrap().2.is_empty());
+}
+
+#[test]
+fn recursive_operators_accept_composed_relations_and_flatten_nested_or() {
+    let optional_branch = |predicate: &str| {
+        and_of(vec![
+            tv("x", predicate, "y"),
+            Query::WoqlOptional(WoqlOptional {
+                query: Box::new(tv("y", "q", "z")),
+            }),
+        ])
+    };
+    let or_of_optional = Query::Or(Or {
+        or: vec![optional_branch("p"), optional_branch("r")],
+    });
+    let compiled = plan_bgp(&or_of_optional).unwrap();
+    assert_eq!(compiled.relation.schema, ["x", "y", "z"]);
+    assert!(compiled
+        .relation
+        .as_bag_union()
+        .unwrap()
+        .0
+        .iter()
+        .all(|branch| branch.as_left_outer().is_some()));
+
+    let optional_right_or = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(Query::Or(Or {
+                or: vec![tv("y", "q", "z"), tv("y", "r", "z")],
+            })),
+        }),
+    ]);
+    let compiled = plan_bgp(&optional_right_or).unwrap();
+    assert!(compiled.relation.as_left_outer().unwrap().1.as_bag_union().is_some());
+
+    let not_over_or = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(Query::Or(Or {
+                or: vec![tv("y", "q", "z"), tv("y", "r", "z")],
+            })),
+        }),
+    ]);
+    let compiled = plan_bgp(&not_over_or).unwrap();
+    assert!(compiled.relation.as_left_anti().unwrap().1.as_bag_union().is_some());
+
+    let nested = Query::Or(Or {
+        or: vec![
+            tv("x", "p", "y"),
+            Query::Or(Or {
+                or: vec![tv("x", "q", "y"), tv("x", "r", "y")],
+            }),
+        ],
+    });
+    assert_eq!(
+        plan_bgp(&nested)
+            .unwrap()
+            .relation
+            .as_bag_union()
+            .unwrap()
+            .0
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn sequential_operators_allow_sound_keys_and_reject_nullable_correlation() {
+    let sequential_optional = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("x", "r", "w")),
+        }),
+    ]);
+    let compiled = plan_bgp(&sequential_optional).unwrap();
+    let (prior, _, _) = compiled.relation.as_left_outer().unwrap();
+    assert!(prior.as_left_outer().is_some());
+
+    let nullable_key = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("z", "r", "w")),
+        }),
+    ]);
+    reject(nullable_key, BgpPlanError::OptionalUnsupportedSubplan);
+
+    let sequential_not = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::Not(Not {
+            query: Box::new(tv("x", "r", "w")),
+        }),
+    ]);
+    let compiled = plan_bgp(&sequential_not).unwrap();
+    let (prior, _, _) = compiled.relation.as_left_anti().unwrap();
+    assert!(prior.as_left_anti().is_some());
 }
 
 #[test]
@@ -579,7 +684,7 @@ fn accepts_distinct_on_the_complete_bgp_schema() {
     });
     let compiled = plan_bgp(&q).unwrap();
     assert!(compiled.full_row_distinct);
-    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
+    assert_eq!(compiled.relation.schema, vec!["x", "y", "z"]);
 }
 
 #[test]
@@ -613,18 +718,18 @@ fn accepts_predicate_variable_and_predicate_to_predicate_join() {
         tv_pred_var("y", "pv", "z"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "pv", "y", "z"]);
-    assert!(c.plan.atoms.iter().all(|atom| atom.predicate_variable));
+    assert_eq!(c.relation.schema, vec!["x", "pv", "y", "z"]);
+    assert!(c.bgp_plan().atoms.iter().all(|atom| atom.predicate_variable));
     assert!(c
-        .plan
+        .bgp_plan()
         .atoms
         .iter()
         .all(|atom| atom.predicate_term.is_empty()));
     assert_eq!(
-        (c.plan.joins[0].acc_key, c.plan.joins[0].rel_key),
+        (c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key),
         (2, 0)
     );
-    assert_eq!(c.plan.joins[0].additional_keys, vec![(1, 1)]);
+    assert_eq!(c.bgp_plan().joins[0].additional_keys, vec![(1, 1)]);
 }
 
 #[test]
@@ -657,7 +762,7 @@ fn predicate_variables_compose_with_projection_count_or_and_not() {
     let union = Query::Or(Or {
         or: vec![base.clone(), base.clone()],
     });
-    assert_eq!(plan_bgp(&union).unwrap().union_plans.len(), 2);
+    assert_eq!(plan_bgp(&union).unwrap().relation.as_bag_union().unwrap().0.len(), 2);
 
     let negated = and_of(vec![
         base,
@@ -666,7 +771,7 @@ fn predicate_variables_compose_with_projection_count_or_and_not() {
         }),
     ]);
     let compiled = plan_bgp(&negated).unwrap();
-    assert_eq!(compiled.anti_join.unwrap().key_pairs.len(), 2);
+    assert_eq!(compiled.relation.as_left_anti().unwrap().2.len(), 2);
 }
 
 #[test]
@@ -675,10 +780,10 @@ fn accepts_subject_node_constant() {
     // then joins on y with the all-variable atom's subject.
     let q = and_of(vec![tv_subj_const("s", "p", "y"), tv("y", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["y", "z"]);
-    assert!(matches!(c.plan.atoms[0].subject, AtomTerm::NodeConstant(_)));
-    assert!(matches!(c.plan.atoms[0].object, AtomTerm::Variable));
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
+    assert_eq!(c.relation.schema, vec!["y", "z"]);
+    assert!(matches!(c.bgp_plan().atoms[0].subject, AtomTerm::NodeConstant(_)));
+    assert!(matches!(c.bgp_plan().atoms[0].object, AtomTerm::Variable));
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (0, 0));
 }
 
 #[test]
@@ -687,10 +792,10 @@ fn accepts_object_node_constant() {
     // then joins on x with the all-variable atom's subject.
     let q = and_of(vec![tv_obj_node("x", "p", "o"), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
-    assert!(matches!(c.plan.atoms[0].object, AtomTerm::NodeConstant(_)));
-    assert!(matches!(c.plan.atoms[0].subject, AtomTerm::Variable));
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
+    assert!(matches!(c.bgp_plan().atoms[0].object, AtomTerm::NodeConstant(_)));
+    assert!(matches!(c.bgp_plan().atoms[0].subject, AtomTerm::Variable));
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (0, 0));
 }
 
 #[test]
@@ -717,9 +822,9 @@ fn accepts_object_integer_literal() {
     // xsd:integer object literal -> store Int64 value constant (byte-aligned).
     let q = and_of(vec![tv_obj_integer("x", "p", 42), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
     assert!(matches!(
-        c.plan.atoms[0].object,
+        c.bgp_plan().atoms[0].object,
         AtomTerm::ValueConstant(_, _)
     ));
     assert_value_constant(&c, "p", i64::make_entry(&42i64));
@@ -730,7 +835,7 @@ fn accepts_object_boolean_literal() {
     // xsd:boolean object literal -> store Boolean value constant.
     let q = and_of(vec![tv_obj_bool("x", "p", true), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
     assert_value_constant(&c, "p", bool::make_entry(&true));
 }
 
@@ -739,7 +844,7 @@ fn accepts_object_float_literal() {
     // xsd:float/double object literal -> store Float64 value constant.
     let q = and_of(vec![tv_obj_float("x", "p", 3.5), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
     assert_value_constant(&c, "p", f64::make_entry(&3.5f64));
 }
 
@@ -748,7 +853,7 @@ fn accepts_object_unsigned_int_literal() {
     // xsd:unsignedInt object literal -> store UInt32 value constant.
     let q = and_of(vec![tv_obj_uint("x", "p", 7), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
     assert_value_constant(&c, "p", u32::make_entry(&7u32));
 }
 
@@ -757,12 +862,12 @@ fn accepts_object_string_literal() {
     // t(?x, p, "hi"), t(?x, q, ?z): the string-literal atom keeps only S = x (arity 1).
     let q = and_of(vec![tv_obj_string("x", "p", "hi"), tv("x", "q", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
     assert!(matches!(
-        c.plan.atoms[0].object,
+        c.bgp_plan().atoms[0].object,
         AtomTerm::ValueConstant(_, _)
     ));
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (0, 0));
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (0, 0));
 }
 
 #[test]
@@ -812,25 +917,25 @@ fn accepts_all_ground_and_mixed_arity_conjunctions() {
     // t(<s>, p, <o>) is a zero-arity existence relation whose authenticated UNIT
     // result column remains hidden from the WOQL schema.
     let c = plan_bgp(&tv_ground("s", "p", "o")).unwrap();
-    assert!(c.schema.is_empty());
+    assert!(c.relation.schema.is_empty());
     assert_eq!(c.projection, Some(Vec::new()));
-    assert_eq!(c.plan.atoms.len(), 1);
-    assert!(c.plan.joins.is_empty());
+    assert_eq!(c.bgp_plan().atoms.len(), 1);
+    assert!(c.bgp_plan().joins.is_empty());
 
     let all_ground = and_of(vec![tv_ground("s", "p", "o"), tv_ground("y", "q", "z")]);
     let compiled = plan_bgp(&all_ground).unwrap();
-    assert!(compiled.schema.is_empty());
-    assert_eq!(compiled.plan.atoms.len(), 2);
-    assert!(compiled.plan.joins.is_empty());
+    assert!(compiled.relation.schema.is_empty());
+    assert_eq!(compiled.bgp_plan().atoms.len(), 2);
+    assert!(compiled.bgp_plan().joins.is_empty());
 
     let mixed = and_of(vec![tv_ground("s", "p", "o"), tv("y", "q", "z")]);
     let compiled = plan_bgp(&mixed).unwrap();
-    assert_eq!(compiled.schema, vec!["y", "z"]);
-    assert_eq!(compiled.plan.atoms.len(), 2);
-    assert!(compiled.plan.joins.is_empty());
-    assert!(matches!(compiled.plan.atoms[0].subject, AtomTerm::Variable));
+    assert_eq!(compiled.relation.schema, vec!["y", "z"]);
+    assert_eq!(compiled.bgp_plan().atoms.len(), 2);
+    assert!(compiled.bgp_plan().joins.is_empty());
+    assert!(matches!(compiled.bgp_plan().atoms[0].subject, AtomTerm::Variable));
     assert!(!matches!(
-        compiled.plan.atoms[1].subject,
+        compiled.bgp_plan().atoms[1].subject,
         AtomTerm::Variable
     ));
 }
@@ -839,9 +944,9 @@ fn accepts_all_ground_and_mixed_arity_conjunctions() {
 fn accepts_repeated_variable_as_same_row_equality() {
     let q = and_of(vec![tv("x", "p", "x"), tv("x", "q", "y")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
-    assert!(c.plan.atoms[0].subject_object_equal);
-    assert_eq!(c.plan.joins.len(), 1);
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
+    assert!(c.bgp_plan().atoms[0].subject_object_equal);
+    assert_eq!(c.bgp_plan().joins.len(), 1);
 }
 
 #[test]
@@ -849,8 +954,8 @@ fn accepts_composite_key() {
     // t(?x,p,?y), t(?x,q,?y) — the second atom shares BOTH x and y.
     let q = and_of(vec![tv("x", "p", "y"), tv("x", "q", "y")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
-    assert_eq!(c.plan.joins[0].additional_keys, vec![(1, 1)]);
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
+    assert_eq!(c.bgp_plan().joins[0].additional_keys, vec![(1, 1)]);
 }
 
 #[test]
@@ -862,9 +967,9 @@ fn accepts_triangle_cycle() {
         tv("z", "r", "x"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z"]);
-    assert_eq!(c.plan.joins.len(), 2);
-    assert_eq!(c.plan.joins[1].additional_keys, vec![(0, 1)]);
+    assert_eq!(c.relation.schema, vec!["x", "y", "z"]);
+    assert_eq!(c.bgp_plan().joins.len(), 2);
+    assert_eq!(c.bgp_plan().joins[1].additional_keys, vec![(0, 1)]);
 }
 
 #[test]
@@ -872,16 +977,16 @@ fn accepts_disconnected_components_in_stable_schema_order() {
     // t(?x,p,?y), t(?a,q,?b) — two components, no shared variable.
     let q = and_of(vec![tv("x", "p", "y"), tv("a", "q", "b")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "a", "b"]);
-    assert_eq!(c.plan.joins.len(), 1);
-    assert!(c.plan.joins[0].is_cross_product());
+    assert_eq!(c.relation.schema, vec!["x", "y", "a", "b"]);
+    assert_eq!(c.bgp_plan().joins.len(), 1);
+    assert!(c.bgp_plan().joins[0].is_cross_product());
 
     // A same-named variable makes the atoms connected, even if a caller intended two
     // logical components; variable identity, not atom position, defines connectivity.
     let collision = and_of(vec![tv("x", "p", "y"), tv("a", "q", "x")]);
     let c = plan_bgp(&collision).unwrap();
-    assert_eq!(c.schema, vec!["y", "x", "a"]);
-    assert!(!c.plan.joins[0].is_cross_product());
+    assert_eq!(c.relation.schema, vec!["y", "x", "a"]);
+    assert!(!c.bgp_plan().joins[0].is_cross_product());
 
     let three = and_of(vec![
         tv("x", "p", "y"),
@@ -889,17 +994,17 @@ fn accepts_disconnected_components_in_stable_schema_order() {
         tv("m", "r", "n"),
     ]);
     let c = plan_bgp(&three).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "a", "b", "m", "n"]);
-    assert!(c.plan.joins.iter().all(|step| step.is_cross_product()));
+    assert_eq!(c.relation.schema, vec!["x", "y", "a", "b", "m", "n"]);
+    assert!(c.bgp_plan().joins.iter().all(|step| step.is_cross_product()));
 }
 
 #[test]
 fn accepts_single_atom() {
     let q = and_of(vec![tv("x", "p", "y")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
-    assert_eq!(c.plan.atoms.len(), 1);
-    assert!(c.plan.joins.is_empty());
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 1);
+    assert!(c.bgp_plan().joins.is_empty());
 }
 
 #[test]
@@ -925,8 +1030,8 @@ fn rejects_selected_variable_not_in_bgp() {
 fn accepts_bare_triple_body() {
     let q = tv("x", "p", "y");
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
-    assert_eq!(c.plan.atoms.len(), 1);
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
+    assert_eq!(c.bgp_plan().atoms.len(), 1);
 }
 
 // ----------------------------------------------------------------------------
@@ -937,7 +1042,7 @@ fn accepts_bare_triple_body() {
 /// The ObjectRangeSpec attached to the compiled atom whose predicate is `iri(pred)`.
 fn range_of<'a>(c: &'a CompiledBgp, pred: &str) -> Option<&'a ObjectRangeSpec> {
     let term = iri(pred).into_bytes();
-    c.plan
+    c.bgp_plan()
         .atoms
         .iter()
         .find(|a| a.predicate_term == term)
@@ -992,9 +1097,9 @@ fn range_attaches_to_object_binding_atom_and_keeps_it_output() {
     assert!(range_of(&c, "name").is_none(), "name atom is not ranged");
     assert_uint32_range(range_of(&c, "age").unwrap(), RangeOp::Gt, 18);
     // The ranged object variable stays a kept output column.
-    assert!(c.schema.contains(&"a".to_string()));
+    assert!(c.relation.schema.contains(&"a".to_string()));
     // schema is [a, x, n] (left-deep join of age then name on the shared x).
-    assert_eq!(c.schema, vec!["a", "x", "n"]);
+    assert_eq!(c.relation.schema, vec!["a", "x", "n"]);
 }
 
 #[test]

@@ -28,7 +28,9 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_woql2::control::WoqlOptional;
 use terminusdb_woql2::control::{Distinct, Select};
-use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp, ExecutedResultValue};
+use terminusdb_woql2::proof::{
+    decode_and_verify_envelope, plan_bgp, CompiledRelationStatement, ExecutedResultValue,
+};
 use terminusdb_woql2::{
     misc::{Count, InRange},
     query::{Not, Or, Query},
@@ -50,7 +52,7 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     ]);
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
-    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
+    assert_eq!(compiled.relation.schema, vec!["x", "y", "z"]);
     assert_eq!(proved.result_len, 3);
     assert_eq!(proved.result_columns[2][2], ArkFr::zero());
     let values = proved
@@ -151,7 +153,7 @@ fn composite_key_optional_requires_both_keys_and_preserves_right_duplicates() {
     ]);
     let compiled = plan_bgp(&query).unwrap();
     assert_eq!(
-        compiled.optional_join.as_ref().unwrap().key_pairs,
+        compiled.relation.as_left_outer().unwrap().2,
         vec![(0, 0), (1, 1)]
     );
     let proved = compiled.prove(&layer).unwrap();
@@ -169,7 +171,7 @@ fn composite_key_optional_requires_both_keys_and_preserves_right_duplicates() {
         .unwrap();
 
     let mut swapped = compiled.clone();
-    swapped.optional_join.as_mut().unwrap().key_pairs.swap(0, 1);
+    swapped.relation.as_left_outer_mut().unwrap().swap(0, 1);
     assert!(proved
         .verify(&swapped, &layer, layer.state.commitment_root)
         .is_err());
@@ -197,8 +199,8 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
         }),
     ]);
     let compiled = plan_bgp(&query).unwrap();
-    assert!(compiled.optional_join.as_ref().unwrap().key_pairs.is_empty());
-    assert_eq!(compiled.schema, vec!["x", "y", "r", "pred", "o", "z"]);
+    assert!(compiled.relation.as_left_outer().unwrap().2.is_empty());
+    assert_eq!(compiled.relation.schema, vec!["x", "y", "r", "pred", "o", "z"]);
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 2);
     assert!(proved.result_columns[2..]
@@ -296,7 +298,7 @@ fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
     ]);
     let query = tv_pred_var("s", "p", "o");
     let compiled = plan_bgp(&query).unwrap();
-    assert_eq!(compiled.schema, vec!["s", "p", "o"]);
+    assert_eq!(compiled.relation.schema, vec!["s", "p", "o"]);
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 3);
     let objects = proved
@@ -331,7 +333,7 @@ fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
             .unwrap();
     assert_eq!(verified.result_objects, objects);
     let mut reordered_schema = compiled.clone();
-    reordered_schema.schema.swap(0, 1);
+    reordered_schema.relation.schema.swap(0, 1);
     assert!(decode_and_verify_envelope(
         &envelope,
         &reordered_schema,
@@ -427,7 +429,7 @@ fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
     ]);
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
-    assert_eq!(compiled.schema, vec!["x", "y"]);
+    assert_eq!(compiled.relation.schema, vec!["x", "y"]);
     assert_eq!(proved.result_len, 1, "only c-p-d has no correlated q match");
     proved
         .verify(&compiled, &layer, layer.state.commitment_root)
@@ -461,6 +463,56 @@ fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
 }
 
 #[test]
+fn not_over_or_proves_and_roundtrips_recursive_statement_tree() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("b", "q", "u"),
+        ("b", "r", "v"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(Query::Or(Or {
+                or: vec![tv("y", "q", "z"), tv("y", "r", "z")],
+            })),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    assert!(compiled.relation.as_left_anti().unwrap().1.as_bag_union().is_some());
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 1);
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+    assert_eq!(verified.proved.result_len, 1);
+
+    let mut reordered = compiled.clone();
+    // Changing the right branch order changes the child and parent digests.
+    let right = match &mut reordered.relation.statement {
+        CompiledRelationStatement::LeftAnti { right, .. } => right,
+        _ => unreachable!(),
+    };
+    if let CompiledRelationStatement::BagUnion { branches, mappings } = &mut right.statement {
+        branches.swap(0, 1);
+        mappings.swap(0, 1);
+    }
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reordered,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
 fn composite_not_binds_swapped_shared_schema_and_requires_both_keys() {
     let layer = build_layer(&[
         ("a", "p", "b"),
@@ -479,7 +531,7 @@ fn composite_not_binds_swapped_shared_schema_and_requires_both_keys() {
     ]);
     let compiled = plan_bgp(&query).unwrap();
     assert_eq!(
-        compiled.anti_join.as_ref().unwrap().key_pairs,
+        compiled.relation.as_left_anti().unwrap().2,
         vec![(0, 1), (1, 0)]
     );
     let proved = compiled.prove(&layer).unwrap();
@@ -494,7 +546,7 @@ fn composite_not_binds_swapped_shared_schema_and_requires_both_keys() {
         .encode_envelope(&compiled, &layer, layer.state.commitment_root)
         .unwrap();
     let mut reordered = compiled.clone();
-    reordered.anti_join.as_mut().unwrap().key_pairs.swap(0, 1);
+    reordered.relation.as_left_anti_mut().unwrap().swap(0, 1);
     assert!(
         decode_and_verify_envelope(&envelope, &reordered, &layer, layer.state.commitment_root,)
             .is_err()
@@ -514,11 +566,7 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
         ])),
     });
     let retained_compiled = plan_bgp(&retained).unwrap();
-    assert!(retained_compiled
-        .anti_join
-        .as_ref()
-        .unwrap()
-        .key_pairs
+    assert!(retained_compiled.relation.as_left_anti().unwrap().2
         .is_empty());
     let retained_proved = retained_compiled.prove(&layer).unwrap();
     assert_eq!(retained_proved.result_len, 2);
@@ -724,13 +772,13 @@ fn expected_bgp(lc: &LayerCommitment, ids: &[u64], joins: &[JoinStep]) -> (Vec<V
 fn assert_true_join_end_to_end(lc: &LayerCommitment, q: &terminusdb_woql2::query::Query) {
     let compiled = plan_bgp(q).unwrap();
 
-    let (proof, result_coms, m, ids) = prove_layer_bgp(lc, &compiled.plan).unwrap();
+    let (proof, result_coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     // The verifier sees ONLY the IRIs (inside the plan) + revealed ids + result
     // commitments + the external root — never reruns the BGP.
     verify_layer_bgp(
         lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &ids,
         &result_coms,
         m,
@@ -739,13 +787,13 @@ fn assert_true_join_end_to_end(lc: &LayerCommitment, q: &terminusdb_woql2::query
     .unwrap();
 
     // Independent oracle: the TRUE natural join.
-    let (exp_cols, domain) = expected_bgp(lc, &ids, &compiled.plan.joins);
+    let (exp_cols, domain) = expected_bgp(lc, &ids, &compiled.bgp_plan().joins);
     assert_eq!(
         result_coms.len(),
-        compiled.schema.len(),
+        compiled.relation.schema.len(),
         "one commitment per schema column"
     );
-    assert_eq!(exp_cols.len(), compiled.schema.len());
+    assert_eq!(exp_cols.len(), compiled.relation.schema.len());
     assert_eq!(
         m,
         exp_cols[0].len(),
@@ -756,7 +804,7 @@ fn assert_true_join_end_to_end(lc: &LayerCommitment, q: &terminusdb_woql2::query
             commit_column(&pad(col, domain)).unwrap(),
             result_coms[c],
             "result column {c} ({}) is EXACTLY the true join column",
-            compiled.schema[c]
+            compiled.relation.schema[c]
         );
     }
 }
@@ -798,8 +846,8 @@ fn repeated_variable_atom_proves_same_row_equality() {
     ]);
     let q = and_of(vec![tv("x", "knows", "x")]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_eq!(compiled.schema, vec!["x"]);
-    assert!(compiled.plan.atoms[0].subject_object_equal);
+    assert_eq!(compiled.relation.schema, vec!["x"]);
+    assert!(compiled.bgp_plan().atoms[0].subject_object_equal);
     let proved = compiled.prove(&lc).unwrap();
     assert_eq!(proved.result_len, 2);
     proved
@@ -901,7 +949,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .is_err());
 
     let mut renamed_schema = compiled.clone();
-    renamed_schema.schema[0] = "not_x".into();
+    renamed_schema.relation.schema[0] = "not_x".into();
     assert!(
         decode_and_verify_envelope(&encoded, &renamed_schema, &lc, lc.state.commitment_root,)
             .is_err()
@@ -1171,7 +1219,7 @@ fn disconnected_components_prove_complete_cartesian_results() {
     ];
     let present = and_of(vec![product.clone(), tv_ground("a", "p", "b")]);
     let compiled = plan_bgp(&present).unwrap();
-    assert!(compiled.plan.joins[0].is_cross_product());
+    assert!(compiled.bgp_plan().joins[0].is_cross_product());
     let proved = compiled.prove(&lc).unwrap();
     let variables = ["x".into(), "y".into(), "a".into(), "b".into()];
     proved
@@ -1401,8 +1449,8 @@ fn path_three_atoms_proves_true_join() {
     ]);
     // Sanity: plan shape is what we expect before proving.
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y", "z", "w"]);
-    let (_p, _coms, m, _ids) = prove_layer_bgp(&lc, &c.plan).unwrap();
+    assert_eq!(c.relation.schema, vec!["x", "y", "z", "w"]);
+    let (_p, _coms, m, _ids) = prove_layer_bgp(&lc, c.bgp_plan()).unwrap();
     assert_eq!(m, 3);
 
     assert_true_join_end_to_end(&lc, &q);
@@ -1425,8 +1473,8 @@ fn star_three_atoms_proves_true_join() {
         tv("c", "owns", "d"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["a", "b", "c", "d"]);
-    let (_p, _coms, m, _ids) = prove_layer_bgp(&lc, &c.plan).unwrap();
+    assert_eq!(c.relation.schema, vec!["a", "b", "c", "d"]);
+    let (_p, _coms, m, _ids) = prove_layer_bgp(&lc, c.bgp_plan()).unwrap();
     assert_eq!(m, 1); // only c1 has all three edges
 
     assert_true_join_end_to_end(&lc, &q);
@@ -1448,9 +1496,9 @@ fn variable_in_three_atoms_mixed_positions_proves_true_join() {
         tv("x", "owns", "c"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["a", "b", "x", "c"]);
+    assert_eq!(c.relation.schema, vec!["a", "b", "x", "c"]);
     // (a in {a1,a2}) x (b1) x (c in {c1,c2}) = 2 * 1 * 2 = 4 rows.
-    let (_p, _coms, m, _ids) = prove_layer_bgp(&lc, &c.plan).unwrap();
+    let (_p, _coms, m, _ids) = prove_layer_bgp(&lc, c.bgp_plan()).unwrap();
     assert_eq!(m, 4);
 
     assert_true_join_end_to_end(&lc, &q);
@@ -1491,11 +1539,11 @@ fn select_projection_reads_true_columns() {
     let compiled = plan_bgp(&q).unwrap();
     assert_eq!(compiled.projection, Some(vec![0, 3]));
 
-    let (proof, result_coms, m, ids) = prove_layer_bgp(&lc, &compiled.plan).unwrap();
+    let (proof, result_coms, m, ids) = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &ids,
         &result_coms,
         m,
@@ -1504,7 +1552,7 @@ fn select_projection_reads_true_columns() {
     .unwrap();
 
     // Projected columns are exactly the true-join columns at the selected indices.
-    let (exp_cols, domain) = expected_bgp(&lc, &ids, &compiled.plan.joins);
+    let (exp_cols, domain) = expected_bgp(&lc, &ids, &compiled.bgp_plan().joins);
     for &idx in compiled.projection.as_ref().unwrap() {
         assert_eq!(
             commit_column(&pad(&exp_cols[idx], domain)).unwrap(),
@@ -1588,13 +1636,13 @@ fn composite_key_compiler_proves_exact_result_not_single_key_superset() {
     // (b) The compiler retains both shared variables in the public join key.
     let q = and_of(vec![tv("x", "p", "y"), tv("x", "q", "y")]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_eq!(compiled.plan.joins[0].additional_keys, vec![(1, 1)]);
+    assert_eq!(compiled.bgp_plan().joins[0].additional_keys, vec![(1, 1)]);
     let (exact_proof, exact_coms, exact_m, exact_ids) =
-        prove_layer_bgp(&lc, &compiled.plan).unwrap();
+        prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &exact_ids,
         &exact_coms,
         exact_m,
@@ -1631,8 +1679,8 @@ fn cycle_triangle_proves_authenticated_closing_edge() {
         tv("z", "r", "x"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_eq!(compiled.schema, vec!["x", "y", "z"]);
-    assert_eq!(compiled.plan.joins[1].additional_keys, vec![(0, 1)]);
+    assert_eq!(compiled.relation.schema, vec!["x", "y", "z"]);
+    assert_eq!(compiled.bgp_plan().joins[1].additional_keys, vec![(0, 1)]);
 
     let lc = build_layer(&[
         ("a", "p", "b"),
@@ -1642,11 +1690,11 @@ fn cycle_triangle_proves_authenticated_closing_edge() {
         ("d", "r", "a"),
         ("d", "r", "e"),
     ]);
-    let (proof, commitments, result_len, ids) = prove_layer_bgp(&lc, &compiled.plan).unwrap();
+    let (proof, commitments, result_len, ids) = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &ids,
         &commitments,
         result_len,
@@ -1784,11 +1832,11 @@ fn assert_const_join_end_to_end(
     expected_m: usize,
 ) {
     let compiled = plan_bgp(q).unwrap();
-    let (proof, coms, m, ids) = prove_layer_bgp(lc, &compiled.plan).unwrap();
+    let (proof, coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &ids,
         &coms,
         m,
@@ -1801,18 +1849,18 @@ fn assert_const_join_end_to_end(
     let object_ids: Vec<Option<u64>> = proof.atoms.iter().map(|a| a.object_id).collect();
     let (exp_cols, domain) = expected_const_bgp(
         lc,
-        &compiled.plan.atoms,
+        &compiled.bgp_plan().atoms,
         &ids,
         &subject_ids,
         &object_ids,
-        &compiled.plan.joins,
+        &compiled.bgp_plan().joins,
     );
     assert_eq!(
         coms.len(),
-        compiled.schema.len(),
+        compiled.relation.schema.len(),
         "one commitment per schema column"
     );
-    assert_eq!(exp_cols.len(), compiled.schema.len());
+    assert_eq!(exp_cols.len(), compiled.relation.schema.len());
     assert_eq!(
         m,
         exp_cols[0].len(),
@@ -1823,7 +1871,7 @@ fn assert_const_join_end_to_end(
             commit_column(&pad(col, domain)).unwrap(),
             coms[c],
             "result column {c} ({}) is EXACTLY the true filtered join",
-            compiled.schema[c]
+            compiled.relation.schema[c]
         );
     }
 }
@@ -1846,8 +1894,8 @@ fn object_node_constant_proves_true_join() {
     let q = and_of(vec![tv("x", "likes", "z"), tv_obj_node("x", "knows", "b")]);
     // Plan sanity: the const atom keeps only S (=x); schema is [z, x].
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["z", "x"]);
-    assert!(matches!(c.plan.atoms[1].object, AtomTerm::NodeConstant(_)));
+    assert_eq!(c.relation.schema, vec!["z", "x"]);
+    assert!(matches!(c.bgp_plan().atoms[1].object, AtomTerm::NodeConstant(_)));
     assert_const_join_end_to_end(&lc, &q, 3);
 }
 
@@ -1870,8 +1918,8 @@ fn subject_node_constant_proves_true_join() {
         tv("y", "likes", "z"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["y", "z"]);
-    assert!(matches!(c.plan.atoms[0].subject, AtomTerm::NodeConstant(_)));
+    assert_eq!(c.relation.schema, vec!["y", "z"]);
+    assert!(matches!(c.bgp_plan().atoms[0].subject, AtomTerm::NodeConstant(_)));
     assert_const_join_end_to_end(&lc, &q, 3);
 }
 
@@ -1891,8 +1939,8 @@ fn object_constant_joined_on_object_variable_proves_true_join() {
     ]);
     let q = and_of(vec![tv("x", "knows", "y"), tv_obj_node("y", "likes", "g")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "y"]);
-    assert_eq!((c.plan.joins[0].acc_key, c.plan.joins[0].rel_key), (1, 0));
+    assert_eq!(c.relation.schema, vec!["x", "y"]);
+    assert_eq!((c.bgp_plan().joins[0].acc_key, c.bgp_plan().joins[0].rel_key), (1, 0));
     assert_const_join_end_to_end(&lc, &q, 2);
 }
 
@@ -1906,7 +1954,7 @@ fn absent_node_constant_fails_closed() {
         tv_obj_node("y", "likes", "absent"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    let err = prove_layer_bgp(&lc, &compiled.plan).unwrap_err();
+    let err = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap_err();
     assert!(err
         .to_string()
         .contains("constant not in layer node/value dictionary"));
@@ -1943,13 +1991,13 @@ fn object_string_literal_proves_true_join() {
     ]);
     // Plan sanity: the object is an aligned value constant; schema is [x, z].
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
     assert!(matches!(
-        c.plan.atoms[0].object,
+        c.bgp_plan().atoms[0].object,
         AtomTerm::ValueConstant(_, _)
     ));
     // The compiled value constant is exactly the store's canonicalization of "hi".
-    match &c.plan.atoms[0].object {
+    match &c.bgp_plan().atoms[0].object {
         AtomTerm::ValueConstant(dt, lex) => {
             match terminus_store::proof::CanonicalObject::from_store_object(
                 &ValueTriple::new_string_value("", "", "hi").object,
@@ -2001,7 +2049,7 @@ fn absent_string_literal_fails_closed() {
         tv("x", "knows", "z"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    let err = prove_layer_bgp(&lc, &compiled.plan).unwrap_err();
+    let err = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap_err();
     assert!(err
         .to_string()
         .contains("constant not in layer node/value dictionary"));
@@ -2083,7 +2131,7 @@ fn object_decimal_literal_proves_true_join() {
         tv("x", "knows", "z"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_value_constant_matches(&compiled.plan.atoms[0].object, store_decimal(&wanted));
+    assert_value_constant_matches(&compiled.bgp_plan().atoms[0].object, store_decimal(&wanted));
     assert_const_join_end_to_end(&lc, &q, 2);
 }
 
@@ -2114,7 +2162,7 @@ fn object_hexbinary_literal_proves_true_join() {
         tv("x", "knows", "z"),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    assert_value_constant_matches(&compiled.plan.atoms[0].object, entry(vec![0xde, 0xad]));
+    assert_value_constant_matches(&compiled.bgp_plan().atoms[0].object, entry(vec![0xde, 0xad]));
     assert_const_join_end_to_end(&lc, &q, 2);
 }
 
@@ -2137,8 +2185,8 @@ fn object_boolean_literal_proves_true_join() {
         tv("x", "knows", "z"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
-    assert_value_constant_matches(&c.plan.atoms[0].object, bool::make_entry(&true));
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
+    assert_value_constant_matches(&c.bgp_plan().atoms[0].object, bool::make_entry(&true));
     assert_const_join_end_to_end(&lc, &q, 3);
 }
 
@@ -2180,8 +2228,8 @@ fn object_integer_literal_proves_true_join() {
         tv("x", "knows", "z"),
     ]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
-    assert_value_constant_matches(&c.plan.atoms[0].object, i64::make_entry(&42i64));
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
+    assert_value_constant_matches(&c.bgp_plan().atoms[0].object, i64::make_entry(&42i64));
     assert_const_join_end_to_end(&lc, &q, 3);
 }
 
@@ -2217,8 +2265,8 @@ fn object_float_literal_proves_true_join() {
     );
     let q = and_of(vec![tv_obj_float("x", "score", 3.5), tv("x", "knows", "z")]);
     let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["x", "z"]);
-    assert_value_constant_matches(&c.plan.atoms[0].object, f64::make_entry(&3.5f64));
+    assert_eq!(c.relation.schema, vec!["x", "z"]);
+    assert_value_constant_matches(&c.bgp_plan().atoms[0].object, f64::make_entry(&3.5f64));
     assert_const_join_end_to_end(&lc, &q, 3);
 }
 
@@ -2363,7 +2411,7 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
 
     // Round-trip alignment: the compiled range spec matches the store's OWN encoding.
     let age_atom = compiled
-        .plan
+        .bgp_plan()
         .atoms
         .iter()
         .find(|a| a.object_range.is_some())
@@ -2382,11 +2430,11 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
         "compiled c == store's committed dict OP encoding of k"
     );
 
-    let (proof, coms, m, ids) = prove_layer_bgp(lc, &compiled.plan).unwrap();
+    let (proof, coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &ids,
         &coms,
         m,
@@ -2398,15 +2446,15 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
     // Independent oracle: the TRUE range-filtered join. `ids` are predicate ids in plan
     // atom order; the ranged atom is the age atom.
     let age_idx = compiled
-        .plan
+        .bgp_plan()
         .atoms
         .iter()
         .position(|a| a.object_range.is_some())
         .unwrap();
     let name_idx = 1 - age_idx;
     let (exp_cols, domain) = expected_range_join(lc, ids[age_idx], ids[name_idx], op, k as u64);
-    assert_eq!(coms.len(), compiled.schema.len());
-    assert_eq!(exp_cols.len(), compiled.schema.len());
+    assert_eq!(coms.len(), compiled.relation.schema.len());
+    assert_eq!(exp_cols.len(), compiled.relation.schema.len());
     assert_eq!(
         m,
         exp_cols[0].len(),
@@ -2417,12 +2465,12 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
             commit_column(&pad(col, domain)).unwrap(),
             coms[c],
             "result column {c} ({}) is EXACTLY the true range-filtered join",
-            compiled.schema[c]
+            compiled.relation.schema[c]
         );
     }
 
     // schema is [a, x, n]; the Select reads ?x, ?n -> indices [1, 2].
-    assert_eq!(compiled.schema, vec!["a", "x", "n"]);
+    assert_eq!(compiled.relation.schema, vec!["a", "x", "n"]);
     assert_eq!(compiled.projection, Some(vec![1, 2]));
 }
 
@@ -2483,7 +2531,7 @@ fn woql_in_range_proves_half_open_filtered_join() {
         }),
     ]);
     let compiled = plan_bgp(&q).unwrap();
-    let range = compiled.plan.atoms[0].object_range.as_ref().unwrap();
+    let range = compiled.bgp_plan().atoms[0].object_range.as_ref().unwrap();
     assert_eq!(range.op, RangeOp::Ge);
     assert_eq!(range.second.as_ref().unwrap().op, RangeOp::Lt);
 
@@ -2616,7 +2664,7 @@ fn check_range_generic(
 
     // Round-trip alignment: the compiled range spec matches the store's OWN encoding.
     let val_atom = compiled
-        .plan
+        .bgp_plan()
         .atoms
         .iter()
         .find(|a| a.object_range.is_some())
@@ -2631,11 +2679,11 @@ fn check_range_generic(
     assert_eq!(spec.c, ArkFr::from_u64(c_op), "constant c");
     assert_eq!(spec.b_bits, OBJECT_RANGE_B_BITS, "bit-width");
 
-    let (proof, coms, m, ids) = prove_layer_bgp(lc, &compiled.plan).unwrap();
+    let (proof, coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         lc,
         lc.state.commitment_root,
-        &compiled.plan,
+        compiled.bgp_plan(),
         &ids,
         &coms,
         m,
@@ -2645,7 +2693,7 @@ fn check_range_generic(
     assert_eq!(m, expected_m, "proven row count (op {:?})", op);
 
     let val_idx = compiled
-        .plan
+        .bgp_plan()
         .atoms
         .iter()
         .position(|a| a.object_range.is_some())
@@ -2653,8 +2701,8 @@ fn check_range_generic(
     let name_idx = 1 - val_idx;
     let (exp_cols, domain) =
         expected_range_join_generic(lc, ids[val_idx], ids[name_idx], op, c_op, datatype);
-    assert_eq!(coms.len(), compiled.schema.len());
-    assert_eq!(exp_cols.len(), compiled.schema.len());
+    assert_eq!(coms.len(), compiled.relation.schema.len());
+    assert_eq!(exp_cols.len(), compiled.relation.schema.len());
     assert_eq!(
         m,
         exp_cols[0].len(),
@@ -2665,10 +2713,10 @@ fn check_range_generic(
             commit_column(&pad(col, domain)).unwrap(),
             coms[c],
             "result column {c} ({}) is EXACTLY the true range-filtered join",
-            compiled.schema[c]
+            compiled.relation.schema[c]
         );
     }
-    assert_eq!(compiled.schema, vec!["a", "x", "n"]);
+    assert_eq!(compiled.relation.schema, vec!["a", "x", "n"]);
     assert_eq!(compiled.projection, Some(vec![1, 2]));
 }
 
