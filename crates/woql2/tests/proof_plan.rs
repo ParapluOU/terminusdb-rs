@@ -305,6 +305,107 @@ fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
     }
 }
 
+#[test]
+fn signed_group_sum_comparisons_bind_domain_operator_order_and_i64_constants() {
+    let Query::And(mut signed) = grouped_sum_with_bound(DataValue::Data(
+        XSDAnySimpleType::Long(i64::MIN),
+    )) else {
+        unreachable!()
+    };
+    signed
+        .and
+        .push(greater(dvar("total"), decimal_value("-1")));
+    signed
+        .and
+        .push(lte(decimal_value("9223372036854775807"), dvar("total")));
+    let query = Query::And(signed.clone());
+    let compiled = plan_bgp(&query).unwrap();
+    let CompiledRelationStatement::GeneratedI64Filter {
+        input,
+        op,
+        constant,
+        constant_on_left,
+        ..
+    } = &compiled.relation.statement
+    else {
+        panic!("expected outer generated-i64 filter")
+    };
+    assert_eq!(*op, GeneratedU64ComparisonOp::Le);
+    assert_eq!(*constant, i64::MAX);
+    assert!(*constant_on_left);
+    assert!(matches!(
+        input.statement,
+        CompiledRelationStatement::GeneratedI64Filter {
+            op: GeneratedU64ComparisonOp::Gt,
+            constant: -1,
+            constant_on_left: false,
+            ..
+        }
+    ));
+
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(query),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(counted.count_variable.as_deref(), Some("rows"));
+
+    let mut gated = signed.clone();
+    gated.and.truncate(2);
+    let gate = tv_obj_node("category", "gate", "yes");
+    gated.and.push(Query::If(When {
+        query: Box::new(gate.clone()),
+        consequent: Box::new(gate),
+    }));
+    let gated = plan_bgp(&Query::Count(Count {
+        query: Box::new(Query::And(gated)),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(gated.count_variable.as_deref(), Some("rows"));
+    assert!(matches!(
+        gated.relation.statement,
+        CompiledRelationStatement::When { .. }
+    ));
+
+    for constant in [
+        "1.5",
+        "1e2",
+        "9223372036854775808",
+        "-9223372036854775809",
+    ] {
+        let mut invalid = signed.clone();
+        invalid.and.truncate(2);
+        invalid
+            .and
+            .push(greater(dvar("total"), decimal_value(constant)));
+        reject(
+            Query::And(invalid),
+            BgpPlanError::GroupSumComparisonUnsupportedConstant,
+        );
+    }
+    let mut wrong_variable = signed;
+    wrong_variable.and.truncate(2);
+    wrong_variable
+        .and
+        .push(greater(dvar("other"), decimal_value("0")));
+    reject(
+        Query::And(wrong_variable),
+        BgpPlanError::GroupSumComparisonUnsupportedShape,
+    );
+
+    let Query::And(mut unsigned) = grouped_u32_sum() else {
+        unreachable!()
+    };
+    unsigned
+        .and
+        .push(greater(dvar("total"), decimal_value("-1")));
+    reject(
+        Query::And(unsigned),
+        BgpPlanError::GroupSumComparisonUnsupportedConstant,
+    );
+}
+
 fn global_u32_sum() -> Query {
     let Query::And(mut query) = grouped_u32_sum() else {
         unreachable!()

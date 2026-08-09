@@ -59,7 +59,7 @@ use terminus_store::proof::multiorder::{verify_exact_multi_order, ExactMultiOrde
 use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
-    verify_result_columns, generated_decimal_i64_field, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    verify_result_columns, generated_decimal_i64_field, generated_decimal_i64_value, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
     LayerBgpProof, ObjectKindFilter, ObjectRangeBound, ObjectRangeSpec,
     ResultColumnDescriptor, ResultIdNamespace,
 };
@@ -116,6 +116,13 @@ pub enum CompiledRelationStatement {
         column: usize,
         op: GeneratedU64ComparisonOp,
         constant: u64,
+        constant_on_left: bool,
+    },
+    GeneratedI64Filter {
+        input: Box<CompiledRelation>,
+        column: usize,
+        op: GeneratedU64ComparisonOp,
+        constant: i64,
         constant_on_left: bool,
     },
     BagUnion {
@@ -438,6 +445,9 @@ pub enum ProvedQueryStatement {
     GeneratedU64Filter {
         input: Box<ProvedBgp>,
     },
+    GeneratedI64Filter {
+        input: Box<ProvedBgp>,
+    },
     Single {
         proof: Box<LayerBgpProof>,
         predicate_ids: Vec<u64>,
@@ -575,6 +585,26 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             constant_on_left,
         } => {
             hasher.update(b"/generated-u64-filter");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update(column.to_le_bytes());
+            hasher.update([match op {
+                GeneratedU64ComparisonOp::Eq => 0,
+                GeneratedU64ComparisonOp::Lt => 1,
+                GeneratedU64ComparisonOp::Le => 2,
+                GeneratedU64ComparisonOp::Gt => 3,
+                GeneratedU64ComparisonOp::Ge => 4,
+            }]);
+            hasher.update(constant.to_le_bytes());
+            hasher.update([*constant_on_left as u8]);
+        }
+        CompiledRelationStatement::GeneratedI64Filter {
+            input,
+            column,
+            op,
+            constant,
+            constant_on_left,
+        } => {
+            hasher.update(b"/generated-i64-filter");
             hasher.update(relation_query_digest(input)?);
             hasher.update(column.to_le_bytes());
             hasher.update([match op {
@@ -797,7 +827,8 @@ fn relation_result_descriptors(
             namespace: ResultIdNamespace::GeneratedDecimalU64,
             nullable: false,
         }]),
-        CompiledRelationStatement::GeneratedU64Filter { input, .. } => {
+        CompiledRelationStatement::GeneratedU64Filter { input, .. }
+        | CompiledRelationStatement::GeneratedI64Filter { input, .. } => {
             relation_result_descriptors(input)
         }
         CompiledRelationStatement::Bgp(plan) => {
@@ -968,6 +999,19 @@ fn relation_proof_plan(
             constant: *constant,
             constant_on_left: *constant_on_left,
         },
+        CompiledRelationStatement::GeneratedI64Filter {
+            input,
+            column,
+            op,
+            constant,
+            constant_on_left,
+        } => RelationProofPlanKind::GeneratedI64Filter {
+            input: Box::new(child(input)?),
+            column: *column,
+            op: *op,
+            constant: *constant,
+            constant_on_left: *constant_on_left,
+        },
         CompiledRelationStatement::Bgp(plan) => RelationProofPlanKind::Bgp(plan.clone()),
         CompiledRelationStatement::BagUnion { branches, mappings } => {
             RelationProofPlanKind::BagUnion {
@@ -1119,6 +1163,62 @@ fn expected_generated_u64_filter_columns(
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "generated-u64 comparison input column is short",
+                        )
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn expected_generated_i64_filter_columns(
+    input: &ProvedBgp,
+    column: usize,
+    op: GeneratedU64ComparisonOp,
+    constant: i64,
+    constant_on_left: bool,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let source = input.result_columns.get(column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "generated-i64 comparison column is out of range",
+        )
+    })?;
+    if source.len() < input.result_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "generated-i64 comparison input column is short",
+        ));
+    }
+    let mut keep = Vec::new();
+    for (row, field) in source.iter().take(input.result_len).enumerate() {
+        let value = generated_decimal_i64_value(*field)?;
+        let (left, right) = if constant_on_left {
+            (constant, value)
+        } else {
+            (value, constant)
+        };
+        let selected = match op {
+            GeneratedU64ComparisonOp::Eq => left == right,
+            GeneratedU64ComparisonOp::Lt => left < right,
+            GeneratedU64ComparisonOp::Le => left <= right,
+            GeneratedU64ComparisonOp::Gt => left > right,
+            GeneratedU64ComparisonOp::Ge => left >= right,
+        };
+        if selected {
+            keep.push(row);
+        }
+    }
+    input
+        .result_columns
+        .iter()
+        .map(|input_column| {
+            keep.iter()
+                .map(|row| {
+                    input_column.get(*row).copied().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "generated-i64 comparison input column is short",
                         )
                     })
                 })
@@ -1449,6 +1549,45 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL generated-u64 comparison is not the exact derived selection",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::GeneratedI64Filter { input },
+                CompiledRelationStatement::GeneratedI64Filter {
+                    input: input_plan,
+                    column,
+                    op,
+                    constant,
+                    constant_on_left,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_generated_i64_filter_columns(
+                    input,
+                    *column,
+                    *op,
+                    *constant,
+                    *constant_on_left,
+                )?;
+                let expected_len = expected_columns.first().map_or(0, Vec::len);
+                let expected_log = expected_len
+                    .max(1)
+                    .next_power_of_two()
+                    .max(2)
+                    .trailing_zeros() as usize;
+                if self.result_len != expected_len
+                    || self.result_log_domain != expected_log
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL generated-i64 comparison is not the exact derived selection",
                     ));
                 }
             }
@@ -2287,6 +2426,19 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::GeneratedI64Filter { input },
+                CompiledRelationStatement::GeneratedI64Filter {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::GeneratedI64Filter {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::Single {
                     proof,
                     predicate_ids,
@@ -2648,6 +2800,11 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::GeneratedU64Filter { input } => {
             ProvedQueryStatement::GeneratedU64Filter {
+                input: Box::new(proved_from_recursive(*input)),
+            }
+        }
+        RecursiveRelationProof::GeneratedI64Filter { input } => {
+            ProvedQueryStatement::GeneratedI64Filter {
                 input: Box::new(proved_from_recursive(*input)),
             }
         }
@@ -3042,6 +3199,12 @@ pub enum BgpPlanError {
     #[error("GroupBy Sum template must be an exact fixed-width signed or unsigned integer variable")]
     GroupSumUnsupportedValue,
 
+    #[error("generated GroupBy-Sum comparisons require the sum source before comparisons of that result variable to exact integral xsd:decimal constants")]
+    GroupSumComparisonUnsupportedShape,
+
+    #[error("generated GroupBy-Sum comparison constants must be exact integral xsd:decimal values in the generated result domain")]
+    GroupSumComparisonUnsupportedConstant,
+
     #[error("OrderBy proof coverage requires one ascending key naming the complete one-column result of a leaf BGP")]
     OrderByUnsupportedShape,
 
@@ -3294,11 +3457,94 @@ fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlan
     }))
 }
 
+fn exact_integral_decimal_i64(value: &XSDAnySimpleType) -> Result<i64, BgpPlanError> {
+    let XSDAnySimpleType::Decimal(decimal) = value else {
+        return Err(BgpPlanError::GroupSumComparisonUnsupportedConstant);
+    };
+    if decimal.scale() < 0 {
+        return Err(BgpPlanError::GroupSumComparisonUnsupportedConstant);
+    }
+    let value = i64::try_from(decimal)
+        .map_err(|_| BgpPlanError::GroupSumComparisonUnsupportedConstant)?;
+    if decimal != &decimal_rs::Decimal::from(value) {
+        return Err(BgpPlanError::GroupSumComparisonUnsupportedConstant);
+    }
+    Ok(value)
+}
+
+fn generated_group_sum_constraint(
+    query: &Query,
+    variable: &str,
+    signed: bool,
+) -> Result<(GeneratedU64ComparisonOp, ResultIdNamespace, i128, bool), BgpPlanError> {
+    let constant = |value: &XSDAnySimpleType| -> Result<_, BgpPlanError> {
+        if signed {
+            Ok((
+                ResultIdNamespace::GeneratedDecimalI64,
+                i128::from(exact_integral_decimal_i64(value)?),
+            ))
+        } else {
+            let value = exact_integral_decimal_u64(value)
+                .map_err(|_| BgpPlanError::GroupSumComparisonUnsupportedConstant)?;
+            Ok((ResultIdNamespace::GeneratedDecimalU64, i128::from(value)))
+        }
+    };
+    let range = |left: &DataValue,
+                 right: &DataValue,
+                 op: GeneratedU64ComparisonOp|
+     -> Result<_, BgpPlanError> {
+        match (left, right) {
+            (DataValue::Variable(candidate), DataValue::Data(value)) if candidate == variable => {
+                let (domain, constant) = constant(value)?;
+                Ok((op, domain, constant, false))
+            }
+            (DataValue::Data(value), DataValue::Variable(candidate)) if candidate == variable => {
+                let (domain, constant) = constant(value)?;
+                Ok((op, domain, constant, true))
+            }
+            _ => Err(BgpPlanError::GroupSumComparisonUnsupportedShape),
+        }
+    };
+    match query {
+        Query::Greater(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Gt),
+        Query::Gte(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Ge),
+        Query::Less(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Lt),
+        Query::Lte(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Le),
+        Query::Equals(value) => {
+            use crate::value::WoqlValue;
+            match (&value.left, &value.right) {
+                (WoqlValue::Variable(candidate), WoqlValue::Data(value))
+                    if candidate == variable =>
+                {
+                    let (domain, constant) = constant(value)?;
+                    Ok((GeneratedU64ComparisonOp::Eq, domain, constant, false))
+                }
+                (WoqlValue::Data(value), WoqlValue::Variable(candidate))
+                    if candidate == variable =>
+                {
+                    let (domain, constant) = constant(value)?;
+                    Ok((GeneratedU64ComparisonOp::Eq, domain, constant, true))
+                }
+                _ => Err(BgpPlanError::GroupSumComparisonUnsupportedShape),
+            }
+        }
+        _ => Err(BgpPlanError::GroupSumComparisonUnsupportedShape),
+    }
+}
+
 fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
-        Query::And(and) if and.and.len() == 2 => &and.and,
+        Query::And(and) if and.and.len() >= 2 => &and.and,
         _ => return Ok(None),
     };
+    // Let the general sequential-relation planner compose supported When/Optional/Not
+    // operators over the aggregate prefix. Equals and range comparisons remain here so
+    // generated-decimal domains are handled without Store-ID coercion.
+    if conjuncts.iter().skip(2).any(|query| {
+        matches!(query, Query::If(_) | Query::WoqlOptional(_) | Query::Not(_))
+    }) {
+        return Ok(None);
+    }
     let (Query::GroupBy(group), Query::Sum(sum)) = (&conjuncts[0], &conjuncts[1]) else {
         if conjuncts.iter().any(|query| matches!(query, Query::Sum(_))) {
             return Err(BgpPlanError::GroupSumUnsupportedShape);
@@ -3393,8 +3639,14 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
     }
     schema.push(result.clone());
     domains.push(None);
-    Ok(Some(CompiledBgp {
-        relation: CompiledRelation {
+    let signed = matches!(
+        datatype,
+        CanonicalDatatype::Int8
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Int64
+    );
+    let mut relation = CompiledRelation {
             schema,
             domains,
             statement: CompiledRelationStatement::GroupSum {
@@ -3403,7 +3655,43 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
                 value_column,
                 datatype,
             },
-        },
+        };
+    for comparison in conjuncts.iter().skip(2) {
+        let (op, domain, constant, constant_on_left) =
+            generated_group_sum_constraint(comparison, result, signed)?;
+        let input = relation;
+        relation = CompiledRelation {
+            schema: input.schema.clone(),
+            domains: input.domains.clone(),
+            statement: match domain {
+                ResultIdNamespace::GeneratedDecimalU64 => {
+                    CompiledRelationStatement::GeneratedU64Filter {
+                        input: Box::new(input),
+                        column: usize::from(key.is_some()),
+                        op,
+                        constant: u64::try_from(constant).map_err(|_| {
+                            BgpPlanError::GroupSumComparisonUnsupportedConstant
+                        })?,
+                        constant_on_left,
+                    }
+                }
+                ResultIdNamespace::GeneratedDecimalI64 => {
+                    CompiledRelationStatement::GeneratedI64Filter {
+                        input: Box::new(input),
+                        column: usize::from(key.is_some()),
+                        op,
+                        constant: i64::try_from(constant).map_err(|_| {
+                            BgpPlanError::GroupSumComparisonUnsupportedConstant
+                        })?,
+                        constant_on_left,
+                    }
+                }
+                _ => unreachable!(),
+            },
+        };
+    }
+    Ok(Some(CompiledBgp {
+        relation,
         projection: None,
         collection,
         count_variable: None,
@@ -4858,7 +5146,8 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
         match &relation.statement {
             CompiledRelationStatement::Bgp(_)
             | CompiledRelationStatement::LayerTripleCount => Ok(()),
-            CompiledRelationStatement::GeneratedU64Filter { input, .. } => {
+            CompiledRelationStatement::GeneratedU64Filter { input, .. }
+            | CompiledRelationStatement::GeneratedI64Filter { input, .. } => {
                 visit(input, depth + 1, nodes)
             }
             CompiledRelationStatement::BagUnion { branches, .. } => {

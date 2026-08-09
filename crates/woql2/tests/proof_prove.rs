@@ -1204,74 +1204,108 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
     }
     let layer = child_builder.commit().unwrap().proof_commitment().unwrap();
     let compiled = plan_bgp(&grouped_i64_sum_query()).unwrap();
-    let proved = compiled.prove(&layer).unwrap();
-    let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::GroupSum { .. }
+    ));
+
+    let Query::And(mut filtered_query) = grouped_i64_sum_query() else {
+        unreachable!()
+    };
+    filtered_query.and.push(less(
+        dvar("total"),
+        DataValue::Data(XSDAnySimpleType::Decimal("0".parse().unwrap())),
+    ));
+    let filtered_compiled = plan_bgp(&Query::And(filtered_query.clone())).unwrap();
+    assert!(matches!(
+        filtered_compiled.relation.statement,
+        CompiledRelationStatement::GeneratedI64Filter { .. }
+    ));
+    let filtered = filtered_compiled.prove(&layer).unwrap();
+    let filtered_values = filtered
+        .verify_and_resolve_values(
+            &filtered_compiled,
+            &layer,
+            layer.state.commitment_root,
+        )
         .unwrap();
+    assert_eq!(filtered.result_len, 1);
     assert_eq!(
-        values[0],
-        vec![
-            CanonicalResultValue::Object(CanonicalObject::Node(iri("a").into_bytes())),
-            CanonicalResultValue::Object(CanonicalObject::Node(iri("b").into_bytes())),
-        ]
+        filtered_values[0],
+        vec![CanonicalResultValue::Object(CanonicalObject::Node(
+            iri("b").into_bytes(),
+        ))]
     );
     assert_eq!(
-        values[1],
-        vec![
-            CanonicalResultValue::GeneratedDecimalI64(1),
-            CanonicalResultValue::GeneratedDecimalI64(-1),
-        ]
+        filtered_values[1],
+        vec![CanonicalResultValue::GeneratedDecimalI64(-1)]
     );
-    let executed = (0..proved.result_len)
-        .map(|row| {
-            let key_id = layer
-                .node_value_catalog
-                .iter()
-                .find(|record| ArkFr::from_u64(record.object_id) == proved.result_columns[0][row])
-                .unwrap()
-                .object_id;
-            let CanonicalResultValue::GeneratedDecimalI64(sum) = values[1][row] else {
-                unreachable!()
-            };
-            vec![
-                ExecutedResultValue::Id(key_id),
-                ExecutedResultValue::GeneratedDecimalI64(sum),
-            ]
-        })
-        .collect::<Vec<_>>();
-    proved
+    let key_id = layer
+        .node_value_catalog
+        .iter()
+        .find(|record| ArkFr::from_u64(record.object_id) == filtered.result_columns[0][0])
+        .unwrap()
+        .object_id;
+    filtered
         .verify_executed_values(
-            &compiled,
+            &filtered_compiled,
             &layer,
             layer.state.commitment_root,
             &["category".into(), "total".into()],
-            &executed,
+            &[vec![
+                ExecutedResultValue::Id(key_id),
+                ExecutedResultValue::GeneratedDecimalI64(-1),
+            ]],
         )
         .unwrap();
-    let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+    let filtered_envelope = filtered
+        .encode_envelope(
+            &filtered_compiled,
+            &layer,
+            layer.state.commitment_root,
+        )
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
-        .unwrap();
-    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
-    tampered.result_columns[1][1] = generated_decimal_i64_field(1);
-    tampered.result_commitments[1] = commit_column(&pad(
-        &tampered.result_columns[1],
-        1usize << tampered.result_log_domain,
-    ))
+    decode_and_verify_envelope(
+        &filtered_envelope,
+        &filtered_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
     .unwrap();
+
+    filtered_query.and.pop();
+    filtered_query.and.push(greater(
+        DataValue::Data(XSDAnySimpleType::Decimal("0".parse().unwrap())),
+        dvar("total"),
+    ));
+    let reversed = plan_bgp(&Query::And(filtered_query)).unwrap();
     assert!(decode_and_verify_envelope(
-        &tampered.encode().unwrap(),
-        &compiled,
+        &filtered_envelope,
+        &reversed,
         &layer,
         layer.state.commitment_root,
     )
     .is_err());
-    let mut wrong_domain = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    let mut filtered_tamper = RecursiveRelationEnvelope::decode(&filtered_envelope).unwrap();
+    filtered_tamper.result_columns[1][0] = generated_decimal_i64_field(1);
+    filtered_tamper.result_values[1][0] = CanonicalResultValue::GeneratedDecimalI64(1);
+    filtered_tamper.result_commitments[1] = commit_column(&pad(
+        &filtered_tamper.result_columns[1],
+        1usize << filtered_tamper.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &filtered_tamper.encode().unwrap(),
+        &filtered_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let mut wrong_domain = RecursiveRelationEnvelope::decode(&filtered_envelope).unwrap();
     wrong_domain.result_descriptors[1].namespace = ResultIdNamespace::GeneratedDecimalU64;
     assert!(decode_and_verify_envelope(
         &wrong_domain.encode().unwrap(),
-        &compiled,
+        &filtered_compiled,
         &layer,
         layer.state.commitment_root,
     )

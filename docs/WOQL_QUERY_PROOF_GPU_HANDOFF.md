@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `7b5e889` | Recursive v15 GroupSum adds a distinct signed generated-decimal domain and exact Int8/16/32/64 accumulation. |
-| `modules/terminusdb-rs` | `272553b` | Descriptor-driven foreign executor inputs distinguish Store IDs, nullable cells, and canonical generated decimals; immediate zero-/one-node-key `GroupBy`→`Sum` supports signed/unsigned 64-bit integers. |
+| `modules/terminusdb-store-paraplu` | `4326f27` | Recursive signed generated-decimal filters derive exact Eq/Lt/Le/Gt/Ge selections and commitments from authenticated I64 aggregate values. |
+| `modules/terminusdb-rs` | this checkpoint | Descriptor-driven signed/unsigned generated-decimal comparisons after immediate `GroupBy`→`Sum`, plus the explicit foreign executor input boundary. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -427,8 +427,27 @@ forms without cross-datatype coercion, and returns `GeneratedDecimalI64` through
 resolution and `ExecutedResultValue`. Planner gates passed. The 136.91s E2E gate proves
 visible signed keyed sums over a child stack, including duplicates, zero, i64 boundaries,
 negative executor output, envelope round-trip, sign/recommit tamper, descriptor-domain
-substitution, and actual global overflow rejection. Generated signed-decimal comparisons
-are intentionally still unsupported and reject closed.
+substitution, and actual global overflow rejection.
+
+Store checkpoint `4326f27` adds the recursive `GeneratedI64Filter` proof kind. Shape
+validation requires a nonnullable `GeneratedDecimalI64` child descriptor, so neither an
+unsigned generated value nor a Store ID can be reinterpreted as signed. The prover and
+verifier decode only the canonical signed field image, derive the complete Eq/Lt/Le/Gt/Ge
+row subset, and recompute every output commitment. The separate proof tag plus the woql2
+relation/query digest bind domain, operator, operand order, constant, and child plan. The
+focused Store gate passed in 57.49s, covering -1/0 rows, both operand orders, every
+operator, i64 minimum/maximum constants, wire round-trip, unsigned-domain substitution,
+wrong operator/order, and sign/content/recommit tamper.
+
+woql2 now recognizes comparisons following immediate keyed or global `GroupBy`→`Sum`.
+The aggregate datatype descriptor chooses U64 or I64; constants must be exact integral
+`xsd:decimal` values in that domain. Fractional, retained scientific-exponent, overflow,
+wrong-variable, cross-domain, and Store integer-tag constants reject closed. Outer
+`Select`/`Count` remain supported, and the existing sequential planner composes bounded
+`When` over the aggregate prefix. The focused planner test passed in 0.00s. The reduced
+signed WOQL E2E passed in 156.46s, proving `< 0`, resolving the negative executor value,
+round-tripping the envelope, and rejecting operand/query substitution, descriptor-domain
+substitution, and signed-result tamper.
 
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
@@ -484,8 +503,9 @@ are intentionally still unsupported and reject closed.
 - [x] Add exact signed Int8/16/32/64 grouped sums with a distinct generated-I64 domain,
   canonical signed field encoding, cancellation-safe accumulation, and signed executor
   resolution.
-- [ ] Add bounded comparisons over generated signed decimals; current generated-u64
-  comparison lowering deliberately rejects the signed result domain.
+- [x] Add bounded Eq/Lt/Le/Gt/Ge comparisons over signed and unsigned generated grouped
+  sums, with exact decimal constants, operand order, domain-separated plans, outer Count,
+  bounded When composition, envelope/executor integration, and tamper rejection.
 - [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
   selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
 - [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage
