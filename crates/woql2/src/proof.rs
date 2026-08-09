@@ -113,6 +113,10 @@ pub enum CompiledRelationStatement {
         /// Public output column -> child relation column, per ordered branch.
         mappings: Vec<Vec<usize>>,
     },
+    BagProjection {
+        input: Box<CompiledRelation>,
+        indices: Vec<usize>,
+    },
     /// Leading-Prolog `when(A,B)` lowered to authenticated joins plus bag union.
     /// This wrapper keeps canonical query identity distinct from an explicit `Or`.
     When {
@@ -295,6 +299,9 @@ pub enum ProvedQueryStatement {
         branches: Vec<ProvedBgp>,
         proof: Box<BagUnionProof>,
     },
+    BagProjection {
+        input: Box<ProvedBgp>,
+    },
     LeftAnti {
         left: Box<ProvedBgp>,
         right: Box<ProvedBgp>,
@@ -414,6 +421,14 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 for index in mapping {
                     hasher.update((*index as u64).to_le_bytes());
                 }
+            }
+        }
+        CompiledRelationStatement::BagProjection { input, indices } => {
+            hasher.update(b"/bag-projection");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((indices.len() as u64).to_le_bytes());
+            for index in indices {
+                hasher.update((*index as u64).to_le_bytes());
             }
         }
         CompiledRelationStatement::When { expanded } => {
@@ -601,6 +616,20 @@ fn relation_result_descriptors(
             }
             Ok(expected.unwrap_or_default())
         }
+        CompiledRelationStatement::BagProjection { input, indices } => {
+            let descriptors = relation_result_descriptors(input)?;
+            indices
+                .iter()
+                .map(|index| {
+                    descriptors.get(*index).copied().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "WOQL bag projection index out of range",
+                        )
+                    })
+                })
+                .collect()
+        }
         CompiledRelationStatement::When { expanded } => relation_result_descriptors(expanded),
         CompiledRelationStatement::LeftAnti { left, .. } => relation_result_descriptors(left),
         CompiledRelationStatement::InnerJoin { left, right, key_pairs } => {
@@ -673,6 +702,12 @@ fn relation_proof_plan(
             RelationProofPlanKind::BagUnion {
                 branches: branches.iter().map(child).collect::<std::io::Result<_>>()?,
                 mappings: mappings.clone(),
+            }
+        }
+        CompiledRelationStatement::BagProjection { input, indices } => {
+            RelationProofPlanKind::BagProjection {
+                input: Box::new(child(input)?),
+                indices: indices.clone(),
             }
         }
         CompiledRelationStatement::When { expanded } => {
@@ -869,6 +904,52 @@ impl ProvedBgp {
                     proof,
                     &mut transcript,
                 )?;
+            }
+            (
+                ProvedQueryStatement::BagProjection { input },
+                CompiledRelationStatement::BagProjection {
+                    input: input_plan,
+                    indices,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_commitments = indices
+                    .iter()
+                    .map(|index| {
+                        input.result_commitments.get(*index).copied().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "WOQL bag projection index out of range",
+                            )
+                        })
+                    })
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let expected_columns = indices
+                    .iter()
+                    .map(|index| {
+                        input.result_columns.get(*index).cloned().ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "WOQL bag projection index out of range",
+                            )
+                        })
+                    })
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                if self.result_commitments != expected_commitments
+                    || self.result_columns != expected_columns
+                    || self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL bag projection changed rows or multiplicity",
+                    ));
+                }
             }
             (
                 ProvedQueryStatement::LeftAnti { left, right, proof },
@@ -1525,6 +1606,19 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::BagProjection { input },
+                CompiledRelationStatement::BagProjection {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::BagProjection {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::Equality { input, proof },
                 CompiledRelationStatement::Equality {
                     input: input_plan, ..
@@ -1781,6 +1875,11 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             branches: branches.into_iter().map(proved_from_recursive).collect(),
             proof,
         },
+        RecursiveRelationProof::BagProjection { input } => {
+            ProvedQueryStatement::BagProjection {
+                input: Box::new(proved_from_recursive(*input)),
+            }
+        }
         RecursiveRelationProof::LeftAnti { left, right, proof } => ProvedQueryStatement::LeftAnti {
             left: Box::new(proved_from_recursive(*left)),
             right: Box::new(proved_from_recursive(*right)),
@@ -2136,8 +2235,14 @@ pub enum BgpPlanError {
     #[error("When needs a preceding non-empty authenticated outer relation")]
     WhenMissingOuter,
 
-    #[error("When condition/consequent must expose one or two variables already bound by the outer relation")]
+    #[error("When condition/consequent must share one or two nonnullable variables with their input relation")]
     WhenUnsupportedVariables,
+
+    #[error("When branch-local variables would escape the result: {vars:?}")]
+    WhenBranchLocalsEscape { vars: Vec<String> },
+
+    #[error("When branch-local variable `?{var}` is referenced by a later operator")]
+    WhenBranchLocalUsedLater { var: String },
 
     #[error("When condition/consequent may not contain result wrappers or nullable correlation keys")]
     WhenUnsupportedSubplan,
@@ -2962,6 +3067,75 @@ fn compile_equality_constraint(
     }
 }
 
+fn inner_join_relation(
+    left: CompiledRelation,
+    right: CompiledRelation,
+    key_pairs: Vec<(usize, usize)>,
+) -> CompiledRelation {
+    let shared_right = key_pairs.iter().map(|pair| pair.1).collect::<Vec<_>>();
+    let mut schema = left.schema.clone();
+    let mut domains = left.domains.clone();
+    schema.extend(
+        right
+            .schema
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !shared_right.contains(index))
+            .map(|(_, name)| name.clone()),
+    );
+    domains.extend(
+        right
+            .domains
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !shared_right.contains(index))
+            .map(|(_, domain)| *domain),
+    );
+    CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::InnerJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            key_pairs,
+        },
+    }
+}
+
+fn first_local_in_schema(schema: &[String], locals: &[String]) -> Option<String> {
+    schema.iter().find(|name| locals.contains(name)).cloned()
+}
+
+fn later_operator_local(
+    operator: &ReadOperator,
+    locals: &[String],
+) -> Result<Option<String>, BgpPlanError> {
+    match operator {
+        ReadOperator::Optional(query) | ReadOperator::Not(query) => {
+            let compiled = plan_bgp(query)?;
+            Ok(first_local_in_schema(&compiled.relation.schema, locals))
+        }
+        ReadOperator::Equals(equals) => {
+            for value in [&equals.left, &equals.right] {
+                if let Value::Variable(name) = value {
+                    if locals.contains(name) {
+                        return Ok(Some(name.clone()));
+                    }
+                }
+            }
+            Ok(None)
+        }
+        ReadOperator::When(when) => {
+            let condition = plan_bgp(&when.query)?;
+            if let Some(local) = first_local_in_schema(&condition.relation.schema, locals) {
+                return Ok(Some(local));
+            }
+            let consequent = plan_bgp(&when.consequent)?;
+            Ok(first_local_in_schema(&consequent.relation.schema, locals))
+        }
+    }
+}
+
 fn plan_sequential_read_operators(
     query: &Query,
     selections: &[(&[String], bool)],
@@ -2999,8 +3173,8 @@ fn plan_sequential_read_operators(
         },
     )?;
 
-    for operator in operators {
-        if let ReadOperator::When(when) = &operator {
+    for (operator_index, operator) in operators.iter().enumerate() {
+        if let ReadOperator::When(when) = operator {
             let true_branch = relation.clone();
             let condition = plan_bgp(&when.query)?;
             reject_when_subplan(&condition)?;
@@ -3008,24 +3182,59 @@ fn plan_sequential_read_operators(
             let condition_keys = when_key_pairs(&relation, &condition.relation)?;
             let schema = relation.schema.clone();
             let domains = relation.domains.clone();
-            let matched_condition = CompiledRelation {
-                schema: schema.clone(), domains: domains.clone(),
-                statement: CompiledRelationStatement::InnerJoin {
-                    left: Box::new(relation), right: Box::new(condition.relation),
-                    key_pairs: condition_keys,
-                },
-            };
+            let matched_condition = inner_join_relation(relation, condition.relation, condition_keys);
 
             let consequent = plan_bgp(&when.consequent)?;
             reject_when_subplan(&consequent)?;
             merge_collection(&mut effective_collection, consequent.collection.as_ref(), BgpPlanError::WhenRoutingConflict)?;
             let consequent_keys = when_key_pairs(&matched_condition, &consequent.relation)?;
-            let successful = CompiledRelation {
-                schema: schema.clone(), domains: domains.clone(),
-                statement: CompiledRelationStatement::InnerJoin {
-                    left: Box::new(matched_condition), right: Box::new(consequent.relation),
-                    key_pairs: consequent_keys,
-                },
+            let successful = inner_join_relation(
+                matched_condition,
+                consequent.relation,
+                consequent_keys,
+            );
+            let locals = successful
+                .schema
+                .iter()
+                .filter(|name| !schema.contains(name))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !locals.is_empty() {
+                let hidden_by_result_wrapper = count_variable.is_some()
+                    || (!selections.is_empty()
+                        && selections.iter().all(|(variables, _)| {
+                            variables.iter().all(|name| !locals.contains(name))
+                        }));
+                if !hidden_by_result_wrapper {
+                    return Err(BgpPlanError::WhenBranchLocalsEscape { vars: locals });
+                }
+                for later in &operators[operator_index + 1..] {
+                    if let Some(var) = later_operator_local(later, &locals)? {
+                        return Err(BgpPlanError::WhenBranchLocalUsedLater { var });
+                    }
+                }
+            }
+            let successful = if locals.is_empty() {
+                successful
+            } else {
+                let indices = schema
+                    .iter()
+                    .map(|name| {
+                        successful
+                            .schema
+                            .iter()
+                            .position(|candidate| candidate == name)
+                            .expect("outer When column remains in the joined relation")
+                    })
+                    .collect();
+                CompiledRelation {
+                    schema: schema.clone(),
+                    domains: domains.clone(),
+                    statement: CompiledRelationStatement::BagProjection {
+                        input: Box::new(successful),
+                        indices,
+                    },
+                }
             };
             let identity = (0..schema.len()).collect::<Vec<_>>();
             let expanded = CompiledRelation {
@@ -3061,7 +3270,7 @@ fn plan_sequential_read_operators(
             ReadOperator::Equals(_) => unreachable!(),
             ReadOperator::When(_) => unreachable!(),
         };
-        let right = plan_bgp(&right_query)?;
+        let right = plan_bgp(right_query)?;
         reject_subplan_wrappers(&right, optional)?;
         merge_collection(
             &mut effective_collection,
@@ -3152,6 +3361,9 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 }
                 Ok(())
             }
+            CompiledRelationStatement::BagProjection { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
             CompiledRelationStatement::When { expanded } => visit(expanded, depth + 1, nodes),
             CompiledRelationStatement::LeftAnti { left, right, .. }
             | CompiledRelationStatement::InnerJoin { left, right, .. }
@@ -3199,14 +3411,21 @@ fn when_key_pairs(
     outer: &CompiledRelation,
     subplan: &CompiledRelation,
 ) -> Result<Vec<(usize, usize)>, BgpPlanError> {
-    if !(1..=2).contains(&subplan.schema.len()) {
+    let pairs = subplan
+        .schema
+        .iter()
+        .enumerate()
+        .filter_map(|(right, name)| {
+            outer
+                .schema
+                .iter()
+                .position(|candidate| candidate == name)
+                .map(|left| (left, right))
+        })
+        .collect::<Vec<_>>();
+    if !(1..=2).contains(&pairs.len()) {
         return Err(BgpPlanError::WhenUnsupportedVariables);
     }
-    let pairs = subplan.schema.iter().enumerate().map(|(right, name)| {
-        outer.schema.iter().position(|candidate| candidate == name)
-            .map(|left| (left, right))
-            .ok_or(BgpPlanError::WhenUnsupportedVariables)
-    }).collect::<Result<Vec<_>, _>>()?;
     let left_descriptors = relation_result_descriptors(outer)
         .map_err(|_| BgpPlanError::WhenUnsupportedSubplan)?;
     let right_descriptors = relation_result_descriptors(subplan)

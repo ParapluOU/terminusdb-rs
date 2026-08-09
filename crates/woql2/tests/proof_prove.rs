@@ -364,6 +364,91 @@ fn bounded_when_success_plus_true_e2e() {
         .spawn(assert_bounded_when_success_plus_true_e2e).unwrap().join().unwrap();
 }
 
+fn assert_when_existential_local_projection_preserves_success_multiplicity() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, predicate, object) in [
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("a", "q", "z1"),
+        ("a", "q", "z2"),
+        ("z1", "r", "b"),
+        ("z2", "r", "b"),
+    ] {
+        builder
+            .add_value_triple(ValueTriple::new_node(
+                &iri(subject),
+                &iri(predicate),
+                &iri(object),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = |consequent: &str| Query::Select(Select {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(and_of(vec![
+            tv("x", "p", "y"),
+            Query::If(When {
+                query: Box::new(tv("x", "q", "z")),
+                consequent: Box::new(tv("z", consequent, "y")),
+            }),
+        ])),
+    });
+    let compiled = plan_bgp(&query("r")).unwrap();
+    assert_eq!(compiled.relation.schema, ["x", "y"]);
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let node = |value: &CanonicalResultValue| match value {
+        CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => {
+            String::from_utf8(bytes.clone()).unwrap()
+        }
+        other => panic!("unexpected {other:?}"),
+    };
+    let rows = (0..proved.result_len)
+        .map(|row| (node(&values[0][row]), node(&values[1][row])))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            (iri("a"), iri("b")),
+            (iri("a"), iri("b")),
+            (iri("a"), iri("b")),
+            (iri("c"), iri("d")),
+        ]
+    );
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    let substituted = plan_bgp(&query("s")).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &substituted,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn when_existential_local_projection_preserves_success_multiplicity() {
+    std::thread::Builder::new()
+        .name("woql-when-existential-proof".into())
+        .stack_size(48 * 1024 * 1024)
+        .spawn(assert_when_existential_local_projection_preserves_success_multiplicity)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn explicit_cpu_context_preserves_recursive_envelope_bytes() {
     let store = open_sync_memory_store();

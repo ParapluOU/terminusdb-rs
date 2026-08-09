@@ -899,7 +899,7 @@ fn planner_rejects_recursive_depth_and_node_bombs() {
 }
 
 #[test]
-fn bounded_when_compiles_prolog_success_plus_true_semantics_and_rejects_new_variables() {
+fn bounded_when_compiles_prolog_success_plus_true_and_bounds_existential_locals() {
     let when = Query::If(When {
         query: Box::new(tv("x", "q", "y")),
         consequent: Box::new(tv("x", "r", "y")),
@@ -913,15 +913,66 @@ fn bounded_when_compiles_prolog_success_plus_true_semantics_and_rejects_new_vari
     assert!(matches!(branches[0].statement, terminusdb_woql2::proof::CompiledRelationStatement::InnerJoin { .. }));
 
     reject(when, BgpPlanError::WhenMissingOuter);
+    let local_when = || Query::If(When {
+        query: Box::new(tv("x", "q", "z")),
+        consequent: Box::new(tv("z", "r", "y")),
+    });
+    let local_body = || and_of(vec![tv("x", "p", "y"), local_when()]);
     reject(
-        and_of(vec![
-            tv("x", "p", "y"),
-            Query::If(When {
-                query: Box::new(tv("x", "q", "y")),
-                consequent: Box::new(tv("x", "r", "z")),
-            }),
-        ]),
-        BgpPlanError::WhenUnsupportedVariables,
+        local_body(),
+        BgpPlanError::WhenBranchLocalsEscape {
+            vars: vec!["z".into()],
+        },
+    );
+
+    let selected = plan_bgp(&Query::Select(Select {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(local_body()),
+    }))
+    .unwrap();
+    assert_eq!(selected.relation.schema, ["x", "y"]);
+    let terminusdb_woql2::proof::CompiledRelationStatement::When { expanded } =
+        &selected.relation.statement
+    else {
+        panic!("expected When wrapper")
+    };
+    let terminusdb_woql2::proof::CompiledRelationStatement::BagUnion { branches, .. } =
+        &expanded.statement
+    else {
+        panic!("expected When bag union")
+    };
+    assert!(matches!(
+        branches[0].statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::BagProjection { .. }
+    ));
+
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(local_body()),
+        count: DataValue::Variable("count".into()),
+    }))
+    .unwrap();
+    assert_eq!(counted.count_variable.as_deref(), Some("count"));
+
+    let nested_select = plan_bgp(&Query::Select(Select {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into(), "y".into()],
+            query: Box::new(local_body()),
+        })),
+    }))
+    .unwrap();
+    assert_eq!(nested_select.projection, Some(vec![0]));
+
+    reject(
+        Query::Select(Select {
+            variables: vec!["x".into(), "y".into()],
+            query: Box::new(and_of(vec![
+                tv("x", "p", "y"),
+                local_when(),
+                equals(value_var("z"), value_node("kept")),
+            ])),
+        }),
+        BgpPlanError::WhenBranchLocalUsedLater { var: "z".into() },
     );
 }
 
