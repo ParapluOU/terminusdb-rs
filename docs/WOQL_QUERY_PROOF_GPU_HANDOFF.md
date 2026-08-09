@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `a93ab32` | Ascending and descending exact scalar order; descending derives `MAX*chi-value` from authenticated commitments and reuses strict sort. |
-| `modules/terminusdb-rs` | `f65e97e` plus this documentation commit | WOQL `OrderBy` direction is Store-plan, verifier, recursive-envelope, and digest bound under the same bounded shape. |
+| `modules/terminusdb-store-paraplu` | `2ed11ca` | Exact two-/three-key complete-row ordering, recursive wire/tamper coverage, and ordered-slice composition. |
+| `modules/terminusdb-rs` | `76c056f` plus this documentation commit | Bounded multikey WOQL planning, recursive verification, digest binding, rejection coverage, and nested pagination E2E. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -160,8 +160,7 @@ duplicate-generating recursive children.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column leaf result.
 - [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
 - [x] `Once` over an authenticated ordered child, digest-distinct from `Limit(1)`.
-- [x] Two-/three-key lexicographic strict-sort prerequisite over authenticated 64-bit columns.
-- [ ] Compose multikey full-row permutation plus per-key dictionary/type lookup into that gadget.
+- [x] Two-/three-key complete-row lexicographic order with full-row permutation and root-catalog type/value authentication.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
