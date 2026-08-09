@@ -35,13 +35,115 @@ use terminusdb_woql2::proof::{
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
     BgpPlanError, CompiledRelationStatement, ExecutedResultValue,
 };
-use terminusdb_woql2::triple::{Data, Link};
+use terminusdb_woql2::triple::{Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::{
     misc::{Count, InRange, Limit, RangeMax, RangeMin, Start},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
     query::{Not, Or, Query},
-    value::{DataValue, NodeValue},
+    value::{DataValue, NodeValue, Value},
 };
+
+fn ordered_triple_value_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for score in [10u32, 20, 30, 40] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("metric"),
+                &iri("score"),
+                u32::make_entry(&score),
+            ))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn resolved_u32_column(values: &[Vec<CanonicalResultValue>]) -> Vec<u32> {
+    values[0]
+        .iter()
+        .map(|value| match value {
+            CanonicalResultValue::Object(CanonicalObject::Value {
+                datatype: CanonicalDatatype::UInt32,
+                lexical,
+            }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+            other => panic!("unexpected ordered triple value {other:?}"),
+        })
+        .collect()
+}
+
+fn triple_slice_query(reverse: bool) -> Query {
+    let subject = NodeValue::Node(iri("metric"));
+    let predicate = NodeValue::Node(iri("score"));
+    let object = Value::Variable("score".into());
+    let low = Value::Data(XSDAnySimpleType::UnsignedInt(15));
+    let high = Value::Data(XSDAnySimpleType::UnsignedInt(40));
+    if reverse {
+        Query::TripleSliceRev(TripleSliceRev { subject, predicate, object, low, high, graph: None })
+    } else {
+        Query::TripleSlice(TripleSlice { subject, predicate, object, low, high, graph: None })
+    }
+}
+
+#[test]
+fn triple_slice_forward_and_reverse_prove_exact_order_and_reject_direction_substitution() {
+    let layer = ordered_triple_value_layer();
+    let forward = plan_bgp(&triple_slice_query(false)).unwrap();
+    let forward_proof = forward.prove(&layer).unwrap();
+    let forward_values = forward_proof
+        .verify_and_resolve_values(&forward, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(resolved_u32_column(&forward_values), [20, 30]);
+
+    let reverse = plan_bgp(&triple_slice_query(true)).unwrap();
+    let reverse_proof = reverse.prove(&layer).unwrap();
+    let reverse_values = reverse_proof
+        .verify_and_resolve_values(&reverse, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(resolved_u32_column(&reverse_values), [30, 20]);
+
+    let envelope = forward_proof
+        .encode_envelope(&forward, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reverse,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn triple_next_previous_and_end_cursor_prove_nearest_strict_value() {
+    let layer = ordered_triple_value_layer();
+    let subject = NodeValue::Node(iri("metric"));
+    let predicate = NodeValue::Node(iri("score"));
+    let reference = |score| Value::Data(XSDAnySimpleType::UnsignedInt(score));
+    let variable = || Value::Variable("neighbor".into());
+    let queries = [
+        Query::TripleNext(TripleNext {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: reference(20), next: variable(), graph: None,
+        }),
+        Query::TriplePrevious(TriplePrevious {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: reference(30), previous: variable(), graph: None,
+        }),
+        Query::TripleNext(TripleNext {
+            subject, predicate, object: reference(40), next: variable(), graph: None,
+        }),
+    ];
+    let expected = [vec![30], vec![20], vec![]];
+
+    for (query, expected) in queries.into_iter().zip(expected) {
+        let compiled = plan_bgp(&query).unwrap();
+        let proved = compiled.prove(&layer).unwrap();
+        let values = proved
+            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+        assert_eq!(resolved_u32_column(&values), expected);
+    }
+}
 
 fn build_grouped_score_layer() -> Arc<LayerCommitment> {
     let store = open_sync_memory_store();

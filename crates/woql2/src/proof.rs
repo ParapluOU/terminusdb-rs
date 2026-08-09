@@ -2342,6 +2342,12 @@ pub enum BgpPlanError {
     #[error("Start/Limit proof coverage requires an authenticated ordered child without result wrappers")]
     OrderedSliceUnsupportedShape,
 
+    #[error("ordered triple-value proof coverage requires instance graph, constant subject/predicate, and exactly one object/cursor variable")]
+    TripleValueOrderUnsupportedShape,
+
+    #[error("ordered triple-value proof coverage requires fixed-width numeric literal bounds of one datatype")]
+    TripleValueOrderUnsupportedValue,
+
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
@@ -2422,6 +2428,8 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::InRange(_) => "InRange",
         Query::TripleSlice(_) => "TripleSlice",
         Query::TripleSliceRev(_) => "TripleSliceRev",
+        Query::TripleNext(_) => "TripleNext",
+        Query::TriplePrevious(_) => "TriplePrevious",
         Query::Sum(_) => "Sum",
         Query::Member(_) => "Member",
         Query::Get(_) => "Get",
@@ -2668,6 +2676,223 @@ fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, BgpPlanError> 
     })
 }
 
+fn encoded_ordered_triple_value(
+    value: &Value,
+) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
+    let Value::Data(value) = value else {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
+    };
+    let encoded = encode_range_constant(value)
+        .map_err(|_| BgpPlanError::TripleValueOrderUnsupportedValue)?;
+    if !matches!(
+        encoded.2,
+        CanonicalDatatype::UInt8
+            | CanonicalDatatype::Int8
+            | CanonicalDatatype::UInt16
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::UInt32
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Float32
+            | CanonicalDatatype::UInt64
+            | CanonicalDatatype::Int64
+            | CanonicalDatatype::Float64
+    ) {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
+    }
+    Ok(encoded)
+}
+
+fn compile_ordered_triple_value_scan(
+    subject: &NodeValue,
+    predicate: &NodeValue,
+    graph: &Option<GraphType>,
+    variable: &str,
+    datatype: ArkFr,
+    canonical_datatype: CanonicalDatatype,
+    bounds: Vec<NormalizedBound>,
+    direction: OrderDirection,
+    first_only: bool,
+) -> Result<CompiledBgp, BgpPlanError> {
+    if !matches!(subject, NodeValue::Node(_))
+        || !matches!(predicate, NodeValue::Node(_))
+        || matches!(graph, Some(GraphType::Schema))
+    {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedShape);
+    }
+
+    let typed = TypedTriple {
+        triple: Triple {
+            subject: subject.clone(),
+            predicate: predicate.clone(),
+            object: Value::Variable(variable.to_owned()),
+            graph: graph.clone(),
+        },
+        object_kind: ObjectKindFilter::Any,
+    };
+    let mut atoms = vec![atom_from_triple(&typed)?];
+    let comparisons = vec![NormalizedRange {
+        var: variable.to_owned(),
+        datatype,
+        canonical_datatype,
+        bounds,
+    }];
+    attach_ranges(&mut atoms, &comparisons)?;
+    let (plan, schema) = plan_left_deep(&atoms)?;
+    if schema != [variable] {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedShape);
+    }
+    let ordered = CompiledRelation {
+        schema: schema.clone(),
+        domains: vec![Some(EqualityValueDomain::Datatype(canonical_datatype))],
+        statement: CompiledRelationStatement::ExactScalarOrder {
+            input: Box::new(CompiledRelation {
+                schema: schema.clone(),
+                domains: vec![Some(EqualityValueDomain::Datatype(canonical_datatype))],
+                statement: CompiledRelationStatement::Bgp(plan),
+            }),
+            datatype: canonical_datatype,
+            direction,
+        },
+    };
+    let relation = if first_only {
+        CompiledRelation {
+            schema,
+            domains: vec![Some(EqualityValueDomain::Datatype(canonical_datatype))],
+            statement: CompiledRelationStatement::ExactOrderedSlice {
+                input: Box::new(ordered),
+                offset: 0,
+                limit: Some(1),
+                once: false,
+            },
+        }
+    } else {
+        ordered
+    };
+    Ok(CompiledBgp {
+        relation,
+        projection: None,
+        collection: None,
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
+fn compile_ordered_triple_slice(
+    subject: &NodeValue,
+    predicate: &NodeValue,
+    object: &Value,
+    low: &Value,
+    high: &Value,
+    graph: &Option<GraphType>,
+    direction: OrderDirection,
+) -> Result<CompiledBgp, BgpPlanError> {
+    let Value::Variable(variable) = object else {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedShape);
+    };
+    let (low_datatype, low_c, low_canonical) = encoded_ordered_triple_value(low)?;
+    let (high_datatype, high_c, high_canonical) = encoded_ordered_triple_value(high)?;
+    if low_datatype != high_datatype || low_canonical != high_canonical {
+        return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
+    }
+    compile_ordered_triple_value_scan(
+        subject,
+        predicate,
+        graph,
+        variable,
+        low_datatype,
+        low_canonical,
+        vec![
+            NormalizedBound {
+                op: RangeOp::Ge,
+                c: low_c,
+            },
+            NormalizedBound {
+                op: RangeOp::Lt,
+                c: high_c,
+            },
+        ],
+        direction,
+        false,
+    )
+}
+
+/// Compile the largest currently exact ordered-value subset shared by the four
+/// TerminusDB 12 cursor constructs.  Constant S/P leaves one complete object column,
+/// so the existing range, exact-order, and exact-slice arguments prove both membership
+/// and the executor-visible order without relying on physical dictionary IDs.
+fn plan_ordered_triple_value_construct(
+    query: &Query,
+) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let compiled = match query {
+        Query::TripleSlice(slice) => compile_ordered_triple_slice(
+            &slice.subject,
+            &slice.predicate,
+            &slice.object,
+            &slice.low,
+            &slice.high,
+            &slice.graph,
+            OrderDirection::Ascending,
+        )?,
+        Query::TripleSliceRev(slice) => compile_ordered_triple_slice(
+            &slice.subject,
+            &slice.predicate,
+            &slice.object,
+            &slice.low,
+            &slice.high,
+            &slice.graph,
+            OrderDirection::Descending,
+        )?,
+        Query::TripleNext(next) => {
+            let (variable, reference, op, direction) = match (&next.object, &next.next) {
+                (Value::Data(reference), Value::Variable(variable)) => {
+                    (variable, Value::Data(reference.clone()), RangeOp::Gt, OrderDirection::Ascending)
+                }
+                (Value::Variable(variable), Value::Data(reference)) => {
+                    (variable, Value::Data(reference.clone()), RangeOp::Lt, OrderDirection::Descending)
+                }
+                _ => return Err(BgpPlanError::TripleValueOrderUnsupportedShape),
+            };
+            let (datatype, c, canonical) = encoded_ordered_triple_value(&reference)?;
+            compile_ordered_triple_value_scan(
+                &next.subject,
+                &next.predicate,
+                &next.graph,
+                variable,
+                datatype,
+                canonical,
+                vec![NormalizedBound { op, c }],
+                direction,
+                true,
+            )?
+        }
+        Query::TriplePrevious(previous) => {
+            let (variable, reference, op, direction) = match (&previous.object, &previous.previous) {
+                (Value::Data(reference), Value::Variable(variable)) => {
+                    (variable, Value::Data(reference.clone()), RangeOp::Lt, OrderDirection::Descending)
+                }
+                (Value::Variable(variable), Value::Data(reference)) => {
+                    (variable, Value::Data(reference.clone()), RangeOp::Gt, OrderDirection::Ascending)
+                }
+                _ => return Err(BgpPlanError::TripleValueOrderUnsupportedShape),
+            };
+            let (datatype, c, canonical) = encoded_ordered_triple_value(&reference)?;
+            compile_ordered_triple_value_scan(
+                &previous.subject,
+                &previous.predicate,
+                &previous.graph,
+                variable,
+                datatype,
+                canonical,
+                vec![NormalizedBound { op, c }],
+                direction,
+                true,
+            )?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(compiled))
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -2756,6 +2981,28 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         let mut compiled = plan_exact_scalar_order(order_by)?;
         // Prolog's nested routing scope is innermost-wins. Preserve an inner collection
         // already found while compiling the ordered child; otherwise retain this outer one.
+        if compiled.collection.is_none() {
+            compiled.collection = collection;
+        }
+        let (relation, full_row_distinct) = compile_distinct_relation(
+            compiled.relation,
+            &distincts,
+            &selections,
+            count_variable.as_deref(),
+        )?;
+        compiled.projection = compile_projection(
+            &selections,
+            count_variable.as_deref(),
+            &relation.schema,
+        )?;
+        compiled.relation = relation;
+        compiled.count_variable = count_variable;
+        compiled.full_row_distinct = full_row_distinct;
+        validate_compiled_structure(&compiled.relation)?;
+        return Ok(compiled);
+    }
+
+    if let Some(mut compiled) = plan_ordered_triple_value_construct(body)? {
         if compiled.collection.is_none() {
             compiled.collection = collection;
         }

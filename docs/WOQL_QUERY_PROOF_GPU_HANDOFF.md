@@ -261,6 +261,26 @@ the empty result proved count 0 in 9.19s. The canonical explicit decoder already
 the leading Prolog `variables`/`query` Distinct shape and required no serde path or shape
 change.
 
+Leading Prolog and its explicit JSON decoder expose all four ordered triple-value
+constructs. `TripleSlice`/`TripleSliceRev` enumerate the half-open typed-object range
+`[low, high)` in ascending/descending value order. `TripleNext`/`TriplePrevious` require
+ground subject and predicate and choose the nearest same-datatype object strictly above/
+below an arbitrary typed reference; when the cursor rather than object is ground, Prolog
+uses the inverse relation. Store checkpoint `d923e69` fixes child snapshots to merge their
+per-layer typed dictionaries into one global value order (and deduplicate reused outer
+IDs) instead of concatenating individually sorted layer runs.
+
+The bounded proof lowering accepts default/instance graph, constant subject/predicate,
+one fixed-width numeric object variable, and constant same-datatype bounds/reference.
+Slices compose exact BGP range selection with exact scalar ascending/descending order;
+next/previous additionally apply an exact `Limit(1)`. This proves membership,
+completeness, strict cursor boundaries, result order, and the empty endpoint without a
+new proof gadget or physical-ID-order assumption. All 96 planner tests pass. Forward and
+reverse prove/resolve/verify plus direction-substitution rejection passed in 184.22s;
+next, previous, and empty end-cursor proving passed in 162.06s. These nested tests require
+`RUST_MIN_STACK=16777216` on this Linux host; the default Rust test-thread stack overflow
+is a recorded CPU/stack-pressure optimization target, not a verifier relaxation.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -275,7 +295,8 @@ change.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
-- [ ] Extend general lexicographic/stable-tie ordering and triple navigation.
+- [ ] Extend general lexicographic/stable-tie ordering and triple navigation beyond the
+  exact constant-S/P, one fixed-width numeric object-column subset.
   `Once` can now be implemented exactly as `Limit(1)` only when its child already has an
   authenticated order; unordered first-solution semantics remain unsupported.
 - [x] Implement bounded leading-Prolog `When` exactly when `A` and `B` introduce no
@@ -290,6 +311,13 @@ change.
   coercion; retain `xsd:integer` as a documented bounded-i64 subset.
 - [x] Authenticate one-/two-witness projected `Distinct` class counts over recursive
   relations without claiming unauthenticated first-occurrence output order.
+- [x] Authenticate bounded `TripleSlice`/`TripleSliceRev` and both binding modes of
+  `TripleNext`/`TriplePrevious` for constant S/P and one fixed-width numeric object column,
+  including global child-layer order, half-open/strict boundaries, reverse order, limit
+  one, empty endpoints, and direction substitution.
+- [ ] Extend ordered triple values to variable S/P or visible full triples only after
+  authenticating complete tie order; add variable-width string collation, schema routing,
+  and the all-ground zero-column adjacency form separately.
 - [ ] Expose visible projected `Distinct` only after authenticating SWI first-occurrence
   order, first-row non-witness bindings, and Prolog-unbound variant equality.
 - [ ] Extend `When` to observable branch-local variables only after defining an

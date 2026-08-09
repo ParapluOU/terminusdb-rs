@@ -12,7 +12,9 @@ use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Start};
 use terminusdb_woql2::order::{Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
-use terminusdb_woql2::triple::{Data, Link, TripleSlice, TripleSliceRev};
+use terminusdb_woql2::triple::{
+    Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev,
+};
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
 use terminus_store::proof::envelope::RelationEqualityPlan;
@@ -1816,7 +1818,7 @@ fn in_range_compiles_to_half_open_bounds() {
 }
 
 #[test]
-fn triple_slice_rejects_until_result_order_is_authenticated() {
+fn triple_slice_rejects_variable_subject_because_complete_order_key_is_not_proved() {
     let q = Query::TripleSlice(TripleSlice {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("age")),
@@ -1827,14 +1829,12 @@ fn triple_slice_rejects_until_result_order_is_authenticated() {
     });
     reject(
         q,
-        BgpPlanError::UnsupportedConstruct {
-            construct: "TripleSlice",
-        },
+        BgpPlanError::TripleValueOrderUnsupportedShape,
     );
 }
 
 #[test]
-fn triple_slice_rev_rejects_until_result_order_is_authenticated() {
+fn triple_slice_rev_rejects_variable_subject_because_complete_order_key_is_not_proved() {
     let q = Query::TripleSliceRev(TripleSliceRev {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("age")),
@@ -1845,9 +1845,96 @@ fn triple_slice_rev_rejects_until_result_order_is_authenticated() {
     });
     reject(
         q,
-        BgpPlanError::UnsupportedConstruct {
-            construct: "TripleSliceRev",
-        },
+        BgpPlanError::TripleValueOrderUnsupportedShape,
+    );
+}
+
+#[test]
+fn triple_slice_and_reverse_compile_exact_half_open_scalar_order() {
+    let make = |reverse| {
+        let subject = NodeValue::Node(iri("metric"));
+        let predicate = NodeValue::Node(iri("age"));
+        let object = Value::Variable("age".into());
+        let low = Value::Data(XSDAnySimpleType::UnsignedInt(18));
+        let high = Value::Data(XSDAnySimpleType::UnsignedInt(40));
+        if reverse {
+            Query::TripleSliceRev(TripleSliceRev { subject, predicate, object, low, high, graph: None })
+        } else {
+            Query::TripleSlice(TripleSlice { subject, predicate, object, low, high, graph: None })
+        }
+    };
+
+    for reverse in [false, true] {
+        let compiled = plan_bgp(&make(reverse)).unwrap();
+        assert_eq!(compiled.relation.schema, ["age"]);
+        let (input, datatype) = compiled.relation.as_exact_scalar_order().unwrap();
+        assert_eq!(datatype, CanonicalDatatype::UInt32);
+        let range = &input.as_bgp().unwrap().atoms[0].object_range;
+        let range = range.as_ref().unwrap();
+        assert_eq!(range.op, RangeOp::Ge);
+        assert_eq!(range.c, ArkFr::from_u64(18));
+        assert_eq!(range.second.as_ref().unwrap().op, RangeOp::Lt);
+        assert_eq!(range.second.as_ref().unwrap().c, ArkFr::from_u64(40));
+    }
+}
+
+#[test]
+fn triple_next_and_previous_compile_strict_nearest_value_in_both_binding_modes() {
+    let subject = NodeValue::Node(iri("metric"));
+    let predicate = NodeValue::Node(iri("age"));
+    let reference = Value::Data(XSDAnySimpleType::UnsignedInt(20));
+    let variable = Value::Variable("neighbor".into());
+    let queries = [
+        Query::TripleNext(TripleNext {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: reference.clone(), next: variable.clone(), graph: None,
+        }),
+        Query::TripleNext(TripleNext {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: variable.clone(), next: reference.clone(), graph: None,
+        }),
+        Query::TriplePrevious(TriplePrevious {
+            subject: subject.clone(), predicate: predicate.clone(),
+            object: reference.clone(), previous: variable.clone(), graph: None,
+        }),
+        Query::TriplePrevious(TriplePrevious {
+            subject, predicate, object: variable, previous: reference, graph: None,
+        }),
+    ];
+    let expected_ops = [RangeOp::Gt, RangeOp::Lt, RangeOp::Lt, RangeOp::Gt];
+
+    for (query, expected_op) in queries.into_iter().zip(expected_ops) {
+        let compiled = plan_bgp(&query).unwrap();
+        let (ordered, offset, limit) = compiled.relation.as_exact_ordered_slice().unwrap();
+        assert_eq!((offset, limit), (0, Some(1)));
+        let (bgp, datatype) = ordered.as_exact_scalar_order().unwrap();
+        assert_eq!(datatype, CanonicalDatatype::UInt32);
+        assert_eq!(bgp.as_bgp().unwrap().atoms[0].object_range.as_ref().unwrap().op, expected_op);
+    }
+}
+
+#[test]
+fn ordered_triple_value_constructs_reject_schema_strings_and_two_variables() {
+    reject(
+        Query::TripleSlice(TripleSlice {
+            subject: NodeValue::Node(iri("metric")),
+            predicate: NodeValue::Node(iri("age")),
+            object: Value::Variable("age".into()),
+            low: Value::Data(XSDAnySimpleType::String("a".into())),
+            high: Value::Data(XSDAnySimpleType::String("z".into())),
+            graph: None,
+        }),
+        BgpPlanError::TripleValueOrderUnsupportedValue,
+    );
+    reject(
+        Query::TripleNext(TripleNext {
+            subject: NodeValue::Node(iri("metric")),
+            predicate: NodeValue::Node(iri("age")),
+            object: Value::Variable("object".into()),
+            next: Value::Variable("next".into()),
+            graph: Some(GraphType::Schema),
+        }),
+        BgpPlanError::TripleValueOrderUnsupportedShape,
     );
 }
 
