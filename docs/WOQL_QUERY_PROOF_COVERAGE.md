@@ -11,7 +11,7 @@ authenticated.
 | Construct | Status | Soundness condition |
 |---|---|---|
 | `Select` | Implemented | The proof authenticates the complete BGP; delivered rows must exactly match the selected columns and declared order. |
-| `Using` | Compiler implemented; integration routing must be checked by the caller | Collection identity is in the query digest. The selected immutable layer must be the collection actually executed. |
+| `Using` | Implemented; running-node integration covered | Collection identity is in the query digest, and the running node proves/verifies against the exact transaction layer selected by the executed `Using` context. Envelope reuse under another collection string rejects. App/domain callers remain responsible for resolving their declared collection to the supplied immutable layer. |
 | `From(instance)` | Implemented | Schema and wildcard graph reads reject. |
 | `Pin`, `Immediately` | Implemented | They affect execution/optimization timing, not the declarative BGP result. Their query identity remains bound. |
 | `Distinct` | Implemented only for the complete BGP schema | Full natural-join assignments over set-valued triples are already unique. Projection/subset distinct needs authenticated deduplication. |
