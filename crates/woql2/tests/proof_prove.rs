@@ -30,7 +30,7 @@ use terminusdb_woql2::control::Distinct;
 use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp};
 use terminusdb_woql2::{
     misc::{Count, InRange},
-    query::Query,
+    query::{Or, Query},
 };
 
 // ----------------------------------------------------------------------------
@@ -207,7 +207,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .verify(&compiled, &lc, lc.state.commitment_root)
         .unwrap();
 
-    let predicate_id = proved.predicate_ids[0];
+    let predicate_id = proved.as_single().unwrap().1[0];
     let expected: Vec<ArkFr> = lc
         .additions
         .iter()
@@ -647,6 +647,159 @@ fn disconnected_components_prove_complete_cartesian_results() {
             &["x".into(), "y".into(), "w".into()],
             &[],
         )
+        .unwrap();
+}
+
+#[test]
+fn or_proves_exact_bag_union_with_overlap() {
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("c", "q", "d"),
+        ("e", "q", "f"),
+    ]);
+    let id = |name: &str| {
+        lc.node_value_catalog
+            .iter()
+            .find(|record| record.triple.object == CanonicalObject::Node(iri(name).into_bytes()))
+            .unwrap()
+            .object_id
+    };
+    let query = Query::Or(Or {
+        or: vec![tv("s", "p", "o"), tv("s", "q", "o")],
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    let variables = ["s".into(), "o".into()];
+    let rows = vec![
+        vec![id("a"), id("b")],
+        vec![id("c"), id("d")],
+        vec![id("c"), id("d")],
+        vec![id("e"), id("f")],
+    ];
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &variables,
+            &rows,
+        )
+        .unwrap();
+    let mut duplicated = rows.clone();
+    duplicated.push(rows[0].clone());
+    for forged in [
+        rows[..3].to_vec(),
+        duplicated,
+        vec![
+            vec![id("a"), id("d")],
+            vec![id("c"), id("b")],
+            vec![id("c"), id("d")],
+            vec![id("e"), id("f")],
+        ],
+    ] {
+        assert!(proved
+            .verify_executed_rows(
+                &compiled,
+                &lc,
+                lc.state.commitment_root,
+                &variables,
+                &forged,
+            )
+            .is_err());
+    }
+
+    let envelope = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    let decoded =
+        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+    assert!(decoded.proved.as_bag_union().is_some());
+    assert!(decoded.proved.as_single().is_none());
+    let mut corrupt = envelope.clone();
+    corrupt[20] ^= 1;
+    assert!(decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root).is_err());
+
+    let single = plan_bgp(&tv("s", "p", "o")).unwrap();
+    let single_proved = single.prove(&lc).unwrap();
+    assert!(single_proved.as_single().is_some());
+    assert!(single_proved.as_bag_union().is_none());
+    let single_envelope = single_proved
+        .encode_envelope(&single, &lc, lc.state.commitment_root)
+        .unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &single, &lc, lc.state.commitment_root).is_err());
+    assert!(decode_and_verify_envelope(
+        &single_envelope,
+        &compiled,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+    let reordered = plan_bgp(&Query::Or(Or {
+        or: vec![tv("s", "q", "o"), tv("s", "p", "o")],
+    }))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reordered,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn or_supports_empty_and_ground_branches() {
+    use terminusdb_woql2::control::Select;
+
+    let lc = build_layer(&[("a", "p", "a"), ("b", "q", "c")]);
+    let query = Query::Or(Or {
+        or: vec![tv("x", "p", "x"), tv("x", "q", "x")],
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    let a = lc
+        .node_value_catalog
+        .iter()
+        .find(|record| record.triple.object == CanonicalObject::Node(iri("a").into_bytes()))
+        .unwrap()
+        .object_id;
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["x".into()],
+            &[vec![a]],
+        )
+        .unwrap();
+
+    let counted_projection = Query::Count(Count {
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(query.clone()),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&counted_projection).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["count".into()],
+            &[vec![1]],
+        )
+        .unwrap();
+
+    let ground = Query::Or(Or {
+        or: vec![tv_ground("a", "p", "a"), tv_ground("a", "q", "c")],
+    });
+    let compiled = plan_bgp(&ground).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &[vec![]])
         .unwrap();
 }
 

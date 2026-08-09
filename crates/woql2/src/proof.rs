@@ -27,17 +27,20 @@
 use chrono::Datelike;
 use dory_pcs::backends::arkworks::{ArkFr, ArkGT};
 use dory_pcs::primitives::arithmetic::Field;
+use dory_pcs::primitives::transcript::Transcript;
 use sha2::{Digest, Sha256};
 use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
-use terminus_store::proof::bgp::JoinStep;
+use terminus_store::proof::argument::Transcript254;
+use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
-use terminus_store::proof::envelope::{plan_digest, LayerBgpEnvelope};
+use terminus_store::proof::envelope::{plan_digest, BagUnionEnvelope, LayerBgpEnvelope};
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp,
     verify_layer_bgp_result_log_domain, verify_result_columns, verify_result_objects, AtomTerm,
     LayerBgpAtom, LayerBgpPlan, LayerBgpProof, ObjectRangeBound, ObjectRangeSpec,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
+use terminus_store::proof::union::{prove_bag_union, verify_bag_union, BagUnionProof};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 use terminus_store::store::sync::SyncStoreLayer;
 use terminus_store::ValueTriple;
@@ -54,6 +57,12 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 pub struct CompiledBgp {
     /// The variable-blind plan handed to `prove_layer_bgp` / `verify_layer_bgp`.
     pub plan: LayerBgpPlan,
+    /// Ordered branch plans for an outer WOQL `Or`. Empty denotes the ordinary
+    /// single-plan path; otherwise `plan` is the first branch for compatibility.
+    pub union_plans: Vec<LayerBgpPlan>,
+    /// For each union branch, public-schema column -> branch-result column. This aligns
+    /// compatible variable sets whose internal left-deep plans produce different order.
+    pub union_schema_mappings: Vec<Vec<usize>>,
     /// Result column index -> BGP variable name, in the proof's output order
     /// (`[r_other.., key, s_other..]` folded over the join steps).
     pub schema: Vec<String>,
@@ -79,13 +88,37 @@ pub struct CompiledBgp {
 /// no scheduling or persistence policy; applications own when and where proving runs.
 #[derive(Debug)]
 pub struct ProvedBgp {
-    pub proof: LayerBgpProof,
+    pub statement: ProvedQueryStatement,
     pub result_commitments: Vec<ArkGT>,
     /// Real, unpadded Store ID columns in the compiled schema order.
     pub result_columns: Vec<Vec<ArkFr>>,
     pub result_log_domain: usize,
     pub result_len: usize,
+}
+
+#[derive(Debug)]
+pub enum ProvedQueryStatement {
+    Single {
+        proof: LayerBgpProof,
+        predicate_ids: Vec<u64>,
+    },
+    BagUnion(ProvedBagUnion),
+}
+
+#[derive(Debug)]
+pub struct ProvedBagUnionBranch {
+    pub proof: LayerBgpProof,
+    pub result_commitments: Vec<ArkGT>,
+    pub result_columns: Vec<Vec<ArkFr>>,
+    pub result_log_domain: usize,
+    pub result_len: usize,
     pub predicate_ids: Vec<u64>,
+}
+
+#[derive(Debug)]
+pub struct ProvedBagUnion {
+    pub branches: Vec<ProvedBagUnionBranch>,
+    pub proof: BagUnionProof,
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -108,6 +141,21 @@ pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHas
     let mut hasher = Sha256::new();
     hasher.update(b"terminusdb-woql2/query-proof-envelope/v1");
     hasher.update(plan_digest(&compiled.plan)?);
+    if !compiled.union_plans.is_empty() {
+        hasher.update(b"/bag-union/v1");
+        hasher.update((compiled.union_plans.len() as u64).to_le_bytes());
+        for (plan, mapping) in compiled
+            .union_plans
+            .iter()
+            .zip(&compiled.union_schema_mappings)
+        {
+            hasher.update(plan_digest(plan)?);
+            hasher.update((mapping.len() as u64).to_le_bytes());
+            for index in mapping {
+                hasher.update((*index as u64).to_le_bytes());
+            }
+        }
+    }
     hasher.update((compiled.schema.len() as u64).to_le_bytes());
     for name in &compiled.schema {
         digest_bytes(&mut hasher, name.as_bytes());
@@ -136,6 +184,23 @@ pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHas
 }
 
 impl ProvedBgp {
+    pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
+        match &self.statement {
+            ProvedQueryStatement::Single {
+                proof,
+                predicate_ids,
+            } => Some((proof, predicate_ids)),
+            ProvedQueryStatement::BagUnion(_) => None,
+        }
+    }
+
+    pub fn as_bag_union(&self) -> Option<&ProvedBagUnion> {
+        match &self.statement {
+            ProvedQueryStatement::Single { .. } => None,
+            ProvedQueryStatement::BagUnion(union) => Some(union),
+        }
+    }
+
     /// Verify against a caller-selected, independently trusted root.
     pub fn verify(
         &self,
@@ -143,19 +208,102 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<()> {
+        if let ProvedQueryStatement::BagUnion(union) = &self.statement {
+            if compiled.union_plans.len() != union.branches.len()
+                || compiled.union_schema_mappings.len() != union.branches.len()
+                || union.branches.len() < 2
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL bag-union branch shape mismatch",
+                ));
+            }
+            let mut inputs = Vec::with_capacity(union.branches.len());
+            for ((branch, plan), mapping) in union
+                .branches
+                .iter()
+                .zip(&compiled.union_plans)
+                .zip(&compiled.union_schema_mappings)
+            {
+                verify_layer_bgp(
+                    layer,
+                    expected_root,
+                    plan,
+                    &branch.predicate_ids,
+                    &branch.result_commitments,
+                    branch.result_len,
+                    &branch.proof,
+                )?;
+                verify_layer_bgp_result_log_domain(
+                    layer,
+                    plan,
+                    &branch.proof,
+                    branch.result_log_domain,
+                )?;
+                verify_result_columns(
+                    &branch.result_commitments,
+                    &branch.result_columns,
+                    branch.result_len,
+                    branch.result_log_domain,
+                )?;
+                let union_arity = compiled.schema.len().max(1);
+                if mapping.len() != union_arity
+                    || mapping.iter().any(|index| *index >= branch.result_columns.len())
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL bag-union schema mapping mismatch",
+                    ));
+                }
+                inputs.push(RelationCommit {
+                    commitments: mapping
+                        .iter()
+                        .map(|index| branch.result_commitments[*index])
+                        .collect(),
+                    log_domain: branch.result_log_domain,
+                    n: branch.result_len,
+                });
+            }
+            let digest = compiled_query_digest(compiled)?;
+            let mut transcript = Transcript254::new(b"parture-union-envelope");
+            transcript.append_bytes(b"pow/union-envelope/root", &expected_root);
+            transcript.append_bytes(b"pow/union-envelope/query", &digest);
+            verify_bag_union(
+                &inputs,
+                &self.result_commitments,
+                self.result_len,
+                self.result_log_domain,
+                &union.proof,
+                &mut transcript,
+            )?;
+            return self.verify_columns(&self.result_columns);
+        }
+        let ProvedQueryStatement::Single {
+            proof,
+            predicate_ids,
+        } = &self.statement
+        else {
+            unreachable!("bag-union statement returned from its verification branch")
+        };
+        if !compiled.union_plans.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "single BGP proof cannot verify a compiled WOQL bag union",
+            ));
+        }
         verify_layer_bgp(
             layer,
             expected_root,
             &compiled.plan,
-            &self.predicate_ids,
+            predicate_ids,
             &self.result_commitments,
             self.result_len,
-            &self.proof,
+            proof,
         )?;
         verify_layer_bgp_result_log_domain(
             layer,
             &compiled.plan,
-            &self.proof,
+            proof,
             self.result_log_domain,
         )?;
         self.verify_columns(&self.result_columns)
@@ -324,17 +472,72 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<u8>> {
+        if let ProvedQueryStatement::BagUnion(union) = &self.statement {
+            let digest = compiled_query_digest(compiled)?;
+            if union.branches.len() != compiled.union_plans.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL bag-union branch count mismatch",
+                ));
+            }
+            let branches: Vec<LayerBgpEnvelope> = union
+                .branches
+                .iter()
+                .zip(&compiled.union_plans)
+                .map(|(branch, plan)| {
+                    LayerBgpEnvelope::new_verified(
+                        layer,
+                        expected_root,
+                        plan,
+                        digest,
+                        branch.proof.clone(),
+                        branch.result_commitments.clone(),
+                        branch.result_columns.clone(),
+                        branch.result_log_domain,
+                        branch.result_len,
+                        branch.predicate_ids.clone(),
+                    )
+                })
+                .collect::<std::io::Result<_>>()?;
+            return BagUnionEnvelope::new_verified(
+                layer,
+                expected_root,
+                &compiled.union_plans,
+                digest,
+                branches,
+                union.proof.clone(),
+                self.result_commitments.clone(),
+                self.result_columns.clone(),
+                self.result_log_domain,
+                self.result_len,
+                compiled.schema.is_empty(),
+            )?
+            .encode();
+        }
+        let ProvedQueryStatement::Single {
+            proof,
+            predicate_ids,
+        } = &self.statement
+        else {
+            unreachable!("bag-union statement returned from its encoding branch")
+        };
+        if !compiled.union_plans.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "single BGP proof cannot encode as a WOQL bag union",
+            ));
+        }
         LayerBgpEnvelope::new_verified(
             layer,
             expected_root,
             &compiled.plan,
             compiled_query_digest(compiled)?,
-            self.proof.clone(),
+            proof.clone(),
             self.result_commitments.clone(),
             self.result_columns.clone(),
             self.result_log_domain,
             self.result_len,
-            self.predicate_ids.clone(),
+            predicate_ids.clone(),
         )?
         .encode()
     }
@@ -386,6 +589,45 @@ pub fn decode_and_verify_envelope(
     layer: &LayerCommitment,
     expected_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
+    if !compiled.union_plans.is_empty() {
+        let envelope = BagUnionEnvelope::decode(bytes)?;
+        let digest = compiled_query_digest(compiled)?;
+        envelope.verify(
+            layer,
+            expected_root,
+            &compiled.union_plans,
+            digest,
+            compiled.schema.is_empty(),
+        )?;
+        let branches: Vec<ProvedBagUnionBranch> = envelope
+            .branches
+            .into_iter()
+            .map(|branch| ProvedBagUnionBranch {
+                proof: branch.proof,
+                result_commitments: branch.result_commitments,
+                result_columns: branch.result_columns,
+                result_log_domain: branch.result_log_domain,
+                result_len: branch.result_len,
+                predicate_ids: branch.predicate_ids,
+            })
+            .collect();
+        branches.first().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "empty bag-union envelope")
+        })?;
+        return Ok(VerifiedBgpEnvelope {
+            proved: ProvedBgp {
+                statement: ProvedQueryStatement::BagUnion(ProvedBagUnion {
+                    branches,
+                    proof: envelope.union_proof,
+                }),
+                result_commitments: envelope.result_commitments,
+                result_columns: envelope.result_columns,
+                result_log_domain: envelope.result_log_domain,
+                result_len: envelope.result_len,
+            },
+            result_objects: envelope.result_objects,
+        });
+    }
     let envelope = LayerBgpEnvelope::decode(bytes)?;
     envelope.verify(
         layer,
@@ -395,12 +637,14 @@ pub fn decode_and_verify_envelope(
     )?;
     Ok(VerifiedBgpEnvelope {
         proved: ProvedBgp {
-            proof: envelope.proof,
+            statement: ProvedQueryStatement::Single {
+                proof: envelope.proof,
+                predicate_ids: envelope.predicate_ids,
+            },
             result_commitments: envelope.result_commitments,
             result_columns: envelope.result_columns,
             result_log_domain: envelope.result_log_domain,
             result_len: envelope.result_len,
-            predicate_ids: envelope.predicate_ids,
         },
         result_objects: envelope.result_objects,
     })
@@ -418,15 +662,75 @@ pub enum QueryProofError {
 impl CompiledBgp {
     /// Generate a proof against an already loaded authenticated commitment.
     pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
+        if !self.union_plans.is_empty() {
+            if self.union_plans.len() != self.union_schema_mappings.len()
+                || self.union_plans.len() < 2
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "compiled WOQL bag-union branch shape mismatch",
+                ));
+            }
+            let mut branches = Vec::with_capacity(self.union_plans.len());
+            let mut inputs = Vec::with_capacity(self.union_plans.len());
+            for (plan, mapping) in self.union_plans.iter().zip(&self.union_schema_mappings) {
+                let result = prove_layer_bgp_with_result(layer, plan)?;
+                let mapped_columns: Vec<Vec<ArkFr>> = mapping
+                    .iter()
+                    .map(|index| result.result_columns[*index].clone())
+                    .collect();
+                let mapped_commitments: Vec<ArkGT> = mapping
+                    .iter()
+                    .map(|index| result.result_commitments[*index])
+                    .collect();
+                inputs.push(RelationWitness {
+                    columns: mapped_columns,
+                    commitments: mapped_commitments,
+                    log_domain: result.result_log_domain,
+                    n: result.result_len,
+                });
+                let real_columns = result.real_columns();
+                branches.push(ProvedBagUnionBranch {
+                    proof: result.proof,
+                    result_commitments: result.result_commitments,
+                    result_columns: real_columns,
+                    result_log_domain: result.result_log_domain,
+                    result_len: result.result_len,
+                    predicate_ids: result.predicate_ids,
+                });
+            }
+            let digest = compiled_query_digest(self)?;
+            let mut transcript = Transcript254::new(b"parture-union-envelope");
+            transcript.append_bytes(b"pow/union-envelope/root", &layer.state.commitment_root);
+            transcript.append_bytes(b"pow/union-envelope/query", &digest);
+            let union_result = prove_bag_union(&inputs, &mut transcript)?;
+            let result_columns: Vec<Vec<ArkFr>> = union_result
+                .columns
+                .iter()
+                .map(|column| column[..union_result.n].to_vec())
+                .collect();
+            return Ok(ProvedBgp {
+                statement: ProvedQueryStatement::BagUnion(ProvedBagUnion {
+                    branches,
+                    proof: union_result.proof,
+                }),
+                result_commitments: union_result.commitments,
+                result_columns,
+                result_log_domain: union_result.log_domain,
+                result_len: union_result.n,
+            });
+        }
         let result = prove_layer_bgp_with_result(layer, &self.plan)?;
         let result_columns = result.real_columns();
         Ok(ProvedBgp {
-            proof: result.proof,
+            statement: ProvedQueryStatement::Single {
+                proof: result.proof,
+                predicate_ids: result.predicate_ids,
+            },
             result_commitments: result.result_commitments,
             result_columns,
             result_log_domain: result.result_log_domain,
             result_len: result.result_len,
-            predicate_ids: result.predicate_ids,
         })
     }
 
@@ -555,6 +859,18 @@ pub enum BgpPlanError {
     #[error("disconnected BGP")]
     DisconnectedBgp,
 
+    #[error("Or needs at least two branches, found {count}")]
+    OrTooFewBranches { count: usize },
+
+    #[error("Or branches must expose exactly the same variable schema and order")]
+    OrIncompatibleSchema,
+
+    #[error("Select, Count, or nested Or inside an Or branch is unsupported")]
+    OrUnsupportedBranchWrapper,
+
+    #[error("Or branches resolve to conflicting collections")]
+    OrRoutingConflict,
+
     /// A `Select`ed variable does not occur in the BGP body.
     #[error("selected variable `?{var}` does not occur in the BGP")]
     SelectedVariableNotInBgp { var: String },
@@ -679,6 +995,75 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         };
     }
 
+    if let Query::Or(disjunction) = body {
+        if disjunction.or.len() < 2 {
+            return Err(BgpPlanError::OrTooFewBranches {
+                count: disjunction.or.len(),
+            });
+        }
+        // Distinct over an Or is not transparent: overlapping branches deliberately
+        // preserve duplicate multiplicity and need a separate authenticated dedup.
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        let mut branches = Vec::with_capacity(disjunction.or.len());
+        for branch_query in &disjunction.or {
+            let branch = plan_bgp(branch_query)?;
+            let branch_has_projection = branch.projection.is_some() && !branch.schema.is_empty();
+            if branch_has_projection
+                || branch.count_variable.is_some()
+                || !branch.union_plans.is_empty()
+            {
+                return Err(BgpPlanError::OrUnsupportedBranchWrapper);
+            }
+            branches.push(branch);
+        }
+        let schema = branches[0].schema.clone();
+        if branches.iter().any(|branch| branch.schema != schema) {
+            return Err(BgpPlanError::OrIncompatibleSchema);
+        }
+
+        let mut effective_collection = collection.clone();
+        for branch in &branches {
+            match (&effective_collection, &branch.collection) {
+                (Some(expected), Some(actual)) if expected != actual => {
+                    return Err(BgpPlanError::OrRoutingConflict)
+                }
+                (None, Some(actual)) => effective_collection = Some(actual.clone()),
+                _ => {}
+            }
+        }
+        if branches.iter().any(|branch| {
+            branch
+                .collection
+                .as_ref()
+                .or(collection.as_ref())
+                != effective_collection.as_ref()
+        }) {
+            return Err(BgpPlanError::OrRoutingConflict);
+        }
+
+        let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
+        let union_plans: Vec<LayerBgpPlan> = branches
+            .iter()
+            .map(|branch| branch.plan.clone())
+            .collect();
+        let union_arity = schema.len().max(1);
+        let union_schema_mappings = (0..branches.len())
+            .map(|_| (0..union_arity).collect())
+            .collect();
+        return Ok(CompiledBgp {
+            plan: union_plans[0].clone(),
+            union_plans,
+            union_schema_mappings,
+            schema,
+            projection,
+            collection: effective_collection,
+            count_variable,
+            full_row_distinct: false,
+        });
+    }
+
     if !matches!(
         body,
         Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
@@ -746,7 +1131,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // (4) Validate every nested projection against what its inner query exposes. The
     // proof still authenticates the complete BGP; only the outermost visible Select
     // determines which committed columns the caller reads.
-    let projection = if let Some(count) = count_variable.as_deref() {
+    let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
+
+    Ok(CompiledBgp {
+        plan,
+        union_plans: Vec::new(),
+        union_schema_mappings: Vec::new(),
+        schema,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct: !distincts.is_empty(),
+    })
+}
+
+fn compile_projection(
+    selections: &[(&[String], bool)],
+    count_variable: Option<&str>,
+    schema: &[String],
+) -> Result<Option<Vec<usize>>, BgpPlanError> {
+    if let Some(count) = count_variable {
         let outside: Vec<&[String]> = selections
             .iter()
             .filter_map(|(vars, outside)| outside.then_some(*vars))
@@ -755,17 +1159,17 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             .iter()
             .filter_map(|(vars, outside)| (!outside).then_some(*vars))
             .collect();
-        validate_selection_chain(&inside, &schema)?;
+        validate_selection_chain(&inside, schema)?;
         validate_selection_chain(&outside, &[count.to_owned()])?;
-        Some(Vec::new())
+        Ok(Some(Vec::new()))
     } else if selections.is_empty() {
-        // A single ground atom uses the Store filter's internal UNIT column to
-        // authenticate cardinality. It is not a WOQL variable and stays hidden.
-        schema.is_empty().then(Vec::new)
+        // Ground relations use one authenticated internal UNIT column that remains
+        // hidden from the public WOQL schema, including a bag union of ground branches.
+        Ok(schema.is_empty().then(Vec::new))
     } else {
         let selections: Vec<&[String]> = selections.iter().map(|(vars, _)| *vars).collect();
-        validate_selection_chain(&selections, &schema)?;
-        Some(
+        validate_selection_chain(&selections, schema)?;
+        Ok(Some(
             selections[0]
                 .iter()
                 .map(|var| {
@@ -775,17 +1179,8 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                         .expect("validated outer projection must occur in the BGP schema")
                 })
                 .collect(),
-        )
-    };
-
-    Ok(CompiledBgp {
-        plan,
-        schema,
-        projection,
-        collection,
-        count_variable,
-        full_row_distinct: !distincts.is_empty(),
-    })
+        ))
+    }
 }
 
 /// Validate nested Selects listed outer-to-inner. Each Select may only name variables

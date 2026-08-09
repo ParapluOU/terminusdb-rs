@@ -386,15 +386,55 @@ fn dsl_macro_ast_compiles_identically() {
 }
 
 // ----------------------------------------------------------------------------
-// REJECT-CLOSED — each returns the right BgpPlanError.
+// ACCEPT/REJECT boundaries for compound operators.
 // ----------------------------------------------------------------------------
 
 #[test]
-fn rejects_or() {
+fn accepts_compatible_or_and_rejects_incompatible_schemas() {
     let q = Query::Or(Or {
         or: vec![tv("x", "p", "y"), tv("x", "q", "y")],
     });
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "Or" });
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.schema, vec!["x", "y"]);
+    assert_eq!(compiled.union_plans.len(), 2);
+    assert_eq!(compiled.union_schema_mappings, vec![vec![0, 1], vec![0, 1]]);
+
+    let complex = Query::Or(Or {
+        or: vec![
+            and_of(vec![tv("x", "p", "y"), tv("a", "r", "b")]),
+            and_of(vec![tv("x", "q", "y"), tv("a", "s", "b")]),
+        ],
+    });
+    let complex = plan_bgp(&complex).unwrap();
+    assert_eq!(complex.schema, vec!["x", "y", "a", "b"]);
+    assert!(complex
+        .union_plans
+        .iter()
+        .all(|plan| plan.joins[0].is_cross_product()));
+
+    let incompatible = Query::Or(Or {
+        or: vec![tv("x", "p", "y"), tv("x", "q", "z")],
+    });
+    reject(incompatible, BgpPlanError::OrIncompatibleSchema);
+
+    reject(
+        Query::Or(Or { or: vec![] }),
+        BgpPlanError::OrTooFewBranches { count: 0 },
+    );
+
+    let routed = Query::Or(Or {
+        or: vec![
+            Query::Using(Using {
+                collection: "admin/one".into(),
+                query: Box::new(tv("x", "p", "y")),
+            }),
+            Query::Using(Using {
+                collection: "admin/two".into(),
+                query: Box::new(tv("x", "q", "y")),
+            }),
+        ],
+    });
+    reject(routed, BgpPlanError::OrRoutingConflict);
 }
 
 #[test]
