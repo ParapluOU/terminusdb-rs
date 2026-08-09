@@ -1552,16 +1552,18 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
         tv_subj_const("metric", "score", "score"),
         gte(dvar("score"), duint(0)),
     ]);
-    reject(
-        Query::OrderBy(OrderBy {
+    let descending = plan_bgp(&Query::OrderBy(OrderBy {
             ordering: vec![OrderTemplate {
                 variable: "score".into(),
                 order: Order::Desc,
             }],
             query: Box::new(child.clone()),
-        }),
-        BgpPlanError::OrderByUnsupportedDirection,
-    );
+        })).unwrap();
+    let ascending = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "score".into(), order: Order::Asc }],
+        query: Box::new(child.clone()),
+    })).unwrap();
+    assert_ne!(compiled_query_digest(&descending).unwrap(), compiled_query_digest(&ascending).unwrap());
     reject(
         Query::OrderBy(OrderBy {
             ordering: vec![],

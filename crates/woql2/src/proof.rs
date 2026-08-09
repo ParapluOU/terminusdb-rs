@@ -51,7 +51,7 @@ use terminus_store::proof::equality::{
 use terminus_store::proof::group::{
     verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
 };
-use terminus_store::proof::order::{verify_exact_scalar_order, ExactScalarOrderProof};
+use terminus_store::proof::order::{verify_exact_scalar_order, ExactScalarOrderProof, OrderDirection};
 use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
@@ -127,6 +127,7 @@ pub enum CompiledRelationStatement {
     ExactScalarOrder {
         input: Box<CompiledRelation>,
         datatype: CanonicalDatatype,
+        direction: OrderDirection,
     },
     ExactOrderedSlice {
         input: Box<CompiledRelation>,
@@ -211,7 +212,7 @@ impl CompiledRelation {
 
     pub fn as_exact_scalar_order(&self) -> Option<(&CompiledRelation, CanonicalDatatype)> {
         match &self.statement {
-            CompiledRelationStatement::ExactScalarOrder { input, datatype } => {
+            CompiledRelationStatement::ExactScalarOrder { input, datatype, .. } => {
                 Some((input, *datatype))
             }
             _ => None,
@@ -409,10 +410,11 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(input)?);
             digest_equality_plan(&mut hasher, constraint);
         }
-        CompiledRelationStatement::ExactScalarOrder { input, datatype } => {
+        CompiledRelationStatement::ExactScalarOrder { input, datatype, direction } => {
             hasher.update(b"/exact-scalar-order");
             hasher.update(relation_query_digest(input)?);
             hasher.update([*datatype as u8]);
+            hasher.update([match direction { OrderDirection::Ascending => 0, OrderDirection::Descending => 1 }]);
         }
         CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, once } => {
             hasher.update(if *once {
@@ -626,10 +628,11 @@ fn relation_proof_plan(
                 constraint: constraint.clone(),
             }
         }
-        CompiledRelationStatement::ExactScalarOrder { input, datatype } => {
+        CompiledRelationStatement::ExactScalarOrder { input, datatype, direction } => {
             RelationProofPlanKind::ExactScalarOrder {
                 input: Box::new(child(input)?),
                 datatype: *datatype,
+                direction: *direction,
             }
         }
         CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {
@@ -954,6 +957,7 @@ impl ProvedBgp {
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan,
                     datatype,
+                    direction,
                 },
             ) => {
                 input.verify_relation(
@@ -969,6 +973,7 @@ impl ProvedBgp {
                     layer,
                     &input.relation_commit(None)?,
                     *datatype,
+                    *direction,
                     &self.result_commitments,
                     self.result_len,
                     self.result_log_domain,
@@ -2184,9 +2189,10 @@ fn plan_exact_scalar_order(
     let [ordering] = order_by.ordering.as_slice() else {
         return Err(BgpPlanError::OrderByUnsupportedShape);
     };
-    if ordering.order != crate::order::Order::Asc {
-        return Err(BgpPlanError::OrderByUnsupportedDirection);
-    }
+    let direction = match ordering.order {
+        crate::order::Order::Asc => OrderDirection::Ascending,
+        crate::order::Order::Desc => OrderDirection::Descending,
+    };
     let child = plan_bgp(&order_by.query)?;
     if child.projection.is_some()
         || child.count_variable.is_some()
@@ -2233,6 +2239,7 @@ fn plan_exact_scalar_order(
             statement: CompiledRelationStatement::ExactScalarOrder {
                 input: Box::new(child.relation),
                 datatype,
+                direction,
             },
         },
         projection: None,
