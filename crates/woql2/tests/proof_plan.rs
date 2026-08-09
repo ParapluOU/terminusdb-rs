@@ -1530,6 +1530,47 @@ fn accepts_range_integer_negative_datatype() {
 }
 
 #[test]
+fn accepts_every_exact_fixed_width_integer_datatype_at_edges_and_zero() {
+    let cases = vec![
+        (XSDAnySimpleType::UnsignedByte(u8::MIN), CanonicalDatatype::UInt8, u8::make_entry(&u8::MIN)),
+        (XSDAnySimpleType::UnsignedByte(u8::MAX), CanonicalDatatype::UInt8, u8::make_entry(&u8::MAX)),
+        (XSDAnySimpleType::Byte(i8::MIN), CanonicalDatatype::Int8, i8::make_entry(&i8::MIN)),
+        (XSDAnySimpleType::Byte(0), CanonicalDatatype::Int8, i8::make_entry(&0i8)),
+        (XSDAnySimpleType::Byte(i8::MAX), CanonicalDatatype::Int8, i8::make_entry(&i8::MAX)),
+        (XSDAnySimpleType::UnsignedShort(u16::MAX), CanonicalDatatype::UInt16, u16::make_entry(&u16::MAX)),
+        (XSDAnySimpleType::Short(i16::MIN), CanonicalDatatype::Int16, i16::make_entry(&i16::MIN)),
+        (XSDAnySimpleType::Short(0), CanonicalDatatype::Int16, i16::make_entry(&0i16)),
+        (XSDAnySimpleType::Int(i32::MIN), CanonicalDatatype::Int32, i32::make_entry(&i32::MIN)),
+        (XSDAnySimpleType::Int(0), CanonicalDatatype::Int32, i32::make_entry(&0i32)),
+        (XSDAnySimpleType::UnsignedLong(u64::MAX), CanonicalDatatype::UInt64, u64::make_entry(&u64::MAX)),
+        (XSDAnySimpleType::Long(i64::MIN), CanonicalDatatype::Int64, i64::make_entry(&i64::MIN)),
+        (XSDAnySimpleType::Long(0), CanonicalDatatype::Int64, i64::make_entry(&0i64)),
+        (XSDAnySimpleType::Long(i64::MAX), CanonicalDatatype::Int64, i64::make_entry(&i64::MAX)),
+    ];
+    for (constant, datatype, entry) in cases {
+        let compiled = age_name_range(gte(dvar("a"), DataValue::Data(constant)));
+        assert_range(
+            range_of(&compiled, "age").unwrap(),
+            RangeOp::Ge,
+            datatype,
+            store_op_value(entry),
+        );
+    }
+}
+
+#[test]
+fn rejects_mixed_fixed_width_bounds_as_distinct_datatypes() {
+    reject_range(
+        Query::InRange(InRange {
+            value: dvar("a"),
+            start: DataValue::Data(XSDAnySimpleType::Byte(0)),
+            end: DataValue::Data(XSDAnySimpleType::UnsignedByte(10)),
+        }),
+        BgpPlanError::RangeDatatypeMismatch { var: "a".into() },
+    );
+}
+
+#[test]
 fn accepts_range_boolean_datatype() {
     // xsd:boolean range -> store Boolean order-preserving constant (false=0 < true=1).
     let c = age_name_range(greater(dvar("a"), dbool(false)));
@@ -1714,6 +1755,23 @@ fn exact_scalar_ascending_order_compiles_when_key_is_the_complete_typed_row() {
         boolean.relation.as_exact_scalar_order().unwrap().1,
         CanonicalDatatype::Boolean
     );
+}
+
+#[test]
+fn fixed_width_signed_order_compiles_ascending_and_descending_with_exact_tag() {
+    let child = and_of(vec![
+        tv_subj_const("metric", "score", "score"),
+        gte(dvar("score"), DataValue::Data(XSDAnySimpleType::Byte(i8::MIN))),
+    ]);
+    let ordered = |order| Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "score".into(), order }],
+        query: Box::new(child.clone()),
+    });
+    let ascending = plan_bgp(&ordered(Order::Asc)).unwrap();
+    let descending = plan_bgp(&ordered(Order::Desc)).unwrap();
+    assert_eq!(ascending.relation.as_exact_scalar_order().unwrap().1, CanonicalDatatype::Int8);
+    assert_eq!(descending.relation.as_exact_scalar_order().unwrap().1, CanonicalDatatype::Int8);
+    assert_ne!(compiled_query_digest(&ascending).unwrap(), compiled_query_digest(&descending).unwrap());
 }
 
 #[test]

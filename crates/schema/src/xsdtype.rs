@@ -39,7 +39,15 @@ pub enum XSDAnySimpleType {
     Date(chrono::NaiveDate),
     Time(chrono::NaiveTime),
     // DateTime(chrono::DateTime<Tz>)
+    UnsignedByte(u8),
+    Byte(i8),
+    UnsignedShort(u16),
+    Short(i16),
     UnsignedInt(usize),
+    Int(i32),
+    UnsignedLong(u64),
+    Long(i64),
+    /// The currently representable, bounded-i64 subset of arbitrary-precision `xsd:integer`.
     Integer(i64),
 }
 
@@ -55,8 +63,15 @@ fn variant_order(v: &XSDAnySimpleType) -> u8 {
         XSDAnySimpleType::DateTime(_) => 6,
         XSDAnySimpleType::Date(_) => 7,
         XSDAnySimpleType::Time(_) => 8,
-        XSDAnySimpleType::UnsignedInt(_) => 9,
-        XSDAnySimpleType::Integer(_) => 10,
+        XSDAnySimpleType::UnsignedByte(_) => 9,
+        XSDAnySimpleType::Byte(_) => 10,
+        XSDAnySimpleType::UnsignedShort(_) => 11,
+        XSDAnySimpleType::Short(_) => 12,
+        XSDAnySimpleType::UnsignedInt(_) => 13,
+        XSDAnySimpleType::Int(_) => 14,
+        XSDAnySimpleType::UnsignedLong(_) => 15,
+        XSDAnySimpleType::Long(_) => 16,
+        XSDAnySimpleType::Integer(_) => 17,
     }
 }
 
@@ -84,7 +99,14 @@ impl PartialOrd for XSDAnySimpleType {
             (Self::DateTime(l), Self::DateTime(r)) => l.partial_cmp(r),
             (Self::Date(l), Self::Date(r)) => l.partial_cmp(r),
             (Self::Time(l), Self::Time(r)) => l.partial_cmp(r),
+            (Self::UnsignedByte(l), Self::UnsignedByte(r)) => l.partial_cmp(r),
+            (Self::Byte(l), Self::Byte(r)) => l.partial_cmp(r),
+            (Self::UnsignedShort(l), Self::UnsignedShort(r)) => l.partial_cmp(r),
+            (Self::Short(l), Self::Short(r)) => l.partial_cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.partial_cmp(r),
+            (Self::Int(l), Self::Int(r)) => l.partial_cmp(r),
+            (Self::UnsignedLong(l), Self::UnsignedLong(r)) => l.partial_cmp(r),
+            (Self::Long(l), Self::Long(r)) => l.partial_cmp(r),
             (Self::Integer(l), Self::Integer(r)) => l.partial_cmp(r),
             // This case should be unreachable because we check variant order first
             _ => unreachable!("Variant order mismatch after equality check"),
@@ -113,7 +135,14 @@ impl Ord for XSDAnySimpleType {
             (Self::DateTime(l), Self::DateTime(r)) => l.cmp(r),
             (Self::Date(l), Self::Date(r)) => l.cmp(r),
             (Self::Time(l), Self::Time(r)) => l.cmp(r),
+            (Self::UnsignedByte(l), Self::UnsignedByte(r)) => l.cmp(r),
+            (Self::Byte(l), Self::Byte(r)) => l.cmp(r),
+            (Self::UnsignedShort(l), Self::UnsignedShort(r)) => l.cmp(r),
+            (Self::Short(l), Self::Short(r)) => l.cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.cmp(r),
+            (Self::Int(l), Self::Int(r)) => l.cmp(r),
+            (Self::UnsignedLong(l), Self::UnsignedLong(r)) => l.cmp(r),
+            (Self::Long(l), Self::Long(r)) => l.cmp(r),
             (Self::Integer(l), Self::Integer(r)) => l.cmp(r),
             // This case should be unreachable because we check variant order first
             _ => unreachable!("Variant order mismatch after equality check"),
@@ -133,7 +162,14 @@ impl PartialEq for XSDAnySimpleType {
             (Self::DateTime(l0), Self::DateTime(r0)) => l0 == r0,
             (Self::Date(l0), Self::Date(r0)) => l0 == r0,
             (Self::Time(l0), Self::Time(r0)) => l0 == r0,
+            (Self::UnsignedByte(l0), Self::UnsignedByte(r0)) => l0 == r0,
+            (Self::Byte(l0), Self::Byte(r0)) => l0 == r0,
+            (Self::UnsignedShort(l0), Self::UnsignedShort(r0)) => l0 == r0,
+            (Self::Short(l0), Self::Short(r0)) => l0 == r0,
             (Self::UnsignedInt(l0), Self::UnsignedInt(r0)) => l0 == r0,
+            (Self::Int(l0), Self::Int(r0)) => l0 == r0,
+            (Self::UnsignedLong(l0), Self::UnsignedLong(r0)) => l0 == r0,
+            (Self::Long(l0), Self::Long(r0)) => l0 == r0,
             (Self::Integer(l0), Self::Integer(r0)) => l0 == r0,
             _ => false,
         }
@@ -155,7 +191,14 @@ impl Hash for XSDAnySimpleType {
             XSDAnySimpleType::DateTime(dt) => dt.hash(state),
             XSDAnySimpleType::Date(d) => d.hash(state),
             XSDAnySimpleType::Time(t) => t.hash(state),
+            XSDAnySimpleType::UnsignedByte(i) => i.hash(state),
+            XSDAnySimpleType::Byte(i) => i.hash(state),
+            XSDAnySimpleType::UnsignedShort(i) => i.hash(state),
+            XSDAnySimpleType::Short(i) => i.hash(state),
             XSDAnySimpleType::UnsignedInt(i) => i.hash(state),
+            XSDAnySimpleType::Int(i) => i.hash(state),
+            XSDAnySimpleType::UnsignedLong(i) => i.hash(state),
+            XSDAnySimpleType::Long(i) => i.hash(state),
             XSDAnySimpleType::Integer(i) => i.hash(state),
         }
     }
@@ -276,6 +319,39 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn canonical_fixed_width_integer_json_roundtrips_edges() {
+        let cases = [
+            (serde_json::json!({"@type": "xsd:unsignedByte", "@value": 255}), XSDAnySimpleType::UnsignedByte(u8::MAX)),
+            (serde_json::json!({"@type": "xsd:byte", "@value": -128}), XSDAnySimpleType::Byte(i8::MIN)),
+            (serde_json::json!({"@type": "xsd:unsignedShort", "@value": 65535}), XSDAnySimpleType::UnsignedShort(u16::MAX)),
+            (serde_json::json!({"@type": "xsd:short", "@value": -32768}), XSDAnySimpleType::Short(i16::MIN)),
+            (serde_json::json!({"@type": "xsd:int", "@value": -2147483648i64}), XSDAnySimpleType::Int(i32::MIN)),
+            (serde_json::json!({"@type": "xsd:unsignedLong", "@value": u64::MAX}), XSDAnySimpleType::UnsignedLong(u64::MAX)),
+            (serde_json::json!({"@type": "xsd:long", "@value": i64::MIN}), XSDAnySimpleType::Long(i64::MIN)),
+        ];
+        for (json, expected) in cases {
+            let property =
+                <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(json)
+                    .unwrap();
+            assert_eq!(XSDAnySimpleType::from_property(&property).unwrap(), expected);
+        }
+
+        for invalid in [
+            serde_json::json!({"@type": "xsd:byte", "@value": -129}),
+            serde_json::json!({"@type": "xsd:unsignedByte", "@value": 256}),
+            serde_json::json!({"@type": "xsd:short", "@value": 32768}),
+            serde_json::json!({"@type": "xsd:unsignedShort", "@value": -1}),
+            serde_json::json!({"@type": "xsd:int", "@value": 2147483648u64}),
+            serde_json::json!({"@type": "xsd:unsignedLong", "@value": -1}),
+        ] {
+            assert!(
+                <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(invalid)
+                    .is_err()
+            );
+        }
+    }
 }
 
 // impl ToTDBSchema for XSDAnySimpleType {
@@ -356,12 +432,19 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
                     "@value": t.format("%H:%M:%S%.f").to_string()
                 })))
             }
+            XSDAnySimpleType::UnsignedByte(i) => typed_integer_property("xsd:unsignedByte", i),
+            XSDAnySimpleType::Byte(i) => typed_integer_property("xsd:byte", i),
+            XSDAnySimpleType::UnsignedShort(i) => typed_integer_property("xsd:unsignedShort", i),
+            XSDAnySimpleType::Short(i) => typed_integer_property("xsd:short", i),
             XSDAnySimpleType::UnsignedInt(i) => {
                 InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
                     "@type": UNSIGNED_INT,
                     "@value": i
                 })))
             }
+            XSDAnySimpleType::Int(i) => typed_integer_property("xsd:int", i),
+            XSDAnySimpleType::UnsignedLong(i) => typed_integer_property("xsd:unsignedLong", i),
+            XSDAnySimpleType::Long(i) => typed_integer_property("xsd:long", i),
             XSDAnySimpleType::Integer(i) => {
                 InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
                     "@type": INTEGER,
@@ -370,6 +453,13 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
             }
         }
     }
+}
+
+fn typed_integer_property<T: Serialize>(datatype: &str, value: T) -> InstanceProperty {
+    InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
+        "@type": datatype,
+        "@value": value
+    })))
 }
 
 impl<Parent> InstancePropertyFromJson<Parent> for XSDAnySimpleType {
@@ -429,6 +519,56 @@ fn xsd_from_typed_json(json: &serde_json::Value) -> anyhow::Result<XSDAnySimpleT
                     .ok_or_else(|| anyhow::anyhow!("xsd:unsignedInt @value must be unsigned"))?,
             )
             .map_err(|_| anyhow::anyhow!("xsd:unsignedInt does not fit usize"))?,
+        ),
+        "xsd:unsignedByte" => XSDAnySimpleType::UnsignedByte(
+            u8::try_from(
+                value
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:unsignedByte @value must be unsigned"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:unsignedByte does not fit u8"))?,
+        ),
+        "xsd:byte" => XSDAnySimpleType::Byte(
+            i8::try_from(
+                value
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:byte @value must be an integer"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:byte does not fit i8"))?,
+        ),
+        "xsd:unsignedShort" => XSDAnySimpleType::UnsignedShort(
+            u16::try_from(
+                value.as_u64().ok_or_else(|| {
+                    anyhow::anyhow!("xsd:unsignedShort @value must be unsigned")
+                })?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:unsignedShort does not fit u16"))?,
+        ),
+        "xsd:short" => XSDAnySimpleType::Short(
+            i16::try_from(
+                value
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:short @value must be an integer"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:short does not fit i16"))?,
+        ),
+        "xsd:int" => XSDAnySimpleType::Int(
+            i32::try_from(
+                value
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:int @value must be an integer"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:int does not fit i32"))?,
+        ),
+        "xsd:unsignedLong" => XSDAnySimpleType::UnsignedLong(
+            value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("xsd:unsignedLong @value must fit u64"))?,
+        ),
+        "xsd:long" => XSDAnySimpleType::Long(
+            value
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("xsd:long @value must fit i64"))?,
         ),
         "xsd:integer" => XSDAnySimpleType::Integer(
             value

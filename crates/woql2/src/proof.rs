@@ -2071,10 +2071,10 @@ pub enum BgpPlanError {
     RangeBothConstants,
 
     /// A comparison's constant is not a round-trip-aligned order-preserving numeric literal.
-    /// Supported: `xsd:boolean` (`Boolean`), `xsd:unsignedInt` (`UInt32`), `xsd:integer`
-    /// (`Int64`), `xsd:float`/`double` (`Float64`). Strings, decimals, other datatypes, and
-    /// list operands reject closed — a range over a non-order-preserving encoding would
-    /// compare a sentinel and is unsound at the query level.
+    /// Supported: `xsd:boolean`, the explicit fixed-width XSD integer family, the bounded-i64
+    /// subset currently representable by the AST's `xsd:integer`, and `xsd:float`/`double`
+    /// (`Float64`). Strings, decimals, arbitrary-precision integers outside i64, other
+    /// datatypes, and list operands reject closed.
     #[error(
         "unsupported range constant `{datatype}`: no round-trip-aligned order-preserving encoding"
     )]
@@ -3970,11 +3970,18 @@ fn normalize_in_range(range: &InRange) -> Result<NormalizedRange, BgpPlanError> 
 fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static str> {
     Ok(match xsd {
         XSDAnySimpleType::Boolean(b) => bool::make_entry(b),
+        XSDAnySimpleType::UnsignedByte(v) => u8::make_entry(v),
+        XSDAnySimpleType::Byte(v) => i8::make_entry(v),
+        XSDAnySimpleType::UnsignedShort(v) => u16::make_entry(v),
+        XSDAnySimpleType::Short(v) => i16::make_entry(v),
         // xsd:unsignedInt is the 32-bit unsigned type → store `UInt32`.
         XSDAnySimpleType::UnsignedInt(u) => {
             let v = u32::try_from(*u).map_err(|_| "unsignedInt (exceeds u32)")?;
             u32::make_entry(&v)
         }
+        XSDAnySimpleType::Int(v) => i32::make_entry(v),
+        XSDAnySimpleType::UnsignedLong(v) => u64::make_entry(v),
+        XSDAnySimpleType::Long(v) => i64::make_entry(v),
         // The woql2 `Integer` variant carries an `i64` → store `Int64` (fixed-width,
         // order-preserving via offset-binary — so it also supports range).
         XSDAnySimpleType::Integer(i) => i64::make_entry(i),
@@ -4016,8 +4023,9 @@ fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static s
 /// applies to the committed dict value column.
 ///
 /// Supported (round-trip-verified, all order-preserving fixed-width): `xsd:boolean`
-/// (`Boolean`), `xsd:unsignedInt` (`UInt32`), `xsd:integer` (`Int64`), `xsd:float`/`double`
-/// (`Float64`). Every other `XSDAnySimpleType` rejects closed: a range over a
+/// (`Boolean`), all explicit fixed-width XSD integer types (`UInt8`/`Int8` through
+/// `UInt64`/`Int64`), `xsd:integer` (`Int64`), and `xsd:float`/`double` (`Float64`).
+/// Every other `XSDAnySimpleType` rejects closed: a range over a
 /// non-order-preserving or variable-width datatype (string/decimal/…) would compare a
 /// `0` sentinel in the store, which is unsound at the query level. Adding a datatype
 /// requires a store-routed construction in [`xsd_scalar_entry`], an
@@ -4028,7 +4036,14 @@ fn encode_range_constant(
     if !matches!(
         xsd,
         XSDAnySimpleType::Boolean(_)
+            | XSDAnySimpleType::UnsignedByte(_)
+            | XSDAnySimpleType::Byte(_)
+            | XSDAnySimpleType::UnsignedShort(_)
+            | XSDAnySimpleType::Short(_)
             | XSDAnySimpleType::UnsignedInt(_)
+            | XSDAnySimpleType::Int(_)
+            | XSDAnySimpleType::UnsignedLong(_)
+            | XSDAnySimpleType::Long(_)
             | XSDAnySimpleType::Integer(_)
             | XSDAnySimpleType::Float(_)
     ) {
@@ -4106,7 +4121,14 @@ fn xsd_datatype_name(xsd: &XSDAnySimpleType) -> &'static str {
         XSDAnySimpleType::DateTime(_) => "dateTime",
         XSDAnySimpleType::Date(_) => "date",
         XSDAnySimpleType::Time(_) => "time",
+        XSDAnySimpleType::UnsignedByte(_) => "unsignedByte",
+        XSDAnySimpleType::Byte(_) => "byte",
+        XSDAnySimpleType::UnsignedShort(_) => "unsignedShort",
+        XSDAnySimpleType::Short(_) => "short",
         XSDAnySimpleType::UnsignedInt(_) => "unsignedInt",
+        XSDAnySimpleType::Int(_) => "int",
+        XSDAnySimpleType::UnsignedLong(_) => "unsignedLong",
+        XSDAnySimpleType::Long(_) => "long",
         XSDAnySimpleType::Integer(_) => "integer",
     }
 }

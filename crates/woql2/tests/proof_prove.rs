@@ -3952,6 +3952,31 @@ fn object_range_int64_lt_zero_selects_only_negatives() {
     );
 }
 
+#[test]
+fn object_range_int8_ge_zero_authenticates_signed_width_and_dictionary_tag() {
+    let lc = build_val_name_layer(
+        "tiny_count",
+        vec![
+            ("minimum", i8::make_entry(&i8::MIN)),
+            ("negative", i8::make_entry(&-1i8)),
+            ("zero", i8::make_entry(&0i8)),
+            ("maximum", i8::make_entry(&i8::MAX)),
+        ],
+    );
+    check_range_generic(
+        &lc,
+        "tiny_count",
+        gte(
+            dvar("a"),
+            DataValue::Data(XSDAnySimpleType::Byte(0)),
+        ),
+        RangeOp::Ge,
+        CanonicalDatatype::Int8,
+        store_op_value(i8::make_entry(&0i8)),
+        2,
+    );
+}
+
 /// scores as Float64, including negatives: alice=1.5, bob=-2.5, carol=0.0, dave=3.0.
 fn float64_fixture() -> Arc<LayerCommitment> {
     build_val_name_layer(
