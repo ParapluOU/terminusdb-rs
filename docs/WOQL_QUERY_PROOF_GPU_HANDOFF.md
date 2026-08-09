@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `65bd38c` | Exact contiguous ordered slices over the authenticated scalar order, including canonical empty results, recursive wire format, and content/plan tamper rejection. |
-| `modules/terminusdb-rs` | `e0fd19c` plus this documentation commit | Ordered `Once` lowering reuses the exact slice proof while retaining a digest identity distinct from `Limit(1)`; canonical decoding and unordered rejection are covered. |
+| `modules/terminusdb-store-paraplu` | `a93ab32` | Ascending and descending exact scalar order; descending derives `MAX*chi-value` from authenticated commitments and reuses strict sort. |
+| `modules/terminusdb-rs` | `f65e97e` plus this documentation commit | WOQL `OrderBy` direction is Store-plan, verifier, recursive-envelope, and digest bound under the same bounded shape. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
