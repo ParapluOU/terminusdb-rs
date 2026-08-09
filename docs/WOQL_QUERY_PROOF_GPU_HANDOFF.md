@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `2bea830` | Exact recursive bag projection preserves child rows/domain/order/multiplicity while selecting a unique, plan-bound subset of columns. |
-| `modules/terminusdb-rs` | `5550226` plus this documentation commit | Bounded leading-Prolog `When` now supports existential branch locals hidden by `Select`/`Count`, preserving each successful local assignment's multiplicity. |
+| `modules/terminusdb-store-paraplu` | `96546e9` | Exact recursive bag projection plus edge-tested monotone encodings for every fixed-width integer Store datatype. |
+| `modules/terminusdb-rs` | `6287001` plus this documentation commit | Canonical WOQL/XSD decoding and proof planning cover the distinct 8/16/32/64-bit signed and unsigned integer family, including range/order proof gates. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -91,6 +91,12 @@ cargo test -p terminusdb-woql2 --features proof --test proof_plan \
   exact_complete_row_multikey_order_compiles_and_rejects_key_mappings -- --exact
 cargo test -p terminusdb-woql2 --features proof --test proof_prove \
   multikey_order_nested_limit_e2e -- --exact
+cargo test -p terminusdb-schema --lib \
+  xsdtype::tests::canonical_fixed_width_integer_json_roundtrips_edges -- --exact
+cargo test -p terminusdb-woql2 --features proof --test proof_plan \
+  accepts_every_exact_fixed_width_integer_datatype_at_edges_and_zero -- --exact
+cargo test -p terminusdb-woql2 --features proof --test proof_prove \
+  object_range_int8_ge_zero_authenticates_signed_width_and_dictionary_tag -- --exact
 ```
 
 For a meaningful portability check, retain a Linux-generated envelope and
@@ -221,6 +227,16 @@ focused E2E passed in 196.24s: two local successful assignments projected to two
 outer rows, the true branch added that outer row once more, a failing outer row appeared
 once, envelope round-trip passed, and consequent substitution rejected.
 
+Store checkpoint `96546e9` verifies the exact monotone field encoding at minimum, zero,
+and maximum for every fixed-width signed and unsigned integer datatype. woql2 checkpoint
+`6287001` exposes the corresponding distinct XSD variants through the canonical explicit
+decoder and maps each to its identical Store tag. Typed JSON bounds checks, all 89 planner
+tests, Asc/Desc `Int8` ordering, and mixed-width bound rejection passed. A real `Int8`
+dictionary/range/join prove-and-verify gate passed in 55.53s. `xsd:integer` remains an
+explicit bounded-i64 subset; arbitrary precision and Prolog cross-type numeric coercion
+are not claimed. Decimal, temporal, string collation, and the AST's conflated float/double
+representation remain documented fail-closed boundaries in the coverage matrix.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -246,6 +262,8 @@ once, envelope round-trip passed, and consequent substitution rejected.
 - [x] Extend bounded `When` with existential condition/consequent locals when enclosing
   `Select`/`Count` makes them unobservable; preserve local-match bag multiplicity through
   exact projection back to the incoming outer schema.
+- [x] Cover distinct fixed-width XSD integer datatypes end to end without cross-datatype
+  coercion; retain `xsd:integer` as a documented bounded-i64 subset.
 - [ ] Extend `When` to observable branch-local variables only after defining an
   authenticated Prolog-unbound output representation and its later-correlation semantics.
 - [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
