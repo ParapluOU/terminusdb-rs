@@ -25,6 +25,7 @@ authenticated.
 | `Optional` | Implemented recursively | Global and one-/two-key correlated left outer joins accept any already-proved non-ground read relation, including `Or`, and authenticate exactly one null-extended row per unmatched left row. Top-level optionals may mix sequentially with `Not` when every later correlation key is nonnullable. Nullable-key correlation rejects for the same Prolog-unbound reason as `Not`. |
 | Predicate variables | Implemented | Predicate IDs are authenticated in their independent dictionary namespace, remain public result columns, compose through joins/operators, and resolve only through the predicate catalog. Cross-namespace variable reuse rejects. |
 | Constant-object `Link` and `Data` | Implemented in woql2 | The constant's canonical node/literal representation intrinsically authenticates the declared object kind. Variable-object forms reject until object-kind selection is proven; the current TerminusDB JSON parser does not expose either variant. |
+| Exact relational `Equals` | Implemented recursively for already-bound operands | An IsZero selection plus exact LogUp compaction filters a complete authenticated input relation. Node-only, predicate-only, or identical exact-datatype nonnullable columns are accepted; operand order, column indices, exact domains, and canonical constants are digest-bound. Free-variable assignment, nullable operands, unknown mixed node/value columns, predicate↔node/value comparisons, lists/dictionaries, and cross-datatype numeric coercion reject. Constant/constant equality is an authenticated true/false relation gate under the same exact-type rule. |
 
 Write/routing constructs (`Into`, `Add*`, `Delete*`, document mutations) are not
 read-query wrappers and remain rejected by query-proof generation.
@@ -43,7 +44,6 @@ composition is implemented.
 | `OrderBy`, `TripleSlice`, `TripleSliceRev`, `TripleNext`, `TriplePrevious` | strict-sort, range, membership, relocation, multiset/LogUp gadgets | Prove a permutation of the complete input, lexicographic typed ordering, and exact prefix/range boundaries. Sortedness alone is insufficient. |
 | Dictionary non-membership in relational/non-ground atoms | dictionary commitments and standalone-ground catalog openings | Compose authenticated absence with a relation that still exposes variables. Only the zero-arity ground case can currently short-circuit to empty. |
 | `Once` | complete BGP plus count/existence and authenticated selection | Define and authenticate TerminusDB's first-solution order; without it, stripping `Once` is unsound. |
-| Full-schema `Equals` and variable equality filters | atom equality filter and sumcheck | General cross-atom equality routing beyond natural join and constant unification. |
 | `If` | existence plus union/anti-join | Correlated branch selection with authenticated test success/failure. |
 | `GroupBy`, `Collect`, `Sum` | sumcheck, count, sort, membership and commitments | Authenticate grouping partition/permutation, per-group aggregation, and output dictionary/list values. |
 | `RangeMin`, `RangeMax` | range selection and strict sort | Authenticate extrema and the empty-input case. |
@@ -55,7 +55,7 @@ composition is implemented.
 | Construct family | Why existing gadgets are insufficient |
 |---|---|
 | Arbitrary `Path` | Requires authenticated transitive closure/regular-path evaluation, not a fixed left-deep relational join. |
-| `Eval`, general `Equals`, `Typecast`, string/regex/`Like`, collection/set/list operators, `Sequence`, interval/date operators | Need circuits or lookup arguments for their full value semantics and authenticated linkage to output values. |
+| `Eval`, generative/coercive `Equals`, `Typecast`, string/regex/`Like`, collection/set/list operators, `Sequence`, interval/date operators | Need circuits or lookup arguments for their full value semantics and authenticated linkage to output values. |
 | `Get` and external resources | Requires an authenticated external-resource commitment and routing model. |
 | `ReadDocument` | Requires proof semantics for document reconstruction, field multiplicity, subdocuments and JSON shape over triples. |
 | `IsA`, `TypeOf`, `Subsumption` | Require authenticated schema graph selection and transitive schema reasoning. |

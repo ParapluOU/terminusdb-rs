@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use terminusdb_schema::XSDAnySimpleType;
-use terminusdb_woql2::compare::{Greater, Gte, Less, Lte};
+use terminusdb_woql2::compare::{Equals, Greater, Gte, Less, Lte};
 use terminusdb_woql2::query::{And, Query};
 use terminusdb_woql2::triple::Triple;
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
@@ -127,6 +127,26 @@ pub fn tv_ground(subj: &str, pred: &str, obj: &str) -> Query {
 /// `And` of a set of conjuncts.
 pub fn and_of(qs: Vec<Query>) -> Query {
     Query::And(And { and: qs })
+}
+
+pub fn equals(left: Value, right: Value) -> Query {
+    Query::Equals(Equals { left, right })
+}
+
+pub fn value_var(name: &str) -> Value {
+    Value::Variable(name.to_string())
+}
+
+pub fn value_node(name: &str) -> Value {
+    Value::Node(iri(name))
+}
+
+pub fn value_uint(value: usize) -> Value {
+    Value::Data(XSDAnySimpleType::UnsignedInt(value))
+}
+
+pub fn value_integer(value: i64) -> Value {
+    Value::Data(XSDAnySimpleType::Integer(value))
 }
 
 /// A `DataValue::Variable`, for building comparison atoms.

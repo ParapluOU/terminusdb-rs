@@ -35,6 +35,7 @@ use terminusdb_woql2::proof::{
 use terminusdb_woql2::{
     misc::{Count, InRange},
     query::{Not, Or, Query},
+    value::DataValue,
 };
 
 #[test]
@@ -130,6 +131,173 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     assert!(fake_null
         .verify(&compiled, &layer, layer.state.commitment_root)
         .is_err());
+}
+
+#[test]
+fn exact_equals_filters_authenticated_relations_and_binds_operands() {
+    let layer = build_layer(&[
+        ("a", "p", "a"),
+        ("a", "p", "b"),
+        ("c", "p", "c"),
+        ("a", "q", "u"),
+        ("b", "q", "v"),
+        ("c", "q", "w"),
+    ]);
+    let constant_query = and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_var("x"), value_node("a")),
+    ]);
+    let constant_compiled = plan_bgp(&constant_query).unwrap();
+    let constant_proved = constant_compiled.prove(&layer).unwrap();
+    assert_eq!(constant_proved.result_len, 2);
+    let constant_envelope = constant_proved
+        .encode_envelope(
+            &constant_compiled,
+            &layer,
+            layer.state.commitment_root,
+        )
+        .unwrap();
+    decode_and_verify_envelope(
+        &constant_envelope,
+        &constant_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+
+    let wrong_constant = plan_bgp(&and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_var("x"), value_node("c")),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &constant_envelope,
+        &wrong_constant,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let reversed_operands = plan_bgp(&and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_node("a"), value_var("x")),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &constant_envelope,
+        &reversed_operands,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut forged_row = constant_proved.result_columns.clone();
+    forged_row[1][0] = layer
+        .node_value_catalog
+        .iter()
+        .find(|record| record.triple.object == CanonicalObject::Node(iri("c").into_bytes()))
+        .map(|record| ArkFr::from_u64(record.object_id))
+        .unwrap();
+    assert!(constant_proved.verify_columns(&forged_row).is_err());
+    let mut spliced_column = constant_proved.result_columns.clone();
+    spliced_column[1] = spliced_column[0].clone();
+    assert!(constant_proved.verify_columns(&spliced_column).is_err());
+
+    let other_layer = build_layer(&[("a", "p", "a"), ("a", "p", "b"), ("d", "p", "d")]);
+    assert!(decode_and_verify_envelope(
+        &constant_envelope,
+        &constant_compiled,
+        &other_layer,
+        other_layer.state.commitment_root,
+    )
+    .is_err());
+
+    let columns_query = and_of(vec![
+        tv("x", "p", "y"),
+        tv("y", "q", "z"),
+        equals(value_var("x"), value_var("y")),
+    ]);
+    let columns_compiled = plan_bgp(&columns_query).unwrap();
+    let columns_proved = columns_compiled.prove(&layer).unwrap();
+    assert_eq!(columns_proved.result_len, 2);
+    let columns_envelope = columns_proved
+        .encode_envelope(&columns_compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(
+        &columns_envelope,
+        &columns_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    let reversed_alias = plan_bgp(&and_of(vec![
+        tv("x", "p", "y"),
+        tv("y", "q", "z"),
+        equals(value_var("y"), value_var("x")),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &columns_envelope,
+        &reversed_alias,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let mut reordered_schema = columns_compiled.clone();
+    reordered_schema.relation.schema.swap(0, 1);
+    reordered_schema.relation.domains.swap(0, 1);
+    assert!(decode_and_verify_envelope(
+        &columns_envelope,
+        &reordered_schema,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let false_gate = plan_bgp(&and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_node("a"), value_node("missing")),
+    ]))
+    .unwrap();
+    let false_proved = false_gate.prove(&layer).unwrap();
+    assert_eq!(false_proved.result_len, 0);
+    let false_envelope = false_proved
+        .encode_envelope(&false_gate, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(
+        &false_envelope,
+        &false_gate,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+}
+
+#[test]
+fn exact_typed_equals_composes_with_select_and_count() {
+    let layer = build_age_name_layer(&[("a", 7), ("b", 8), ("c", 7)]);
+    let relation = and_of(vec![
+        tv("x", "age", "age"),
+        greater(dvar("age"), duint(0)),
+        equals(value_var("age"), value_uint(7)),
+    ]);
+    let query = Query::Count(Count {
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into(), "age".into()],
+            query: Box::new(relation),
+        })),
+        count: DataValue::Variable("count".into()),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 2);
+    assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+    assert_eq!(verified.proved.result_len, 2);
 }
 
 #[test]

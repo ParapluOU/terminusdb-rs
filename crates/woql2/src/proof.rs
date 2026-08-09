@@ -41,9 +41,12 @@ use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::{
-    plan_digest, LayerBgpEnvelope, RecursiveRelationEnvelope, RecursiveRelationProof,
-    RelationProofPlan, RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH,
-    MAX_RELATION_PROOF_NODES,
+    plan_digest, resolve_relation_equality_constraint, EqualityValueDomain, LayerBgpEnvelope,
+    RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
+    RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
+};
+use terminus_store::proof::equality::{
+    prove_relation_equality, verify_relation_equality, RelationEqualityProof,
 };
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
@@ -89,6 +92,9 @@ pub struct CompiledBgp {
 #[derive(Clone, Debug)]
 pub struct CompiledRelation {
     pub schema: Vec<String>,
+    /// Exact executor value domains known for each schema column. `None` means the
+    /// node/value dictionary column may contain both nodes and differently typed values.
+    pub domains: Vec<Option<EqualityValueDomain>>,
     pub statement: CompiledRelationStatement,
 }
 
@@ -109,6 +115,10 @@ pub enum CompiledRelationStatement {
         left: Box<CompiledRelation>,
         right: Box<CompiledRelation>,
         key_pairs: Vec<(usize, usize)>,
+    },
+    Equality {
+        input: Box<CompiledRelation>,
+        constraint: RelationEqualityPlan,
     },
 }
 
@@ -157,6 +167,15 @@ impl CompiledRelation {
     pub fn as_left_outer_mut(&mut self) -> Option<&mut Vec<(usize, usize)>> {
         match &mut self.statement {
             CompiledRelationStatement::LeftOuter { key_pairs, .. } => Some(key_pairs),
+            _ => None,
+        }
+    }
+
+    pub fn as_equality(&self) -> Option<(&CompiledRelation, &RelationEqualityPlan)> {
+        match &self.statement {
+            CompiledRelationStatement::Equality { input, constraint } => {
+                Some((input, constraint))
+            }
             _ => None,
         }
     }
@@ -217,6 +236,10 @@ pub enum ProvedQueryStatement {
         right: Box<ProvedBgp>,
         proof: Box<LeftOuterJoinProof>,
     },
+    Equality {
+        input: Box<ProvedBgp>,
+        proof: Box<RelationEqualityProof>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -264,11 +287,21 @@ pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHas
 }
 
 fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHash> {
+    if relation.domains.len() != relation.schema.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL relation domain metadata shape mismatch",
+        ));
+    }
     let mut hasher = Sha256::new();
     hasher.update(b"terminusdb-woql2/relation/v1");
     hasher.update((relation.schema.len() as u64).to_le_bytes());
     for name in &relation.schema {
         digest_bytes(&mut hasher, name.as_bytes());
+    }
+    hasher.update((relation.domains.len() as u64).to_le_bytes());
+    for domain in &relation.domains {
+        digest_equality_domain(&mut hasher, *domain);
     }
     for descriptor in relation_result_descriptors(relation)? {
         hasher.update([match descriptor.namespace {
@@ -305,8 +338,70 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(right)?);
             digest_key_pairs(&mut hasher, key_pairs);
         }
+        CompiledRelationStatement::Equality { input, constraint } => {
+            hasher.update(b"/equality");
+            hasher.update(relation_query_digest(input)?);
+            digest_equality_plan(&mut hasher, constraint);
+        }
     }
     Ok(hasher.finalize().into())
+}
+
+fn digest_equality_domain(hasher: &mut Sha256, domain: Option<EqualityValueDomain>) {
+    match domain {
+        None => hasher.update([0]),
+        Some(EqualityValueDomain::Predicate) => hasher.update([1]),
+        Some(EqualityValueDomain::Node) => hasher.update([2]),
+        Some(EqualityValueDomain::Datatype(datatype)) => {
+            hasher.update([3]);
+            hasher.update([datatype as u8]);
+        }
+    }
+}
+
+fn digest_canonical_object(hasher: &mut Sha256, value: &CanonicalObject) {
+    match value {
+        CanonicalObject::Node(iri) => {
+            hasher.update([0]);
+            digest_bytes(hasher, iri);
+        }
+        CanonicalObject::Value { datatype, lexical } => {
+            hasher.update([1, *datatype as u8]);
+            digest_bytes(hasher, lexical);
+        }
+    }
+}
+
+fn digest_equality_plan(hasher: &mut Sha256, plan: &RelationEqualityPlan) {
+    match plan {
+        RelationEqualityPlan::ColumnConstant {
+            column,
+            domain,
+            value,
+            constant_on_left,
+        } => {
+            hasher.update([0]);
+            hasher.update((*column as u64).to_le_bytes());
+            hasher.update([*constant_on_left as u8]);
+            digest_equality_domain(hasher, Some(*domain));
+            digest_canonical_object(hasher, value);
+        }
+        RelationEqualityPlan::Columns {
+            left,
+            right,
+            domain,
+        } => {
+            hasher.update([1]);
+            hasher.update((*left as u64).to_le_bytes());
+            hasher.update((*right as u64).to_le_bytes());
+            digest_equality_domain(hasher, Some(*domain));
+        }
+        RelationEqualityPlan::Constants { left, right } => {
+            hasher.update([2]);
+            digest_canonical_object(hasher, left);
+            digest_canonical_object(hasher, right);
+        }
+    }
 }
 
 fn digest_key_pairs(hasher: &mut Sha256, key_pairs: &[(usize, usize)]) {
@@ -364,6 +459,7 @@ fn relation_result_descriptors(
             ));
             Ok(descriptors)
         }
+        CompiledRelationStatement::Equality { input, .. } => relation_result_descriptors(input),
     }
 }
 
@@ -388,6 +484,12 @@ fn relation_proof_plan(
                 left: Box::new(child(left)?),
                 right: Box::new(child(right)?),
                 key_pairs: key_pairs.clone(),
+            }
+        }
+        CompiledRelationStatement::Equality { input, constraint } => {
+            RelationProofPlanKind::Equality {
+                input: Box::new(child(input)?),
+                constraint: constraint.clone(),
             }
         }
         CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
@@ -629,6 +731,33 @@ impl ProvedBgp {
                         &mut transcript,
                     )?;
                 }
+            }
+            (
+                ProvedQueryStatement::Equality { input, proof },
+                CompiledRelationStatement::Equality {
+                    input: input_plan,
+                    constraint,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let resolved = resolve_relation_equality_constraint(layer, constraint)?;
+                let mut transcript = Transcript254::new(b"parture-equality-envelope");
+                transcript.append_bytes(b"pow/equality-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/equality-envelope/query", &query_digest);
+                verify_relation_equality(
+                    &input.relation_commit(None)?,
+                    &resolved,
+                    &self.result_commitments,
+                    self.result_len,
+                    self.result_log_domain,
+                    proof,
+                    &mut transcript,
+                )?;
             }
             _ => {
                 return Err(std::io::Error::new(
@@ -1012,6 +1141,20 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::Equality { input, proof },
+                CompiledRelationStatement::Equality {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::Equality {
+                input: Box::new(input.recursive_envelope(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+                proof: proof.clone(),
+            },
+            (
                 ProvedQueryStatement::LeftAnti { left, right, proof },
                 CompiledRelationStatement::LeftAnti {
                     left: left_plan,
@@ -1198,6 +1341,10 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
                 proof,
             }
         }
+        RecursiveRelationProof::Equality { input, proof } => ProvedQueryStatement::Equality {
+            input: Box::new(proved_from_recursive(*input)),
+            proof,
+        },
     };
     ProvedBgp {
         statement,
@@ -1372,6 +1519,33 @@ fn prove_compiled_relation(
                 result_len: result.n,
             })
         }
+        CompiledRelationStatement::Equality { input, constraint } => {
+            let input_proved = prove_compiled_relation(
+                input,
+                layer,
+                relation_query_digest(input)?,
+            )?;
+            let witness = relation_witness(&input_proved);
+            let resolved = resolve_relation_equality_constraint(layer, constraint)?;
+            let mut transcript = Transcript254::new(b"parture-equality-envelope");
+            transcript.append_bytes(b"pow/equality-envelope/root", &layer.state.commitment_root);
+            transcript.append_bytes(b"pow/equality-envelope/query", &query_digest);
+            let result = boxed_prove_equality(&witness, &resolved, &mut transcript)?;
+            Ok(ProvedBgp {
+                statement: ProvedQueryStatement::Equality {
+                    input: Box::new(input_proved),
+                    proof: Box::new(result.proof),
+                },
+                result_commitments: result.commitments,
+                result_columns: result
+                    .columns
+                    .iter()
+                    .map(|column| column[..result.n].to_vec())
+                    .collect(),
+                result_log_domain: result.log_domain,
+                result_len: result.n,
+            })
+        }
     }
 }
 
@@ -1430,6 +1604,19 @@ fn boxed_prove_outer(
         left,
         right,
         key_pairs,
+        transcript,
+    )?))
+}
+
+#[inline(never)]
+fn boxed_prove_equality(
+    input: &RelationWitness,
+    constraint: &terminus_store::proof::equality::RelationEqualityConstraint,
+    transcript: &mut Transcript254,
+) -> std::io::Result<Box<terminus_store::proof::equality::RelationEqualityResult>> {
+    Ok(Box::new(prove_relation_equality(
+        input,
+        constraint,
         transcript,
     )?))
 }
@@ -1632,6 +1819,27 @@ pub enum BgpPlanError {
     #[error("recursive proof relation exceeds depth or node limits")]
     RecursiveStructureLimit,
 
+    #[error("Equals needs an already-authenticated input relation")]
+    EqualsMissingInput,
+
+    #[error("Equals operand is a list or dictionary")]
+    EqualsUnsupportedOperand,
+
+    #[error("Equals variable `?{var}` is not already bound by the preceding relation")]
+    EqualsUnboundVariable { var: String },
+
+    #[error("Equals variable `?{var}` is nullable")]
+    EqualsNullableVariable { var: String },
+
+    #[error("Equals variable `?{var}` has no exact node/predicate/datatype domain proof")]
+    EqualsUnknownDomain { var: String },
+
+    #[error("Equals operands have incompatible exact value domains")]
+    EqualsDomainMismatch,
+
+    #[error("cross-datatype numeric Equals uses coercive executor semantics")]
+    EqualsCoerciveNumeric,
+
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
@@ -1822,6 +2030,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
 
     // (3) Shape guard + left-deep planner: the safety-critical core.
     let (plan, schema) = plan_left_deep(&atoms)?;
+    let domains = infer_schema_domains(&schema, &atoms, &comparisons);
 
     // A full BGP binding is already unique: for a fixed assignment every triple atom
     // identifies at most one row in the Store's set-valued triple relation. Therefore
@@ -1854,6 +2063,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     Ok(CompiledBgp {
         relation: CompiledRelation {
             schema: schema.clone(),
+            domains,
             statement: CompiledRelationStatement::Bgp(plan),
         },
         projection,
@@ -1861,6 +2071,36 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         count_variable,
         full_row_distinct: !distincts.is_empty(),
     })
+}
+
+fn infer_schema_domains(
+    schema: &[String],
+    atoms: &[Atom],
+    comparisons: &[NormalizedRange],
+) -> Vec<Option<EqualityValueDomain>> {
+    schema
+        .iter()
+        .map(|variable| {
+            if atoms
+                .iter()
+                .any(|atom| atom.pred_var.as_ref() == Some(variable))
+            {
+                Some(EqualityValueDomain::Predicate)
+            } else if atoms
+                .iter()
+                .any(|atom| atom.subj_var.as_ref() == Some(variable))
+            {
+                Some(EqualityValueDomain::Node)
+            } else {
+                comparisons
+                    .iter()
+                    .find(|comparison| &comparison.var == variable)
+                    .map(|comparison| {
+                        EqualityValueDomain::Datatype(comparison.canonical_datatype)
+                    })
+            }
+        })
+        .collect()
 }
 
 fn plan_or_relation(
@@ -1902,6 +2142,7 @@ fn plan_or_relation(
     let mut branches = Vec::new();
     let mut mappings = Vec::new();
     let mut expected_descriptors = None;
+    let mut merged_domains: Option<Vec<Option<EqualityValueDomain>>> = None;
     for branch in compiled {
         let mapping = schema_mapping(&schema, &branch.relation.schema)
             .ok_or(BgpPlanError::OrIncompatibleSchema)?;
@@ -1915,6 +2156,19 @@ fn plan_or_relation(
             return Err(BgpPlanError::OrIncompatibleNamespaces);
         }
         expected_descriptors = Some(mapped);
+        let mapped_domains = mapping
+            .iter()
+            .map(|index| branch.relation.domains[*index])
+            .collect::<Vec<_>>();
+        if let Some(prior) = &mut merged_domains {
+            for (prior, current) in prior.iter_mut().zip(&mapped_domains) {
+                if *prior != *current {
+                    *prior = None;
+                }
+            }
+        } else {
+            merged_domains = Some(mapped_domains);
+        }
         match branch.relation.statement {
             CompiledRelationStatement::BagUnion {
                 branches: nested,
@@ -1934,6 +2188,7 @@ fn plan_or_relation(
                 mappings.push(if schema.is_empty() { Vec::new() } else { mapping });
                 branches.push(CompiledRelation {
                     schema: branch.relation.schema,
+                    domains: branch.relation.domains,
                     statement,
                 });
             }
@@ -1943,6 +2198,7 @@ fn plan_or_relation(
     let compiled = CompiledBgp {
         relation: CompiledRelation {
             schema,
+            domains: merged_domains.unwrap_or_default(),
             statement: CompiledRelationStatement::BagUnion { branches, mappings },
         },
         projection,
@@ -1957,12 +2213,13 @@ fn plan_or_relation(
 enum ReadOperator {
     Optional(Query),
     Not(Query),
+    Equals(crate::compare::Equals),
 }
 
 fn has_top_level_read_operator(query: &Query) -> bool {
     match query {
         Query::And(and) => and.and.iter().any(has_top_level_read_operator),
-        Query::WoqlOptional(_) | Query::Not(_) => true,
+        Query::WoqlOptional(_) | Query::Not(_) | Query::Equals(_) => true,
         _ => false,
     }
 }
@@ -1982,6 +2239,7 @@ fn collect_read_operator_sequence(
             operators.push(ReadOperator::Optional((*optional.query).clone()))
         }
         Query::Not(not) => operators.push(ReadOperator::Not((*not.query).clone())),
+        Query::Equals(equals) => operators.push(ReadOperator::Equals(equals.clone())),
         other if operators.is_empty() => positive.push(other.clone()),
         other => {
             return Err(BgpPlanError::ConjunctNotTriple {
@@ -1990,6 +2248,149 @@ fn collect_read_operator_sequence(
         }
     }
     Ok(())
+}
+
+#[derive(Clone)]
+enum EqualityOperand {
+    Variable(String),
+    Constant(CanonicalObject),
+}
+
+fn equality_operand(value: &crate::value::WoqlValue) -> Result<EqualityOperand, BgpPlanError> {
+    match value {
+        crate::value::WoqlValue::Variable(variable) => {
+            Ok(EqualityOperand::Variable(variable.clone()))
+        }
+        crate::value::WoqlValue::Node(iri) => Ok(EqualityOperand::Constant(
+            CanonicalObject::Node(iri.clone().into_bytes()),
+        )),
+        crate::value::WoqlValue::Data(value) => {
+            let term = value_constant_term(value)?;
+            match term {
+                AtomTerm::ValueConstant(datatype, lexical) => Ok(EqualityOperand::Constant(
+                    CanonicalObject::Value { datatype, lexical },
+                )),
+                _ => unreachable!("value_constant_term returned a non-value"),
+            }
+        }
+        crate::value::WoqlValue::Dictionary(_) | crate::value::WoqlValue::List(_) => {
+            Err(BgpPlanError::EqualsUnsupportedOperand)
+        }
+    }
+}
+
+fn numeric_equality_datatype(datatype: CanonicalDatatype) -> bool {
+    use CanonicalDatatype::*;
+    matches!(
+        datatype,
+        UInt8
+            | Int8
+            | UInt16
+            | Int16
+            | UInt32
+            | Int32
+            | Float32
+            | UInt64
+            | Int64
+            | Float64
+            | Decimal
+            | BigInt
+            | PositiveInteger
+            | NonNegativeInteger
+            | NonPositiveInteger
+            | NegativeInteger
+    )
+}
+
+fn bound_equality_column(
+    relation: &CompiledRelation,
+    variable: &str,
+) -> Result<(usize, EqualityValueDomain), BgpPlanError> {
+    let column = relation
+        .schema
+        .iter()
+        .position(|candidate| candidate == variable)
+        .ok_or_else(|| BgpPlanError::EqualsUnboundVariable {
+            var: variable.to_string(),
+        })?;
+    let descriptors = relation_result_descriptors(relation)
+        .map_err(|_| BgpPlanError::EqualsDomainMismatch)?;
+    if descriptors[column].nullable {
+        return Err(BgpPlanError::EqualsNullableVariable {
+            var: variable.to_string(),
+        });
+    }
+    let domain = relation.domains[column].ok_or_else(|| BgpPlanError::EqualsUnknownDomain {
+        var: variable.to_string(),
+    })?;
+    Ok((column, domain))
+}
+
+fn constant_matches_domain(value: &CanonicalObject, domain: EqualityValueDomain) -> bool {
+    match (value, domain) {
+        (CanonicalObject::Node(_), EqualityValueDomain::Node) => true,
+        (
+            CanonicalObject::Value { datatype, .. },
+            EqualityValueDomain::Datatype(expected),
+        ) => *datatype == expected,
+        _ => false,
+    }
+}
+
+fn compile_equality_constraint(
+    relation: &CompiledRelation,
+    equals: &crate::compare::Equals,
+) -> Result<RelationEqualityPlan, BgpPlanError> {
+    let left = equality_operand(&equals.left)?;
+    let right = equality_operand(&equals.right)?;
+    match (left, right) {
+        (EqualityOperand::Variable(left), EqualityOperand::Variable(right)) => {
+            let (left_column, left_domain) = bound_equality_column(relation, &left)?;
+            let (right_column, right_domain) = bound_equality_column(relation, &right)?;
+            if left_domain != right_domain {
+                return Err(BgpPlanError::EqualsDomainMismatch);
+            }
+            Ok(RelationEqualityPlan::Columns {
+                left: left_column,
+                right: right_column,
+                domain: left_domain,
+            })
+        }
+        (EqualityOperand::Variable(variable), EqualityOperand::Constant(value))
+        | (EqualityOperand::Constant(value), EqualityOperand::Variable(variable)) => {
+            let constant_on_left = matches!(
+                equality_operand(&equals.left)?,
+                EqualityOperand::Constant(_)
+            );
+            let (column, domain) = bound_equality_column(relation, &variable)?;
+            if !constant_matches_domain(&value, domain) {
+                return Err(BgpPlanError::EqualsDomainMismatch);
+            }
+            Ok(RelationEqualityPlan::ColumnConstant {
+                column,
+                domain,
+                value,
+                constant_on_left,
+            })
+        }
+        (EqualityOperand::Constant(left), EqualityOperand::Constant(right)) => {
+            if let (
+                CanonicalObject::Value { datatype: left, .. },
+                CanonicalObject::Value {
+                    datatype: right, ..
+                },
+            ) = (&left, &right)
+            {
+                if left != right
+                    && (numeric_equality_datatype(*left)
+                        || numeric_equality_datatype(*right))
+                {
+                    return Err(BgpPlanError::EqualsCoerciveNumeric);
+                }
+            }
+            Ok(RelationEqualityPlan::Constants { left, right })
+        }
+    }
 }
 
 fn plan_sequential_read_operators(
@@ -2005,6 +2406,7 @@ fn plan_sequential_read_operators(
     if positive.is_empty() {
         return Err(match operators.first() {
             Some(ReadOperator::Optional(_)) => BgpPlanError::OptionalMissingOuter,
+            Some(ReadOperator::Equals(_)) => BgpPlanError::EqualsMissingInput,
             _ => BgpPlanError::NotMissingOuter,
         });
     }
@@ -2028,9 +2430,24 @@ fn plan_sequential_read_operators(
     )?;
 
     for operator in operators {
+        if let ReadOperator::Equals(equals) = operator {
+            let constraint = compile_equality_constraint(&relation, &equals)?;
+            let schema = relation.schema.clone();
+            let domains = relation.domains.clone();
+            relation = CompiledRelation {
+                schema,
+                domains,
+                statement: CompiledRelationStatement::Equality {
+                    input: Box::new(relation),
+                    constraint,
+                },
+            };
+            continue;
+        }
         let (right_query, optional) = match operator {
             ReadOperator::Optional(query) => (query, true),
             ReadOperator::Not(query) => (query, false),
+            ReadOperator::Equals(_) => unreachable!(),
         };
         let right = plan_bgp(&right_query)?;
         reject_subplan_wrappers(&right, optional)?;
@@ -2046,6 +2463,16 @@ fn plan_sequential_read_operators(
         let key_pairs = shared_key_pairs(&relation, &right.relation, optional)?;
         if optional {
             let mut schema = relation.schema.clone();
+            let mut domains = relation.domains.clone();
+            domains.extend(
+                right
+                    .relation
+                    .schema
+                    .iter()
+                    .zip(&right.relation.domains)
+                    .filter(|(name, _)| !relation.schema.contains(name))
+                    .map(|(_, domain)| *domain),
+            );
             schema.extend(
                 right
                     .relation
@@ -2056,6 +2483,7 @@ fn plan_sequential_read_operators(
             );
             relation = CompiledRelation {
                 schema,
+                domains,
                 statement: CompiledRelationStatement::LeftOuter {
                     left: Box::new(relation),
                     right: Box::new(right.relation),
@@ -2064,8 +2492,10 @@ fn plan_sequential_read_operators(
             };
         } else {
             let schema = relation.schema.clone();
+            let domains = relation.domains.clone();
             relation = CompiledRelation {
                 schema,
+                domains,
                 statement: CompiledRelationStatement::LeftAnti {
                     left: Box::new(relation),
                     right: Box::new(right.relation),
@@ -2114,6 +2544,9 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             | CompiledRelationStatement::LeftOuter { left, right, .. } => {
                 visit(left, depth + 1, nodes)?;
                 visit(right, depth + 1, nodes)
+            }
+            CompiledRelationStatement::Equality { input, .. } => {
+                visit(input, depth + 1, nodes)
             }
         }
     }
@@ -2556,6 +2989,7 @@ struct NormalizedBound {
 struct NormalizedRange {
     var: String,
     datatype: ArkFr,
+    canonical_datatype: CanonicalDatatype,
     bounds: Vec<NormalizedBound>,
 }
 
@@ -2597,10 +3031,11 @@ fn normalize_comparison(q: &Query) -> Result<NormalizedRange, BgpPlanError> {
         // Excluded above (the variable was the other operand).
         DataValue::Variable(_) => unreachable!(),
     };
-    let (datatype, c) = encode_range_constant(xsd)?;
+    let (datatype, c, canonical_datatype) = encode_range_constant(xsd)?;
     Ok(NormalizedRange {
         var,
         datatype,
+        canonical_datatype,
         bounds: vec![NormalizedBound { op, c }],
     })
 }
@@ -2618,14 +3053,15 @@ fn normalize_in_range(range: &InRange) -> Result<NormalizedRange, BgpPlanError> 
         DataValue::Data(value) => value,
         _ => return Err(BgpPlanError::InRangeBoundNotConstant),
     };
-    let (start_datatype, start_c) = encode_range_constant(start)?;
-    let (end_datatype, end_c) = encode_range_constant(end)?;
-    if start_datatype != end_datatype {
+    let (start_datatype, start_c, start_canonical_datatype) = encode_range_constant(start)?;
+    let (end_datatype, end_c, end_canonical_datatype) = encode_range_constant(end)?;
+    if start_datatype != end_datatype || start_canonical_datatype != end_canonical_datatype {
         return Err(BgpPlanError::RangeDatatypeMismatch { var });
     }
     Ok(NormalizedRange {
         var,
         datatype: start_datatype,
+        canonical_datatype: start_canonical_datatype,
         bounds: vec![
             NormalizedBound {
                 op: RangeOp::Ge,
@@ -2703,7 +3139,9 @@ fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static s
 /// `0` sentinel in the store, which is unsound at the query level. Adding a datatype
 /// requires a store-routed construction in [`xsd_scalar_entry`], an
 /// [`op_preserving_width`] entry, PLUS a round-trip alignment test.
-fn encode_range_constant(xsd: &XSDAnySimpleType) -> Result<(ArkFr, ArkFr), BgpPlanError> {
+fn encode_range_constant(
+    xsd: &XSDAnySimpleType,
+) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
     if !matches!(
         xsd,
         XSDAnySimpleType::Boolean(_)
@@ -2723,7 +3161,9 @@ fn encode_range_constant(xsd: &XSDAnySimpleType) -> Result<(ArkFr, ArkFr), BgpPl
 /// Canonicalize a `TypedDictEntry` through the store's own value path and derive the
 /// `(datatype_tag, c)` pair. Fails closed if the resulting datatype is not one of the
 /// round-trip-verified order-preserving fixed-width numerics (see [`op_preserving_width`]).
-fn encode_via_store(entry: TypedDictEntry) -> Result<(ArkFr, ArkFr), BgpPlanError> {
+fn encode_via_store(
+    entry: TypedDictEntry,
+) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
     // Subject/predicate are irrelevant to the object canonicalization.
     let triple = ValueTriple::new_value("", "", entry);
     let (datatype, lexical) = match CanonicalObject::from_store_object(&triple.object) {
@@ -2749,7 +3189,7 @@ fn encode_via_store(entry: TypedDictEntry) -> Result<(ArkFr, ArkFr), BgpPlanErro
     buf[8 - width..].copy_from_slice(&lexical);
     let c = ArkFr::from_u64(u64::from_be_bytes(buf));
     let datatype_tag = ArkFr::from_u64(datatype as u64);
-    Ok((datatype_tag, c))
+    Ok((datatype_tag, c, datatype))
 }
 
 /// Fixed byte width of a SUPPORTED order-preserving numeric datatype, or `None` for any

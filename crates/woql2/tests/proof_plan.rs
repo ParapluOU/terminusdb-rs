@@ -15,6 +15,7 @@ use terminusdb_woql2::query::{Not, Or, Path, Query, True};
 use terminusdb_woql2::triple::{Data, Link, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
+use terminus_store::proof::envelope::RelationEqualityPlan;
 use terminus_store::proof::query::{AtomTerm, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -664,6 +665,159 @@ fn sequential_operators_allow_sound_keys_and_reject_nullable_correlation() {
         }),
     ]);
     reject(nullable_then_not, BgpPlanError::NotUnsupportedSubplan);
+}
+
+#[test]
+fn equals_accepts_only_bound_nonnullable_exact_domains() {
+    let node_constant = and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_var("x"), value_node("a")),
+    ]);
+    let compiled = plan_bgp(&node_constant).unwrap();
+    assert!(matches!(
+        compiled.relation.as_equality().unwrap().1,
+        RelationEqualityPlan::ColumnConstant {
+            column: 0,
+            constant_on_left: false,
+            ..
+        }
+    ));
+
+    let node_columns = and_of(vec![
+        tv("x", "p", "y"),
+        tv("y", "q", "z"),
+        equals(value_var("x"), value_var("y")),
+    ]);
+    assert!(matches!(
+        plan_bgp(&node_columns)
+            .unwrap()
+            .relation
+            .as_equality()
+            .unwrap()
+            .1,
+        RelationEqualityPlan::Columns { .. }
+    ));
+
+    reject(
+        and_of(vec![
+            tv("x", "p", "y"),
+            equals(value_var("y"), value_node("a")),
+        ]),
+        BgpPlanError::EqualsUnknownDomain { var: "y".into() },
+    );
+    reject(
+        and_of(vec![
+            equals(value_var("x"), value_node("a")),
+            tv("x", "p", "y"),
+        ]),
+        BgpPlanError::ConjunctNotTriple {
+            construct: "Triple",
+        },
+    );
+    reject(
+        and_of(vec![
+            tv_pred_var("x", "predicate", "y"),
+            equals(value_var("predicate"), value_var("x")),
+        ]),
+        BgpPlanError::EqualsDomainMismatch,
+    );
+}
+
+#[test]
+fn equals_exact_typed_domains_reject_executor_numeric_coercion() {
+    let exact = and_of(vec![
+        tv("x", "age", "age"),
+        greater(dvar("age"), duint(0)),
+        equals(value_var("age"), value_uint(7)),
+    ]);
+    assert!(plan_bgp(&exact).unwrap().relation.as_equality().is_some());
+
+    reject(
+        and_of(vec![
+            tv("x", "age", "age"),
+            greater(dvar("age"), duint(0)),
+            equals(value_var("age"), value_integer(7)),
+        ]),
+        BgpPlanError::EqualsDomainMismatch,
+    );
+    reject(
+        and_of(vec![
+            tv("x", "a", "a"),
+            tv("x", "b", "b"),
+            greater(dvar("a"), duint(0)),
+            greater(dvar("b"), dint(0)),
+            equals(value_var("a"), value_var("b")),
+        ]),
+        BgpPlanError::EqualsDomainMismatch,
+    );
+    reject(
+        and_of(vec![
+            tv("x", "p", "y"),
+            equals(value_uint(7), value_integer(7)),
+        ]),
+        BgpPlanError::EqualsCoerciveNumeric,
+    );
+}
+
+#[test]
+fn equals_composes_with_recursive_relations_projection_and_count() {
+    let filtered = and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_node("a"), value_var("x")),
+    ]);
+    let optional = and_of(vec![
+        filtered.clone(),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(and_of(vec![
+                tv("y", "q", "z"),
+                equals(value_var("y"), value_node("b")),
+            ])),
+        }),
+    ]);
+    let union = Query::Or(Or {
+        or: vec![optional.clone(), optional],
+    });
+    assert!(plan_bgp(&union).unwrap().relation.as_bag_union().is_some());
+
+    let selected = Query::Select(Select {
+        variables: vec!["x".into()],
+        query: Box::new(filtered.clone()),
+    });
+    assert_eq!(plan_bgp(&selected).unwrap().projection, Some(vec![0]));
+    let counted = Query::Count(Count {
+        query: Box::new(filtered),
+        count: DataValue::Variable("count".into()),
+    });
+    assert_eq!(plan_bgp(&counted).unwrap().count_variable.as_deref(), Some("count"));
+
+    let nullable = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        equals(value_var("z"), value_node("u")),
+    ]);
+    reject(
+        nullable,
+        BgpPlanError::EqualsNullableVariable { var: "z".into() },
+    );
+}
+
+#[test]
+fn equals_constant_gates_preserve_operand_order() {
+    let false_gate = and_of(vec![
+        tv("x", "p", "y"),
+        equals(value_node("a"), value_node("b")),
+    ]);
+    assert!(matches!(
+        plan_bgp(&false_gate)
+            .unwrap()
+            .relation
+            .as_equality()
+            .unwrap()
+            .1,
+        RelationEqualityPlan::Constants { .. }
+    ));
 }
 
 #[test]
