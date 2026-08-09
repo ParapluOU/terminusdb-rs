@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `7005dd1` | Recursive one-/two-key natural inner join exposes the already-authenticated complete matched projection, with multiplicity, empty, wire, and tamper coverage. |
-| `modules/terminusdb-rs` | `1e9a90f` plus this documentation commit | Leading-Prolog bounded `When` lowering, distinct query identity, recursive verification, nested planner coverage, and success-plus-true E2E. |
+| `modules/terminusdb-store-paraplu` | `3b86b80` | Explicit `Any`/`Node`/`Literal` object-kind filters are transcript/wire bound; exact literal complement, predicate-variable and join composition are covered. |
+| `modules/terminusdb-rs` | `fb251ca` plus this documentation commit | Canonical woql2 `Link`/`Data` lowering, graph/range guards, mixed-literal join E2E, and kind-substitution rejection. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -187,6 +187,24 @@ outer rejection, and nullable-correlation rejection. The focused Linux E2E passe
 appeared once (`true` only), envelope round-trip passed, and consequent substitution
 rejected.
 
+Store checkpoint `3b86b80` adds an explicit public `ObjectKindFilter` to every leaf
+atom and bumps every plan-carrying envelope version. `Node` authenticates the reserved
+node datatype selector; `Literal` authenticates its exact `chi_real - node_selector`
+complement. Both preserve the original Store object ID. The selection-only composition
+also now proves `sel = chi_real` for an otherwise unconstrained `?s ?p ?o`, enabling
+predicate-variable kind filters. Focused Linux gates passed for mixed UInt32/Boolean/node
+selection plus kind tamper (78.02s), empty literal results plus predicate-variable and
+join composition (120.99s), and envelope round-trip/version rejection (34.70s).
+
+woql2 checkpoint `fb251ca` lowers its canonical `Link` and `Data` AST variants to those
+explicit filters. Constants remain authenticated directly. A numeric `Data` comparison
+uses the exact datatype range proof, which subsumes the broad literal constraint; a
+numeric comparison on `Link` rejects closed. All 86 planner tests passed, and the mixed
+literal `Data` joined to a node-label triple passed prove/resolve/verify plus wrong-kind
+substitution rejection in 80.67s. The leading TerminusDB JSON decoder currently exposes
+neither `Link` nor `Data`, so running-node coverage remains blocked on an authoritative
+Prolog/JSON shape rather than silently inventing one in the client AST.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -207,6 +225,8 @@ rejected.
 - [x] Implement bounded leading-Prolog `When` exactly when `A` and `B` introduce no
   variables beyond one or two nonnullable outer keys; preserve success multiplicity
   plus one unchanged `true` row without using left outer join.
+- [x] Authenticate variable-object `Link` and unconstrained mixed-datatype `Data` as
+  exact node/literal dictionary partitions, including predicate variables and joins.
 - [ ] Extend `When` to branch-local variables only after defining an authenticated
   Prolog-unbound output representation and its later-correlation semantics.
 - [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
