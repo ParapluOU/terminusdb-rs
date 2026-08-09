@@ -1511,19 +1511,170 @@ fn triple_slice_rev_rejects_until_result_order_is_authenticated() {
 }
 
 #[test]
-fn ordered_result_controls_reject_until_executor_order_is_authenticated() {
+fn exact_scalar_ascending_order_compiles_when_key_is_the_complete_typed_row() {
+    let child = and_of(vec![
+        tv_subj_const("metric", "score", "score"),
+        gte(dvar("score"), duint(0)),
+    ]);
+    let compiled = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate {
+            variable: "score".into(),
+            order: Order::Asc,
+        }],
+        query: Box::new(child),
+    }))
+    .unwrap();
+    let (input, datatype) = compiled.relation.as_exact_scalar_order().unwrap();
+    assert!(input.as_bgp().is_some());
+    assert_eq!(compiled.relation.schema, ["score"]);
+    assert_eq!(datatype, CanonicalDatatype::UInt32);
+
+    let boolean = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate {
+            variable: "enabled".into(),
+            order: Order::Asc,
+        }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("feature", "enabled", "enabled"),
+            gte(dvar("enabled"), dbool(false)),
+        ])),
+    }))
+    .unwrap();
+    assert_eq!(
+        boolean.relation.as_exact_scalar_order().unwrap().1,
+        CanonicalDatatype::Boolean
+    );
+}
+
+#[test]
+fn exact_scalar_order_rejects_unsupported_shapes_closed() {
+    let child = and_of(vec![
+        tv_subj_const("metric", "score", "score"),
+        gte(dvar("score"), duint(0)),
+    ]);
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![OrderTemplate {
+                variable: "score".into(),
+                order: Order::Desc,
+            }],
+            query: Box::new(child.clone()),
+        }),
+        BgpPlanError::OrderByUnsupportedDirection,
+    );
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![],
+            query: Box::new(child),
+        }),
+        BgpPlanError::OrderByUnsupportedShape,
+    );
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![OrderTemplate {
+                variable: "score".into(),
+                order: Order::Asc,
+            }],
+            query: Box::new(tv_subj_const("metric", "score", "score")),
+        }),
+        BgpPlanError::OrderByUnsupportedValue,
+    );
+
+    let two_columns = and_of(vec![tv("subject", "score", "score"), gte(dvar("score"), duint(0))]);
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![OrderTemplate {
+                variable: "score".into(),
+                order: Order::Asc,
+            }],
+            query: Box::new(two_columns.clone()),
+        }),
+        BgpPlanError::OrderByUnsupportedShape,
+    );
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![
+                OrderTemplate {
+                    variable: "score".into(),
+                    order: Order::Asc,
+                },
+                OrderTemplate {
+                    variable: "subject".into(),
+                    order: Order::Asc,
+                },
+            ],
+            query: Box::new(two_columns),
+        }),
+        BgpPlanError::OrderByUnsupportedShape,
+    );
+
+    let duplicate_generating_union = Query::Or(terminusdb_woql2::query::Or {
+        or: vec![
+            and_of(vec![
+                tv_subj_const("metric", "score", "score"),
+                gte(dvar("score"), duint(0)),
+            ]),
+            and_of(vec![
+                tv_subj_const("metric", "score", "score"),
+                gte(dvar("score"), duint(0)),
+            ]),
+        ],
+    });
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![OrderTemplate {
+                variable: "score".into(),
+                order: Order::Asc,
+            }],
+            query: Box::new(duplicate_generating_union),
+        }),
+        BgpPlanError::OrderByUnsupportedShape,
+    );
+
+    let nullable_child = and_of(vec![
+        tv_subj_const("metric", "score", "score"),
+        gte(dvar("score"), duint(0)),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv_subj_const("metric", "label", "label")),
+        }),
+    ]);
+    reject(
+        Query::OrderBy(OrderBy {
+            ordering: vec![OrderTemplate {
+                variable: "score".into(),
+                order: Order::Asc,
+            }],
+            query: Box::new(nullable_child),
+        }),
+        BgpPlanError::OrderByUnsupportedShape,
+    );
+}
+
+#[test]
+fn exact_scalar_order_retains_outer_routing_wrapper() {
+    let ordered = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate {
+            variable: "score".into(),
+            order: Order::Asc,
+        }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("metric", "score", "score"),
+            gte(dvar("score"), duint(0)),
+        ])),
+    });
+    let compiled = plan_bgp(&Query::Using(Using {
+        collection: "admin/db/local/branch/main".into(),
+        query: Box::new(ordered),
+    }))
+    .unwrap();
+    assert_eq!(compiled.collection.as_deref(), Some("admin/db/local/branch/main"));
+    assert!(compiled.relation.as_exact_scalar_order().is_some());
+}
+
+#[test]
+fn remaining_ordered_result_controls_reject_until_authenticated() {
     let base = tv("x", "age", "a");
     let cases = [
-        (
-            Query::OrderBy(OrderBy {
-                ordering: vec![OrderTemplate {
-                    variable: "a".into(),
-                    order: Order::Asc,
-                }],
-                query: Box::new(base.clone()),
-            }),
-            "OrderBy",
-        ),
         (
             Query::Start(Start {
                 start: 2,

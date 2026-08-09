@@ -28,7 +28,7 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::WoqlOptional;
-use terminusdb_woql2::control::{Distinct, Select};
+use terminusdb_woql2::control::{Distinct, Select, Using};
 use terminusdb_woql2::proof::{
     decode_and_verify_envelope, decode_verifier_commitment_and_verify_envelope, plan_bgp,
     BgpPlanError, CompiledRelationStatement, ExecutedResultValue,
@@ -36,7 +36,7 @@ use terminusdb_woql2::proof::{
 use terminusdb_woql2::triple::Link;
 use terminusdb_woql2::{
     misc::{Count, InRange, RangeMax, RangeMin},
-    order::GroupBy,
+    order::{GroupBy, Order, OrderBy, OrderTemplate},
     query::{Not, Or, Query},
     value::DataValue,
 };
@@ -54,6 +54,103 @@ fn build_grouped_score_layer() -> Arc<LayerCommitment> {
             .unwrap();
     }
     builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn exact_scalar_order_query(minimum: usize) -> Query {
+    Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate {
+            variable: "score".into(),
+            order: Order::Asc,
+        }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("metric", "score", "score"),
+            gte(dvar("score"), duint(minimum)),
+        ])),
+    })
+}
+
+#[test]
+fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for score in [30u32, 10, 20] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("metric"),
+                &iri("score"),
+                u32::make_entry(&score),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = Query::Using(Using {
+        collection: "admin/db/local/branch/main".into(),
+        query: Box::new(exact_scalar_order_query(0)),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let scores = values[0]
+        .iter()
+        .map(|value| match value {
+            CanonicalResultValue::Object(CanonicalObject::Value {
+                datatype: CanonicalDatatype::UInt32,
+                lexical,
+            }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+            other => panic!("unexpected ordered value {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(scores, [10, 20, 30]);
+
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+
+    let mut wrong_type = compiled.clone();
+    match &mut wrong_type.relation.statement {
+        CompiledRelationStatement::ExactScalarOrder { datatype, .. } => {
+            *datatype = CanonicalDatatype::Int32;
+        }
+        other => panic!("unexpected statement {other:?}"),
+    }
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &wrong_type,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let different_range = plan_bgp(&Query::Using(Using {
+        collection: "admin/db/local/branch/main".into(),
+        query: Box::new(exact_scalar_order_query(11)),
+    }))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &different_range,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut reordered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    reordered.result_columns[0].swap(0, 2);
+    reordered.result_commitments[0] = commit_column(&pad(
+        &reordered.result_columns[0],
+        1usize << reordered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &reordered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
 }
 
 #[test]

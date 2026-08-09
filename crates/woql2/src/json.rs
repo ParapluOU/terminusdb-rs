@@ -71,6 +71,7 @@ pub fn normalize_woql_json(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    use crate::order::Order;
     use crate::prelude::{NodeValue, Query, Triple, True, When};
     use crate::value::Value as WoqlValue;
     use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance};
@@ -91,6 +92,30 @@ mod tests {
 
         let decoded = Query::from_json(json).expect("domain decoder accepts Prolog When JSON");
         assert!(matches!(decoded, Query::If(_)));
+    }
+
+    #[test]
+    fn order_by_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
+        // This is the shape accepted by json_woql.pl: OrderBy(ordering, query), with
+        // OrderTemplate(variable, "asc"|"desc"). Query proofs consume the decoded
+        // domain AST below; JSON-LD is never the proof statement.
+        let decoded = Query::from_json(serde_json::json!({
+            "@type": "OrderBy",
+            "ordering": [{
+                "@type": "OrderTemplate",
+                "variable": "score",
+                "order": "asc"
+            }],
+            "query": { "@type": "True" }
+        }))
+        .expect("domain decoder accepts Prolog OrderBy JSON");
+        let Query::OrderBy(order_by) = decoded else {
+            panic!("expected decoded OrderBy domain AST");
+        };
+        assert_eq!(order_by.ordering.len(), 1);
+        assert_eq!(order_by.ordering[0].variable, "score");
+        assert_eq!(order_by.ordering[0].order, Order::Asc);
+        assert!(matches!(*order_by.query, Query::True(_)));
     }
 
     #[test]

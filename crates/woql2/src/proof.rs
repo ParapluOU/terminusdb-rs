@@ -51,6 +51,7 @@ use terminus_store::proof::equality::{
 use terminus_store::proof::group::{
     verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
 };
+use terminus_store::proof::order::{verify_exact_scalar_order, ExactScalarOrderProof};
 use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
@@ -122,6 +123,10 @@ pub enum CompiledRelationStatement {
     Equality {
         input: Box<CompiledRelation>,
         constraint: RelationEqualityPlan,
+    },
+    ExactScalarOrder {
+        input: Box<CompiledRelation>,
+        datatype: CanonicalDatatype,
     },
     GroupExtrema {
         input: Box<CompiledRelation>,
@@ -195,6 +200,15 @@ impl CompiledRelation {
             _ => None,
         }
     }
+
+    pub fn as_exact_scalar_order(&self) -> Option<(&CompiledRelation, CanonicalDatatype)> {
+        match &self.statement {
+            CompiledRelationStatement::ExactScalarOrder { input, datatype } => {
+                Some((input, *datatype))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl CompiledBgp {
@@ -255,6 +269,10 @@ pub enum ProvedQueryStatement {
     Equality {
         input: Box<ProvedBgp>,
         proof: Box<RelationEqualityProof>,
+    },
+    ExactScalarOrder {
+        input: Box<ProvedBgp>,
+        proof: Box<ExactScalarOrderProof>,
     },
     GroupExtrema {
         input: Box<ProvedBgp>,
@@ -370,6 +388,11 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(b"/equality");
             hasher.update(relation_query_digest(input)?);
             digest_equality_plan(&mut hasher, constraint);
+        }
+        CompiledRelationStatement::ExactScalarOrder { input, datatype } => {
+            hasher.update(b"/exact-scalar-order");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update([*datatype as u8]);
         }
         CompiledRelationStatement::GroupExtrema {
             input,
@@ -509,6 +532,9 @@ fn relation_result_descriptors(
             Ok(descriptors)
         }
         CompiledRelationStatement::Equality { input, .. } => relation_result_descriptors(input),
+        CompiledRelationStatement::ExactScalarOrder { input, .. } => {
+            relation_result_descriptors(input)
+        }
         CompiledRelationStatement::GroupExtrema {
             input, key_column, ..
         } => {
@@ -559,6 +585,12 @@ fn relation_proof_plan(
             RelationProofPlanKind::Equality {
                 input: Box::new(child(input)?),
                 constraint: constraint.clone(),
+            }
+        }
+        CompiledRelationStatement::ExactScalarOrder { input, datatype } => {
+            RelationProofPlanKind::ExactScalarOrder {
+                input: Box::new(child(input)?),
+                datatype: *datatype,
             }
         }
         CompiledRelationStatement::LeftOuter {
@@ -867,6 +899,33 @@ impl ProvedBgp {
                     *kind,
                     &rows,
                     layer,
+                    proof,
+                    &mut transcript,
+                )?;
+            }
+            (
+                ProvedQueryStatement::ExactScalarOrder { input, proof },
+                CompiledRelationStatement::ExactScalarOrder {
+                    input: input_plan,
+                    datatype,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let mut transcript = Transcript254::new(b"parture-order-envelope");
+                transcript.append_bytes(b"pow/order-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/order-envelope/query", &query_digest);
+                verify_exact_scalar_order(
+                    layer,
+                    &input.relation_commit(None)?,
+                    *datatype,
+                    &self.result_commitments,
+                    self.result_len,
+                    self.result_log_domain,
                     proof,
                     &mut transcript,
                 )?;
@@ -1297,6 +1356,20 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::ExactScalarOrder { input, proof },
+                CompiledRelationStatement::ExactScalarOrder {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::ExactScalarOrder {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+                proof: proof.clone(),
+            },
+            (
                 ProvedQueryStatement::LeftAnti { left, right, proof },
                 CompiledRelationStatement::LeftAnti {
                     left: left_plan,
@@ -1495,6 +1568,12 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             input: Box::new(proved_from_recursive(*input)),
             proof,
         },
+        RecursiveRelationProof::ExactScalarOrder { input, proof } => {
+            ProvedQueryStatement::ExactScalarOrder {
+                input: Box::new(proved_from_recursive(*input)),
+                proof,
+            }
+        }
         RecursiveRelationProof::GroupExtrema { input, proof } => {
             ProvedQueryStatement::GroupExtrema {
                 input: Box::new(proved_from_recursive(*input)),
@@ -1794,6 +1873,15 @@ pub enum BgpPlanError {
     #[error("GroupBy extrema template must be a nonnullable variable with an exact fixed-width order-preserving datatype")]
     GroupExtremaUnsupportedValue,
 
+    #[error("OrderBy proof coverage requires one ascending key naming the complete one-column result of a leaf BGP")]
+    OrderByUnsupportedShape,
+
+    #[error("OrderBy proof coverage currently supports ascending order only")]
+    OrderByUnsupportedDirection,
+
+    #[error("OrderBy key must have an exact fixed-width order-preserving numeric datatype")]
+    OrderByUnsupportedValue,
+
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
@@ -1984,6 +2072,70 @@ fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlan
     }))
 }
 
+fn plan_exact_scalar_order(
+    order_by: &crate::order::OrderBy,
+) -> Result<CompiledBgp, BgpPlanError> {
+    let [ordering] = order_by.ordering.as_slice() else {
+        return Err(BgpPlanError::OrderByUnsupportedShape);
+    };
+    if ordering.order != crate::order::Order::Asc {
+        return Err(BgpPlanError::OrderByUnsupportedDirection);
+    }
+    let child = plan_bgp(&order_by.query)?;
+    if child.projection.is_some()
+        || child.count_variable.is_some()
+        || child.full_row_distinct
+        || child.relation.schema.len() != 1
+        || child.relation.schema[0] != ordering.variable
+        || child.relation.as_bgp().is_none()
+    {
+        return Err(BgpPlanError::OrderByUnsupportedShape);
+    }
+    let descriptor = relation_result_descriptors(&child.relation)
+        .map_err(|_| BgpPlanError::OrderByUnsupportedShape)?;
+    if descriptor.as_slice()
+        != [ResultColumnDescriptor {
+            namespace: ResultIdNamespace::NodeValue,
+            nullable: false,
+        }]
+    {
+        return Err(BgpPlanError::OrderByUnsupportedValue);
+    }
+    let datatype = match child.relation.domains[0] {
+        Some(EqualityValueDomain::Datatype(datatype))
+            if matches!(
+                datatype,
+                CanonicalDatatype::Boolean
+                    | CanonicalDatatype::UInt8
+                    | CanonicalDatatype::Int8
+                    | CanonicalDatatype::UInt16
+                    | CanonicalDatatype::Int16
+                    | CanonicalDatatype::UInt32
+                    | CanonicalDatatype::Int32
+                    | CanonicalDatatype::Float32
+                    | CanonicalDatatype::UInt64
+                    | CanonicalDatatype::Int64
+                    | CanonicalDatatype::Float64
+            ) => datatype,
+        _ => return Err(BgpPlanError::OrderByUnsupportedValue),
+    };
+    let collection = child.collection;
+    Ok(CompiledBgp {
+        relation: CompiledRelation {
+            schema: child.relation.schema.clone(),
+            domains: child.relation.domains.clone(),
+            statement: CompiledRelationStatement::ExactScalarOrder {
+                input: Box::new(child.relation),
+                datatype,
+            },
+        },
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -2033,6 +2185,20 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             }
             _ => break,
         };
+    }
+
+    if let Query::OrderBy(order_by) = body {
+        if !selections.is_empty() || count_variable.is_some() || !distincts.is_empty() {
+            return Err(BgpPlanError::OrderByUnsupportedShape);
+        }
+        let mut compiled = plan_exact_scalar_order(order_by)?;
+        // Prolog's nested routing scope is innermost-wins. Preserve an inner collection
+        // already found while compiling the ordered child; otherwise retain this outer one.
+        if compiled.collection.is_none() {
+            compiled.collection = collection;
+        }
+        validate_compiled_structure(&compiled.relation)?;
+        return Ok(compiled);
     }
 
     if let Query::Or(disjunction) = body {
@@ -2630,7 +2796,10 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 visit(left, depth + 1, nodes)?;
                 visit(right, depth + 1, nodes)
             }
-            CompiledRelationStatement::Equality { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::Equality { input, .. }
+            | CompiledRelationStatement::ExactScalarOrder { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
             CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),
         }
     }
