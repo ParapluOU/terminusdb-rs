@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `0f7f52d` | Recursive v13 GroupSum supports zero or one key: global nonempty input emits one generated decimal and empty input emits no row, without a synthetic key. |
-| `modules/terminusdb-rs` | this checkpoint | Immediate zero-/one-node-key `GroupBy`→`Sum`, canonical decoder, generated-scalar executor/envelope integration, checked arithmetic boundary, and fail-closed list/coercion rules. |
+| `modules/terminusdb-store-paraplu` | `7428496` | Recursive v14 GroupSum supports exact UInt64 values with verifier-derived actual-value checked accumulation through `u64::MAX`. |
+| `modules/terminusdb-rs` | this checkpoint | Immediate zero-/one-node-key `GroupBy`→`Sum` through UInt64, canonical decoder, generated-scalar executor/envelope integration, actual-overflow rejection, and fail-closed list/coercion rules. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -365,6 +365,22 @@ round-trips an empty `group_by` array. The nonempty global E2E proved generated 
 executor matching, envelope round-trip, keyed/global substitution rejection, and tamper in
 89.07s; the empty global outer-Count gate proved zero rows/groups in 35.45s.
 
+Store checkpoint `7428496` extends recursive `GroupSum` to v14 and exact UInt64
+templates. This is sound without the earlier pessimistic row-count × datatype-maximum
+bound: every public child value ID is resolved against the validated root-bound catalog,
+the verifier requires the exact datatype and canonical eight-byte lexical value, and both
+keyed and global derivation use checked addition over those actual authenticated values.
+Totals through `u64::MAX` are below the BN254 scalar modulus and therefore have no field
+wrap ambiguity; only actual overflow rejects. The 14.84s focused Store gate covered a
+partitioned exact maximum, near-maximum, generated-result tamper, datatype substitution,
+and overflow rejection in both recursive proving and the verifier derivation path.
+
+woql2 now maps the canonical decoder's existing `xsd:unsignedLong` form to UInt64 for
+immediate grouped sums. The proof verifier independently resolves the same root-bound
+public values and checked-adds them. Planner/check gates passed, and the 83.90s E2E gate
+proved a partitioned `u64::MAX`, matched the generated executor value, round-tripped the
+portable envelope, and rejected authenticated `u64::MAX + 1` input during proving.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -408,11 +424,14 @@ executor matching, envelope round-trip, keyed/global substitution rejection, and
 - [x] Authenticate bounded Eq/Gt/Gte/Lt/Lte filters over the generated TripleCount
   decimal against exact integral decimal constants, including operand order and
   zero/maximum boundaries, without conflating generated scalars with Store IDs.
-- [x] Authenticate immediate one-node-key `GroupBy`→`Sum` for UInt8/UInt16/UInt32,
+- [x] Authenticate immediate one-node-key `GroupBy`→`Sum` for UInt8/UInt16/UInt32/UInt64,
   preserving duplicate multiplicity, canonical SWI-compatible node group order, checked
   no-wrap arithmetic, and generated-decimal result typing without exposing the list.
 - [x] Extend immediate `GroupBy`→`Sum` to the zero-key/global form: one sum row iff the
   authenticated child is nonempty, no row when empty, and no synthetic key/list leakage.
+- [x] Replace the pessimistic grouped-sum datatype-maximum bound with exact authenticated
+  value accumulation, accepting UInt64 totals through `u64::MAX` and rejecting actual
+  overflow without field-modulus ambiguity.
 - [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
   selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
 - [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage

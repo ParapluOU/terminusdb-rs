@@ -271,6 +271,10 @@ fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
             DataValue::Data(XSDAnySimpleType::UnsignedShort(0)),
             CanonicalDatatype::UInt16,
         ),
+        (
+            DataValue::Data(XSDAnySimpleType::UnsignedLong(0)),
+            CanonicalDatatype::UInt64,
+        ),
     ] {
         let compiled = plan_bgp(&grouped_sum_with_bound(bound)).unwrap();
         assert!(matches!(

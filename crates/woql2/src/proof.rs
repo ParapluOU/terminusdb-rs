@@ -1025,9 +1025,13 @@ fn bounded_group_sum_value(
         CanonicalDatatype::UInt32 if lexical.len() == 4 => {
             u64::from(u32::from_be_bytes(lexical.as_slice().try_into().unwrap()))
         }
+        CanonicalDatatype::UInt64 if lexical.len() == 8 => {
+            u64::from_be_bytes(lexical.as_slice().try_into().unwrap())
+        }
         CanonicalDatatype::UInt8
         | CanonicalDatatype::UInt16
-        | CanonicalDatatype::UInt32 => {
+        | CanonicalDatatype::UInt32
+        | CanonicalDatatype::UInt64 => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "group-sum input has a noncanonical lexical width",
@@ -1051,26 +1055,6 @@ fn expected_group_sum_columns(
     layer: &impl VerifierLayer,
     expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
-    let max_value = match datatype {
-        CanonicalDatatype::UInt8 => u64::from(u8::MAX),
-        CanonicalDatatype::UInt16 => u64::from(u16::MAX),
-        CanonicalDatatype::UInt32 => u64::from(u32::MAX),
-        _ => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "group-sum datatype is outside the bounded unsigned subset",
-            ))
-        }
-    };
-    let row_count = u64::try_from(input.result_len).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum row count exceeds u64")
-    })?;
-    max_value.checked_mul(row_count).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "group-sum setup bound cannot establish a u64 total",
-        )
-    })?;
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
         layer,
@@ -2836,7 +2820,7 @@ pub enum BgpPlanError {
     #[error("GroupBy followed by Sum requires zero keys or one node key, one private grouped-list variable, and one distinct result variable")]
     GroupSumUnsupportedShape,
 
-    #[error("GroupBy Sum template must be an exact UInt8, UInt16, or UInt32 variable")]
+    #[error("GroupBy Sum template must be an exact UInt8, UInt16, UInt32, or UInt64 variable")]
     GroupSumUnsupportedValue,
 
     #[error("OrderBy proof coverage requires one ascending key naming the complete one-column result of a leaf BGP")]
@@ -3171,7 +3155,8 @@ fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanErro
         Some(EqualityValueDomain::Datatype(
             datatype @ (CanonicalDatatype::UInt8
             | CanonicalDatatype::UInt16
-            | CanonicalDatatype::UInt32),
+            | CanonicalDatatype::UInt32
+            | CanonicalDatatype::UInt64),
         )) => datatype,
         _ => return Err(BgpPlanError::GroupSumUnsupportedValue),
     };

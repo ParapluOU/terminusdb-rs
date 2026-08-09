@@ -993,6 +993,28 @@ fn global_u32_sum_query() -> Query {
     Query::And(query)
 }
 
+fn global_u64_sum_query() -> Query {
+    let child = and_of(vec![
+        tv_pred_var("category", "predicate", "score"),
+        gte(
+            dvar("score"),
+            DataValue::Data(XSDAnySimpleType::UnsignedLong(0)),
+        ),
+    ]);
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("score".into()),
+            group_by: Vec::new(),
+            grouped_value: Value::Variable("scores".into()),
+            query: Box::new(child),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ])
+}
+
 fn assert_global_u32_sum_proves_one_generated_decimal_row() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();
@@ -1056,6 +1078,69 @@ fn global_u32_sum_proves_one_generated_decimal_row() {
         .name("woql-global-sum-proof".into())
         .stack_size(32 * 1024 * 1024)
         .spawn(assert_global_u32_sum_proves_one_generated_decimal_row)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_global_u64_sum_accepts_exact_max_and_rejects_actual_overflow() {
+    let layer_with = |values: &[(&str, u64)]| {
+        let store = open_sync_memory_store();
+        let builder = store.create_base_layer().unwrap();
+        for (predicate, value) in values {
+            builder
+                .add_value_triple(ValueTriple::new_value(
+                    &iri("a"),
+                    &iri(predicate),
+                    u64::make_entry(value),
+                ))
+                .unwrap();
+        }
+        builder.commit().unwrap().proof_commitment().unwrap()
+    };
+    let compiled = plan_bgp(&global_u64_sum_query()).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::GroupSum {
+            key_column: None,
+            datatype: CanonicalDatatype::UInt64,
+            ..
+        }
+    ));
+
+    let exact = layer_with(&[("p", u64::MAX - 5), ("q", 5)]);
+    let proved = compiled.prove(&exact).unwrap();
+    assert_eq!(
+        proved
+            .verify_and_resolve_values(&compiled, &exact, exact.state.commitment_root)
+            .unwrap(),
+        vec![vec![CanonicalResultValue::GeneratedDecimalU64(u64::MAX)]]
+    );
+    proved
+        .verify_executed_values(
+            &compiled,
+            &exact,
+            exact.state.commitment_root,
+            &["total".into()],
+            &[vec![ExecutedResultValue::GeneratedDecimalU64(u64::MAX)]],
+        )
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &exact, exact.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &exact, exact.state.commitment_root)
+        .unwrap();
+
+    let overflow = layer_with(&[("p", u64::MAX), ("q", 1)]);
+    assert!(compiled.prove(&overflow).is_err());
+}
+
+#[test]
+fn global_u64_sum_accepts_exact_max_and_rejects_actual_overflow() {
+    std::thread::Builder::new()
+        .name("woql-global-u64-sum-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_global_u64_sum_accepts_exact_max_and_rejects_actual_overflow)
         .unwrap()
         .join()
         .unwrap();
