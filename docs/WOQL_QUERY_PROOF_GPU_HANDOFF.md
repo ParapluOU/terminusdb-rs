@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `2ed11ca` | Exact two-/three-key complete-row ordering, recursive wire/tamper coverage, and ordered-slice composition. |
-| `modules/terminusdb-rs` | `76c056f` plus this documentation commit | Bounded multikey WOQL planning, recursive verification, digest binding, rejection coverage, and nested pagination E2E. |
+| `modules/terminusdb-store-paraplu` | `77ff651` | Exact two-/three-key complete-row ordering with transcript-bound arbitrary priority permutations, recursive wire/tamper coverage, and ordered-slice composition. |
+| `modules/terminusdb-rs` | `03c1637` plus this documentation commit | Canonical WOQL planning for arbitrary complete-key priority permutations, recursive verification, digest binding, canonical decoder coverage, and nested pagination E2E. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -84,6 +84,15 @@ cargo test -p terminusdb-woql2 --features proof --test proof_plan
 cargo test -p terminusdb-woql2 --features proof --test proof_prove
 ```
 
+Before the broad Mac suites, the exact new semantic gates can be run with:
+
+```sh
+cargo test -p terminusdb-woql2 --features proof --test proof_plan \
+  exact_complete_row_multikey_order_compiles_and_rejects_key_mappings -- --exact
+cargo test -p terminusdb-woql2 --features proof --test proof_prove \
+  multikey_order_nested_limit_e2e -- --exact
+```
+
 For a meaningful portability check, retain a Linux-generated envelope and
 compact verifier artifact as fixtures in a future checkpoint, then verify them
 on macOS and compare their bytes with a Mac CPU-generated proof for the same
@@ -136,24 +145,16 @@ the prepared cloud server.
 
 ## Active WOQL coverage checklist
 
-Store checkpoint `76a468f` adds the exact prerequisite for bounded multikey order:
-an injective radix-`2^64` packing and strict-sort proof for two or three authenticated
-64-bit key columns with independent Asc/Desc directions. The packed commitment is
-derived linearly from the key commitments and real-row selector; padding is zero and
-direction tampering rejects. Remaining composition must authenticate each output ID's
-dictionary value/datatype, apply a full-row permutation, then feed those commitments to
-this gadget. Do not expose it directly from the WOQL planner before that composition.
-
-GPU implementation is parked until WOQL completeness is substantially higher. The
-current semantic checkpoint adds an exact scalar ascending `OrderBy` slice on top of the
-existing recursively composable read relation. The Store proof covers full-row
-permutation (including duplicate preservation), root-authenticated dictionary lookup,
-datatype completeness, strict ordering, recursive wire round-trip, and plan tamper
-rejection. The woql2 planner accepts only the complete one-column, nonnullable,
-exact-datatype leaf-BGP form. Its tests cover canonical domain decoding, outer routing,
-resolved ordered results, envelope round-trip, datatype/query/row-order substitution,
-and fail-closed descending, multikey, partial-key, nullable, unknown-domain, and
-duplicate-generating recursive children.
+The current semantic checkpoint completes authenticated priority mappings for bounded
+two-/three-key complete-row order. Store accepts only an exact permutation of every
+canonical schema column, binds that mapping and its parallel directions into the
+transcript, and reorders only the strict-sort inputs; the full-row proof and public
+outputs remain canonical schema order. `woql2` derives this mapping from the decoded
+Prolog-led `OrderTemplate` sequence, binds it into the query digest and recursive plan,
+and rejects partial, duplicate, missing, and substituted mappings. Focused Linux CPU
+gates passed for reversed two-key order (36.62s), a `[2,0,1]` three-key permutation
+(40.05s), recursive Store wire/tamper verification (144.04s), and nested WOQL
+`Limit(OrderBy(y DESC, x ASC))` proof/envelope verification (321.14s).
 
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
@@ -161,6 +162,7 @@ duplicate-generating recursive children.
 - [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
 - [x] `Once` over an authenticated ordered child, digest-distinct from `Limit(1)`.
 - [x] Two-/three-key complete-row lexicographic order with full-row permutation and root-catalog type/value authentication.
+- [x] Arbitrary complete-key priority permutations, with canonical output schema and Store/WOQL digest binding.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
