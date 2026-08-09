@@ -653,6 +653,25 @@ fn sequential_operators_allow_sound_keys_and_reject_nullable_correlation() {
     ]);
     reject(nullable_key, BgpPlanError::OptionalUnsupportedSubplan);
 
+    // A nullable key on the independently proved right side is Prolog-unbound
+    // and could become bound by the left row; the proof composition is strict
+    // equality, so this must fail closed rather than model different semantics.
+    let nullable_right_key = and_of(vec![
+        tv("x", "p", "z"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(and_of(vec![
+                tv("a", "q", "b"),
+                Query::WoqlOptional(WoqlOptional {
+                    query: Box::new(tv("b", "r", "z")),
+                }),
+            ])),
+        }),
+    ]);
+    reject(
+        nullable_right_key,
+        BgpPlanError::OptionalUnsupportedSubplan,
+    );
+
     let sequential_not = and_of(vec![
         tv("x", "p", "y"),
         Query::Not(Not {

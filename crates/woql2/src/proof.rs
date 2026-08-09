@@ -2859,7 +2859,7 @@ fn shared_key_pairs(
         // Independent authenticated child relations model equality correlation. A
         // nullable outer binding is Prolog-unbound and would instead become bindable,
         // so this composition is deliberately rejected closed.
-        if left_descriptors[*left_index].nullable {
+        if left_descriptors[*left_index].nullable || right_descriptors[*right_index].nullable {
             return Err(if optional {
                 BgpPlanError::OptionalUnsupportedSubplan
             } else {
