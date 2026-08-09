@@ -544,6 +544,113 @@ fn ground_atoms_authentically_gate_variable_results() {
 }
 
 #[test]
+fn disconnected_components_prove_complete_cartesian_results() {
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("e", "q", "f"),
+        ("g", "q", "h"),
+        ("i", "r", "j"),
+        ("z", "q", "marker"),
+    ]);
+    let id = |name: &str| {
+        lc.node_value_catalog
+            .iter()
+            .find(|record| record.triple.object == CanonicalObject::Node(iri(name).into_bytes()))
+            .unwrap()
+            .object_id
+    };
+
+    let product = and_of(vec![tv("x", "p", "y"), tv("a", "q", "b")]);
+    let expected = vec![
+        vec![id("a"), id("b"), id("e"), id("f")],
+        vec![id("a"), id("b"), id("g"), id("h")],
+        vec![id("a"), id("b"), id("z"), id("marker")],
+        vec![id("c"), id("d"), id("e"), id("f")],
+        vec![id("c"), id("d"), id("g"), id("h")],
+        vec![id("c"), id("d"), id("z"), id("marker")],
+    ];
+    let present = and_of(vec![product.clone(), tv_ground("a", "p", "b")]);
+    let compiled = plan_bgp(&present).unwrap();
+    assert!(compiled.plan.joins[0].is_cross_product());
+    let proved = compiled.prove(&lc).unwrap();
+    let variables = ["x".into(), "y".into(), "a".into(), "b".into()];
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &variables,
+            &expected,
+        )
+        .unwrap();
+    let mut dropped = expected.clone();
+    dropped.pop();
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &variables,
+            &dropped,
+        )
+        .is_err());
+    let mut duplicated = expected.clone();
+    duplicated.push(expected[0].clone());
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &variables,
+            &duplicated,
+        )
+        .is_err());
+
+    let envelope = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    let reordered = and_of(vec![tv("a", "q", "b"), tv("x", "p", "y")]);
+    let reordered = plan_bgp(&reordered).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reordered,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+
+    // A false authenticated ground gate suppresses the complete product without
+    // changing its schema, while an empty relational component does the same through
+    // the Cartesian join's pinned zero multiplicity.
+    let absent = and_of(vec![product, tv_ground("a", "q", "b")]);
+    let compiled = plan_bgp(&absent).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &variables,
+            &[],
+        )
+        .unwrap();
+
+    let empty_component = and_of(vec![tv("x", "p", "y"), tv_subj_const("i", "p", "w")]);
+    let compiled = plan_bgp(&empty_component).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["x".into(), "y".into(), "w".into()],
+            &[],
+        )
+        .unwrap();
+}
+
+#[test]
 fn path_three_atoms_proves_true_join() {
     // knows/likes/owns chain; BGP t(?x,knows,?y), t(?y,likes,?z), t(?z,owns,?w).
     // Paths (x,y,z,w): (a,b,g,k), (c,b,g,k), (e,f,h,m).

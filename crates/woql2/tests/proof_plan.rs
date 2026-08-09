@@ -666,10 +666,29 @@ fn accepts_triangle_cycle() {
 }
 
 #[test]
-fn rejects_disconnected() {
+fn accepts_disconnected_components_in_stable_schema_order() {
     // t(?x,p,?y), t(?a,q,?b) — two components, no shared variable.
     let q = and_of(vec![tv("x", "p", "y"), tv("a", "q", "b")]);
-    reject(q, BgpPlanError::DisconnectedBgp);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "y", "a", "b"]);
+    assert_eq!(c.plan.joins.len(), 1);
+    assert!(c.plan.joins[0].is_cross_product());
+
+    // A same-named variable makes the atoms connected, even if a caller intended two
+    // logical components; variable identity, not atom position, defines connectivity.
+    let collision = and_of(vec![tv("x", "p", "y"), tv("a", "q", "x")]);
+    let c = plan_bgp(&collision).unwrap();
+    assert_eq!(c.schema, vec!["y", "x", "a"]);
+    assert!(!c.plan.joins[0].is_cross_product());
+
+    let three = and_of(vec![
+        tv("x", "p", "y"),
+        tv("a", "q", "b"),
+        tv("m", "r", "n"),
+    ]);
+    let c = plan_bgp(&three).unwrap();
+    assert_eq!(c.schema, vec!["x", "y", "a", "b", "m", "n"]);
+    assert!(c.plan.joins.iter().all(|step| step.is_cross_product()));
 }
 
 #[test]

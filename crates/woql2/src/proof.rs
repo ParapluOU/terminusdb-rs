@@ -13,13 +13,13 @@
 //!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`]:
 //!   all scalar `XSDAnySimpleType` variants, routed through the Store's
 //!   typed-value construction). Each atom keeps one output column per variable (S,O order);
-//!   the atoms join into a left-deep chain where every step shares one or more variables
-//!   with the evolving accumulator schema. Two-variable graph keys use the Store's
-//!   injective two-u64 packing and remain bound to the original columns.
+//!   the atoms join into a left-deep chain. Shared variables use ordinary natural joins;
+//!   disconnected components use the Store's verifier-known UNIT-key Cartesian product.
+//!   Two-variable graph keys use the Store's injective two-u64 packing and remain bound
+//!   to the original columns.
 //!
-//! A disconnected step remains out of scope. A single fully-ground atom is an
-//! authenticated zero-arity existence relation; composing it with other atoms remains
-//! out of scope. Every emitted constant is one the store
+//! Fully-ground atoms are authenticated zero-arity existence relations and gate the
+//! relational result. Every emitted constant is one the store
 //! can authenticate against its committed node/value dictionary, canonicalized IDENTICALLY
 //! to how the store stored it (node IRIs by their IRI bytes; `xsd:string` literals by
 //! routing through the store's own value construction).
@@ -550,8 +550,8 @@ pub enum BgpPlanError {
     #[error("schema-graph triples unsupported: only the instance graph is queried")]
     SchemaGraphUnsupported,
 
-    /// A remaining atom shares no variable with the accumulator: the BGP is not
-    /// connected, so it is not a single natural-join tree.
+    /// Reserved for malformed externally-built plans. The compiler now composes
+    /// disconnected components through authenticated Cartesian products.
     #[error("disconnected BGP")]
     DisconnectedBgp,
 
@@ -1306,7 +1306,9 @@ fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError>
 /// list of distinct variable names and emits atoms (in placement order) + `k-1` join
 /// steps. Each step joins the accumulator with an unplaced atom on the SINGLE shared
 /// variable; the accumulator schema evolves as `[r_other.., key, s_other..]`, matching
-/// `terminus_store`'s `bgp` output ordering exactly.
+/// `terminus_store`'s `bgp` output ordering exactly. If no remaining atom shares a
+/// variable, the next input-order component starts with a verifier-known UNIT-key
+/// Cartesian step whose output ordering is `[acc.., relation..]`.
 ///
 /// Each atom relation carries ONE column per VARIABLE, in S,O order (`atom.kept`): two
 /// for an all-variable atom, one for a subject/object-constant atom (a constant removes
@@ -1350,12 +1352,13 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
             }
         }
 
-        let i = match chosen {
-            Some(i) => i,
-            None => {
-                return Err(BgpPlanError::DisconnectedBgp);
-            }
-        };
+        let i = chosen.unwrap_or_else(|| {
+            placed
+                .iter()
+                .take(relational_count)
+                .position(|is_placed| !is_placed)
+                .expect("an unplaced relational atom must remain")
+        });
 
         // Join on every shared variable. The first pair remains the scalar-key fields;
         // further pairs activate the Store chain's authenticated composite-key mode.
@@ -1371,6 +1374,14 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
                     .map(|acc| (acc, rel))
             })
             .collect();
+        if shared.is_empty() {
+            joins.push(JoinStep::cross_product());
+            acc_vars.extend(atom.kept.iter().cloned());
+            ordered_atoms.push(atom.layer_atom.clone());
+            placed[i] = true;
+            placed_count += 1;
+            continue;
+        }
         let (acc_key, rel_key) = shared[0];
         let v = atom.kept[rel_key].clone();
         let additional_keys = shared[1..].to_vec();

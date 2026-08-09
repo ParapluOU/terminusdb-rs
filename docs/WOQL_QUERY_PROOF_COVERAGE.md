@@ -19,6 +19,7 @@ authenticated.
 | `Count` | Implemented | The authenticated complete result length is the count. The ordinary executor must deliver exactly the declared count variable and one nonnegative `u64` value. |
 | Fully-ground `Triple`/`Link`/`Data` and all-ground `And` | Implemented in woql2; this TerminusDB fork's JSON parser exposes only `Triple` | Each Store UNIT filter authenticates a zero-arity existence bit; an all-ground conjunction returns their verified boolean AND, preserving duplicate-atom idempotence. If a standalone term is dictionary-absent, the verifier recommits the root-bound clear catalog and authenticates the empty relation. |
 | Ground atoms mixed with variable-bearing atoms | Implemented | Variable-bearing atoms form the authenticated relational prefix; verified ground UNIT bits gate its complete result. A false gate forces the same output arity to canonical zero commitments at the verifier-derived result domain and forces result length zero. Dictionary-absent mixed atoms still fail closed. |
+| Disconnected BGP/cartesian product | Implemented | Each disconnected step joins verifier-derived UNIT columns through the complete binary-join argument, proving every source-index pair exactly once. UNIT relocations bind both sides, the synthetic output key is checked and removed, and schema order remains accumulator variables followed by the new component. |
 | Constant-object `Link` and `Data` | Implemented in woql2 | The constant's canonical node/literal representation intrinsically authenticates the declared object kind. Variable-object forms reject until object-kind selection is proven; the current TerminusDB JSON parser does not expose either variant. |
 
 Write/routing constructs (`Into`, `Add*`, `Delete*`, document mutations) are not
@@ -43,7 +44,6 @@ composition is implemented.
 | `If` | existence plus union/anti-join | Correlated branch selection with authenticated test success/failure. |
 | `GroupBy`, `Collect`, `Sum` | sumcheck, count, sort, membership and commitments | Authenticate grouping partition/permutation, per-group aggregation, and output dictionary/list values. |
 | `RangeMin`, `RangeMax` | range selection and strict sort | Authenticate extrema and the empty-input case. |
-| Disconnected BGP/cartesian product | binary join and count identities | A complete cartesian-product gadget with multiplicity and output-column linkage. |
 | Additional scalar ranges | dictionary value lookup and range bit proofs | A store-aligned order-preserving encoding and comparison circuit for each datatype. |
 | Variable-object `Link`/`Data` | canonical dictionary values and result commitments | Authenticate the node-vs-literal object-kind filter. Normalizing either to an unconstrained `Triple` would prove the wrong complete relation. |
 
