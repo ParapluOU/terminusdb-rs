@@ -1673,6 +1673,25 @@ fn exact_scalar_order_retains_outer_routing_wrapper() {
     assert!(compiled.relation.as_exact_scalar_order().is_some());
 }
 
+#[test]
+fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
+    let child = and_of(vec![
+        tv_subj_const("left", "x", "x"), gte(dvar("x"), duint(0)),
+        tv_subj_const("right", "y", "y"), gte(dvar("y"), duint(0)),
+    ]);
+    let query = |ordering| Query::OrderBy(OrderBy { ordering, query: Box::new(child.clone()) });
+    let compiled = plan_bgp(&query(vec![
+        OrderTemplate { variable: "x".into(), order: Order::Asc },
+        OrderTemplate { variable: "y".into(), order: Order::Desc },
+    ])).unwrap();
+    assert!(matches!(compiled.relation.statement, terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { .. }));
+    for ordering in [
+        vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        vec![OrderTemplate { variable: "y".into(), order: Order::Desc }, OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        vec![OrderTemplate { variable: "x".into(), order: Order::Asc }, OrderTemplate { variable: "x".into(), order: Order::Desc }],
+    ] { assert_eq!(plan_bgp(&query(ordering)).unwrap_err(), BgpPlanError::OrderByUnsupportedShape); }
+}
+
 fn exact_order_query_for_slice() -> Query {
     Query::OrderBy(OrderBy {
         ordering: vec![OrderTemplate {

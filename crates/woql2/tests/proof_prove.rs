@@ -281,6 +281,37 @@ fn desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
         .unwrap();
 }
 
+fn assert_multikey_order_nested_limit_e2e() {
+    let store = open_sync_memory_store(); let builder = store.create_base_layer().unwrap();
+    for value in [1u32,2] { builder.add_value_triple(ValueTriple::new_value(&iri("left"), &iri("x"), u32::make_entry(&value))).unwrap(); }
+    for value in [3u32,4] { builder.add_value_triple(ValueTriple::new_value(&iri("right"), &iri("y"), u32::make_entry(&value))).unwrap(); }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let ordered = |second_order| Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }, OrderTemplate { variable: "y".into(), order: second_order }],
+        query: Box::new(and_of(vec![tv_subj_const("left","x","x"), gte(dvar("x"),duint(0)), tv_subj_const("right","y","y"), gte(dvar("y"),duint(0))])),
+    });
+    let query = Query::Limit(Limit { limit: 2, query: Box::new(ordered(Order::Desc)) });
+    let compiled = plan_bgp(&query).unwrap(); let proved = compiled.prove(&layer).unwrap();
+    let values = proved.verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root).unwrap();
+    let number = |value: &CanonicalResultValue| match value { CanonicalResultValue::Object(CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, lexical }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()), other => panic!("unexpected {other:?}") };
+    assert_eq!((number(&values[0][0]),number(&values[1][0])), (1,4));
+    assert_eq!((number(&values[0][1]),number(&values[1][1])), (1,3));
+    let envelope = proved.encode_envelope(&compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    let ascending = plan_bgp(&Query::Limit(Limit { limit: 2, query: Box::new(ordered(Order::Asc)) })).unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &ascending, &layer, layer.state.commitment_root).is_err());
+    let mut reordered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    for column in &mut reordered.result_columns { column.swap(0,1); }
+    for (commitment,column) in reordered.result_commitments.iter_mut().zip(&reordered.result_columns) { *commitment = commit_column(&pad(column, 1usize << reordered.result_log_domain)).unwrap(); }
+    assert!(decode_and_verify_envelope(&reordered.encode().unwrap(), &compiled, &layer, layer.state.commitment_root).is_err());
+}
+
+#[test]
+fn multikey_order_nested_limit_e2e() {
+    std::thread::Builder::new().name("woql-multikey-order".into()).stack_size(32*1024*1024)
+        .spawn(assert_multikey_order_nested_limit_e2e).unwrap().join().unwrap();
+}
+
 #[test]
 fn explicit_cpu_context_preserves_recursive_envelope_bytes() {
     let store = open_sync_memory_store();

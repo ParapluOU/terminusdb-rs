@@ -52,6 +52,7 @@ use terminus_store::proof::group::{
     verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
 };
 use terminus_store::proof::order::{verify_exact_scalar_order, ExactScalarOrderProof, OrderDirection};
+use terminus_store::proof::multiorder::{verify_exact_multi_order, ExactMultiOrderProof};
 use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
@@ -128,6 +129,11 @@ pub enum CompiledRelationStatement {
         input: Box<CompiledRelation>,
         datatype: CanonicalDatatype,
         direction: OrderDirection,
+    },
+    ExactMultiOrder {
+        input: Box<CompiledRelation>,
+        datatypes: Vec<CanonicalDatatype>,
+        directions: Vec<OrderDirection>,
     },
     ExactOrderedSlice {
         input: Box<CompiledRelation>,
@@ -292,6 +298,10 @@ pub enum ProvedQueryStatement {
         input: Box<ProvedBgp>,
         proof: Box<ExactScalarOrderProof>,
     },
+    ExactMultiOrder {
+        input: Box<ProvedBgp>,
+        proof: Box<ExactMultiOrderProof>,
+    },
     ExactOrderedSlice {
         input: Box<ProvedBgp>,
     },
@@ -415,6 +425,12 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(input)?);
             hasher.update([*datatype as u8]);
             hasher.update([match direction { OrderDirection::Ascending => 0, OrderDirection::Descending => 1 }]);
+        }
+        CompiledRelationStatement::ExactMultiOrder { input, datatypes, directions } => {
+            hasher.update(b"/exact-multi-order"); hasher.update(relation_query_digest(input)?);
+            for (datatype, direction) in datatypes.iter().zip(directions) {
+                hasher.update([*datatype as u8, match direction { OrderDirection::Ascending => 0, OrderDirection::Descending => 1 }]);
+            }
         }
         CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, once } => {
             hasher.update(if *once {
@@ -573,6 +589,7 @@ fn relation_result_descriptors(
         CompiledRelationStatement::ExactScalarOrder { input, .. } => {
             relation_result_descriptors(input)
         }
+        CompiledRelationStatement::ExactMultiOrder { input, .. } => relation_result_descriptors(input),
         CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
             relation_result_descriptors(input)
         }
@@ -634,6 +651,9 @@ fn relation_proof_plan(
                 datatype: *datatype,
                 direction: *direction,
             }
+        }
+        CompiledRelationStatement::ExactMultiOrder { input, datatypes, directions } => {
+            RelationProofPlanKind::ExactMultiOrder { input: Box::new(child(input)?), datatypes: datatypes.clone(), directions: directions.clone() }
         }
         CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {
             RelationProofPlanKind::ExactOrderedSlice {
@@ -980,6 +1000,16 @@ impl ProvedBgp {
                     proof,
                     &mut transcript,
                 )?;
+            }
+            (
+                ProvedQueryStatement::ExactMultiOrder { input, proof },
+                CompiledRelationStatement::ExactMultiOrder { input: input_plan, datatypes, directions },
+            ) => {
+                input.verify_relation(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?;
+                let mut transcript = Transcript254::new(b"parture-multi-order-envelope");
+                transcript.append_bytes(b"pow/multi-order-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/multi-order-envelope/query", &query_digest);
+                verify_exact_multi_order(layer, &input.relation_commit(None)?, &self.result_columns, datatypes, directions, &self.result_commitments, self.result_len, self.result_log_domain, proof, &mut transcript)?;
             }
             (
                 ProvedQueryStatement::ExactOrderedSlice { input },
@@ -1460,6 +1490,13 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::ExactMultiOrder { input, proof },
+                CompiledRelationStatement::ExactMultiOrder { input: input_plan, .. },
+            ) => RecursiveRelationProof::ExactMultiOrder {
+                input: Box::new(input.recursive_envelope_after_verification(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?),
+                proof: proof.clone(),
+            },
+            (
                 ProvedQueryStatement::ExactOrderedSlice { input },
                 CompiledRelationStatement::ExactOrderedSlice {
                     input: input_plan, ..
@@ -1677,6 +1714,9 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
                 proof,
             }
         }
+        RecursiveRelationProof::ExactMultiOrder { input, proof } => ProvedQueryStatement::ExactMultiOrder {
+            input: Box::new(proved_from_recursive(*input)), proof,
+        },
         RecursiveRelationProof::ExactOrderedSlice { input } => {
             ProvedQueryStatement::ExactOrderedSlice {
                 input: Box::new(proved_from_recursive(*input)),
@@ -2186,37 +2226,26 @@ fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlan
 fn plan_exact_scalar_order(
     order_by: &crate::order::OrderBy,
 ) -> Result<CompiledBgp, BgpPlanError> {
-    let [ordering] = order_by.ordering.as_slice() else {
+    if !(1..=3).contains(&order_by.ordering.len()) {
         return Err(BgpPlanError::OrderByUnsupportedShape);
-    };
-    let direction = match ordering.order {
-        crate::order::Order::Asc => OrderDirection::Ascending,
-        crate::order::Order::Desc => OrderDirection::Descending,
-    };
+    }
     let child = plan_bgp(&order_by.query)?;
     if child.projection.is_some()
         || child.count_variable.is_some()
         || child.full_row_distinct
-        || child.relation.schema.len() != 1
-        || child.relation.schema[0] != ordering.variable
+        || child.relation.schema.len() != order_by.ordering.len()
+        || child.relation.schema.iter().zip(&order_by.ordering).any(|(schema, ordering)| schema != &ordering.variable)
         || child.relation.as_bgp().is_none()
     {
         return Err(BgpPlanError::OrderByUnsupportedShape);
     }
     let descriptor = relation_result_descriptors(&child.relation)
         .map_err(|_| BgpPlanError::OrderByUnsupportedShape)?;
-    if descriptor.as_slice()
-        != [ResultColumnDescriptor {
-            namespace: ResultIdNamespace::NodeValue,
-            nullable: false,
-        }]
-    {
+    if descriptor.iter().any(|descriptor| descriptor.namespace != ResultIdNamespace::NodeValue || descriptor.nullable) {
         return Err(BgpPlanError::OrderByUnsupportedValue);
     }
-    let datatype = match child.relation.domains[0] {
-        Some(EqualityValueDomain::Datatype(datatype))
-            if matches!(
-                datatype,
+    let datatypes = child.relation.domains.iter().map(|domain| match domain {
+        Some(EqualityValueDomain::Datatype(datatype)) if matches!(datatype,
                 CanonicalDatatype::Boolean
                     | CanonicalDatatype::UInt8
                     | CanonicalDatatype::Int8
@@ -2228,19 +2257,24 @@ fn plan_exact_scalar_order(
                     | CanonicalDatatype::UInt64
                     | CanonicalDatatype::Int64
                     | CanonicalDatatype::Float64
-            ) => datatype,
+            ) => Ok(*datatype),
         _ => return Err(BgpPlanError::OrderByUnsupportedValue),
-    };
+    }).collect::<Result<Vec<_>, _>>()?;
+    let directions = order_by.ordering.iter().map(|ordering| match ordering.order {
+        crate::order::Order::Asc => OrderDirection::Ascending,
+        crate::order::Order::Desc => OrderDirection::Descending,
+    }).collect::<Vec<_>>();
     let collection = child.collection;
+    let statement = if datatypes.len() == 1 {
+        CompiledRelationStatement::ExactScalarOrder { input: Box::new(child.relation), datatype: datatypes[0], direction: directions[0] }
+    } else {
+        CompiledRelationStatement::ExactMultiOrder { input: Box::new(child.relation), datatypes, directions }
+    };
     Ok(CompiledBgp {
         relation: CompiledRelation {
-            schema: child.relation.schema.clone(),
-            domains: child.relation.domains.clone(),
-            statement: CompiledRelationStatement::ExactScalarOrder {
-                input: Box::new(child.relation),
-                datatype,
-                direction,
-            },
+            schema: order_by.ordering.iter().map(|o| o.variable.clone()).collect(),
+            domains: match &statement { CompiledRelationStatement::ExactScalarOrder { input, .. } | CompiledRelationStatement::ExactMultiOrder { input, .. } => input.domains.clone(), _ => unreachable!() },
+            statement,
         },
         projection: None,
         collection,
@@ -2263,6 +2297,7 @@ fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, BgpPlanError> 
         || !matches!(
             child.relation.statement,
             CompiledRelationStatement::ExactScalarOrder { .. }
+                | CompiledRelationStatement::ExactMultiOrder { .. }
                 | CompiledRelationStatement::ExactOrderedSlice { .. }
         )
     {
@@ -2961,6 +2996,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             }
             CompiledRelationStatement::Equality { input, .. }
             | CompiledRelationStatement::ExactScalarOrder { input, .. }
+            | CompiledRelationStatement::ExactMultiOrder { input, .. }
             | CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
                 visit(input, depth + 1, nodes)
             }
