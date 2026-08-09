@@ -1898,6 +1898,80 @@ fn full_schema_distinct_is_proof_transparent_end_to_end() {
 }
 
 #[test]
+fn count_projected_distinct_proves_duplicate_classes_and_rejects_tamper() {
+    let lc = build_layer(&[
+        ("a", "p", "x"),
+        ("a", "p", "y"),
+        ("a", "p", "z"),
+        ("b", "p", "x"),
+        ("b", "p", "y"),
+    ]);
+    let q = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["subject".into()],
+            query: Box::new(tv("subject", "p", "object")),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.result_len, 2);
+    assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
+    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+
+    let bytes = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.state.commitment_root).unwrap();
+
+    let mut duplicate = RecursiveRelationEnvelope::decode(&bytes).unwrap();
+    duplicate.result_columns[0][1] = duplicate.result_columns[0][0];
+    duplicate.result_values[0][1] = duplicate.result_values[0][0].clone();
+    duplicate.result_commitments[0] = commit_column(&duplicate.result_columns[0]).unwrap();
+    let duplicate_bytes = duplicate.encode().unwrap();
+    assert!(decode_and_verify_envelope(
+        &duplicate_bytes,
+        &compiled,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+
+    let substituted = plan_bgp(&Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["predicate".into()],
+            query: Box::new(tv_pred_var("subject", "predicate", "object")),
+        })),
+        count: dvar("count"),
+    }))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &bytes,
+        &substituted,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn count_projected_distinct_empty_input_proves_zero() {
+    let lc = build_layer(&[("a", "other", "x"), ("b", "other", "y")]);
+    let query = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["subject".into()],
+            query: Box::new(tv("subject", "missing", "object")),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.result_len, 0);
+    assert_eq!(proved.count_binding(&compiled), Some(("count", 0)));
+    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+}
+
+#[test]
 fn repeated_variable_atom_proves_same_row_equality() {
     let lc = build_layer(&[
         ("a", "knows", "a"),

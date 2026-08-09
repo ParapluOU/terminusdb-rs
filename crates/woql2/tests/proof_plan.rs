@@ -1054,6 +1054,136 @@ fn rejects_distinct_combined_with_projection_until_dedup_is_proven() {
 }
 
 #[test]
+fn count_accepts_exact_projected_distinct_over_one_or_two_known_domains() {
+    let one = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["x".into()],
+            query: Box::new(tv("x", "p", "y")),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&one).unwrap();
+    assert_eq!(compiled.relation.schema, ["x"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::Distinct {
+            ref key_columns, ..
+        } if key_columns == &[0]
+    ));
+    assert_eq!(compiled.count_variable.as_deref(), Some("count"));
+    assert_eq!(compiled.projection, Some(Vec::new()));
+
+    let two = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["x".into(), "age".into()],
+            query: Box::new(and_of(vec![
+                tv("x", "age", "age"),
+                gte(dvar("age"), duint(0)),
+            ])),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&two).unwrap();
+    assert_eq!(compiled.relation.schema, ["x", "age"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::Distinct {
+            ref key_columns, ..
+        } if key_columns == &[0, 1]
+    ));
+}
+
+#[test]
+fn count_projected_distinct_composes_over_duplicate_bag_union() {
+    let branch = tv("x", "p", "y");
+    let query = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["x".into()],
+            query: Box::new(Query::Or(Or {
+                or: vec![branch.clone(), branch],
+            })),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let terminusdb_woql2::proof::CompiledRelationStatement::Distinct { input, .. } =
+        &compiled.relation.statement
+    else {
+        panic!("expected exact distinct wrapper")
+    };
+    assert!(input.as_bag_union().is_some());
+}
+
+#[test]
+fn count_projected_distinct_accepts_an_authenticated_ordered_child_but_hides_order() {
+    let ordered = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate {
+            variable: "score".into(),
+            order: Order::Desc,
+        }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("metric", "score", "score"),
+            gte(dvar("score"), duint(0)),
+        ])),
+    });
+    let query = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["score".into()],
+            query: Box::new(ordered),
+        })),
+        count: dvar("count"),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let terminusdb_woql2::proof::CompiledRelationStatement::Distinct { input, .. } =
+        &compiled.relation.statement
+    else {
+        panic!("expected exact distinct wrapper")
+    };
+    assert!(input.as_exact_scalar_order().is_some());
+    assert_eq!(compiled.count_variable.as_deref(), Some("count"));
+}
+
+#[test]
+fn projected_distinct_rejects_visible_unknown_nullable_and_oversized_witnesses() {
+    reject(
+        Query::Count(Count {
+            query: Box::new(Query::Distinct(Distinct {
+                variables: vec!["y".into()],
+                query: Box::new(tv("x", "p", "y")),
+            })),
+            count: dvar("count"),
+        }),
+        BgpPlanError::DistinctUnsupportedDomain { var: "y".into() },
+    );
+    reject(
+        Query::Count(Count {
+            query: Box::new(Query::Distinct(Distinct {
+                variables: vec!["x".into(), "y".into(), "z".into()],
+                query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "q", "z")])),
+            })),
+            count: dvar("count"),
+        }),
+        BgpPlanError::DistinctUnsupportedKeyCount { count: 3 },
+    );
+    let nullable = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("x", "q", "z")),
+        }),
+    ]);
+    reject(
+        Query::Count(Count {
+            query: Box::new(Query::Distinct(Distinct {
+                variables: vec!["z".into()],
+                query: Box::new(nullable),
+            })),
+            count: dvar("count"),
+        }),
+        BgpPlanError::DistinctUnsupportedDomain { var: "z".into() },
+    );
+}
+
+#[test]
 fn rejects_comparison_var_vs_var() {
     // A comparison with variables on BOTH sides is not a range filter (Phase 7.4 routes
     // comparisons, but only `?var op const`).

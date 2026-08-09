@@ -49,6 +49,7 @@ use terminus_store::proof::envelope::{
 use terminus_store::proof::equality::{
     verify_relation_equality, RelationEqualityProof,
 };
+use terminus_store::proof::distinct::{verify_relation_distinct, RelationDistinctProof};
 use terminus_store::proof::group::{
     verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
 };
@@ -116,6 +117,12 @@ pub enum CompiledRelationStatement {
     BagProjection {
         input: Box<CompiledRelation>,
         indices: Vec<usize>,
+    },
+    /// Exact unordered distinct projection. The initial bounded WOQL exposure is only
+    /// beneath `Count`, because SWI's first-occurrence output order is not authenticated.
+    Distinct {
+        input: Box<CompiledRelation>,
+        key_columns: Vec<usize>,
     },
     /// Leading-Prolog `when(A,B)` lowered to authenticated joins plus bag union.
     /// This wrapper keeps canonical query identity distinct from an explicit `Or`.
@@ -302,6 +309,10 @@ pub enum ProvedQueryStatement {
     BagProjection {
         input: Box<ProvedBgp>,
     },
+    Distinct {
+        input: Box<ProvedBgp>,
+        proof: Box<RelationDistinctProof>,
+    },
     LeftAnti {
         left: Box<ProvedBgp>,
         right: Box<ProvedBgp>,
@@ -429,6 +440,14 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update((indices.len() as u64).to_le_bytes());
             for index in indices {
                 hasher.update((*index as u64).to_le_bytes());
+            }
+        }
+        CompiledRelationStatement::Distinct { input, key_columns } => {
+            hasher.update(b"/distinct-unordered");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((key_columns.len() as u64).to_le_bytes());
+            for column in key_columns {
+                hasher.update((*column as u64).to_le_bytes());
             }
         }
         CompiledRelationStatement::When { expanded } => {
@@ -630,6 +649,20 @@ fn relation_result_descriptors(
                 })
                 .collect()
         }
+        CompiledRelationStatement::Distinct { input, key_columns } => {
+            let descriptors = relation_result_descriptors(input)?;
+            key_columns
+                .iter()
+                .map(|index| {
+                    descriptors.get(*index).copied().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "WOQL distinct key column out of range",
+                        )
+                    })
+                })
+                .collect()
+        }
         CompiledRelationStatement::When { expanded } => relation_result_descriptors(expanded),
         CompiledRelationStatement::LeftAnti { left, .. } => relation_result_descriptors(left),
         CompiledRelationStatement::InnerJoin { left, right, key_pairs } => {
@@ -708,6 +741,12 @@ fn relation_proof_plan(
             RelationProofPlanKind::BagProjection {
                 input: Box::new(child(input)?),
                 indices: indices.clone(),
+            }
+        }
+        CompiledRelationStatement::Distinct { input, key_columns } => {
+            RelationProofPlanKind::Distinct {
+                input: Box::new(child(input)?),
+                key_columns: key_columns.clone(),
             }
         }
         CompiledRelationStatement::When { expanded } => {
@@ -950,6 +989,36 @@ impl ProvedBgp {
                         "WOQL bag projection changed rows or multiplicity",
                     ));
                 }
+            }
+            (
+                ProvedQueryStatement::Distinct { input, proof },
+                CompiledRelationStatement::Distinct {
+                    input: input_plan,
+                    key_columns,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let rows = distinct_output_rows(
+                    &self.result_columns,
+                    self.result_len,
+                    compiled,
+                    layer,
+                )?;
+                let mut transcript = Transcript254::new(b"parture-distinct-envelope");
+                transcript.append_bytes(b"pow/distinct-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/distinct-envelope/query", &query_digest);
+                verify_relation_distinct(
+                    &input.relation_commit(None)?,
+                    key_columns,
+                    &rows,
+                    proof,
+                    &mut transcript,
+                )?;
             }
             (
                 ProvedQueryStatement::LeftAnti { left, right, proof },
@@ -1619,6 +1688,20 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::Distinct { input, proof },
+                CompiledRelationStatement::Distinct {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::Distinct {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+                proof: proof.clone(),
+            },
+            (
                 ProvedQueryStatement::Equality { input, proof },
                 CompiledRelationStatement::Equality {
                     input: input_plan, ..
@@ -1880,6 +1963,10 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
                 input: Box::new(proved_from_recursive(*input)),
             }
         }
+        RecursiveRelationProof::Distinct { input, proof } => ProvedQueryStatement::Distinct {
+            input: Box::new(proved_from_recursive(*input)),
+            proof,
+        },
         RecursiveRelationProof::LeftAnti { left, right, proof } => ProvedQueryStatement::LeftAnti {
             left: Box::new(proved_from_recursive(*left)),
             right: Box::new(proved_from_recursive(*right)),
@@ -1986,6 +2073,32 @@ fn group_output_rows(
                 store_id_for_field(columns[0][i], namespace, layer)?,
                 store_id_for_field(columns[1][i], ResultIdNamespace::NodeValue, layer)?,
             ))
+        })
+        .collect()
+}
+
+fn distinct_output_rows(
+    columns: &[Vec<ArkFr>],
+    n: usize,
+    relation: &CompiledRelation,
+    layer: &impl VerifierLayer,
+) -> std::io::Result<Vec<Vec<u64>>> {
+    let descriptors = relation_result_descriptors(relation)?;
+    if columns.len() != descriptors.len() || columns.iter().any(|column| column.len() < n) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "distinct output shape mismatch",
+        ));
+    }
+    (0..n)
+        .map(|row| {
+            columns
+                .iter()
+                .zip(&descriptors)
+                .map(|(column, descriptor)| {
+                    store_id_for_field(column[row], descriptor.namespace, layer)
+                })
+                .collect()
         })
         .collect()
 }
@@ -2259,11 +2372,20 @@ pub enum BgpPlanError {
     #[error("Count output must be a variable")]
     CountOutputNotVariable,
 
-    #[error("Distinct is currently supported only without Select or Count wrappers")]
+    #[error("Distinct with visible projection/ordering is unsupported; projected Distinct is currently exact only beneath Count")]
     DistinctWithProjectionOrCount,
 
     #[error("Distinct variables must name the complete BGP schema")]
     DistinctNotFullSchema,
+
+    #[error("projected Distinct requires one or two witness variables, found {count}")]
+    DistinctUnsupportedKeyCount { count: usize },
+
+    #[error("Distinct witness `?{var}` must have an exact nonnullable Store-ID domain")]
+    DistinctUnsupportedDomain { var: String },
+
+    #[error("nested Distinct wrappers are unsupported")]
+    NestedDistinctUnsupported,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -2598,19 +2720,37 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     }
 
     if matches!(body, Query::Start(_) | Query::Limit(_) | Query::Once(_)) {
-        if !selections.is_empty() || count_variable.is_some() || !distincts.is_empty() {
+        if (distincts.is_empty() && (!selections.is_empty() || count_variable.is_some()))
+            || (!distincts.is_empty() && count_variable.is_none())
+        {
             return Err(BgpPlanError::OrderedSliceUnsupportedShape);
         }
         let mut compiled = plan_exact_ordered_slice(body)?;
         if compiled.collection.is_none() {
             compiled.collection = collection;
         }
+        let (relation, full_row_distinct) = compile_distinct_relation(
+            compiled.relation,
+            &distincts,
+            &selections,
+            count_variable.as_deref(),
+        )?;
+        compiled.projection = compile_projection(
+            &selections,
+            count_variable.as_deref(),
+            &relation.schema,
+        )?;
+        compiled.relation = relation;
+        compiled.count_variable = count_variable;
+        compiled.full_row_distinct = full_row_distinct;
         validate_compiled_structure(&compiled.relation)?;
         return Ok(compiled);
     }
 
     if let Query::OrderBy(order_by) = body {
-        if !selections.is_empty() || count_variable.is_some() || !distincts.is_empty() {
+        if (distincts.is_empty() && (!selections.is_empty() || count_variable.is_some()))
+            || (!distincts.is_empty() && count_variable.is_none())
+        {
             return Err(BgpPlanError::OrderByUnsupportedShape);
         }
         let mut compiled = plan_exact_scalar_order(order_by)?;
@@ -2619,6 +2759,20 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         if compiled.collection.is_none() {
             compiled.collection = collection;
         }
+        let (relation, full_row_distinct) = compile_distinct_relation(
+            compiled.relation,
+            &distincts,
+            &selections,
+            count_variable.as_deref(),
+        )?;
+        compiled.projection = compile_projection(
+            &selections,
+            count_variable.as_deref(),
+            &relation.schema,
+        )?;
+        compiled.relation = relation;
+        compiled.count_variable = count_variable;
+        compiled.full_row_distinct = full_row_distinct;
         validate_compiled_structure(&compiled.relation)?;
         return Ok(compiled);
     }
@@ -2704,44 +2858,29 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let (plan, schema) = plan_left_deep(&atoms)?;
     let domains = infer_schema_domains(&schema, &atoms, &comparisons);
 
-    // A full BGP binding is already unique: for a fixed assignment every triple atom
-    // identifies at most one row in the Store's set-valued triple relation. Therefore
-    // Distinct over exactly the full schema is proof-transparent. Distinct over a subset
-    // (or around projection/count) needs an authenticated deduplication operator.
-    if !distincts.is_empty() {
-        if !selections.is_empty() || count_variable.is_some() {
-            return Err(BgpPlanError::DistinctWithProjectionOrCount);
-        }
-        for variables in &distincts {
-            let covers_schema = variables.len() == schema.len()
-                && schema.iter().all(|schema_var| {
-                    variables
-                        .iter()
-                        .filter(|candidate| *candidate == schema_var)
-                        .count()
-                        == 1
-                });
-            if !covers_schema {
-                return Err(BgpPlanError::DistinctNotFullSchema);
-            }
-        }
-    }
-
-    // (4) Validate every nested projection against what its inner query exposes. The
-    // proof still authenticates the complete BGP; only the outermost visible Select
-    // determines which committed columns the caller reads.
-    let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
+    let relation = CompiledRelation {
+        schema: schema.clone(),
+        domains,
+        statement: CompiledRelationStatement::Bgp(plan),
+    };
+    let (relation, full_row_distinct) = compile_distinct_relation(
+        relation,
+        &distincts,
+        &selections,
+        count_variable.as_deref(),
+    )?;
+    let projection = compile_projection(
+        &selections,
+        count_variable.as_deref(),
+        &relation.schema,
+    )?;
 
     Ok(CompiledBgp {
-        relation: CompiledRelation {
-            schema: schema.clone(),
-            domains,
-            statement: CompiledRelationStatement::Bgp(plan),
-        },
+        relation,
         projection,
         collection,
         count_variable,
-        full_row_distinct: !distincts.is_empty(),
+        full_row_distinct,
     })
 }
 
@@ -2784,9 +2923,6 @@ fn plan_or_relation(
         return Err(BgpPlanError::OrTooFewBranches {
             count: disjunction.or.len(),
         });
-    }
-    if !distincts.is_empty() {
-        return Err(BgpPlanError::DistinctWithProjectionOrCount);
     }
     let mut compiled = Vec::with_capacity(disjunction.or.len());
     for query in &disjunction.or {
@@ -2865,17 +3001,28 @@ fn plan_or_relation(
             }
         }
     }
-    let projection = compile_projection(selections, count_variable.as_deref(), &schema)?;
+    let relation = CompiledRelation {
+        schema,
+        domains: merged_domains.unwrap_or_default(),
+        statement: CompiledRelationStatement::BagUnion { branches, mappings },
+    };
+    let (relation, full_row_distinct) = compile_distinct_relation(
+        relation,
+        distincts,
+        selections,
+        count_variable.as_deref(),
+    )?;
+    let projection = compile_projection(
+        selections,
+        count_variable.as_deref(),
+        &relation.schema,
+    )?;
     let compiled = CompiledBgp {
-        relation: CompiledRelation {
-            schema,
-            domains: merged_domains.unwrap_or_default(),
-            statement: CompiledRelationStatement::BagUnion { branches, mappings },
-        },
+        relation,
         projection,
         collection: effective_collection,
         count_variable,
-        full_row_distinct: false,
+        full_row_distinct,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -3325,11 +3472,11 @@ fn plan_sequential_read_operators(
             };
         }
     }
-    validate_distincts(
+    let (relation, full_row_distinct) = compile_distinct_relation(
+        relation,
         distincts,
         selections,
         count_variable.as_deref(),
-        &relation.schema,
     )?;
     let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
     let compiled = CompiledBgp {
@@ -3337,7 +3484,7 @@ fn plan_sequential_read_operators(
         projection,
         collection: effective_collection,
         count_variable,
-        full_row_distinct: !distincts.is_empty(),
+        full_row_distinct,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -3362,6 +3509,14 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 Ok(())
             }
             CompiledRelationStatement::BagProjection { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
+            CompiledRelationStatement::Distinct { input, key_columns } => {
+                if !(1..=2).contains(&key_columns.len()) {
+                    return Err(BgpPlanError::DistinctUnsupportedKeyCount {
+                        count: key_columns.len(),
+                    });
+                }
                 visit(input, depth + 1, nodes)
             }
             CompiledRelationStatement::When { expanded } => visit(expanded, depth + 1, nodes),
@@ -3530,29 +3685,92 @@ fn merge_collection(
     }
 }
 
-fn validate_distincts(
+fn compile_distinct_relation(
+    relation: CompiledRelation,
     distincts: &[&[String]],
     selections: &[(&[String], bool)],
     count_variable: Option<&str>,
-    schema: &[String],
-) -> Result<(), BgpPlanError> {
-    if !distincts.is_empty() && (!selections.is_empty() || count_variable.is_some()) {
-        return Err(BgpPlanError::DistinctWithProjectionOrCount);
+) -> Result<(CompiledRelation, bool), BgpPlanError> {
+    if distincts.is_empty() {
+        return Ok((relation, false));
     }
-    for variables in distincts {
-        if variables.len() != schema.len()
-            || !schema.iter().all(|name| {
+    if distincts.len() != 1 {
+        return Err(BgpPlanError::NestedDistinctUnsupported);
+    }
+    let variables = distincts[0];
+    if count_variable.is_none() {
+        if !selections.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        let covers_schema = variables.len() == relation.schema.len()
+            && relation.schema.iter().all(|name| {
                 variables
                     .iter()
                     .filter(|candidate| *candidate == name)
                     .count()
                     == 1
-            })
-        {
+            });
+        if !covers_schema {
             return Err(BgpPlanError::DistinctNotFullSchema);
         }
+        return Ok((relation, true));
     }
-    Ok(())
+    // A Select nested inside Count/Distinct changes the generated witness stream and is
+    // not merely a selection of the count binding. Keep it fail-closed. An outer Select
+    // of the Count binding has `outside == true` and is validated by compile_projection.
+    if selections.iter().any(|(_, outside)| !outside) {
+        return Err(BgpPlanError::DistinctWithProjectionOrCount);
+    }
+    if !(1..=2).contains(&variables.len()) {
+        return Err(BgpPlanError::DistinctUnsupportedKeyCount {
+            count: variables.len(),
+        });
+    }
+    let mut key_columns = Vec::with_capacity(variables.len());
+    for variable in variables {
+        let index = relation
+            .schema
+            .iter()
+            .position(|candidate| candidate == variable)
+            .ok_or_else(|| BgpPlanError::SelectedVariableNotInBgp {
+                var: variable.clone(),
+            })?;
+        if key_columns.contains(&index)
+            || relation.domains.get(index).copied().flatten().is_none()
+        {
+            return Err(BgpPlanError::DistinctUnsupportedDomain {
+                var: variable.clone(),
+            });
+        }
+        key_columns.push(index);
+    }
+    let descriptors = relation_result_descriptors(&relation)
+        .map_err(|_| BgpPlanError::DistinctUnsupportedDomain {
+            var: variables[0].clone(),
+        })?;
+    for (&index, variable) in key_columns.iter().zip(variables) {
+        if descriptors[index].nullable {
+            return Err(BgpPlanError::DistinctUnsupportedDomain {
+                var: variable.clone(),
+            });
+        }
+    }
+    let schema = variables.to_vec();
+    let domains = key_columns
+        .iter()
+        .map(|index| relation.domains[*index])
+        .collect();
+    Ok((
+        CompiledRelation {
+            schema,
+            domains,
+            statement: CompiledRelationStatement::Distinct {
+                input: Box::new(relation),
+                key_columns,
+            },
+        },
+        false,
+    ))
 }
 
 fn compile_projection(
