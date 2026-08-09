@@ -30,8 +30,58 @@ use terminusdb_woql2::control::Distinct;
 use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp};
 use terminusdb_woql2::{
     misc::{Count, InRange},
-    query::{Or, Query},
+    query::{Not, Or, Query},
 };
+
+#[test]
+fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("e", "p", "b"),
+        ("b", "q", "u"),
+        ("b", "q", "v"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(compiled.schema, vec!["x", "y"]);
+    assert_eq!(proved.result_len, 1, "only c-p-d has no correlated q match");
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+    assert_eq!(verified.proved.result_len, 1);
+    let mut corrupt = envelope;
+    let last = corrupt.len() - 1;
+    corrupt[last] ^= 1;
+    assert!(
+        decode_and_verify_envelope(&corrupt, &compiled, &layer, layer.state.commitment_root,)
+            .is_err()
+    );
+
+    let original_len = proved.result_len;
+    let mut forged = proved;
+    forged.result_len = 0;
+    assert!(forged
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+    forged.result_len = original_len;
+    forged.result_columns[0][0] = ArkFr::from_u64(999_999);
+    assert!(forged
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
 
 // ----------------------------------------------------------------------------
 // Store + independent-join helpers (mirror the store's own query.rs tests).
@@ -612,13 +662,9 @@ fn disconnected_components_prove_complete_cartesian_results() {
         .unwrap();
     let reordered = and_of(vec![tv("a", "q", "b"), tv("x", "p", "y")]);
     let reordered = plan_bgp(&reordered).unwrap();
-    assert!(decode_and_verify_envelope(
-        &envelope,
-        &reordered,
-        &lc,
-        lc.state.commitment_root,
-    )
-    .is_err());
+    assert!(
+        decode_and_verify_envelope(&envelope, &reordered, &lc, lc.state.commitment_root,).is_err()
+    );
 
     // A false authenticated ground gate suppresses the complete product without
     // changing its schema, while an empty relational component does the same through
@@ -627,13 +673,7 @@ fn disconnected_components_prove_complete_cartesian_results() {
     let compiled = plan_bgp(&absent).unwrap();
     let proved = compiled.prove(&lc).unwrap();
     proved
-        .verify_executed_rows(
-            &compiled,
-            &lc,
-            lc.state.commitment_root,
-            &variables,
-            &[],
-        )
+        .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &variables, &[])
         .unwrap();
 
     let empty_component = and_of(vec![tv("x", "p", "y"), tv_subj_const("i", "p", "w")]);
@@ -678,13 +718,7 @@ fn or_proves_exact_bag_union_with_overlap() {
         vec![id("e"), id("f")],
     ];
     proved
-        .verify_executed_rows(
-            &compiled,
-            &lc,
-            lc.state.commitment_root,
-            &variables,
-            &rows,
-        )
+        .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &variables, &rows)
         .unwrap();
     let mut duplicated = rows.clone();
     duplicated.push(rows[0].clone());
@@ -718,7 +752,9 @@ fn or_proves_exact_bag_union_with_overlap() {
     assert!(decoded.proved.as_single().is_none());
     let mut corrupt = envelope.clone();
     corrupt[20] ^= 1;
-    assert!(decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root).is_err());
+    assert!(
+        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root).is_err()
+    );
 
     let single = plan_bgp(&tv("s", "p", "o")).unwrap();
     let single_proved = single.prove(&lc).unwrap();
@@ -728,24 +764,17 @@ fn or_proves_exact_bag_union_with_overlap() {
         .encode_envelope(&single, &lc, lc.state.commitment_root)
         .unwrap();
     assert!(decode_and_verify_envelope(&envelope, &single, &lc, lc.state.commitment_root).is_err());
-    assert!(decode_and_verify_envelope(
-        &single_envelope,
-        &compiled,
-        &lc,
-        lc.state.commitment_root,
-    )
-    .is_err());
+    assert!(
+        decode_and_verify_envelope(&single_envelope, &compiled, &lc, lc.state.commitment_root,)
+            .is_err()
+    );
     let reordered = plan_bgp(&Query::Or(Or {
         or: vec![tv("s", "q", "o"), tv("s", "p", "o")],
     }))
     .unwrap();
-    assert!(decode_and_verify_envelope(
-        &envelope,
-        &reordered,
-        &lc,
-        lc.state.commitment_root,
-    )
-    .is_err());
+    assert!(
+        decode_and_verify_envelope(&envelope, &reordered, &lc, lc.state.commitment_root,).is_err()
+    );
 }
 
 #[test]
@@ -1064,8 +1093,7 @@ fn cycle_triangle_proves_authenticated_closing_edge() {
         ("d", "r", "a"),
         ("d", "r", "e"),
     ]);
-    let (proof, commitments, result_len, ids) =
-        prove_layer_bgp(&lc, &compiled.plan).unwrap();
+    let (proof, commitments, result_len, ids) = prove_layer_bgp(&lc, &compiled.plan).unwrap();
     verify_layer_bgp(
         &lc,
         lc.state.commitment_root,
@@ -1084,10 +1112,7 @@ fn cycle_triangle_proves_authenticated_closing_edge() {
     for a in 0..p[0].len() {
         for b in 0..q_rel[0].len() {
             for c in 0..r[0].len() {
-                if p[1][a] == q_rel[0][b]
-                    && q_rel[1][b] == r[0][c]
-                    && p[0][a] == r[1][c]
-                {
+                if p[1][a] == q_rel[0][b] && q_rel[1][b] == r[0][c] && p[0][a] == r[1][c] {
                     x.push(p[0][a]);
                     y.push(p[1][a]);
                     z.push(q_rel[1][b]);

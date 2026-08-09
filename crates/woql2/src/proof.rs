@@ -30,10 +30,13 @@ use dory_pcs::primitives::arithmetic::Field;
 use dory_pcs::primitives::transcript::Transcript;
 use sha2::{Digest, Sha256};
 use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
+use terminus_store::proof::anti::{prove_left_anti_join, verify_left_anti_join, LeftAntiJoinProof};
 use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
-use terminus_store::proof::envelope::{plan_digest, BagUnionEnvelope, LayerBgpEnvelope};
+use terminus_store::proof::envelope::{
+    plan_digest, BagUnionEnvelope, LayerBgpEnvelope, LeftAntiJoinEnvelope,
+};
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp,
     verify_layer_bgp_result_log_domain, verify_result_columns, verify_result_objects, AtomTerm,
@@ -63,6 +66,10 @@ pub struct CompiledBgp {
     /// For each union branch, public-schema column -> branch-result column. This aligns
     /// compatible variable sets whose internal left-deep plans produce different order.
     pub union_schema_mappings: Vec<Vec<usize>>,
+    /// A correlated `Not` compiled as a scalar-key left anti-join. The ordinary
+    /// `plan` is the positive outer relation; this metadata names the independently
+    /// authenticated negated relation and the one shared variable column.
+    pub anti_join: Option<CompiledAntiJoin>,
     /// Result column index -> BGP variable name, in the proof's output order
     /// (`[r_other.., key, s_other..]` folded over the join steps).
     pub schema: Vec<String>,
@@ -81,6 +88,13 @@ pub struct CompiledBgp {
     /// BGP schema. Full natural-join assignments over set-valued triple relations are
     /// already unique; subset/projection distinctness still requires a dedup argument.
     pub full_row_distinct: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompiledAntiJoin {
+    pub right_plan: LayerBgpPlan,
+    pub left_key: usize,
+    pub right_key: usize,
 }
 
 /// An in-memory proof result produced only when a caller explicitly invokes
@@ -103,6 +117,14 @@ pub enum ProvedQueryStatement {
         predicate_ids: Vec<u64>,
     },
     BagUnion(ProvedBagUnion),
+    LeftAntiJoin(ProvedLeftAntiJoin),
+}
+
+#[derive(Debug)]
+pub struct ProvedLeftAntiJoin {
+    pub left: ProvedBagUnionBranch,
+    pub right: ProvedBagUnionBranch,
+    pub proof: LeftAntiJoinProof,
 }
 
 #[derive(Debug)]
@@ -156,6 +178,12 @@ pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHas
             }
         }
     }
+    if let Some(anti) = &compiled.anti_join {
+        hasher.update(b"/left-anti-join/v0");
+        hasher.update(plan_digest(&anti.right_plan)?);
+        hasher.update((anti.left_key as u64).to_le_bytes());
+        hasher.update((anti.right_key as u64).to_le_bytes());
+    }
     hasher.update((compiled.schema.len() as u64).to_le_bytes());
     for name in &compiled.schema {
         digest_bytes(&mut hasher, name.as_bytes());
@@ -191,6 +219,7 @@ impl ProvedBgp {
                 predicate_ids,
             } => Some((proof, predicate_ids)),
             ProvedQueryStatement::BagUnion(_) => None,
+            ProvedQueryStatement::LeftAntiJoin(_) => None,
         }
     }
 
@@ -198,6 +227,7 @@ impl ProvedBgp {
         match &self.statement {
             ProvedQueryStatement::Single { .. } => None,
             ProvedQueryStatement::BagUnion(union) => Some(union),
+            ProvedQueryStatement::LeftAntiJoin(_) => None,
         }
     }
 
@@ -208,6 +238,64 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<()> {
+        if let ProvedQueryStatement::LeftAntiJoin(proved) = &self.statement {
+            let anti = compiled.anti_join.as_ref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "left anti-join proof supplied for a non-Not query",
+                )
+            })?;
+            for (branch, plan) in [
+                (&proved.left, &compiled.plan),
+                (&proved.right, &anti.right_plan),
+            ] {
+                verify_layer_bgp(
+                    layer,
+                    expected_root,
+                    plan,
+                    &branch.predicate_ids,
+                    &branch.result_commitments,
+                    branch.result_len,
+                    &branch.proof,
+                )?;
+                verify_layer_bgp_result_log_domain(
+                    layer,
+                    plan,
+                    &branch.proof,
+                    branch.result_log_domain,
+                )?;
+                verify_result_columns(
+                    &branch.result_commitments,
+                    &branch.result_columns,
+                    branch.result_len,
+                    branch.result_log_domain,
+                )?;
+            }
+            let digest = compiled_query_digest(compiled)?;
+            let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
+            transcript.append_bytes(b"pow/anti-envelope/root", &expected_root);
+            transcript.append_bytes(b"pow/anti-envelope/query", &digest);
+            verify_left_anti_join(
+                &RelationCommit {
+                    commitments: proved.left.result_commitments.clone(),
+                    log_domain: proved.left.result_log_domain,
+                    n: proved.left.result_len,
+                },
+                &RelationCommit {
+                    commitments: proved.right.result_commitments.clone(),
+                    log_domain: proved.right.result_log_domain,
+                    n: proved.right.result_len,
+                },
+                anti.left_key,
+                anti.right_key,
+                &self.result_commitments,
+                self.result_len,
+                self.result_log_domain,
+                &proved.proof,
+                &mut transcript,
+            )?;
+            return self.verify_columns(&self.result_columns);
+        }
         if let ProvedQueryStatement::BagUnion(union) = &self.statement {
             if compiled.union_plans.len() != union.branches.len()
                 || compiled.union_schema_mappings.len() != union.branches.len()
@@ -248,7 +336,9 @@ impl ProvedBgp {
                 )?;
                 let union_arity = compiled.schema.len().max(1);
                 if mapping.len() != union_arity
-                    || mapping.iter().any(|index| *index >= branch.result_columns.len())
+                    || mapping
+                        .iter()
+                        .any(|index| *index >= branch.result_columns.len())
                 {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -291,6 +381,12 @@ impl ProvedBgp {
                 "single BGP proof cannot verify a compiled WOQL bag union",
             ));
         }
+        if compiled.anti_join.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "single BGP proof cannot verify a compiled WOQL Not",
+            ));
+        }
         verify_layer_bgp(
             layer,
             expected_root,
@@ -300,12 +396,7 @@ impl ProvedBgp {
             self.result_len,
             proof,
         )?;
-        verify_layer_bgp_result_log_domain(
-            layer,
-            &compiled.plan,
-            proof,
-            self.result_log_domain,
-        )?;
+        verify_layer_bgp_result_log_domain(layer, &compiled.plan, proof, self.result_log_domain)?;
         self.verify_columns(&self.result_columns)
     }
 
@@ -472,6 +563,48 @@ impl ProvedBgp {
         layer: &LayerCommitment,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<u8>> {
+        if let ProvedQueryStatement::LeftAntiJoin(proved) = &self.statement {
+            let anti = compiled.anti_join.as_ref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "left anti-join proof supplied for a non-Not query",
+                )
+            })?;
+            let digest = compiled_query_digest(compiled)?;
+            let branch_envelope = |branch: &ProvedBagUnionBranch,
+                                   plan: &LayerBgpPlan|
+             -> std::io::Result<LayerBgpEnvelope> {
+                LayerBgpEnvelope::new_verified(
+                    layer,
+                    expected_root,
+                    plan,
+                    digest,
+                    branch.proof.clone(),
+                    branch.result_commitments.clone(),
+                    branch.result_columns.clone(),
+                    branch.result_log_domain,
+                    branch.result_len,
+                    branch.predicate_ids.clone(),
+                )
+            };
+            return LeftAntiJoinEnvelope::new_verified(
+                layer,
+                expected_root,
+                &compiled.plan,
+                &anti.right_plan,
+                digest,
+                branch_envelope(&proved.left, &compiled.plan)?,
+                branch_envelope(&proved.right, &anti.right_plan)?,
+                anti.left_key,
+                anti.right_key,
+                proved.proof.clone(),
+                self.result_commitments.clone(),
+                self.result_columns.clone(),
+                self.result_log_domain,
+                self.result_len,
+            )?
+            .encode();
+        }
         if let ProvedQueryStatement::BagUnion(union) = &self.statement {
             let digest = compiled_query_digest(compiled)?;
             if union.branches.len() != compiled.union_plans.len() {
@@ -589,6 +722,41 @@ pub fn decode_and_verify_envelope(
     layer: &LayerCommitment,
     expected_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
+    if let Some(anti) = &compiled.anti_join {
+        let envelope = LeftAntiJoinEnvelope::decode(bytes)?;
+        let digest = compiled_query_digest(compiled)?;
+        envelope.verify(
+            layer,
+            expected_root,
+            &compiled.plan,
+            &anti.right_plan,
+            digest,
+            anti.left_key,
+            anti.right_key,
+        )?;
+        let branch = |envelope: LayerBgpEnvelope| ProvedBagUnionBranch {
+            proof: envelope.proof,
+            result_commitments: envelope.result_commitments,
+            result_columns: envelope.result_columns,
+            result_log_domain: envelope.result_log_domain,
+            result_len: envelope.result_len,
+            predicate_ids: envelope.predicate_ids,
+        };
+        return Ok(VerifiedBgpEnvelope {
+            proved: ProvedBgp {
+                statement: ProvedQueryStatement::LeftAntiJoin(ProvedLeftAntiJoin {
+                    left: branch(envelope.left),
+                    right: branch(envelope.right),
+                    proof: envelope.anti_proof,
+                }),
+                result_commitments: envelope.result_commitments,
+                result_columns: envelope.result_columns,
+                result_log_domain: envelope.result_log_domain,
+                result_len: envelope.result_len,
+            },
+            result_objects: envelope.result_objects,
+        });
+    }
     if !compiled.union_plans.is_empty() {
         let envelope = BagUnionEnvelope::decode(bytes)?;
         let digest = compiled_query_digest(compiled)?;
@@ -662,6 +830,65 @@ pub enum QueryProofError {
 impl CompiledBgp {
     /// Generate a proof against an already loaded authenticated commitment.
     pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
+        if let Some(anti) = &self.anti_join {
+            if !self.union_plans.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Not cannot also carry bag-union plans",
+                ));
+            }
+            let left = prove_layer_bgp_with_result(layer, &self.plan)?;
+            let right = prove_layer_bgp_with_result(layer, &anti.right_plan)?;
+            let left_witness = RelationWitness {
+                columns: left.result_columns.clone(),
+                commitments: left.result_commitments.clone(),
+                log_domain: left.result_log_domain,
+                n: left.result_len,
+            };
+            let right_witness = RelationWitness {
+                columns: right.result_columns.clone(),
+                commitments: right.result_commitments.clone(),
+                log_domain: right.result_log_domain,
+                n: right.result_len,
+            };
+            let digest = compiled_query_digest(self)?;
+            let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
+            transcript.append_bytes(b"pow/anti-envelope/root", &layer.state.commitment_root);
+            transcript.append_bytes(b"pow/anti-envelope/query", &digest);
+            let result = prove_left_anti_join(
+                &left_witness,
+                &right_witness,
+                anti.left_key,
+                anti.right_key,
+                &mut transcript,
+            )?;
+            let branch = |result: terminus_store::proof::query::LayerBgpResult| {
+                let real_columns = result.real_columns();
+                ProvedBagUnionBranch {
+                    proof: result.proof,
+                    result_commitments: result.result_commitments,
+                    result_columns: real_columns,
+                    result_log_domain: result.result_log_domain,
+                    result_len: result.result_len,
+                    predicate_ids: result.predicate_ids,
+                }
+            };
+            return Ok(ProvedBgp {
+                statement: ProvedQueryStatement::LeftAntiJoin(ProvedLeftAntiJoin {
+                    left: branch(left),
+                    right: branch(right),
+                    proof: result.proof,
+                }),
+                result_commitments: result.commitments,
+                result_columns: result
+                    .columns
+                    .iter()
+                    .map(|column| column[..result.n].to_vec())
+                    .collect(),
+                result_log_domain: result.log_domain,
+                result_len: result.n,
+            });
+        }
         if !self.union_plans.is_empty() {
             if self.union_plans.len() != self.union_schema_mappings.len()
                 || self.union_plans.len() < 2
@@ -871,6 +1098,24 @@ pub enum BgpPlanError {
     #[error("Or branches resolve to conflicting collections")]
     OrRoutingConflict,
 
+    #[error("correlated Not needs exactly one negated conjunct, found {count}")]
+    NotConjunctCount { count: usize },
+
+    #[error("correlated Not needs a non-empty positive outer BGP")]
+    NotMissingOuter,
+
+    #[error("correlated Not currently needs exactly one shared variable, found {count}")]
+    NotSharedVariableCount { count: usize },
+
+    #[error("Select, Count, Distinct, Or, or nested Not inside a Not subplan is unsupported")]
+    NotUnsupportedSubplan,
+
+    #[error("Not subplans resolve to conflicting collections")]
+    NotRoutingConflict,
+
+    #[error("Optional unmatched bindings serialize as null, which has no authenticated Store ID representation")]
+    OptionalUnboundRepresentation,
+
     /// A `Select`ed variable does not occur in the BGP body.
     #[error("selected variable `?{var}` does not occur in the BGP")]
     SelectedVariableNotInBgp { var: String },
@@ -1034,20 +1279,14 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             }
         }
         if branches.iter().any(|branch| {
-            branch
-                .collection
-                .as_ref()
-                .or(collection.as_ref())
-                != effective_collection.as_ref()
+            branch.collection.as_ref().or(collection.as_ref()) != effective_collection.as_ref()
         }) {
             return Err(BgpPlanError::OrRoutingConflict);
         }
 
         let projection = compile_projection(&selections, count_variable.as_deref(), &schema)?;
-        let union_plans: Vec<LayerBgpPlan> = branches
-            .iter()
-            .map(|branch| branch.plan.clone())
-            .collect();
+        let union_plans: Vec<LayerBgpPlan> =
+            branches.iter().map(|branch| branch.plan.clone()).collect();
         let union_arity = schema.len().max(1);
         let union_schema_mappings = (0..branches.len())
             .map(|_| (0..union_arity).collect())
@@ -1056,11 +1295,121 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             plan: union_plans[0].clone(),
             union_plans,
             union_schema_mappings,
+            anti_join: None,
             schema,
             projection,
             collection: effective_collection,
             count_variable,
             full_row_distinct: false,
+        });
+    }
+
+    // Correlated Prolog negation is a left anti-join: evaluate the positive BGP,
+    // evaluate the negated BGP, and retain exactly the outer rows whose shared key has
+    // no right match. This first sound slice deliberately accepts one shared variable;
+    // two-variable correlation needs the composite-key anti-join extension.
+    if matches!(body, Query::WoqlOptional(_)) {
+        return Err(BgpPlanError::OptionalUnboundRepresentation);
+    }
+    let mut positive = Vec::new();
+    let mut negatives = Vec::new();
+    split_top_level_not(body, &mut positive, &mut negatives);
+    if !negatives.is_empty() {
+        if negatives.len() != 1 {
+            return Err(BgpPlanError::NotConjunctCount {
+                count: negatives.len(),
+            });
+        }
+        if positive.is_empty() {
+            return Err(BgpPlanError::NotMissingOuter);
+        }
+        let positive_query = if positive.len() == 1 {
+            positive.pop().unwrap()
+        } else {
+            Query::And(crate::query::And { and: positive })
+        };
+        let left = plan_bgp(&positive_query)?;
+        let right = plan_bgp(&negatives.pop().unwrap())?;
+        if left.projection.is_some()
+            || left.count_variable.is_some()
+            || left.full_row_distinct
+            || !left.union_plans.is_empty()
+            || left.anti_join.is_some()
+            || right.projection.is_some()
+            || right.count_variable.is_some()
+            || right.full_row_distinct
+            || !right.union_plans.is_empty()
+            || right.anti_join.is_some()
+        {
+            return Err(BgpPlanError::NotUnsupportedSubplan);
+        }
+        let shared: Vec<(&String, usize, usize)> = left
+            .schema
+            .iter()
+            .enumerate()
+            .filter_map(|(left_index, name)| {
+                right
+                    .schema
+                    .iter()
+                    .position(|candidate| candidate == name)
+                    .map(|right_index| (name, left_index, right_index))
+            })
+            .collect();
+        if shared.len() != 1 {
+            return Err(BgpPlanError::NotSharedVariableCount {
+                count: shared.len(),
+            });
+        }
+        let effective_collection = [
+            collection.as_ref(),
+            left.collection.as_ref(),
+            right.collection.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        .cloned();
+        if [
+            collection.as_ref(),
+            left.collection.as_ref(),
+            right.collection.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|candidate| Some(candidate) != effective_collection.as_ref())
+        {
+            return Err(BgpPlanError::NotRoutingConflict);
+        }
+        if !distincts.is_empty() {
+            if !selections.is_empty() || count_variable.is_some() {
+                return Err(BgpPlanError::DistinctWithProjectionOrCount);
+            }
+            for variables in &distincts {
+                let covers = variables.len() == left.schema.len()
+                    && left
+                        .schema
+                        .iter()
+                        .all(|name| variables.iter().filter(|v| *v == name).count() == 1);
+                if !covers {
+                    return Err(BgpPlanError::DistinctNotFullSchema);
+                }
+            }
+        }
+        let projection = compile_projection(&selections, count_variable.as_deref(), &left.schema)?;
+        return Ok(CompiledBgp {
+            plan: left.plan,
+            union_plans: Vec::new(),
+            union_schema_mappings: Vec::new(),
+            anti_join: Some(CompiledAntiJoin {
+                right_plan: right.plan,
+                left_key: shared[0].1,
+                right_key: shared[0].2,
+            }),
+            schema: left.schema,
+            projection,
+            collection: effective_collection,
+            count_variable,
+            full_row_distinct: !distincts.is_empty(),
         });
     }
 
@@ -1137,12 +1486,25 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         plan,
         union_plans: Vec::new(),
         union_schema_mappings: Vec::new(),
+        anti_join: None,
         schema,
         projection,
         collection,
         count_variable,
         full_row_distinct: !distincts.is_empty(),
     })
+}
+
+fn split_top_level_not(query: &Query, positive: &mut Vec<Query>, negative: &mut Vec<Query>) {
+    match query {
+        Query::And(and) => {
+            for child in &and.and {
+                split_top_level_not(child, positive, negative);
+            }
+        }
+        Query::Not(not) => negative.push((*not.query).clone()),
+        other => positive.push(other.clone()),
+    }
 }
 
 fn compile_projection(

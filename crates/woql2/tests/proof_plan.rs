@@ -5,7 +5,7 @@ mod proof_common;
 use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
-use terminusdb_woql2::control::{Distinct, From, Immediately, Pin, Select, Using};
+use terminusdb_woql2::control::{Distinct, From, Immediately, Pin, Select, Using, WoqlOptional};
 use terminusdb_woql2::misc::{Comment, Count, InRange};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
@@ -438,11 +438,46 @@ fn accepts_compatible_or_and_rejects_incompatible_schemas() {
 }
 
 #[test]
-fn rejects_not() {
-    let q = Query::Not(Not {
-        query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")])),
+fn accepts_correlated_not_as_scalar_left_anti_join() {
+    let q = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+    ]);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.schema, vec!["x", "y"]);
+    let anti = compiled.anti_join.as_ref().unwrap();
+    assert_eq!((anti.left_key, anti.right_key), (1, 0));
+}
+
+#[test]
+fn rejects_uncorrelated_and_two_key_not_closed() {
+    let uncorrelated = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv("a", "q", "b")),
+        }),
+    ]);
+    reject(
+        uncorrelated,
+        BgpPlanError::NotSharedVariableCount { count: 0 },
+    );
+    let two_keys = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv("x", "q", "y")),
+        }),
+    ]);
+    reject(two_keys, BgpPlanError::NotSharedVariableCount { count: 2 });
+}
+
+#[test]
+fn rejects_optional_until_unbound_null_has_an_authenticated_representation() {
+    let q = Query::WoqlOptional(WoqlOptional {
+        query: Box::new(tv("x", "p", "y")),
     });
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "Not" });
+    reject(q, BgpPlanError::OptionalUnboundRepresentation);
 }
 
 #[test]
@@ -670,7 +705,10 @@ fn accepts_all_ground_and_mixed_arity_conjunctions() {
     assert_eq!(compiled.plan.atoms.len(), 2);
     assert!(compiled.plan.joins.is_empty());
     assert!(matches!(compiled.plan.atoms[0].subject, AtomTerm::Variable));
-    assert!(!matches!(compiled.plan.atoms[1].subject, AtomTerm::Variable));
+    assert!(!matches!(
+        compiled.plan.atoms[1].subject,
+        AtomTerm::Variable
+    ));
 }
 
 #[test]
