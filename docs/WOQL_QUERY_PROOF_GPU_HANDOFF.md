@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `43e0757` | Recursive v10 `LayerTripleCount` derives one generated decimal-u64 scalar from the trusted root's logical `materialized_count`; generated values have a domain distinct from Store IDs. |
-| `modules/terminusdb-rs` | this checkpoint | Canonical explicit-instance `TripleCount` planning, generated-scalar verification/executor boundary, envelope integration, and fail-closed resource rules. |
+| `modules/terminusdb-store-paraplu` | `c5389a6` | Recursive v11 generated-u64 filters derive exact Eq/Lt/Le/Gt/Ge selections over already-authenticated generated decimal fields, without dictionary or extra polynomial proofs. |
+| `modules/terminusdb-rs` | this checkpoint | Explicit-instance `TripleCount` plus bounded exact-integral decimal comparisons, generated-scalar executor/envelope integration, and fail-closed coercion/resource rules. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -314,6 +314,23 @@ non-serde domain-decoder test, and two E2E tests covering empty and child-layer 
 generated executor values, portable envelope round-trip, wrong resource/root, and a
 forged/recommitted result (10.90s for the E2E pair).
 
+Store checkpoint `c5389a6` adds recursive wire v11/tag 13
+`GeneratedU64Filter`. It accepts Eq/Lt/Le/Gt/Ge, a `u64` constant, operand order,
+and one generated-decimal child column. Since the child values are already public and
+authenticated, proving and verification deterministically select the complete matching
+rows and recommit them; no Store dictionary membership or additional polynomial proof is
+used. The focused Store gate covered every operator, zero and `u64::MAX` constants,
+operand order, wire round-trip, operator substitution, and forged/recommitted output in
+17.69s.
+
+The woql2 lowering recognizes a sequential explicit-instance `TripleCount` followed by
+`Equals`, `Greater`, `Gte`, `Less`, or `Lte` on that bound count variable. Constants must
+be `xsd:decimal`, nonnegative, integral, non-scientific in the retained Decimal form, and
+within `u64`; the planner does not coerce Store integer tags, fractions, negatives, or
+other datatypes. Six focused planner tests passed. Two E2E tests covered true/false
+relations for all comparison families, operand reversal, `u64::MAX`, outer `Count`,
+envelopes, and operator/order/constant substitution in 14.89s.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -354,6 +371,9 @@ forged/recommitted result (10.90s for the E2E pair).
 - [x] Authenticate explicit instance-graph `TripleCount` directly from the trusted
   root's logical visible count, with a generated-decimal result domain, child stacks,
   envelope/executor integration, and resource/root/tamper guards.
+- [x] Authenticate bounded Eq/Gt/Gte/Lt/Lte filters over the generated TripleCount
+  decimal against exact integral decimal constants, including operand order and
+  zero/maximum boundaries, without conflating generated scalars with Store IDs.
 - [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
   selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
 - [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage

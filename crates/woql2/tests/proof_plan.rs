@@ -17,7 +17,7 @@ use terminusdb_woql2::triple::{
 };
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
-use terminus_store::proof::envelope::RelationEqualityPlan;
+use terminus_store::proof::envelope::{GeneratedU64ComparisonOp, RelationEqualityPlan};
 use terminus_store::proof::query::{AtomTerm, ObjectKindFilter, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -46,6 +46,10 @@ fn triple_count(resource: &str, output: DataValue) -> Query {
         resource: resource.into(),
         count: output,
     })
+}
+
+fn decimal_value(value: &str) -> DataValue {
+    DataValue::Data(XSDAnySimpleType::Decimal(value.parse().unwrap()))
 }
 
 #[test]
@@ -115,6 +119,102 @@ fn triple_count_rejects_uncommitted_resource_semantics_and_constant_output() {
             size: DataValue::Variable("Size".into()),
         }),
         BgpPlanError::UnsupportedConstruct { construct: "Size" },
+    );
+}
+
+#[test]
+fn triple_count_accepts_exact_integral_decimal_comparisons_and_binds_their_plan() {
+    let source = triple_count(
+        "admin/db/local/branch/main/instance",
+        DataValue::Variable("Count".into()),
+    );
+    let query = and_of(vec![
+        source,
+        greater(dvar("Count"), decimal_value("0")),
+        lte(decimal_value("18446744073709551615"), dvar("Count")),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let CompiledRelationStatement::GeneratedU64Filter {
+        input,
+        op,
+        constant,
+        constant_on_left,
+        ..
+    } = &compiled.relation.statement
+    else {
+        panic!("expected outer generated-u64 filter");
+    };
+    assert_eq!(*op, GeneratedU64ComparisonOp::Le);
+    assert_eq!(*constant, u64::MAX);
+    assert!(*constant_on_left);
+    assert!(matches!(
+        input.statement,
+        CompiledRelationStatement::GeneratedU64Filter {
+            op: GeneratedU64ComparisonOp::Gt,
+            constant: 0,
+            constant_on_left: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn triple_count_equals_and_outer_count_compose_without_store_id_coercion() {
+    let source = triple_count(
+        "admin/db/local/branch/main/instance",
+        DataValue::Variable("Count".into()),
+    );
+    let equality = equals(
+        Value::Variable("Count".into()),
+        Value::Data(XSDAnySimpleType::Decimal("3.000".parse().unwrap())),
+    );
+    let compiled = plan_bgp(&Query::Count(Count {
+        query: Box::new(and_of(vec![source, equality])),
+        count: DataValue::Variable("Rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(compiled.count_variable.as_deref(), Some("Rows"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::GeneratedU64Filter {
+            op: GeneratedU64ComparisonOp::Eq,
+            constant: 3,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn triple_count_comparisons_reject_fraction_negative_scientific_wrong_type_and_shape() {
+    let source = || {
+        triple_count(
+            "admin/db/local/branch/main/instance",
+            DataValue::Variable("Count".into()),
+        )
+    };
+    for constant in ["1.5", "-1", "1e2", "18446744073709551616"] {
+        reject(
+            and_of(vec![source(), greater(dvar("Count"), decimal_value(constant))]),
+            BgpPlanError::TripleCountComparisonUnsupportedConstant,
+        );
+    }
+    reject(
+        and_of(vec![
+            source(),
+            greater(
+                dvar("Count"),
+                DataValue::Data(XSDAnySimpleType::UnsignedLong(3)),
+            ),
+        ]),
+        BgpPlanError::TripleCountComparisonUnsupportedConstant,
+    );
+    reject(
+        and_of(vec![source(), greater(dvar("Other"), decimal_value("3"))]),
+        BgpPlanError::TripleCountComparisonUnsupportedShape,
+    );
+    reject(
+        and_of(vec![greater(dvar("Count"), decimal_value("3")), source()]),
+        BgpPlanError::TripleCountComparisonUnsupportedShape,
     );
 }
 

@@ -42,7 +42,8 @@ use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
 };
 use terminus_store::proof::envelope::{
-    plan_digest, resolve_relation_equality_constraint, EqualityValueDomain, LayerBgpEnvelope,
+    plan_digest, resolve_relation_equality_constraint, EqualityValueDomain,
+    GeneratedU64ComparisonOp, LayerBgpEnvelope,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
     RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
 };
@@ -110,6 +111,13 @@ pub struct CompiledRelation {
 pub enum CompiledRelationStatement {
     Bgp(LayerBgpPlan),
     LayerTripleCount,
+    GeneratedU64Filter {
+        input: Box<CompiledRelation>,
+        column: usize,
+        op: GeneratedU64ComparisonOp,
+        constant: u64,
+        constant_on_left: bool,
+    },
     BagUnion {
         branches: Vec<CompiledRelation>,
         /// Public output column -> child relation column, per ordered branch.
@@ -302,6 +310,9 @@ pub enum ExecutedResultValue {
 #[derive(Debug)]
 pub enum ProvedQueryStatement {
     LayerTripleCount,
+    GeneratedU64Filter {
+        input: Box<ProvedBgp>,
+    },
     Single {
         proof: Box<LayerBgpProof>,
         predicate_ids: Vec<u64>,
@@ -426,6 +437,26 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
     match &relation.statement {
         CompiledRelationStatement::LayerTripleCount => {
             hasher.update(b"/layer-triple-count");
+        }
+        CompiledRelationStatement::GeneratedU64Filter {
+            input,
+            column,
+            op,
+            constant,
+            constant_on_left,
+        } => {
+            hasher.update(b"/generated-u64-filter");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update(column.to_le_bytes());
+            hasher.update([match op {
+                GeneratedU64ComparisonOp::Eq => 0,
+                GeneratedU64ComparisonOp::Lt => 1,
+                GeneratedU64ComparisonOp::Le => 2,
+                GeneratedU64ComparisonOp::Gt => 3,
+                GeneratedU64ComparisonOp::Ge => 4,
+            }]);
+            hasher.update(constant.to_le_bytes());
+            hasher.update([*constant_on_left as u8]);
         }
         CompiledRelationStatement::Bgp(plan) => {
             hasher.update(b"/bgp");
@@ -619,6 +650,9 @@ fn relation_result_descriptors(
             namespace: ResultIdNamespace::GeneratedDecimalU64,
             nullable: false,
         }]),
+        CompiledRelationStatement::GeneratedU64Filter { input, .. } => {
+            relation_result_descriptors(input)
+        }
         CompiledRelationStatement::Bgp(plan) => {
             terminus_store::proof::query::result_column_descriptors(plan)
         }
@@ -743,6 +777,19 @@ fn relation_proof_plan(
     };
     let kind = match &relation.statement {
         CompiledRelationStatement::LayerTripleCount => RelationProofPlanKind::LayerTripleCount,
+        CompiledRelationStatement::GeneratedU64Filter {
+            input,
+            column,
+            op,
+            constant,
+            constant_on_left,
+        } => RelationProofPlanKind::GeneratedU64Filter {
+            input: Box::new(child(input)?),
+            column: *column,
+            op: *op,
+            constant: *constant,
+            constant_on_left: *constant_on_left,
+        },
         CompiledRelationStatement::Bgp(plan) => RelationProofPlanKind::Bgp(plan.clone()),
         CompiledRelationStatement::BagUnion { branches, mappings } => {
             RelationProofPlanKind::BagUnion {
@@ -829,6 +876,68 @@ fn relation_proof_plan(
     Ok(RelationProofPlan { query_digest, kind })
 }
 
+fn generated_u64_comparison(
+    value: u64,
+    op: GeneratedU64ComparisonOp,
+    constant: u64,
+    constant_on_left: bool,
+) -> bool {
+    let (left, right) = if constant_on_left {
+        (constant, value)
+    } else {
+        (value, constant)
+    };
+    match op {
+        GeneratedU64ComparisonOp::Eq => left == right,
+        GeneratedU64ComparisonOp::Lt => left < right,
+        GeneratedU64ComparisonOp::Le => left <= right,
+        GeneratedU64ComparisonOp::Gt => left > right,
+        GeneratedU64ComparisonOp::Ge => left >= right,
+    }
+}
+
+fn expected_generated_u64_filter_columns(
+    input: &ProvedBgp,
+    column: usize,
+    op: GeneratedU64ComparisonOp,
+    constant: u64,
+    constant_on_left: bool,
+    value: u64,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let source = input.result_columns.get(column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "generated-u64 comparison column is out of range",
+        )
+    })?;
+    if input.result_len != 1 || source.first() != Some(&ArkFr::from_u64(value)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "generated-u64 comparison input does not match the trusted root-derived value",
+        ));
+    }
+    let keep = generated_u64_comparison(value, op, constant, constant_on_left)
+        .then_some(0)
+        .into_iter()
+        .collect::<Vec<_>>();
+    input
+        .result_columns
+        .iter()
+        .map(|input_column| {
+            keep.iter()
+                .map(|row| {
+                    input_column.get(*row).copied().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "generated-u64 comparison input column is short",
+                        )
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
 impl ProvedBgp {
     pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
         match &self.statement {
@@ -910,6 +1019,46 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL layer triple-count result does not match trusted root",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::GeneratedU64Filter { input },
+                CompiledRelationStatement::GeneratedU64Filter {
+                    input: input_plan,
+                    column,
+                    op,
+                    constant,
+                    constant_on_left,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_generated_u64_filter_columns(
+                    input,
+                    *column,
+                    *op,
+                    *constant,
+                    *constant_on_left,
+                    layer.verifier_view().state.materialized_count,
+                )?;
+                let expected_len = expected_columns.first().map_or(0, Vec::len);
+                let expected_log = expected_len
+                    .max(1)
+                    .next_power_of_two()
+                    .max(2)
+                    .trailing_zeros() as usize;
+                if self.result_len != expected_len
+                    || self.result_log_domain != expected_log
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL generated-u64 comparison is not the exact derived selection",
                     ));
                 }
             }
@@ -1691,6 +1840,19 @@ impl ProvedBgp {
                 CompiledRelationStatement::LayerTripleCount,
             ) => RecursiveRelationProof::LayerTripleCount,
             (
+                ProvedQueryStatement::GeneratedU64Filter { input },
+                CompiledRelationStatement::GeneratedU64Filter {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::GeneratedU64Filter {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::Single {
                     proof,
                     predicate_ids,
@@ -2027,6 +2189,11 @@ pub fn decode_verifier_commitment_and_verify_envelope(
 fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
+        RecursiveRelationProof::GeneratedU64Filter { input } => {
+            ProvedQueryStatement::GeneratedU64Filter {
+                input: Box::new(proved_from_recursive(*input)),
+            }
+        }
         RecursiveRelationProof::Bgp(leaf) => ProvedQueryStatement::Single {
             proof: Box::new(leaf.proof),
             predicate_ids: leaf.predicate_ids,
@@ -2431,6 +2598,12 @@ pub enum BgpPlanError {
 
     #[error("TripleCount output must be a variable")]
     TripleCountOutputNotVariable,
+
+    #[error("generated TripleCount comparisons require the count source before one or more comparisons of that same variable to exact integral xsd:decimal constants")]
+    TripleCountComparisonUnsupportedShape,
+
+    #[error("generated TripleCount comparison constants must be exact nonnegative integral xsd:decimal values in the u64 range")]
+    TripleCountComparisonUnsupportedConstant,
 
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
@@ -3089,6 +3262,122 @@ fn plan_layer_triple_count(
     })
 }
 
+fn exact_integral_decimal_u64(value: &XSDAnySimpleType) -> Result<u64, BgpPlanError> {
+    let XSDAnySimpleType::Decimal(decimal) = value else {
+        return Err(BgpPlanError::TripleCountComparisonUnsupportedConstant);
+    };
+    // A negative scale is the retained representation of a positive decimal exponent.
+    // Do not silently broaden this bounded contract to scientific notation.
+    if decimal.is_sign_negative() || decimal.scale() < 0 {
+        return Err(BgpPlanError::TripleCountComparisonUnsupportedConstant);
+    }
+    let value = u64::try_from(decimal)
+        .map_err(|_| BgpPlanError::TripleCountComparisonUnsupportedConstant)?;
+    if decimal != &decimal_rs::Decimal::from(value) {
+        return Err(BgpPlanError::TripleCountComparisonUnsupportedConstant);
+    }
+    Ok(value)
+}
+
+fn flatten_triple_count_comparison_body<'a>(query: &'a Query, leaves: &mut Vec<&'a Query>) {
+    match query {
+        Query::And(and) => {
+            for child in &and.and {
+                flatten_triple_count_comparison_body(child, leaves);
+            }
+        }
+        Query::Pin(pin) => flatten_triple_count_comparison_body(pin.query.as_ref(), leaves),
+        Query::Immediately(immediately) => {
+            flatten_triple_count_comparison_body(immediately.query.as_ref(), leaves)
+        }
+        Query::True(_) | Query::Comment(_) => {}
+        other => leaves.push(other),
+    }
+}
+
+fn generated_triple_count_constraint(
+    query: &Query,
+    variable: &str,
+) -> Result<(GeneratedU64ComparisonOp, u64, bool), BgpPlanError> {
+    let range = |left: &DataValue,
+                 right: &DataValue,
+                 op: GeneratedU64ComparisonOp|
+     -> Result<_, BgpPlanError> {
+        match (left, right) {
+            (DataValue::Variable(candidate), DataValue::Data(value)) if candidate == variable => {
+                Ok((op, exact_integral_decimal_u64(value)?, false))
+            }
+            (DataValue::Data(value), DataValue::Variable(candidate)) if candidate == variable => {
+                Ok((op, exact_integral_decimal_u64(value)?, true))
+            }
+            _ => Err(BgpPlanError::TripleCountComparisonUnsupportedShape),
+        }
+    };
+    match query {
+        Query::Greater(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Gt),
+        Query::Gte(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Ge),
+        Query::Less(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Lt),
+        Query::Lte(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Le),
+        Query::Equals(value) => {
+            use crate::value::WoqlValue;
+            match (&value.left, &value.right) {
+                (WoqlValue::Variable(candidate), WoqlValue::Data(value))
+                    if candidate == variable =>
+                {
+                    Ok((
+                        GeneratedU64ComparisonOp::Eq,
+                        exact_integral_decimal_u64(value)?,
+                        false,
+                    ))
+                }
+                (WoqlValue::Data(value), WoqlValue::Variable(candidate))
+                    if candidate == variable =>
+                {
+                    Ok((
+                        GeneratedU64ComparisonOp::Eq,
+                        exact_integral_decimal_u64(value)?,
+                        true,
+                    ))
+                }
+                _ => Err(BgpPlanError::TripleCountComparisonUnsupportedShape),
+            }
+        }
+        _ => Err(BgpPlanError::TripleCountComparisonUnsupportedShape),
+    }
+}
+
+fn plan_triple_count_comparison_body(
+    body: &Query,
+) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let mut leaves = Vec::new();
+    flatten_triple_count_comparison_body(body, &mut leaves);
+    let Some(Query::TripleCount(triple_count)) = leaves.first().copied() else {
+        if leaves.iter().any(|leaf| matches!(leaf, Query::TripleCount(_))) {
+            return Err(BgpPlanError::TripleCountComparisonUnsupportedShape);
+        }
+        return Ok(None);
+    };
+    let mut compiled = plan_layer_triple_count(triple_count)?;
+    let variable = compiled.relation.schema[0].clone();
+    for comparison in leaves.into_iter().skip(1) {
+        let (op, constant, constant_on_left) =
+            generated_triple_count_constraint(comparison, &variable)?;
+        let input = compiled.relation;
+        compiled.relation = CompiledRelation {
+            schema: input.schema.clone(),
+            domains: input.domains.clone(),
+            statement: CompiledRelationStatement::GeneratedU64Filter {
+                input: Box::new(input),
+                column: 0,
+                op,
+                constant,
+                constant_on_left,
+            },
+        };
+    }
+    Ok(Some(compiled))
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -3220,8 +3509,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         return Ok(compiled);
     }
 
-    if let Query::TripleCount(triple_count) = body {
-        let mut compiled = plan_layer_triple_count(triple_count)?;
+    if let Some(mut compiled) = plan_triple_count_comparison_body(body)? {
         let (relation, full_row_distinct) = compile_distinct_relation(
             compiled.relation,
             &distincts,
@@ -3966,6 +4254,9 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
         match &relation.statement {
             CompiledRelationStatement::Bgp(_)
             | CompiledRelationStatement::LayerTripleCount => Ok(()),
+            CompiledRelationStatement::GeneratedU64Filter { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
             CompiledRelationStatement::BagUnion { branches, .. } => {
                 for branch in branches {
                     visit(branch, depth + 1, nodes)?;

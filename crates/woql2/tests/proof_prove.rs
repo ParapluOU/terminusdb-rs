@@ -78,6 +78,17 @@ fn triple_count_query(resource: &str) -> Query {
     })
 }
 
+fn triple_count_decimal(value: &str) -> DataValue {
+    DataValue::Data(XSDAnySimpleType::Decimal(value.parse().unwrap()))
+}
+
+fn counted_comparison(comparison: Query) -> Query {
+    and_of(vec![
+        triple_count_query("admin/db/local/branch/main/instance"),
+        comparison,
+    ])
+}
+
 #[test]
 fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() {
     let store = open_sync_memory_store();
@@ -215,6 +226,91 @@ fn explicit_instance_triple_count_proves_zero_as_a_value_not_null() {
             layer.state.commitment_root,
             &["Count".into()],
             &[vec![ExecutedResultValue::GeneratedDecimalU64(0)]],
+        )
+        .unwrap();
+}
+
+#[test]
+fn generated_triple_count_comparisons_prove_exact_true_and_false_relations() {
+    let layer = build_layer(&[("a", "p", "b"), ("c", "p", "d"), ("e", "q", "f")]);
+    let cases = [
+        (equals(
+            Value::Variable("Count".into()),
+            Value::Data(XSDAnySimpleType::Decimal("3".parse().unwrap())),
+        ), 1),
+        (equals(
+            Value::Variable("Count".into()),
+            Value::Data(XSDAnySimpleType::Decimal("2".parse().unwrap())),
+        ), 0),
+        (greater(dvar("Count"), triple_count_decimal("0")), 1),
+        (gte(dvar("Count"), triple_count_decimal("3")), 1),
+        (less(dvar("Count"), triple_count_decimal("3")), 0),
+        (lte(triple_count_decimal("3"), dvar("Count")), 1),
+        (less(dvar("Count"), triple_count_decimal("18446744073709551615")), 1),
+    ];
+
+    for (query, expected_len) in cases {
+        let compiled = plan_bgp(&counted_comparison(query)).unwrap();
+        let proved = compiled.prove(&layer).unwrap();
+        assert_eq!(proved.result_len, expected_len);
+        let values = proved
+            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+        assert_eq!(
+            values,
+            vec![if expected_len == 1 {
+                vec![CanonicalResultValue::GeneratedDecimalU64(3)]
+            } else {
+                Vec::new()
+            }]
+        );
+    }
+}
+
+#[test]
+fn generated_triple_count_comparison_envelope_binds_operator_operand_and_constant() {
+    let layer = build_layer(&[("a", "p", "b"), ("c", "p", "d"), ("e", "q", "f")]);
+    let query = counted_comparison(gte(dvar("Count"), triple_count_decimal("3")));
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    for substituted in [
+        counted_comparison(greater(dvar("Count"), triple_count_decimal("3"))),
+        counted_comparison(gte(triple_count_decimal("3"), dvar("Count"))),
+        counted_comparison(gte(dvar("Count"), triple_count_decimal("2"))),
+    ] {
+        let substituted = plan_bgp(&substituted).unwrap();
+        assert!(decode_and_verify_envelope(
+            &envelope,
+            &substituted,
+            &layer,
+            layer.state.commitment_root,
+        )
+        .is_err());
+    }
+
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(counted_comparison(less(
+            dvar("Count"),
+            triple_count_decimal("3"),
+        ))),
+        count: DataValue::Variable("Rows".into()),
+    }))
+    .unwrap();
+    let counted_proof = counted.prove(&layer).unwrap();
+    assert_eq!(counted_proof.count_binding(&counted), Some(("Rows", 0)));
+    counted_proof
+        .verify_executed_rows(
+            &counted,
+            &layer,
+            layer.state.commitment_root,
+            &["Rows".into()],
+            &[vec![0]],
         )
         .unwrap();
 }
