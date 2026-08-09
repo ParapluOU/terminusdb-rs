@@ -136,6 +136,14 @@ the prepared cloud server.
 
 ## Active WOQL coverage checklist
 
+Store checkpoint `76a468f` adds the exact prerequisite for bounded multikey order:
+an injective radix-`2^64` packing and strict-sort proof for two or three authenticated
+64-bit key columns with independent Asc/Desc directions. The packed commitment is
+derived linearly from the key commitments and real-row selector; padding is zero and
+direction tampering rejects. Remaining composition must authenticate each output ID's
+dictionary value/datatype, apply a full-row permutation, then feed those commitments to
+this gadget. Do not expose it directly from the WOQL planner before that composition.
+
 GPU implementation is parked until WOQL completeness is substantially higher. The
 current semantic checkpoint adds an exact scalar ascending `OrderBy` slice on top of the
 existing recursively composable read relation. The Store proof covers full-row
@@ -152,6 +160,8 @@ duplicate-generating recursive children.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column leaf result.
 - [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
 - [x] `Once` over an authenticated ordered child, digest-distinct from `Limit(1)`.
+- [x] Two-/three-key lexicographic strict-sort prerequisite over authenticated 64-bit columns.
+- [ ] Compose multikey full-row permutation plus per-key dictionary/type lookup into that gadget.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
