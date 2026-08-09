@@ -5,7 +5,7 @@ mod proof_common;
 use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
-use terminusdb_woql2::control::{Distinct, From, Immediately, Pin, Select, Using, WoqlOptional};
+use terminusdb_woql2::control::{Distinct, From, If, Immediately, Pin, Select, Using, WoqlOptional};
 use terminusdb_woql2::misc::{Comment, Count, InRange};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
@@ -448,28 +448,27 @@ fn accepts_correlated_not_as_scalar_left_anti_join() {
     let compiled = plan_bgp(&q).unwrap();
     assert_eq!(compiled.schema, vec!["x", "y"]);
     let anti = compiled.anti_join.as_ref().unwrap();
-    assert_eq!((anti.left_key, anti.right_key), (1, 0));
+    assert_eq!(anti.key_pairs, vec![(1, 0)]);
 }
 
 #[test]
-fn rejects_uncorrelated_and_two_key_not_closed() {
+fn accepts_global_and_two_key_not() {
     let uncorrelated = and_of(vec![
         tv("x", "p", "y"),
         Query::Not(Not {
             query: Box::new(tv("a", "q", "b")),
         }),
     ]);
-    reject(
-        uncorrelated,
-        BgpPlanError::NotSharedVariableCount { count: 0 },
-    );
+    let global = plan_bgp(&uncorrelated).unwrap();
+    assert!(global.anti_join.unwrap().key_pairs.is_empty());
     let two_keys = and_of(vec![
         tv("x", "p", "y"),
         Query::Not(Not {
             query: Box::new(tv("x", "q", "y")),
         }),
     ]);
-    reject(two_keys, BgpPlanError::NotSharedVariableCount { count: 2 });
+    let compiled = plan_bgp(&two_keys).unwrap();
+    assert_eq!(compiled.anti_join.unwrap().key_pairs, vec![(0, 0), (1, 1)]);
 }
 
 #[test]
@@ -478,6 +477,16 @@ fn rejects_optional_until_unbound_null_has_an_authenticated_representation() {
         query: Box::new(tv("x", "p", "y")),
     });
     reject(q, BgpPlanError::OptionalUnboundRepresentation);
+}
+
+#[test]
+fn rejects_if_until_the_executor_json_ast_has_matching_semantics() {
+    let q = Query::If(If {
+        test: Box::new(tv("a", "p", "b")),
+        then_query: Box::new(tv("x", "q", "y")),
+        else_query: Box::new(tv("x", "r", "y")),
+    });
+    reject(q, BgpPlanError::UnsupportedConstruct { construct: "If" });
 }
 
 #[test]

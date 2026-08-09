@@ -30,7 +30,10 @@ use dory_pcs::primitives::arithmetic::Field;
 use dory_pcs::primitives::transcript::Transcript;
 use sha2::{Digest, Sha256};
 use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
-use terminus_store::proof::anti::{prove_left_anti_join, verify_left_anti_join, LeftAntiJoinProof};
+use terminus_store::proof::anti::{
+    prove_global_not, prove_left_anti_join_with_keys, verify_global_not,
+    verify_left_anti_join_with_keys, LeftAntiJoinProof,
+};
 use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
@@ -93,8 +96,12 @@ pub struct CompiledBgp {
 #[derive(Clone, Debug)]
 pub struct CompiledAntiJoin {
     pub right_plan: LayerBgpPlan,
-    pub left_key: usize,
-    pub right_key: usize,
+    /// Negated branch schema, bound into the public query digest even though local
+    /// variables are not exposed by Prolog negation.
+    pub right_schema: Vec<String>,
+    /// Ordered `(outer, negated)` schema-column pairs. Two pairs use the Store's
+    /// injective two-u64 composite key in this exact order.
+    pub key_pairs: Vec<(usize, usize)>,
 }
 
 /// An in-memory proof result produced only when a caller explicitly invokes
@@ -124,7 +131,9 @@ pub enum ProvedQueryStatement {
 pub struct ProvedLeftAntiJoin {
     pub left: ProvedBagUnionBranch,
     pub right: ProvedBagUnionBranch,
-    pub proof: LeftAntiJoinProof,
+    /// Present for correlated anti-joins. Global Not is pinned entirely by the
+    /// independently authenticated right length and carries no extra witness.
+    pub proof: Option<LeftAntiJoinProof>,
 }
 
 #[derive(Debug)]
@@ -181,8 +190,15 @@ pub fn compiled_query_digest(compiled: &CompiledBgp) -> std::io::Result<ProofHas
     if let Some(anti) = &compiled.anti_join {
         hasher.update(b"/left-anti-join/v0");
         hasher.update(plan_digest(&anti.right_plan)?);
-        hasher.update((anti.left_key as u64).to_le_bytes());
-        hasher.update((anti.right_key as u64).to_le_bytes());
+        hasher.update((anti.right_schema.len() as u64).to_le_bytes());
+        for name in &anti.right_schema {
+            digest_bytes(&mut hasher, name.as_bytes());
+        }
+        hasher.update((anti.key_pairs.len() as u64).to_le_bytes());
+        for (left, right) in &anti.key_pairs {
+            hasher.update((*left as u64).to_le_bytes());
+            hasher.update((*right as u64).to_le_bytes());
+        }
     }
     hasher.update((compiled.schema.len() as u64).to_le_bytes());
     for name in &compiled.schema {
@@ -275,25 +291,30 @@ impl ProvedBgp {
             let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
             transcript.append_bytes(b"pow/anti-envelope/root", &expected_root);
             transcript.append_bytes(b"pow/anti-envelope/query", &digest);
-            verify_left_anti_join(
-                &RelationCommit {
+            let left_commit = RelationCommit {
                     commitments: proved.left.result_commitments.clone(),
                     log_domain: proved.left.result_log_domain,
                     n: proved.left.result_len,
-                },
-                &RelationCommit {
+                };
+            let right_commit = RelationCommit {
                     commitments: proved.right.result_commitments.clone(),
                     log_domain: proved.right.result_log_domain,
                     n: proved.right.result_len,
-                },
-                anti.left_key,
-                anti.right_key,
-                &self.result_commitments,
-                self.result_len,
-                self.result_log_domain,
-                &proved.proof,
-                &mut transcript,
-            )?;
+                };
+            match (anti.key_pairs.is_empty(), proved.proof.as_ref()) {
+                (true, None) => verify_global_not(
+                    &left_commit, &right_commit, &self.result_commitments, self.result_len,
+                    self.result_log_domain,
+                )?,
+                (false, Some(proof)) => verify_left_anti_join_with_keys(
+                    &left_commit, &right_commit, &anti.key_pairs, &self.result_commitments,
+                    self.result_len, self.result_log_domain, proof, &mut transcript,
+                )?,
+                _ => return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Not key/proof variant mismatch",
+                )),
+            }
             return self.verify_columns(&self.result_columns);
         }
         if let ProvedQueryStatement::BagUnion(union) = &self.statement {
@@ -595,13 +616,13 @@ impl ProvedBgp {
                 digest,
                 branch_envelope(&proved.left, &compiled.plan)?,
                 branch_envelope(&proved.right, &anti.right_plan)?,
-                anti.left_key,
-                anti.right_key,
+                anti.key_pairs.clone(),
                 proved.proof.clone(),
                 self.result_commitments.clone(),
                 self.result_columns.clone(),
                 self.result_log_domain,
                 self.result_len,
+                compiled.schema.is_empty(),
             )?
             .encode();
         }
@@ -731,8 +752,8 @@ pub fn decode_and_verify_envelope(
             &compiled.plan,
             &anti.right_plan,
             digest,
-            anti.left_key,
-            anti.right_key,
+            &anti.key_pairs,
+            compiled.schema.is_empty(),
         )?;
         let branch = |envelope: LayerBgpEnvelope| ProvedBagUnionBranch {
             proof: envelope.proof,
@@ -855,13 +876,26 @@ impl CompiledBgp {
             let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
             transcript.append_bytes(b"pow/anti-envelope/root", &layer.state.commitment_root);
             transcript.append_bytes(b"pow/anti-envelope/query", &digest);
-            let result = prove_left_anti_join(
-                &left_witness,
-                &right_witness,
-                anti.left_key,
-                anti.right_key,
-                &mut transcript,
-            )?;
+            let (operator_proof, commitments, columns, result_log_domain, result_len) =
+                if anti.key_pairs.is_empty() {
+                    let (commitments, columns, log_domain, n) =
+                        prove_global_not(&left_witness, &right_witness)?;
+                    (None, commitments, columns, log_domain, n)
+                } else {
+                    let result = prove_left_anti_join_with_keys(
+                        &left_witness,
+                        &right_witness,
+                        &anti.key_pairs,
+                        &mut transcript,
+                    )?;
+                    (
+                        Some(result.proof),
+                        result.commitments,
+                        result.columns,
+                        result.log_domain,
+                        result.n,
+                    )
+                };
             let branch = |result: terminus_store::proof::query::LayerBgpResult| {
                 let real_columns = result.real_columns();
                 ProvedBagUnionBranch {
@@ -877,16 +911,15 @@ impl CompiledBgp {
                 statement: ProvedQueryStatement::LeftAntiJoin(ProvedLeftAntiJoin {
                     left: branch(left),
                     right: branch(right),
-                    proof: result.proof,
+                    proof: operator_proof,
                 }),
-                result_commitments: result.commitments,
-                result_columns: result
-                    .columns
+                result_commitments: commitments,
+                result_columns: columns
                     .iter()
-                    .map(|column| column[..result.n].to_vec())
+                    .map(|column| column[..result_len].to_vec())
                     .collect(),
-                result_log_domain: result.log_domain,
-                result_len: result.n,
+                result_log_domain,
+                result_len,
             });
         }
         if !self.union_plans.is_empty() {
@@ -1104,7 +1137,7 @@ pub enum BgpPlanError {
     #[error("correlated Not needs a non-empty positive outer BGP")]
     NotMissingOuter,
 
-    #[error("correlated Not currently needs exactly one shared variable, found {count}")]
+    #[error("Not supports at most two shared variables, found {count}")]
     NotSharedVariableCount { count: usize },
 
     #[error("Select, Count, Distinct, Or, or nested Not inside a Not subplan is unsupported")]
@@ -1355,7 +1388,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                     .map(|right_index| (name, left_index, right_index))
             })
             .collect();
-        if shared.len() != 1 {
+        if shared.len() > 2 {
             return Err(BgpPlanError::NotSharedVariableCount {
                 count: shared.len(),
             });
@@ -1402,8 +1435,11 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             union_schema_mappings: Vec::new(),
             anti_join: Some(CompiledAntiJoin {
                 right_plan: right.plan,
-                left_key: shared[0].1,
-                right_key: shared[0].2,
+                key_pairs: shared
+                    .iter()
+                    .map(|(_, left, right)| (*left, *right))
+                    .collect(),
+                right_schema: right.schema,
             }),
             schema: left.schema,
             projection,

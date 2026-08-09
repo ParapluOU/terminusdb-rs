@@ -26,7 +26,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::XSDAnySimpleType;
-use terminusdb_woql2::control::Distinct;
+use terminusdb_woql2::control::{Distinct, Select};
 use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp};
 use terminusdb_woql2::{
     misc::{Count, InRange},
@@ -80,6 +80,160 @@ fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
     forged.result_columns[0][0] = ArkFr::from_u64(999_999);
     assert!(forged
         .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn composite_not_binds_swapped_shared_schema_and_requires_both_keys() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("a", "p", "c"),
+        ("d", "p", "e"),
+        ("b", "q", "a"),
+        ("z", "q", "a"),
+        ("e", "q", "d"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            // Reversed variable order makes the mapping [(x,1),(y,0)].
+            query: Box::new(tv("y", "q", "x")),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    assert_eq!(compiled.anti_join.as_ref().unwrap().key_pairs, vec![(0, 1), (1, 0)]);
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 1, "a-p-c only partially matches the right keys");
+    proved.verify(&compiled, &layer, layer.state.commitment_root).unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let mut reordered = compiled.clone();
+    reordered.anti_join.as_mut().unwrap().key_pairs.swap(0, 1);
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reordered,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn global_not_gates_complete_outer_relation_under_select_and_count() {
+    let layer = build_layer(&[("a", "p", "b"), ("c", "p", "d"), ("u", "q", "v")]);
+    let retained = Query::Select(Select {
+        variables: vec!["x".into()],
+        query: Box::new(and_of(vec![
+            tv("x", "p", "y"),
+            Query::Not(Not { query: Box::new(tv_subj_const("a", "q", "b")) }),
+        ])),
+    });
+    let retained_compiled = plan_bgp(&retained).unwrap();
+    assert!(retained_compiled.anti_join.as_ref().unwrap().key_pairs.is_empty());
+    let retained_proved = retained_compiled.prove(&layer).unwrap();
+    assert_eq!(retained_proved.result_len, 2);
+    assert_eq!(retained_proved.projected_columns(&retained_compiled).count(), 1);
+    retained_proved
+        .verify(&retained_compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let suppressed = Query::Count(Count {
+        query: Box::new(and_of(vec![
+            tv("x", "p", "y"),
+            Query::Not(Not { query: Box::new(tv("a", "q", "b")) }),
+        ])),
+        count: terminusdb_woql2::value::DataValue::Variable("count".into()),
+    });
+    let suppressed_compiled = plan_bgp(&suppressed).unwrap();
+    let suppressed_proved = suppressed_compiled.prove(&layer).unwrap();
+    assert_eq!(suppressed_proved.count_binding(&suppressed_compiled), Some(("count", 0)));
+    suppressed_proved
+        .verify(&suppressed_compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(suppressed_proved
+        .verify_columns(&retained_proved.result_columns)
+        .is_err());
+    let envelope = suppressed_proved
+        .encode_envelope(
+            &suppressed_compiled,
+            &layer,
+            layer.state.commitment_root,
+        )
+        .unwrap();
+    decode_and_verify_envelope(
+        &envelope,
+        &suppressed_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    let correlated_variant = plan_bgp(&and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv("x", "q", "y")),
+        }),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &correlated_variant,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn global_not_tracks_authenticated_nonemptiness_across_layers() {
+    let store = open_sync_memory_store();
+    let base_builder = store.create_base_layer().unwrap();
+    base_builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("p"), &iri("b")))
+        .unwrap();
+    base_builder
+        .add_value_triple(ValueTriple::new_node(&iri("u"), &iri("q"), &iri("v")))
+        .unwrap();
+    let base = base_builder.commit().unwrap();
+    let base_commitment = base.proof_commitment().unwrap();
+    let child_builder = base.open_write().unwrap();
+    child_builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("q"), &iri("hit")))
+        .unwrap();
+    let child = child_builder.commit().unwrap();
+    let child_commitment = child.proof_commitment().unwrap();
+
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::Not(Not {
+            query: Box::new(tv_subj_const("a", "q", "z")),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let base_proved = compiled.prove(&base_commitment).unwrap();
+    assert_eq!(base_proved.result_len, 1);
+    base_proved
+        .verify(
+            &compiled,
+            &base_commitment,
+            base_commitment.state.commitment_root,
+        )
+        .unwrap();
+    let child_proved = compiled.prove(&child_commitment).unwrap();
+    assert_eq!(child_proved.result_len, 0);
+    child_proved
+        .verify(
+            &compiled,
+            &child_commitment,
+            child_commitment.state.commitment_root,
+        )
+        .unwrap();
+    assert!(child_proved
+        .verify(
+            &compiled,
+            &child_commitment,
+            base_commitment.state.commitment_root,
+        )
         .is_err());
 }
 
