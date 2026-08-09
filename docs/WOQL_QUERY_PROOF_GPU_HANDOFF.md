@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `014b67d` | Transcript-bound strict/nondecreasing sort modes; scalar and complete-row ordering preserve duplicate multiplicity while strict join/distinctness callers remain unchanged. |
-| `modules/terminusdb-rs` | `10bbf1e` plus this documentation commit | Exact complete-key ordering accepts recursively proved bag children, retains fail-closed shape/type checks, and includes duplicate pagination coverage. |
+| `modules/terminusdb-store-paraplu` | `7005dd1` | Recursive one-/two-key natural inner join exposes the already-authenticated complete matched projection, with multiplicity, empty, wire, and tamper coverage. |
+| `modules/terminusdb-rs` | `1e9a90f` plus this documentation commit | Leading-Prolog bounded `When` lowering, distinct query identity, recursive verification, nested planner coverage, and success-plus-true E2E. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -169,6 +169,24 @@ full rerun was deliberately stopped after a bounded two-minute observation. The 
 Store changed-content tamper gate covers the underlying proof property; the corrected
 full WOQL E2E remains pending, preferably on the Mac or accelerated hardware.
 
+The next checkpoint implements the largest sound `When` subset that does not require
+inventing a Prolog-unbound output representation. Leading Prolog is authoritative:
+`compile_wf(when(A,B), ((ProgA,ProgB);true))`. Store checkpoint `7005dd1` adds a
+recursive exact inner join by exposing the complete matched projection already proven
+inside the anti-join argument; the verifier still checks the hidden unmatched-left
+compaction before accepting it. Direct multiplicity/empty/key/length tamper passed in
+67.50s, and recursive two-key wire/key/content tamper passed in 96.35s.
+
+`woql2` checkpoint `1e9a90f` lowers a bounded `When` after an authenticated outer
+relation to `bag_union(inner_join(inner_join(outer,A),B), outer)`, wrapped in a distinct
+`/when` query digest. `A` and `B` may be recursive reads but must each expose only one
+or two nonnullable variables already in the outer schema. Planner tests cover duplicate
+`Or` conditions, nesting in `And`/`Or`/`Optional`/`Not`, new-variable rejection, missing
+outer rejection, and nullable-correlation rejection. The focused Linux E2E passed in
+163.31s: one successful outer row appeared twice (success plus `true`), one failing row
+appeared once (`true` only), envelope round-trip passed, and consequent substitution
+rejected.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -186,9 +204,11 @@ full WOQL E2E remains pending, preferably on the Mac or accelerated hardware.
 - [ ] Extend general lexicographic/stable-tie ordering and triple navigation.
   `Once` can now be implemented exactly as `Limit(1)` only when its child already has an
   authenticated order; unordered first-solution semantics remain unsupported.
-- [ ] Implement Prolog `When` exactly. `compile_wf(when(A,B), ((ProgA,ProgB);true))`
-  proves it is not conventional if/else: matched `A,B` rows are bag-unioned with the
-  unchanged outer solution. Do not normalize it to the existing left-outer gadget.
+- [x] Implement bounded leading-Prolog `When` exactly when `A` and `B` introduce no
+  variables beyond one or two nonnullable outer keys; preserve success multiplicity
+  plus one unchanged `true` row without using left outer join.
+- [ ] Extend `When` to branch-local variables only after defining an authenticated
+  Prolog-unbound output representation and its later-correlation semantics.
 - [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
   generalize `GroupBy`/`Collect`/`Sum` and list-consuming extrema.
 - [ ] Add operators requiring new value circuits/data models in the order recorded in
