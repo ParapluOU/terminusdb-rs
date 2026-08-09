@@ -30,7 +30,7 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{When, WoqlOptional};
 use terminusdb_woql2::control::{Distinct, Select, Using};
-use terminusdb_woql2::collection::Sum;
+use terminusdb_woql2::collection::{Length, Sum};
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
@@ -1067,6 +1067,140 @@ fn two_key_i64_sum_query() -> Query {
             DataValue::Data(XSDAnySimpleType::Decimal("0".parse().unwrap())),
         ),
     ])
+}
+
+fn two_key_group_count_query() -> Query {
+    let child = and_of(vec![
+        Query::Link(Link {
+            subject: NodeValue::Variable("left".into()),
+            predicate: NodeValue::Node(iri("link")),
+            object: NodeValue::Variable("right".into()),
+            graph: GraphType::Instance,
+        }),
+        tv("right", "score", "score"),
+        gte(dvar("score"), duint(0)),
+    ]);
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("score".into()),
+            group_by: vec!["right".into(), "left".into()],
+            grouped_value: Value::Variable("scores".into()),
+            query: Box::new(child),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("scores".into()),
+            length: DataValue::Variable("cardinality".into()),
+        }),
+        gte(
+            dvar("cardinality"),
+            DataValue::Data(XSDAnySimpleType::Decimal("3".parse().unwrap())),
+        ),
+    ])
+}
+
+fn assert_two_key_group_count_proves_duplicate_cardinality_and_comparison() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("z"), &iri("link"), &iri("z")))
+        .unwrap();
+    for value in [1u32, 2] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("z"),
+                &iri("score"),
+                u32::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let base = builder.commit().unwrap();
+    let builder = base.open_write().unwrap();
+    for (left, right) in [("a", "a"), ("a", "z"), ("z", "a")] {
+        builder
+            .add_value_triple(ValueTriple::new_node(
+                &iri(left),
+                &iri("link"),
+                &iri(right),
+            ))
+            .unwrap();
+    }
+    for value in [3u32, 4, 5] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("a"),
+                &iri("score"),
+                u32::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = two_key_group_count_query();
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let node = |name: &str| {
+        CanonicalResultValue::Object(CanonicalObject::Node(iri(name).into_bytes()))
+    };
+    assert_eq!(proved.result_len, 2);
+    assert_eq!(values[0], vec![node("a"), node("a")]);
+    assert_eq!(values[1], vec![node("a"), node("z")]);
+    assert_eq!(
+        values[2],
+        vec![
+            CanonicalResultValue::GeneratedDecimalU64(3),
+            CanonicalResultValue::GeneratedDecimalU64(3),
+        ]
+    );
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let Query::And(mut swapped) = query else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &mut swapped.and[0] else {
+        unreachable!()
+    };
+    group.group_by.swap(0, 1);
+    let swapped = plan_bgp(&Query::And(swapped)).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &swapped,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[2][0] = ArkFr::from_u64(4);
+    tampered.result_values[2][0] = CanonicalResultValue::GeneratedDecimalU64(4);
+    tampered.result_commitments[2] = commit_column(&pad(
+        &tampered.result_columns[2],
+        1usize << tampered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn two_key_group_count_proves_duplicate_cardinality_and_comparison() {
+    std::thread::Builder::new()
+        .name("woql-two-key-group-count-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_two_key_group_count_proves_duplicate_cardinality_and_comparison)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 fn assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison() {

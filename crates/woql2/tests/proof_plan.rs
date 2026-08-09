@@ -8,7 +8,7 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{
     Distinct, From, Immediately, Once, Pin, Select, Using, When, WoqlOptional,
 };
-use terminusdb_woql2::collection::Sum;
+use terminusdb_woql2::collection::{Length, Sum};
 use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Size, Start, TripleCount};
 use terminusdb_woql2::order::{GroupBy, Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
@@ -265,6 +265,92 @@ fn two_node_key_sum_with_bound(bound: DataValue) -> Query {
             result: DataValue::Variable("total".into()),
         }),
     ])
+}
+
+fn two_node_key_count_with_bound(bound: DataValue) -> Query {
+    let child = and_of(vec![
+        Query::Link(Link {
+            subject: NodeValue::Variable("left".into()),
+            predicate: NodeValue::Node(iri("link")),
+            object: NodeValue::Variable("right".into()),
+            graph: GraphType::Instance,
+        }),
+        tv("right", "score", "score"),
+        gte(dvar("score"), bound),
+    ]);
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("score".into()),
+            group_by: vec!["right".into(), "left".into()],
+            grouped_value: Value::Variable("scores".into()),
+            query: Box::new(child),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("scores".into()),
+            length: DataValue::Variable("cardinality".into()),
+        }),
+    ])
+}
+
+#[test]
+fn immediate_group_length_binds_keys_generated_count_and_comparisons() {
+    let compiled = plan_bgp(&two_node_key_count_with_bound(duint(0))).unwrap();
+    assert_eq!(compiled.relation.schema, ["right", "left", "cardinality"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::GroupCount { ref key_columns, .. }
+            if key_columns == &[1, 0]
+    ));
+
+    let Query::And(mut filtered) = two_node_key_count_with_bound(duint(0)) else {
+        unreachable!()
+    };
+    filtered
+        .and
+        .push(gte(dvar("cardinality"), decimal_value("2")));
+    let filtered = plan_bgp(&Query::Count(Count {
+        query: Box::new(Query::And(filtered)),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(filtered.count_variable.as_deref(), Some("rows"));
+    assert!(matches!(
+        filtered.relation.statement,
+        CompiledRelationStatement::GeneratedU64Filter { column: 2, .. }
+    ));
+
+    let Query::And(mut global) = two_node_key_count_with_bound(duint(0)) else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &mut global.and[0] else {
+        unreachable!()
+    };
+    group.group_by.clear();
+    let global = plan_bgp(&Query::And(global)).unwrap();
+    assert_eq!(global.relation.schema, ["cardinality"]);
+    assert!(matches!(
+        global.relation.statement,
+        CompiledRelationStatement::GroupCount { ref key_columns, .. }
+            if key_columns.is_empty()
+    ));
+
+    let Query::And(valid) = two_node_key_count_with_bound(duint(0)) else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = &valid.and[0] else {
+        unreachable!()
+    };
+    for group_by in [
+        vec!["left".into(), "left".into()],
+        vec!["left".into(), "right".into(), "extra".into()],
+    ] {
+        let mut invalid = group.clone();
+        invalid.group_by = group_by;
+        reject(
+            and_of(vec![Query::GroupBy(invalid), valid.and[1].clone()]),
+            BgpPlanError::GroupCountUnsupportedShape,
+        );
+    }
 }
 
 #[test]

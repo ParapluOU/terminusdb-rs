@@ -59,7 +59,8 @@ use terminus_store::proof::multiorder::{verify_exact_multi_order, ExactMultiOrde
 use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
-    verify_result_columns, generated_decimal_i64_field, generated_decimal_i64_value, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    verify_result_columns, generated_decimal_i64_field, generated_decimal_i64_value,
+    generated_decimal_u64_value, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
     LayerBgpProof, ObjectKindFilter, ObjectRangeBound, ObjectRangeSpec,
     ResultColumnDescriptor, ResultIdNamespace,
 };
@@ -198,6 +199,10 @@ pub enum CompiledRelationStatement {
         key_columns: Vec<usize>,
         value_column: usize,
         datatype: CanonicalDatatype,
+    },
+    GroupCount {
+        input: Box<CompiledRelation>,
+        key_columns: Vec<usize>,
     },
 }
 
@@ -501,6 +506,9 @@ pub enum ProvedQueryStatement {
     GroupSum {
         input: Box<ProvedBgp>,
     },
+    GroupCount {
+        input: Box<ProvedBgp>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -747,6 +755,14 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update((*value_column as u64).to_le_bytes());
             hasher.update([*datatype as u8]);
         }
+        CompiledRelationStatement::GroupCount { input, key_columns } => {
+            hasher.update(b"/group-count");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((key_columns.len() as u64).to_le_bytes());
+            for key_column in key_columns {
+                hasher.update((*key_column as u64).to_le_bytes());
+            }
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -971,6 +987,25 @@ fn relation_result_descriptors(
             result.push(generated);
             Ok(result)
         }
+        CompiledRelationStatement::GroupCount { input, key_columns } => {
+            let child = relation_result_descriptors(input)?;
+            let mut result = key_columns
+                .iter()
+                .map(|key_column| {
+                    child.get(*key_column).copied().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "group-count key column out of range",
+                        )
+                    })
+                })
+                .collect::<std::io::Result<Vec<_>>>()?;
+            result.push(ResultColumnDescriptor {
+                namespace: ResultIdNamespace::GeneratedDecimalU64,
+                nullable: false,
+            });
+            Ok(result)
+        }
     }
 }
 
@@ -1103,6 +1138,12 @@ fn relation_proof_plan(
             value_column: *value_column,
             datatype: *datatype,
         },
+        CompiledRelationStatement::GroupCount { input, key_columns } => {
+            RelationProofPlanKind::GroupCount {
+                input: Box::new(child(input)?),
+                key_columns: key_columns.clone(),
+            }
+        }
     };
     Ok(RelationProofPlan { query_digest, kind })
 }
@@ -1133,7 +1174,6 @@ fn expected_generated_u64_filter_columns(
     op: GeneratedU64ComparisonOp,
     constant: u64,
     constant_on_left: bool,
-    value: u64,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let source = input.result_columns.get(column).ok_or_else(|| {
         std::io::Error::new(
@@ -1141,16 +1181,19 @@ fn expected_generated_u64_filter_columns(
             "generated-u64 comparison column is out of range",
         )
     })?;
-    if input.result_len != 1 || source.first() != Some(&ArkFr::from_u64(value)) {
+    if source.len() < input.result_len {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "generated-u64 comparison input does not match the trusted root-derived value",
+            "generated-u64 comparison input column is short",
         ));
     }
-    let keep = generated_u64_comparison(value, op, constant, constant_on_left)
-        .then_some(0)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut keep = Vec::new();
+    for (row, field) in source.iter().take(input.result_len).enumerate() {
+        let value = generated_decimal_u64_value(*field)?;
+        if generated_u64_comparison(value, op, constant, constant_on_left) {
+            keep.push(row);
+        }
+    }
     input
         .result_columns
         .iter()
@@ -1442,6 +1485,85 @@ fn expected_group_sum_columns(
     Ok(output)
 }
 
+fn expected_group_count_columns(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    key_columns: &[usize],
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    if key_columns.is_empty() {
+        return if input.result_len == 0 {
+            Ok(vec![Vec::new()])
+        } else {
+            Ok(vec![vec![ArkFr::from_u64(u64::try_from(input.result_len).map_err(
+                |_| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-count exceeds u64"),
+            )?)]])
+        };
+    }
+    let descriptors = relation_result_descriptors(input_plan)?;
+    let values = resolve_result_values(
+        layer,
+        expected_root,
+        &input.result_columns,
+        &descriptors,
+    )?;
+    let keys = key_columns
+        .iter()
+        .map(|key_column| {
+            let values = values.get(*key_column).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "group-count key out of range")
+            })?;
+            let fields = input.result_columns.get(*key_column).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-count key field out of range",
+                )
+            })?;
+            if values.len() != input.result_len || fields.len() != input.result_len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-count key length mismatch",
+                ));
+            }
+            Ok((values, fields))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut groups = std::collections::BTreeMap::<Vec<Vec<u8>>, (Vec<ArkFr>, u64)>::new();
+    for row in 0..input.result_len {
+        let mut canonical = Vec::with_capacity(keys.len());
+        let mut fields = Vec::with_capacity(keys.len());
+        for (values, key_fields) in &keys {
+            let CanonicalResultValue::Object(CanonicalObject::Node(iri)) = &values[row] else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-count key is not a node IRI",
+                ));
+            };
+            canonical.push(iri.clone());
+            fields.push(key_fields[row]);
+        }
+        let entry = groups.entry(canonical).or_insert((fields.clone(), 0));
+        if entry.0 != fields {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-count canonical node tuple maps to multiple Store IDs",
+            ));
+        }
+        entry.1 = entry.1.checked_add(1).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "group-count exceeds u64")
+        })?;
+    }
+    let mut output = vec![Vec::with_capacity(groups.len()); key_columns.len() + 1];
+    for (fields, count) in groups.values() {
+        for (column, field) in output.iter_mut().zip(fields) {
+            column.push(*field);
+        }
+        output[key_columns.len()].push(ArkFr::from_u64(*count));
+    }
+    Ok(output)
+}
+
 impl ProvedBgp {
     pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
         match &self.statement {
@@ -1548,7 +1670,6 @@ impl ProvedBgp {
                     *op,
                     *constant,
                     *constant_on_left,
-                    layer.verifier_view().state.materialized_count,
                 )?;
                 let expected_len = expected_columns.first().map_or(0, Vec::len);
                 let expected_log = expected_len
@@ -1964,6 +2085,42 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL group-sum result is not the exact derived aggregate",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::GroupCount { input },
+                CompiledRelationStatement::GroupCount {
+                    input: input_plan,
+                    key_columns,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_group_count_columns(
+                    input,
+                    input_plan,
+                    key_columns,
+                    layer,
+                    expected_root,
+                )?;
+                let expected_len = expected_columns.first().map_or(0, Vec::len);
+                let expected_log = expected_len
+                    .max(1)
+                    .next_power_of_two()
+                    .max(2)
+                    .trailing_zeros() as usize;
+                if self.result_len != expected_len
+                    || self.result_log_domain != expected_log
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL group-count result is not the exact derived aggregate",
                     ));
                 }
             }
@@ -2572,6 +2729,19 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::GroupCount { input },
+                CompiledRelationStatement::GroupCount {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::GroupCount {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -2881,6 +3051,9 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             }
         }
         RecursiveRelationProof::GroupSum { input } => ProvedQueryStatement::GroupSum {
+            input: Box::new(proved_from_recursive(*input)),
+        },
+        RecursiveRelationProof::GroupCount { input } => ProvedQueryStatement::GroupCount {
             input: Box::new(proved_from_recursive(*input)),
         },
     };
@@ -3213,6 +3386,12 @@ pub enum BgpPlanError {
     #[error("GroupBy Sum template must be an exact fixed-width signed or unsigned integer variable")]
     GroupSumUnsupportedValue,
 
+    #[error("GroupBy followed by Length requires zero to two unique node keys, one private grouped-list variable, and one distinct result variable")]
+    GroupCountUnsupportedShape,
+
+    #[error("GroupBy Length template must be a nonnullable bound Store-ID variable")]
+    GroupCountUnsupportedValue,
+
     #[error("generated GroupBy-Sum comparisons require the sum source before comparisons of that result variable to exact integral xsd:decimal constants")]
     GroupSumComparisonUnsupportedShape,
 
@@ -3334,6 +3513,7 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::TripleNext(_) => "TripleNext",
         Query::TriplePrevious(_) => "TriplePrevious",
         Query::Sum(_) => "Sum",
+        Query::Length(_) => "Length",
         Query::Member(_) => "Member",
         Query::Get(_) => "Get",
         _ => "unsupported",
@@ -3544,6 +3724,142 @@ fn generated_group_sum_constraint(
         }
         _ => Err(BgpPlanError::GroupSumComparisonUnsupportedShape),
     }
+}
+
+fn plan_group_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) if and.and.len() >= 2 => &and.and,
+        _ => return Ok(None),
+    };
+    if conjuncts.iter().skip(2).any(|query| {
+        matches!(query, Query::If(_) | Query::WoqlOptional(_) | Query::Not(_))
+    }) {
+        return Ok(None);
+    }
+    let (Query::GroupBy(group), Query::Length(length)) = (&conjuncts[0], &conjuncts[1]) else {
+        if conjuncts.iter().any(|query| matches!(query, Query::Length(_))) {
+            return Err(BgpPlanError::GroupCountUnsupportedShape);
+        }
+        return Ok(None);
+    };
+    if group.group_by.len() > 2
+        || (group.group_by.len() == 2 && group.group_by[0] == group.group_by[1])
+    {
+        return Err(BgpPlanError::GroupCountUnsupportedShape);
+    }
+    let template = match &group.template {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupCountUnsupportedValue),
+    };
+    let hidden = match &group.grouped_value {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupCountUnsupportedShape),
+    };
+    let list = match &length.list {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupCountUnsupportedShape),
+    };
+    let result = match &length.length {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupCountUnsupportedShape),
+    };
+    if hidden != list
+        || group
+            .group_by
+            .iter()
+            .any(|key| key == template || key == hidden || key == result)
+        || template == hidden
+        || template == result
+        || hidden == result
+    {
+        return Err(BgpPlanError::GroupCountUnsupportedShape);
+    }
+    let child = plan_bgp(&group.query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::GroupCountUnsupportedShape);
+    }
+    let key_columns = group
+        .group_by
+        .iter()
+        .map(|key| {
+            child
+                .relation
+                .schema
+                .iter()
+                .position(|variable| variable == key)
+                .ok_or(BgpPlanError::GroupCountUnsupportedShape)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let template_column = child
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == template)
+        .ok_or(BgpPlanError::GroupCountUnsupportedValue)?;
+    if key_columns.iter().any(|key_column| {
+        *key_column == template_column
+            || child.relation.domains.get(*key_column).copied().flatten()
+                != Some(EqualityValueDomain::Node)
+    }) {
+        return Err(BgpPlanError::GroupCountUnsupportedShape);
+    }
+    let descriptors = relation_result_descriptors(&child.relation)
+        .map_err(|_| BgpPlanError::GroupCountUnsupportedShape)?;
+    if key_columns.iter().any(|key_column| {
+        descriptors[*key_column].namespace != ResultIdNamespace::NodeValue
+            || descriptors[*key_column].nullable
+    }) || descriptors[template_column].nullable
+        || !matches!(
+            descriptors[template_column].namespace,
+            ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate
+        )
+    {
+        return Err(BgpPlanError::GroupCountUnsupportedValue);
+    }
+    let collection = child.collection;
+    let mut schema = Vec::with_capacity(key_columns.len() + 1);
+    let mut domains = Vec::with_capacity(schema.capacity());
+    for (key, key_column) in group.group_by.iter().zip(&key_columns) {
+        schema.push(key.clone());
+        domains.push(child.relation.domains[*key_column]);
+    }
+    schema.push(result.clone());
+    domains.push(None);
+    let mut relation = CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::GroupCount {
+            input: Box::new(child.relation),
+            key_columns: key_columns.clone(),
+        },
+    };
+    for comparison in conjuncts.iter().skip(2) {
+        let (op, domain, constant, constant_on_left) =
+            generated_group_sum_constraint(comparison, result, false)?;
+        if domain != ResultIdNamespace::GeneratedDecimalU64 {
+            return Err(BgpPlanError::GroupSumComparisonUnsupportedConstant);
+        }
+        let input = relation;
+        relation = CompiledRelation {
+            schema: input.schema.clone(),
+            domains: input.domains.clone(),
+            statement: CompiledRelationStatement::GeneratedU64Filter {
+                input: Box::new(input),
+                column: key_columns.len(),
+                op,
+                constant: u64::try_from(constant)
+                    .map_err(|_| BgpPlanError::GroupSumComparisonUnsupportedConstant)?,
+                constant_on_left,
+            },
+        };
+    }
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
 }
 
 fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
@@ -4429,6 +4745,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         );
     }
 
+    if let Some(mut aggregate) = plan_group_count_form(body)? {
+        if collection.is_some() {
+            if aggregate.collection.is_some() && aggregate.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            aggregate.collection = collection;
+        }
+        aggregate.count_variable = count_variable;
+        aggregate.projection = compile_projection(
+            &selections,
+            aggregate.count_variable.as_deref(),
+            &aggregate.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&aggregate.relation)?;
+        return Ok(aggregate);
+    }
+
     if let Some(mut aggregate) = plan_group_sum_form(body)? {
         if collection.is_some() {
             if aggregate.collection.is_some() && aggregate.collection != collection {
@@ -5201,6 +5537,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             }
             CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::GroupSum { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::GroupCount { input, .. } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;
