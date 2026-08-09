@@ -7,7 +7,7 @@
 mod proof_common;
 use proof_common::*;
 
-use std::sync::Arc;
+use std::{convert::TryInto, sync::Arc};
 
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
@@ -33,12 +33,201 @@ use terminusdb_woql2::proof::{
     decode_and_verify_envelope, decode_verifier_commitment_and_verify_envelope, plan_bgp,
     CompiledRelationStatement, ExecutedResultValue,
 };
+use terminusdb_woql2::triple::{Data, Link};
 use terminusdb_woql2::{
-    misc::{Count, InRange},
+    misc::{Count, InRange, RangeMax, RangeMin},
+    order::GroupBy,
     query::{Not, Or, Query},
     value::DataValue,
 };
-use terminusdb_woql2::triple::{Data, Link};
+
+fn build_grouped_score_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (category, score) in [("c1", 30u32), ("c1", 10), ("c2", 5), ("c2", 20)] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri(category),
+                &iri("score"),
+                u32::make_entry(&score),
+            ))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn grouped_score_extrema(kind: RangeOp) -> Query {
+    let child = and_of(vec![
+        Query::Data(Data {
+            subject: terminusdb_woql2::value::NodeValue::Variable("category".into()),
+            predicate: terminusdb_woql2::value::NodeValue::Node(iri("score")),
+            object: DataValue::Variable("score".into()),
+            graph: GraphType::Instance,
+        }),
+        gte(dvar("score"), duint(0)),
+        // A tautological exact equality makes the aggregate child a genuinely
+        // recursive relation node rather than only an internal multi-atom BGP.
+        equals(value_var("score"), value_var("score")),
+    ]);
+    let group = Query::GroupBy(GroupBy {
+        template: terminusdb_woql2::value::Value::Variable("score".into()),
+        group_by: vec!["category".into()],
+        grouped_value: terminusdb_woql2::value::Value::Variable("scores".into()),
+        query: Box::new(child),
+    });
+    let extrema = match kind {
+        RangeOp::Ge => Query::RangeMin(RangeMin {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("extremum".into()),
+        }),
+        RangeOp::Le => Query::RangeMax(RangeMax {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("extremum".into()),
+        }),
+        _ => unreachable!(),
+    };
+    Query::Select(Select {
+        variables: vec!["category".into(), "extremum".into()],
+        query: Box::new(and_of(vec![group, extrema])),
+    })
+}
+
+fn resolved_group_extrema(
+    proved: &terminusdb_woql2::proof::ProvedBgp,
+    compiled: &terminusdb_woql2::proof::CompiledBgp,
+    layer: &LayerCommitment,
+) -> Vec<(String, u32)> {
+    let columns = proved
+        .verify_and_resolve_values(compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let mut rows = (0..proved.result_len)
+        .map(|row| {
+            let category = match &columns[0][row] {
+                CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => {
+                    String::from_utf8(bytes.clone()).unwrap()
+                }
+                other => panic!("unexpected category {other:?}"),
+            };
+            let score = match &columns[1][row] {
+                CanonicalResultValue::Object(CanonicalObject::Value {
+                    datatype: CanonicalDatatype::UInt32,
+                    lexical,
+                }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+                other => panic!("unexpected score {other:?}"),
+            };
+            (category, score)
+        })
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() {
+    let layer = build_grouped_score_layer();
+    let mut min_envelope = None;
+    for (kind, expected) in [
+        (RangeOp::Ge, vec![(iri("c1"), 10), (iri("c2"), 5)]),
+        (RangeOp::Le, vec![(iri("c1"), 30), (iri("c2"), 20)]),
+    ] {
+        let query = grouped_score_extrema(kind);
+        let compiled = plan_bgp(&query).unwrap();
+        let proved = compiled.prove(&layer).unwrap();
+        assert_eq!(resolved_group_extrema(&proved, &compiled, &layer), expected);
+        let envelope = proved
+            .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+        let decoded =
+            decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+                .unwrap();
+        assert_eq!(decoded.proved.result_len, 2);
+        let compact = layer.verifier_commitment().unwrap().encode().unwrap();
+        decode_verifier_commitment_and_verify_envelope(
+            &envelope,
+            &compiled,
+            &compact,
+            layer.state.commitment_root,
+        )
+        .unwrap();
+        if kind == RangeOp::Ge {
+            min_envelope = Some((envelope, compiled));
+        }
+    }
+
+    let (envelope, min_compiled) = min_envelope.unwrap();
+    // The same proof cannot be substituted for RangeMax: kind is in both relation
+    // digest and group transcript.
+    let max_compiled = plan_bgp(&grouped_score_extrema(RangeOp::Le)).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &max_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    // Wrong extremum and group reassignment both alter committed public columns.
+    let mut wrong = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    wrong.result_columns[1].swap(0, 1);
+    wrong.result_commitments[1] = commit_column(&pad(
+        &wrong.result_columns[1],
+        1usize << wrong.result_log_domain,
+    ))
+    .unwrap();
+    let wrong_extremum = wrong.encode().unwrap();
+    assert!(decode_and_verify_envelope(
+        &wrong_extremum,
+        &min_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let mut reassigned = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    reassigned.result_columns[0][1] = reassigned.result_columns[0][0];
+    reassigned.result_commitments[0] = commit_column(&pad(
+        &reassigned.result_columns[0],
+        1usize << reassigned.result_log_domain,
+    ))
+    .unwrap();
+    let reassigned = reassigned.encode().unwrap();
+    assert!(decode_and_verify_envelope(
+        &reassigned,
+        &min_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn grouped_extrema_count_wrapper_binds_group_cardinality() {
+    let layer = build_grouped_score_layer();
+    let query = Query::Count(Count {
+        query: Box::new(grouped_score_extrema(RangeOp::Ge)),
+        count: DataValue::Variable("count".into()),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["count".into()],
+            &[vec![2]],
+        )
+        .unwrap();
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["count".into()],
+            &[vec![1]],
+        )
+        .is_err());
+}
 
 #[test]
 fn correlated_optional_proves_all_matches_and_one_null_extended_row() {

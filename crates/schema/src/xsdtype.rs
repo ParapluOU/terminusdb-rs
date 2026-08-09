@@ -1,13 +1,14 @@
 use crate::{
-    json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive,
-    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL,
-    INTEGER, TIME, UNSIGNED_INT, URI,
+    json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue,
+    Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL, INTEGER, TIME, UNSIGNED_INT, URI,
 };
 use chrono::Utc;
 use decimal_rs::Decimal;
 use serde::Serialize;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug)]
 pub struct XSDDate {
@@ -253,6 +254,28 @@ mod tests {
             // This would require custom serialization implementation
         }
     }
+
+    #[test]
+    fn canonical_typed_xsd_json_roundtrips_and_rejects_malformed_objects() {
+        let json = serde_json::json!({"@type": "xsd:unsignedInt", "@value": 42});
+        let property =
+            <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(json).unwrap();
+        assert_eq!(
+            XSDAnySimpleType::from_property(&property).unwrap(),
+            XSDAnySimpleType::UnsignedInt(42)
+        );
+        for invalid in [
+            serde_json::json!({"@type": "xsd:unsignedInt"}),
+            serde_json::json!({"@type": "xsd:unsignedInt", "@value": 42, "extra": true}),
+            serde_json::json!({"@type": "xsd:unknown", "@value": 42}),
+            serde_json::json!({"@type": "xsd:unsignedInt", "@value": -1}),
+        ] {
+            assert!(
+                <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(invalid)
+                    .is_err()
+            );
+        }
+    }
 }
 
 // impl ToTDBSchema for XSDAnySimpleType {
@@ -278,8 +301,23 @@ mod tests {
 // }
 
 impl FromInstanceProperty for XSDAnySimpleType {
-    fn from_property(_prop: &InstanceProperty) -> anyhow::Result<Self> {
-        todo!()
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        let primitive = match prop {
+            InstanceProperty::Primitive(value) => value,
+            _ => return Err(anyhow::anyhow!("xsd value must be a primitive property")),
+        };
+        match primitive {
+            PrimitiveValue::String(value) => Ok(Self::String(value.clone())),
+            PrimitiveValue::Bool(value) => Ok(Self::Boolean(*value)),
+            PrimitiveValue::Number(value) => value
+                .as_f64()
+                .map(Self::Float)
+                .ok_or_else(|| anyhow::anyhow!("xsd numeric value is not representable as f64")),
+            PrimitiveValue::Object(value) => xsd_from_typed_json(value),
+            PrimitiveValue::Null | PrimitiveValue::Unit => Err(anyhow::anyhow!(
+                "null/unit is not an xsd:anySimpleType value"
+            )),
+        }
     }
 }
 
@@ -342,6 +380,12 @@ impl<Parent> InstancePropertyFromJson<Parent> for XSDAnySimpleType {
             serde_json::Value::Number(n) => PrimitiveValue::Number(n),
             serde_json::Value::Bool(b) => PrimitiveValue::Bool(b),
             serde_json::Value::Null => PrimitiveValue::Null,
+            serde_json::Value::Object(_) => {
+                // Validate the canonical typed JSON now, then retain it verbatim so
+                // `FromInstanceProperty` can reconstruct the exact enum variant.
+                xsd_from_typed_json(&json)?;
+                PrimitiveValue::Object(json)
+            }
             _ => {
                 return Err(anyhow::anyhow!(
                     "Unsupported JSON type for XSDAnySimpleType"
@@ -350,4 +394,70 @@ impl<Parent> InstancePropertyFromJson<Parent> for XSDAnySimpleType {
         };
         Ok(InstanceProperty::Primitive(primitive))
     }
+}
+
+fn xsd_from_typed_json(json: &serde_json::Value) -> anyhow::Result<XSDAnySimpleType> {
+    let map = json
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("typed xsd value must be an object"))?;
+    if map.len() != 2 || !map.contains_key("@type") || !map.contains_key("@value") {
+        return Err(anyhow::anyhow!(
+            "typed xsd value must contain exactly @type and @value"
+        ));
+    }
+    let datatype = map["@type"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("typed xsd @type must be a string"))?;
+    let value = &map["@value"];
+    let string = || {
+        value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("{datatype} @value must be a string"))
+    };
+    Ok(match datatype {
+        "xsd:string" => XSDAnySimpleType::String(string()?),
+        "xsd:boolean" => XSDAnySimpleType::Boolean(
+            value
+                .as_bool()
+                .ok_or_else(|| anyhow::anyhow!("xsd:boolean @value must be boolean"))?,
+        ),
+        "xsd:unsignedInt" => XSDAnySimpleType::UnsignedInt(
+            usize::try_from(
+                value
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:unsignedInt @value must be unsigned"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:unsignedInt does not fit usize"))?,
+        ),
+        "xsd:integer" => XSDAnySimpleType::Integer(
+            value
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("xsd:integer @value must fit i64"))?,
+        ),
+        "xsd:float" | "xsd:double" => XSDAnySimpleType::Float(
+            value
+                .as_f64()
+                .ok_or_else(|| anyhow::anyhow!("{datatype} @value must be numeric"))?,
+        ),
+        "xsd:decimal" => XSDAnySimpleType::Decimal(
+            Decimal::from_str(&string()?).map_err(|_| anyhow::anyhow!("invalid xsd:decimal"))?,
+        ),
+        "xsd:hexBinary" => XSDAnySimpleType::HexBinary(string()?),
+        "xsd:anyURI" => XSDAnySimpleType::URI(string()?),
+        "xsd:dateTime" => XSDAnySimpleType::DateTime(
+            chrono::DateTime::parse_from_rfc3339(&string()?)
+                .map_err(|_| anyhow::anyhow!("invalid xsd:dateTime"))?
+                .with_timezone(&Utc),
+        ),
+        "xsd:date" => XSDAnySimpleType::Date(
+            chrono::NaiveDate::parse_from_str(&string()?, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!("invalid xsd:date"))?,
+        ),
+        "xsd:time" => XSDAnySimpleType::Time(
+            chrono::NaiveTime::parse_from_str(&string()?, "%H:%M:%S%.f")
+                .map_err(|_| anyhow::anyhow!("invalid xsd:time"))?,
+        ),
+        _ => return Err(anyhow::anyhow!("unsupported xsd datatype tag '{datatype}'")),
+    })
 }
