@@ -535,9 +535,10 @@ pub enum BgpPlanError {
     #[error("unsupported value datatype `{datatype}`: no round-trip-aligned encoding")]
     UnsupportedValueDatatype { datatype: &'static str },
 
-    /// A ground existence relation appeared alongside another atom. Its zero-arity
-    /// boolean composition needs a dedicated authenticated product operation.
-    #[error("fully-ground atoms are supported only as a single-atom existence query")]
+    /// A ground existence relation appeared alongside a variable-bearing atom. The
+    /// all-ground boolean product is supported, but mixed zero/nonzero-arity composition
+    /// still needs an authenticated gating operation.
+    #[error("ground atoms cannot yet be mixed with variable-bearing atoms")]
     GroundAtom,
 
     /// The triple targeted the schema graph.
@@ -1306,7 +1307,17 @@ fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError>
 fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlanError> {
     let k = atoms.len();
 
-    if k > 1 && atoms.iter().any(|atom| atom.kept.is_empty()) {
+    let ground_count = atoms.iter().filter(|atom| atom.kept.is_empty()).count();
+    if ground_count == k {
+        return Ok((
+            LayerBgpPlan {
+                atoms: atoms.iter().map(|atom| atom.layer_atom.clone()).collect(),
+                joins: Vec::new(),
+            },
+            Vec::new(),
+        ));
+    }
+    if ground_count != 0 {
         return Err(BgpPlanError::GroundAtom);
     }
 

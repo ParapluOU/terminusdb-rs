@@ -460,6 +460,39 @@ fn ground_triple_authenticates_presence_absence_and_zero_arity_rows() {
 }
 
 #[test]
+fn all_ground_conjunction_authenticates_boolean_product() {
+    let lc = build_layer(&[("a", "knows", "b"), ("b", "likes", "c")]);
+    for (query, expected_len) in [
+        (
+            and_of(vec![
+                tv_ground("a", "knows", "b"),
+                tv_ground("b", "likes", "c"),
+            ]),
+            1usize,
+        ),
+        (
+            and_of(vec![
+                tv_ground("a", "knows", "b"),
+                tv_ground("a", "likes", "c"),
+            ]),
+            0usize,
+        ),
+    ] {
+        let compiled = plan_bgp(&query).unwrap();
+        let proved = compiled.prove(&lc).unwrap();
+        assert_eq!(proved.result_len, expected_len);
+        let rows = vec![Vec::new(); expected_len];
+        proved
+            .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &rows)
+            .unwrap();
+        let envelope = proved
+            .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+            .unwrap();
+        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+    }
+}
+
+#[test]
 fn path_three_atoms_proves_true_join() {
     // knows/likes/owns chain; BGP t(?x,knows,?y), t(?y,likes,?z), t(?z,owns,?w).
     // Paths (x,y,z,w): (a,b,g,k), (c,b,g,k), (e,f,h,m).
