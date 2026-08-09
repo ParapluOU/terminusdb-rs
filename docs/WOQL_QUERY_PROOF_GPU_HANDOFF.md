@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `c5389a6` | Recursive v11 generated-u64 filters derive exact Eq/Lt/Le/Gt/Ge selections over already-authenticated generated decimal fields, without dictionary or extra polynomial proofs. |
-| `modules/terminusdb-rs` | this checkpoint | Explicit-instance `TripleCount` plus bounded exact-integral decimal comparisons, generated-scalar executor/envelope integration, and fail-closed coercion/resource rules. |
+| `modules/terminusdb-store-paraplu` | `758d94f`, order fix `69f28cd` | Recursive v12 grouped UInt8/16/32 sums derive exact duplicate-preserving generated decimals and sort node groups by authenticated canonical IRI rather than append-order Store IDs. |
+| `modules/terminusdb-rs` | this checkpoint | Immediate node-key `GroupBy`→`Sum` planning, canonical decoder, generated-scalar executor/envelope integration, checked arithmetic boundary, and fail-closed list/coercion rules. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -331,6 +331,26 @@ other datatypes. Six focused planner tests passed. Two E2E tests covered true/fa
 relations for all comparison families, operand reversal, `u64::MAX`, outer `Count`,
 envelopes, and operator/order/constant substitution in 14.89s.
 
+Leading Prolog lowers `GroupBy` to SWI `bagof`: an empty child yields no group, duplicate
+template solutions remain duplicated, each bag retains generator order, and groups follow
+standard term order of their free keys. Immediate `Sum` makes the private bag order
+unobservable; its marshalling strips typed literals before `sum_list` and wraps the result
+as `xsd:decimal`. The implemented subset requires one expanded node-IRI key and an exact
+UInt8/UInt16/UInt32 template. Store checkpoint `758d94f` adds recursive v12/tag 14
+`GroupSum`; fix `69f28cd` sorts groups by authenticated canonical node bytes rather than
+Store ID, since child-layer IDs append and need not be lexical. A base-`b`/child-`a`
+fixture proves visible `a,b` order despite the later `a` ID.
+
+The verifier resolves every child value ID through the root-recommitted catalog, checks
+the exact unsigned datatype and lexical width, preserves duplicate multiplicity, and
+derives each checked `u64` total. The authenticated row count multiplied by the datatype
+maximum must fit `u64`, which also establishes no BN254 field wrap. Empty input emits no
+groups. The Store focused gate passed in 14.52s. Two planner tests cover all three accepted
+datatypes plus list/order/key/type rejection; the canonical non-serde decoder test passed.
+Two WOQL E2E tests passed in 138.52s, covering duplicate 2+2, zero, `u32::MAX`, child-stack
+key order, generated-decimal resolution, mixed executor values, outer Count, empty input,
+envelope round-trip, forged/recommitted sum, and `Sum`/`RangeMax` substitution.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -374,6 +394,9 @@ envelopes, and operator/order/constant substitution in 14.89s.
 - [x] Authenticate bounded Eq/Gt/Gte/Lt/Lte filters over the generated TripleCount
   decimal against exact integral decimal constants, including operand order and
   zero/maximum boundaries, without conflating generated scalars with Store IDs.
+- [x] Authenticate immediate one-node-key `GroupBy`→`Sum` for UInt8/UInt16/UInt32,
+  preserving duplicate multiplicity, canonical SWI-compatible node group order, checked
+  no-wrap arithmetic, and generated-decimal result typing without exposing the list.
 - [ ] Extend database-level or schema `TripleCount` only after the proof input binds all
   selected graph roots and exactly matches leading Prolog's multi-graph aggregation.
 - [ ] Keep physical `Size` rejected unless a separately authenticated filesystem/storage

@@ -8,8 +8,9 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{
     Distinct, From, Immediately, Once, Pin, Select, Using, When, WoqlOptional,
 };
+use terminusdb_woql2::collection::Sum;
 use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Size, Start, TripleCount};
-use terminusdb_woql2::order::{Order, OrderBy, OrderTemplate};
+use terminusdb_woql2::order::{GroupBy, Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
 use terminusdb_woql2::triple::{
@@ -215,6 +216,118 @@ fn triple_count_comparisons_reject_fraction_negative_scientific_wrong_type_and_s
     reject(
         and_of(vec![greater(dvar("Count"), decimal_value("3")), source()]),
         BgpPlanError::TripleCountComparisonUnsupportedShape,
+    );
+}
+
+fn grouped_sum_with_bound(bound: DataValue) -> Query {
+    let child = and_of(vec![
+        tv("category", "score", "score"),
+        gte(dvar("score"), bound),
+    ]);
+    let group = Query::GroupBy(GroupBy {
+        template: Value::Variable("score".into()),
+        group_by: vec!["category".into()],
+        grouped_value: Value::Variable("scores".into()),
+        query: Box::new(child),
+    });
+    let sum = Query::Sum(Sum {
+        list: DataValue::Variable("scores".into()),
+        result: DataValue::Variable("total".into()),
+    });
+    and_of(vec![group, sum])
+}
+
+fn grouped_u32_sum() -> Query {
+    grouped_sum_with_bound(duint(0))
+}
+
+#[test]
+fn immediate_group_sum_compiles_node_key_and_generated_decimal_result() {
+    let compiled = plan_bgp(&grouped_u32_sum()).unwrap();
+    assert_eq!(compiled.relation.schema, ["category", "total"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::GroupSum {
+            key_column: 0,
+            value_column: 1,
+            datatype: CanonicalDatatype::UInt32,
+            ..
+        }
+    ));
+
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(grouped_u32_sum()),
+        count: DataValue::Variable("groups".into()),
+    }))
+    .unwrap();
+    assert_eq!(counted.count_variable.as_deref(), Some("groups"));
+
+    for (bound, expected) in [
+        (
+            DataValue::Data(XSDAnySimpleType::UnsignedByte(0)),
+            CanonicalDatatype::UInt8,
+        ),
+        (
+            DataValue::Data(XSDAnySimpleType::UnsignedShort(0)),
+            CanonicalDatatype::UInt16,
+        ),
+    ] {
+        let compiled = plan_bgp(&grouped_sum_with_bound(bound)).unwrap();
+        assert!(matches!(
+            compiled.relation.statement,
+            CompiledRelationStatement::GroupSum { datatype, .. } if datatype == expected
+        ));
+    }
+}
+
+#[test]
+fn immediate_group_sum_rejects_list_leak_order_wrong_type_and_non_node_key() {
+    let Query::And(valid) = grouped_u32_sum() else {
+        unreachable!()
+    };
+    reject(
+        and_of(vec![valid.and[1].clone(), valid.and[0].clone()]),
+        BgpPlanError::GroupSumUnsupportedShape,
+    );
+
+    let Query::GroupBy(mut group) = valid.and[0].clone() else {
+        unreachable!()
+    };
+    group.grouped_value = Value::Variable("leaked".into());
+    reject(
+        and_of(vec![Query::GroupBy(group), valid.and[1].clone()]),
+        BgpPlanError::GroupSumUnsupportedShape,
+    );
+
+    let signed_child = and_of(vec![
+        tv("category", "score", "score"),
+        gte(dvar("score"), dint(0)),
+    ]);
+    let signed_group = Query::GroupBy(GroupBy {
+        template: Value::Variable("score".into()),
+        group_by: vec!["category".into()],
+        grouped_value: Value::Variable("scores".into()),
+        query: Box::new(signed_child),
+    });
+    reject(
+        and_of(vec![signed_group, valid.and[1].clone()]),
+        BgpPlanError::GroupSumUnsupportedValue,
+    );
+
+    let object_key_group = Query::GroupBy(GroupBy {
+        template: Value::Variable("score".into()),
+        group_by: vec!["category".into()],
+        grouped_value: Value::Variable("scores".into()),
+        query: Box::new(and_of(vec![
+            tv("subject", "score", "category"),
+            gte(dvar("category"), duint(0)),
+            tv("subject", "other", "score"),
+            gte(dvar("score"), duint(0)),
+        ])),
+    });
+    reject(
+        and_of(vec![object_key_group, valid.and[1].clone()]),
+        BgpPlanError::GroupSumUnsupportedShape,
     );
 }
 

@@ -30,6 +30,7 @@ use tdb_succinct::{TdbDataType, TypedDictEntry};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::{When, WoqlOptional};
 use terminusdb_woql2::control::{Distinct, Select, Using};
+use terminusdb_woql2::collection::Sum;
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
@@ -961,6 +962,189 @@ fn grouped_score_extrema(kind: RangeOp) -> Query {
         variables: vec!["category".into(), "extremum".into()],
         query: Box::new(and_of(vec![group, extrema])),
     })
+}
+
+fn grouped_u32_sum_query() -> Query {
+    let child = and_of(vec![
+        tv_pred_var("category", "predicate", "score"),
+        gte(dvar("score"), duint(0)),
+    ]);
+    let group = Query::GroupBy(GroupBy {
+        template: Value::Variable("score".into()),
+        group_by: vec!["category".into()],
+        grouped_value: Value::Variable("scores".into()),
+        query: Box::new(child),
+    });
+    let sum = Query::Sum(Sum {
+        list: DataValue::Variable("scores".into()),
+        result: DataValue::Variable("total".into()),
+    });
+    and_of(vec![group, sum])
+}
+
+fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_key_order() {
+    let store = open_sync_memory_store();
+    let base_builder = store.create_base_layer().unwrap();
+    for (predicate, value) in [("p", 0u32), ("q", u32::MAX)] {
+        base_builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("b"),
+                &iri(predicate),
+                u32::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let base = base_builder.commit().unwrap();
+    let child_builder = base.open_write().unwrap();
+    for predicate in ["p", "q"] {
+        child_builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("a"),
+                &iri(predicate),
+                u32::make_entry(&2),
+            ))
+            .unwrap();
+    }
+    let layer = child_builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&grouped_u32_sum_query()).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(proved.result_len, 2);
+    assert_eq!(
+        values[0],
+        vec![
+            CanonicalResultValue::Object(CanonicalObject::Node(iri("a").into_bytes())),
+            CanonicalResultValue::Object(CanonicalObject::Node(iri("b").into_bytes())),
+        ]
+    );
+    assert_eq!(
+        values[1],
+        vec![
+            CanonicalResultValue::GeneratedDecimalU64(4),
+            CanonicalResultValue::GeneratedDecimalU64(u64::from(u32::MAX)),
+        ]
+    );
+    let executed = (0..proved.result_len)
+        .map(|row| {
+            let key_id = layer
+                .node_value_catalog
+                .iter()
+                .find(|record| ArkFr::from_u64(record.object_id) == proved.result_columns[0][row])
+                .unwrap()
+                .object_id;
+            let sum = match values[1][row] {
+                CanonicalResultValue::GeneratedDecimalU64(sum) => sum,
+                _ => unreachable!(),
+            };
+            vec![
+                ExecutedResultValue::Id(key_id),
+                ExecutedResultValue::GeneratedDecimalU64(sum),
+            ]
+        })
+        .collect::<Vec<_>>();
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["category".into(), "total".into()],
+            &executed,
+        )
+        .unwrap();
+
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[1][0] = ArkFr::from_u64(5);
+    tampered.result_commitments[1] = commit_column(&pad(
+        &tampered.result_columns[1],
+        1usize << tampered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let Query::And(parts) = grouped_u32_sum_query() else {
+        unreachable!()
+    };
+    let Query::GroupBy(group) = parts.and[0].clone() else {
+        unreachable!()
+    };
+    let substituted = plan_bgp(&and_of(vec![
+        Query::GroupBy(group),
+        Query::RangeMax(RangeMax {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &substituted,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_key_order() {
+    std::thread::Builder::new()
+        .name("woql-group-sum-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_key_order)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_grouped_u32_sum_empty_and_outer_count_are_exact() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("x"), &iri("p"), &iri("y")))
+        .unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("u"), &iri("q"), &iri("v")))
+        .unwrap();
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&Query::Count(Count {
+        query: Box::new(grouped_u32_sum_query()),
+        count: DataValue::Variable("groups".into()),
+    }))
+    .unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.count_binding(&compiled), Some(("groups", 0)));
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["groups".into()],
+            &[vec![0]],
+        )
+        .unwrap();
+}
+
+#[test]
+fn grouped_u32_sum_empty_and_outer_count_are_exact() {
+    std::thread::Builder::new()
+        .name("woql-group-sum-empty-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_grouped_u32_sum_empty_and_outer_count_are_exact)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 fn resolved_group_extrema(

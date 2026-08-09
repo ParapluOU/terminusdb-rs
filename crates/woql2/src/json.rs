@@ -71,9 +71,11 @@ pub fn normalize_woql_json(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use crate::order::Order;
+    use crate::collection::Sum;
     use crate::misc::TripleCount;
+    use crate::order::{GroupBy, Order};
     use crate::prelude::{DataValue, NodeValue, Query, Triple, True, When};
+    use crate::query::And;
     use crate::value::Value as WoqlValue;
     use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance};
 
@@ -168,6 +170,35 @@ mod tests {
         };
         assert_eq!(decoded.resource, "admin/db/local/branch/main/instance");
         assert_eq!(decoded.count, DataValue::Variable("Count".into()));
+    }
+
+    #[test]
+    fn immediate_group_by_sum_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::GroupBy(GroupBy {
+                    template: WoqlValue::Variable("score".into()),
+                    group_by: vec!["category".into()],
+                    grouped_value: WoqlValue::Variable("scores".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Sum(Sum {
+                    list: DataValue::Variable("scores".into()),
+                    result: DataValue::Variable("total".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][0]["@type"], "GroupBy");
+        assert_eq!(json["and"][0]["group_by"][0], "category");
+        assert!(json["and"][0].get("grouped").is_some());
+        assert_eq!(json["and"][1]["@type"], "Sum");
+        assert!(json["and"][1].get("list").is_some());
+        assert!(json["and"][1].get("result").is_some());
+
+        let decoded = Query::from_json(json)
+            .expect("domain decoder accepts canonical immediate GroupBy followed by Sum");
+        assert_eq!(decoded, query);
     }
 
     #[test]

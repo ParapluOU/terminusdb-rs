@@ -186,6 +186,12 @@ pub enum CompiledRelationStatement {
         datatype: CanonicalDatatype,
         kind: GroupExtremaKind,
     },
+    GroupSum {
+        input: Box<CompiledRelation>,
+        key_column: usize,
+        value_column: usize,
+        datatype: CanonicalDatatype,
+    },
 }
 
 impl CompiledRelation {
@@ -362,6 +368,9 @@ pub enum ProvedQueryStatement {
     GroupExtrema {
         input: Box<ProvedBgp>,
         proof: Box<GroupExtremaProof>,
+    },
+    GroupSum {
+        input: Box<ProvedBgp>,
     },
 }
 
@@ -573,6 +582,18 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 GroupExtremaKind::Max => 1,
             }]);
         }
+        CompiledRelationStatement::GroupSum {
+            input,
+            key_column,
+            value_column,
+            datatype,
+        } => {
+            hasher.update(b"/group-sum");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*key_column as u64).to_le_bytes());
+            hasher.update((*value_column as u64).to_le_bytes());
+            hasher.update([*datatype as u8]);
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -764,6 +785,24 @@ fn relation_result_descriptors(
                 },
             ])
         }
+        CompiledRelationStatement::GroupSum {
+            input, key_column, ..
+        } => {
+            let child = relation_result_descriptors(input)?;
+            let key = *child.get(*key_column).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-sum key column out of range",
+                )
+            })?;
+            Ok(vec![
+                key,
+                ResultColumnDescriptor {
+                    namespace: ResultIdNamespace::GeneratedDecimalU64,
+                    nullable: false,
+                },
+            ])
+        }
     }
 }
 
@@ -872,6 +911,17 @@ fn relation_proof_plan(
             datatype: *datatype,
             kind: *kind,
         },
+        CompiledRelationStatement::GroupSum {
+            input,
+            key_column,
+            value_column,
+            datatype,
+        } => RelationProofPlanKind::GroupSum {
+            input: Box::new(child(input)?),
+            key_column: *key_column,
+            value_column: *value_column,
+            datatype: *datatype,
+        },
     };
     Ok(RelationProofPlan { query_digest, kind })
 }
@@ -936,6 +986,131 @@ fn expected_generated_u64_filter_columns(
                 .collect()
         })
         .collect()
+}
+
+fn bounded_group_sum_value(
+    value: &CanonicalResultValue,
+    datatype: CanonicalDatatype,
+) -> std::io::Result<u64> {
+    let CanonicalResultValue::Object(CanonicalObject::Value {
+        datatype: actual,
+        lexical,
+    }) = value
+    else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-sum input is not a typed Store literal",
+        ));
+    };
+    if *actual != datatype {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-sum input has the wrong exact datatype",
+        ));
+    }
+    Ok(match datatype {
+        CanonicalDatatype::UInt8 if lexical.len() == 1 => u64::from(lexical[0]),
+        CanonicalDatatype::UInt16 if lexical.len() == 2 => {
+            u64::from(u16::from_be_bytes(lexical.as_slice().try_into().unwrap()))
+        }
+        CanonicalDatatype::UInt32 if lexical.len() == 4 => {
+            u64::from(u32::from_be_bytes(lexical.as_slice().try_into().unwrap()))
+        }
+        CanonicalDatatype::UInt8
+        | CanonicalDatatype::UInt16
+        | CanonicalDatatype::UInt32 => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum input has a noncanonical lexical width",
+            ))
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum datatype is outside the bounded unsigned subset",
+            ))
+        }
+    })
+}
+
+fn expected_group_sum_columns(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    key_column: usize,
+    value_column: usize,
+    datatype: CanonicalDatatype,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let max_value = match datatype {
+        CanonicalDatatype::UInt8 => u64::from(u8::MAX),
+        CanonicalDatatype::UInt16 => u64::from(u16::MAX),
+        CanonicalDatatype::UInt32 => u64::from(u32::MAX),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum datatype is outside the bounded unsigned subset",
+            ))
+        }
+    };
+    let row_count = u64::try_from(input.result_len).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum row count exceeds u64")
+    })?;
+    max_value.checked_mul(row_count).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-sum setup bound cannot establish a u64 total",
+        )
+    })?;
+    let descriptors = relation_result_descriptors(input_plan)?;
+    let values = resolve_result_values(
+        layer,
+        expected_root,
+        &input.result_columns,
+        &descriptors,
+    )?;
+    let keys = values.get(key_column).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key out of range")
+    })?;
+    let numbers = values.get(value_column).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum value out of range")
+    })?;
+    let key_fields = input.result_columns.get(key_column).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum key field out of range")
+    })?;
+    if keys.len() != input.result_len
+        || numbers.len() != input.result_len
+        || key_fields.len() != input.result_len
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-sum input length mismatch",
+        ));
+    }
+    let mut sums = std::collections::BTreeMap::<Vec<u8>, (ArkFr, u64)>::new();
+    for row in 0..input.result_len {
+        let CanonicalResultValue::Object(CanonicalObject::Node(iri)) = &keys[row] else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum key is not a node IRI",
+            ));
+        };
+        let value = bounded_group_sum_value(&numbers[row], datatype)?;
+        let entry = sums.entry(iri.clone()).or_insert((key_fields[row], 0));
+        if entry.0 != key_fields[row] {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "group-sum canonical node maps to multiple Store IDs",
+            ));
+        }
+        entry.1 = entry.1.checked_add(value).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "group-sum exceeds u64")
+        })?;
+    }
+    Ok(vec![
+        sums.values().map(|(key, _)| *key).collect(),
+        sums.values().map(|(_, sum)| ArkFr::from_u64(*sum)).collect(),
+    ])
 }
 
 impl ProvedBgp {
@@ -1383,6 +1558,46 @@ impl ProvedBgp {
                     proof,
                     &mut transcript,
                 )?;
+            }
+            (
+                ProvedQueryStatement::GroupSum { input },
+                CompiledRelationStatement::GroupSum {
+                    input: input_plan,
+                    key_column,
+                    value_column,
+                    datatype,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_group_sum_columns(
+                    input,
+                    input_plan,
+                    *key_column,
+                    *value_column,
+                    *datatype,
+                    layer,
+                    expected_root,
+                )?;
+                let expected_len = expected_columns.first().map_or(0, Vec::len);
+                let expected_log = expected_len
+                    .max(1)
+                    .next_power_of_two()
+                    .max(2)
+                    .trailing_zeros() as usize;
+                if self.result_len != expected_len
+                    || self.result_log_domain != expected_log
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL group-sum result is not the exact derived aggregate",
+                    ));
+                }
             }
             (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
@@ -1959,6 +2174,19 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::GroupSum { input },
+                CompiledRelationStatement::GroupSum {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::GroupSum {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -2252,6 +2480,9 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
                 proof,
             }
         }
+        RecursiveRelationProof::GroupSum { input } => ProvedQueryStatement::GroupSum {
+            input: Box::new(proved_from_recursive(*input)),
+        },
     };
     ProvedBgp {
         statement,
@@ -2575,6 +2806,12 @@ pub enum BgpPlanError {
     #[error("GroupBy extrema template must be a nonnullable variable with an exact fixed-width order-preserving datatype")]
     GroupExtremaUnsupportedValue,
 
+    #[error("GroupBy followed by Sum requires one node key, one private grouped-list variable, and one distinct result variable")]
+    GroupSumUnsupportedShape,
+
+    #[error("GroupBy Sum template must be an exact UInt8, UInt16, or UInt32 variable")]
+    GroupSumUnsupportedValue,
+
     #[error("OrderBy proof coverage requires one ascending key naming the complete one-column result of a leaf BGP")]
     OrderByUnsupportedShape,
 
@@ -2818,6 +3055,106 @@ fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlan
                 value_column,
                 datatype,
                 kind,
+            },
+        },
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) if and.and.len() == 2 => &and.and,
+        _ => return Ok(None),
+    };
+    let (Query::GroupBy(group), Query::Sum(sum)) = (&conjuncts[0], &conjuncts[1]) else {
+        if conjuncts.iter().any(|query| matches!(query, Query::Sum(_))) {
+            return Err(BgpPlanError::GroupSumUnsupportedShape);
+        }
+        return Ok(None);
+    };
+    if group.group_by.len() != 1 {
+        return Err(BgpPlanError::GroupSumUnsupportedShape);
+    }
+    let template = match &group.template {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupSumUnsupportedValue),
+    };
+    let hidden = match &group.grouped_value {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupSumUnsupportedShape),
+    };
+    let list = match &sum.list {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupSumUnsupportedShape),
+    };
+    let result = match &sum.result {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::GroupSumUnsupportedShape),
+    };
+    let key = &group.group_by[0];
+    if hidden != list
+        || key == template
+        || key == hidden
+        || key == result
+        || template == hidden
+        || template == result
+        || hidden == result
+    {
+        return Err(BgpPlanError::GroupSumUnsupportedShape);
+    }
+    let child = plan_bgp(&group.query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::GroupSumUnsupportedShape);
+    }
+    let key_column = child
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == key)
+        .ok_or(BgpPlanError::GroupSumUnsupportedShape)?;
+    let value_column = child
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == template)
+        .ok_or(BgpPlanError::GroupSumUnsupportedValue)?;
+    if key_column == value_column
+        || child.relation.domains.get(key_column).copied().flatten()
+            != Some(EqualityValueDomain::Node)
+    {
+        return Err(BgpPlanError::GroupSumUnsupportedShape);
+    }
+    let descriptors = relation_result_descriptors(&child.relation)
+        .map_err(|_| BgpPlanError::GroupSumUnsupportedShape)?;
+    if descriptors[key_column].namespace != ResultIdNamespace::NodeValue
+        || descriptors[key_column].nullable
+        || descriptors[value_column].namespace != ResultIdNamespace::NodeValue
+        || descriptors[value_column].nullable
+    {
+        return Err(BgpPlanError::GroupSumUnsupportedShape);
+    }
+    let datatype = match child.relation.domains.get(value_column).copied().flatten() {
+        Some(EqualityValueDomain::Datatype(
+            datatype @ (CanonicalDatatype::UInt8
+            | CanonicalDatatype::UInt16
+            | CanonicalDatatype::UInt32),
+        )) => datatype,
+        _ => return Err(BgpPlanError::GroupSumUnsupportedValue),
+    };
+    let key_domain = child.relation.domains[key_column];
+    let collection = child.collection;
+    Ok(Some(CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec![key.clone(), result.clone()],
+            domains: vec![key_domain, None],
+            statement: CompiledRelationStatement::GroupSum {
+                input: Box::new(child.relation),
+                key_column,
+                value_column,
+                datatype,
             },
         },
         projection: None,
@@ -3536,6 +3873,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             count_variable,
             &distincts,
         );
+    }
+
+    if let Some(mut aggregate) = plan_group_sum_form(body)? {
+        if collection.is_some() {
+            if aggregate.collection.is_some() && aggregate.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            aggregate.collection = collection;
+        }
+        aggregate.count_variable = count_variable;
+        aggregate.projection = compile_projection(
+            &selections,
+            aggregate.count_variable.as_deref(),
+            &aggregate.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&aggregate.relation)?;
+        return Ok(aggregate);
     }
 
     if let Some(mut aggregate) = plan_group_extrema_form(body)? {
@@ -4288,6 +4645,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 visit(input, depth + 1, nodes)
             }
             CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::GroupSum { input, .. } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;
