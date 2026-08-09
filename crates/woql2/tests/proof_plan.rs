@@ -509,6 +509,22 @@ fn optional_requires_outer_bindings_and_compiles_correlated_join() {
         compiled.optional_join.unwrap().key_pairs,
         vec![(1, 0)]
     );
+
+    let selected = Query::Select(Select {
+        variables: vec!["x".into(), "z".into()],
+        query: Box::new(q.clone()),
+    });
+    let selected = plan_bgp(&selected).unwrap();
+    assert_eq!(selected.projection, Some(vec![0, 2]));
+    assert!(selected.optional_join.is_some());
+
+    let counted = Query::Count(Count {
+        query: Box::new(q),
+        count: dvar("count"),
+    });
+    let counted = plan_bgp(&counted).unwrap();
+    assert_eq!(counted.count_variable.as_deref(), Some("count"));
+    assert!(counted.optional_join.is_some());
 }
 
 #[test]
