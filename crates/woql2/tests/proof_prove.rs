@@ -404,14 +404,14 @@ fn count_binds_the_proven_relation_cardinality() {
 
 #[test]
 fn ground_triple_authenticates_presence_absence_and_zero_arity_rows() {
-    // Every constant occurs somewhere in the authenticated dictionaries, while only
-    // (a,knows,b) is present. This exercises triple non-membership rather than the
-    // deliberately separate dictionary-nonmembership problem.
+    // (a,likes,b) exercises row nonmembership with dictionary-present terms;
+    // (a,likes,missing) exercises the root-authenticated dictionary-absence shortcut.
     let lc = build_layer(&[("a", "knows", "b"), ("a", "likes", "c")]);
 
     for (query, expected_len) in [
         (tv_ground("a", "knows", "b"), 1usize),
         (tv_ground("a", "likes", "b"), 0usize),
+        (tv_ground("a", "likes", "missing"), 0usize),
     ] {
         let compiled = plan_bgp(&query).unwrap();
         let proved = compiled.prove(&lc).unwrap();
