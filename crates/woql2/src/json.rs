@@ -119,6 +119,29 @@ mod tests {
     }
 
     #[test]
+    fn start_limit_use_authoritative_prolog_wire_shape_and_domain_decoder() {
+        let decoded = Query::from_json(serde_json::json!({
+            "@type": "Limit",
+            "limit": 2,
+            "query": {
+                "@type": "Start",
+                "start": 1,
+                "query": { "@type": "True" }
+            }
+        }))
+        .expect("domain decoder accepts Prolog Limit(Start(Query)) JSON");
+        let Query::Limit(limit) = decoded else {
+            panic!("expected decoded Limit domain AST");
+        };
+        assert_eq!(limit.limit, 2);
+        let Query::Start(start) = *limit.query else {
+            panic!("expected nested Start domain AST");
+        };
+        assert_eq!(start.start, 1);
+        assert!(matches!(*start.query, Query::True(_)));
+    }
+
+    #[test]
     fn none_graph_serializes_as_instance() {
         let q = Query::Triple(Triple {
             subject: NodeValue::Variable("S".to_string()),

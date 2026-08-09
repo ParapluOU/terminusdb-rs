@@ -30,12 +30,13 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::control::WoqlOptional;
 use terminusdb_woql2::control::{Distinct, Select, Using};
 use terminusdb_woql2::proof::{
-    decode_and_verify_envelope, decode_verifier_commitment_and_verify_envelope, plan_bgp,
+    compiled_query_digest, decode_and_verify_envelope,
+    decode_verifier_commitment_and_verify_envelope, plan_bgp,
     BgpPlanError, CompiledRelationStatement, ExecutedResultValue,
 };
 use terminusdb_woql2::triple::Link;
 use terminusdb_woql2::{
-    misc::{Count, InRange, RangeMax, RangeMin},
+    misc::{Count, InRange, Limit, RangeMax, RangeMin, Start},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
     query::{Not, Or, Query},
     value::DataValue,
@@ -151,6 +152,115 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
         layer.state.commitment_root,
     )
     .is_err());
+}
+
+fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for score in [30u32, 10, 20] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("metric"),
+                &iri("score"),
+                u32::make_entry(&score),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = Query::Limit(Limit {
+        limit: 2,
+        query: Box::new(Query::Start(Start {
+            start: 1,
+            query: Box::new(exact_scalar_order_query(0)),
+        })),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let scores = values[0]
+        .iter()
+        .map(|value| match value {
+            CanonicalResultValue::Object(CanonicalObject::Value {
+                datatype: CanonicalDatatype::UInt32,
+                lexical,
+            }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+            other => panic!("unexpected sliced value {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(scores, [20, 30]);
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+
+    // The outer Limit(0) has the same already-authenticated Start child and must verify
+    // only the canonical empty contiguous slice; no second expensive child proof is needed.
+    let zero_compiled = plan_bgp(&Query::Limit(Limit {
+        limit: 0,
+        query: Box::new(Query::Start(Start {
+            start: 1,
+            query: Box::new(exact_scalar_order_query(0)),
+        })),
+    }))
+    .unwrap();
+    let mut zero = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    zero.query_digest = compiled_query_digest(&zero_compiled).unwrap();
+    zero.result_len = 0;
+    zero.result_log_domain = 1;
+    zero.result_columns[0].clear();
+    zero.result_values[0].clear();
+    zero.result_commitments[0] = commit_column(&[ArkFr::zero(), ArkFr::zero()]).unwrap();
+    decode_and_verify_envelope(
+        &zero.encode().unwrap(),
+        &zero_compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+
+    let substituted = plan_bgp(&Query::Limit(Limit {
+        limit: 1,
+        query: Box::new(Query::Start(Start {
+            start: 1,
+            query: Box::new(exact_scalar_order_query(0)),
+        })),
+    }))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &substituted,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut reordered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    reordered.result_columns[0].swap(0, 1);
+    reordered.result_commitments[0] = commit_column(&pad(
+        &reordered.result_columns[0],
+        1usize << reordered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &reordered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
+    std::thread::Builder::new()
+        .name("woql-ordered-slice-proof".into())
+        .stack_size(24 * 1024 * 1024)
+        .spawn(assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]

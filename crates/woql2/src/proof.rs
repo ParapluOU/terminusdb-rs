@@ -128,6 +128,11 @@ pub enum CompiledRelationStatement {
         input: Box<CompiledRelation>,
         datatype: CanonicalDatatype,
     },
+    ExactOrderedSlice {
+        input: Box<CompiledRelation>,
+        offset: u64,
+        limit: Option<u64>,
+    },
     GroupExtrema {
         input: Box<CompiledRelation>,
         key_column: usize,
@@ -209,6 +214,15 @@ impl CompiledRelation {
             _ => None,
         }
     }
+
+    pub fn as_exact_ordered_slice(&self) -> Option<(&CompiledRelation, u64, Option<u64>)> {
+        match &self.statement {
+            CompiledRelationStatement::ExactOrderedSlice { input, offset, limit } => {
+                Some((input, *offset, *limit))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl CompiledBgp {
@@ -273,6 +287,9 @@ pub enum ProvedQueryStatement {
     ExactScalarOrder {
         input: Box<ProvedBgp>,
         proof: Box<ExactScalarOrderProof>,
+    },
+    ExactOrderedSlice {
+        input: Box<ProvedBgp>,
     },
     GroupExtrema {
         input: Box<ProvedBgp>,
@@ -393,6 +410,18 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(b"/exact-scalar-order");
             hasher.update(relation_query_digest(input)?);
             hasher.update([*datatype as u8]);
+        }
+        CompiledRelationStatement::ExactOrderedSlice { input, offset, limit } => {
+            hasher.update(b"/exact-ordered-slice");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update(offset.to_le_bytes());
+            match limit {
+                None => hasher.update([0]),
+                Some(limit) => {
+                    hasher.update([1]);
+                    hasher.update(limit.to_le_bytes());
+                }
+            }
         }
         CompiledRelationStatement::GroupExtrema {
             input,
@@ -535,6 +564,9 @@ fn relation_result_descriptors(
         CompiledRelationStatement::ExactScalarOrder { input, .. } => {
             relation_result_descriptors(input)
         }
+        CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
+            relation_result_descriptors(input)
+        }
         CompiledRelationStatement::GroupExtrema {
             input, key_column, ..
         } => {
@@ -591,6 +623,13 @@ fn relation_proof_plan(
             RelationProofPlanKind::ExactScalarOrder {
                 input: Box::new(child(input)?),
                 datatype: *datatype,
+            }
+        }
+        CompiledRelationStatement::ExactOrderedSlice { input, offset, limit } => {
+            RelationProofPlanKind::ExactOrderedSlice {
+                input: Box::new(child(input)?),
+                offset: *offset,
+                limit: *limit,
             }
         }
         CompiledRelationStatement::LeftOuter {
@@ -929,6 +968,44 @@ impl ProvedBgp {
                     proof,
                     &mut transcript,
                 )?;
+            }
+            (
+                ProvedQueryStatement::ExactOrderedSlice { input },
+                CompiledRelationStatement::ExactOrderedSlice {
+                    input: input_plan,
+                    offset,
+                    limit,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let start = usize::try_from(*offset)
+                    .unwrap_or(usize::MAX)
+                    .min(input.result_len);
+                let available = input.result_len - start;
+                let take = limit
+                    .map(|count| usize::try_from(count).unwrap_or(usize::MAX).min(available))
+                    .unwrap_or(available);
+                let end = start + take;
+                let expected_log = take.max(1).next_power_of_two().max(2).trailing_zeros() as usize;
+                let expected_columns = input
+                    .result_columns
+                    .iter()
+                    .map(|column| column[start..end].to_vec())
+                    .collect::<Vec<_>>();
+                if self.result_len != take
+                    || self.result_log_domain != expected_log
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL ordered slice is not the exact contiguous child slice",
+                    ));
+                }
             }
             _ => {
                 return Err(std::io::Error::new(
@@ -1370,6 +1447,19 @@ impl ProvedBgp {
                 proof: proof.clone(),
             },
             (
+                ProvedQueryStatement::ExactOrderedSlice { input },
+                CompiledRelationStatement::ExactOrderedSlice {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::ExactOrderedSlice {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::LeftAnti { left, right, proof },
                 CompiledRelationStatement::LeftAnti {
                     left: left_plan,
@@ -1572,6 +1662,11 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             ProvedQueryStatement::ExactScalarOrder {
                 input: Box::new(proved_from_recursive(*input)),
                 proof,
+            }
+        }
+        RecursiveRelationProof::ExactOrderedSlice { input } => {
+            ProvedQueryStatement::ExactOrderedSlice {
+                input: Box::new(proved_from_recursive(*input)),
             }
         }
         RecursiveRelationProof::GroupExtrema { input, proof } => {
@@ -1882,6 +1977,9 @@ pub enum BgpPlanError {
     #[error("OrderBy key must have an exact fixed-width order-preserving numeric datatype")]
     OrderByUnsupportedValue,
 
+    #[error("Start/Limit proof coverage requires an authenticated ordered child without result wrappers")]
+    OrderedSliceUnsupportedShape,
+
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
 
@@ -2136,6 +2234,42 @@ fn plan_exact_scalar_order(
     })
 }
 
+fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
+    let (child_query, offset, limit) = match query {
+        Query::Start(start) => (start.query.as_ref(), start.start, None),
+        Query::Limit(limit) => (limit.query.as_ref(), 0, Some(limit.limit)),
+        _ => return Err(BgpPlanError::OrderedSliceUnsupportedShape),
+    };
+    let child = plan_bgp(child_query)?;
+    if child.projection.is_some()
+        || child.count_variable.is_some()
+        || child.full_row_distinct
+        || !matches!(
+            child.relation.statement,
+            CompiledRelationStatement::ExactScalarOrder { .. }
+                | CompiledRelationStatement::ExactOrderedSlice { .. }
+        )
+    {
+        return Err(BgpPlanError::OrderedSliceUnsupportedShape);
+    }
+    let collection = child.collection;
+    Ok(CompiledBgp {
+        relation: CompiledRelation {
+            schema: child.relation.schema.clone(),
+            domains: child.relation.domains.clone(),
+            statement: CompiledRelationStatement::ExactOrderedSlice {
+                input: Box::new(child.relation),
+                offset,
+                limit,
+            },
+        },
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -2185,6 +2319,18 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             }
             _ => break,
         };
+    }
+
+    if matches!(body, Query::Start(_) | Query::Limit(_)) {
+        if !selections.is_empty() || count_variable.is_some() || !distincts.is_empty() {
+            return Err(BgpPlanError::OrderedSliceUnsupportedShape);
+        }
+        let mut compiled = plan_exact_ordered_slice(body)?;
+        if compiled.collection.is_none() {
+            compiled.collection = collection;
+        }
+        validate_compiled_structure(&compiled.relation)?;
+        return Ok(compiled);
     }
 
     if let Query::OrderBy(order_by) = body {
@@ -2797,7 +2943,8 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 visit(right, depth + 1, nodes)
             }
             CompiledRelationStatement::Equality { input, .. }
-            | CompiledRelationStatement::ExactScalarOrder { input, .. } => {
+            | CompiledRelationStatement::ExactScalarOrder { input, .. }
+            | CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
                 visit(input, depth + 1, nodes)
             }
             CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),

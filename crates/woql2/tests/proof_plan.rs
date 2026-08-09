@@ -1671,31 +1671,69 @@ fn exact_scalar_order_retains_outer_routing_wrapper() {
     assert!(compiled.relation.as_exact_scalar_order().is_some());
 }
 
+fn exact_order_query_for_slice() -> Query {
+    Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate {
+            variable: "score".into(),
+            order: Order::Asc,
+        }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("metric", "score", "score"),
+            gte(dvar("score"), duint(0)),
+        ])),
+    })
+}
+
+#[test]
+fn start_and_limit_preserve_authoritative_inside_out_nesting() {
+    let query = Query::Start(Start {
+        start: 1,
+        query: Box::new(Query::Limit(Limit {
+            limit: 2,
+            query: Box::new(exact_order_query_for_slice()),
+        })),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let (limited, offset, limit) = compiled.relation.as_exact_ordered_slice().unwrap();
+    assert_eq!((offset, limit), (1, None));
+    let (ordered, offset, limit) = limited.as_exact_ordered_slice().unwrap();
+    assert_eq!((offset, limit), (0, Some(2)));
+    assert!(ordered.as_exact_scalar_order().is_some());
+
+    for query in [
+        Query::Limit(Limit {
+            limit: 0,
+            query: Box::new(exact_order_query_for_slice()),
+        }),
+        Query::Start(Start {
+            start: u64::MAX,
+            query: Box::new(exact_order_query_for_slice()),
+        }),
+    ] {
+        assert!(plan_bgp(&query).unwrap().relation.as_exact_ordered_slice().is_some());
+    }
+}
+
+#[test]
+fn start_and_limit_reject_unordered_children_closed() {
+    for query in [
+        Query::Start(Start {
+            start: 1,
+            query: Box::new(tv("x", "age", "a")),
+        }),
+        Query::Limit(Limit {
+            limit: 1,
+            query: Box::new(tv("x", "age", "a")),
+        }),
+    ] {
+        reject(query, BgpPlanError::OrderedSliceUnsupportedShape);
+    }
+}
+
 #[test]
 fn remaining_ordered_result_controls_reject_until_authenticated() {
     let base = tv("x", "age", "a");
-    let cases = [
-        (
-            Query::Start(Start {
-                start: 2,
-                query: Box::new(base.clone()),
-            }),
-            "Start",
-        ),
-        (
-            Query::Limit(Limit {
-                limit: 3,
-                query: Box::new(base.clone()),
-            }),
-            "Limit",
-        ),
-        (
-            Query::Once(Once {
-                query: Box::new(base),
-            }),
-            "Once",
-        ),
-    ];
+    let cases = [(Query::Once(Once { query: Box::new(base) }), "Once")];
 
     for (q, construct) in cases {
         reject(q, BgpPlanError::UnsupportedConstruct { construct });
