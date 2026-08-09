@@ -7,12 +7,13 @@
 //! * zero or more nested outer [`Select`]s (projection is read-side only — the proof
 //!   still proves the FULL BGP), wrapping
 //! * an [`And`] (nested `And`s flattened) of `k >= 1` [`Triple`]s, each a
-//!   `<subj> <constant predicate IRI> <obj>` atom where the predicate is a constant IRI
-//!   and each of subject/object is EITHER a query VARIABLE (a kept output column) OR an
+//!   `<subj> <predicate> <obj>` atom where the predicate is either a constant IRI or a
+//!   query variable retained from the authenticated P column, and each of subject/object
+//!   is EITHER a query VARIABLE (a kept output column) OR an
 //!   aligned CONSTANT — a subject/object node IRI ([`AtomTerm::NodeConstant`]) or an
 //!   object typed literal of a round-trip-aligned xsd datatype ([`AtomTerm::ValueConstant`]:
 //!   all scalar `XSDAnySimpleType` variants, routed through the Store's
-//!   typed-value construction). Each atom keeps one output column per variable (S,O order);
+//!   typed-value construction). Each atom keeps one output column per variable (S,P,O order);
 //!   the atoms join into a left-deep chain. Shared variables use ordinary natural joins;
 //!   disconnected components use the Store's verifier-known UNIT-key Cartesian product.
 //!   Two-variable graph keys use the Store's injective two-u64 packing and remain bound
@@ -41,9 +42,10 @@ use terminus_store::proof::envelope::{
     plan_digest, BagUnionEnvelope, LayerBgpEnvelope, LeftAntiJoinEnvelope,
 };
 use terminus_store::proof::query::{
-    prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp,
-    verify_layer_bgp_result_log_domain, verify_result_columns, verify_result_objects, AtomTerm,
+    prove_layer_bgp_with_result, resolve_typed_result_objects, result_id_namespaces,
+    verify_layer_bgp, verify_layer_bgp_result_log_domain, verify_result_columns, AtomTerm,
     LayerBgpAtom, LayerBgpPlan, LayerBgpProof, ObjectRangeBound, ObjectRangeSpec,
+    ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::union::{prove_bag_union, verify_bag_union, BagUnionProof};
@@ -91,6 +93,30 @@ pub struct CompiledBgp {
     /// BGP schema. Full natural-join assignments over set-valued triple relations are
     /// already unique; subset/projection distinctness still requires a dedup argument.
     pub full_row_distinct: bool,
+}
+
+fn compiled_result_namespaces(compiled: &CompiledBgp) -> std::io::Result<Vec<ResultIdNamespace>> {
+    if compiled.union_plans.is_empty() {
+        result_id_namespaces(&compiled.plan)
+    } else {
+        let mut expected: Option<Vec<ResultIdNamespace>> = None;
+        for (plan, mapping) in compiled
+            .union_plans
+            .iter()
+            .zip(&compiled.union_schema_mappings)
+        {
+            let branch = result_id_namespaces(plan)?;
+            let mapped: Vec<_> = mapping.iter().map(|index| branch[*index]).collect();
+            if expected.as_ref().is_some_and(|kinds| kinds != &mapped) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL union branches expose incompatible Store ID namespaces",
+                ));
+            }
+            expected = Some(mapped);
+        }
+        Ok(expected.unwrap_or_default())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -444,7 +470,12 @@ impl ProvedBgp {
         if compiled.schema.is_empty() {
             Ok(Vec::new())
         } else {
-            resolve_result_objects(layer, expected_root, &self.result_columns)
+            resolve_typed_result_objects(
+                layer,
+                expected_root,
+                &self.result_columns,
+                &compiled_result_namespaces(compiled)?,
+            )
         }
     }
 
@@ -468,7 +499,20 @@ impl ProvedBgp {
                 ))
             }
         } else {
-            verify_result_objects(layer, expected_root, &self.result_columns, objects)
+            let resolved = resolve_typed_result_objects(
+                layer,
+                expected_root,
+                &self.result_columns,
+                &compiled_result_namespaces(compiled)?,
+            )?;
+            if resolved == objects {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "delivered result objects do not match typed authenticated Store IDs",
+                ))
+            }
         }
     }
 
@@ -556,7 +600,14 @@ impl ProvedBgp {
                 delivered_columns[column].push(ArkFr::from_u64(*id));
             }
         }
-        let delivered_objects = resolve_result_objects(layer, expected_root, &delivered_columns)?;
+        let namespaces = compiled_result_namespaces(compiled)?;
+        let projected_namespaces: Vec<_> = projection.iter().map(|index| namespaces[*index]).collect();
+        let delivered_objects = resolve_typed_result_objects(
+            layer,
+            expected_root,
+            &delivered_columns,
+            &projected_namespaces,
+        )?;
         let mut delivered_rows: Vec<Vec<CanonicalObject>> = (0..rows.len())
             .map(|row| {
                 (0..projection.len())
@@ -1080,9 +1131,8 @@ pub enum BgpPlanError {
     #[error("BGP needs at least one atom, found {count}")]
     TooFewAtoms { count: usize },
 
-    /// The predicate position held a variable. Predicate variables are unsupported.
-    #[error("predicate variables unsupported: the predicate must be a constant IRI")]
-    PredicateNotConstant,
+    #[error("variable `?{var}` occurs in both predicate and node/value positions")]
+    VariableNamespaceConflict { var: String },
 
     /// `Link`/`Data` declare an object-kind restriction which a generic variable loses
     /// when normalized to a triple. Constants carry their kind intrinsically; variables
@@ -1124,6 +1174,9 @@ pub enum BgpPlanError {
 
     #[error("Or branches must expose exactly the same variable schema and order")]
     OrIncompatibleSchema,
+
+    #[error("Or branches expose incompatible Store ID namespaces")]
+    OrIncompatibleNamespaces,
 
     #[error("Select, Count, or nested Or inside an Or branch is unsupported")]
     OrUnsupportedBranchWrapper,
@@ -1208,7 +1261,7 @@ fn query_variant_name(q: &Query) -> &'static str {
 
 /// A per-atom relation, ready for the variable-arity planner. `layer_atom` is the
 /// variable-blind atom emitted into the plan (subject/predicate/object terms). `kept`
-/// is the atom's VARIABLE names in S,O order — the relation's output columns, one per
+/// is the atom's VARIABLE names in S,P,O order — the relation's output columns, one per
 /// variable. An all-variable atom keeps two columns `[subj_var, obj_var]`; a
 /// subject/object-constant atom keeps one. The planner joins on shared `kept` names and
 /// `rel_key` indexes into `kept`.
@@ -1218,6 +1271,8 @@ struct Atom {
     /// The subject variable name, if the subject is a variable (else the subject is a
     /// constant). Used to route comparison conjuncts to the right object-binding atom.
     subj_var: Option<String>,
+    /// Predicate variables use the independent predicate dictionary ID namespace.
+    pred_var: Option<String>,
     /// The object variable name, if the object is a variable (else a constant). A numeric
     /// range attaches to the unique atom whose `obj_var` is the compared variable.
     obj_var: Option<String>,
@@ -1300,6 +1355,15 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         let schema = branches[0].schema.clone();
         if branches.iter().any(|branch| branch.schema != schema) {
             return Err(BgpPlanError::OrIncompatibleSchema);
+        }
+        let first_namespaces = result_id_namespaces(&branches[0].plan)
+            .map_err(|_| BgpPlanError::OrIncompatibleNamespaces)?;
+        if branches.iter().skip(1).any(|branch| {
+            result_id_namespaces(&branch.plan)
+                .map(|namespaces| namespaces != first_namespaces)
+                .unwrap_or(true)
+        }) {
+            return Err(BgpPlanError::OrIncompatibleNamespaces);
         }
 
         let mut effective_collection = collection.clone();
@@ -1389,6 +1453,17 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                     .map(|right_index| (name, left_index, right_index))
             })
             .collect();
+        let left_namespaces = result_id_namespaces(&left.plan)
+            .map_err(|_| BgpPlanError::VariableNamespaceConflict { var: "unknown".into() })?;
+        let right_namespaces = result_id_namespaces(&right.plan)
+            .map_err(|_| BgpPlanError::VariableNamespaceConflict { var: "unknown".into() })?;
+        if let Some((name, _, _)) = shared.iter().find(|(_, left, right)| {
+            left_namespaces[*left] != right_namespaces[*right]
+        }) {
+            return Err(BgpPlanError::VariableNamespaceConflict {
+                var: (*name).clone(),
+            });
+        }
         if shared.len() > 2 {
             return Err(BgpPlanError::NotSharedVariableCount {
                 count: shared.len(),
@@ -1478,6 +1553,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     if k == 0 {
         return Err(BgpPlanError::TooFewAtoms { count: k });
     }
+    validate_variable_namespaces(&atoms)?;
 
     // (2b) Phase 7.4: route each comparison conjunct to a numeric RANGE filter on the
     // object of the (unique) atom that binds the compared variable. Consumes the
@@ -1684,8 +1760,8 @@ fn value_from_data_value(value: &DataValue) -> Value {
 /// * object typed literals of a round-trip-aligned xsd datatype → [`AtomTerm::ValueConstant`]
 ///   (CP3, via [`value_constant_term`]).
 ///
-/// Rejected closed: predicate variables, schema-graph triples, dictionary/list object
-/// values, and unaligned typed-literal datatypes. A
+/// Rejected closed: cross-namespace reuse of one variable in predicate and S/O positions,
+/// schema-graph triples, dictionary/list object values, and unaligned typed-literal datatypes. A
 /// value-literal SUBJECT is unrepresentable — woql2's
 /// subject is a [`NodeValue`] (node/variable only) — so the store's `validate_atom`
 /// value-subject guard is unreachable through this compiler by construction.
@@ -1696,10 +1772,9 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
         Some(GraphType::Schema) => return Err(BgpPlanError::SchemaGraphUnsupported),
     }
 
-    // Predicate must be a constant IRI.
-    let predicate_iri = match &t.predicate {
-        NodeValue::Node(iri) => iri.clone(),
-        NodeValue::Variable(_) => return Err(BgpPlanError::PredicateNotConstant),
+    let (predicate_term, pred_var) = match &t.predicate {
+        NodeValue::Node(iri) => (iri.clone().into_bytes(), None),
+        NodeValue::Variable(name) => (Vec::new(), Some(name.clone())),
     };
 
     // Subject: a variable (kept column) or a node-IRI constant.
@@ -1721,12 +1796,22 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
 
     let subject_object_equal = matches!((&subj_var, &obj_var), (Some(s), Some(o)) if s == o);
 
-    // Kept (variable) columns in S,O order — one per variable position.
-    let mut kept = Vec::with_capacity(2);
+    // Kept columns are materialized in S,P,O order. Predicate IDs occupy an independent
+    // Store namespace, so one WOQL variable may not alias P with S or O.
+    let mut kept = Vec::with_capacity(3);
     if let Some(s) = &subj_var {
         kept.push(s.clone());
     }
+    if let Some(p) = &pred_var {
+        if kept.contains(p) {
+            return Err(BgpPlanError::VariableNamespaceConflict { var: p.clone() });
+        }
+        kept.push(p.clone());
+    }
     if let Some(o) = &obj_var {
+        if pred_var.as_ref() == Some(o) {
+            return Err(BgpPlanError::VariableNamespaceConflict { var: o.clone() });
+        }
         if !kept.contains(o) {
             kept.push(o.clone());
         }
@@ -1734,7 +1819,8 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
     Ok(Atom {
         layer_atom: LayerBgpAtom {
             subject: subject_term,
-            predicate_term: predicate_iri.into_bytes(),
+            predicate_term,
+            predicate_variable: pred_var.is_some(),
             object: object_term,
             // CP-D Step 1 (migration): every atom starts with no object range. Step 2
             // fills this in for atoms whose object variable a comparison conjunct ranges.
@@ -1743,8 +1829,25 @@ fn atom_from_triple(t: &Triple) -> Result<Atom, BgpPlanError> {
         },
         kept,
         subj_var,
+        pred_var,
         obj_var,
     })
+}
+
+fn validate_variable_namespaces(atoms: &[Atom]) -> Result<(), BgpPlanError> {
+    for atom in atoms {
+        if let Some(predicate) = &atom.pred_var {
+            if atoms.iter().any(|candidate| {
+                candidate.subj_var.as_ref() == Some(predicate)
+                    || candidate.obj_var.as_ref() == Some(predicate)
+            }) {
+                return Err(BgpPlanError::VariableNamespaceConflict {
+                    var: predicate.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Route each numeric comparison conjunct to an object-value RANGE filter on the atom
@@ -2104,9 +2207,8 @@ fn value_constant_term(xsd: &XSDAnySimpleType) -> Result<AtomTerm, BgpPlanError>
 /// variable, the next input-order component starts with a verifier-known UNIT-key
 /// Cartesian step whose output ordering is `[acc.., relation..]`.
 ///
-/// Each atom relation carries ONE column per VARIABLE, in S,O order (`atom.kept`): two
-/// for an all-variable atom, one for a subject/object-constant atom (a constant removes
-/// its position from `kept`). `rel_key` is therefore the shared variable's index within
+/// Each atom relation carries ONE column per VARIABLE, in S,P,O order (`atom.kept`); a
+/// constant removes its position from `kept`. `rel_key` is the shared variable's index within
 /// the atom's KEPT columns, and `s_other` is the atom's remaining kept columns (possibly
 /// empty for a 1-variable atom).
 fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlanError> {

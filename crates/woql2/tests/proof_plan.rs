@@ -213,6 +213,14 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
     });
     assert_eq!(plan_bgp(&link).unwrap().schema, vec!["x"]);
 
+    let predicate_link = Query::Link(Link {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Variable("p".into()),
+        object: NodeValue::Node(iri("y")),
+        graph: GraphType::Instance,
+    });
+    assert_eq!(plan_bgp(&predicate_link).unwrap().schema, vec!["x", "p"]);
+
     let data = Query::Data(Data {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("active")),
@@ -220,6 +228,14 @@ fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
         graph: GraphType::Instance,
     });
     assert_eq!(plan_bgp(&data).unwrap().schema, vec!["x"]);
+
+    let predicate_data = Query::Data(Data {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Variable("p".into()),
+        object: DataValue::Data(XSDAnySimpleType::Boolean(true)),
+        graph: GraphType::Instance,
+    });
+    assert_eq!(plan_bgp(&predicate_data).unwrap().schema, vec!["x", "p"]);
 
     let variable_link = Query::Link(Link {
         subject: NodeValue::Variable("x".into()),
@@ -552,9 +568,66 @@ fn rejects_comparison_var_vs_var() {
 }
 
 #[test]
-fn rejects_predicate_variable() {
-    let q = and_of(vec![tv_pred_var("x", "pv", "y"), tv("y", "p", "z")]);
-    reject(q, BgpPlanError::PredicateNotConstant);
+fn accepts_predicate_variable_and_predicate_to_predicate_join() {
+    let q = and_of(vec![
+        tv_pred_var("x", "pv", "y"),
+        tv_pred_var("y", "pv", "z"),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.schema, vec!["x", "pv", "y", "z"]);
+    assert!(c.plan.atoms.iter().all(|atom| atom.predicate_variable));
+    assert!(c
+        .plan
+        .atoms
+        .iter()
+        .all(|atom| atom.predicate_term.is_empty()));
+    assert_eq!(
+        (c.plan.joins[0].acc_key, c.plan.joins[0].rel_key),
+        (2, 0)
+    );
+    assert_eq!(c.plan.joins[0].additional_keys, vec![(1, 1)]);
+}
+
+#[test]
+fn rejects_variable_shared_across_predicate_and_node_value_namespaces() {
+    let q = and_of(vec![tv_pred_var("x", "pv", "y"), tv("pv", "p", "z")]);
+    reject(
+        q,
+        BgpPlanError::VariableNamespaceConflict { var: "pv".into() },
+    );
+}
+
+#[test]
+fn predicate_variables_compose_with_projection_count_or_and_not() {
+    let base = tv_pred_var("s", "p", "o");
+    let selected = Query::Select(Select {
+        variables: vec!["p".into()],
+        query: Box::new(base.clone()),
+    });
+    assert_eq!(plan_bgp(&selected).unwrap().projection, Some(vec![1]));
+
+    let counted = Query::Count(Count {
+        query: Box::new(base.clone()),
+        count: dvar("count"),
+    });
+    assert_eq!(
+        plan_bgp(&counted).unwrap().count_variable.as_deref(),
+        Some("count")
+    );
+
+    let union = Query::Or(Or {
+        or: vec![base.clone(), base.clone()],
+    });
+    assert_eq!(plan_bgp(&union).unwrap().union_plans.len(), 2);
+
+    let negated = and_of(vec![
+        base,
+        Query::Not(Not {
+            query: Box::new(tv_pred_var("o", "p", "z")),
+        }),
+    ]);
+    let compiled = plan_bgp(&negated).unwrap();
+    assert_eq!(compiled.anti_join.unwrap().key_pairs.len(), 2);
 }
 
 #[test]

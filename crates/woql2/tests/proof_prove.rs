@@ -34,6 +34,128 @@ use terminusdb_woql2::{
 };
 
 #[test]
+fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
+    let layer = build_layer(&[
+        ("a", "knows", "b"),
+        ("a", "likes", "c"),
+        ("d", "knows", "e"),
+    ]);
+    let query = tv_pred_var("s", "p", "o");
+    let compiled = plan_bgp(&query).unwrap();
+    assert_eq!(compiled.schema, vec!["s", "p", "o"]);
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 3);
+    let objects = proved
+        .verify_and_resolve(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let predicates: Vec<_> = objects[1]
+        .iter()
+        .map(|object| match object {
+            CanonicalObject::Node(iri) => iri.clone(),
+            CanonicalObject::Value { .. } => panic!("predicate resolved as a value"),
+        })
+        .collect();
+    assert!(predicates.contains(&iri("knows").into_bytes()));
+    assert!(predicates.contains(&iri("likes").into_bytes()));
+
+    let mut forged_objects = objects.clone();
+    forged_objects[1][0] = CanonicalObject::Node(iri("forged").into_bytes());
+    assert!(proved
+        .verify_objects(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &forged_objects,
+        )
+        .is_err());
+
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified = decode_and_verify_envelope(
+        &envelope,
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .unwrap();
+    assert_eq!(verified.result_objects, objects);
+    let mut reordered_schema = compiled.clone();
+    reordered_schema.schema.swap(0, 1);
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reordered_schema,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut forged = proved;
+    forged.result_columns[1][0] = ArkFr::from_u64(999_999);
+    assert!(forged
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn predicate_variable_composite_join_preserves_predicate_namespace() {
+    let layer = build_layer(&[
+        ("a", "knows", "b"),
+        ("b", "knows", "c"),
+        ("b", "likes", "d"),
+        ("d", "likes", "e"),
+    ]);
+    let query = and_of(vec![
+        tv_pred_var("x", "p", "y"),
+        tv_pred_var("y", "p", "z"),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 2);
+    let objects = proved
+        .verify_and_resolve(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert!(objects[1].iter().all(|predicate| matches!(
+        predicate,
+        CanonicalObject::Node(iri) if iri == &crate::proof_common::iri("knows").into_bytes()
+            || iri == &crate::proof_common::iri("likes").into_bytes()
+    )));
+}
+
+#[test]
+fn predicate_variable_resolves_inherited_and_new_predicates_at_child_root() {
+    let store = open_sync_memory_store();
+    let base_builder = store.create_base_layer().unwrap();
+    base_builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("inherited"), &iri("b")))
+        .unwrap();
+    let base = base_builder.commit().unwrap();
+    let base_commitment = base.proof_commitment().unwrap();
+    let child_builder = base.open_write().unwrap();
+    child_builder
+        .add_value_triple(ValueTriple::new_node(&iri("c"), &iri("new"), &iri("d")))
+        .unwrap();
+    let child = child_builder.commit().unwrap();
+    let child_commitment = child.proof_commitment().unwrap();
+
+    let compiled = plan_bgp(&tv_pred_var("s", "p", "o")).unwrap();
+    let proved = compiled.prove(&child_commitment).unwrap();
+    let objects = proved
+        .verify_and_resolve(
+            &compiled,
+            &child_commitment,
+            child_commitment.state.commitment_root,
+        )
+        .unwrap();
+    assert_eq!(proved.result_len, 2);
+    assert!(objects[1].contains(&CanonicalObject::Node(iri("inherited").into_bytes())));
+    assert!(objects[1].contains(&CanonicalObject::Node(iri("new").into_bytes())));
+    assert!(proved
+        .verify(&compiled, &child_commitment, base_commitment.state.commitment_root)
+        .is_err());
+}
+
+#[test]
 fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
     let layer = build_layer(&[
         ("a", "p", "b"),
