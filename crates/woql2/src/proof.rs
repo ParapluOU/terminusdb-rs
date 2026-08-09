@@ -40,7 +40,7 @@ use terminus_store::proof::anti::{
 use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::{
-    LayerCommitment, VerifierCommitment, VerifierLayer, NODE_DATATYPE_TAG,
+    LayerCommitment, VerifierCommitment, VerifierLayer,
 };
 use terminus_store::proof::envelope::{
     plan_digest, resolve_relation_equality_constraint, EqualityValueDomain, LayerBgpEnvelope,
@@ -55,8 +55,8 @@ use terminus_store::proof::group::{
 };
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
-    verify_layer_bgp, verify_layer_bgp_result_log_domain, verify_result_columns, AtomTerm,
-    CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    result_id_namespaces, verify_layer_bgp, verify_layer_bgp_result_log_domain,
+    verify_result_columns, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
     LayerBgpProof, ObjectRangeBound, ObjectRangeSpec, ResultColumnDescriptor, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
@@ -67,7 +67,7 @@ use terminus_store::ValueTriple;
 
 use crate::misc::InRange;
 use crate::query::Query;
-use crate::triple::{Data, Link, Triple};
+use crate::triple::Triple;
 use crate::value::{DataValue, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
@@ -151,11 +151,15 @@ impl CompiledRelation {
         }
     }
 
-    pub fn as_left_anti(&self) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
+    pub fn as_left_anti(
+        &self,
+    ) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
         match &self.statement {
-            CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
-                Some((left, right, key_pairs))
-            }
+            CompiledRelationStatement::LeftAnti {
+                left,
+                right,
+                key_pairs,
+            } => Some((left, right, key_pairs)),
             _ => None,
         }
     }
@@ -167,11 +171,15 @@ impl CompiledRelation {
         }
     }
 
-    pub fn as_left_outer(&self) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
+    pub fn as_left_outer(
+        &self,
+    ) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
         match &self.statement {
-            CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
-                Some((left, right, key_pairs))
-            }
+            CompiledRelationStatement::LeftOuter {
+                left,
+                right,
+                key_pairs,
+            } => Some((left, right, key_pairs)),
             _ => None,
         }
     }
@@ -185,9 +193,7 @@ impl CompiledRelation {
 
     pub fn as_equality(&self) -> Option<(&CompiledRelation, &RelationEqualityPlan)> {
         match &self.statement {
-            CompiledRelationStatement::Equality { input, constraint } => {
-                Some((input, constraint))
-            }
+            CompiledRelationStatement::Equality { input, constraint } => Some((input, constraint)),
             _ => None,
         }
     }
@@ -342,13 +348,21 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 }
             }
         }
-        CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
+        CompiledRelationStatement::LeftAnti {
+            left,
+            right,
+            key_pairs,
+        } => {
             hasher.update(b"/left-anti");
             hasher.update(relation_query_digest(left)?);
             hasher.update(relation_query_digest(right)?);
             digest_key_pairs(&mut hasher, key_pairs);
         }
-        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+        CompiledRelationStatement::LeftOuter {
+            left,
+            right,
+            key_pairs,
+        } => {
             hasher.update(b"/left-outer");
             hasher.update(relation_query_digest(left)?);
             hasher.update(relation_query_digest(right)?);
@@ -359,13 +373,22 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(input)?);
             digest_equality_plan(&mut hasher, constraint);
         }
-        CompiledRelationStatement::GroupExtrema { input, key_column, value_column, datatype, kind } => {
+        CompiledRelationStatement::GroupExtrema {
+            input,
+            key_column,
+            value_column,
+            datatype,
+            kind,
+        } => {
             hasher.update(b"/group-extrema");
             hasher.update(relation_query_digest(input)?);
             hasher.update((*key_column as u64).to_le_bytes());
             hasher.update((*value_column as u64).to_le_bytes());
             hasher.update([*datatype as u8]);
-            hasher.update([match kind { GroupExtremaKind::Min => 0, GroupExtremaKind::Max => 1 }]);
+            hasher.update([match kind {
+                GroupExtremaKind::Min => 0,
+                GroupExtremaKind::Max => 1,
+            }]);
         }
     }
     Ok(hasher.finalize().into())
@@ -469,7 +492,11 @@ fn relation_result_descriptors(
             Ok(expected.unwrap_or_default())
         }
         CompiledRelationStatement::LeftAnti { left, .. } => relation_result_descriptors(left),
-        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
+        CompiledRelationStatement::LeftOuter {
+            left,
+            right,
+            key_pairs,
+        } => {
             let mut descriptors = relation_result_descriptors(left)?;
             let right_descriptors = relation_result_descriptors(right)?;
             let shared_right: Vec<_> = key_pairs.iter().map(|pair| pair.1).collect();
@@ -484,10 +511,23 @@ fn relation_result_descriptors(
             Ok(descriptors)
         }
         CompiledRelationStatement::Equality { input, .. } => relation_result_descriptors(input),
-        CompiledRelationStatement::GroupExtrema { input, key_column, .. } => {
+        CompiledRelationStatement::GroupExtrema {
+            input, key_column, ..
+        } => {
             let child = relation_result_descriptors(input)?;
-            let key = *child.get(*key_column).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema key column out of range"))?;
-            Ok(vec![key, ResultColumnDescriptor { namespace: ResultIdNamespace::NodeValue, nullable: false }])
+            let key = *child.get(*key_column).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "group-extrema key column out of range",
+                )
+            })?;
+            Ok(vec![
+                key,
+                ResultColumnDescriptor {
+                    namespace: ResultIdNamespace::NodeValue,
+                    nullable: false,
+                },
+            ])
         }
     }
 }
@@ -508,29 +548,42 @@ fn relation_proof_plan(
                 mappings: mappings.clone(),
             }
         }
-        CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
-            RelationProofPlanKind::LeftAnti {
-                left: Box::new(child(left)?),
-                right: Box::new(child(right)?),
-                key_pairs: key_pairs.clone(),
-            }
-        }
+        CompiledRelationStatement::LeftAnti {
+            left,
+            right,
+            key_pairs,
+        } => RelationProofPlanKind::LeftAnti {
+            left: Box::new(child(left)?),
+            right: Box::new(child(right)?),
+            key_pairs: key_pairs.clone(),
+        },
         CompiledRelationStatement::Equality { input, constraint } => {
             RelationProofPlanKind::Equality {
                 input: Box::new(child(input)?),
                 constraint: constraint.clone(),
             }
         }
-        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
-            RelationProofPlanKind::LeftOuter {
-                left: Box::new(child(left)?),
-                right: Box::new(child(right)?),
-                key_pairs: key_pairs.clone(),
-            }
-        }
-        CompiledRelationStatement::GroupExtrema { input, key_column, value_column, datatype, kind } => RelationProofPlanKind::GroupExtrema {
-            input: Box::new(child(input)?), key_column: *key_column, value_column: *value_column,
-            datatype: *datatype, kind: *kind,
+        CompiledRelationStatement::LeftOuter {
+            left,
+            right,
+            key_pairs,
+        } => RelationProofPlanKind::LeftOuter {
+            left: Box::new(child(left)?),
+            right: Box::new(child(right)?),
+            key_pairs: key_pairs.clone(),
+        },
+        CompiledRelationStatement::GroupExtrema {
+            input,
+            key_column,
+            value_column,
+            datatype,
+            kind,
+        } => RelationProofPlanKind::GroupExtrema {
+            input: Box::new(child(input)?),
+            key_column: *key_column,
+            value_column: *value_column,
+            datatype: *datatype,
+            kind: *kind,
         },
     };
     Ok(RelationProofPlan { query_digest, kind })
@@ -615,12 +668,7 @@ impl ProvedBgp {
                     self.result_len,
                     proof,
                 )?;
-                verify_layer_bgp_result_log_domain(
-                    layer,
-                    plan,
-                    proof,
-                    self.result_log_domain,
-                )?;
+                verify_layer_bgp_result_log_domain(layer, plan, proof, self.result_log_domain)?;
             }
             (
                 ProvedQueryStatement::BagUnion { branches, proof },
@@ -794,14 +842,36 @@ impl ProvedBgp {
             }
             (
                 ProvedQueryStatement::GroupExtrema { input, proof },
-                CompiledRelationStatement::GroupExtrema { input: input_plan, key_column, value_column, datatype, kind },
+                CompiledRelationStatement::GroupExtrema {
+                    input: input_plan,
+                    key_column,
+                    value_column,
+                    datatype,
+                    kind,
+                },
             ) => {
-                input.verify_relation(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?;
-                let rows = group_output_rows(&self.result_columns, self.result_len, compiled, layer)?;
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let rows =
+                    group_output_rows(&self.result_columns, self.result_len, compiled, layer)?;
                 let mut transcript = Transcript254::new(b"parture-group-extrema-envelope");
                 transcript.append_bytes(b"pow/group-envelope/root", &expected_root);
                 transcript.append_bytes(b"pow/group-envelope/query", &query_digest);
-                verify_group_extrema(&input.relation_commit(None)?, *key_column, *value_column, *datatype, *kind, &rows, layer, proof, &mut transcript)?;
+                verify_group_extrema(
+                    &input.relation_commit(None)?,
+                    *key_column,
+                    *value_column,
+                    *datatype,
+                    *kind,
+                    &rows,
+                    layer,
+                    proof,
+                    &mut transcript,
+                )?;
             }
             _ => {
                 return Err(std::io::Error::new(
@@ -812,7 +882,6 @@ impl ProvedBgp {
         }
         self.verify_columns(&self.result_columns)
     }
-
 
     /// Verify arbitrary caller-delivered Store ID columns against the result commitments
     /// authenticated by this proof. A changed, reordered, inserted, or omitted row fails.
@@ -1125,25 +1194,30 @@ impl ProvedBgp {
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<u8>> {
         let digest = compiled_query_digest(compiled)?;
-        let envelope = self.recursive_envelope(
+        // `verify_relation` recursively checks the complete proof tree.  Keep that single
+        // public trust boundary, then only materialize the already-checked tree below;
+        // verifying every child again (and the finished envelope once more) made checked
+        // encoding quadratic in the depth/number of recursive operators.
+        self.verify_relation(&compiled.relation, layer, expected_root, digest)?;
+        let envelope = self.recursive_envelope_after_verification(
             &compiled.relation,
             layer,
             expected_root,
             digest,
         )?;
-        let plan = relation_proof_plan(&compiled.relation, digest)?;
-        envelope.verify(layer, expected_root, &plan)?;
         envelope.encode()
     }
 
-    fn recursive_envelope(
+    /// Materialize an envelope after the caller has verified the complete root relation.
+    /// This must remain private: decoded/external envelopes still go through the full
+    /// recursive `RecursiveRelationEnvelope::verify` path.
+    fn recursive_envelope_after_verification(
         &self,
         compiled: &CompiledRelation,
         layer: &LayerCommitment,
         expected_root: ProofHash,
         query_digest: ProofHash,
     ) -> std::io::Result<RecursiveRelationEnvelope> {
-        self.verify_relation(compiled, layer, expected_root, query_digest)?;
         let proof = match (&self.statement, &compiled.statement) {
             (
                 ProvedQueryStatement::Single {
@@ -1151,18 +1225,30 @@ impl ProvedBgp {
                     predicate_ids,
                 },
                 CompiledRelationStatement::Bgp(plan),
-            ) => RecursiveRelationProof::Bgp(Box::new(LayerBgpEnvelope::new_verified(
-                layer,
-                expected_root,
-                plan,
-                query_digest,
-                *proof.clone(),
-                self.result_commitments.clone(),
-                self.result_columns.clone(),
-                self.result_log_domain,
-                self.result_len,
-                predicate_ids.clone(),
-            )?)),
+            ) => {
+                let result_objects = if compiled.schema.is_empty() {
+                    Vec::new()
+                } else {
+                    resolve_typed_result_objects(
+                        layer,
+                        expected_root,
+                        &self.result_columns,
+                        &result_id_namespaces(plan)?,
+                    )?
+                };
+                RecursiveRelationProof::Bgp(Box::new(LayerBgpEnvelope {
+                    layer_root: expected_root,
+                    plan_digest: plan_digest(plan)?,
+                    query_digest,
+                    proof: *proof.clone(),
+                    result_commitments: self.result_commitments.clone(),
+                    result_columns: self.result_columns.clone(),
+                    result_log_domain: self.result_log_domain,
+                    result_len: self.result_len,
+                    predicate_ids: predicate_ids.clone(),
+                    result_objects,
+                }))
+            }
             (
                 ProvedQueryStatement::BagUnion { branches, proof },
                 CompiledRelationStatement::BagUnion {
@@ -1174,7 +1260,7 @@ impl ProvedBgp {
                     .iter()
                     .zip(branch_plans)
                     .map(|(branch, plan)| {
-                        branch.recursive_envelope(
+                        branch.recursive_envelope_after_verification(
                             plan,
                             layer,
                             expected_root,
@@ -1190,7 +1276,7 @@ impl ProvedBgp {
                     input: input_plan, ..
                 },
             ) => RecursiveRelationProof::Equality {
-                input: Box::new(input.recursive_envelope(
+                input: Box::new(input.recursive_envelope_after_verification(
                     input_plan,
                     layer,
                     expected_root,
@@ -1200,9 +1286,16 @@ impl ProvedBgp {
             },
             (
                 ProvedQueryStatement::GroupExtrema { input, proof },
-                CompiledRelationStatement::GroupExtrema { input: input_plan, .. },
+                CompiledRelationStatement::GroupExtrema {
+                    input: input_plan, ..
+                },
             ) => RecursiveRelationProof::GroupExtrema {
-                input: Box::new(input.recursive_envelope(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?),
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
                 proof: proof.clone(),
             },
             (
@@ -1213,13 +1306,13 @@ impl ProvedBgp {
                     ..
                 },
             ) => RecursiveRelationProof::LeftAnti {
-                left: Box::new(left.recursive_envelope(
+                left: Box::new(left.recursive_envelope_after_verification(
                     left_plan,
                     layer,
                     expected_root,
                     relation_query_digest(left_plan)?,
                 )?),
-                right: Box::new(right.recursive_envelope(
+                right: Box::new(right.recursive_envelope_after_verification(
                     right_plan,
                     layer,
                     expected_root,
@@ -1235,13 +1328,13 @@ impl ProvedBgp {
                     ..
                 },
             ) => RecursiveRelationProof::LeftOuter {
-                left: Box::new(left.recursive_envelope(
+                left: Box::new(left.recursive_envelope_after_verification(
                     left_plan,
                     layer,
                     expected_root,
                     relation_query_digest(left_plan)?,
                 )?),
-                right: Box::new(right.recursive_envelope(
+                right: Box::new(right.recursive_envelope_after_verification(
                     right_plan,
                     layer,
                     expected_root,
@@ -1281,7 +1374,6 @@ impl ProvedBgp {
             result_values,
         })
     }
-
 
     /// Commitments selected by an outer WOQL `Select`, or every result commitment when
     /// the query has no projection.
@@ -1385,19 +1477,15 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             proof: Box::new(leaf.proof),
             predicate_ids: leaf.predicate_ids,
         },
-        RecursiveRelationProof::BagUnion { branches, proof } => {
-            ProvedQueryStatement::BagUnion {
-                branches: branches.into_iter().map(proved_from_recursive).collect(),
-                proof,
-            }
-        }
-        RecursiveRelationProof::LeftAnti { left, right, proof } => {
-            ProvedQueryStatement::LeftAnti {
-                left: Box::new(proved_from_recursive(*left)),
-                right: Box::new(proved_from_recursive(*right)),
-                proof,
-            }
-        }
+        RecursiveRelationProof::BagUnion { branches, proof } => ProvedQueryStatement::BagUnion {
+            branches: branches.into_iter().map(proved_from_recursive).collect(),
+            proof,
+        },
+        RecursiveRelationProof::LeftAnti { left, right, proof } => ProvedQueryStatement::LeftAnti {
+            left: Box::new(proved_from_recursive(*left)),
+            right: Box::new(proved_from_recursive(*right)),
+            proof,
+        },
         RecursiveRelationProof::LeftOuter { left, right, proof } => {
             ProvedQueryStatement::LeftOuter {
                 left: Box::new(proved_from_recursive(*left)),
@@ -1409,10 +1497,12 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             input: Box::new(proved_from_recursive(*input)),
             proof,
         },
-        RecursiveRelationProof::GroupExtrema { input, proof } => ProvedQueryStatement::GroupExtrema {
-            input: Box::new(proved_from_recursive(*input)),
-            proof,
-        },
+        RecursiveRelationProof::GroupExtrema { input, proof } => {
+            ProvedQueryStatement::GroupExtrema {
+                input: Box::new(proved_from_recursive(*input)),
+                proof,
+            }
+        }
     };
     ProvedBgp {
         statement,
@@ -1422,7 +1512,6 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
         result_len: envelope.result_len,
     }
 }
-
 
 /// Errors at the explicit compile/load/prove boundary.
 #[derive(Debug, thiserror::Error)]
@@ -1463,11 +1552,8 @@ fn prove_compiled_relation(
             let mut proved = Vec::with_capacity(branches.len());
             let mut inputs = Vec::with_capacity(branches.len());
             for (branch, mapping) in branches.iter().zip(mappings) {
-                let result = prove_compiled_relation(
-                    branch,
-                    layer,
-                    relation_query_digest(branch)?,
-                )?;
+                let result =
+                    prove_compiled_relation(branch, layer, relation_query_digest(branch)?)?;
                 let selected: Vec<usize> = if compiled.schema.is_empty() {
                     vec![0]
                 } else {
@@ -1495,17 +1581,14 @@ fn prove_compiled_relation(
                 result_len: result.n,
             })
         }
-        CompiledRelationStatement::LeftAnti { left, right, key_pairs } => {
-            let left_proved = prove_compiled_relation(
-                left,
-                layer,
-                relation_query_digest(left)?,
-            )?;
-            let right_proved = prove_compiled_relation(
-                right,
-                layer,
-                relation_query_digest(right)?,
-            )?;
+        CompiledRelationStatement::LeftAnti {
+            left,
+            right,
+            key_pairs,
+        } => {
+            let left_proved = prove_compiled_relation(left, layer, relation_query_digest(left)?)?;
+            let right_proved =
+                prove_compiled_relation(right, layer, relation_query_digest(right)?)?;
             let left_witness = relation_witness(&left_proved);
             let right_witness = relation_witness(&right_proved);
             let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
@@ -1516,12 +1599,8 @@ fn prove_compiled_relation(
                     prove_global_not(&left_witness, &right_witness)?;
                 (None, commitments, columns, log_domain, n)
             } else {
-                let result = boxed_prove_anti(
-                    &left_witness,
-                    &right_witness,
-                    key_pairs,
-                    &mut transcript,
-                )?;
+                let result =
+                    boxed_prove_anti(&left_witness, &right_witness, key_pairs, &mut transcript)?;
                 (
                     Some(result.proof),
                     result.commitments,
@@ -1537,25 +1616,19 @@ fn prove_compiled_relation(
                     proof: proof.map(Box::new),
                 },
                 result_commitments: commitments,
-                result_columns: columns
-                    .iter()
-                    .map(|column| column[..n].to_vec())
-                    .collect(),
+                result_columns: columns.iter().map(|column| column[..n].to_vec()).collect(),
                 result_log_domain: log_domain,
                 result_len: n,
             })
         }
-        CompiledRelationStatement::LeftOuter { left, right, key_pairs } => {
-            let left_proved = prove_compiled_relation(
-                left,
-                layer,
-                relation_query_digest(left)?,
-            )?;
-            let right_proved = prove_compiled_relation(
-                right,
-                layer,
-                relation_query_digest(right)?,
-            )?;
+        CompiledRelationStatement::LeftOuter {
+            left,
+            right,
+            key_pairs,
+        } => {
+            let left_proved = prove_compiled_relation(left, layer, relation_query_digest(left)?)?;
+            let right_proved =
+                prove_compiled_relation(right, layer, relation_query_digest(right)?)?;
             let left_witness = relation_witness(&left_proved);
             let right_witness = relation_witness(&right_proved);
             let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
@@ -1564,12 +1637,7 @@ fn prove_compiled_relation(
             let result = if key_pairs.is_empty() {
                 boxed_prove_global_outer(&left_witness, &right_witness, &mut transcript)?
             } else {
-                boxed_prove_outer(
-                    &left_witness,
-                    &right_witness,
-                    key_pairs,
-                    &mut transcript,
-                )?
+                boxed_prove_outer(&left_witness, &right_witness, key_pairs, &mut transcript)?
             };
             Ok(ProvedBgp {
                 statement: ProvedQueryStatement::LeftOuter {
@@ -1588,11 +1656,8 @@ fn prove_compiled_relation(
             })
         }
         CompiledRelationStatement::Equality { input, constraint } => {
-            let input_proved = prove_compiled_relation(
-                input,
-                layer,
-                relation_query_digest(input)?,
-            )?;
+            let input_proved =
+                prove_compiled_relation(input, layer, relation_query_digest(input)?)?;
             let witness = relation_witness(&input_proved);
             let resolved = resolve_relation_equality_constraint(layer, constraint)?;
             let mut transcript = Transcript254::new(b"parture-equality-envelope");
@@ -1614,18 +1679,49 @@ fn prove_compiled_relation(
                 result_len: result.n,
             })
         }
-        CompiledRelationStatement::GroupExtrema { input, key_column, value_column, datatype, kind } => {
-            let input_proved = prove_compiled_relation(input, layer, relation_query_digest(input)?)?;
+        CompiledRelationStatement::GroupExtrema {
+            input,
+            key_column,
+            value_column,
+            datatype,
+            kind,
+        } => {
+            let input_proved =
+                prove_compiled_relation(input, layer, relation_query_digest(input)?)?;
             let witness = relation_witness(&input_proved);
-            let rows = honest_group_rows(&input_proved, input, *key_column, *value_column, *datatype, *kind, layer)?;
+            let rows = honest_group_rows(
+                &input_proved,
+                input,
+                *key_column,
+                *value_column,
+                *datatype,
+                *kind,
+                layer,
+            )?;
             let mut transcript = Transcript254::new(b"parture-group-extrema-envelope");
             transcript.append_bytes(b"pow/group-envelope/root", &layer.state.commitment_root);
             transcript.append_bytes(b"pow/group-envelope/query", &query_digest);
-            let result = prove_group_extrema(&witness, *key_column, *value_column, *datatype, *kind, &rows, layer, &mut transcript)?;
+            let result = prove_group_extrema(
+                &witness,
+                *key_column,
+                *value_column,
+                *datatype,
+                *kind,
+                &rows,
+                layer,
+                &mut transcript,
+            )?;
             Ok(ProvedBgp {
-                statement: ProvedQueryStatement::GroupExtrema { input: Box::new(input_proved), proof: Box::new(result.proof) },
+                statement: ProvedQueryStatement::GroupExtrema {
+                    input: Box::new(input_proved),
+                    proof: Box::new(result.proof),
+                },
                 result_commitments: result.commitments,
-                result_columns: result.columns.iter().map(|c| c[..result.n].to_vec()).collect(),
+                result_columns: result
+                    .columns
+                    .iter()
+                    .map(|c| c[..result.n].to_vec())
+                    .collect(),
                 result_log_domain: result.log_domain,
                 result_len: result.n,
             })
@@ -1640,63 +1736,126 @@ fn store_id_for_field(
 ) -> std::io::Result<u64> {
     let view = layer.verifier_view();
     match namespace {
-        ResultIdNamespace::Predicate => view.predicate_catalog.iter()
-            .find(|r| ArkFr::from_u64(r.predicate_id) == field).map(|r| r.predicate_id),
-        ResultIdNamespace::NodeValue => view.node_value_catalog.iter()
-            .find(|r| ArkFr::from_u64(r.object_id) == field).map(|r| r.object_id),
-    }.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema Store id absent from planned namespace"))
+        ResultIdNamespace::Predicate => view
+            .predicate_catalog
+            .iter()
+            .find(|r| ArkFr::from_u64(r.predicate_id) == field)
+            .map(|r| r.predicate_id),
+        ResultIdNamespace::NodeValue => view
+            .node_value_catalog
+            .iter()
+            .find(|r| ArkFr::from_u64(r.object_id) == field)
+            .map(|r| r.object_id),
+    }
+    .ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-extrema Store id absent from planned namespace",
+        )
+    })
 }
 
 fn group_output_rows(
-    columns: &[Vec<ArkFr>], n: usize, relation: &CompiledRelation,
+    columns: &[Vec<ArkFr>],
+    n: usize,
+    relation: &CompiledRelation,
     layer: &impl VerifierLayer,
-) -> std::io::Result<Vec<(u64,u64)>> {
+) -> std::io::Result<Vec<(u64, u64)>> {
     if columns.len() != 2 || columns.iter().any(|c| c.len() < n) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema output shape mismatch"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-extrema output shape mismatch",
+        ));
     }
     let namespace = relation_result_descriptors(relation)?[0].namespace;
-    (0..n).map(|i| Ok((
-        store_id_for_field(columns[0][i], namespace, layer)?,
-        store_id_for_field(columns[1][i], ResultIdNamespace::NodeValue, layer)?,
-    ))).collect()
+    (0..n)
+        .map(|i| {
+            Ok((
+                store_id_for_field(columns[0][i], namespace, layer)?,
+                store_id_for_field(columns[1][i], ResultIdNamespace::NodeValue, layer)?,
+            ))
+        })
+        .collect()
 }
 
 fn literal_op_u64(object: &CanonicalObject, datatype: CanonicalDatatype) -> std::io::Result<u64> {
     match object {
-        CanonicalObject::Value { datatype: actual, lexical } if *actual == datatype && lexical.len() <= 8 => {
-            let mut bytes = [0u8;8]; bytes[8-lexical.len()..].copy_from_slice(lexical);
+        CanonicalObject::Value {
+            datatype: actual,
+            lexical,
+        } if *actual == datatype && lexical.len() <= 8 => {
+            let mut bytes = [0u8; 8];
+            bytes[8 - lexical.len()..].copy_from_slice(lexical);
             Ok(u64::from_be_bytes(bytes))
         }
-        _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema value lacks exact fixed-width datatype")),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-extrema value lacks exact fixed-width datatype",
+        )),
     }
 }
 
 fn honest_group_rows(
-    proved: &ProvedBgp, input: &CompiledRelation, key_column: usize, value_column: usize,
-    datatype: CanonicalDatatype, kind: GroupExtremaKind, layer: &LayerCommitment,
-) -> std::io::Result<Vec<(u64,u64)>> {
+    proved: &ProvedBgp,
+    input: &CompiledRelation,
+    key_column: usize,
+    value_column: usize,
+    datatype: CanonicalDatatype,
+    kind: GroupExtremaKind,
+    layer: &LayerCommitment,
+) -> std::io::Result<Vec<(u64, u64)>> {
     use std::collections::BTreeMap;
     if key_column >= proved.result_columns.len() || value_column >= proved.result_columns.len() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema input column out of range"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "group-extrema input column out of range",
+        ));
     }
     let namespace = relation_result_descriptors(input)?[key_column].namespace;
     let mut groups: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     for row in 0..proved.result_len {
         let key = store_id_for_field(proved.result_columns[key_column][row], namespace, layer)?;
-        let value = store_id_for_field(proved.result_columns[value_column][row], ResultIdNamespace::NodeValue, layer)?;
+        let value = store_id_for_field(
+            proved.result_columns[value_column][row],
+            ResultIdNamespace::NodeValue,
+            layer,
+        )?;
         groups.entry(key).or_default().push(value);
     }
     let view = layer.verifier_view();
-    groups.into_iter().map(|(key, values)| {
-        let selected = values.into_iter().map(|id| {
-            let record = view.node_value_catalog.iter().find(|r| r.object_id == id)
-                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema value id absent"))?;
-            Ok((literal_op_u64(&record.triple.object, datatype)?, id))
-        }).collect::<std::io::Result<Vec<_>>>()?.into_iter()
-          .min_by_key(|x| if kind == GroupExtremaKind::Min { x.0 } else { u64::MAX - x.0 })
-          .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "empty group"))?;
-        Ok((key, selected.1))
-    }).collect()
+    groups
+        .into_iter()
+        .map(|(key, values)| {
+            let selected = values
+                .into_iter()
+                .map(|id| {
+                    let record = view
+                        .node_value_catalog
+                        .iter()
+                        .find(|r| r.object_id == id)
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "group-extrema value id absent",
+                            )
+                        })?;
+                    Ok((literal_op_u64(&record.triple.object, datatype)?, id))
+                })
+                .collect::<std::io::Result<Vec<_>>>()?
+                .into_iter()
+                .min_by_key(|x| {
+                    if kind == GroupExtremaKind::Min {
+                        x.0
+                    } else {
+                        u64::MAX - x.0
+                    }
+                })
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "empty group")
+                })?;
+            Ok((key, selected.1))
+        })
+        .collect()
 }
 
 #[inline(never)]
@@ -1723,10 +1882,7 @@ fn boxed_prove_anti(
     transcript: &mut Transcript254,
 ) -> std::io::Result<Box<terminus_store::proof::anti::LeftAntiJoinResult>> {
     Ok(Box::new(prove_left_anti_join_with_keys(
-        left,
-        right,
-        key_pairs,
-        transcript,
+        left, right, key_pairs, transcript,
     )?))
 }
 
@@ -1737,9 +1893,7 @@ fn boxed_prove_global_outer(
     transcript: &mut Transcript254,
 ) -> std::io::Result<Box<terminus_store::proof::anti::LeftOuterJoinResult>> {
     Ok(Box::new(prove_global_left_outer_join(
-        left,
-        right,
-        transcript,
+        left, right, transcript,
     )?))
 }
 
@@ -1751,10 +1905,7 @@ fn boxed_prove_outer(
     transcript: &mut Transcript254,
 ) -> std::io::Result<Box<terminus_store::proof::anti::LeftOuterJoinResult>> {
     Ok(Box::new(prove_left_outer_join_with_keys(
-        left,
-        right,
-        key_pairs,
-        transcript,
+        left, right, key_pairs, transcript,
     )?))
 }
 
@@ -1765,14 +1916,15 @@ fn boxed_prove_equality(
     transcript: &mut Transcript254,
 ) -> std::io::Result<Box<terminus_store::proof::equality::RelationEqualityResult>> {
     Ok(Box::new(prove_relation_equality(
-        input,
-        constraint,
-        transcript,
+        input, constraint, transcript,
     )?))
 }
 
 fn relation_witness(proved: &ProvedBgp) -> RelationWitness {
-    relation_witness_selected(proved, &(0..proved.result_columns.len()).collect::<Vec<_>>())
+    relation_witness_selected(
+        proved,
+        &(0..proved.result_columns.len()).collect::<Vec<_>>(),
+    )
 }
 
 fn relation_witness_selected(proved: &ProvedBgp, selected: &[usize]) -> RelationWitness {
@@ -1798,13 +1950,8 @@ fn relation_witness_selected(proved: &ProvedBgp, selected: &[usize]) -> Relation
 impl CompiledBgp {
     /// Generate a proof against an already loaded authenticated commitment.
     pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
-        prove_compiled_relation(
-            &self.relation,
-            layer,
-            compiled_query_digest(self)?,
-        )
+        prove_compiled_relation(&self.relation, layer, compiled_query_digest(self)?)
     }
-
 
     /// Explicitly load the commitment from a synchronous Store layer and prove. Calling
     /// this method is the lifecycle decision; no worker or background job is started.
@@ -1895,12 +2042,6 @@ pub enum BgpPlanError {
     #[error("variable `?{var}` occurs in both predicate and node/value positions")]
     VariableNamespaceConflict { var: String },
 
-    /// `Link`/`Data` declare an object-kind restriction which a generic variable loses
-    /// when normalized to a triple. Constants carry their kind intrinsically; variables
-    /// need an authenticated type-selection proof.
-    #[error("{construct} with a variable object requires authenticated object-kind filtering")]
-    TypedObjectVariable { construct: &'static str },
-
     /// The object position held a compound value the store's node/value dictionary does
     /// not model as a single constant (a `Dictionary` or `List`). Node IRIs and aligned
     /// typed literals are accepted; these are not.
@@ -1963,7 +2104,9 @@ pub enum BgpPlanError {
     #[error("Optional supports at most two shared variables, found {count}")]
     OptionalSharedVariableCount { count: usize },
 
-    #[error("Optional subplans may not contain result wrappers or correlate through nullable columns")]
+    #[error(
+        "Optional subplans may not contain result wrappers or correlate through nullable columns"
+    )]
     OptionalUnsupportedSubplan,
 
     #[error("recursive proof relation exceeds depth or node limits")]
@@ -1998,9 +2141,6 @@ pub enum BgpPlanError {
 
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
-
-    #[error("variable `?{var}` is constrained as both a node and a literal")]
-    ObjectKindConflict { var: String },
 
     /// A `Select`ed variable does not occur in the BGP body.
     #[error("selected variable `?{var}` does not occur in the BGP")]
@@ -2040,7 +2180,7 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::Lte(_) => "Lte",
         Query::Select(_) => "Select",
         Query::Distinct(_) => "Distinct",
-        Query::If(_) => "If",
+        Query::If(_) => "When",
         Query::WoqlOptional(_) => "Optional",
         Query::Once(_) => "Once",
         Query::Immediately(_) => "Immediately",
@@ -2076,51 +2216,96 @@ struct Atom {
     /// The object variable name, if the object is a variable (else a constant). A numeric
     /// range attaches to the unique atom whose `obj_var` is the compared variable.
     obj_var: Option<String>,
-    declared_object_kind: Option<ObjectKindConstraint>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ObjectKindConstraint {
-    Node,
-    Value,
 }
 
 #[derive(Clone)]
 struct TypedTriple {
     triple: Triple,
-    object_kind: Option<ObjectKindConstraint>,
 }
 
 fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
-    let conjuncts = match query { Query::And(and) if and.and.len() == 2 => &and.and, _ => return Ok(None) };
-    let (group, range, kind) = match (&conjuncts[0], &conjuncts[1]) {
-        (Query::GroupBy(group), Query::RangeMin(range)) => (group, (&range.list, &range.result), GroupExtremaKind::Min),
-        (Query::GroupBy(group), Query::RangeMax(range)) => (group, (&range.list, &range.result), GroupExtremaKind::Max),
-        (Query::RangeMin(range), Query::GroupBy(group)) => (group, (&range.list, &range.result), GroupExtremaKind::Min),
-        (Query::RangeMax(range), Query::GroupBy(group)) => (group, (&range.list, &range.result), GroupExtremaKind::Max),
+    let conjuncts = match query {
+        Query::And(and) if and.and.len() == 2 => &and.and,
         _ => return Ok(None),
     };
-    if group.group_by.len() != 1 { return Err(BgpPlanError::GroupExtremaUnsupportedShape); }
-    let template = match &group.template { Value::Variable(v) => v.clone(), _ => return Err(BgpPlanError::GroupExtremaUnsupportedValue) };
-    let hidden = match &group.grouped_value { Value::Variable(v) => v, _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape) };
-    let list = match range.0 { DataValue::Variable(v) => v, _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape) };
-    let result = match range.1 { DataValue::Variable(v) => v.clone(), _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape) };
-    if hidden != list || hidden == &result || group.group_by[0] == result || group.group_by[0] == *hidden {
+    let (group, range, kind) = match (&conjuncts[0], &conjuncts[1]) {
+        (Query::GroupBy(group), Query::RangeMin(range)) => {
+            (group, (&range.list, &range.result), GroupExtremaKind::Min)
+        }
+        (Query::GroupBy(group), Query::RangeMax(range)) => {
+            (group, (&range.list, &range.result), GroupExtremaKind::Max)
+        }
+        (Query::RangeMin(range), Query::GroupBy(group)) => {
+            (group, (&range.list, &range.result), GroupExtremaKind::Min)
+        }
+        (Query::RangeMax(range), Query::GroupBy(group)) => {
+            (group, (&range.list, &range.result), GroupExtremaKind::Max)
+        }
+        _ => return Ok(None),
+    };
+    if group.group_by.len() != 1 {
+        return Err(BgpPlanError::GroupExtremaUnsupportedShape);
+    }
+    let template = match &group.template {
+        Value::Variable(v) => v.clone(),
+        _ => return Err(BgpPlanError::GroupExtremaUnsupportedValue),
+    };
+    let hidden = match &group.grouped_value {
+        Value::Variable(v) => v,
+        _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape),
+    };
+    let list = match range.0 {
+        DataValue::Variable(v) => v,
+        _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape),
+    };
+    let result = match range.1 {
+        DataValue::Variable(v) => v.clone(),
+        _ => return Err(BgpPlanError::GroupExtremaUnsupportedShape),
+    };
+    if hidden != list
+        || hidden == &result
+        || group.group_by[0] == result
+        || group.group_by[0] == *hidden
+    {
         return Err(BgpPlanError::GroupExtremaUnsupportedShape);
     }
     let child = plan_bgp(&group.query)?;
     if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
         return Err(BgpPlanError::GroupExtremaUnsupportedShape);
     }
-    let key_column = child.relation.schema.iter().position(|v| v == &group.group_by[0]).ok_or(BgpPlanError::GroupExtremaUnsupportedShape)?;
-    let value_column = child.relation.schema.iter().position(|v| v == &template).ok_or(BgpPlanError::GroupExtremaUnsupportedValue)?;
-    if key_column == value_column { return Err(BgpPlanError::GroupExtremaUnsupportedShape); }
+    let key_column = child
+        .relation
+        .schema
+        .iter()
+        .position(|v| v == &group.group_by[0])
+        .ok_or(BgpPlanError::GroupExtremaUnsupportedShape)?;
+    let value_column = child
+        .relation
+        .schema
+        .iter()
+        .position(|v| v == &template)
+        .ok_or(BgpPlanError::GroupExtremaUnsupportedValue)?;
+    if key_column == value_column {
+        return Err(BgpPlanError::GroupExtremaUnsupportedShape);
+    }
     let datatype = match child.relation.domains.get(value_column).and_then(|d| *d) {
-        Some(EqualityValueDomain::Datatype(dt)) if matches!(dt,
-            CanonicalDatatype::UInt8 | CanonicalDatatype::Int8 |
-            CanonicalDatatype::UInt16 | CanonicalDatatype::Int16 | CanonicalDatatype::UInt32 |
-            CanonicalDatatype::Int32 | CanonicalDatatype::Float32 | CanonicalDatatype::UInt64 |
-            CanonicalDatatype::Int64 | CanonicalDatatype::Float64) => dt,
+        Some(EqualityValueDomain::Datatype(dt))
+            if matches!(
+                dt,
+                CanonicalDatatype::UInt8
+                    | CanonicalDatatype::Int8
+                    | CanonicalDatatype::UInt16
+                    | CanonicalDatatype::Int16
+                    | CanonicalDatatype::UInt32
+                    | CanonicalDatatype::Int32
+                    | CanonicalDatatype::Float32
+                    | CanonicalDatatype::UInt64
+                    | CanonicalDatatype::Int64
+                    | CanonicalDatatype::Float64
+            ) =>
+        {
+            dt
+        }
         _ => return Err(BgpPlanError::GroupExtremaUnsupportedValue),
     };
     let key_domain = child.relation.domains[key_column];
@@ -2130,10 +2315,17 @@ fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlan
             schema: vec![group.group_by[0].clone(), result],
             domains: vec![key_domain, Some(EqualityValueDomain::Datatype(datatype))],
             statement: CompiledRelationStatement::GroupExtrema {
-                input: Box::new(child.relation), key_column, value_column, datatype, kind,
+                input: Box::new(child.relation),
+                key_column,
+                value_column,
+                datatype,
+                kind,
             },
         },
-        projection: None, collection, count_variable: None, full_row_distinct: false,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
     }))
 }
 
@@ -2206,8 +2398,14 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             aggregate.collection = collection;
         }
         aggregate.count_variable = count_variable;
-        aggregate.projection = compile_projection(&selections, aggregate.count_variable.as_deref(), &aggregate.relation.schema)?;
-        if !distincts.is_empty() { return Err(BgpPlanError::DistinctWithProjectionOrCount); }
+        aggregate.projection = compile_projection(
+            &selections,
+            aggregate.count_variable.as_deref(),
+            &aggregate.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
         validate_compiled_structure(&aggregate.relation)?;
         return Ok(aggregate);
     }
@@ -2223,18 +2421,18 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     }
     if !matches!(
         body,
-        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
+        Query::And(_) | Query::Triple(_)
     ) {
         return Err(BgpPlanError::UnsupportedConstruct {
             construct: query_variant_name(body),
         });
     }
 
-    // (1b) Flatten nested Ands. Sound constant-object Link/Data forms share one
-    // canonical Triple representation here; variable-object forms reject because their
-    // declared node/literal kind is not yet authenticated. Comparisons become
-    // object-value range filters. True and Comment contribute no bindings and are
-    // proof-transparent conjunction leaves.
+    // (1b) Flatten nested Ands. Prolog's authoritative JSON compiler exposes graph
+    // patterns only as Triple; Rust-only Link/Data forms reject closed because the
+    // executor cannot enforce their declared node/literal distinction. Comparisons
+    // become object-value range filters. True and Comment contribute no bindings and
+    // are proof-transparent conjunction leaves.
     let mut triples: Vec<TypedTriple> = Vec::new();
     let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
@@ -2255,7 +2453,6 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // object of the (unique) atom that binds the compared variable. Consumes the
     // comparisons; the ranged variable stays a kept output column.
     attach_ranges(&mut atoms, &comparisons)?;
-    attach_object_kind_constraints(&mut atoms)?;
 
     // The Store's mixed-arity plan is a relational prefix followed by zero-arity
     // existence bits. Stable ordering preserves query order within both groups.
@@ -2324,18 +2521,11 @@ fn infer_schema_domains(
                 .any(|atom| atom.subj_var.as_ref() == Some(variable))
             {
                 Some(EqualityValueDomain::Node)
-            } else if atoms.iter().any(|atom| {
-                atom.obj_var.as_ref() == Some(variable)
-                    && atom.declared_object_kind == Some(ObjectKindConstraint::Node)
-            }) {
-                Some(EqualityValueDomain::Node)
             } else {
                 comparisons
                     .iter()
                     .find(|comparison| &comparison.var == variable)
-                    .map(|comparison| {
-                        EqualityValueDomain::Datatype(comparison.canonical_datatype)
-                    })
+                    .map(|comparison| EqualityValueDomain::Datatype(comparison.canonical_datatype))
             }
         })
         .collect()
@@ -2359,7 +2549,9 @@ fn plan_or_relation(
     let mut compiled = Vec::with_capacity(disjunction.or.len());
     for query in &disjunction.or {
         let branch = plan_bgp(query)?;
-        if branch.projection.is_some()
+        let internal_ground_projection = branch.relation.schema.is_empty()
+            && branch.projection.as_deref() == Some(&[]);
+        if (branch.projection.is_some() && !internal_ground_projection)
             || branch.count_variable.is_some()
             || branch.full_row_distinct
         {
@@ -2413,17 +2605,16 @@ fn plan_or_relation(
                 mappings: nested_mappings,
             } => {
                 for (nested, nested_mapping) in nested.into_iter().zip(nested_mappings) {
-                    mappings.push(
-                        mapping
-                            .iter()
-                            .map(|index| nested_mapping[*index])
-                            .collect(),
-                    );
+                    mappings.push(mapping.iter().map(|index| nested_mapping[*index]).collect());
                     branches.push(nested);
                 }
             }
             statement => {
-                mappings.push(if schema.is_empty() { Vec::new() } else { mapping });
+                mappings.push(if schema.is_empty() {
+                    Vec::new()
+                } else {
+                    mapping
+                });
                 branches.push(CompiledRelation {
                     schema: branch.relation.schema,
                     domains: branch.relation.domains,
@@ -2499,15 +2690,18 @@ fn equality_operand(value: &crate::value::WoqlValue) -> Result<EqualityOperand, 
         crate::value::WoqlValue::Variable(variable) => {
             Ok(EqualityOperand::Variable(variable.clone()))
         }
-        crate::value::WoqlValue::Node(iri) => Ok(EqualityOperand::Constant(
-            CanonicalObject::Node(iri.clone().into_bytes()),
-        )),
+        crate::value::WoqlValue::Node(iri) => Ok(EqualityOperand::Constant(CanonicalObject::Node(
+            iri.clone().into_bytes(),
+        ))),
         crate::value::WoqlValue::Data(value) => {
             let term = value_constant_term(value)?;
             match term {
-                AtomTerm::ValueConstant(datatype, lexical) => Ok(EqualityOperand::Constant(
-                    CanonicalObject::Value { datatype, lexical },
-                )),
+                AtomTerm::ValueConstant(datatype, lexical) => {
+                    Ok(EqualityOperand::Constant(CanonicalObject::Value {
+                        datatype,
+                        lexical,
+                    }))
+                }
                 _ => unreachable!("value_constant_term returned a non-value"),
             }
         }
@@ -2551,8 +2745,8 @@ fn bound_equality_column(
         .ok_or_else(|| BgpPlanError::EqualsUnboundVariable {
             var: variable.to_string(),
         })?;
-    let descriptors = relation_result_descriptors(relation)
-        .map_err(|_| BgpPlanError::EqualsDomainMismatch)?;
+    let descriptors =
+        relation_result_descriptors(relation).map_err(|_| BgpPlanError::EqualsDomainMismatch)?;
     if descriptors[column].nullable {
         return Err(BgpPlanError::EqualsNullableVariable {
             var: variable.to_string(),
@@ -2567,10 +2761,9 @@ fn bound_equality_column(
 fn constant_matches_domain(value: &CanonicalObject, domain: EqualityValueDomain) -> bool {
     match (value, domain) {
         (CanonicalObject::Node(_), EqualityValueDomain::Node) => true,
-        (
-            CanonicalObject::Value { datatype, .. },
-            EqualityValueDomain::Datatype(expected),
-        ) => *datatype == expected,
+        (CanonicalObject::Value { datatype, .. }, EqualityValueDomain::Datatype(expected)) => {
+            *datatype == expected
+        }
         _ => false,
     }
 }
@@ -2620,8 +2813,7 @@ fn compile_equality_constraint(
             ) = (&left, &right)
             {
                 if left != right
-                    && (numeric_equality_datatype(*left)
-                        || numeric_equality_datatype(*right))
+                    && (numeric_equality_datatype(*left) || numeric_equality_datatype(*right))
                 {
                     return Err(BgpPlanError::EqualsCoerciveNumeric);
                 }
@@ -2783,9 +2975,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 visit(left, depth + 1, nodes)?;
                 visit(right, depth + 1, nodes)
             }
-            CompiledRelationStatement::Equality { input, .. } => {
-                visit(input, depth + 1, nodes)
-            }
+            CompiledRelationStatement::Equality { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::GroupExtrema { input, .. } => visit(input, depth + 1, nodes),
         }
     }
@@ -2986,15 +3176,6 @@ fn collect_conjunct<'a>(
     match query {
         Query::Triple(triple) => triples.push(TypedTriple {
             triple: triple.clone(),
-            object_kind: None,
-        }),
-        Query::Link(link) => triples.push(TypedTriple {
-            triple: triple_from_link(link)?,
-            object_kind: Some(ObjectKindConstraint::Node),
-        }),
-        Query::Data(data) => triples.push(TypedTriple {
-            triple: triple_from_data(data)?,
-            object_kind: Some(ObjectKindConstraint::Value),
         }),
         Query::And(inner) => {
             for query in &inner.and {
@@ -3021,41 +3202,6 @@ fn collect_conjunct<'a>(
         }
     }
     Ok(())
-}
-
-fn triple_from_link(link: &Link) -> Result<Triple, BgpPlanError> {
-    let object = match &link.object {
-        NodeValue::Node(node) => Value::Node(node.clone()),
-        NodeValue::Variable(variable) => Value::Variable(variable.clone()),
-    };
-    Ok(Triple {
-        subject: link.subject.clone(),
-        predicate: link.predicate.clone(),
-        object,
-        graph: Some(link.graph.clone()),
-    })
-}
-
-fn triple_from_data(data: &Data) -> Result<Triple, BgpPlanError> {
-    let object = match &data.object {
-        DataValue::Data(value) => Value::Data(value.clone()),
-        DataValue::List(values) => Value::List(values.iter().map(value_from_data_value).collect()),
-        DataValue::Variable(variable) => Value::Variable(variable.clone()),
-    };
-    Ok(Triple {
-        subject: data.subject.clone(),
-        predicate: data.predicate.clone(),
-        object,
-        graph: Some(data.graph.clone()),
-    })
-}
-
-fn value_from_data_value(value: &DataValue) -> Value {
-    match value {
-        DataValue::Data(value) => Value::Data(value.clone()),
-        DataValue::Variable(var) => Value::Variable(var.clone()),
-        DataValue::List(values) => Value::List(values.iter().map(value_from_data_value).collect()),
-    }
 }
 
 /// Lift one `Triple` to an [`Atom`]: the predicate must be a constant IRI; the subject
@@ -3140,7 +3286,6 @@ fn atom_from_triple(typed: &TypedTriple) -> Result<Atom, BgpPlanError> {
         subj_var,
         pred_var,
         obj_var,
-        declared_object_kind: typed.object_kind,
     })
 }
 
@@ -3218,48 +3363,6 @@ fn attach_ranges(atoms: &mut [Atom], comparisons: &[NormalizedRange]) -> Result<
                         op: bound.op,
                         c: bound.c,
                     });
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Authenticate the executor's typed triple variants. `Link` is exactly the reserved
-/// node datatype tag, expressed through the existing dictionary lookup + datatype mask;
-/// `Data` is accepted only when a numeric comparison already pins one exact literal
-/// datatype. Plain variable `Data` still needs a value-vs-node union/range discriminator.
-fn attach_object_kind_constraints(atoms: &mut [Atom]) -> Result<(), BgpPlanError> {
-    for index in 0..atoms.len() {
-        let Some(variable) = atoms[index].obj_var.clone() else {
-            continue;
-        };
-        let Some(kind) = atoms[index].declared_object_kind else {
-            continue;
-        };
-        if atoms.iter().any(|candidate| {
-            candidate.obj_var.as_ref() == Some(&variable)
-                && candidate.declared_object_kind.is_some()
-                && candidate.declared_object_kind != Some(kind)
-        }) {
-            return Err(BgpPlanError::ObjectKindConflict { var: variable });
-        }
-        match kind {
-            ObjectKindConstraint::Node => {
-                if atoms[index].layer_atom.object_range.is_some() {
-                    return Err(BgpPlanError::ObjectKindConflict { var: variable });
-                }
-                atoms[index].layer_atom.object_range = Some(ObjectRangeSpec {
-                    datatype: ArkFr::from_u64(NODE_DATATYPE_TAG),
-                    op: RangeOp::Ge,
-                    c: ArkFr::zero(),
-                    b_bits: OBJECT_RANGE_B_BITS,
-                    second: None,
-                });
-            }
-            ObjectKindConstraint::Value => {
-                if atoms[index].layer_atom.object_range.is_none() {
-                    return Err(BgpPlanError::TypedObjectVariable { construct: "Data" });
                 }
             }
         }
@@ -3567,18 +3670,34 @@ mod group_extrema_planner_tests {
     use crate::query::And;
 
     fn exact_min() -> Query {
-        let child = Query::And(And { and: vec![
-            Query::Triple(Triple {
-                subject: NodeValue::Variable("Person".into()),
-                predicate: NodeValue::Node("http://ex/age".into()),
-                object: Value::Variable("Age".into()), graph: None,
-            }),
-            Query::Gte(Gte { left: DataValue::Variable("Age".into()), right: DataValue::Data(XSDAnySimpleType::UnsignedInt(0)) }),
-        ]});
-        Query::And(And { and: vec![
-            Query::GroupBy(GroupBy { template: Value::Variable("Age".into()), group_by: vec!["Person".into()], grouped_value: Value::Variable("Ages".into()), query: Box::new(child) }),
-            Query::RangeMin(RangeMin { list: DataValue::Variable("Ages".into()), result: DataValue::Variable("Youngest".into()) }),
-        ]})
+        let child = Query::And(And {
+            and: vec![
+                Query::Triple(Triple {
+                    subject: NodeValue::Variable("Person".into()),
+                    predicate: NodeValue::Node("http://ex/age".into()),
+                    object: Value::Variable("Age".into()),
+                    graph: None,
+                }),
+                Query::Gte(Gte {
+                    left: DataValue::Variable("Age".into()),
+                    right: DataValue::Data(XSDAnySimpleType::UnsignedInt(0)),
+                }),
+            ],
+        });
+        Query::And(And {
+            and: vec![
+                Query::GroupBy(GroupBy {
+                    template: Value::Variable("Age".into()),
+                    group_by: vec!["Person".into()],
+                    grouped_value: Value::Variable("Ages".into()),
+                    query: Box::new(child),
+                }),
+                Query::RangeMin(RangeMin {
+                    list: DataValue::Variable("Ages".into()),
+                    result: DataValue::Variable("Youngest".into()),
+                }),
+            ],
+        })
     }
 
     #[test]
@@ -3586,7 +3705,13 @@ mod group_extrema_planner_tests {
         let compiled = plan_bgp(&exact_min()).unwrap();
         assert_eq!(compiled.relation.schema, ["Person", "Youngest"]);
         match compiled.relation.statement {
-            CompiledRelationStatement::GroupExtrema { key_column, value_column, datatype, kind, .. } => {
+            CompiledRelationStatement::GroupExtrema {
+                key_column,
+                value_column,
+                datatype,
+                kind,
+                ..
+            } => {
                 assert_ne!(key_column, value_column);
                 assert_eq!(datatype, CanonicalDatatype::UInt32);
                 assert_eq!(kind, GroupExtremaKind::Min);
@@ -3599,13 +3724,23 @@ mod group_extrema_planner_tests {
     fn composite_key_or_unconsumed_hidden_list_rejects() {
         let mut composite = exact_min();
         if let Query::And(and) = &mut composite {
-            if let Query::GroupBy(group) = &mut and.and[0] { group.group_by.push("Age".into()); }
+            if let Query::GroupBy(group) = &mut and.and[0] {
+                group.group_by.push("Age".into());
+            }
         }
-        assert!(matches!(plan_bgp(&composite), Err(BgpPlanError::GroupExtremaUnsupportedShape)));
-        assert!(matches!(plan_bgp(&Query::GroupBy(GroupBy {
-            template: Value::Variable("Age".into()), group_by: vec!["Person".into()],
-            grouped_value: Value::Variable("Ages".into()), query: Box::new(exact_min()),
-        })), Err(BgpPlanError::UnsupportedConstruct { .. })));
+        assert!(matches!(
+            plan_bgp(&composite),
+            Err(BgpPlanError::GroupExtremaUnsupportedShape)
+        ));
+        assert!(matches!(
+            plan_bgp(&Query::GroupBy(GroupBy {
+                template: Value::Variable("Age".into()),
+                group_by: vec!["Person".into()],
+                grouped_value: Value::Variable("Ages".into()),
+                query: Box::new(exact_min()),
+            })),
+            Err(BgpPlanError::UnsupportedConstruct { .. })
+        ));
     }
 }
 

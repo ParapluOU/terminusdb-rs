@@ -31,9 +31,9 @@ use terminusdb_woql2::control::WoqlOptional;
 use terminusdb_woql2::control::{Distinct, Select};
 use terminusdb_woql2::proof::{
     decode_and_verify_envelope, decode_verifier_commitment_and_verify_envelope, plan_bgp,
-    CompiledRelationStatement, ExecutedResultValue,
+    BgpPlanError, CompiledRelationStatement, ExecutedResultValue,
 };
-use terminusdb_woql2::triple::{Data, Link};
+use terminusdb_woql2::triple::Link;
 use terminusdb_woql2::{
     misc::{Count, InRange, RangeMax, RangeMin},
     order::GroupBy,
@@ -58,12 +58,7 @@ fn build_grouped_score_layer() -> Arc<LayerCommitment> {
 
 fn grouped_score_extrema(kind: RangeOp) -> Query {
     let child = and_of(vec![
-        Query::Data(Data {
-            subject: terminusdb_woql2::value::NodeValue::Variable("category".into()),
-            predicate: terminusdb_woql2::value::NodeValue::Node(iri("score")),
-            object: DataValue::Variable("score".into()),
-            graph: GraphType::Instance,
-        }),
+        tv("category", "score", "score"),
         gte(dvar("score"), duint(0)),
         // A tautological exact equality makes the aggregate child a genuinely
         // recursive relation node rather than only an internal multi-atom BGP.
@@ -325,42 +320,17 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
 }
 
 #[test]
-fn variable_link_authenticates_node_kind_and_excludes_literal_objects() {
-    let store = open_sync_memory_store();
-    let builder = store.create_base_layer().unwrap();
-    builder
-        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("p"), &iri("b")))
-        .unwrap();
-    builder
-        .add_value_triple(ValueTriple::new_node(&iri("c"), &iri("p"), &iri("d")))
-        .unwrap();
-    builder
-        .add_value_triple(ValueTriple::new_value(
-            &iri("literal"),
-            &iri("p"),
-            u32::make_entry(&7),
-        ))
-        .unwrap();
-    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+fn link_form_absent_from_prolog_json_rejects_before_proving() {
     let query = Query::Link(Link {
         subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
         predicate: terminusdb_woql2::value::NodeValue::Node(iri("p")),
         object: terminusdb_woql2::value::NodeValue::Variable("y".into()),
         graph: GraphType::Instance,
     });
-    let compiled = plan_bgp(&query).unwrap();
-    let proved = compiled.prove(&layer).unwrap();
-    assert_eq!(proved.result_len, 2);
-    let values = proved
-        .verify_and_resolve(&compiled, &layer, layer.state.commitment_root)
-        .unwrap();
-    assert!(values[1]
-        .iter()
-        .all(|value| matches!(value, CanonicalObject::Node(_))));
-    let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
-        .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    assert!(matches!(
+        plan_bgp(&query),
+        Err(BgpPlanError::UnsupportedConstruct { construct: "Link" })
+    ));
 }
 
 #[test]
@@ -3006,13 +2976,7 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
         RangeOp::Ge => gte(dvar("a"), duint(k)),
         RangeOp::Le => lte(dvar("a"), duint(k)),
     };
-    let age_data = Query::Data(Data {
-        subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
-        predicate: terminusdb_woql2::value::NodeValue::Node(iri("age")),
-        object: DataValue::Variable("a".into()),
-        graph: GraphType::Instance,
-    });
-    let bgp = and_of(vec![age_data, tv("x", "name", "n"), cmp]);
+    let bgp = and_of(vec![tv("x", "age", "a"), tv("x", "name", "n"), cmp]);
     let q = Query::Select(Select {
         variables: vec!["x".into(), "n".into()],
         query: Box::new(bgp),

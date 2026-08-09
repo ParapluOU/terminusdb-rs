@@ -205,83 +205,27 @@ fn nested_select_rejects_a_variable_hidden_by_its_inner_select() {
 }
 
 #[test]
-fn accepts_authenticated_link_variables_and_ranged_data_variables() {
+fn rejects_link_and_data_forms_absent_from_authoritative_prolog_json() {
     let link = Query::Link(Link {
-        subject: NodeValue::Variable("x".into()),
-        predicate: NodeValue::Node(iri("knows")),
-        object: NodeValue::Node(iri("y")),
-        graph: GraphType::Instance,
-    });
-    assert_eq!(plan_bgp(&link).unwrap().relation.schema, vec!["x"]);
-
-    let predicate_link = Query::Link(Link {
-        subject: NodeValue::Variable("x".into()),
-        predicate: NodeValue::Variable("p".into()),
-        object: NodeValue::Node(iri("y")),
-        graph: GraphType::Instance,
-    });
-    assert_eq!(plan_bgp(&predicate_link).unwrap().relation.schema, vec!["x", "p"]);
-
-    let data = Query::Data(Data {
-        subject: NodeValue::Variable("x".into()),
-        predicate: NodeValue::Node(iri("active")),
-        object: DataValue::Data(XSDAnySimpleType::Boolean(true)),
-        graph: GraphType::Instance,
-    });
-    assert_eq!(plan_bgp(&data).unwrap().relation.schema, vec!["x"]);
-
-    let predicate_data = Query::Data(Data {
-        subject: NodeValue::Variable("x".into()),
-        predicate: NodeValue::Variable("p".into()),
-        object: DataValue::Data(XSDAnySimpleType::Boolean(true)),
-        graph: GraphType::Instance,
-    });
-    assert_eq!(plan_bgp(&predicate_data).unwrap().relation.schema, vec!["x", "p"]);
-
-    let variable_link = Query::Link(Link {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("knows")),
         object: NodeValue::Variable("y".into()),
         graph: GraphType::Instance,
     });
-    let compiled_link = plan_bgp(&variable_link).unwrap();
-    assert_eq!(compiled_link.relation.schema, vec!["x", "y"]);
-    assert_eq!(
-        compiled_link.relation.domains,
-        vec![
-            Some(terminus_store::proof::envelope::EqualityValueDomain::Node),
-            Some(terminus_store::proof::envelope::EqualityValueDomain::Node),
-        ]
-    );
-    assert_eq!(
-        compiled_link.relation.as_bgp().unwrap().atoms[0]
-            .object_range
-            .as_ref()
-            .unwrap()
-            .datatype,
-        ArkFr::from_u64(255)
+    reject(
+        link,
+        BgpPlanError::UnsupportedConstruct { construct: "Link" },
     );
 
-    let variable_data = Query::Data(Data {
+    let data = Query::Data(Data {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("active")),
         object: DataValue::Variable("active".into()),
         graph: GraphType::Instance,
     });
     reject(
-        variable_data.clone(),
-        BgpPlanError::TypedObjectVariable { construct: "Data" },
-    );
-    let ranged_data = and_of(vec![
-        variable_data,
-        greater(dvar("active"), duint(0)),
-    ]);
-    let compiled_data = plan_bgp(&ranged_data).unwrap();
-    assert_eq!(
-        compiled_data.relation.domains[1],
-        Some(terminus_store::proof::envelope::EqualityValueDomain::Datatype(
-            CanonicalDatatype::UInt32,
-        ))
+        data,
+        BgpPlanError::UnsupportedConstruct { construct: "Data" },
     );
 }
 
@@ -889,7 +833,7 @@ fn rejects_when_until_the_proof_planner_has_matching_semantics() {
         query: Box::new(tv("a", "p", "b")),
         consequent: Box::new(tv("x", "q", "y")),
     });
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "If" });
+    reject(q, BgpPlanError::UnsupportedConstruct { construct: "When" });
 }
 
 #[test]
