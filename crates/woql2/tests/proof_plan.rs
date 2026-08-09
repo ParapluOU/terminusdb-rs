@@ -609,7 +609,7 @@ fn accepts_remaining_store_aligned_scalar_equalities() {
 }
 
 #[test]
-fn accepts_all_ground_conjunction_and_rejects_mixed_arity_composition() {
+fn accepts_all_ground_and_mixed_arity_conjunctions() {
     // t(<s>, p, <o>) is a zero-arity existence relation whose authenticated UNIT
     // result column remains hidden from the WOQL schema.
     let c = plan_bgp(&tv_ground("s", "p", "o")).unwrap();
@@ -625,7 +625,12 @@ fn accepts_all_ground_conjunction_and_rejects_mixed_arity_composition() {
     assert!(compiled.plan.joins.is_empty());
 
     let mixed = and_of(vec![tv_ground("s", "p", "o"), tv("y", "q", "z")]);
-    reject(mixed, BgpPlanError::GroundAtom);
+    let compiled = plan_bgp(&mixed).unwrap();
+    assert_eq!(compiled.schema, vec!["y", "z"]);
+    assert_eq!(compiled.plan.atoms.len(), 2);
+    assert!(compiled.plan.joins.is_empty());
+    assert!(matches!(compiled.plan.atoms[0].subject, AtomTerm::Variable));
+    assert!(!matches!(compiled.plan.atoms[1].subject, AtomTerm::Variable));
 }
 
 #[test]

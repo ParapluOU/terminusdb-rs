@@ -18,6 +18,7 @@ authenticated.
 | `Comment`, `True` inside `And` | Implemented in woql2 | They add no bindings and do not change conjunction solutions. This TerminusDB fork's JSON parser does not expose query-level `True`; running-node coverage therefore cannot claim it. |
 | `Count` | Implemented | The authenticated complete result length is the count. The ordinary executor must deliver exactly the declared count variable and one nonnegative `u64` value. |
 | Fully-ground `Triple`/`Link`/`Data` and all-ground `And` | Implemented in woql2; this TerminusDB fork's JSON parser exposes only `Triple` | Each Store UNIT filter authenticates a zero-arity existence bit; an all-ground conjunction returns their verified boolean AND, preserving duplicate-atom idempotence. If a standalone term is dictionary-absent, the verifier recommits the root-bound clear catalog and authenticates the empty relation. |
+| Ground atoms mixed with variable-bearing atoms | Implemented | Variable-bearing atoms form the authenticated relational prefix; verified ground UNIT bits gate its complete result. A false gate forces the same output arity to canonical zero commitments at the verifier-derived result domain and forces result length zero. Dictionary-absent mixed atoms still fail closed. |
 | Constant-object `Link` and `Data` | Implemented in woql2 | The constant's canonical node/literal representation intrinsically authenticates the declared object kind. Variable-object forms reject until object-kind selection is proven; the current TerminusDB JSON parser does not expose either variant. |
 
 Write/routing constructs (`Into`, `Add*`, `Delete*`, document mutations) are not
@@ -33,7 +34,6 @@ composition is implemented.
 |---|---|---|
 | `Start`, `Limit` | result-column commitments, compaction, relocation, count identities | Authenticate the exact selected slice. Without an authenticated order, arbitrary BGP pagination is not a declarative set result. |
 | `OrderBy`, `TripleSlice`, `TripleSliceRev`, `TripleNext`, `TriplePrevious` | strict-sort, range, membership, relocation, multiset/LogUp gadgets | Prove a permutation of the complete input, lexicographic typed ordering, and exact prefix/range boundaries. Sortedness alone is insufficient. |
-| Ground atoms mixed with variable-bearing atoms | complete constant filter, authenticated UNIT relation/result length | Gate the nonzero-arity relation by the verified existence bit without an unauthenticated post-filter. |
 | Dictionary non-membership in relational/non-ground atoms | dictionary commitments and standalone-ground catalog openings | Compose authenticated absence with a relation that still exposes variables. Only the zero-arity ground case can currently short-circuit to empty. |
 | `Once` | complete BGP plus count/existence and authenticated selection | Define and authenticate TerminusDB's first-solution order; without it, stripping `Once` is unsound. |
 | Full-schema `Equals` and variable equality filters | atom equality filter and sumcheck | General cross-atom equality routing beyond natural join and constant unification. |

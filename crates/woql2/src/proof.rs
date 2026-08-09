@@ -33,9 +33,9 @@ use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::{plan_digest, LayerBgpEnvelope};
 use terminus_store::proof::query::{
-    prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp, verify_result_columns,
-    verify_result_objects, AtomTerm, LayerBgpAtom, LayerBgpPlan, LayerBgpProof, ObjectRangeBound,
-    ObjectRangeSpec,
+    prove_layer_bgp_with_result, resolve_result_objects, verify_layer_bgp,
+    verify_layer_bgp_result_log_domain, verify_result_columns, verify_result_objects, AtomTerm,
+    LayerBgpAtom, LayerBgpPlan, LayerBgpProof, ObjectRangeBound, ObjectRangeSpec,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
@@ -151,6 +151,12 @@ impl ProvedBgp {
             &self.result_commitments,
             self.result_len,
             &self.proof,
+        )?;
+        verify_layer_bgp_result_log_domain(
+            layer,
+            &compiled.plan,
+            &self.proof,
+            self.result_log_domain,
         )?;
         self.verify_columns(&self.result_columns)
     }
@@ -535,10 +541,9 @@ pub enum BgpPlanError {
     #[error("unsupported value datatype `{datatype}`: no round-trip-aligned encoding")]
     UnsupportedValueDatatype { datatype: &'static str },
 
-    /// A ground existence relation appeared alongside a variable-bearing atom. The
-    /// all-ground boolean product is supported, but mixed zero/nonzero-arity composition
-    /// still needs an authenticated gating operation.
-    #[error("ground atoms cannot yet be mixed with variable-bearing atoms")]
+    /// Reserved for malformed externally-built plans. The compiler now emits sound
+    /// mixed-arity gating plans directly.
+    #[error("invalid ground/relational atom composition")]
     GroundAtom,
 
     /// The triple targeted the schema graph.
@@ -707,6 +712,10 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // object of the (unique) atom that binds the compared variable. Consumes the
     // comparisons; the ranged variable stays a kept output column.
     attach_ranges(&mut atoms, &comparisons)?;
+
+    // The Store's mixed-arity plan is a relational prefix followed by zero-arity
+    // existence bits. Stable ordering preserves query order within both groups.
+    atoms.sort_by_key(|atom| atom.kept.is_empty());
 
     // (3) Shape guard + left-deep planner: the safety-critical core.
     let (plan, schema) = plan_left_deep(&atoms)?;
@@ -1317,9 +1326,7 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
             Vec::new(),
         ));
     }
-    if ground_count != 0 {
-        return Err(BgpPlanError::GroundAtom);
-    }
+    let relational_count = k - ground_count;
 
     // Deterministic start atom: input order 0. Its kept variables seed the accumulator.
     let mut acc_vars: Vec<String> = atoms[0].kept.clone();
@@ -1327,13 +1334,13 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
     placed[0] = true;
 
     let mut ordered_atoms: Vec<LayerBgpAtom> = vec![atoms[0].layer_atom.clone()];
-    let mut joins: Vec<JoinStep> = Vec::with_capacity(k - 1);
+    let mut joins: Vec<JoinStep> = Vec::with_capacity(relational_count - 1);
 
     let mut placed_count = 1usize;
-    while placed_count < k {
+    while placed_count < relational_count {
         // Find an unplaced atom sharing at least one variable with the accumulator.
         let mut chosen: Option<usize> = None;
-        for (i, atom) in atoms.iter().enumerate() {
+        for (i, atom) in atoms.iter().take(relational_count).enumerate() {
             if placed[i] {
                 continue;
             }
@@ -1398,6 +1405,12 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
         placed[i] = true;
         placed_count += 1;
     }
+
+    ordered_atoms.extend(
+        atoms[relational_count..]
+            .iter()
+            .map(|atom| atom.layer_atom.clone()),
+    );
 
     Ok((
         LayerBgpPlan {

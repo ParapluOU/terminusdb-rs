@@ -493,6 +493,57 @@ fn all_ground_conjunction_authenticates_boolean_product() {
 }
 
 #[test]
+fn ground_atoms_authentically_gate_variable_results() {
+    let lc = build_layer(&[("a", "knows", "b"), ("b", "likes", "c")]);
+    let id = |name: &str| {
+        lc.node_value_catalog
+            .iter()
+            .find(|record| record.triple.object == CanonicalObject::Node(iri(name).into_bytes()))
+            .unwrap()
+            .object_id
+    };
+    for (ground, expected_rows) in [
+        (tv_ground("a", "knows", "b"), vec![vec![id("b"), id("c")]]),
+        (tv_ground("a", "likes", "c"), Vec::new()),
+    ] {
+        let query = and_of(vec![ground, tv("s", "likes", "o")]);
+        let compiled = plan_bgp(&query).unwrap();
+        let mut proved = compiled.prove(&lc).unwrap();
+        proved
+            .verify_executed_rows(
+                &compiled,
+                &lc,
+                lc.state.commitment_root,
+                &["s".into(), "o".into()],
+                &expected_rows,
+            )
+            .unwrap();
+        let swapped_rows = if expected_rows.is_empty() {
+            vec![vec![id("b"), id("c")]]
+        } else {
+            Vec::new()
+        };
+        assert!(proved
+            .verify_executed_rows(
+                &compiled,
+                &lc,
+                lc.state.commitment_root,
+                &["s".into(), "o".into()],
+                &swapped_rows,
+            )
+            .is_err());
+        let envelope = proved
+            .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+            .unwrap();
+        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+        proved.result_log_domain += 1;
+        assert!(proved
+            .verify(&compiled, &lc, lc.state.commitment_root)
+            .is_err());
+    }
+}
+
+#[test]
 fn path_three_atoms_proves_true_join() {
     // knows/likes/owns chain; BGP t(?x,knows,?y), t(?y,likes,?z), t(?z,owns,?w).
     // Paths (x,y,z,w): (a,b,g,k), (c,b,g,k), (e,f,h,m).
