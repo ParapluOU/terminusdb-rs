@@ -5,11 +5,14 @@ mod proof_common;
 use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
-use terminusdb_woql2::control::{Distinct, From, If, Immediately, Pin, Select, Using, WoqlOptional};
-use terminusdb_woql2::misc::{Comment, Count, InRange};
+use terminusdb_woql2::control::{
+    Distinct, From, If, Immediately, Once, Pin, Select, Using, WoqlOptional,
+};
+use terminusdb_woql2::misc::{Comment, Count, InRange, Limit, Start};
+use terminusdb_woql2::order::{Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
-use terminusdb_woql2::triple::{Data, Link, TripleSlice};
+use terminusdb_woql2::triple::{Data, Link, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
 use terminus_store::proof::query::{AtomTerm, ObjectRangeSpec};
@@ -1086,6 +1089,65 @@ fn triple_slice_rejects_until_result_order_is_authenticated() {
             construct: "TripleSlice",
         },
     );
+}
+
+#[test]
+fn triple_slice_rev_rejects_until_result_order_is_authenticated() {
+    let q = Query::TripleSliceRev(TripleSliceRev {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("age")),
+        object: Value::Variable("a".into()),
+        low: Value::Data(terminusdb_schema::XSDAnySimpleType::UnsignedInt(18)),
+        high: Value::Data(terminusdb_schema::XSDAnySimpleType::UnsignedInt(40)),
+        graph: None,
+    });
+    reject(
+        q,
+        BgpPlanError::UnsupportedConstruct {
+            construct: "TripleSliceRev",
+        },
+    );
+}
+
+#[test]
+fn ordered_result_controls_reject_until_executor_order_is_authenticated() {
+    let base = tv("x", "age", "a");
+    let cases = [
+        (
+            Query::OrderBy(OrderBy {
+                ordering: vec![OrderTemplate {
+                    variable: "a".into(),
+                    order: Order::Asc,
+                }],
+                query: Box::new(base.clone()),
+            }),
+            "OrderBy",
+        ),
+        (
+            Query::Start(Start {
+                start: 2,
+                query: Box::new(base.clone()),
+            }),
+            "Start",
+        ),
+        (
+            Query::Limit(Limit {
+                limit: 3,
+                query: Box::new(base.clone()),
+            }),
+            "Limit",
+        ),
+        (
+            Query::Once(Once {
+                query: Box::new(base),
+            }),
+            "Once",
+        ),
+    ];
+
+    for (q, construct) in cases {
+        reject(q, BgpPlanError::UnsupportedConstruct { construct });
+    }
 }
 
 #[test]

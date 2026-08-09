@@ -1198,6 +1198,7 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::Count(_) => "Count",
         Query::InRange(_) => "InRange",
         Query::TripleSlice(_) => "TripleSlice",
+        Query::TripleSliceRev(_) => "TripleSliceRev",
         Query::Sum(_) => "Sum",
         Query::Member(_) => "Member",
         Query::Get(_) => "Get",
