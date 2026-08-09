@@ -15,6 +15,7 @@ use dory_pcs::primitives::arithmetic::Field;
 use terminus_store::proof::argument::commit_column;
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
+use terminus_store::proof::envelope::RecursiveRelationEnvelope;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
     prove_layer_bgp, verify_layer_bgp, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
@@ -129,6 +130,157 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     assert!(fake_null
         .verify(&compiled, &layer, layer.state.commitment_root)
         .is_err());
+}
+
+#[test]
+fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("b", "q", "u"),
+        ("b", "r", "v"),
+        ("d", "s", "w"), // keeps every queried predicate in the catalog
+    ]);
+    let optional_right_or = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(Query::Or(Or {
+                or: vec![tv("y", "q", "z"), tv("y", "r", "z")],
+            })),
+        }),
+    ]);
+    let optional_plain = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+    ]);
+    let query = Query::Or(Or {
+        or: vec![optional_right_or, optional_plain],
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let (branches, _) = compiled.relation.as_bag_union().unwrap();
+    assert!(branches[0]
+        .as_left_outer()
+        .unwrap()
+        .1
+        .as_bag_union()
+        .is_some());
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 5);
+    assert_eq!(
+        proved.result_columns[2]
+            .iter()
+            .filter(|value| value.is_zero())
+            .count(),
+        2
+    );
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+    assert_eq!(verified.proved.result_len, 5);
+    assert_eq!(
+        verified.result_values.as_ref().unwrap()[2]
+            .iter()
+            .filter(|value| **value == CanonicalResultValue::Null)
+            .count(),
+        2
+    );
+    let u = CanonicalResultValue::Object(CanonicalObject::Node(iri("u").into_bytes()));
+    assert_eq!(
+        verified.result_values.as_ref().unwrap()[2]
+            .iter()
+            .filter(|value| **value == u)
+            .count(),
+        2,
+        "overlapping Optional branches retain bag multiplicity",
+    );
+
+    let mut wrong_nullability = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    wrong_nullability.result_descriptors[2].nullable = false;
+    let wrong_nullability = wrong_nullability.encode().unwrap();
+    assert!(decode_and_verify_envelope(
+        &wrong_nullability,
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut reordered = compiled.clone();
+    if let CompiledRelationStatement::BagUnion { branches, mappings } =
+        &mut reordered.relation.statement
+    {
+        branches.swap(0, 1);
+        mappings.swap(0, 1);
+    }
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &reordered,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let substituted = plan_bgp(&and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "s", "z")),
+        }),
+    ]))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &substituted,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+}
+
+#[test]
+fn sequential_optional_then_not_filters_on_nonnullable_key() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("b", "q", "u"),
+        ("a", "r", "blocked"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::Not(Not {
+            query: Box::new(tv("x", "r", "reason")),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let (left, _, keys) = compiled.relation.as_left_anti().unwrap();
+    assert!(left.as_left_outer().is_some());
+    assert_eq!(keys, [(0, 0)]);
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 1);
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(values[2], [CanonicalResultValue::Null]);
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+    assert_eq!(
+        verified.result_values.as_ref().unwrap()[2],
+        [CanonicalResultValue::Null]
+    );
 }
 
 #[test]

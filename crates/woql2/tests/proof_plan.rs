@@ -640,6 +640,50 @@ fn sequential_operators_allow_sound_keys_and_reject_nullable_correlation() {
     let compiled = plan_bgp(&sequential_not).unwrap();
     let (prior, _, _) = compiled.relation.as_left_anti().unwrap();
     assert!(prior.as_left_anti().is_some());
+
+    let optional_then_not = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::Not(Not {
+            query: Box::new(tv("x", "r", "w")),
+        }),
+    ]);
+    let compiled = plan_bgp(&optional_then_not).unwrap();
+    let (prior, _, _) = compiled.relation.as_left_anti().unwrap();
+    assert!(prior.as_left_outer().is_some());
+
+    let nullable_then_not = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::Not(Not {
+            query: Box::new(tv("z", "r", "w")),
+        }),
+    ]);
+    reject(nullable_then_not, BgpPlanError::NotUnsupportedSubplan);
+}
+
+#[test]
+fn planner_rejects_recursive_depth_and_node_bombs() {
+    let mut deep = vec![tv("x", "p", "y")];
+    for _ in 0..64 {
+        deep.push(Query::Not(Not {
+            query: Box::new(tv("a", "q", "b")),
+        }));
+    }
+    reject(
+        and_of(deep),
+        BgpPlanError::RecursiveStructureLimit,
+    );
+
+    let branches = (0..4096).map(|_| tv("x", "p", "y")).collect();
+    reject(
+        Query::Or(Or { or: branches }),
+        BgpPlanError::RecursiveStructureLimit,
+    );
 }
 
 #[test]

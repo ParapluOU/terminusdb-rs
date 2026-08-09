@@ -42,7 +42,8 @@ use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::{
     plan_digest, LayerBgpEnvelope, RecursiveRelationEnvelope, RecursiveRelationProof,
-    RelationProofPlan, RelationProofPlanKind,
+    RelationProofPlan, RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH,
+    MAX_RELATION_PROOF_NODES,
 };
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
@@ -1224,7 +1225,7 @@ fn prove_compiled_relation(
 ) -> std::io::Result<ProvedBgp> {
     match &compiled.statement {
         CompiledRelationStatement::Bgp(plan) => {
-            let result = prove_layer_bgp_with_result(layer, plan)?;
+            let result = boxed_prove_bgp(layer, plan)?;
             let result_columns = result.real_columns();
             Ok(ProvedBgp {
                 statement: ProvedQueryStatement::Single {
@@ -1263,7 +1264,7 @@ fn prove_compiled_relation(
             let mut transcript = Transcript254::new(b"parture-union-envelope");
             transcript.append_bytes(b"pow/union-envelope/root", &layer.state.commitment_root);
             transcript.append_bytes(b"pow/union-envelope/query", &query_digest);
-            let result = prove_bag_union(&inputs, &mut transcript)?;
+            let result = boxed_prove_union(&inputs, &mut transcript)?;
             Ok(ProvedBgp {
                 statement: ProvedQueryStatement::BagUnion {
                     branches: proved,
@@ -1300,7 +1301,7 @@ fn prove_compiled_relation(
                     prove_global_not(&left_witness, &right_witness)?;
                 (None, commitments, columns, log_domain, n)
             } else {
-                let result = prove_left_anti_join_with_keys(
+                let result = boxed_prove_anti(
                     &left_witness,
                     &right_witness,
                     key_pairs,
@@ -1346,9 +1347,9 @@ fn prove_compiled_relation(
             transcript.append_bytes(b"pow/outer-envelope/root", &layer.state.commitment_root);
             transcript.append_bytes(b"pow/outer-envelope/query", &query_digest);
             let result = if key_pairs.is_empty() {
-                prove_global_left_outer_join(&left_witness, &right_witness, &mut transcript)?
+                boxed_prove_global_outer(&left_witness, &right_witness, &mut transcript)?
             } else {
-                prove_left_outer_join_with_keys(
+                boxed_prove_outer(
                     &left_witness,
                     &right_witness,
                     key_pairs,
@@ -1372,6 +1373,65 @@ fn prove_compiled_relation(
             })
         }
     }
+}
+
+#[inline(never)]
+fn boxed_prove_bgp(
+    layer: &LayerCommitment,
+    plan: &LayerBgpPlan,
+) -> std::io::Result<Box<terminus_store::proof::query::LayerBgpResult>> {
+    Ok(Box::new(prove_layer_bgp_with_result(layer, plan)?))
+}
+
+#[inline(never)]
+fn boxed_prove_union(
+    inputs: &[RelationWitness],
+    transcript: &mut Transcript254,
+) -> std::io::Result<Box<terminus_store::proof::union::BagUnionResult>> {
+    Ok(Box::new(prove_bag_union(inputs, transcript)?))
+}
+
+#[inline(never)]
+fn boxed_prove_anti(
+    left: &RelationWitness,
+    right: &RelationWitness,
+    key_pairs: &[(usize, usize)],
+    transcript: &mut Transcript254,
+) -> std::io::Result<Box<terminus_store::proof::anti::LeftAntiJoinResult>> {
+    Ok(Box::new(prove_left_anti_join_with_keys(
+        left,
+        right,
+        key_pairs,
+        transcript,
+    )?))
+}
+
+#[inline(never)]
+fn boxed_prove_global_outer(
+    left: &RelationWitness,
+    right: &RelationWitness,
+    transcript: &mut Transcript254,
+) -> std::io::Result<Box<terminus_store::proof::anti::LeftOuterJoinResult>> {
+    Ok(Box::new(prove_global_left_outer_join(
+        left,
+        right,
+        transcript,
+    )?))
+}
+
+#[inline(never)]
+fn boxed_prove_outer(
+    left: &RelationWitness,
+    right: &RelationWitness,
+    key_pairs: &[(usize, usize)],
+    transcript: &mut Transcript254,
+) -> std::io::Result<Box<terminus_store::proof::anti::LeftOuterJoinResult>> {
+    Ok(Box::new(prove_left_outer_join_with_keys(
+        left,
+        right,
+        key_pairs,
+        transcript,
+    )?))
 }
 
 fn relation_witness(proved: &ProvedBgp) -> RelationWitness {
@@ -1536,20 +1596,17 @@ pub enum BgpPlanError {
     #[error("Or needs at least two branches, found {count}")]
     OrTooFewBranches { count: usize },
 
-    #[error("Or branches must expose exactly the same variable schema and order")]
+    #[error("Or branches must expose the same variable schema")]
     OrIncompatibleSchema,
 
     #[error("Or branches expose incompatible Store ID namespaces")]
     OrIncompatibleNamespaces,
 
-    #[error("Select, Count, or nested Or inside an Or branch is unsupported")]
+    #[error("Select, Count, or Distinct inside an Or branch is unsupported")]
     OrUnsupportedBranchWrapper,
 
     #[error("Or branches resolve to conflicting collections")]
     OrRoutingConflict,
-
-    #[error("correlated Not needs exactly one negated conjunct, found {count}")]
-    NotConjunctCount { count: usize },
 
     #[error("correlated Not needs a non-empty positive outer BGP")]
     NotMissingOuter,
@@ -1557,23 +1614,23 @@ pub enum BgpPlanError {
     #[error("Not supports at most two shared variables, found {count}")]
     NotSharedVariableCount { count: usize },
 
-    #[error("Select, Count, Distinct, Or, or nested Not inside a Not subplan is unsupported")]
+    #[error("Not subplans may not contain result wrappers or correlate through nullable columns")]
     NotUnsupportedSubplan,
 
     #[error("Not subplans resolve to conflicting collections")]
     NotRoutingConflict,
 
-    #[error("Optional needs exactly one optional conjunct, found {count}")]
-    OptionalConjunctCount { count: usize },
-
     #[error("Optional needs a non-empty positive outer BGP")]
     OptionalMissingOuter,
 
-    #[error("Optional initially requires one or two shared variables, found {count}")]
+    #[error("Optional supports at most two shared variables, found {count}")]
     OptionalSharedVariableCount { count: usize },
 
-    #[error("Optional subplans may not contain Select, Count, Distinct, Or, Not, or Optional")]
+    #[error("Optional subplans may not contain result wrappers or correlate through nullable columns")]
     OptionalUnsupportedSubplan,
+
+    #[error("recursive proof relation exceeds depth or node limits")]
+    RecursiveStructureLimit,
 
     #[error("Optional subplans resolve to conflicting collections")]
     OptionalRoutingConflict,
@@ -1715,38 +1772,15 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         );
     }
 
-
-    let mut optional_positive = Vec::new();
-    let mut optionals = Vec::new();
-    split_top_level_optional(body, &mut optional_positive, &mut optionals);
-    if !optionals.is_empty() {
-        return plan_optional_relations(
-            optional_positive,
-            optionals,
+    if has_top_level_read_operator(body) {
+        return plan_sequential_read_operators(
+            body,
             &selections,
             collection,
             count_variable,
             &distincts,
         );
     }
-
-    // Prolog negation is a left anti-join over complete authenticated child relations.
-    // Zero shared variables use global existence; one or two use ordered correlation
-    // keys. Multiple top-level Not conjuncts fold left-to-right.
-    let mut positive = Vec::new();
-    let mut negatives = Vec::new();
-    split_top_level_not(body, &mut positive, &mut negatives);
-    if !negatives.is_empty() {
-        return plan_not_relations(
-            positive,
-            negatives,
-            &selections,
-            collection,
-            count_variable,
-            &distincts,
-        );
-    }
-
     if !matches!(
         body,
         Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
@@ -1906,7 +1940,7 @@ fn plan_or_relation(
         }
     }
     let projection = compile_projection(selections, count_variable.as_deref(), &schema)?;
-    Ok(CompiledBgp {
+    let compiled = CompiledBgp {
         relation: CompiledRelation {
             schema,
             statement: CompiledRelationStatement::BagUnion { branches, mappings },
@@ -1915,19 +1949,64 @@ fn plan_or_relation(
         collection: effective_collection,
         count_variable,
         full_row_distinct: false,
-    })
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
 }
 
-fn plan_optional_relations(
-    mut positive: Vec<Query>,
-    optionals: Vec<Query>,
+enum ReadOperator {
+    Optional(Query),
+    Not(Query),
+}
+
+fn has_top_level_read_operator(query: &Query) -> bool {
+    match query {
+        Query::And(and) => and.and.iter().any(has_top_level_read_operator),
+        Query::WoqlOptional(_) | Query::Not(_) => true,
+        _ => false,
+    }
+}
+
+fn collect_read_operator_sequence(
+    query: &Query,
+    positive: &mut Vec<Query>,
+    operators: &mut Vec<ReadOperator>,
+) -> Result<(), BgpPlanError> {
+    match query {
+        Query::And(and) => {
+            for child in &and.and {
+                collect_read_operator_sequence(child, positive, operators)?;
+            }
+        }
+        Query::WoqlOptional(optional) => {
+            operators.push(ReadOperator::Optional((*optional.query).clone()))
+        }
+        Query::Not(not) => operators.push(ReadOperator::Not((*not.query).clone())),
+        other if operators.is_empty() => positive.push(other.clone()),
+        other => {
+            return Err(BgpPlanError::ConjunctNotTriple {
+                construct: query_variant_name(other),
+            })
+        }
+    }
+    Ok(())
+}
+
+fn plan_sequential_read_operators(
+    query: &Query,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
     distincts: &[&[String]],
 ) -> Result<CompiledBgp, BgpPlanError> {
+    let mut positive = Vec::new();
+    let mut operators = Vec::new();
+    collect_read_operator_sequence(query, &mut positive, &mut operators)?;
     if positive.is_empty() {
-        return Err(BgpPlanError::OptionalMissingOuter);
+        return Err(match operators.first() {
+            Some(ReadOperator::Optional(_)) => BgpPlanError::OptionalMissingOuter,
+            _ => BgpPlanError::NotMissingOuter,
+        });
     }
     let positive_query = if positive.len() == 1 {
         positive.pop().unwrap()
@@ -1935,105 +2014,111 @@ fn plan_optional_relations(
         Query::And(crate::query::And { and: positive })
     };
     let left = plan_bgp(&positive_query)?;
-    reject_subplan_wrappers(&left, true)?;
     let mut relation = left.relation;
     let mut effective_collection = collection;
+    let first_optional = matches!(operators.first(), Some(ReadOperator::Optional(_)));
     merge_collection(
         &mut effective_collection,
         left.collection.as_ref(),
-        BgpPlanError::OptionalRoutingConflict,
+        if first_optional {
+            BgpPlanError::OptionalRoutingConflict
+        } else {
+            BgpPlanError::NotRoutingConflict
+        },
     )?;
-    for optional in optionals {
-        let right = plan_bgp(&optional)?;
-        reject_subplan_wrappers(&right, true)?;
+
+    for operator in operators {
+        let (right_query, optional) = match operator {
+            ReadOperator::Optional(query) => (query, true),
+            ReadOperator::Not(query) => (query, false),
+        };
+        let right = plan_bgp(&right_query)?;
+        reject_subplan_wrappers(&right, optional)?;
         merge_collection(
             &mut effective_collection,
             right.collection.as_ref(),
-            BgpPlanError::OptionalRoutingConflict,
-        )?;
-        let key_pairs = shared_key_pairs(&relation, &right.relation, true)?;
-        let mut schema = relation.schema.clone();
-        schema.extend(
-            right
-                .relation
-                .schema
-                .iter()
-                .filter(|name| !relation.schema.contains(name))
-                .cloned(),
-        );
-        relation = CompiledRelation {
-            schema,
-            statement: CompiledRelationStatement::LeftOuter {
-                left: Box::new(relation),
-                right: Box::new(right.relation),
-                key_pairs,
+            if optional {
+                BgpPlanError::OptionalRoutingConflict
+            } else {
+                BgpPlanError::NotRoutingConflict
             },
-        };
+        )?;
+        let key_pairs = shared_key_pairs(&relation, &right.relation, optional)?;
+        if optional {
+            let mut schema = relation.schema.clone();
+            schema.extend(
+                right
+                    .relation
+                    .schema
+                    .iter()
+                    .filter(|name| !relation.schema.contains(name))
+                    .cloned(),
+            );
+            relation = CompiledRelation {
+                schema,
+                statement: CompiledRelationStatement::LeftOuter {
+                    left: Box::new(relation),
+                    right: Box::new(right.relation),
+                    key_pairs,
+                },
+            };
+        } else {
+            let schema = relation.schema.clone();
+            relation = CompiledRelation {
+                schema,
+                statement: CompiledRelationStatement::LeftAnti {
+                    left: Box::new(relation),
+                    right: Box::new(right.relation),
+                    key_pairs,
+                },
+            };
+        }
     }
-    validate_distincts(distincts, selections, count_variable.as_deref(), &relation.schema)?;
+    validate_distincts(
+        distincts,
+        selections,
+        count_variable.as_deref(),
+        &relation.schema,
+    )?;
     let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
-    Ok(CompiledBgp {
+    let compiled = CompiledBgp {
         relation,
         projection,
         collection: effective_collection,
         count_variable,
         full_row_distinct: !distincts.is_empty(),
-    })
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
 }
 
-fn plan_not_relations(
-    mut positive: Vec<Query>,
-    negatives: Vec<Query>,
-    selections: &[(&[String], bool)],
-    collection: Option<String>,
-    count_variable: Option<String>,
-    distincts: &[&[String]],
-) -> Result<CompiledBgp, BgpPlanError> {
-    if positive.is_empty() {
-        return Err(BgpPlanError::NotMissingOuter);
+fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPlanError> {
+    fn visit(
+        relation: &CompiledRelation,
+        depth: usize,
+        nodes: &mut usize,
+    ) -> Result<(), BgpPlanError> {
+        if depth > MAX_RELATION_PROOF_DEPTH || *nodes >= MAX_RELATION_PROOF_NODES {
+            return Err(BgpPlanError::RecursiveStructureLimit);
+        }
+        *nodes += 1;
+        match &relation.statement {
+            CompiledRelationStatement::Bgp(_) => Ok(()),
+            CompiledRelationStatement::BagUnion { branches, .. } => {
+                for branch in branches {
+                    visit(branch, depth + 1, nodes)?;
+                }
+                Ok(())
+            }
+            CompiledRelationStatement::LeftAnti { left, right, .. }
+            | CompiledRelationStatement::LeftOuter { left, right, .. } => {
+                visit(left, depth + 1, nodes)?;
+                visit(right, depth + 1, nodes)
+            }
+        }
     }
-    let positive_query = if positive.len() == 1 {
-        positive.pop().unwrap()
-    } else {
-        Query::And(crate::query::And { and: positive })
-    };
-    let left = plan_bgp(&positive_query)?;
-    reject_subplan_wrappers(&left, false)?;
-    let mut relation = left.relation;
-    let mut effective_collection = collection;
-    merge_collection(
-        &mut effective_collection,
-        left.collection.as_ref(),
-        BgpPlanError::NotRoutingConflict,
-    )?;
-    for negative in negatives {
-        let right = plan_bgp(&negative)?;
-        reject_subplan_wrappers(&right, false)?;
-        merge_collection(
-            &mut effective_collection,
-            right.collection.as_ref(),
-            BgpPlanError::NotRoutingConflict,
-        )?;
-        let key_pairs = shared_key_pairs(&relation, &right.relation, false)?;
-        let schema = relation.schema.clone();
-        relation = CompiledRelation {
-            schema,
-            statement: CompiledRelationStatement::LeftAnti {
-                left: Box::new(relation),
-                right: Box::new(right.relation),
-                key_pairs,
-            },
-        };
-    }
-    validate_distincts(distincts, selections, count_variable.as_deref(), &relation.schema)?;
-    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
-    Ok(CompiledBgp {
-        relation,
-        projection,
-        collection: effective_collection,
-        count_variable,
-        full_row_distinct: !distincts.is_empty(),
-    })
+    let mut nodes = 0;
+    visit(relation, 1, &mut nodes)
 }
 
 fn reject_subplan_wrappers(compiled: &CompiledBgp, optional: bool) -> Result<(), BgpPlanError> {
@@ -2164,30 +2249,6 @@ fn validate_distincts(
         }
     }
     Ok(())
-}
-
-fn split_top_level_not(query: &Query, positive: &mut Vec<Query>, negative: &mut Vec<Query>) {
-    match query {
-        Query::And(and) => {
-            for child in &and.and {
-                split_top_level_not(child, positive, negative);
-            }
-        }
-        Query::Not(not) => negative.push((*not.query).clone()),
-        other => positive.push(other.clone()),
-    }
-}
-
-fn split_top_level_optional(query: &Query, positive: &mut Vec<Query>, optional: &mut Vec<Query>) {
-    match query {
-        Query::And(and) => {
-            for child in &and.and {
-                split_top_level_optional(child, positive, optional);
-            }
-        }
-        Query::WoqlOptional(inner) => optional.push((*inner.query).clone()),
-        other => positive.push(other.clone()),
-    }
 }
 
 fn compile_projection(
