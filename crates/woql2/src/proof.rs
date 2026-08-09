@@ -40,15 +40,13 @@ use terminus_store::proof::argument::Transcript254;
 use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::{
-    plan_digest, BagUnionEnvelope, LayerBgpEnvelope, LeftAntiJoinEnvelope,
-    LeftOuterJoinEnvelope,
+    plan_digest, BagUnionEnvelope, LayerBgpEnvelope, LeftAntiJoinEnvelope, LeftOuterJoinEnvelope,
 };
 use terminus_store::proof::query::{
     prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
     result_id_namespaces, verify_layer_bgp, verify_layer_bgp_result_log_domain,
     verify_result_columns, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
-    LayerBgpProof, ObjectRangeBound, ObjectRangeSpec, ResultColumnDescriptor,
-    ResultIdNamespace,
+    LayerBgpProof, ObjectRangeBound, ObjectRangeSpec, ResultColumnDescriptor, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::union::{prove_bag_union, verify_bag_union, BagUnionProof};
@@ -108,7 +106,9 @@ fn compiled_result_namespaces(compiled: &CompiledBgp) -> std::io::Result<Vec<Res
             right
                 .into_iter()
                 .enumerate()
-                .filter_map(|(index, namespace)| (!shared_right.contains(&index)).then_some(namespace)),
+                .filter_map(|(index, namespace)| {
+                    (!shared_right.contains(&index)).then_some(namespace)
+                }),
         );
         return Ok(namespaces);
     }
@@ -179,6 +179,12 @@ pub struct ProvedBgp {
     pub result_columns: Vec<Vec<ArkFr>>,
     pub result_log_domain: usize,
     pub result_len: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutedResultValue {
+    Id(u64),
+    Null,
 }
 
 #[derive(Debug)]
@@ -437,28 +443,39 @@ impl ProvedBgp {
             transcript.append_bytes(b"pow/anti-envelope/root", &expected_root);
             transcript.append_bytes(b"pow/anti-envelope/query", &digest);
             let left_commit = RelationCommit {
-                    commitments: proved.left.result_commitments.clone(),
-                    log_domain: proved.left.result_log_domain,
-                    n: proved.left.result_len,
-                };
+                commitments: proved.left.result_commitments.clone(),
+                log_domain: proved.left.result_log_domain,
+                n: proved.left.result_len,
+            };
             let right_commit = RelationCommit {
-                    commitments: proved.right.result_commitments.clone(),
-                    log_domain: proved.right.result_log_domain,
-                    n: proved.right.result_len,
-                };
+                commitments: proved.right.result_commitments.clone(),
+                log_domain: proved.right.result_log_domain,
+                n: proved.right.result_len,
+            };
             match (anti.key_pairs.is_empty(), proved.proof.as_ref()) {
                 (true, None) => verify_global_not(
-                    &left_commit, &right_commit, &self.result_commitments, self.result_len,
+                    &left_commit,
+                    &right_commit,
+                    &self.result_commitments,
+                    self.result_len,
                     self.result_log_domain,
                 )?,
                 (false, Some(proof)) => verify_left_anti_join_with_keys(
-                    &left_commit, &right_commit, &anti.key_pairs, &self.result_commitments,
-                    self.result_len, self.result_log_domain, proof, &mut transcript,
+                    &left_commit,
+                    &right_commit,
+                    &anti.key_pairs,
+                    &self.result_commitments,
+                    self.result_len,
+                    self.result_log_domain,
+                    proof,
+                    &mut transcript,
                 )?,
-                _ => return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "WOQL Not key/proof variant mismatch",
-                )),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Not key/proof variant mismatch",
+                    ))
+                }
             }
             return self.verify_columns(&self.result_columns);
         }
@@ -694,6 +711,12 @@ impl ProvedBgp {
             }
             return Ok(());
         }
+        if compiled.optional_join.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "nullable Optional rows require verify_executed_values",
+            ));
+        }
         if compiled.schema.is_empty() {
             self.verify(compiled, layer, expected_root)?;
             if !variables.is_empty()
@@ -745,7 +768,8 @@ impl ProvedBgp {
             }
         }
         let namespaces = compiled_result_namespaces(compiled)?;
-        let projected_namespaces: Vec<_> = projection.iter().map(|index| namespaces[*index]).collect();
+        let projected_namespaces: Vec<_> =
+            projection.iter().map(|index| namespaces[*index]).collect();
         let delivered_objects = resolve_typed_result_objects(
             layer,
             expected_root,
@@ -766,6 +790,87 @@ impl ProvedBgp {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "ordinary WOQL result rows do not match the proven result multiset",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn verify_executed_values(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        expected_root: ProofHash,
+        variables: &[String],
+        rows: &[Vec<ExecutedResultValue>],
+    ) -> std::io::Result<()> {
+        if compiled.optional_join.is_none() || compiled.count_variable.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "typed nullable rows are supported only for non-Count Optional queries",
+            ));
+        }
+        let projection = compiled
+            .projection
+            .clone()
+            .unwrap_or_else(|| (0..compiled.schema.len()).collect());
+        let expected_variables: Vec<&str> = projection
+            .iter()
+            .map(|index| compiled.schema[*index].as_str())
+            .collect();
+        if variables.iter().map(String::as_str).collect::<Vec<_>>() != expected_variables
+            || rows.iter().any(|row| row.len() != projection.len())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "executed nullable result shape does not match compiled projection",
+            ));
+        }
+        let proven = self.verify_and_resolve_values(compiled, layer, expected_root)?;
+        let mut expected_rows: Vec<Vec<CanonicalResultValue>> = (0..self.result_len)
+            .map(|row| {
+                projection
+                    .iter()
+                    .map(|column| proven[*column][row].clone())
+                    .collect()
+            })
+            .collect();
+        let descriptors = compiled_result_descriptors(compiled)?;
+        let projected_descriptors: Vec<_> =
+            projection.iter().map(|index| descriptors[*index]).collect();
+        let mut delivered_columns = vec![Vec::with_capacity(rows.len()); projection.len()];
+        for row in rows {
+            for (column, value) in row.iter().enumerate() {
+                delivered_columns[column].push(match value {
+                    ExecutedResultValue::Id(id) if *id != 0 => ArkFr::from_u64(*id),
+                    ExecutedResultValue::Null => ArkFr::zero(),
+                    ExecutedResultValue::Id(_) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "executed Store ID zero must be represented as typed Null",
+                        ))
+                    }
+                });
+            }
+        }
+        let delivered = resolve_result_values(
+            layer,
+            expected_root,
+            &delivered_columns,
+            &projected_descriptors,
+        )?;
+        let mut delivered_rows: Vec<Vec<CanonicalResultValue>> = (0..rows.len())
+            .map(|row| {
+                (0..projection.len())
+                    .map(|column| delivered[column][row].clone())
+                    .collect()
+            })
+            .collect();
+        expected_rows.sort();
+        delivered_rows.sort();
+        if expected_rows != delivered_rows {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ordinary WOQL nullable rows do not match the proven result multiset",
             ));
         }
         Ok(())
@@ -1713,7 +1818,9 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         let left_query = if optional_positive.len() == 1 {
             optional_positive.pop().unwrap()
         } else {
-            Query::And(crate::query::And { and: optional_positive })
+            Query::And(crate::query::And {
+                and: optional_positive,
+            })
         };
         let left = plan_bgp(&left_query)?;
         let right = plan_bgp(&optionals.pop().unwrap())?;
@@ -1753,9 +1860,10 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             .map_err(|_| BgpPlanError::OptionalUnsupportedSubplan)?;
         let right_namespaces = result_id_namespaces(&right.plan)
             .map_err(|_| BgpPlanError::OptionalUnsupportedSubplan)?;
-        if let Some((name, _, _)) = shared.iter().find(|(_, left, right)| {
-            left_namespaces[*left] != right_namespaces[*right]
-        }) {
+        if let Some((name, _, _)) = shared
+            .iter()
+            .find(|(_, left, right)| left_namespaces[*left] != right_namespaces[*right])
+        {
             return Err(BgpPlanError::VariableNamespaceConflict {
                 var: (*name).clone(),
             });
@@ -1769,10 +1877,14 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         .flatten()
         .next()
         .cloned();
-        if [collection.as_ref(), left.collection.as_ref(), right.collection.as_ref()]
-            .into_iter()
-            .flatten()
-            .any(|candidate| Some(candidate) != effective_collection.as_ref())
+        if [
+            collection.as_ref(),
+            left.collection.as_ref(),
+            right.collection.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|candidate| Some(candidate) != effective_collection.as_ref())
         {
             return Err(BgpPlanError::OptionalRoutingConflict);
         }
@@ -1791,7 +1903,11 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             for variables in &distincts {
                 let covers = variables.len() == schema.len()
                     && schema.iter().all(|name| {
-                        variables.iter().filter(|candidate| *candidate == name).count() == 1
+                        variables
+                            .iter()
+                            .filter(|candidate| *candidate == name)
+                            .count()
+                            == 1
                     });
                 if !covers {
                     return Err(BgpPlanError::DistinctNotFullSchema);
@@ -1870,13 +1986,20 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                     .map(|right_index| (name, left_index, right_index))
             })
             .collect();
-        let left_namespaces = result_id_namespaces(&left.plan)
-            .map_err(|_| BgpPlanError::VariableNamespaceConflict { var: "unknown".into() })?;
-        let right_namespaces = result_id_namespaces(&right.plan)
-            .map_err(|_| BgpPlanError::VariableNamespaceConflict { var: "unknown".into() })?;
-        if let Some((name, _, _)) = shared.iter().find(|(_, left, right)| {
-            left_namespaces[*left] != right_namespaces[*right]
-        }) {
+        let left_namespaces = result_id_namespaces(&left.plan).map_err(|_| {
+            BgpPlanError::VariableNamespaceConflict {
+                var: "unknown".into(),
+            }
+        })?;
+        let right_namespaces = result_id_namespaces(&right.plan).map_err(|_| {
+            BgpPlanError::VariableNamespaceConflict {
+                var: "unknown".into(),
+            }
+        })?;
+        if let Some((name, _, _)) = shared
+            .iter()
+            .find(|(_, left, right)| left_namespaces[*left] != right_namespaces[*right])
+        {
             return Err(BgpPlanError::VariableNamespaceConflict {
                 var: (*name).clone(),
             });

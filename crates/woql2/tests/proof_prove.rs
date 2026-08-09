@@ -17,8 +17,7 @@ use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
-    prove_layer_bgp, verify_layer_bgp, AtomTerm, CanonicalResultValue, LayerBgpAtom,
-    LayerBgpPlan,
+    prove_layer_bgp, verify_layer_bgp, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -27,9 +26,9 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::XSDAnySimpleType;
-use terminusdb_woql2::control::{Distinct, Select};
 use terminusdb_woql2::control::WoqlOptional;
-use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp};
+use terminusdb_woql2::control::{Distinct, Select};
+use terminusdb_woql2::proof::{decode_and_verify_envelope, plan_bgp, ExecutedResultValue};
 use terminusdb_woql2::{
     misc::{Count, InRange},
     query::{Not, Or, Query},
@@ -64,14 +63,13 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     let envelope = proved
         .encode_envelope(&compiled, &layer, layer.state.commitment_root)
         .unwrap();
-    let verified = decode_and_verify_envelope(
-        &envelope,
-        &compiled,
-        &layer,
-        layer.state.commitment_root,
-    )
-    .unwrap();
-    assert_eq!(verified.result_values.as_ref().unwrap()[2][2], CanonicalResultValue::Null);
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
+    assert_eq!(
+        verified.result_values.as_ref().unwrap()[2][2],
+        CanonicalResultValue::Null
+    );
     let non_optional = plan_bgp(&tv("x", "p", "y")).unwrap();
     assert!(decode_and_verify_envelope(
         &envelope,
@@ -80,6 +78,49 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
         layer.state.commitment_root,
     )
     .is_err());
+
+    let rows: Vec<Vec<ExecutedResultValue>> = (0..proved.result_len)
+        .map(|row| {
+            proved
+                .result_columns
+                .iter()
+                .map(|column| {
+                    if column[row].is_zero() {
+                        ExecutedResultValue::Null
+                    } else {
+                        ExecutedResultValue::Id(
+                            layer
+                                .node_value_catalog
+                                .iter()
+                                .find(|record| ArkFr::from_u64(record.object_id) == column[row])
+                                .unwrap()
+                                .object_id,
+                        )
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["x".into(), "y".into(), "z".into()],
+            &rows,
+        )
+        .unwrap();
+    let mut null_in_shared = rows.clone();
+    null_in_shared[0][1] = ExecutedResultValue::Null;
+    assert!(proved
+        .verify_executed_values(
+            &compiled,
+            &layer,
+            layer.state.commitment_root,
+            &["x".into(), "y".into(), "z".into()],
+            &null_in_shared,
+        )
+        .is_err());
 
     let mut fake_null = proved;
     fake_null.result_columns[2][0] = ArkFr::zero();
@@ -127,13 +168,9 @@ fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
     let envelope = proved
         .encode_envelope(&compiled, &layer, layer.state.commitment_root)
         .unwrap();
-    let verified = decode_and_verify_envelope(
-        &envelope,
-        &compiled,
-        &layer,
-        layer.state.commitment_root,
-    )
-    .unwrap();
+    let verified =
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            .unwrap();
     assert_eq!(verified.result_objects, objects);
     let mut reordered_schema = compiled.clone();
     reordered_schema.schema.swap(0, 1);
@@ -160,10 +197,7 @@ fn predicate_variable_composite_join_preserves_predicate_namespace() {
         ("b", "likes", "d"),
         ("d", "likes", "e"),
     ]);
-    let query = and_of(vec![
-        tv_pred_var("x", "p", "y"),
-        tv_pred_var("y", "p", "z"),
-    ]);
+    let query = and_of(vec![tv_pred_var("x", "p", "y"), tv_pred_var("y", "p", "z")]);
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 2);
@@ -182,7 +216,11 @@ fn predicate_variable_resolves_inherited_and_new_predicates_at_child_root() {
     let store = open_sync_memory_store();
     let base_builder = store.create_base_layer().unwrap();
     base_builder
-        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("inherited"), &iri("b")))
+        .add_value_triple(ValueTriple::new_node(
+            &iri("a"),
+            &iri("inherited"),
+            &iri("b"),
+        ))
         .unwrap();
     let base = base_builder.commit().unwrap();
     let base_commitment = base.proof_commitment().unwrap();
@@ -206,7 +244,11 @@ fn predicate_variable_resolves_inherited_and_new_predicates_at_child_root() {
     assert!(objects[1].contains(&CanonicalObject::Node(iri("inherited").into_bytes())));
     assert!(objects[1].contains(&CanonicalObject::Node(iri("new").into_bytes())));
     assert!(proved
-        .verify(&compiled, &child_commitment, base_commitment.state.commitment_root)
+        .verify(
+            &compiled,
+            &child_commitment,
+            base_commitment.state.commitment_root
+        )
         .is_err());
 }
 
@@ -278,22 +320,27 @@ fn composite_not_binds_swapped_shared_schema_and_requires_both_keys() {
         }),
     ]);
     let compiled = plan_bgp(&query).unwrap();
-    assert_eq!(compiled.anti_join.as_ref().unwrap().key_pairs, vec![(0, 1), (1, 0)]);
+    assert_eq!(
+        compiled.anti_join.as_ref().unwrap().key_pairs,
+        vec![(0, 1), (1, 0)]
+    );
     let proved = compiled.prove(&layer).unwrap();
-    assert_eq!(proved.result_len, 1, "a-p-c only partially matches the right keys");
-    proved.verify(&compiled, &layer, layer.state.commitment_root).unwrap();
+    assert_eq!(
+        proved.result_len, 1,
+        "a-p-c only partially matches the right keys"
+    );
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
     let envelope = proved
         .encode_envelope(&compiled, &layer, layer.state.commitment_root)
         .unwrap();
     let mut reordered = compiled.clone();
     reordered.anti_join.as_mut().unwrap().key_pairs.swap(0, 1);
-    assert!(decode_and_verify_envelope(
-        &envelope,
-        &reordered,
-        &layer,
-        layer.state.commitment_root,
-    )
-    .is_err());
+    assert!(
+        decode_and_verify_envelope(&envelope, &reordered, &layer, layer.state.commitment_root,)
+            .is_err()
+    );
 }
 
 #[test]
@@ -303,14 +350,26 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
         variables: vec!["x".into()],
         query: Box::new(and_of(vec![
             tv("x", "p", "y"),
-            Query::Not(Not { query: Box::new(tv_subj_const("a", "q", "b")) }),
+            Query::Not(Not {
+                query: Box::new(tv_subj_const("a", "q", "b")),
+            }),
         ])),
     });
     let retained_compiled = plan_bgp(&retained).unwrap();
-    assert!(retained_compiled.anti_join.as_ref().unwrap().key_pairs.is_empty());
+    assert!(retained_compiled
+        .anti_join
+        .as_ref()
+        .unwrap()
+        .key_pairs
+        .is_empty());
     let retained_proved = retained_compiled.prove(&layer).unwrap();
     assert_eq!(retained_proved.result_len, 2);
-    assert_eq!(retained_proved.projected_columns(&retained_compiled).count(), 1);
+    assert_eq!(
+        retained_proved
+            .projected_columns(&retained_compiled)
+            .count(),
+        1
+    );
     retained_proved
         .verify(&retained_compiled, &layer, layer.state.commitment_root)
         .unwrap();
@@ -318,13 +377,18 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
     let suppressed = Query::Count(Count {
         query: Box::new(and_of(vec![
             tv("x", "p", "y"),
-            Query::Not(Not { query: Box::new(tv("a", "q", "b")) }),
+            Query::Not(Not {
+                query: Box::new(tv("a", "q", "b")),
+            }),
         ])),
         count: terminusdb_woql2::value::DataValue::Variable("count".into()),
     });
     let suppressed_compiled = plan_bgp(&suppressed).unwrap();
     let suppressed_proved = suppressed_compiled.prove(&layer).unwrap();
-    assert_eq!(suppressed_proved.count_binding(&suppressed_compiled), Some(("count", 0)));
+    assert_eq!(
+        suppressed_proved.count_binding(&suppressed_compiled),
+        Some(("count", 0))
+    );
     suppressed_proved
         .verify(&suppressed_compiled, &layer, layer.state.commitment_root)
         .unwrap();
@@ -332,11 +396,7 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
         .verify_columns(&retained_proved.result_columns)
         .is_err());
     let envelope = suppressed_proved
-        .encode_envelope(
-            &suppressed_compiled,
-            &layer,
-            layer.state.commitment_root,
-        )
+        .encode_envelope(&suppressed_compiled, &layer, layer.state.commitment_root)
         .unwrap();
     decode_and_verify_envelope(
         &envelope,
