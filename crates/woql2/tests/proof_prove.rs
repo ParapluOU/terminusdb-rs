@@ -19,6 +19,7 @@ use terminus_store::proof::envelope::RecursiveRelationEnvelope;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
     prove_layer_bgp, verify_layer_bgp, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    ObjectKindFilter,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -34,12 +35,12 @@ use terminusdb_woql2::proof::{
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
     BgpPlanError, CompiledRelationStatement, ExecutedResultValue,
 };
-use terminusdb_woql2::triple::Link;
+use terminusdb_woql2::triple::{Data, Link};
 use terminusdb_woql2::{
     misc::{Count, InRange, Limit, RangeMax, RangeMin, Start},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
     query::{Not, Or, Query},
-    value::DataValue,
+    value::{DataValue, NodeValue},
 };
 
 fn build_grouped_score_layer() -> Arc<LayerCommitment> {
@@ -1974,6 +1975,59 @@ fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
     };
     assert!(proved
         .verify_objects(&compiled, &lc, lc.state.commitment_root, &tampered)
+        .is_err());
+}
+
+#[test]
+fn data_variable_proves_mixed_literals_excludes_nodes_and_composes_with_join() {
+    let lc = build_layer_triples(vec![
+        ValueTriple::new_value(&iri("alice"), &iri("datum"), u32::make_entry(&42)),
+        ValueTriple::new_value(&iri("bob"), &iri("datum"), bool::make_entry(&true)),
+        ValueTriple::new_node(&iri("carol"), &iri("datum"), &iri("not-data")),
+        ValueTriple::new_node(&iri("alice"), &iri("label"), &iri("alice-label")),
+        ValueTriple::new_node(&iri("bob"), &iri("label"), &iri("bob-label")),
+        ValueTriple::new_node(&iri("carol"), &iri("label"), &iri("carol-label")),
+    ]);
+    let query = and_of(vec![
+        Query::Data(Data {
+            subject: NodeValue::Variable("person".into()),
+            predicate: NodeValue::Node(iri("datum")),
+            object: DataValue::Variable("value".into()),
+            graph: GraphType::Instance,
+        }),
+        tv("person", "label", "label"),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    assert_eq!(compiled.relation.schema, ["value", "person", "label"]);
+    assert_eq!(
+        compiled.bgp_plan().atoms[0].object_kind,
+        ObjectKindFilter::Literal
+    );
+
+    let proved = compiled.prove(&lc).unwrap();
+    let objects = proved
+        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    assert_eq!(objects[0].len(), 2);
+    assert!(objects[0]
+        .iter()
+        .all(|object| matches!(object, CanonicalObject::Value { .. })));
+    assert!(objects[0].iter().any(|object| matches!(
+        object,
+        CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, .. }
+    )));
+    assert!(objects[0].iter().any(|object| matches!(
+        object,
+        CanonicalObject::Value { datatype: CanonicalDatatype::Boolean, .. }
+    )));
+
+    let mut wrong_kind = compiled.clone();
+    let CompiledRelationStatement::Bgp(plan) = &mut wrong_kind.relation.statement else {
+        unreachable!()
+    };
+    plan.atoms[0].object_kind = ObjectKindFilter::Node;
+    assert!(proved
+        .verify(&wrong_kind, &lc, lc.state.commitment_root)
         .is_err());
 }
 

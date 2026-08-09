@@ -58,7 +58,8 @@ use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
     verify_result_columns, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
-    LayerBgpProof, ObjectRangeBound, ObjectRangeSpec, ResultColumnDescriptor, ResultIdNamespace,
+    LayerBgpProof, ObjectKindFilter, ObjectRangeBound, ObjectRangeSpec,
+    ResultColumnDescriptor, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::union::{verify_bag_union, BagUnionProof};
@@ -2010,6 +2011,9 @@ pub enum BgpPlanError {
     #[error("range bounds for `?{var}` use different datatypes")]
     RangeDatatypeMismatch { var: String },
 
+    #[error("range variable `?{var}` is constrained to a node object")]
+    RangeOnNodeObject { var: String },
+
     /// No triple atoms remain after normalization.
     #[error("BGP needs at least one atom, found {count}")]
     TooFewAtoms { count: usize },
@@ -2220,6 +2224,7 @@ struct Atom {
 #[derive(Clone)]
 struct TypedTriple {
     triple: Triple,
+    object_kind: ObjectKindFilter,
 }
 
 fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
@@ -2554,18 +2559,17 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     }
     if !matches!(
         body,
-        Query::And(_) | Query::Triple(_)
+        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
     ) {
         return Err(BgpPlanError::UnsupportedConstruct {
             construct: query_variant_name(body),
         });
     }
 
-    // (1b) Flatten nested Ands. Prolog's authoritative JSON compiler exposes graph
-    // patterns only as Triple; Rust-only Link/Data forms reject closed because the
-    // executor cannot enforce their declared node/literal distinction. Comparisons
-    // become object-value range filters. True and Comment contribute no bindings and
-    // are proof-transparent conjunction leaves.
+    // (1b) Flatten nested Ands. Triple leaves remain kind-agnostic; Link/Data leaves
+    // explicitly authenticate the node/literal half of the Store object dictionary.
+    // Comparisons become object-value range filters. True and Comment contribute no
+    // bindings and are proof-transparent conjunction leaves.
     let mut triples: Vec<TypedTriple> = Vec::new();
     let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
@@ -3395,7 +3399,38 @@ fn collect_conjunct<'a>(
     match query {
         Query::Triple(triple) => triples.push(TypedTriple {
             triple: triple.clone(),
+            object_kind: ObjectKindFilter::Any,
         }),
+        Query::Link(link) => triples.push(TypedTriple {
+            triple: Triple {
+                subject: link.subject.clone(),
+                predicate: link.predicate.clone(),
+                object: match &link.object {
+                    NodeValue::Node(iri) => Value::Node(iri.clone()),
+                    NodeValue::Variable(name) => Value::Variable(name.clone()),
+                },
+                graph: Some(link.graph.clone()),
+            },
+            object_kind: ObjectKindFilter::Node,
+        }),
+        Query::Data(data) => {
+            let object = match &data.object {
+                DataValue::Data(value) => Value::Data(value.clone()),
+                DataValue::Variable(name) => Value::Variable(name.clone()),
+                DataValue::List(_) => {
+                    return Err(BgpPlanError::UnsupportedObjectValue { kind: "data list" })
+                }
+            };
+            triples.push(TypedTriple {
+                triple: Triple {
+                    subject: data.subject.clone(),
+                    predicate: data.predicate.clone(),
+                    object,
+                    graph: Some(data.graph.clone()),
+                },
+                object_kind: ObjectKindFilter::Literal,
+            });
+        }
         Query::And(inner) => {
             for query in &inner.and {
                 collect_conjunct(query, triples, comparisons)?;
@@ -3490,6 +3525,13 @@ fn atom_from_triple(typed: &TypedTriple) -> Result<Atom, BgpPlanError> {
             kept.push(o.clone());
         }
     }
+    let object_kind = if matches!(object_term, AtomTerm::Variable) {
+        typed.object_kind
+    } else {
+        // A node/data constant already pins its kind through the authenticated
+        // dictionary entry; the explicit filter is needed only for variables.
+        ObjectKindFilter::Any
+    };
     Ok(Atom {
         layer_atom: LayerBgpAtom {
             subject: subject_term,
@@ -3499,6 +3541,7 @@ fn atom_from_triple(typed: &TypedTriple) -> Result<Atom, BgpPlanError> {
             // CP-D Step 1 (migration): every atom starts with no object range. Step 2
             // fills this in for atoms whose object variable a comparison conjunct ranges.
             object_range: None,
+            object_kind,
             subject_object_equal,
         },
         kept,
@@ -3560,6 +3603,17 @@ fn attach_ranges(atoms: &mut [Atom], comparisons: &[NormalizedRange]) -> Result<
         // The matched atom's object is a Variable by construction (obj_var is Some only
         // for a variable object), so a range never lands on a constant object here.
         debug_assert!(matches!(atoms[idx].layer_atom.object, AtomTerm::Variable));
+        match atoms[idx].layer_atom.object_kind {
+            ObjectKindFilter::Node => {
+                return Err(BgpPlanError::RangeOnNodeObject { var });
+            }
+            ObjectKindFilter::Literal => {
+                // The range proof authenticates equality to one exact literal datatype,
+                // so it subsumes Data's broader literal-kind constraint.
+                atoms[idx].layer_atom.object_kind = ObjectKindFilter::Any;
+            }
+            ObjectKindFilter::Any => {}
+        }
         for bound in &comparison.bounds {
             match &mut atoms[idx].layer_atom.object_range {
                 None => {

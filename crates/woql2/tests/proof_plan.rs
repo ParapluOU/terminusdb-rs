@@ -16,7 +16,7 @@ use terminusdb_woql2::triple::{Data, Link, TripleSlice, TripleSliceRev};
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
 use terminus_store::proof::envelope::RelationEqualityPlan;
-use terminus_store::proof::query::{AtomTerm, ObjectRangeSpec};
+use terminus_store::proof::query::{AtomTerm, ObjectKindFilter, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::ValueTriple;
@@ -205,16 +205,18 @@ fn nested_select_rejects_a_variable_hidden_by_its_inner_select() {
 }
 
 #[test]
-fn rejects_link_and_data_forms_absent_from_authoritative_prolog_json() {
+fn link_and_data_compile_to_explicit_object_kind_filters() {
     let link = Query::Link(Link {
         subject: NodeValue::Variable("x".into()),
         predicate: NodeValue::Node(iri("knows")),
         object: NodeValue::Variable("y".into()),
         graph: GraphType::Instance,
     });
-    reject(
-        link,
-        BgpPlanError::UnsupportedConstruct { construct: "Link" },
+    let link = plan_bgp(&link).unwrap();
+    assert_eq!(link.relation.schema, ["x", "y"]);
+    assert_eq!(
+        link.bgp_plan().atoms[0].object_kind,
+        ObjectKindFilter::Node
     );
 
     let data = Query::Data(Data {
@@ -223,9 +225,78 @@ fn rejects_link_and_data_forms_absent_from_authoritative_prolog_json() {
         object: DataValue::Variable("active".into()),
         graph: GraphType::Instance,
     });
-    reject(
+    let data = plan_bgp(&data).unwrap();
+    assert_eq!(data.relation.schema, ["x", "active"]);
+    assert_eq!(
+        data.bgp_plan().atoms[0].object_kind,
+        ObjectKindFilter::Literal
+    );
+}
+
+#[test]
+fn data_numeric_range_subsumes_literal_kind_and_link_range_rejects() {
+    let data = Query::Data(Data {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("score")),
+        object: DataValue::Variable("score".into()),
+        graph: GraphType::Instance,
+    });
+    let compiled = plan_bgp(&and_of(vec![
         data,
-        BgpPlanError::UnsupportedConstruct { construct: "Data" },
+        greater(dvar("score"), duint(10)),
+    ]))
+    .unwrap();
+    let atom = &compiled.bgp_plan().atoms[0];
+    assert_eq!(atom.object_kind, ObjectKindFilter::Any);
+    assert!(atom.object_range.is_some());
+
+    let link = Query::Link(Link {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("knows")),
+        object: NodeValue::Variable("score".into()),
+        graph: GraphType::Instance,
+    });
+    reject(
+        and_of(vec![link, greater(dvar("score"), duint(10))]),
+        BgpPlanError::RangeOnNodeObject {
+            var: "score".into(),
+        },
+    );
+}
+
+#[test]
+fn data_and_link_retain_existing_graph_and_constant_guards() {
+    for query in [
+        Query::Data(Data {
+            subject: NodeValue::Variable("x".into()),
+            predicate: NodeValue::Node(iri("score")),
+            object: DataValue::Variable("score".into()),
+            graph: GraphType::Schema,
+        }),
+        Query::Link(Link {
+            subject: NodeValue::Variable("x".into()),
+            predicate: NodeValue::Node(iri("knows")),
+            object: NodeValue::Variable("y".into()),
+            graph: GraphType::Schema,
+        }),
+    ] {
+        reject(query, BgpPlanError::SchemaGraphUnsupported);
+    }
+
+    let constant = Query::Data(Data {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("score")),
+        object: DataValue::Data(XSDAnySimpleType::UnsignedInt(10)),
+        graph: GraphType::Instance,
+    });
+    let compiled = plan_bgp(&constant).unwrap();
+    assert!(matches!(
+        compiled.bgp_plan().atoms[0].object,
+        AtomTerm::ValueConstant(CanonicalDatatype::UInt32, _)
+    ));
+    assert_eq!(
+        compiled.bgp_plan().atoms[0].object_kind,
+        ObjectKindFilter::Any
     );
 }
 
