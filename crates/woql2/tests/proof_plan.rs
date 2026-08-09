@@ -1681,15 +1681,35 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
     ]);
     let query = |ordering| Query::OrderBy(OrderBy { ordering, query: Box::new(child.clone()) });
     let compiled = plan_bgp(&query(vec![
-        OrderTemplate { variable: "x".into(), order: Order::Asc },
         OrderTemplate { variable: "y".into(), order: Order::Desc },
+        OrderTemplate { variable: "x".into(), order: Order::Asc },
     ])).unwrap();
-    assert!(matches!(compiled.relation.statement, terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { .. }));
+    assert_eq!(compiled.relation.schema, ["x", "y"]);
+    assert!(matches!(compiled.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
+            if key_indices == &[1, 0]));
     for ordering in [
         vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
-        vec![OrderTemplate { variable: "y".into(), order: Order::Desc }, OrderTemplate { variable: "x".into(), order: Order::Asc }],
         vec![OrderTemplate { variable: "x".into(), order: Order::Asc }, OrderTemplate { variable: "x".into(), order: Order::Desc }],
     ] { assert_eq!(plan_bgp(&query(ordering)).unwrap_err(), BgpPlanError::OrderByUnsupportedShape); }
+
+    let child3 = and_of(vec![
+        tv_subj_const("left", "x", "x"), gte(dvar("x"), duint(0)),
+        tv_subj_const("middle", "y", "y"), gte(dvar("y"), duint(0)),
+        tv_subj_const("right", "z", "z"), gte(dvar("z"), duint(0)),
+    ]);
+    let compiled3 = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![
+            OrderTemplate { variable: "z".into(), order: Order::Desc },
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+            OrderTemplate { variable: "y".into(), order: Order::Asc },
+        ],
+        query: Box::new(child3),
+    })).unwrap();
+    assert_eq!(compiled3.relation.schema, ["x", "y", "z"]);
+    assert!(matches!(compiled3.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
+            if key_indices == &[2, 0, 1]));
 }
 
 fn exact_order_query_for_slice() -> Query {

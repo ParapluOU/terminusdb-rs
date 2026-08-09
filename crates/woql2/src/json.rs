@@ -101,20 +101,29 @@ mod tests {
         // domain AST below; JSON-LD is never the proof statement.
         let decoded = Query::from_json(serde_json::json!({
             "@type": "OrderBy",
-            "ordering": [{
-                "@type": "OrderTemplate",
-                "variable": "score",
-                "order": "asc"
-            }],
+            "ordering": [
+                {
+                    "@type": "OrderTemplate",
+                    "variable": "secondary",
+                    "order": "desc"
+                },
+                {
+                    "@type": "OrderTemplate",
+                    "variable": "primary",
+                    "order": "asc"
+                }
+            ],
             "query": { "@type": "True" }
         }))
         .expect("domain decoder accepts Prolog OrderBy JSON");
         let Query::OrderBy(order_by) = decoded else {
             panic!("expected decoded OrderBy domain AST");
         };
-        assert_eq!(order_by.ordering.len(), 1);
-        assert_eq!(order_by.ordering[0].variable, "score");
-        assert_eq!(order_by.ordering[0].order, Order::Asc);
+        assert_eq!(order_by.ordering.len(), 2);
+        assert_eq!(order_by.ordering[0].variable, "secondary");
+        assert_eq!(order_by.ordering[0].order, Order::Desc);
+        assert_eq!(order_by.ordering[1].variable, "primary");
+        assert_eq!(order_by.ordering[1].order, Order::Asc);
         assert!(matches!(*order_by.query, Query::True(_)));
     }
 

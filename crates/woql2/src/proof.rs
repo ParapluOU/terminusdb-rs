@@ -132,7 +132,11 @@ pub enum CompiledRelationStatement {
     },
     ExactMultiOrder {
         input: Box<CompiledRelation>,
+        /// Priority-ordered mapping into the input's canonical schema columns.
+        key_indices: Vec<usize>,
+        /// Datatypes remain in canonical schema order.
         datatypes: Vec<CanonicalDatatype>,
+        /// Directions are parallel to `key_indices`.
         directions: Vec<OrderDirection>,
     },
     ExactOrderedSlice {
@@ -426,10 +430,14 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update([*datatype as u8]);
             hasher.update([match direction { OrderDirection::Ascending => 0, OrderDirection::Descending => 1 }]);
         }
-        CompiledRelationStatement::ExactMultiOrder { input, datatypes, directions } => {
+        CompiledRelationStatement::ExactMultiOrder { input, key_indices, datatypes, directions } => {
             hasher.update(b"/exact-multi-order"); hasher.update(relation_query_digest(input)?);
-            for (datatype, direction) in datatypes.iter().zip(directions) {
-                hasher.update([*datatype as u8, match direction { OrderDirection::Ascending => 0, OrderDirection::Descending => 1 }]);
+            hasher.update((datatypes.len() as u64).to_le_bytes());
+            for datatype in datatypes { hasher.update([*datatype as u8]); }
+            hasher.update((key_indices.len() as u64).to_le_bytes());
+            for (key_index, direction) in key_indices.iter().zip(directions) {
+                hasher.update((*key_index as u64).to_le_bytes());
+                hasher.update([match direction { OrderDirection::Ascending => 0, OrderDirection::Descending => 1 }]);
             }
         }
         CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, once } => {
@@ -652,8 +660,8 @@ fn relation_proof_plan(
                 direction: *direction,
             }
         }
-        CompiledRelationStatement::ExactMultiOrder { input, datatypes, directions } => {
-            RelationProofPlanKind::ExactMultiOrder { input: Box::new(child(input)?), datatypes: datatypes.clone(), directions: directions.clone() }
+        CompiledRelationStatement::ExactMultiOrder { input, key_indices, datatypes, directions } => {
+            RelationProofPlanKind::ExactMultiOrder { input: Box::new(child(input)?), datatypes: datatypes.clone(), key_indices: key_indices.clone(), directions: directions.clone() }
         }
         CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {
             RelationProofPlanKind::ExactOrderedSlice {
@@ -1003,13 +1011,13 @@ impl ProvedBgp {
             }
             (
                 ProvedQueryStatement::ExactMultiOrder { input, proof },
-                CompiledRelationStatement::ExactMultiOrder { input: input_plan, datatypes, directions },
+                CompiledRelationStatement::ExactMultiOrder { input: input_plan, key_indices, datatypes, directions },
             ) => {
                 input.verify_relation(input_plan, layer, expected_root, relation_query_digest(input_plan)?)?;
                 let mut transcript = Transcript254::new(b"parture-multi-order-envelope");
                 transcript.append_bytes(b"pow/multi-order-envelope/root", &expected_root);
                 transcript.append_bytes(b"pow/multi-order-envelope/query", &query_digest);
-                verify_exact_multi_order(layer, &input.relation_commit(None)?, &self.result_columns, datatypes, directions, &self.result_commitments, self.result_len, self.result_log_domain, proof, &mut transcript)?;
+                verify_exact_multi_order(layer, &input.relation_commit(None)?, &self.result_columns, datatypes, key_indices, directions, &self.result_commitments, self.result_len, self.result_log_domain, proof, &mut transcript)?;
             }
             (
                 ProvedQueryStatement::ExactOrderedSlice { input },
@@ -2234,9 +2242,17 @@ fn plan_exact_scalar_order(
         || child.count_variable.is_some()
         || child.full_row_distinct
         || child.relation.schema.len() != order_by.ordering.len()
-        || child.relation.schema.iter().zip(&order_by.ordering).any(|(schema, ordering)| schema != &ordering.variable)
         || child.relation.as_bgp().is_none()
     {
+        return Err(BgpPlanError::OrderByUnsupportedShape);
+    }
+    let key_indices = order_by.ordering.iter()
+        .map(|ordering| child.relation.schema.iter().position(|schema| schema == &ordering.variable))
+        .collect::<Option<Vec<_>>>()
+        .ok_or(BgpPlanError::OrderByUnsupportedShape)?;
+    let mut complete_key_set = key_indices.clone();
+    complete_key_set.sort_unstable();
+    if complete_key_set != (0..child.relation.schema.len()).collect::<Vec<_>>() {
         return Err(BgpPlanError::OrderByUnsupportedShape);
     }
     let descriptor = relation_result_descriptors(&child.relation)
@@ -2264,16 +2280,18 @@ fn plan_exact_scalar_order(
         crate::order::Order::Asc => OrderDirection::Ascending,
         crate::order::Order::Desc => OrderDirection::Descending,
     }).collect::<Vec<_>>();
+    let schema = child.relation.schema.clone();
+    let domains = child.relation.domains.clone();
     let collection = child.collection;
     let statement = if datatypes.len() == 1 {
         CompiledRelationStatement::ExactScalarOrder { input: Box::new(child.relation), datatype: datatypes[0], direction: directions[0] }
     } else {
-        CompiledRelationStatement::ExactMultiOrder { input: Box::new(child.relation), datatypes, directions }
+        CompiledRelationStatement::ExactMultiOrder { input: Box::new(child.relation), key_indices, datatypes, directions }
     };
     Ok(CompiledBgp {
         relation: CompiledRelation {
-            schema: order_by.ordering.iter().map(|o| o.variable.clone()).collect(),
-            domains: match &statement { CompiledRelationStatement::ExactScalarOrder { input, .. } | CompiledRelationStatement::ExactMultiOrder { input, .. } => input.domains.clone(), _ => unreachable!() },
+            schema,
+            domains,
             statement,
         },
         projection: None,
