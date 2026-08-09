@@ -149,13 +149,13 @@ duplicate-generating recursive children.
 
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
-- [x] Bounded exact scalar ascending `OrderBy` over a complete one-column leaf result.
+- [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column leaf result.
 - [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
 - [x] `Once` over an authenticated ordered child, digest-distinct from `Limit(1)`.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
-- [ ] Extend general lexicographic/descending/stable-tie ordering and triple navigation.
+- [ ] Extend general lexicographic/stable-tie ordering and triple navigation.
   `Once` can now be implemented exactly as `Limit(1)` only when its child already has an
   authenticated order; unordered first-solution semantics remain unsupported.
 - [ ] Implement Prolog `When` exactly. `compile_wf(when(A,B), ((ProgA,ProgB);true))`

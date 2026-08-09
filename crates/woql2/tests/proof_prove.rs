@@ -70,6 +70,12 @@ fn exact_scalar_order_query(minimum: usize) -> Query {
     })
 }
 
+fn exact_scalar_desc_order_query(minimum: usize) -> Query {
+    let Query::OrderBy(mut order) = exact_scalar_order_query(minimum) else { unreachable!() };
+    order.ordering[0].order = Order::Desc;
+    Query::OrderBy(order)
+}
+
 #[test]
 fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() {
     let store = open_sync_memory_store();
@@ -154,7 +160,7 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
     .is_err());
 }
 
-fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
+fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();
     for score in [30u32, 10, 20] {
@@ -171,7 +177,7 @@ fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
         limit: 2,
         query: Box::new(Query::Start(Start {
             start: 1,
-            query: Box::new(exact_scalar_order_query(0)),
+            query: Box::new(exact_scalar_desc_order_query(0)),
         })),
     });
     let compiled = plan_bgp(&query).unwrap();
@@ -189,11 +195,23 @@ fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
             other => panic!("unexpected sliced value {other:?}"),
         })
         .collect::<Vec<_>>();
-    assert_eq!(scores, [20, 30]);
+    assert_eq!(scores, [20, 10]);
     let envelope = proved
         .encode_envelope(&compiled, &layer, layer.state.commitment_root)
         .unwrap();
     decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+
+    let ascending = plan_bgp(&Query::Limit(Limit {
+        limit: 2,
+        query: Box::new(Query::Start(Start {
+            start: 1,
+            query: Box::new(exact_scalar_order_query(0)),
+        })),
+    }))
+    .unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope, &ascending, &layer, layer.state.commitment_root,
+    ).is_err());
 
     // The outer Limit(0) has the same already-authenticated Start child and must verify
     // only the canonical empty contiguous slice; no second expensive child proof is needed.
@@ -201,7 +219,7 @@ fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
         limit: 0,
         query: Box::new(Query::Start(Start {
             start: 1,
-            query: Box::new(exact_scalar_order_query(0)),
+            query: Box::new(exact_scalar_desc_order_query(0)),
         })),
     }))
     .unwrap();
@@ -224,7 +242,7 @@ fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
         limit: 1,
         query: Box::new(Query::Start(Start {
             start: 1,
-            query: Box::new(exact_scalar_order_query(0)),
+            query: Box::new(exact_scalar_desc_order_query(0)),
         })),
     }))
     .unwrap();
@@ -253,11 +271,11 @@ fn assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
 }
 
 #[test]
-fn exact_ordered_start_limit_slice_proves_and_rejects_tamper() {
+fn desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
     std::thread::Builder::new()
         .name("woql-ordered-slice-proof".into())
         .stack_size(24 * 1024 * 1024)
-        .spawn(assert_exact_ordered_start_limit_slice_proves_and_rejects_tamper)
+        .spawn(assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper)
         .unwrap()
         .join()
         .unwrap();
