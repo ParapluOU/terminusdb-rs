@@ -301,6 +301,39 @@ fn exact_typed_equals_composes_with_select_and_count() {
 }
 
 #[test]
+fn exact_equals_filters_after_recursive_optional_and_not() {
+    let layer = build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("b", "q", "u"),
+        ("a", "r", "blocked"),
+    ]);
+    let query = and_of(vec![
+        tv("x", "p", "y"),
+        Query::WoqlOptional(WoqlOptional {
+            query: Box::new(tv("y", "q", "z")),
+        }),
+        Query::Not(Not {
+            query: Box::new(tv("x", "r", "reason")),
+        }),
+        equals(value_var("x"), value_node("c")),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let (input, _) = compiled.relation.as_equality().unwrap();
+    assert!(input.as_left_anti().unwrap().0.as_left_outer().is_some());
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.result_len, 1);
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(values[2], [CanonicalResultValue::Null]);
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+}
+
+#[test]
 fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
     let layer = build_layer(&[
         ("a", "p", "b"),
