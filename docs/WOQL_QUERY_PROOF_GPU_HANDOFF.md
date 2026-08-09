@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `3b86b80` | Explicit `Any`/`Node`/`Literal` object-kind filters are transcript/wire bound; exact literal complement, predicate-variable and join composition are covered. |
-| `modules/terminusdb-rs` | `fb251ca` plus this documentation commit | Canonical woql2 `Link`/`Data` lowering, graph/range guards, mixed-literal join E2E, and kind-substitution rejection. |
+| `modules/terminusdb-store-paraplu` | `2bea830` | Exact recursive bag projection preserves child rows/domain/order/multiplicity while selecting a unique, plan-bound subset of columns. |
+| `modules/terminusdb-rs` | `5550226` plus this documentation commit | Bounded leading-Prolog `When` now supports existential branch locals hidden by `Select`/`Count`, preserving each successful local assignment's multiplicity. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -205,6 +205,22 @@ substitution rejection in 80.67s. The leading TerminusDB JSON decoder currently 
 neither `Link` nor `Data`, so running-node coverage remains blocked on an authoritative
 Prolog/JSON shape rather than silently inventing one in the client AST.
 
+Store checkpoint `2bea830` adds recursive exact bag projection. It emits no redundant
+polynomial argument: output commitments and columns must be a unique subset/reordering
+of the already-verified child, with identical row count and commitment domain. Recursive
+envelope v8 uses tag 10. Duplicate-row preservation, wire round-trip, output-content and
+index substitution, and duplicate-index rejection passed in 37.56s.
+
+woql2 checkpoint `5550226` extends the bounded leading-Prolog `When` lowering to
+`bag_union(project_outer(inner_join(inner_join(outer,A),B)), outer)`. Condition and
+consequent may introduce existential locals and the consequent may correlate through a
+condition local. Locals are accepted only when enclosing `Select` chains omit them or
+`Count` hides the underlying bindings; visible escape and later `Equals`/`Not`/`Optional`/
+`When` reuse reject closed. All 86 planner tests and full test compilation passed. The
+focused E2E passed in 196.24s: two local successful assignments projected to two equal
+outer rows, the true branch added that outer row once more, a failing outer row appeared
+once, envelope round-trip passed, and consequent substitution rejected.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -227,8 +243,11 @@ Prolog/JSON shape rather than silently inventing one in the client AST.
   plus one unchanged `true` row without using left outer join.
 - [x] Authenticate variable-object `Link` and unconstrained mixed-datatype `Data` as
   exact node/literal dictionary partitions, including predicate variables and joins.
-- [ ] Extend `When` to branch-local variables only after defining an authenticated
-  Prolog-unbound output representation and its later-correlation semantics.
+- [x] Extend bounded `When` with existential condition/consequent locals when enclosing
+  `Select`/`Count` makes them unobservable; preserve local-match bag multiplicity through
+  exact projection back to the incoming outer schema.
+- [ ] Extend `When` to observable branch-local variables only after defining an
+  authenticated Prolog-unbound output representation and its later-correlation semantics.
 - [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
   generalize `GroupBy`/`Collect`/`Sum` and list-consuming extrema.
 - [ ] Add operators requiring new value circuits/data models in the order recorded in
