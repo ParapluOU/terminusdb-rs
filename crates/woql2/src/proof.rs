@@ -32,13 +32,11 @@ use dory_pcs::primitives::transcript::Transcript;
 use sha2::{Digest, Sha256};
 use tdb_succinct::{AnyURI, Date, HexBinary, TdbDataType, TypedDictEntry};
 use terminus_store::proof::anti::{
-    prove_global_left_outer_join, prove_global_not, prove_left_anti_join_with_keys,
-    prove_left_outer_join_with_keys, verify_global_left_outer_join, verify_global_not,
-    verify_left_anti_join_with_keys, verify_left_outer_join_with_keys, LeftAntiJoinProof,
-    LeftOuterJoinProof,
+    verify_global_left_outer_join, verify_global_not, verify_left_anti_join_with_keys,
+    verify_left_outer_join_with_keys, LeftAntiJoinProof, LeftOuterJoinProof,
 };
-use terminus_store::proof::argument::Transcript254;
-use terminus_store::proof::bgp::{JoinStep, RelationCommit, RelationWitness};
+use terminus_store::proof::argument::{StoreProverContext, Transcript254};
+use terminus_store::proof::bgp::{JoinStep, RelationCommit};
 use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
 };
@@ -48,19 +46,19 @@ use terminus_store::proof::envelope::{
     RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
 };
 use terminus_store::proof::equality::{
-    prove_relation_equality, verify_relation_equality, RelationEqualityProof,
+    verify_relation_equality, RelationEqualityProof,
 };
 use terminus_store::proof::group::{
-    prove_group_extrema, verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
+    verify_group_extrema, GroupExtremaKind, GroupExtremaProof,
 };
 use terminus_store::proof::query::{
-    prove_layer_bgp_with_result, resolve_result_values, resolve_typed_result_objects,
-    result_id_namespaces, verify_layer_bgp, verify_layer_bgp_result_log_domain,
+    resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
+    verify_layer_bgp_result_log_domain,
     verify_result_columns, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
     LayerBgpProof, ObjectRangeBound, ObjectRangeSpec, ResultColumnDescriptor, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
-use terminus_store::proof::union::{prove_bag_union, verify_bag_union, BagUnionProof};
+use terminus_store::proof::union::{verify_bag_union, BagUnionProof};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 use terminus_store::store::sync::SyncStoreLayer;
 use terminus_store::ValueTriple;
@@ -1522,212 +1520,6 @@ pub enum QueryProofError {
     Store(#[from] std::io::Error),
 }
 
-fn prove_compiled_relation(
-    compiled: &CompiledRelation,
-    layer: &LayerCommitment,
-    query_digest: ProofHash,
-) -> std::io::Result<ProvedBgp> {
-    match &compiled.statement {
-        CompiledRelationStatement::Bgp(plan) => {
-            let result = boxed_prove_bgp(layer, plan)?;
-            let result_columns = result.real_columns();
-            Ok(ProvedBgp {
-                statement: ProvedQueryStatement::Single {
-                    proof: Box::new(result.proof),
-                    predicate_ids: result.predicate_ids,
-                },
-                result_commitments: result.result_commitments,
-                result_columns,
-                result_log_domain: result.result_log_domain,
-                result_len: result.result_len,
-            })
-        }
-        CompiledRelationStatement::BagUnion { branches, mappings } => {
-            if branches.len() < 2 || branches.len() != mappings.len() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "compiled recursive union branch mismatch",
-                ));
-            }
-            let mut proved = Vec::with_capacity(branches.len());
-            let mut inputs = Vec::with_capacity(branches.len());
-            for (branch, mapping) in branches.iter().zip(mappings) {
-                let result =
-                    prove_compiled_relation(branch, layer, relation_query_digest(branch)?)?;
-                let selected: Vec<usize> = if compiled.schema.is_empty() {
-                    vec![0]
-                } else {
-                    mapping.clone()
-                };
-                inputs.push(relation_witness_selected(&result, &selected));
-                proved.push(result);
-            }
-            let mut transcript = Transcript254::new(b"parture-union-envelope");
-            transcript.append_bytes(b"pow/union-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/union-envelope/query", &query_digest);
-            let result = boxed_prove_union(&inputs, &mut transcript)?;
-            Ok(ProvedBgp {
-                statement: ProvedQueryStatement::BagUnion {
-                    branches: proved,
-                    proof: Box::new(result.proof),
-                },
-                result_commitments: result.commitments,
-                result_columns: result
-                    .columns
-                    .iter()
-                    .map(|column| column[..result.n].to_vec())
-                    .collect(),
-                result_log_domain: result.log_domain,
-                result_len: result.n,
-            })
-        }
-        CompiledRelationStatement::LeftAnti {
-            left,
-            right,
-            key_pairs,
-        } => {
-            let left_proved = prove_compiled_relation(left, layer, relation_query_digest(left)?)?;
-            let right_proved =
-                prove_compiled_relation(right, layer, relation_query_digest(right)?)?;
-            let left_witness = relation_witness(&left_proved);
-            let right_witness = relation_witness(&right_proved);
-            let mut transcript = Transcript254::new(b"parture-left-anti-envelope");
-            transcript.append_bytes(b"pow/anti-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/anti-envelope/query", &query_digest);
-            let (proof, commitments, columns, log_domain, n) = if key_pairs.is_empty() {
-                let (commitments, columns, log_domain, n) =
-                    prove_global_not(&left_witness, &right_witness)?;
-                (None, commitments, columns, log_domain, n)
-            } else {
-                let result =
-                    boxed_prove_anti(&left_witness, &right_witness, key_pairs, &mut transcript)?;
-                (
-                    Some(result.proof),
-                    result.commitments,
-                    result.columns,
-                    result.log_domain,
-                    result.n,
-                )
-            };
-            Ok(ProvedBgp {
-                statement: ProvedQueryStatement::LeftAnti {
-                    left: Box::new(left_proved),
-                    right: Box::new(right_proved),
-                    proof: proof.map(Box::new),
-                },
-                result_commitments: commitments,
-                result_columns: columns.iter().map(|column| column[..n].to_vec()).collect(),
-                result_log_domain: log_domain,
-                result_len: n,
-            })
-        }
-        CompiledRelationStatement::LeftOuter {
-            left,
-            right,
-            key_pairs,
-        } => {
-            let left_proved = prove_compiled_relation(left, layer, relation_query_digest(left)?)?;
-            let right_proved =
-                prove_compiled_relation(right, layer, relation_query_digest(right)?)?;
-            let left_witness = relation_witness(&left_proved);
-            let right_witness = relation_witness(&right_proved);
-            let mut transcript = Transcript254::new(b"parture-left-outer-envelope");
-            transcript.append_bytes(b"pow/outer-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/outer-envelope/query", &query_digest);
-            let result = if key_pairs.is_empty() {
-                boxed_prove_global_outer(&left_witness, &right_witness, &mut transcript)?
-            } else {
-                boxed_prove_outer(&left_witness, &right_witness, key_pairs, &mut transcript)?
-            };
-            Ok(ProvedBgp {
-                statement: ProvedQueryStatement::LeftOuter {
-                    left: Box::new(left_proved),
-                    right: Box::new(right_proved),
-                    proof: Box::new(result.proof),
-                },
-                result_commitments: result.commitments,
-                result_columns: result
-                    .columns
-                    .iter()
-                    .map(|column| column[..result.n].to_vec())
-                    .collect(),
-                result_log_domain: result.log_domain,
-                result_len: result.n,
-            })
-        }
-        CompiledRelationStatement::Equality { input, constraint } => {
-            let input_proved =
-                prove_compiled_relation(input, layer, relation_query_digest(input)?)?;
-            let witness = relation_witness(&input_proved);
-            let resolved = resolve_relation_equality_constraint(layer, constraint)?;
-            let mut transcript = Transcript254::new(b"parture-equality-envelope");
-            transcript.append_bytes(b"pow/equality-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/equality-envelope/query", &query_digest);
-            let result = boxed_prove_equality(&witness, &resolved, &mut transcript)?;
-            Ok(ProvedBgp {
-                statement: ProvedQueryStatement::Equality {
-                    input: Box::new(input_proved),
-                    proof: Box::new(result.proof),
-                },
-                result_commitments: result.commitments,
-                result_columns: result
-                    .columns
-                    .iter()
-                    .map(|column| column[..result.n].to_vec())
-                    .collect(),
-                result_log_domain: result.log_domain,
-                result_len: result.n,
-            })
-        }
-        CompiledRelationStatement::GroupExtrema {
-            input,
-            key_column,
-            value_column,
-            datatype,
-            kind,
-        } => {
-            let input_proved =
-                prove_compiled_relation(input, layer, relation_query_digest(input)?)?;
-            let witness = relation_witness(&input_proved);
-            let rows = honest_group_rows(
-                &input_proved,
-                input,
-                *key_column,
-                *value_column,
-                *datatype,
-                *kind,
-                layer,
-            )?;
-            let mut transcript = Transcript254::new(b"parture-group-extrema-envelope");
-            transcript.append_bytes(b"pow/group-envelope/root", &layer.state.commitment_root);
-            transcript.append_bytes(b"pow/group-envelope/query", &query_digest);
-            let result = prove_group_extrema(
-                &witness,
-                *key_column,
-                *value_column,
-                *datatype,
-                *kind,
-                &rows,
-                layer,
-                &mut transcript,
-            )?;
-            Ok(ProvedBgp {
-                statement: ProvedQueryStatement::GroupExtrema {
-                    input: Box::new(input_proved),
-                    proof: Box::new(result.proof),
-                },
-                result_commitments: result.commitments,
-                result_columns: result
-                    .columns
-                    .iter()
-                    .map(|c| c[..result.n].to_vec())
-                    .collect(),
-                result_log_domain: result.log_domain,
-                result_len: result.n,
-            })
-        }
-    }
-}
 
 fn store_id_for_field(
     field: ArkFr,
@@ -1778,186 +1570,40 @@ fn group_output_rows(
         .collect()
 }
 
-fn literal_op_u64(object: &CanonicalObject, datatype: CanonicalDatatype) -> std::io::Result<u64> {
-    match object {
-        CanonicalObject::Value {
-            datatype: actual,
-            lexical,
-        } if *actual == datatype && lexical.len() <= 8 => {
-            let mut bytes = [0u8; 8];
-            bytes[8 - lexical.len()..].copy_from_slice(lexical);
-            Ok(u64::from_be_bytes(bytes))
-        }
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "group-extrema value lacks exact fixed-width datatype",
-        )),
-    }
-}
-
-fn honest_group_rows(
-    proved: &ProvedBgp,
-    input: &CompiledRelation,
-    key_column: usize,
-    value_column: usize,
-    datatype: CanonicalDatatype,
-    kind: GroupExtremaKind,
-    layer: &LayerCommitment,
-) -> std::io::Result<Vec<(u64, u64)>> {
-    use std::collections::BTreeMap;
-    if key_column >= proved.result_columns.len() || value_column >= proved.result_columns.len() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "group-extrema input column out of range",
-        ));
-    }
-    let namespace = relation_result_descriptors(input)?[key_column].namespace;
-    let mut groups: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
-    for row in 0..proved.result_len {
-        let key = store_id_for_field(proved.result_columns[key_column][row], namespace, layer)?;
-        let value = store_id_for_field(
-            proved.result_columns[value_column][row],
-            ResultIdNamespace::NodeValue,
-            layer,
-        )?;
-        groups.entry(key).or_default().push(value);
-    }
-    let view = layer.verifier_view();
-    groups
-        .into_iter()
-        .map(|(key, values)| {
-            let selected = values
-                .into_iter()
-                .map(|id| {
-                    let record = view
-                        .node_value_catalog
-                        .iter()
-                        .find(|r| r.object_id == id)
-                        .ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "group-extrema value id absent",
-                            )
-                        })?;
-                    Ok((literal_op_u64(&record.triple.object, datatype)?, id))
-                })
-                .collect::<std::io::Result<Vec<_>>>()?
-                .into_iter()
-                .min_by_key(|x| {
-                    if kind == GroupExtremaKind::Min {
-                        x.0
-                    } else {
-                        u64::MAX - x.0
-                    }
-                })
-                .ok_or_else(|| {
-                    std::io::Error::new(std::io::ErrorKind::InvalidData, "empty group")
-                })?;
-            Ok((key, selected.1))
-        })
-        .collect()
-}
-
-#[inline(never)]
-fn boxed_prove_bgp(
-    layer: &LayerCommitment,
-    plan: &LayerBgpPlan,
-) -> std::io::Result<Box<terminus_store::proof::query::LayerBgpResult>> {
-    Ok(Box::new(prove_layer_bgp_with_result(layer, plan)?))
-}
-
-#[inline(never)]
-fn boxed_prove_union(
-    inputs: &[RelationWitness],
-    transcript: &mut Transcript254,
-) -> std::io::Result<Box<terminus_store::proof::union::BagUnionResult>> {
-    Ok(Box::new(prove_bag_union(inputs, transcript)?))
-}
-
-#[inline(never)]
-fn boxed_prove_anti(
-    left: &RelationWitness,
-    right: &RelationWitness,
-    key_pairs: &[(usize, usize)],
-    transcript: &mut Transcript254,
-) -> std::io::Result<Box<terminus_store::proof::anti::LeftAntiJoinResult>> {
-    Ok(Box::new(prove_left_anti_join_with_keys(
-        left, right, key_pairs, transcript,
-    )?))
-}
-
-#[inline(never)]
-fn boxed_prove_global_outer(
-    left: &RelationWitness,
-    right: &RelationWitness,
-    transcript: &mut Transcript254,
-) -> std::io::Result<Box<terminus_store::proof::anti::LeftOuterJoinResult>> {
-    Ok(Box::new(prove_global_left_outer_join(
-        left, right, transcript,
-    )?))
-}
-
-#[inline(never)]
-fn boxed_prove_outer(
-    left: &RelationWitness,
-    right: &RelationWitness,
-    key_pairs: &[(usize, usize)],
-    transcript: &mut Transcript254,
-) -> std::io::Result<Box<terminus_store::proof::anti::LeftOuterJoinResult>> {
-    Ok(Box::new(prove_left_outer_join_with_keys(
-        left, right, key_pairs, transcript,
-    )?))
-}
-
-#[inline(never)]
-fn boxed_prove_equality(
-    input: &RelationWitness,
-    constraint: &terminus_store::proof::equality::RelationEqualityConstraint,
-    transcript: &mut Transcript254,
-) -> std::io::Result<Box<terminus_store::proof::equality::RelationEqualityResult>> {
-    Ok(Box::new(prove_relation_equality(
-        input, constraint, transcript,
-    )?))
-}
-
-fn relation_witness(proved: &ProvedBgp) -> RelationWitness {
-    relation_witness_selected(
-        proved,
-        &(0..proved.result_columns.len()).collect::<Vec<_>>(),
-    )
-}
-
-fn relation_witness_selected(proved: &ProvedBgp, selected: &[usize]) -> RelationWitness {
-    let domain = 1usize << proved.result_log_domain;
-    RelationWitness {
-        columns: selected
-            .iter()
-            .map(|index| {
-                let mut column = proved.result_columns[*index].clone();
-                column.resize(domain, ArkFr::zero());
-                column
-            })
-            .collect(),
-        commitments: selected
-            .iter()
-            .map(|index| proved.result_commitments[*index])
-            .collect(),
-        log_domain: proved.result_log_domain,
-        n: proved.result_len,
-    }
-}
 
 impl CompiledBgp {
     /// Generate a proof against an already loaded authenticated commitment.
     pub fn prove(&self, layer: &LayerCommitment) -> std::io::Result<ProvedBgp> {
-        prove_compiled_relation(&self.relation, layer, compiled_query_digest(self)?)
+        self.prove_with_context(&StoreProverContext::cpu(), layer)
+    }
+
+    /// Generate the complete recursive relation proof using caller-selected arithmetic.
+    pub fn prove_with_context(
+        &self,
+        context: &StoreProverContext<'_>,
+        layer: &LayerCommitment,
+    ) -> std::io::Result<ProvedBgp> {
+        let digest = compiled_query_digest(self)?;
+        let plan = relation_proof_plan(&self.relation, digest)?;
+        let envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &plan)?;
+        Ok(proved_from_recursive(envelope))
     }
 
     /// Explicitly load the commitment from a synchronous Store layer and prove. Calling
     /// this method is the lifecycle decision; no worker or background job is started.
     pub fn prove_on_layer(&self, layer: &SyncStoreLayer) -> Result<ProvedBgp, QueryProofError> {
+        self.prove_on_layer_with_context(&StoreProverContext::cpu(), layer)
+    }
+
+    /// Load the commitment from a synchronous Store layer and prove with the caller's
+    /// context. No runtime initialization or scheduling occurs here.
+    pub fn prove_on_layer_with_context(
+        &self,
+        context: &StoreProverContext<'_>,
+        layer: &SyncStoreLayer,
+    ) -> Result<ProvedBgp, QueryProofError> {
         let commitment = layer.proof_commitment()?;
-        Ok(self.prove(&commitment)?)
+        Ok(self.prove_with_context(context, &commitment)?)
     }
 }
 
@@ -1966,8 +1612,17 @@ pub fn compile_and_prove(
     query: &Query,
     layer: &SyncStoreLayer,
 ) -> Result<(CompiledBgp, ProvedBgp), QueryProofError> {
+    compile_and_prove_with_context(&StoreProverContext::cpu(), query, layer)
+}
+
+/// Compile and prove with an explicitly caller-owned Store prover context.
+pub fn compile_and_prove_with_context(
+    context: &StoreProverContext<'_>,
+    query: &Query,
+    layer: &SyncStoreLayer,
+) -> Result<(CompiledBgp, ProvedBgp), QueryProofError> {
     let compiled = plan_bgp(query)?;
-    let proof = compiled.prove_on_layer(layer)?;
+    let proof = compiled.prove_on_layer_with_context(context, layer)?;
     Ok((compiled, proof))
 }
 

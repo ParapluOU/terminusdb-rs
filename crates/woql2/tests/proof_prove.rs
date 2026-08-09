@@ -12,7 +12,7 @@ use std::{convert::TryInto, sync::Arc};
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
-use terminus_store::proof::argument::commit_column;
+use terminus_store::proof::argument::{commit_column, StoreProverContext};
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::RecursiveRelationEnvelope;
@@ -54,6 +54,33 @@ fn build_grouped_score_layer() -> Arc<LayerCommitment> {
             .unwrap();
     }
     builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+#[test]
+fn explicit_cpu_context_preserves_recursive_envelope_bytes() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("knows"), &iri("b")))
+        .unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("b"), &iri("knows"), &iri("c")))
+        .unwrap();
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&tv("subject", "knows", "object")).unwrap();
+
+    let convenience = compiled.prove(&layer).unwrap();
+    let explicit = compiled
+        .prove_with_context(&StoreProverContext::cpu(), &layer)
+        .unwrap();
+    assert_eq!(
+        convenience
+            .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+            .unwrap(),
+        explicit
+            .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+            .unwrap(),
+    );
 }
 
 fn grouped_score_extrema(kind: RangeOp) -> Query {
