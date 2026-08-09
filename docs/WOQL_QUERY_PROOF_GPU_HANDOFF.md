@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `96546e9` | Exact recursive bag projection plus edge-tested monotone encodings for every fixed-width integer Store datatype. |
-| `modules/terminusdb-rs` | `6287001` plus this documentation commit | Canonical WOQL/XSD decoding and proof planning cover the distinct 8/16/32/64-bit signed and unsigned integer family, including range/order proof gates. |
+| `modules/terminusdb-store-paraplu` | `bea5b24` | Recursive exact unordered distinct-class partitions for one or two nonnullable Store-ID columns, with v9 wire coverage. |
+| `modules/terminusdb-rs` | `3535898` plus this documentation commit | Canonical `Count(Distinct(...))` planning authenticates projected one-/two-witness class counts over recursive relations while keeping first-occurrence order unobservable. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -97,6 +97,10 @@ cargo test -p terminusdb-woql2 --features proof --test proof_plan \
   accepts_every_exact_fixed_width_integer_datatype_at_edges_and_zero -- --exact
 cargo test -p terminusdb-woql2 --features proof --test proof_prove \
   object_range_int8_ge_zero_authenticates_signed_width_and_dictionary_tag -- --exact
+cargo test -p terminusdb-woql2 --features proof --test proof_plan \
+  count_accepts_exact_projected_distinct_over_one_or_two_known_domains -- --exact
+cargo test -p terminusdb-woql2 --features proof --test proof_prove \
+  count_projected_distinct_proves_duplicate_classes_and_rejects_tamper -- --exact
 ```
 
 For a meaningful portability check, retain a Linux-generated envelope and
@@ -237,6 +241,26 @@ explicit bounded-i64 subset; arbitrary precision and Prolog cross-type numeric c
 are not claimed. Decimal, temporal, string collation, and the AST's conflated float/double
 representation remain documented fail-closed boundaries in the coverage matrix.
 
+Leading Prolog compiles canonical `distinct(Vars, Query)` directly to SWI
+`solution_sequences:distinct/2`. SWI 10.0.2 uses term-variance equality and streams the
+first generated solution for every new witness tuple. Store checkpoint `bea5b24` therefore
+adds an exact unordered class-partition statement rather than claiming a sorted or arbitrary
+visible result: chained equality compactions prove each one-/two-column tuple's nonempty
+class, public tuples are unique, and class cardinalities exactly partition the authenticated
+child bag. Recursive wire v9/tag 11, duplicate-heavy one-/two-key inputs, empty input,
+omission/invention/duplicate rejection, key substitution, proof tamper, and wire round-trip
+passed focused gates.
+
+woql2 checkpoint `3535898` exposes this statement only as
+`Count(Distinct([Witness...], Child))`, where output order and the first row's discarded
+non-witness bindings are unobservable. Witnesses require exact known nonnullable Store-ID
+domains; recursive bag unions and authenticated ordered children compose. All 93 planner
+tests and full proof-feature test compilation passed. The duplicate-heavy E2E proved count
+2, envelope round-trip, output tamper rejection, and query-substitution rejection in 41.90s;
+the empty result proved count 0 in 9.19s. The canonical explicit decoder already matched
+the leading Prolog `variables`/`query` Distinct shape and required no serde path or shape
+change.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -264,6 +288,10 @@ representation remain documented fail-closed boundaries in the coverage matrix.
   exact projection back to the incoming outer schema.
 - [x] Cover distinct fixed-width XSD integer datatypes end to end without cross-datatype
   coercion; retain `xsd:integer` as a documented bounded-i64 subset.
+- [x] Authenticate one-/two-witness projected `Distinct` class counts over recursive
+  relations without claiming unauthenticated first-occurrence output order.
+- [ ] Expose visible projected `Distinct` only after authenticating SWI first-occurrence
+  order, first-row non-witness bindings, and Prolog-unbound variant equality.
 - [ ] Extend `When` to observable branch-local variables only after defining an
   authenticated Prolog-unbound output representation and its later-correlation semantics.
 - [ ] Define a versioned authenticated Prolog-list/generated-scalar contract, then
