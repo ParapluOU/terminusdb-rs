@@ -42,7 +42,7 @@ use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
 };
 use terminus_store::proof::envelope::{
-    plan_digest, resolve_relation_equality_constraint, EqualityValueDomain,
+    plan_digest, resolve_relation_equality_constraint, CollectionSumTemplate, EqualityValueDomain,
     GeneratedU64ComparisonOp, LayerBgpEnvelope,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
     RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
@@ -206,6 +206,11 @@ pub enum CompiledRelationStatement {
     },
     CollectionCount {
         input: Box<CompiledRelation>,
+    },
+    CollectionSum {
+        input: Box<CompiledRelation>,
+        template: CollectionSumTemplate,
+        datatype: CanonicalDatatype,
     },
 }
 
@@ -515,6 +520,9 @@ pub enum ProvedQueryStatement {
     CollectionCount {
         input: Box<ProvedBgp>,
     },
+    CollectionSum {
+        input: Box<ProvedBgp>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -773,6 +781,29 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(b"/collection-count");
             hasher.update(relation_query_digest(input)?);
         }
+        CompiledRelationStatement::CollectionSum {
+            input,
+            template,
+            datatype,
+        } => {
+            hasher.update(b"/collection-sum");
+            hasher.update(relation_query_digest(input)?);
+            match template {
+                CollectionSumTemplate::Column(column) => {
+                    hasher.update([0]);
+                    hasher.update((*column as u64).to_le_bytes());
+                }
+                CollectionSumTemplate::UnsignedConstant(value) => {
+                    hasher.update([1]);
+                    hasher.update(value.to_le_bytes());
+                }
+                CollectionSumTemplate::SignedConstant(value) => {
+                    hasher.update([2]);
+                    hasher.update(value.to_le_bytes());
+                }
+            }
+            hasher.update([*datatype as u8]);
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -1020,6 +1051,22 @@ fn relation_result_descriptors(
             namespace: ResultIdNamespace::GeneratedDecimalU64,
             nullable: false,
         }]),
+        CompiledRelationStatement::CollectionSum { datatype, .. } => {
+            Ok(vec![ResultColumnDescriptor {
+                namespace: if matches!(
+                    datatype,
+                    CanonicalDatatype::Int8
+                        | CanonicalDatatype::Int16
+                        | CanonicalDatatype::Int32
+                        | CanonicalDatatype::Int64
+                ) {
+                    ResultIdNamespace::GeneratedDecimalI64
+                } else {
+                    ResultIdNamespace::GeneratedDecimalU64
+                },
+                nullable: false,
+            }])
+        }
     }
 }
 
@@ -1163,6 +1210,15 @@ fn relation_proof_plan(
                 input: Box::new(child(input)?),
             }
         }
+        CompiledRelationStatement::CollectionSum {
+            input,
+            template,
+            datatype,
+        } => RelationProofPlanKind::CollectionSum {
+            input: Box::new(child(input)?),
+            template: *template,
+            datatype: *datatype,
+        },
     };
     Ok(RelationProofPlan { query_digest, kind })
 }
@@ -1590,6 +1646,54 @@ fn expected_cardinality_column(
             "collection cardinality exceeds u64",
         ),
     )?)]])
+}
+
+fn expected_collection_sum_column(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    template: CollectionSumTemplate,
+    datatype: CanonicalDatatype,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let mut sum = GroupSumValue::zero(datatype)?;
+    match template {
+        CollectionSumTemplate::Column(column) => {
+            let descriptors = relation_result_descriptors(input_plan)?;
+            let values = resolve_result_values(
+                layer,
+                expected_root,
+                &input.result_columns,
+                &descriptors,
+            )?;
+            let values = values.get(column).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "collection-sum value column out of range",
+                )
+            })?;
+            if values.len() != input.result_len {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "collection-sum input column length mismatch",
+                ));
+            }
+            for value in values {
+                sum = sum.checked_add(integral_group_sum_value(value, datatype)?)?;
+            }
+        }
+        CollectionSumTemplate::UnsignedConstant(value) => {
+            for _ in 0..input.result_len {
+                sum = sum.checked_add(GroupSumValue::Unsigned(value))?;
+            }
+        }
+        CollectionSumTemplate::SignedConstant(value) => {
+            for _ in 0..input.result_len {
+                sum = sum.checked_add(GroupSumValue::Signed(i128::from(value)))?;
+            }
+        }
+    }
+    Ok(vec![vec![sum.field()?]])
 }
 
 impl ProvedBgp {
@@ -2170,6 +2274,38 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL collection-count result is not the exact derived cardinality",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::CollectionSum { input },
+                CompiledRelationStatement::CollectionSum {
+                    input: input_plan,
+                    template,
+                    datatype,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let expected_columns = expected_collection_sum_column(
+                    input,
+                    input_plan,
+                    *template,
+                    *datatype,
+                    layer,
+                    expected_root,
+                )?;
+                if self.result_len != 1
+                    || self.result_log_domain != 1
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL collection-sum result is not the exact derived aggregate",
                     ));
                 }
             }
@@ -2802,6 +2938,19 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::CollectionSum { input },
+                CompiledRelationStatement::CollectionSum {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::CollectionSum {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+            },
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -3121,6 +3270,9 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
                 input: Box::new(proved_from_recursive(*input)),
             }
         }
+        RecursiveRelationProof::CollectionSum { input } => ProvedQueryStatement::CollectionSum {
+            input: Box::new(proved_from_recursive(*input)),
+        },
     };
     ProvedBgp {
         statement,
@@ -3460,6 +3612,12 @@ pub enum BgpPlanError {
     #[error("Collect followed by Length requires one private collected-list variable consumed immediately once and one distinct result variable")]
     CollectionCountUnsupportedShape,
 
+    #[error("Collect followed by Sum requires one private collected-list variable consumed immediately once and one distinct result variable")]
+    CollectionSumUnsupportedShape,
+
+    #[error("Collect-Sum template must be an exact fixed-width integral constant or nonnullable child-bound variable")]
+    CollectionSumUnsupportedValue,
+
     #[error("generated GroupBy-Sum comparisons require the sum source before comparisons of that result variable to exact integral xsd:decimal constants")]
     GroupSumComparisonUnsupportedShape,
 
@@ -3793,6 +3951,196 @@ fn generated_group_sum_constraint(
         }
         _ => Err(BgpPlanError::GroupSumComparisonUnsupportedShape),
     }
+}
+
+fn exact_collection_sum_constant(
+    value: &XSDAnySimpleType,
+) -> Result<(CollectionSumTemplate, CanonicalDatatype), BgpPlanError> {
+    Ok(match value {
+        XSDAnySimpleType::UnsignedByte(value) => (
+            CollectionSumTemplate::UnsignedConstant(u64::from(*value)),
+            CanonicalDatatype::UInt8,
+        ),
+        XSDAnySimpleType::Byte(value) => (
+            CollectionSumTemplate::SignedConstant(i64::from(*value)),
+            CanonicalDatatype::Int8,
+        ),
+        XSDAnySimpleType::UnsignedShort(value) => (
+            CollectionSumTemplate::UnsignedConstant(u64::from(*value)),
+            CanonicalDatatype::UInt16,
+        ),
+        XSDAnySimpleType::Short(value) => (
+            CollectionSumTemplate::SignedConstant(i64::from(*value)),
+            CanonicalDatatype::Int16,
+        ),
+        XSDAnySimpleType::UnsignedInt(value) => (
+            CollectionSumTemplate::UnsignedConstant(u64::from(
+                u32::try_from(*value).map_err(|_| BgpPlanError::CollectionSumUnsupportedValue)?,
+            )),
+            CanonicalDatatype::UInt32,
+        ),
+        XSDAnySimpleType::Int(value) => (
+            CollectionSumTemplate::SignedConstant(i64::from(*value)),
+            CanonicalDatatype::Int32,
+        ),
+        XSDAnySimpleType::UnsignedLong(value) => (
+            CollectionSumTemplate::UnsignedConstant(*value),
+            CanonicalDatatype::UInt64,
+        ),
+        XSDAnySimpleType::Long(value) | XSDAnySimpleType::Integer(value) => (
+            CollectionSumTemplate::SignedConstant(*value),
+            CanonicalDatatype::Int64,
+        ),
+        _ => return Err(BgpPlanError::CollectionSumUnsupportedValue),
+    })
+}
+
+fn plan_collection_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) if and.and.len() >= 2 => &and.and,
+        _ => return Ok(None),
+    };
+    if conjuncts.iter().skip(2).any(|query| {
+        matches!(query, Query::If(_) | Query::WoqlOptional(_) | Query::Not(_))
+    }) {
+        return Ok(None);
+    }
+    let (Query::Collect(collect), Query::Sum(sum)) = (&conjuncts[0], &conjuncts[1]) else {
+        if matches!(conjuncts.first(), Some(Query::GroupBy(_)))
+            || conjuncts.iter().any(|query| matches!(query, Query::Length(_)))
+        {
+            return Ok(None);
+        }
+        if conjuncts
+            .iter()
+            .any(|query| matches!(query, Query::Collect(_) | Query::Sum(_)))
+        {
+            return Err(BgpPlanError::CollectionSumUnsupportedShape);
+        }
+        return Ok(None);
+    };
+    let hidden = match &collect.into {
+        Value::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionSumUnsupportedShape),
+    };
+    let list = match &sum.list {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionSumUnsupportedShape),
+    };
+    let result = match &sum.result {
+        DataValue::Variable(variable) => variable,
+        _ => return Err(BgpPlanError::CollectionSumUnsupportedShape),
+    };
+    if hidden != list || hidden == result {
+        return Err(BgpPlanError::CollectionSumUnsupportedShape);
+    }
+    if matches!(&collect.template, Value::Variable(variable) if variable == hidden || variable == result)
+    {
+        return Err(BgpPlanError::CollectionSumUnsupportedShape);
+    }
+    let child = plan_bgp(&collect.query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::CollectionSumUnsupportedShape);
+    }
+    if child
+        .relation
+        .schema
+        .iter()
+        .any(|variable| variable == hidden || variable == result)
+    {
+        return Err(BgpPlanError::CollectionSumUnsupportedShape);
+    }
+    let descriptors = relation_result_descriptors(&child.relation)
+        .map_err(|_| BgpPlanError::CollectionSumUnsupportedShape)?;
+    let (template, datatype) = match &collect.template {
+        Value::Variable(variable) => {
+            let column = child
+                .relation
+                .schema
+                .iter()
+                .position(|candidate| candidate == variable)
+                .ok_or(BgpPlanError::CollectionSumUnsupportedValue)?;
+            if descriptors[column].nullable
+                || descriptors[column].namespace != ResultIdNamespace::NodeValue
+            {
+                return Err(BgpPlanError::CollectionSumUnsupportedValue);
+            }
+            let datatype = match child.relation.domains.get(column).copied().flatten() {
+                Some(EqualityValueDomain::Datatype(
+                    datatype @ (CanonicalDatatype::UInt8
+                    | CanonicalDatatype::UInt16
+                    | CanonicalDatatype::UInt32
+                    | CanonicalDatatype::UInt64
+                    | CanonicalDatatype::Int8
+                    | CanonicalDatatype::Int16
+                    | CanonicalDatatype::Int32
+                    | CanonicalDatatype::Int64),
+                )) => datatype,
+                _ => return Err(BgpPlanError::CollectionSumUnsupportedValue),
+            };
+            (CollectionSumTemplate::Column(column), datatype)
+        }
+        Value::Data(value) => exact_collection_sum_constant(value)?,
+        _ => return Err(BgpPlanError::CollectionSumUnsupportedValue),
+    };
+    let collection = child.collection;
+    let signed = matches!(
+        datatype,
+        CanonicalDatatype::Int8
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Int64
+    );
+    let mut relation = CompiledRelation {
+        schema: vec![result.clone()],
+        domains: vec![None],
+        statement: CompiledRelationStatement::CollectionSum {
+            input: Box::new(child.relation),
+            template,
+            datatype,
+        },
+    };
+    for comparison in conjuncts.iter().skip(2) {
+        let (op, domain, constant, constant_on_left) =
+            generated_group_sum_constraint(comparison, result, signed)?;
+        let input = relation;
+        relation = CompiledRelation {
+            schema: input.schema.clone(),
+            domains: input.domains.clone(),
+            statement: match domain {
+                ResultIdNamespace::GeneratedDecimalU64 => {
+                    CompiledRelationStatement::GeneratedU64Filter {
+                        input: Box::new(input),
+                        column: 0,
+                        op,
+                        constant: u64::try_from(constant).map_err(|_| {
+                            BgpPlanError::GroupSumComparisonUnsupportedConstant
+                        })?,
+                        constant_on_left,
+                    }
+                }
+                ResultIdNamespace::GeneratedDecimalI64 => {
+                    CompiledRelationStatement::GeneratedI64Filter {
+                        input: Box::new(input),
+                        column: 0,
+                        op,
+                        constant: i64::try_from(constant).map_err(|_| {
+                            BgpPlanError::GroupSumComparisonUnsupportedConstant
+                        })?,
+                        constant_on_left,
+                    }
+                }
+                _ => unreachable!(),
+            },
+        };
+    }
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
 }
 
 fn plan_collection_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
@@ -4904,6 +5252,26 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         );
     }
 
+    if let Some(mut aggregate) = plan_collection_sum_form(body)? {
+        if collection.is_some() {
+            if aggregate.collection.is_some() && aggregate.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            aggregate.collection = collection;
+        }
+        aggregate.count_variable = count_variable;
+        aggregate.projection = compile_projection(
+            &selections,
+            aggregate.count_variable.as_deref(),
+            &aggregate.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&aggregate.relation)?;
+        return Ok(aggregate);
+    }
+
     if let Some(mut aggregate) = plan_collection_count_form(body)? {
         if collection.is_some() {
             if aggregate.collection.is_some() && aggregate.collection != collection {
@@ -5718,6 +6086,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::GroupSum { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::GroupCount { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::CollectionCount { input } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::CollectionSum { input, .. } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;

@@ -18,7 +18,9 @@ use terminusdb_woql2::triple::{
 };
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};
 
-use terminus_store::proof::envelope::{GeneratedU64ComparisonOp, RelationEqualityPlan};
+use terminus_store::proof::envelope::{
+    CollectionSumTemplate, GeneratedU64ComparisonOp, RelationEqualityPlan,
+};
 use terminus_store::proof::query::{AtomTerm, ObjectKindFilter, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
@@ -307,6 +309,120 @@ fn collect_length_query() -> Query {
             length: DataValue::Variable("cardinality".into()),
         }),
     ])
+}
+
+fn collect_sum_query(template: Value, bound: DataValue) -> Query {
+    and_of(vec![
+        Query::Collect(Collect {
+            template,
+            into: Value::Variable("scores".into()),
+            query: Box::new(and_of(vec![
+                tv("subject", "score", "score"),
+                gte(dvar("score"), bound),
+            ])),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ])
+}
+
+#[test]
+fn immediate_collect_sum_compiles_exact_variable_ground_and_comparison_modes() {
+    for (bound, datatype) in [
+        (duint(0), CanonicalDatatype::UInt32),
+        (
+            DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+            CanonicalDatatype::Int64,
+        ),
+    ] {
+        let compiled = plan_bgp(&collect_sum_query(Value::Variable("score".into()), bound)).unwrap();
+        assert_eq!(compiled.relation.schema, ["total"]);
+        assert!(matches!(
+            compiled.relation.statement,
+            CompiledRelationStatement::CollectionSum {
+                template: CollectionSumTemplate::Column(1),
+                datatype: actual,
+                ..
+            } if actual == datatype
+        ));
+    }
+
+    let ground = plan_bgp(&collect_sum_query(
+        Value::Data(XSDAnySimpleType::UnsignedShort(5)),
+        duint(0),
+    ))
+    .unwrap();
+    assert!(matches!(
+        ground.relation.statement,
+        CompiledRelationStatement::CollectionSum {
+            template: CollectionSumTemplate::UnsignedConstant(5),
+            datatype: CanonicalDatatype::UInt16,
+            ..
+        }
+    ));
+
+    let Query::And(mut nested) = collect_sum_query(Value::Variable("score".into()), duint(0)) else {
+        unreachable!()
+    };
+    let Query::Collect(collect) = &mut nested.and[0] else {
+        unreachable!()
+    };
+    let branch = (*collect.query).clone();
+    collect.query = Box::new(Query::Or(Or {
+        or: vec![branch.clone(), branch],
+    }));
+    let nested = plan_bgp(&Query::And(nested)).unwrap();
+    assert!(matches!(
+        nested.relation.statement,
+        CompiledRelationStatement::CollectionSum { input, .. }
+            if matches!(input.statement, CompiledRelationStatement::BagUnion { .. })
+    ));
+
+    let Query::And(mut filtered) = collect_sum_query(
+        Value::Variable("score".into()),
+        DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+    ) else {
+        unreachable!()
+    };
+    filtered.and.push(less(dvar("total"), decimal_value("0")));
+    let filtered = plan_bgp(&Query::Count(Count {
+        query: Box::new(Query::And(filtered)),
+        count: DataValue::Variable("rows".into()),
+    }))
+    .unwrap();
+    assert_eq!(filtered.count_variable.as_deref(), Some("rows"));
+    assert!(matches!(
+        filtered.relation.statement,
+        CompiledRelationStatement::GeneratedI64Filter { column: 0, .. }
+    ));
+
+    for template in [
+        Value::Variable("unbound".into()),
+        Value::Data(XSDAnySimpleType::Decimal("1".parse().unwrap())),
+        Value::Data(XSDAnySimpleType::Float(1.0)),
+    ] {
+        reject(
+            collect_sum_query(template, duint(0)),
+            BgpPlanError::CollectionSumUnsupportedValue,
+        );
+    }
+    let Query::And(valid) = collect_sum_query(Value::Variable("score".into()), duint(0)) else {
+        unreachable!()
+    };
+    reject(
+        and_of(vec![valid.and[1].clone(), valid.and[0].clone()]),
+        BgpPlanError::CollectionSumUnsupportedShape,
+    );
+    let Query::Sum(mut wrong_list) = valid.and[1].clone() else {
+        unreachable!()
+    };
+    wrong_list.list = DataValue::Variable("other".into());
+    reject(
+        and_of(vec![valid.and[0].clone(), Query::Sum(wrong_list)]),
+        BgpPlanError::CollectionSumUnsupportedShape,
+    );
 }
 
 #[test]

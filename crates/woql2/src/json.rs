@@ -272,6 +272,31 @@ mod tests {
     }
 
     #[test]
+    fn immediate_collect_sum_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::Collect(Collect {
+                    template: WoqlValue::Variable("score".into()),
+                    into: WoqlValue::Variable("scores".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Sum(Sum {
+                    list: DataValue::Variable("scores".into()),
+                    result: DataValue::Variable("total".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][0]["@type"], "Collect");
+        assert_eq!(json["and"][1]["@type"], "Sum");
+        assert_eq!(
+            Query::from_json(json)
+                .expect("domain decoder accepts canonical immediate Collect followed by Sum"),
+            query,
+        );
+    }
+
+    #[test]
     fn once_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
         let decoded = Query::from_json(serde_json::json!({
             "@type": "Once",

@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `4129c07` | Store wire v18 authenticates immediate collected-list cardinality with `findall`'s distinct empty policy. |
-| `modules/terminusdb-rs` | `20690a6` | WOQL planning and verification cover immediate `Collect`→`Length`, comparisons, recursive children, and outer result wrappers. |
+| `modules/terminusdb-store-paraplu` | `05024d7` | Store wire v19 authenticates exact fixed-width integral `Collect`→`Sum`, including typed empty zero and checked arithmetic. |
+| `modules/terminusdb-rs` | this checkpoint | WOQL planning and verification cover variable/ground-template `Collect`→`Sum`, comparisons, and outer result wrappers. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -495,6 +495,24 @@ in 0.00s, including a recursively proven bag-union child, and the WOQL E2E passe
 84.55s with identical private elements, empty-zero behavior, comparison, envelope
 round-trip, GroupBy-Length substitution rejection, and recommitted-result tamper.
 
+Immediate `Collect`→`Sum` is the next wire- and digest-distinct contract in Store version
+19. Leading Prolog applies `findall/3`, recursively strips typed wrappers for `sum_list/2`,
+and reports the numeric result as `xsd:decimal`; a direct SWI 10.0.2 probe confirmed signed
+cancellation and empty results `[0,0]`. The bounded proof accepts one exact fixed-width
+integral child column or ground constant. The plan binds column/constant mode, constant,
+and datatype; variable values resolve through the authenticated catalog, ground values are
+repeated once per child solution, and duplicate multiplicity is retained. Empty input emits
+one U64/I64 zero selected from the template datatype. Checked u64 accumulation and the
+cancellation-safe i128/final-i64 contract are shared with grouped sum. Coercive decimals,
+floats, mixed/unbound templates, aliases, list leakage, and arbitrary standalone Sum remain
+rejected.
+The Store focused proof passed in 38.04s, covering cancellation, typed empty zero, exact
+u64 maximum, actual signed/unsigned overflow, wire round-trip, substitution, and tamper.
+The canonical decoder and planner gates passed in 0.00s; GroupBy-Sum and Collect-Length
+precedence regressions remained green. The signed WOQL E2E passed in 92.24s with
+cancellation, comparison, empty zero, GroupBy-Sum and Collection-Length substitution,
+envelope round-trip, and recommitted-result tamper.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -552,6 +570,9 @@ round-trip, GroupBy-Length substitution rejection, and recommitted-result tamper
 - [x] Authenticate immediate `Collect`→`Length` with `findall`'s distinct empty policy:
   one generated zero row for empty input, duplicate child solutions counted, and no
   observable private list order or template contents.
+- [x] Authenticate immediate exact-integral `Collect`→`Sum` for child-bound and ground
+  templates, including typed empty zero, duplicate multiplicity, signed cancellation,
+  checked overflow, comparisons/Count, and aggregate-plan substitution rejection.
 - [x] Replace the pessimistic grouped-sum datatype-maximum bound with exact authenticated
   value accumulation, accepting UInt64 totals through `u64::MAX` and rejecting actual
   overflow without field-modulus ambiguity.

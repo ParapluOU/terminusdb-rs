@@ -1126,6 +1126,147 @@ fn collect_length_for_predicate(predicate: &str, minimum: Option<&str>) -> Query
     and_of(queries)
 }
 
+fn collect_signed_sum_for_predicate(predicate: &str, compare_negative: bool) -> Query {
+    let mut queries = vec![
+        Query::Collect(Collect {
+            template: Value::Variable("score".into()),
+            into: Value::Variable("scores".into()),
+            query: Box::new(and_of(vec![
+                tv("subject", predicate, "score"),
+                gte(
+                    dvar("score"),
+                    DataValue::Data(XSDAnySimpleType::Long(i64::MIN)),
+                ),
+            ])),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ];
+    if compare_negative {
+        queries.push(less(
+            dvar("total"),
+            DataValue::Data(XSDAnySimpleType::Decimal("1".parse().unwrap())),
+        ));
+    }
+    and_of(queries)
+}
+
+fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for value in [-3i64, 1, 2] {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri("a"),
+                &iri("score"),
+                i64::make_entry(&value),
+            ))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let query = collect_signed_sum_for_predicate("score", true);
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    assert_eq!(proved.result_len, 1);
+    assert_eq!(
+        values,
+        vec![vec![CanonicalResultValue::GeneratedDecimalI64(0)]]
+    );
+    let envelope = proved
+        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let Query::And(collect_parts) = collect_signed_sum_for_predicate("score", true) else {
+        unreachable!()
+    };
+    let Query::Collect(collect) = collect_parts.and[0].clone() else {
+        unreachable!()
+    };
+    let group_query = and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: collect.template,
+            group_by: Vec::new(),
+            grouped_value: collect.into,
+            query: collect.query,
+        }),
+        collect_parts.and[1].clone(),
+        collect_parts.and[2].clone(),
+    ]);
+    let group = plan_bgp(&group_query).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &group,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+    let Query::Collect(collect) = collect_parts.and[0].clone() else {
+        unreachable!()
+    };
+    let length_query = and_of(vec![
+        Query::Collect(collect),
+        Query::Length(Length {
+            list: DataValue::Variable("scores".into()),
+            length: DataValue::Variable("total".into()),
+        }),
+    ]);
+    let length = plan_bgp(&length_query).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope,
+        &length,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[0][0] = generated_decimal_i64_field(1);
+    tampered.result_values[0][0] = CanonicalResultValue::GeneratedDecimalI64(1);
+    tampered.result_commitments[0] =
+        commit_column(&[generated_decimal_i64_field(1), ArkFr::zero()]).unwrap();
+    assert!(decode_and_verify_envelope(
+        &tampered.encode().unwrap(),
+        &compiled,
+        &layer,
+        layer.state.commitment_root,
+    )
+    .is_err());
+
+    let empty_query = collect_signed_sum_for_predicate("missing", false);
+    let empty_compiled = plan_bgp(&empty_query).unwrap();
+    let empty = empty_compiled.prove(&layer).unwrap();
+    let empty_values = empty
+        .verify_and_resolve_values(
+            &empty_compiled,
+            &layer,
+            layer.state.commitment_root,
+        )
+        .unwrap();
+    assert_eq!(empty.result_len, 1);
+    assert_eq!(
+        empty_values,
+        vec![vec![CanonicalResultValue::GeneratedDecimalI64(0)]]
+    );
+}
+
+#[test]
+fn collect_sum_proves_cancellation_empty_and_substitution() {
+    std::thread::Builder::new()
+        .name("woql-collect-sum-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_collect_sum_proves_cancellation_empty_and_substitution)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();
