@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `77ff651` | Exact two-/three-key complete-row ordering with transcript-bound arbitrary priority permutations, recursive wire/tamper coverage, and ordered-slice composition. |
-| `modules/terminusdb-rs` | `03c1637` plus this documentation commit | Canonical WOQL planning for arbitrary complete-key priority permutations, recursive verification, digest binding, canonical decoder coverage, and nested pagination E2E. |
+| `modules/terminusdb-store-paraplu` | `014b67d` | Transcript-bound strict/nondecreasing sort modes; scalar and complete-row ordering preserve duplicate multiplicity while strict join/distinctness callers remain unchanged. |
+| `modules/terminusdb-rs` | `10bbf1e` plus this documentation commit | Exact complete-key ordering accepts recursively proved bag children, retains fail-closed shape/type checks, and includes duplicate pagination coverage. |
 | `modules/terminusdb` | `de8ecd7c` | Owned CPU/Blitzar query provers and Prolog bridge. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -145,24 +145,41 @@ the prepared cloud server.
 
 ## Active WOQL coverage checklist
 
-The current semantic checkpoint completes authenticated priority mappings for bounded
-two-/three-key complete-row order. Store accepts only an exact permutation of every
-canonical schema column, binds that mapping and its parallel directions into the
-transcript, and reorders only the strict-sort inputs; the full-row proof and public
-outputs remain canonical schema order. `woql2` derives this mapping from the decoded
-Prolog-led `OrderTemplate` sequence, binds it into the query digest and recursive plan,
-and rejects partial, duplicate, missing, and substituted mappings. Focused Linux CPU
-gates passed for reversed two-key order (36.62s), a `[2,0,1]` three-key permutation
-(40.05s), recursive Store wire/tamper verification (144.04s), and nested WOQL
-`Limit(OrderBy(y DESC, x ASC))` proof/envelope verification (321.14s).
+The current semantic checkpoint permits equal adjacent keys without weakening strict
+callers that depend on distinctness. Store's positional shift proof now has explicit
+strict and nondecreasing modes bound before Fiat-Shamir challenges. Strict join/index
+callers retain the strict wrappers. Exact scalar and lexicographic ordering use only
+nondecreasing mode, while the existing exact multiset permutation preserves duplicate
+multiplicity and tuple correlation. Since the accepted ordering keys are the complete
+public schema, equal keys imply identical complete rows and SWI's stable tie order is
+observationally irrelevant. `woql2` therefore accepts recursively proved bag-producing
+children only under the existing complete-key, nonnullable, exact fixed-width datatype
+guards.
+
+Focused Linux Store gates passed for duplicate/all-equal/u64-boundary/padding/decrease
+(42.24s), strict/nondecreasing mode substitution (10.31s), lexicographic ties and
+direction tamper (33.74s), complete-row duplicate multiplicity and changed-content
+tamper (45.54s), and scalar duplicate preservation plus mixed-type rejection (46.92s).
+The duplicate `Or` -> `OrderBy(y DESC, x ASC)` -> `Limit(2)` WOQL run took 633.16s:
+proof generation, duplicate `(1,4),(1,4)` result resolution, envelope round-trip, and
+direction/key-priority substitution rejection all passed. Its final legacy row-swap
+assertion failed because it swapped identical rows and correctly remained valid. That
+assertion is now a real ID-content mutation and compiles (`--no-run` passed), but its
+full rerun was deliberately stopped after a bounded two-minute observation. The green
+Store changed-content tamper gate covers the underlying proof property; the corrected
+full WOQL E2E remains pending, preferably on the Mac or accelerated hardware.
 
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
-- [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column leaf result.
+- [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
 - [x] Exact `Start`/`Limit` contiguous slices over that authenticated ordered result.
 - [x] `Once` over an authenticated ordered child, digest-distinct from `Limit(1)`.
 - [x] Two-/three-key complete-row lexicographic order with full-row permutation and root-catalog type/value authentication.
 - [x] Arbitrary complete-key priority permutations, with canonical output schema and Store/WOQL digest binding.
+- [x] Transcript-bound nondecreasing order and recursive bag-child composition where ties are identical complete rows.
+- [ ] Complete the corrected duplicate bag-union WOQL E2E content-tamper rerun; its
+  positive path and query-substitution checks passed in 633.16s, while the corrected
+  final mutation currently has compile-only coverage.
 - [ ] Run the full Store proof suite and woql2 `proof_plan`/`proof_prove` suites when
   time permits; focused semantic tests are the commit gate because full Arkworks runs
   take minutes.
