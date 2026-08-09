@@ -142,6 +142,19 @@ mod tests {
     }
 
     #[test]
+    fn once_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
+        let decoded = Query::from_json(serde_json::json!({
+            "@type": "Once",
+            "query": { "@type": "True" }
+        }))
+        .expect("domain decoder accepts Prolog Once JSON");
+        let Query::Once(once) = decoded else {
+            panic!("expected decoded Once domain AST");
+        };
+        assert!(matches!(*once.query, Query::True(_)));
+    }
+
+    #[test]
     fn none_graph_serializes_as_instance() {
         let q = Query::Triple(Triple {
             subject: NodeValue::Variable("S".to_string()),

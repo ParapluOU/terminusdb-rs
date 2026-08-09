@@ -28,7 +28,7 @@ use decimal_rs::Decimal;
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
-use terminusdb_woql2::proof::{plan_bgp, BgpPlanError, CompiledBgp};
+use terminusdb_woql2::proof::{compiled_query_digest, plan_bgp, BgpPlanError, CompiledBgp};
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
 /// `PartialEq` — the plan types are foreign — so compare only the error.)
@@ -1731,13 +1731,34 @@ fn start_and_limit_reject_unordered_children_closed() {
 }
 
 #[test]
-fn remaining_ordered_result_controls_reject_until_authenticated() {
-    let base = tv("x", "age", "a");
-    let cases = [(Query::Once(Once { query: Box::new(base) }), "Once")];
+fn once_reuses_ordered_limit_one_but_remains_digest_distinct() {
+    let once = plan_bgp(&Query::Once(Once {
+        query: Box::new(exact_order_query_for_slice()),
+    }))
+    .unwrap();
+    assert_eq!(once.relation.as_exact_ordered_slice().unwrap().2, Some(1));
+    let limit = plan_bgp(&Query::Limit(Limit {
+        limit: 1,
+        query: Box::new(exact_order_query_for_slice()),
+    }))
+    .unwrap();
+    assert_ne!(compiled_query_digest(&once).unwrap(), compiled_query_digest(&limit).unwrap());
 
-    for (q, construct) in cases {
-        reject(q, BgpPlanError::UnsupportedConstruct { construct });
-    }
+    let empty = plan_bgp(&Query::Once(Once {
+        query: Box::new(Query::Limit(Limit {
+            limit: 0,
+            query: Box::new(exact_order_query_for_slice()),
+        })),
+    }))
+    .unwrap();
+    let (limited, _, once_limit) = empty.relation.as_exact_ordered_slice().unwrap();
+    assert_eq!(once_limit, Some(1));
+    assert_eq!(limited.as_exact_ordered_slice().unwrap().2, Some(0));
+
+    reject(
+        Query::Once(Once { query: Box::new(tv("x", "age", "a")) }),
+        BgpPlanError::OrderedSliceUnsupportedShape,
+    );
 }
 
 #[test]

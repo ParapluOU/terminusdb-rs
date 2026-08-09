@@ -132,6 +132,9 @@ pub enum CompiledRelationStatement {
         input: Box<CompiledRelation>,
         offset: u64,
         limit: Option<u64>,
+        /// Distinguishes canonical Prolog `once/1` from explicit `limit(1, ...)` in
+        /// the WOQL query digest while reusing the identical Store slice statement.
+        once: bool,
     },
     GroupExtrema {
         input: Box<CompiledRelation>,
@@ -217,7 +220,7 @@ impl CompiledRelation {
 
     pub fn as_exact_ordered_slice(&self) -> Option<(&CompiledRelation, u64, Option<u64>)> {
         match &self.statement {
-            CompiledRelationStatement::ExactOrderedSlice { input, offset, limit } => {
+            CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {
                 Some((input, *offset, *limit))
             }
             _ => None,
@@ -411,8 +414,12 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(input)?);
             hasher.update([*datatype as u8]);
         }
-        CompiledRelationStatement::ExactOrderedSlice { input, offset, limit } => {
-            hasher.update(b"/exact-ordered-slice");
+        CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, once } => {
+            hasher.update(if *once {
+                &b"/once-ordered-slice"[..]
+            } else {
+                &b"/exact-ordered-slice"[..]
+            });
             hasher.update(relation_query_digest(input)?);
             hasher.update(offset.to_le_bytes());
             match limit {
@@ -625,7 +632,7 @@ fn relation_proof_plan(
                 datatype: *datatype,
             }
         }
-        CompiledRelationStatement::ExactOrderedSlice { input, offset, limit } => {
+        CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {
             RelationProofPlanKind::ExactOrderedSlice {
                 input: Box::new(child(input)?),
                 offset: *offset,
@@ -975,6 +982,7 @@ impl ProvedBgp {
                     input: input_plan,
                     offset,
                     limit,
+                    ..
                 },
             ) => {
                 input.verify_relation(
@@ -2235,9 +2243,10 @@ fn plan_exact_scalar_order(
 }
 
 fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
-    let (child_query, offset, limit) = match query {
-        Query::Start(start) => (start.query.as_ref(), start.start, None),
-        Query::Limit(limit) => (limit.query.as_ref(), 0, Some(limit.limit)),
+    let (child_query, offset, limit, once) = match query {
+        Query::Start(start) => (start.query.as_ref(), start.start, None, false),
+        Query::Limit(limit) => (limit.query.as_ref(), 0, Some(limit.limit), false),
+        Query::Once(once) => (once.query.as_ref(), 0, Some(1), true),
         _ => return Err(BgpPlanError::OrderedSliceUnsupportedShape),
     };
     let child = plan_bgp(child_query)?;
@@ -2261,6 +2270,7 @@ fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, BgpPlanError> 
                 input: Box::new(child.relation),
                 offset,
                 limit,
+                once,
             },
         },
         projection: None,
@@ -2321,7 +2331,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         };
     }
 
-    if matches!(body, Query::Start(_) | Query::Limit(_)) {
+    if matches!(body, Query::Start(_) | Query::Limit(_) | Query::Once(_)) {
         if !selections.is_empty() || count_variable.is_some() || !distincts.is_empty() {
             return Err(BgpPlanError::OrderedSliceUnsupportedShape);
         }
