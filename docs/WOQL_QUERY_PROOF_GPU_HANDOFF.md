@@ -1,0 +1,160 @@
+# WOQL query-proof GPU handoff
+
+This is the continuation plan for query-proof coverage and accelerated proving.
+Keep the semantic coverage matrix in
+[`WOQL_QUERY_PROOF_COVERAGE.md`](WOQL_QUERY_PROOF_COVERAGE.md) authoritative;
+this file records cross-repository state, performance work, and validation.
+
+## Current checkpoint (2026-08-09)
+
+The proof wire format is independent of the prover backend. The caller owns one
+`StoreProverContext` and passes it through `CompiledBgp::prove_with_context`.
+TerminusDB exposes the same model as an owned `QueryProver` through the Prolog
+blob bridge. Backend selection and proof-generation lifecycle remain application
+policy, not Store policy.
+
+| Repository | Checkpoint | State |
+| --- | --- | --- |
+| `modules/dory` | `07ea32d` | Caller-owned Arkworks/Blitzar backend; Blitzar accelerates BN254 G1 MSM and preserves CPU proof bytes. |
+| `modules/terminusdb-store-paraplu` | `426486b` | Prover context threaded through recursive Store proof gadgets; explicit setup tier/runtime config. |
+| `modules/terminusdb-rs` | `ad11de8` | Canonical WOQL planner integration and hardware benchmark runner. |
+| `modules/terminusdb` | `b746dcda` | Owned CPU/Blitzar query provers and Prolog bridge. |
+
+The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
+boundary parsed JSON is decoded with the schema crate's explicit
+`Query::from_json` decoder (not serde-derived AST decoding). Prolog is the
+leading definition of WOQL shapes; update that decoder and `woql2` when the
+server's accepted structure differs.
+
+## Benchmark commands
+
+Run from `modules/terminusdb-rs`. Record the commit, OS/architecture, CPU/GPU,
+driver/CUDA versions, `RAYON_NUM_THREADS`, tier, row counts, and precomputation
+count with every result. Compare identical arguments and a warm filesystem.
+
+Stock Arkworks CPU (portable, including macOS):
+
+```sh
+RAYON_NUM_THREADS=4 cargo run --release -p terminusdb-woql2 \
+  --features proof --example proof_performance -- \
+  --backend cpu --tier log20 --rows 64 --group-rows 128 --precompute 0
+```
+
+Blitzar native CPU (Linux x86-64 only):
+
+```sh
+RAYON_NUM_THREADS=4 cargo run --release -p terminusdb-woql2 \
+  --features blitzar-cpu --example proof_performance -- \
+  --backend blitzar-cpu --tier log20 --rows 64 --group-rows 128 --precompute 0
+```
+
+Blitzar CUDA (Linux x86-64, NVIDIA GPU and CUDA only):
+
+```sh
+RAYON_NUM_THREADS=4 cargo run --release -p terminusdb-woql2 \
+  --features blitzar-gpu --example proof_performance -- \
+  --backend blitzar-gpu --tier log20 --rows 64 --group-rows 128 --precompute 0
+```
+
+The runner measures native runtime and setup initialization separately, warms
+the GPU once, and then exercises a small BGP, recursive
+`Or`/`Optional`/`Not`, and grouped minimum. CPU and GPU Blitzar features are
+mutually exclusive. Test `log20` first; only move to `log22` or `log24` when the
+query domain requires it. Sweep `--precompute` only after obtaining the zero
+precomputation baseline.
+
+## Mac validation path
+
+The current `blitzar-sys` 1.81.0 build script rejects every non-Linux OS and
+non-x86-64 architecture. Therefore neither `blitzar-cpu` nor `blitzar-gpu` is a
+valid native Mac test today, including on an Intel Mac. Apple Silicon and Apple
+GPU acceleration would require a different backend (for example Metal) or a
+maintained portable fork; CUDA/Blitzar cannot provide it.
+
+The Mac is still valuable for the portable CPU baseline and proof portability:
+
+```sh
+cd modules/terminusdb-rs
+rustc -Vv
+uname -a
+RAYON_NUM_THREADS=4 cargo run --release -p terminusdb-woql2 \
+  --features proof --example proof_performance -- \
+  --backend cpu --tier log20 --rows 64 --group-rows 128 --precompute 0
+cargo test -p terminusdb-woql2 --features proof --test proof_plan
+cargo test -p terminusdb-woql2 --features proof --test proof_prove
+```
+
+For a meaningful portability check, retain a Linux-generated envelope and
+compact verifier artifact as fixtures in a future checkpoint, then verify them
+on macOS and compare their bytes with a Mac CPU-generated proof for the same
+fixed layer/query. Do not claim GPU validation from the Mac CPU run.
+
+## Validation matrix
+
+| Target | Required result | Status |
+| --- | --- | --- |
+| Arkworks CPU, default proof features | Full proof tests and benchmark scenarios verify. | Passed on Linux. |
+| Blitzar CPU, Dory unit level | Edge scalar lengths/values, fallback paths, commitments, and full proof bytes equal Arkworks. | Passed on Linux x86-64. |
+| Blitzar CPU, recursive WOQL envelope | Envelope bytes equal CPU and verify against the same root/query. | Passed on Linux x86-64. |
+| Blitzar GPU feature, all Rust layers | Dory, Store, woql2, QueryProver, and Prolog bridge compile. | Passed on Linux x86-64; execution not tested. |
+| Blitzar GPU hardware | Benchmark all three scenarios, exact proof/envelope equality, verification, repeated-run stability, and peak memory. | Pending NVIDIA host. |
+| macOS portable CPU | Benchmark plus `proof_plan` and `proof_prove`; verify portable fixtures when added. | Pending Mac. |
+| TerminusDB running node | Opt-in release suite from `modules/terminusdb/docs/QUERY_PROOF_RELEASE_TESTS.md`. | Passed for CPU; accelerated prover integration needs a hardware run. |
+
+Hardware results are acceptable only if verification succeeds and proof and
+envelope bytes remain identical to the CPU run. Performance alone is not a pass.
+
+## Ordered continuation plan
+
+1. Run the Mac CPU validation above and record the exact environment and output.
+2. On Linux/NVIDIA, run CPU, Blitzar CPU, and Blitzar GPU with identical inputs.
+   Repeat enough times to separate initialization from steady-state proving.
+3. Profile the remaining wall time. Today only BN254 G1 MSM is accelerated;
+   G2 MSM, pairings, sumcheck, relation construction, and vector work remain on
+   CPU. Use measurements before choosing the next kernel/backend.
+4. Tune a minimum offload size and precomputation count. Preserve explicit
+   application-owned backend creation; do not add automatic lifecycle policy to
+   Store.
+5. Vendor or independently checksum the `blitzar-sys` native library before
+   production use. Its build script downloads a release `.so` without enforcing
+   a checksum. See `modules/dory/PROVENANCE.md` for pinned versions and the
+   observed Linux artifact digest.
+6. Continue WOQL coverage in the order suggested by the coverage matrix:
+   authenticated ordering/permutation and slicing; `If`; general grouped/list
+   results; then operators requiring new value circuits or authenticated data
+   models. Keep unsupported semantics fail-closed.
+7. Publish or register the Dory fork and Store fork so a fresh checkout resolves
+   the exact committed sources rather than relying on sibling directories.
+
+## Commit and handoff discipline
+
+- Before editing, record `git status --short` and the current commit in all four
+  repositories. Never absorb unrelated work.
+- Make one bounded change at a time and commit after each green checkpoint:
+  semantic coverage, proof gadget, context/backend integration, server bridge,
+  then benchmark/docs. Do not leave a cross-repository change represented only
+  by an outer pointer commit.
+- Every semantic commit must add positive, negative/tamper, and fail-closed tests.
+  Every acceleration commit must additionally establish CPU byte equivalence.
+- Update this handoff and `WOQL_QUERY_PROOF_COVERAGE.md` in the same checkpoint
+  when capability or constraints change. Record commands and measured output,
+  not only “tests pass”.
+- Use scoped `cargo clean -p ...` or repository-local `cargo clean` when disk
+  pressure requires it; inspect targets first and do not remove unrelated data.
+- Before handing off, verify each repository is clean, list its HEAD, and call
+  out intentionally untracked sibling repositories or unrelated root changes.
+
+## Known constraints
+
+- Blitzar 4.3.0 / `blitzar-sys` 1.81.0 supports Linux x86-64 only; its GPU mode
+  requires NVIDIA CUDA.
+- Blitzar runtime initialization is explicit in our API, but upstream native
+  initialization is process-global and the first configuration fixes it for the
+  process. There is no shutdown path.
+- The adapter accelerates matching setup-prefix G1 bases. Other bases and G2
+  work fall back to Arkworks CPU.
+- Storage proof support is unconditional. Acceleration is an optional prover
+  backend and must not create alternate layer or proof formats.
+- Proof generation lifecycle, scheduling, caching, and admission control belong
+  to the application/`terminusdb-rs` domain and are deliberately not selected
+  here.

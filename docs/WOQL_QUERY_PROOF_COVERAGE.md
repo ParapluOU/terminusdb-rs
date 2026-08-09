@@ -67,3 +67,7 @@ composition is implemented.
 All unlisted `Query` variants fall into their corresponding family above and
 fail closed today. No query path schedules proof generation, and this matrix
 makes no GPU or proof-lifecycle policy choice.
+
+The cross-repository implementation checkpoint, hardware commands, macOS path,
+and ordered continuation plan are recorded in
+[`WOQL_QUERY_PROOF_GPU_HANDOFF.md`](WOQL_QUERY_PROOF_GPU_HANDOFF.md).
