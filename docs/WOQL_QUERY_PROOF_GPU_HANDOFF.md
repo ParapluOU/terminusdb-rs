@@ -15,7 +15,7 @@ policy, not Store policy.
 
 | Repository | Checkpoint | State |
 | --- | --- | --- |
-| `modules/dory` | `8fdf2c5` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
+| `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
 | `modules/terminusdb-store-paraplu` | `46607d4` | Prover context threaded through recursive Store proof gadgets; explicit setup tier/runtime config and caller-owned exact G2 provider seam. |
 | `modules/terminusdb-rs` | `ad11de8` | Canonical WOQL planner integration and hardware benchmark runner. |
 | `modules/terminusdb` | `b746dcda` | Owned CPU/Blitzar query provers and Prolog bridge. |
@@ -98,6 +98,7 @@ fixed layer/query. Do not claim GPU validation from the Mac CPU run.
 | Blitzar CPU, recursive WOQL envelope | Envelope bytes equal CPU and verify against the same root/query. | Passed on Linux x86-64. |
 | Blitzar GPU feature, all Rust layers | Dory, Store, woql2, QueryProver, and Prolog bridge compile. | Passed on Linux x86-64; execution not tested. |
 | Caller-owned G2 provider seam | Edge MSMs and a complete opening equal Arkworks, serialized bytes match, and Store reports G2 work after type erasure. | Passed on Linux; hardware provider pending. |
+| Canonical ICICLE interchange boundary | Scalar and affine G2 identity/edge/random round trips; noncanonical fields, malformed infinity, and invalid points reject. | Passed without native ICICLE; adapter compile/link pending cloud. |
 | Blitzar GPU hardware | Benchmark all three scenarios, exact proof/envelope equality, verification, repeated-run stability, and peak memory. | Pending NVIDIA host. |
 | macOS portable CPU | Benchmark plus `proof_plan` and `proof_prove`; verify portable fixtures when added. | Pending Mac. |
 | TerminusDB running node | Opt-in release suite from `modules/terminusdb/docs/QUERY_PROOF_RELEASE_TESTS.md`. | Passed for CPU; accelerated prover integration needs a hardware run. |
@@ -122,27 +123,41 @@ a complete Dory opening establish exact Arkworks and serialized proof-byte
 equivalence. A real accelerator must implement `ProverBackend<ArkG2>` and pass
 the same acceptance tests; no proof or lifecycle changes are required.
 
+Official ICICLE v4.0.0, pinned to
+`6c77775961b0e4dc2be359feec1ac11536c18043`, does expose BN254 G2 MSM in its
+Rust API and is the current provider candidate. Dory checkpoint `2c571d4` adds
+tested canonical scalar and G2 affine interchange values and records the exact
+adapter/runtime/fallback design in `modules/dory/ICICLE_G2_DESIGN.md`. It does
+not add ICICLE dependencies or an uncompiled feature: this host lacks CMake,
+Clang/C++, CUDA, an NVIDIA device, and installed ICICLE frontend/backend
+libraries, while ICICLE v4's Rust build invokes CMake. The optional
+`icicle-gpu` provider must be compiled, linked, and equivalence-tested first on
+the prepared cloud server.
+
 ## Ordered continuation plan
 
 1. Run the Mac CPU validation above and record the exact environment and output.
 2. On Linux/NVIDIA, run CPU, Blitzar CPU, and Blitzar GPU with identical inputs.
    Repeat enough times to separate initialization from steady-state proving.
-3. Profile the remaining wall time and retain separate G1/G2 backend snapshots.
+3. On the prepared cloud server, implement the exact-revision ICICLE adapter
+   from `modules/dory/ICICLE_G2_DESIGN.md`, validate generator conversion first,
+   then run edge MSM, full proof-byte, and recursive Store envelope equivalence.
+4. Profile the remaining wall time and retain separate G1/G2 backend snapshots.
    Today only BN254 G1 MSM is accelerated; G2 MSM, pairings, sumcheck, relation
    construction, and vector work remain on CPU. Use measurements before choosing
    a G2 CUDA provider or the next kernel/backend.
-4. Tune a minimum offload size and precomputation count. Preserve explicit
+5. Tune a minimum offload size and precomputation count. Preserve explicit
    application-owned backend creation; do not add automatic lifecycle policy to
    Store.
-5. Vendor or independently checksum the `blitzar-sys` native library before
+6. Vendor or independently checksum the `blitzar-sys` native library before
    production use. Its build script downloads a release `.so` without enforcing
    a checksum. See `modules/dory/PROVENANCE.md` for pinned versions and the
    observed Linux artifact digest.
-6. Continue WOQL coverage in the order suggested by the coverage matrix:
+7. Continue WOQL coverage in the order suggested by the coverage matrix:
    authenticated ordering/permutation and slicing; `If`; general grouped/list
    results; then operators requiring new value circuits or authenticated data
    models. Keep unsupported semantics fail-closed.
-7. Publish or register the Dory fork and Store fork so a fresh checkout resolves
+8. Publish or register the Dory fork and Store fork so a fresh checkout resolves
    the exact committed sources rather than relying on sibling directories.
 
 ## Commit and handoff discipline
