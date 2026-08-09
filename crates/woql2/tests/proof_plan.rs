@@ -201,24 +201,44 @@ fn nested_select_rejects_a_variable_hidden_by_its_inner_select() {
 }
 
 #[test]
-fn accepts_link_and_data_as_typed_triple_patterns() {
-    let q = and_of(vec![
-        Query::Link(Link {
-            subject: NodeValue::Variable("x".into()),
-            predicate: NodeValue::Node(iri("knows")),
-            object: NodeValue::Variable("y".into()),
-            graph: GraphType::Instance,
-        }),
-        Query::Data(Data {
-            subject: NodeValue::Variable("x".into()),
-            predicate: NodeValue::Node(iri("active")),
-            object: DataValue::Variable("active".into()),
-            graph: GraphType::Instance,
-        }),
-    ]);
-    let c = plan_bgp(&q).unwrap();
-    assert_eq!(c.schema, vec!["y", "x", "active"]);
-    assert_eq!(c.plan.atoms.len(), 2);
+fn accepts_typed_constant_link_and_data_but_rejects_unproved_variable_kind() {
+    let link = Query::Link(Link {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("knows")),
+        object: NodeValue::Node(iri("y")),
+        graph: GraphType::Instance,
+    });
+    assert_eq!(plan_bgp(&link).unwrap().schema, vec!["x"]);
+
+    let data = Query::Data(Data {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("active")),
+        object: DataValue::Data(XSDAnySimpleType::Boolean(true)),
+        graph: GraphType::Instance,
+    });
+    assert_eq!(plan_bgp(&data).unwrap().schema, vec!["x"]);
+
+    let variable_link = Query::Link(Link {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("knows")),
+        object: NodeValue::Variable("y".into()),
+        graph: GraphType::Instance,
+    });
+    reject(
+        variable_link,
+        BgpPlanError::TypedObjectVariable { construct: "Link" },
+    );
+
+    let variable_data = Query::Data(Data {
+        subject: NodeValue::Variable("x".into()),
+        predicate: NodeValue::Node(iri("active")),
+        object: DataValue::Variable("active".into()),
+        graph: GraphType::Instance,
+    });
+    reject(
+        variable_data,
+        BgpPlanError::TypedObjectVariable { construct: "Data" },
+    );
 }
 
 #[test]

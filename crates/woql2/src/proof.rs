@@ -514,6 +514,12 @@ pub enum BgpPlanError {
     #[error("predicate variables unsupported: the predicate must be a constant IRI")]
     PredicateNotConstant,
 
+    /// `Link`/`Data` declare an object-kind restriction which a generic variable loses
+    /// when normalized to a triple. Constants carry their kind intrinsically; variables
+    /// need an authenticated type-selection proof.
+    #[error("{construct} with a variable object requires authenticated object-kind filtering")]
+    TypedObjectVariable { construct: &'static str },
+
     /// The object position held a compound value the store's node/value dictionary does
     /// not model as a single constant (a `Dictionary` or `List`). Node IRIs and aligned
     /// typed literals are accepted; these are not.
@@ -676,9 +682,11 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         });
     }
 
-    // (1b) Flatten nested Ands. Triple/Link/Data share one canonical Triple
-    // representation here; comparisons become object-value range filters. True and
-    // Comment contribute no bindings and are proof-transparent conjunction leaves.
+    // (1b) Flatten nested Ands. Sound constant-object Link/Data forms share one
+    // canonical Triple representation here; variable-object forms reject because their
+    // declared node/literal kind is not yet authenticated. Comparisons become
+    // object-value range filters. True and Comment contribute no bindings and are
+    // proof-transparent conjunction leaves.
     let mut triples: Vec<Triple> = Vec::new();
     let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
@@ -794,8 +802,8 @@ fn collect_conjunct<'a>(
 ) -> Result<(), BgpPlanError> {
     match query {
         Query::Triple(triple) => triples.push(triple.clone()),
-        Query::Link(link) => triples.push(triple_from_link(link)),
-        Query::Data(data) => triples.push(triple_from_data(data)),
+        Query::Link(link) => triples.push(triple_from_link(link)?),
+        Query::Data(data) => triples.push(triple_from_data(data)?),
         Query::And(inner) => {
             for query in &inner.and {
                 collect_conjunct(query, triples, comparisons)?;
@@ -823,25 +831,35 @@ fn collect_conjunct<'a>(
     Ok(())
 }
 
-fn triple_from_link(link: &Link) -> Triple {
-    Triple {
+fn triple_from_link(link: &Link) -> Result<Triple, BgpPlanError> {
+    let object = match &link.object {
+        NodeValue::Node(node) => Value::Node(node.clone()),
+        NodeValue::Variable(_) => {
+            return Err(BgpPlanError::TypedObjectVariable { construct: "Link" })
+        }
+    };
+    Ok(Triple {
         subject: link.subject.clone(),
         predicate: link.predicate.clone(),
-        object: match &link.object {
-            NodeValue::Node(node) => Value::Node(node.clone()),
-            NodeValue::Variable(var) => Value::Variable(var.clone()),
-        },
+        object,
         graph: Some(link.graph.clone()),
-    }
+    })
 }
 
-fn triple_from_data(data: &Data) -> Triple {
-    Triple {
+fn triple_from_data(data: &Data) -> Result<Triple, BgpPlanError> {
+    let object = match &data.object {
+        DataValue::Data(value) => Value::Data(value.clone()),
+        DataValue::List(values) => Value::List(values.iter().map(value_from_data_value).collect()),
+        DataValue::Variable(_) => {
+            return Err(BgpPlanError::TypedObjectVariable { construct: "Data" })
+        }
+    };
+    Ok(Triple {
         subject: data.subject.clone(),
         predicate: data.predicate.clone(),
-        object: value_from_data_value(&data.object),
+        object,
         graph: Some(data.graph.clone()),
-    }
+    })
 }
 
 fn value_from_data_value(value: &DataValue) -> Value {

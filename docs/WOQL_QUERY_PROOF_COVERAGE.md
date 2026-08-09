@@ -15,10 +15,10 @@ authenticated.
 | `From(instance)` | Implemented | Schema and wildcard graph reads reject. |
 | `Pin`, `Immediately` | Implemented | They affect execution/optimization timing, not the declarative BGP result. Their query identity remains bound. |
 | `Distinct` | Implemented only for the complete BGP schema | Full natural-join assignments over set-valued triples are already unique. Projection/subset distinct needs authenticated deduplication. |
-| `Comment`, `True` inside `And` | Implemented | They add no bindings and do not change conjunction solutions. |
+| `Comment`, `True` inside `And` | Implemented in woql2 | They add no bindings and do not change conjunction solutions. This TerminusDB fork's JSON parser does not expose query-level `True`; running-node coverage therefore cannot claim it. |
 | `Count` | Implemented | The authenticated complete result length is the count. The ordinary executor must deliver exactly the declared count variable and one nonnegative `u64` value. |
-| Standalone fully-ground `Triple`/`Link`/`Data` | Implemented | The Store's internal UNIT column authenticates the zero-arity relation: one empty binding when the triple exists, none when it does not. Triple absence is supported when all three constants are dictionary members; absent dictionary terms still fail closed. |
-| `Link`, `Data`, `Triple` | Implemented | Normalized to the same instance-triple statement with node/data typing preserved. |
+| Standalone fully-ground `Triple`/`Link`/`Data` | Implemented in woql2; this TerminusDB fork's JSON parser exposes only `Triple` | The Store's internal UNIT column authenticates the zero-arity relation: one empty binding when the triple exists, none when it does not. Triple absence is supported when all three constants are dictionary members; absent dictionary terms still fail closed. |
+| Constant-object `Link` and `Data` | Implemented in woql2 | The constant's canonical node/literal representation intrinsically authenticates the declared object kind. Variable-object forms reject until object-kind selection is proven; the current TerminusDB JSON parser does not expose either variant. |
 
 Write/routing constructs (`Into`, `Add*`, `Delete*`, document mutations) are not
 read-query wrappers and remain rejected by query-proof generation.
@@ -45,6 +45,7 @@ composition is implemented.
 | `RangeMin`, `RangeMax` | range selection and strict sort | Authenticate extrema and the empty-input case. |
 | Disconnected BGP/cartesian product | binary join and count identities | A complete cartesian-product gadget with multiplicity and output-column linkage. |
 | Additional scalar ranges | dictionary value lookup and range bit proofs | A store-aligned order-preserving encoding and comparison circuit for each datatype. |
+| Variable-object `Link`/`Data` | canonical dictionary values and result commitments | Authenticate the node-vs-literal object-kind filter. Normalizing either to an unconstrained `Triple` would prove the wrong complete relation. |
 
 ## C. Operators needing genuinely new crypto or a new authenticated data model
 
