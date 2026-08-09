@@ -17,7 +17,7 @@ policy, not Store policy.
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
 | `modules/terminusdb-store-paraplu` | `3653a34` | Recursive zero-/one-/two-node-key grouped sums bind ordered key mappings and derive SWI-compatible canonical tuple order. |
-| `modules/terminusdb-rs` | this checkpoint | WOQL planning, proving, verification, and signed generated-result filtering cover immediate two-key `GroupBy`→`Sum`. |
+| `modules/terminusdb-rs` | `18a88c2` | WOQL planning, proving, verification, and signed generated-result filtering cover immediate two-key `GroupBy`→`Sum`. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
