@@ -32,7 +32,8 @@ use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
 use terminusdb_woql2::proof::{
-    compiled_query_digest, plan_bgp, BgpPlanError, CompiledBgp, CompiledRelationStatement,
+    compiled_query_digest, decode_executed_result_inputs, plan_bgp, BgpPlanError, CompiledBgp,
+    CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue,
 };
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
@@ -334,6 +335,83 @@ fn immediate_zero_key_group_sum_compiles_one_generated_decimal_column() {
     }))
     .unwrap();
     assert_eq!(counted.count_variable.as_deref(), Some("rows"));
+}
+
+#[test]
+fn generated_decimal_foreign_inputs_are_descriptor_driven_and_canonical() {
+    let unsigned = plan_bgp(&grouped_u32_sum()).unwrap();
+    assert_eq!(
+        decode_executed_result_inputs(
+            &unsigned,
+            &["category".into(), "total".into()],
+            &[vec![
+                ExecutedResultInput::Id(7),
+                ExecutedResultInput::GeneratedDecimal("5".into()),
+            ]],
+        )
+        .unwrap(),
+        vec![vec![
+            ExecutedResultValue::Id(7),
+            ExecutedResultValue::GeneratedDecimalU64(5),
+        ]]
+    );
+
+    let signed = plan_bgp(&grouped_sum_with_bound(DataValue::Data(
+        XSDAnySimpleType::Long(i64::MIN),
+    )))
+    .unwrap();
+    for (lexical, expected) in [
+        ("-1", ExecutedResultValue::GeneratedDecimalI64(-1)),
+        ("0", ExecutedResultValue::GeneratedDecimalI64(0)),
+        ("1", ExecutedResultValue::GeneratedDecimalI64(1)),
+    ] {
+        let decoded = decode_executed_result_inputs(
+            &signed,
+            &["category".into(), "total".into()],
+            &[vec![
+                ExecutedResultInput::Id(7),
+                ExecutedResultInput::GeneratedDecimal(lexical.into()),
+            ]],
+        )
+        .unwrap();
+        assert_eq!(decoded[0][1], expected);
+    }
+    for (compiled, lexical) in [
+        (&unsigned, "-1"),
+        (&unsigned, "01"),
+        (&signed, "18446744073709551615"),
+    ] {
+        assert!(decode_executed_result_inputs(
+            compiled,
+            &["category".into(), "total".into()],
+            &[vec![
+                ExecutedResultInput::Id(7),
+                ExecutedResultInput::GeneratedDecimal(lexical.into()),
+            ]],
+        )
+        .is_err());
+    }
+    assert!(decode_executed_result_inputs(
+        &signed,
+        &["category".into(), "total".into()],
+        &[vec![ExecutedResultInput::Id(7), ExecutedResultInput::Id(1)]],
+    )
+    .is_err());
+
+    let counted = plan_bgp(&Query::Count(Count {
+        query: Box::new(global_u32_sum()),
+        count: DataValue::Variable("groups".into()),
+    }))
+    .unwrap();
+    assert_eq!(
+        decode_executed_result_inputs(
+            &counted,
+            &["groups".into()],
+            &[vec![ExecutedResultInput::GeneratedDecimal("0".into())]],
+        )
+        .unwrap(),
+        vec![vec![ExecutedResultValue::Id(0)]]
+    );
 }
 
 #[test]

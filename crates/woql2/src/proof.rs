@@ -315,6 +315,123 @@ pub enum ExecutedResultValue {
     Null,
 }
 
+/// Untyped foreign/executor wire value. Generated decimals deliberately remain lexical
+/// until the independently compiled result descriptor selects the signed or unsigned
+/// generated domain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutedResultInput {
+    Id(u64),
+    GeneratedDecimal(String),
+    Null,
+}
+
+fn parse_canonical_u64_decimal(value: &str) -> std::io::Result<u64> {
+    let parsed = value.parse::<u64>().map_err(|_| std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "generated unsigned decimal is outside canonical u64 range",
+    ))?;
+    if parsed.to_string() != value {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "generated unsigned decimal has a noncanonical integer lexical form",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_canonical_i64_decimal(value: &str) -> std::io::Result<i64> {
+    let parsed = value.parse::<i64>().map_err(|_| std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "generated signed decimal is outside canonical i64 range",
+    ))?;
+    if parsed.to_string() != value {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "generated signed decimal has a noncanonical integer lexical form",
+        ));
+    }
+    Ok(parsed)
+}
+
+pub fn decode_executed_result_inputs(
+    compiled: &CompiledBgp,
+    variables: &[String],
+    rows: &[Vec<ExecutedResultInput>],
+) -> std::io::Result<Vec<Vec<ExecutedResultValue>>> {
+    if let Some(count_variable) = &compiled.count_variable {
+        if variables != std::slice::from_ref(count_variable)
+            || rows.iter().any(|row| row.len() != 1)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "executed Count input shape does not match compiled count binding",
+            ));
+        }
+        return rows
+            .iter()
+            .map(|row| match &row[0] {
+                ExecutedResultInput::GeneratedDecimal(value) => parse_canonical_u64_decimal(value)
+                    .map(|value| vec![ExecutedResultValue::Id(value)]),
+                _ => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "executed Count requires an explicit generated decimal",
+                )),
+            })
+            .collect();
+    }
+    let projection = compiled
+        .projection
+        .clone()
+        .unwrap_or_else(|| (0..compiled.relation.schema.len()).collect());
+    let expected_variables = projection
+        .iter()
+        .map(|index| compiled.relation.schema[*index].as_str())
+        .collect::<Vec<_>>();
+    if variables.iter().map(String::as_str).collect::<Vec<_>>() != expected_variables
+        || rows.iter().any(|row| row.len() != projection.len())
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "executed input shape does not match compiled projection",
+        ));
+    }
+    let descriptors = compiled_result_descriptors(compiled)?;
+    let projected = projection
+        .iter()
+        .map(|index| descriptors[*index])
+        .collect::<Vec<_>>();
+    rows.iter()
+        .map(|row| {
+            row.iter()
+                .zip(&projected)
+                .map(|(value, descriptor)| match (value, descriptor.namespace) {
+                    (
+                        ExecutedResultInput::Id(id),
+                        ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate,
+                    ) if *id != 0 => Ok(ExecutedResultValue::Id(*id)),
+                    (
+                        ExecutedResultInput::GeneratedDecimal(value),
+                        ResultIdNamespace::GeneratedDecimalU64,
+                    ) => parse_canonical_u64_decimal(value)
+                        .map(ExecutedResultValue::GeneratedDecimalU64),
+                    (
+                        ExecutedResultInput::GeneratedDecimal(value),
+                        ResultIdNamespace::GeneratedDecimalI64,
+                    ) => parse_canonical_i64_decimal(value)
+                        .map(ExecutedResultValue::GeneratedDecimalI64),
+                    (ExecutedResultInput::Null, _) if descriptor.nullable => {
+                        Ok(ExecutedResultValue::Null)
+                    }
+                    _ => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "executed foreign value kind does not match compiled result descriptor",
+                    )),
+                })
+                .collect()
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 pub enum ProvedQueryStatement {
     LayerTripleCount,
