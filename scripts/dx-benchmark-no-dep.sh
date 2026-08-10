@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# bench-dx.sh — measure local build/test speed with rustc-native tooling.
+# dx-benchmark-no-dep.sh — measure local build/test speed with rustc-native
+# tooling only (no third-party dependencies installed).
 #
 # Methodology follows the rustc-dev-guide profiling page and the rustc-perf
 # collector (scenarios x metrics, per-crate timings, self-profile):
@@ -8,9 +9,13 @@
 #                rustc -Z self-profile (measureme summarize)
 #
 # Usage:
-#   scripts/bench-dx.sh [target] [runs]
+#   scripts/dx-benchmark-no-dep.sh [target] [runs]
 #     targets: wall | timings | selfprofile | all    (default: all)
 #     runs:    repetitions per measurement (default: 3)
+#
+# For hardware-guided sweet-spot tuning of .cargo/config.toml
+# (CARGO_BUILD_JOBS / RUST_TEST_THREADS) see
+# scripts/dx-benchmark-hyperfine.sh.
 #
 # Compare base vs candidate branch by running on each and diffing the tables
 # (same machine, warm cache first).
@@ -98,7 +103,7 @@ case "$TARGET" in
     cargo build -p terminusdb-client >/dev/null 2>&1 || true
     bench_wall
     bench_timings
-    echo "# self-profile: scripts/bench-dx.sh selfprofile (needs measureme 'summarize')"
+    echo "# self-profile: scripts/dx-benchmark-no-dep.sh selfprofile (needs measureme 'summarize')"
     ;;
   *) echo "unknown target: $TARGET (wall|timings|selfprofile|all)" >&2; exit 1 ;;
 esac
