@@ -67,5 +67,7 @@ async fn api_key_override_sets_authorization_header() {
         .build()
         .unwrap();
     let auth = request.headers().get("authorization").unwrap();
-    assert_eq!(auth, "Apikey key-456");
+    // Scheme matches the JS client and the server docs: `Token <key>`
+    // (terminusdb-client-js dispatchRequest formatAuthHeader; docs/terminusdb/push-to-project.md).
+    assert_eq!(auth, "Token key-456");
 }
