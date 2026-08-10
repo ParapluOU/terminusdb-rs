@@ -29,6 +29,16 @@ fn encode_basic_auth(username: &str, password: &str) -> String {
     format!("Basic {}", encoded)
 }
 
+/// Returns the `(name, value)` pair for the remote-authentication header.
+///
+/// The TerminusDB server looks this header up **case-sensitively** — sending
+/// `AUTHORIZATION_REMOTE` is silently ignored and the operation fails with an
+/// auth error on v12. The exact casing below matches the server and the
+/// JavaScript client.
+fn authorization_remote_header(username: &str, password: &str) -> (&'static str, String) {
+    ("Authorization-Remote", encode_basic_auth(username, password))
+}
+
 /// Collaboration operations for the TerminusDB HTTP client
 impl super::client::TerminusDBHttpClient {
     /// Fetches changes from a remote repository.
@@ -102,8 +112,8 @@ impl super::client::TerminusDBHttpClient {
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
-            let auth_header = encode_basic_auth(username, password);
-            request = request.header("Authorization-Remote", auth_header);
+            let (name, value) = authorization_remote_header(username, password);
+            request = request.header(name, value);
         }
 
         let body = json!({
@@ -220,8 +230,8 @@ impl super::client::TerminusDBHttpClient {
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
-            let auth_header = encode_basic_auth(username, password);
-            request = request.header("Authorization-Remote", auth_header);
+            let (name, value) = authorization_remote_header(username, password);
+            request = request.header(name, value);
         }
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
@@ -343,8 +353,8 @@ impl super::client::TerminusDBHttpClient {
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
-            let auth_header = encode_basic_auth(username, password);
-            request = request.header("Authorization-Remote", auth_header);
+            let (name, value) = authorization_remote_header(username, password);
+            request = request.header(name, value);
         }
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
@@ -467,8 +477,8 @@ impl super::client::TerminusDBHttpClient {
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
-            let auth_header = encode_basic_auth(username, password);
-            request = request.header("Authorization-Remote", auth_header);
+            let (name, value) = authorization_remote_header(username, password);
+            request = request.header(name, value);
         }
 
         // Apply timeout: use provided timeout or default to 1 hour for full database clone
@@ -507,5 +517,30 @@ impl super::client::TerminusDBHttpClient {
         );
 
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{authorization_remote_header, encode_basic_auth};
+
+    #[test]
+    fn authorization_remote_uses_server_exact_casing() {
+        let (name, _) = authorization_remote_header("admin", "root");
+        // The v12 server looks up this header case-sensitively; the previous
+        // ALL-CAPS form was silently ignored, breaking authenticated
+        // clone/push/pull between servers.
+        assert_eq!(name, "Authorization-Remote");
+    }
+
+    #[test]
+    fn authorization_remote_encodes_basic_credentials() {
+        let (_, value) = authorization_remote_header("admin", "root");
+        assert_eq!(value, "Basic YWRtaW46cm9vdA==");
+    }
+
+    #[test]
+    fn basic_auth_encodes_credentials() {
+        assert_eq!(encode_basic_auth("user", "pw"), "Basic dXNlcjpwdw==");
     }
 }
