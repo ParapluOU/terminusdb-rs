@@ -176,7 +176,7 @@ impl super::client::TerminusDBHttpClient {
         skip(self, remote_auth),
         fields(
             path = %path,
-            remote_url = %remote_url,
+            remote = %remote,
             remote_branch = ?remote_branch,
             has_auth = remote_auth.is_some()
         ),
@@ -185,7 +185,7 @@ impl super::client::TerminusDBHttpClient {
     pub async fn push(
         &self,
         path: &str,
-        remote_url: &str,
+        remote: &str,
         remote_branch: Option<&str>,
         remote_auth: Option<(&str, &str)>,
         timeout: Option<std::time::Duration>,
@@ -201,13 +201,10 @@ impl super::client::TerminusDBHttpClient {
         )
         .with_context(None, None);
 
-        let mut body = json!({
-            "remote": remote_url
+        let body = json!({
+            "remote": remote,
+            "remote_branch": remote_branch.unwrap_or("main")
         });
-
-        if let Some(branch) = remote_branch {
-            body["remote_branch"] = json!(branch);
-        }
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
@@ -293,10 +290,8 @@ impl super::client::TerminusDBHttpClient {
         skip(self, remote_auth),
         fields(
             path = %path,
-            remote_url = %remote_url,
+            remote = %remote,
             remote_branch = ?remote_branch,
-            author = %author,
-            message = %message,
             has_auth = remote_auth.is_some()
         ),
         err
@@ -304,10 +299,8 @@ impl super::client::TerminusDBHttpClient {
     pub async fn pull(
         &self,
         path: &str,
-        remote_url: &str,
+        remote: &str,
         remote_branch: Option<&str>,
-        author: &str,
-        message: &str,
         remote_auth: Option<(&str, &str)>,
         timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<serde_json::Value> {
@@ -322,15 +315,10 @@ impl super::client::TerminusDBHttpClient {
         )
         .with_context(None, None);
 
-        let mut body = json!({
-            "remote": remote_url,
-            "author": author,
-            "message": message
+        let body = json!({
+            "remote": remote,
+            "remote_branch": remote_branch.unwrap_or("main")
         });
-
-        if let Some(branch) = remote_branch {
-            body["remote_branch"] = json!(branch);
-        }
 
         // Apply rate limiting for write operations
         let _permit = self.acquire_write_permit().await;
