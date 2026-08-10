@@ -93,3 +93,6 @@ manager/test-results/
 manager/tests/
 /storage/
 crates/mcp-server/.secrets.env
+
+# Local per-developer cargo config (copy from .cargo/config.toml.example)
+/.cargo/config.toml

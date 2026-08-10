@@ -1,0 +1,44 @@
+# .cargo/config.toml — per-OS build optimizations.
+# Each block applies only on its target_os. Requires the linker installed
+# (see CONTRIBUTING.md "Optional speed-ups"): mold on Linux, lld on macOS/Windows.
+
+[build]
+jobs = 8
+
+[env]
+RUST_TEST_THREADS = "8"
+RUST_TEST_NOCAPTURE = "1"
+
+# --- macOS ---
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "-C", "split-debuginfo=unpacked", # bypasses dsymutil to skip debug symbol bundling
+    "-C", "debuginfo=1",              # stores line numbers only
+    "-C", "link-arg=-fuse-ld=lld",    # faster linking via lld
+]
+
+# --- Linux ---
+[target.'cfg(target_os = "linux")']
+linker = "clang"
+rustflags = [
+    "-C", "link-arg=-fuse-ld=mold",   # ~10x faster linking (fallback: -fuse-ld=lld)
+    "-C", "debuginfo=1",
+]
+
+# --- Windows ---
+[target.'cfg(target_os = "windows")']
+rustflags = [
+    "-C", "link-arg=-fuse-ld=lld",    # replace MSVC link.exe with LLD-link
+    "-C", "split-debuginfo=unpacked", # avoid expensive PDB merges
+    "-C", "debuginfo=1",
+]
+
+# --- Fast dev profile (compile-time-only; workspace Cargo.toml is untouched) ---
+[profile.dev]
+opt-level = 0
+debug = 1
+codegen-units = 256
+
+# Optimize external deps so tests run fast (embedded server included)
+[profile.dev.package."*"]
+opt-level = 2
