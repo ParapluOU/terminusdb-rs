@@ -103,7 +103,7 @@ impl super::client::TerminusDBHttpClient {
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
             let auth_header = encode_basic_auth(username, password);
-            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+            request = request.header("Authorization-Remote", auth_header);
         }
 
         let body = json!({
@@ -221,7 +221,7 @@ impl super::client::TerminusDBHttpClient {
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
             let auth_header = encode_basic_auth(username, password);
-            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+            request = request.header("Authorization-Remote", auth_header);
         }
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
@@ -344,7 +344,7 @@ impl super::client::TerminusDBHttpClient {
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
             let auth_header = encode_basic_auth(username, password);
-            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+            request = request.header("Authorization-Remote", auth_header);
         }
 
         // Apply timeout: use provided timeout or default to 15 minutes for incremental operations
@@ -468,7 +468,7 @@ impl super::client::TerminusDBHttpClient {
         // Add AUTHORIZATION_REMOTE header if credentials are provided
         if let Some((username, password)) = remote_auth {
             let auth_header = encode_basic_auth(username, password);
-            request = request.header("AUTHORIZATION_REMOTE", auth_header);
+            request = request.header("Authorization-Remote", auth_header);
         }
 
         // Apply timeout: use provided timeout or default to 1 hour for full database clone
