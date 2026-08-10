@@ -104,12 +104,31 @@ guide together.
 
 ## Benchmarking build/test speed
 
-To verify DX changes (like the dev-profile defaults) on your own machine:
+Two scripts, same methodology (nightly forced automatically, `CARGO_TARGET_DIR`
+aware):
 
 ```bash
-scripts/bench-dx.sh            # all targets, 3 runs
-scripts/bench-dx.sh tests 5    # just unit tests, 5 runs
+scripts/dx-benchmark-no-dep.sh                # rustc-native, zero installs
+scripts/dx-benchmark-no-dep.sh wall 5         # wall-clock only, 5 runs
+scripts/dx-benchmark-hyperfine.sh             # hardware-guided sweet spot (RAM/cores)
+scripts/dx-benchmark-hyperfine.sh --full      # + clean-build & integration-test scaling
+scripts/dx-benchmark-hyperfine.sh --no-bench  # suggestion only, no hyperfine needed
 ```
+
+**`dx-benchmark-hyperfine.sh`** detects logical/physical cores and RAM, suggests
+a `.cargo/config.toml` starting point, then uses
+[hyperfine](https://github.com/sharkdp/hyperfine) to find the real sweet spot:
+
+- `CARGO_BUILD_JOBS = min(logical cores, RAM_GB / 2.5)` — rustc is RAM-bound
+  (each parallel compiler can use 1.5–4 GB during LLVM codegen); low-RAM
+  machines must cut jobs or they swap and lose 90% of compile speed
+- `RUST_TEST_THREADS` — **physical cores** for CPU-bound unit tests,
+  **1.5–2× logical cores** for I/O-bound integration tests (network/disk/async
+  wait), **1** for shared-resource tests (local DB, ports, global state — the
+  embedded-server harness)
+
+Missing linking dependencies (mold/lld) only emit **WARNING**s — the benchmark
+still runs on the system linker.
 
 Methodology (compare the same target on the base branch and the candidate
 branch, same machine):
@@ -123,8 +142,6 @@ branch, same machine):
      make the embedded server and tests run much faster)
    - a **clean build is intentionally slower** on the optimized-deps profile —
      that is the documented trade-off for faster test runtime, not a regression
-4. The script is pure bash + POSIX tools — no installs. For fancier output,
-   `hyperfine` works too (optional)
 
 ## Before opening a PR
 
