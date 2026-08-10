@@ -58,7 +58,8 @@ use terminus_store::proof::query::{
     resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
     verify_layer_bgp_result_log_domain,
     verify_result_columns, generated_decimal_i64_field, generated_decimal_i64_value,
-    generated_decimal_u64_value, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    generated_decimal_u64_value, AtomTerm, CanonicalResultValue, ColumnSource, LayerBgpAtom,
+    LayerBgpPlan,
     LayerBgpProof, ObjectKindFilter, ObjectRangeBound, ObjectRangeSpec,
     ResultColumnDescriptor, ResultIdNamespace,
 };
@@ -68,10 +69,11 @@ use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 use terminus_store::store::sync::SyncStoreLayer;
 use terminus_store::ValueTriple;
 
+use crate::expression::{ArithmeticExpression, ArithmeticValue};
 use crate::misc::InRange;
-use crate::query::Query;
+use crate::query::{And, Query};
 use crate::triple::Triple;
-use crate::value::{DataValue, NodeValue, Value};
+use crate::value::{DataValue, ListOrVariable, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
 /// A compiled, variable-blind BGP plan plus the metadata a caller needs to read the
@@ -216,6 +218,280 @@ pub enum CompiledRelationStatement {
         datatype: CanonicalDatatype,
         kind: GroupExtremaKind,
     },
+    /// WOQL `Eval` of an INTEGER arithmetic tree (`Plus`/`Minus`/`Times`/`Div`/`Exp` over
+    /// integer literals and authenticated integer child columns; `Div` is floor division and
+    /// `Exp` is integer power over a non-negative exponent — see [`EvalExpr`]). The child
+    /// relation `input` binds
+    /// AND authenticates every operand variable; this statement carries through the child
+    /// columns and appends exactly ONE derived signed-integer column (`GeneratedDecimalI64`)
+    /// that the verifier RE-EVALUATES elementwise. See [`EvalExpr`] for the soundness model.
+    Eval {
+        input: Box<CompiledRelation>,
+        expr: EvalExpr,
+    },
+    /// WOQL `Typecast` of ONE authenticated integer column to a fixed-width integer target
+    /// type. The child relation `input` binds AND authenticates the source column; this
+    /// statement carries through the child columns and appends exactly ONE derived integer
+    /// column holding the cast value, which the verifier RE-COMPUTES elementwise from the
+    /// root-authenticated source value.
+    ///
+    /// SOUNDNESS (verifier recompute — no novel gadget, no value change): an integer→integer
+    /// cast preserves the numeric VALUE (Prolog `typecast` is a lossless identity on the value
+    /// when it fits, and THROWS `casting_error` when it does not — never wraps/truncates; see
+    /// `casting.pl`). The verifier decodes the source value from the trusted root dictionary
+    /// (exactly as Sum/Eval do, re-checking `source_datatype`), asserts it lies within the
+    /// TARGET type's exact XSD range, and appends the value in the target's generated namespace
+    /// (`GeneratedDecimalI64` for signed targets, `GeneratedDecimalU64` for unsigned). A value
+    /// outside the target range FAILS CLOSED (matching the Prolog throw); there is no biasable
+    /// witness. `source_datatype`/`target_datatype` are bound into the query digest.
+    Typecast {
+        input: Box<CompiledRelation>,
+        /// The (nonnullable, fixed-width-integer) child result column that holds the source.
+        source_column: usize,
+        /// The exact fixed-width integer datatype the compiler pinned for `source_column`;
+        /// re-checked against the AUTHENTICATED dictionary value at recompute time.
+        source_datatype: CanonicalDatatype,
+        /// The fixed-width integer target type. Its signedness selects the derived column's
+        /// generated namespace and its XSD range bounds the recompute's fail-closed check.
+        target_datatype: CanonicalDatatype,
+    },
+    /// WOQL `Concatenate` (`concat(List, Result)`) — the FOUNDATION of the read-only string
+    /// value-circuit family, using the SAME verifier-recompute architecture as `Eval`/`Typecast`
+    /// but over string BYTES instead of integers (no novel proof gadget).
+    ///
+    /// `interpolate_string/2` (TerminusDB `src/core/util/utils.pl`) concatenates the list
+    /// elements left-to-right with NO separator; this is DETERMINISTIC, semantically
+    /// UNAMBIGUOUS, and — unlike `upper`/`lower` — LOCALE-INDEPENDENT (pure `string_concat`,
+    /// no `towupper`/`towlower`). The child relation `input` binds AND authenticates every
+    /// operand VARIABLE (each is a nonnullable node/value store column); `elements` is the
+    /// ordered concat template of query-literal bytes and authenticated child string columns.
+    ///
+    /// TERMINAL RESULT — the synthesized string is REVEALED, not committed. A synthesized
+    /// string does not fit a single field element (unlike an integer's `GeneratedDecimalI64`),
+    /// and it feeds no downstream authenticated operation, so — exactly as the task's
+    /// byte-authentication foundation dictates — NO new committed column/format is added. The
+    /// committed `result_columns` are the child's operand columns verbatim (already root-bound);
+    /// the per-row concatenation is DELIVERED alongside and the verifier RE-DERIVES it from the
+    /// root-authenticated operands (see [`expected_concat_objects`]). Because the inputs are
+    /// pinned to the trusted root and byte concatenation is deterministic, there is no biasable
+    /// witness — the identical soundness model the arithmetic circuits use.
+    Concat {
+        input: Box<CompiledRelation>,
+        /// Ordered concat template. Order + literal-vs-column + literal bytes + column indices
+        /// are all bound into the query digest, so a proof cannot be replayed as a reordered or
+        /// differently-literal concatenation.
+        elements: Vec<ConcatElement>,
+        /// The fresh result VARIABLE name that `concat` binds. Tracked only for query identity
+        /// (digest) and terminal-string exposure; it is deliberately NOT a committed schema
+        /// column (the result is revealed, not committed — see the variant docs).
+        result: String,
+    },
+    /// WOQL `Join` (`join(List, Sep, Result)`) — a SEPARATOR-interposed extension of `Concat`.
+    ///
+    /// FIDELITY (reference `utils:join/3`, `src/core/util/utils.pl:777`): `join` is
+    /// `intersperse(Sep, List, New_List)` then `interpolate_string(New_List, Result)`. For a list
+    /// of xsd:string elements `[e0, e1, ..., e_{n-1}]` and an xsd:string separator `Sep`,
+    /// `intersperse` yields `[e0, Sep, e1, Sep, ..., Sep, e_{n-1}]` (SEPARATOR only BETWEEN
+    /// adjacent elements — a single-element list is just `[e0]`, so `Sep` is not emitted) and
+    /// `interpolate_string` `string_concat`s them left-to-right. Because every element and the
+    /// separator are already xsd:strings, `interpolate_string` takes its `string(H)` branch and
+    /// concatenates them VERBATIM (no `term_to_atom`/`atom_string` stringification) — a pure,
+    /// LOCALE-INDEPENDENT byte concatenation, exactly like `Concat`. Hence the recompute is
+    /// literally `Concat`'s byte recompute over the INTERPOSED element sequence (see
+    /// [`expected_join_objects`]). The mode is `[ground, ground, any]` (`join(X,S,Y)`,
+    /// `woql_compile.pl:2902`): List + Sep must be ground (a concrete inline string list and a
+    /// string separator), Result fresh — which is exactly the compile-time shape guard.
+    ///
+    /// SOUNDNESS: identical to `Concat` — operand bytes are pinned to the trusted root, the
+    /// separator + elements are bound into the digest under a DISTINCT `/string-join-bytes` tag
+    /// (so a join proof cannot be replayed as a concat, nor as a reordered/re-separated join),
+    /// and the verifier RE-DERIVES the per-row result. No new committed column/format.
+    Join {
+        input: Box<CompiledRelation>,
+        /// The RAW list elements (NOT yet interposed), in order. Each is an xsd:string literal or
+        /// an authenticated child string column, exactly like a `Concat` element.
+        elements: Vec<ConcatElement>,
+        /// The separator interposed between consecutive `elements` (an xsd:string literal or an
+        /// authenticated child string column). Bound into the digest DISTINCTLY from the elements.
+        separator: ConcatElement,
+        /// The fresh result VARIABLE name that `join` binds — terminal/revealed, NOT committed.
+        result: String,
+    },
+    /// WOQL `Substring` (`sub_string(String, Before, Length, After, SubString)`) — a per-row,
+    /// CONSTANT-index, CHARACTER-based substring map over an authenticated xsd:string column.
+    ///
+    /// FIDELITY (reference `utils:sub_string/5` = SWI-Prolog builtin `sub_string/5`; the
+    /// `utils:` module qualifier resolves to the system builtin — utils.pl defines NO
+    /// `sub_string/5`, it only USES the builtin, e.g. `utils.pl:943`). SWI `sub_string/5` counts
+    /// CODE POINTS (Unicode characters), NOT bytes, and `Before + Length + After ==
+    /// string_length(String)` in characters. In the supported mode `Before`/`Length` are ground
+    /// non-negative integers, `After`/`SubString` are outputs: `After = total_chars - Before -
+    /// Length`, `SubString` = the `Length` characters starting at character offset `Before`. Rust
+    /// `char` is a Unicode scalar value (= code point for valid UTF-8, which has no surrogates),
+    /// so `text.chars().skip(Before).take(Length)` reproduces SWI's substring byte-for-byte (see
+    /// [`expected_substring_objects`]). When `Before + Length > total_chars` SWI `sub_string`
+    /// FAILS (the row yields no solution / is dropped); we FAIL CLOSED at recompute rather than
+    /// fabricate an out-of-range substring — so a proof is only ever produced when NO row is
+    /// dropped, in which case the per-row map equals the reference result exactly. Negative
+    /// indices are rejected at COMPILE time (a negative literal); `After`/`SubString` bound
+    /// (adding a length-equality/occurrence-enumeration constraint) and variable `Before`/`Length`
+    /// are rejected closed (other modes we do not prove faithful).
+    ///
+    /// SOUNDNESS: the operand bytes are pinned to the trusted root; `Before`/`Length` are trusted
+    /// query constants bound into the digest under a DISTINCT `/string-substring-bytes` tag; the
+    /// verifier RE-DERIVES the substring. No prover latitude, no new committed column/format.
+    Substring {
+        input: Box<CompiledRelation>,
+        /// Index of the authenticated child xsd:string column being sliced.
+        string_column: usize,
+        /// Character offset (`Before`) — a trusted, compile-time, non-negative constant.
+        before: usize,
+        /// Character count (`Length`) — a trusted, compile-time, non-negative constant.
+        length: usize,
+        /// The fresh result VARIABLE name that `sub_string` binds — terminal/revealed, NOT
+        /// committed. (The `After` output variable is likewise fresh and NOT revealed.)
+        result: String,
+    },
+    /// WOQL `Pad` (`pad(String, Char, Times, Result)`) — a per-row LEFT-pad of an authenticated
+    /// xsd:string column to a CONSTANT target CHARACTER length, using a CONSTANT single-character
+    /// pad.
+    ///
+    /// FIDELITY (reference `utils:pad/4`, utils.pl:320). `pad(T, C, L, A2)`:
+    ///   `format(atom(A),'~w',[T])` stringifies the operand (identity on an xsd:string's content);
+    ///   `C` MUST interpolate to a string of `string_length == 1` — i.e. exactly ONE CODE POINT
+    ///   (else `throw(pad_not_length_one)`); `L1 = char_length(A)`; `L2 is L - L1`; if `L2 < 0`
+    ///   (operand already LONGER than the target) `throw(bad_pad_length)` — the op FAILS; otherwise
+    ///   `L2` copies of `C` are PREPENDED (`append(Padding, AtomList, Total)`) and the result is
+    ///   `Padding ++ A`. Length is in CHARACTERS (code points), locale-INDEPENDENT. Note the AST arg
+    ///   is named `times` but is semantically the TARGET TOTAL LENGTH `L` (`utils.pl` uses
+    ///   `L2 is L - L1`), so we treat it as the target character length. `L2 == 0` (operand exactly
+    ///   the target) yields the operand unchanged. Rust `char` = a Unicode scalar value (= code
+    ///   point for valid UTF-8), so `text.chars().count()` reproduces SWI's `string_length`, and
+    ///   prepending `pad_char`'s exact UTF-8 bytes `L2` times reproduces `repeat_term`/`append`
+    ///   byte-for-byte (see [`expected_pad_objects`]). Operand-longer-than-target FAILS CLOSED at
+    ///   recompute (never fabricate a truncation the reference would reject).
+    ///
+    /// SOUNDNESS: the operand bytes are pinned to the trusted root; `pad_char` and `target_len` are
+    /// trusted query constants bound into the digest under a DISTINCT `/string-pad-bytes` tag; the
+    /// verifier RE-DERIVES the padded string. No prover latitude, no new committed column/format.
+    /// The reference's WOQL-level marshalling (`woql_compile.pl:2806`) is idiosyncratic (it passes
+    /// the compiled goal as a 5th argument), but the proven semantics are exactly `utils:pad/4`, and
+    /// the result is the documented "result of the padding as a string" (xsd:string).
+    Pad {
+        input: Box<CompiledRelation>,
+        /// Index of the authenticated child xsd:string column being padded.
+        string_column: usize,
+        /// The single-character pad, as its raw UTF-8 bytes. Its CODE-POINT count is exactly 1
+        /// (validated at compile), so repeating these bytes N times repeats the char N times.
+        pad_char: Vec<u8>,
+        /// The target TOTAL character length `L` — a trusted, compile-time, non-negative constant.
+        target_len: usize,
+        /// The fresh result VARIABLE name that `pad` binds — terminal/revealed, NOT committed.
+        result: String,
+    },
+    /// WOQL `HashKey`/`hash` (`hash(Base, Args, Id)`) — a per-row document-ID hash: SHA-256 over the
+    /// `idgen`-canonicalized `Args`, appended to a raw `Base`.
+    ///
+    /// FIDELITY (reference `idgen_hash/3`, `src/core/document/json.pl:467`, reached via
+    /// `woql_compile.pl:2719` `hash(Base,Args,Id) -> idgen_hash(BaseL, ArgsL, IdS)` after
+    /// `literally` strips every operand's `^^type` to its raw string content). `idgen_hash(Base,
+    /// Values, ID)`:
+    ///   `idgen_suffix(Values, Suffix)` = `maplist(raw, Values, Raw)` (identity on plain strings —
+    ///     `raw/2`'s last clause; only JSON-LD dicts are transformed, which `literally` never
+    ///     produces here, so NO set-sorting/normalization applies to the WOQL `hash` path),
+    ///     then `maplist(encode_id_fragment, Raw, Encoded)`, then `merge_separator_split(Suffix,
+    ///     '+', Encoded)` = the encoded fragments joined by a literal `'+'`;
+    ///   `crypto_data_hash(Suffix, Hash, [algorithm(sha256)])` = lowercase 64-char hex SHA-256 of
+    ///     the Suffix's bytes (the Suffix is ALWAYS pure ASCII — see [`encode_id_fragment`] — so the
+    ///     hashed bytes are unambiguous);
+    ///   `format(string(ID), "~w~w", [Base, Hash])` = the RAW base string (NOT encoded) followed by
+    ///     the hex digest.
+    /// `encode_id_fragment` = SWI `uri_encoded(segment, ...)` then `re_replace('+' -> '%2B')`; its
+    /// exact byte behavior was captured from the reference's own SWI builtins and is reproduced in
+    /// [`encode_id_fragment`]. The result is bound to a `NodeValue` (a URI/node), so we reveal it as
+    /// a [`CanonicalObject::Node`].
+    ///
+    /// SOUNDNESS: `Base` and every `Arg` are byte-authenticated against the trusted root (literal
+    /// bytes come from the trusted compiled query); the verifier RE-COMPUTES the exact `idgen_hash`
+    /// recipe and reveals the result. The op kind + operand structure are bound into the digest
+    /// under a DISTINCT `/string-idgen-hash-sha256` tag. No prover latitude, no new committed
+    /// column/format, no novel crypto (SHA-256 is already the digest primitive).
+    HashKey {
+        input: Box<CompiledRelation>,
+        /// The `Base` string, RAW-prepended (never `idgen`-encoded) — an authenticated child string
+        /// column or a trusted query literal.
+        base: ConcatElement,
+        /// The `Args`/`key_list`, in order (NO sorting): each an authenticated child string column
+        /// or a trusted query literal, `idgen`-canonicalized then joined by `'+'`.
+        args: Vec<ConcatElement>,
+        /// The fresh result VARIABLE name that `hash` binds — terminal/revealed, NOT committed.
+        result: String,
+    },
+}
+
+/// One element of a WOQL `concat` template.
+///
+/// A leaf is either an xsd:string LITERAL taken from the trusted compiled query (its bytes are
+/// already known to the verifier) or a reference to an authenticated child string result column
+/// (its per-row value is root-authenticated at recompute time and REQUIRED to be an xsd:string —
+/// a non-string row FAILS CLOSED rather than being stringified; whole-list stringification of
+/// numbers/atoms/nodes is a separate circuit, deferred).
+#[derive(Clone, Debug)]
+pub enum ConcatElement {
+    /// A query-local xsd:string literal, as its raw UTF-8 bytes (trusted; part of the compiled
+    /// query the verifier reconstructs).
+    Literal(Vec<u8>),
+    /// The authenticated xsd:string value of child result column `index`. At recompute time the
+    /// column is resolved through the root-authenticated node/value dictionary and each row is
+    /// required to be a nonnull `xsd:string` VALUE; any other object (node IRI, non-string
+    /// value, null) rejects closed.
+    Column { index: usize },
+}
+
+/// A compiled INTEGER arithmetic expression tree for WOQL `Eval`.
+///
+/// Every leaf is either a query-local integer literal (already trusted — it is part of the
+/// compiled query the verifier reconstructs) or a reference to an authenticated integer
+/// child result column. The interior nodes are the checked-integer operators the verifier
+/// RE-EVALUATES per row.
+///
+/// SOUNDNESS (verifier recompute — no novel arithmetic gadget): this tree carries NO prover
+/// witness. During verification the operand columns are resolved through the
+/// root-authenticated node/value dictionary (`resolve_result_values`, exactly as Sum does),
+/// then the whole tree is re-evaluated elementwise in checked `i128` and the final value is
+/// narrowed to the declared `i64` generated domain. The delivered result column must equal
+/// that recomputation, so there is nothing a malicious prover can bias: the inputs are
+/// pinned to the trusted root and the function is deterministic. This mirrors the
+/// `plan_collection_sum_form`/`plan_group_sum_form` "verifier re-derivation" discipline.
+#[derive(Clone, Debug)]
+pub enum EvalExpr {
+    /// The authenticated integer value of child result column `index`. `datatype` is the
+    /// exact fixed-width integer datatype the compiler inferred for that column; it is
+    /// re-checked against the AUTHENTICATED dictionary value at recompute time, so a wrong
+    /// datatype claim rejects closed rather than decoding a different integer.
+    Column {
+        index: usize,
+        datatype: CanonicalDatatype,
+    },
+    /// A query-local integer literal, normalized to `i128` (all supported fixed-width XSD
+    /// integer literals fit exactly).
+    Literal(i128),
+    Plus(Box<EvalExpr>, Box<EvalExpr>),
+    Minus(Box<EvalExpr>, Box<EvalExpr>),
+    Times(Box<EvalExpr>, Box<EvalExpr>),
+    /// WOQL `Div` — INTEGER FLOOR division (`left div right`), matching SWI-Prolog `div/2`
+    /// (rounds toward NEGATIVE INFINITY), NOT truncation-toward-zero and NOT Rust's
+    /// `div_euclid` (they disagree when the divisor is negative, e.g. `7 div -2 = -4` under
+    /// floor but `-3` under Euclid). `left` is the dividend, `right` the divisor. A zero
+    /// divisor makes Prolog `is/2` throw `evaluation_error(zero_divisor)`, so the WOQL query
+    /// fails — the verifier recompute FAILS CLOSED on any zero-divisor row (never drops it).
+    Div(Box<EvalExpr>, Box<EvalExpr>),
+    /// WOQL `Exp` — integer power (`left ** right`), matching SWI-Prolog `**` under
+    /// `prefer_rationals=true`: an integer base raised to a NON-NEGATIVE INTEGER exponent is an
+    /// integer. `left` is the base, `right` the exponent. A negative exponent yields a rational
+    /// (out of the integer value layer) and an oversized result overflows the declared width;
+    /// both FAIL CLOSED in the recompute (no field wraparound, no silent rational coercion).
+    Exp(Box<EvalExpr>, Box<EvalExpr>),
 }
 
 impl CompiledRelation {
@@ -529,6 +805,72 @@ pub enum ProvedQueryStatement {
     CollectionExtrema {
         input: Box<ProvedBgp>,
     },
+    /// A proved WOQL `Eval`: the authenticated child relation plus one appended derived
+    /// integer column. The proof carries no arithmetic-specific witness — verification
+    /// re-derives the derived column from the child's root-authenticated columns.
+    Eval {
+        input: Box<ProvedBgp>,
+    },
+    /// A proved WOQL `Typecast`: the authenticated child relation plus one appended derived
+    /// cast-value column. Like `Eval`, the proof carries no cast-specific witness —
+    /// verification re-derives the cast column (and its target-range check) from the child's
+    /// root-authenticated source column.
+    Typecast {
+        input: Box<ProvedBgp>,
+    },
+    /// A proved WOQL `Concatenate`: the authenticated operand-binding child relation plus the
+    /// DELIVERED per-row concatenation. The committed `result_columns` are the child's columns
+    /// verbatim (no committed result column — the concat result is terminal/revealed). The
+    /// delivered `result_objects` carry NO independent trust: verification RE-DERIVES them from
+    /// the child's root-authenticated operand columns (+ query literals) and requires an exact
+    /// match, so a tampered/wrong result-string column fails closed.
+    Concat {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:string results, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL `Join`: like `Concat`, the authenticated operand-binding child plus the
+    /// DELIVERED per-row separator-interposed join. The committed columns are the child's verbatim
+    /// (the join result is terminal/revealed); verification RE-DERIVES `result_objects` from the
+    /// child's root-authenticated operand columns (+ query literals) with the separator interposed
+    /// and requires an exact match, so a tampered/wrong result column fails closed.
+    Join {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:string joins, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL `Substring`: like `Concat`, the authenticated operand-binding child plus the
+    /// DELIVERED per-row character-substring. The committed columns are the child's verbatim (the
+    /// substring is terminal/revealed); verification RE-DERIVES `result_objects` by char-slicing
+    /// the child's root-authenticated string column at the trusted constant offsets and requires
+    /// an exact match. Any out-of-range/invalid-UTF-8 row fails closed at re-derivation.
+    Substring {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:string substrings, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL `Pad`: like `Concat`, the authenticated operand-binding child plus the
+    /// DELIVERED per-row left-padded string. The committed columns are the child's verbatim (the
+    /// padded string is terminal/revealed); verification RE-DERIVES `result_objects` by
+    /// left-padding the child's root-authenticated string column to the trusted target length with
+    /// the trusted pad character and requires an exact match. Any operand-longer-than-target or
+    /// invalid-UTF-8 row FAILS CLOSED at re-derivation.
+    Pad {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:string padded results, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL `HashKey`/`hash`: like `Concat`, the authenticated operand-binding child plus
+    /// the DELIVERED per-row document-ID hash. The committed columns are the child's verbatim (the
+    /// id is terminal/revealed); verification RE-DERIVES `result_objects` by running the exact
+    /// `idgen_hash` recipe (SHA-256 over the `idgen`-encoded, `'+'`-joined authenticated args,
+    /// appended to the raw authenticated base) and requires an exact match. Each id is revealed as
+    /// a [`CanonicalObject::Node`] (the reference binds a URI/node).
+    HashKey {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized URI/node ids, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -828,8 +1170,171 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 GroupExtremaKind::Max => 1,
             }]);
         }
+        CompiledRelationStatement::Eval { input, expr } => {
+            hasher.update(b"/eval-arithmetic-i64");
+            hasher.update(relation_query_digest(input)?);
+            digest_eval_expr(&mut hasher, expr);
+        }
+        CompiledRelationStatement::Typecast {
+            input,
+            source_column,
+            source_datatype,
+            target_datatype,
+        } => {
+            // Bind the source column, its pinned datatype, and the target datatype so a proof
+            // for one cast (e.g. int→long) cannot be replayed as another (e.g. long→byte) or
+            // over a different source column.
+            hasher.update(b"/typecast-integer-width");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*source_column as u64).to_le_bytes());
+            hasher.update([*source_datatype as u8]);
+            hasher.update([*target_datatype as u8]);
+        }
+        CompiledRelationStatement::Concat { input, elements, .. } => {
+            // Bind the operator kind, the child, and the EXACT element sequence (order +
+            // literal-vs-column + literal bytes + column index) so a proof for one concat
+            // cannot be replayed as a different string op or a reordered/re-literalled concat.
+            // The result variable NAME is not bound (it is a label, not security-relevant — the
+            // output is fully determined by the recompute), matching Eval's digest discipline.
+            hasher.update(b"/string-concat-bytes");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((elements.len() as u64).to_le_bytes());
+            for element in elements {
+                digest_concat_element(&mut hasher, element);
+            }
+        }
+        CompiledRelationStatement::Join {
+            input,
+            elements,
+            separator,
+            ..
+        } => {
+            // DISTINCT tag from concat so a join can never be replayed as a concat (even a
+            // single-element join, whose interposed sequence equals a one-element concat). Bind
+            // the child, the exact element sequence, AND the separator under its own `/sep` tag
+            // so a proof cannot be replayed as a different join (reordered/re-literalled elements
+            // or a swapped separator). The result variable NAME is a label, not bound (the output
+            // is fully determined by the recompute), matching Concat/Eval digest discipline.
+            hasher.update(b"/string-join-bytes");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((elements.len() as u64).to_le_bytes());
+            for element in elements {
+                digest_concat_element(&mut hasher, element);
+            }
+            hasher.update(b"/sep");
+            digest_concat_element(&mut hasher, separator);
+        }
+        CompiledRelationStatement::Substring {
+            input,
+            string_column,
+            before,
+            length,
+            ..
+        } => {
+            // DISTINCT tag; bind the child, the sliced column, and the constant character offsets
+            // so a proof cannot be replayed as a different string op or a different-offset slice.
+            hasher.update(b"/string-substring-bytes");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*string_column as u64).to_le_bytes());
+            hasher.update((*before as u64).to_le_bytes());
+            hasher.update((*length as u64).to_le_bytes());
+        }
+        CompiledRelationStatement::Pad {
+            input,
+            string_column,
+            pad_char,
+            target_len,
+            ..
+        } => {
+            // DISTINCT tag; bind the child, the padded column, the exact pad-char bytes, and the
+            // target length so a proof cannot be replayed as a different string op or a
+            // different-char/different-length pad.
+            hasher.update(b"/string-pad-bytes");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*string_column as u64).to_le_bytes());
+            hasher.update((*target_len as u64).to_le_bytes());
+            digest_bytes(&mut hasher, pad_char);
+        }
+        CompiledRelationStatement::HashKey {
+            input,
+            base,
+            args,
+            ..
+        } => {
+            // DISTINCT tag; bind the child, the (raw-prepended) base, and the EXACT arg sequence
+            // (order + literal-vs-column + literal bytes + column index) so a proof cannot be
+            // replayed as a different string op or a reordered/re-based/re-argumented hash.
+            hasher.update(b"/string-idgen-hash-sha256");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update(b"/base");
+            digest_concat_element(&mut hasher, base);
+            hasher.update((args.len() as u64).to_le_bytes());
+            for arg in args {
+                digest_concat_element(&mut hasher, arg);
+            }
+        }
     }
     Ok(hasher.finalize().into())
+}
+
+/// Bind one concat element into the relation's query identity (anti-substitution): a literal's
+/// exact bytes, or a column's exact index, each under a distinct tag so a literal cannot be
+/// confused with a column and vice versa.
+fn digest_concat_element(hasher: &mut Sha256, element: &ConcatElement) {
+    match element {
+        ConcatElement::Literal(bytes) => {
+            hasher.update([0u8]);
+            digest_bytes(hasher, bytes);
+        }
+        ConcatElement::Column { index } => {
+            hasher.update([1u8]);
+            hasher.update((*index as u64).to_le_bytes());
+        }
+    }
+}
+
+/// Bind the exact arithmetic tree into the relation's query identity so a proof cannot be
+/// replayed under a different expression, operand column, datatype, or literal.
+fn digest_eval_expr(hasher: &mut Sha256, expr: &EvalExpr) {
+    match expr {
+        EvalExpr::Column { index, datatype } => {
+            hasher.update([0u8]);
+            hasher.update((*index as u64).to_le_bytes());
+            hasher.update([*datatype as u8]);
+        }
+        EvalExpr::Literal(value) => {
+            hasher.update([1u8]);
+            hasher.update(value.to_le_bytes());
+        }
+        EvalExpr::Plus(left, right) => {
+            hasher.update([2u8]);
+            digest_eval_expr(hasher, left);
+            digest_eval_expr(hasher, right);
+        }
+        EvalExpr::Minus(left, right) => {
+            hasher.update([3u8]);
+            digest_eval_expr(hasher, left);
+            digest_eval_expr(hasher, right);
+        }
+        EvalExpr::Times(left, right) => {
+            hasher.update([4u8]);
+            digest_eval_expr(hasher, left);
+            digest_eval_expr(hasher, right);
+        }
+        // Distinct tags 5/6 for Div/Exp: a proof for `a div b` (or `a ** b`) cannot be replayed
+        // as `a - b`, `a * b`, or with the operands swapped — the exact operator and left/right
+        // operand order are bound into the relation's query identity (anti-substitution).
+        EvalExpr::Div(left, right) => {
+            hasher.update([5u8]);
+            digest_eval_expr(hasher, left);
+            digest_eval_expr(hasher, right);
+        }
+        EvalExpr::Exp(base, exponent) => {
+            hasher.update([6u8]);
+            digest_eval_expr(hasher, base);
+            digest_eval_expr(hasher, exponent);
+        }
+    }
 }
 
 fn digest_equality_domain(hasher: &mut Sha256, domain: Option<EqualityValueDomain>) {
@@ -1102,6 +1607,51 @@ fn relation_result_descriptors(
                 )
             })?])
         }
+        CompiledRelationStatement::Eval { input, .. } => {
+            // Every child column is carried through unchanged; the appended derived column
+            // is a signed generated integer (Eval accumulates in signed i128 and narrows to
+            // the i64 generated domain, so `Minus` results and negatives are representable).
+            let mut descriptors = relation_result_descriptors(input)?;
+            descriptors.push(ResultColumnDescriptor {
+                namespace: ResultIdNamespace::GeneratedDecimalI64,
+                nullable: false,
+            });
+            Ok(descriptors)
+        }
+        CompiledRelationStatement::Typecast {
+            input,
+            target_datatype,
+            ..
+        } => {
+            // Child columns pass through; the appended cast column uses the SIGNED generated
+            // namespace for signed targets and the UNSIGNED one for unsigned targets (an
+            // unsigned target like xsd:unsignedLong can hold values above `i64::MAX`).
+            let mut descriptors = relation_result_descriptors(input)?;
+            descriptors.push(ResultColumnDescriptor {
+                namespace: integer_target_namespace(*target_datatype)?,
+                nullable: false,
+            });
+            Ok(descriptors)
+        }
+        CompiledRelationStatement::Concat { input, .. } => {
+            // The committed result columns are exactly the child's operand columns; the concat
+            // result is TERMINAL/revealed and is NOT a committed column (a synthesized string
+            // does not encode into a field element, and nothing downstream consumes it). So the
+            // descriptors are the child's, unchanged — keeping schema/descriptor/column shapes
+            // aligned for the generic resolve path.
+            relation_result_descriptors(input)
+        }
+        // Join/Substring, like Concat, carry the child's committed columns through VERBATIM (their
+        // synthesized result is terminal/revealed, not a committed column) — descriptors are the
+        // child's, unchanged.
+        CompiledRelationStatement::Join { input, .. }
+        | CompiledRelationStatement::Substring { input, .. }
+        // Pad/HashKey, like Concat, carry the child's committed columns through VERBATIM (their
+        // synthesized result is terminal/revealed, not a committed column).
+        | CompiledRelationStatement::Pad { input, .. }
+        | CompiledRelationStatement::HashKey { input, .. } => {
+            relation_result_descriptors(input)
+        }
     }
 }
 
@@ -1265,6 +1815,64 @@ fn relation_proof_plan(
             datatype: *datatype,
             kind: *kind,
         },
+        // Eval is a woql2-side verifier-recompute layered OVER a Store-proven child; it has
+        // no Store `RelationProofPlanKind`. `CompiledBgp::prove_with_context` intercepts a
+        // top-level Eval and proves its child through the Store, so this arm is never reached
+        // for a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::Eval { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Eval relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // Typecast, like Eval, is a woql2-side verifier-recompute layered OVER a Store-proven
+        // child; `CompiledBgp::prove_with_context` intercepts a top-level Typecast, so this arm
+        // is never reached for a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::Typecast { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Typecast relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // Concat, like Eval/Typecast, is a woql2-side verifier-recompute over a Store-proven
+        // child; `CompiledBgp::prove_with_context` intercepts a top-level Concat, so this arm is
+        // never reached for a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::Concat { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Concat relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // Join/Substring are woql2-side verifier-recompute ops (like Concat): the top-level
+        // `prove_with_context` intercepts them, so this recursive-planner arm is never reached for
+        // a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::Join { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Join relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        CompiledRelationStatement::Substring { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Substring relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // Pad/HashKey are woql2-side verifier-recompute ops (like Concat): the top-level
+        // `prove_with_context` intercepts them, so this recursive-planner arm is never reached for
+        // a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::Pad { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Pad relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        CompiledRelationStatement::HashKey { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL HashKey relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
     };
     Ok(RelationProofPlan { query_digest, kind })
 }
@@ -1785,6 +2393,712 @@ fn expected_group_count_columns(
     Ok(output)
 }
 
+/// Decode ONE root-authenticated operand value to its exact integer, as `i128`.
+///
+/// Reuses the audited fixed-width lexical decoder [`integral_group_sum_value`] (the same one
+/// Sum/GroupSum use). That decoder also asserts the AUTHENTICATED dictionary value carries
+/// exactly `datatype`, so a compiler datatype claim that disagrees with the trusted root
+/// value rejects closed here rather than decoding a different integer. Every supported
+/// fixed-width integer (`u8..u64`, `i8..i64`) fits `i128` exactly.
+fn eval_operand_i128(
+    value: &CanonicalResultValue,
+    datatype: CanonicalDatatype,
+) -> std::io::Result<i128> {
+    Ok(match integral_group_sum_value(value, datatype)? {
+        GroupSumValue::Unsigned(v) => i128::from(v),
+        GroupSumValue::Signed(v) => v,
+    })
+}
+
+/// Re-evaluate the arithmetic tree for ONE row over the authenticated operand columns.
+///
+/// All accumulation is CHECKED `i128`: an intermediate that escapes `i128` rejects closed
+/// (`i128` cannot overflow silently here — every operand is a fixed-width integer and the
+/// tree is bounded, but `Times` chains are still guarded). The declared-width narrowing to
+/// `i64` happens once at the top (see [`expected_eval_columns`]).
+fn eval_expr_row(
+    expr: &EvalExpr,
+    values: &[Vec<CanonicalResultValue>],
+    row: usize,
+) -> std::io::Result<i128> {
+    match expr {
+        EvalExpr::Column { index, datatype } => {
+            let column = values.get(*index).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval operand column out of range",
+                )
+            })?;
+            let value = column.get(row).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval operand column is short",
+                )
+            })?;
+            eval_operand_i128(value, *datatype)
+        }
+        EvalExpr::Literal(value) => Ok(*value),
+        EvalExpr::Plus(left, right) => eval_expr_row(left, values, row)?
+            .checked_add(eval_expr_row(right, values, row)?)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval addition overflows the i128 accumulator",
+                )
+            }),
+        EvalExpr::Minus(left, right) => eval_expr_row(left, values, row)?
+            .checked_sub(eval_expr_row(right, values, row)?)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval subtraction overflows the i128 accumulator",
+                )
+            }),
+        EvalExpr::Times(left, right) => eval_expr_row(left, values, row)?
+            .checked_mul(eval_expr_row(right, values, row)?)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval multiplication overflows the i128 accumulator",
+                )
+            }),
+        EvalExpr::Div(left, right) => {
+            let dividend = eval_expr_row(left, values, row)?;
+            let divisor = eval_expr_row(right, values, row)?;
+            // Div-by-zero: Prolog `X div 0` THROWS (`evaluation_error(zero_divisor)`), so the
+            // WOQL query fails. FAIL CLOSED for this row (do NOT drop it — that would silently
+            // change the relation). Static zero literals are also rejected at compile time.
+            if divisor == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval Div by zero: Prolog `div/2` throws, so the query fails closed",
+                ));
+            }
+            // FLOOR division (SWI-Prolog `div/2`, rounds toward −∞). Rust `/` truncates toward
+            // zero, so correct the quotient down by one when the truncated remainder is nonzero
+            // and its sign differs from the divisor's (the exact floor-vs-truncate gap; this is
+            // NOT `div_euclid`, which would round `7 div -2` to −3 instead of the correct −4).
+            // `checked_div`/`checked_rem` also fail closed on the sole i128 overflow case
+            // (`i128::MIN / -1`), unreachable for fixed-width operands but guarded anyway.
+            let truncated = dividend.checked_div(divisor).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval Div overflows the i128 accumulator",
+                )
+            })?;
+            let remainder = dividend.checked_rem(divisor).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval Div overflows the i128 accumulator",
+                )
+            })?;
+            if remainder != 0 && ((remainder < 0) != (divisor < 0)) {
+                truncated.checked_sub(1).ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Eval Div floor correction overflows the i128 accumulator",
+                    )
+                })
+            } else {
+                Ok(truncated)
+            }
+        }
+        EvalExpr::Exp(base, exponent) => {
+            let base = eval_expr_row(base, values, row)?;
+            let exponent = eval_expr_row(exponent, values, row)?;
+            // Only NON-NEGATIVE INTEGER exponents give an INTEGER result under Prolog `**`
+            // (with `prefer_rationals`); a negative exponent yields a rational, which is outside
+            // this integer value layer. FAIL CLOSED on a negative or absurdly large exponent
+            // (`u32::try_from` rejects both — an exponent past `u32::MAX` cannot possibly fit
+            // the declared width and would only overflow below). This also covers a runtime
+            // column exponent that turns out negative: the query is rejected, never coerced.
+            let exponent = u32::try_from(exponent).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval Exp requires a non-negative integer exponent within u32 (a negative exponent is rational; a huge exponent overflows)",
+                )
+            })?;
+            // Checked integer power in i128: an overflow beyond i128 FAILS CLOSED here, and the
+            // final narrowing to the declared i64 width (in `expected_eval_columns`) rejects any
+            // result outside that width — no field wraparound at any stage.
+            base.checked_pow(exponent).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Eval Exp overflows the i128 accumulator",
+                )
+            })
+        }
+    }
+}
+
+/// VERIFIER RECOMPUTE for WOQL `Eval`: carry the child columns through unchanged and append
+/// the derived integer column, re-derived elementwise from ROOT-AUTHENTICATED operands.
+///
+/// SOUNDNESS: `resolve_result_values` binds every child column value to the trusted root's
+/// node/value dictionary (the same authentication Sum uses), so an operand's value is not
+/// prover-chosen — it is exactly the store-derived value at the trusted root. The tree is
+/// then re-evaluated deterministically in checked `i128` and narrowed to the declared `i64`
+/// width; an out-of-`i64` result rejects closed (NO field wraparound). The caller compares
+/// the delivered result column against this recomputation, so there is no biasable witness.
+/// The child columns are passed through verbatim (they are already root-bound), so the outer
+/// equality check also pins them.
+fn expected_eval_columns(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    expr: &EvalExpr,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let descriptors = relation_result_descriptors(input_plan)?;
+    // Authenticate EVERY child column against the trusted root (ties operands to the root).
+    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    if input.result_columns.iter().any(|column| column.len() != input.result_len) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL Eval child column length mismatch",
+        ));
+    }
+    // Pass the child columns through unchanged; the outer equality check pins them.
+    let mut columns = input.result_columns.clone();
+    let mut derived = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        let value = eval_expr_row(expr, &values, row)?;
+        // Checked-narrow to the declared i64 integer width (mirrors the signed-sum path):
+        // any result outside i64 rejects closed rather than wrapping in the field.
+        let narrowed = i64::try_from(value).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Eval result exceeds the declared i64 integer width",
+            )
+        })?;
+        derived.push(generated_decimal_i64_field(narrowed));
+    }
+    columns.push(derived);
+    Ok(columns)
+}
+
+/// The exact XSD value range `[min, max]` (as `i128`) and signedness of a fixed-width integer
+/// datatype, or `None` for any non-fixed-width-integer datatype. These bounds are the SAME
+/// ones the Prolog narrowing typecast enforces (`is_byte`/`is_short`/… in `util/types.pl`), so
+/// a value outside the range is exactly what makes Prolog `typecast` throw `casting_error`.
+fn integer_datatype_bounds(datatype: CanonicalDatatype) -> Option<(i128, i128, bool)> {
+    use CanonicalDatatype::*;
+    Some(match datatype {
+        Int8 => (i128::from(i8::MIN), i128::from(i8::MAX), true),
+        Int16 => (i128::from(i16::MIN), i128::from(i16::MAX), true),
+        Int32 => (i128::from(i32::MIN), i128::from(i32::MAX), true),
+        Int64 => (i128::from(i64::MIN), i128::from(i64::MAX), true),
+        UInt8 => (0, i128::from(u8::MAX), false),
+        UInt16 => (0, i128::from(u16::MAX), false),
+        UInt32 => (0, i128::from(u32::MAX), false),
+        UInt64 => (0, i128::from(u64::MAX), false),
+        _ => return None,
+    })
+}
+
+/// The generated result namespace a fixed-width integer TARGET type is delivered in: signed
+/// targets use the signed generated domain, unsigned targets the unsigned one (an unsigned
+/// target can hold values above `i64::MAX`). Fails closed for a non-integer datatype.
+fn integer_target_namespace(datatype: CanonicalDatatype) -> std::io::Result<ResultIdNamespace> {
+    match integer_datatype_bounds(datatype) {
+        Some((_, _, true)) => Ok(ResultIdNamespace::GeneratedDecimalI64),
+        Some((_, _, false)) => Ok(ResultIdNamespace::GeneratedDecimalU64),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL Typecast target is not a fixed-width integer datatype",
+        )),
+    }
+}
+
+/// VERIFIER RECOMPUTE for WOQL `Typecast` of one integer column to a fixed-width integer target:
+/// carry the child columns through unchanged and append the derived cast column, re-derived
+/// elementwise from the ROOT-AUTHENTICATED source column.
+///
+/// SOUNDNESS: `resolve_result_values` binds every child column to the trusted root (same
+/// authentication Eval/Sum use); the source value is decoded via [`eval_operand_i128`], which
+/// also re-checks the pinned `source_datatype` against the authenticated dictionary value. An
+/// integer→integer cast preserves the numeric value, so the recompute is: assert the value lies
+/// within the target type's exact XSD range and re-emit it in the target's generated namespace.
+/// A value outside the range FAILS CLOSED — matching Prolog `typecast`, which THROWS
+/// `casting_error` on an out-of-range narrowing rather than wrapping/truncating. The caller
+/// compares the delivered result column against this recomputation, so there is no biasable
+/// witness; the passed-through child columns are pinned by the outer equality + `verify_columns`.
+fn expected_typecast_column(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    source_column: usize,
+    source_datatype: CanonicalDatatype,
+    target_datatype: CanonicalDatatype,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let descriptors = relation_result_descriptors(input_plan)?;
+    // Authenticate EVERY child column against the trusted root (ties the source to the root).
+    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    if input.result_columns.iter().any(|column| column.len() != input.result_len) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL Typecast child column length mismatch",
+        ));
+    }
+    let (lo, hi, signed) = integer_datatype_bounds(target_datatype).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL Typecast target is not a fixed-width integer datatype",
+        )
+    })?;
+    let source = values.get(source_column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL Typecast source column out of range",
+        )
+    })?;
+    // Pass the child columns through unchanged; the outer equality check pins them.
+    let mut columns = input.result_columns.clone();
+    let mut derived = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        let value = eval_operand_i128(&source[row], source_datatype)?;
+        // Range check = Prolog's narrowing `casting_error` throw: FAIL CLOSED (never wrap) when
+        // the authenticated source value does not fit the target type's exact XSD range.
+        if value < lo || value > hi {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Typecast value is outside the target integer type's range (Prolog throws casting_error)",
+            ));
+        }
+        // In-range: the value is unchanged (lossless identity), re-emitted in the target's
+        // generated namespace. The `try_from`s cannot fail after the range check (the range is
+        // a subset of i64/u64), but are kept as a defensive second gate.
+        let field = if signed {
+            generated_decimal_i64_field(i64::try_from(value).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Typecast signed value exceeds i64",
+                )
+            })?)
+        } else {
+            ArkFr::from_u64(u64::try_from(value).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Typecast unsigned value exceeds u64",
+                )
+            })?)
+        };
+        derived.push(field);
+    }
+    columns.push(derived);
+    Ok(columns)
+}
+
+/// Resolve EVERY child result column through the ROOT-authenticated node/value dictionary,
+/// returning the per-row canonical values. This is the exact authentication `Eval`/`Sum`/
+/// `Typecast` use ([`resolve_result_values`]): it pins `commitment_root == expected_root`,
+/// re-validates the root-bound dictionary, and decodes each committed id to its store value.
+/// Every child value is therefore the store's root-derived value, with no prover latitude.
+fn resolve_authenticated_child_values(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
+    let descriptors = relation_result_descriptors(input_plan)?;
+    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    if input
+        .result_columns
+        .iter()
+        .any(|column| column.len() != input.result_len)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL string-op child column length mismatch",
+        ));
+    }
+    Ok(values)
+}
+
+/// Extract the per-row authenticated xsd:string BYTES of one already-resolved child column.
+///
+/// This is the BYTE-AUTHENTICATION FOUNDATION shared by the whole string-op family (concat
+/// now; upper/lower/trim/substring later): given the root-authenticated child values (from
+/// [`resolve_authenticated_child_values`]), require column `column` to be a nonnull xsd:string
+/// VALUE in EVERY row and return its lexical bytes. FAILS CLOSED on a node IRI, a non-string
+/// typed value (e.g. an integer/langString — which `interpolate_string` would STRINGIFY, an
+/// out-of-scope circuit), a null, or an out-of-range column index. Because the values are
+/// root-authenticated, the returned bytes are exactly the store's root-derived string content:
+/// there is no biasable witness, matching the arithmetic circuits' soundness model.
+fn authenticate_string_column(
+    values: &[Vec<CanonicalResultValue>],
+    column: usize,
+    result_len: usize,
+) -> std::io::Result<Vec<Vec<u8>>> {
+    let resolved = values.get(column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL string-op operand column out of range",
+        )
+    })?;
+    if resolved.len() != result_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL string-op operand column length mismatch",
+        ));
+    }
+    resolved
+        .iter()
+        .map(|value| match value {
+            CanonicalResultValue::Object(CanonicalObject::Value {
+                datatype: CanonicalDatatype::String,
+                lexical,
+            }) => Ok(lexical.clone()),
+            // A node IRI, a non-string value, or a null is NOT a provable string operand in v1.
+            // SWI `interpolate_string` would STRINGIFY a non-string (number/atom) via
+            // `term_to_atom`/`atom_string`; that is a separate stringification circuit, so we
+            // REJECT CLOSED here rather than guess the rendering.
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL string-op operand row is not an authenticated xsd:string value",
+            )),
+        })
+        .collect()
+}
+
+/// VERIFIER RECOMPUTE for WOQL `concat` — the byte analogue of [`expected_eval_columns`].
+///
+/// Re-derives the per-row concatenation from ROOT-AUTHENTICATED operand columns (+ trusted
+/// query-literal bytes) by appending each element's bytes in LIST ORDER with NO separator —
+/// exactly `interpolate_string/2`'s left-to-right `string_concat` over string elements. The
+/// result is returned as revealed `xsd:string` [`CanonicalObject`]s (a TERMINAL value: not a
+/// committed column). SOUNDNESS: the operand bytes are pinned to the trusted root via
+/// [`resolve_authenticated_child_values`]/[`authenticate_string_column`] and byte concatenation
+/// is deterministic, so the caller's exact-match check against the delivered result column
+/// leaves no biasable witness. FAILS CLOSED (never stringifies) on any non-string operand row.
+fn expected_concat_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    elements: &[ConcatElement],
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    // Authenticate each referenced string column ONCE (root-bound bytes), keyed by column index.
+    let mut column_bytes: std::collections::BTreeMap<usize, Vec<Vec<u8>>> =
+        std::collections::BTreeMap::new();
+    for element in elements {
+        if let ConcatElement::Column { index } = element {
+            if !column_bytes.contains_key(index) {
+                column_bytes.insert(
+                    *index,
+                    authenticate_string_column(&values, *index, input.result_len)?,
+                );
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        let mut lexical: Vec<u8> = Vec::new();
+        for element in elements {
+            match element {
+                // A trusted query literal contributes its bytes verbatim (no separator).
+                ConcatElement::Literal(bytes) => lexical.extend_from_slice(bytes),
+                // A root-authenticated string column contributes its row's content bytes.
+                ConcatElement::Column { index } => {
+                    lexical.extend_from_slice(&column_bytes[index][row]);
+                }
+            }
+        }
+        out.push(CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical,
+        });
+    }
+    Ok(out)
+}
+
+/// Interpose `separator` between consecutive `elements`, exactly as `utils:intersperse/3`
+/// (`utils.pl:227`): `[] -> []`, `[e0] -> [e0]`, `[e0, e1, ...] -> [e0, Sep, e1, Sep, ...]`.
+/// The separator is emitted ONLY between adjacent elements (never leading/trailing, never for a
+/// single-element list). The resulting `ConcatElement` sequence is then concatenated verbatim,
+/// reproducing `interpolate_string/2` over `intersperse`'s output = `utils:join/3`.
+fn interpose_join_elements(
+    elements: &[ConcatElement],
+    separator: &ConcatElement,
+) -> Vec<ConcatElement> {
+    let mut interposed = Vec::with_capacity(elements.len().saturating_mul(2));
+    for (position, element) in elements.iter().enumerate() {
+        if position > 0 {
+            interposed.push(separator.clone());
+        }
+        interposed.push(element.clone());
+    }
+    interposed
+}
+
+/// VERIFIER RECOMPUTE for WOQL `join` — `Concat`'s byte recompute over the INTERPOSED element
+/// sequence.
+///
+/// FIDELITY: `utils:join/3` = `interpolate_string(intersperse(Sep, List))`. Since every list
+/// element and the separator are xsd:strings, `interpolate_string` concatenates them VERBATIM
+/// (its `string(H)` branch — no `term_to_atom`/`atom_string` rendering), so joining is precisely
+/// concatenating `intersperse(Sep, List)`. We therefore build the interposed sequence
+/// ([`interpose_join_elements`]) and delegate to [`expected_concat_objects`] — the SAME
+/// root-authenticating byte recompute the concat circuit uses. SOUNDNESS is inherited verbatim:
+/// operand bytes are pinned to the trusted root, a non-string operand row FAILS CLOSED (never
+/// stringified), and byte concatenation is deterministic.
+fn expected_join_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    elements: &[ConcatElement],
+    separator: &ConcatElement,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let interposed = interpose_join_elements(elements, separator);
+    expected_concat_objects(input, input_plan, &interposed, layer, expected_root)
+}
+
+/// VERIFIER RECOMPUTE for WOQL `sub_string` — the per-row, CHARACTER-based substring.
+///
+/// FIDELITY (SWI builtin `sub_string/5`, character-based over code points): decode the
+/// root-authenticated string column bytes as UTF-8 (a non-UTF-8 lexical FAILS CLOSED — xsd:string
+/// is UTF-8, so this never occurs for a faithful store, and if it did we refuse rather than
+/// mis-slice), then take the `length` Unicode scalar values starting at code-point offset
+/// `before`. Rust `char` == code point for valid UTF-8, so this equals SWI's substring
+/// byte-for-byte. When `before + length` exceeds the row's CHARACTER length, SWI `sub_string`
+/// FAILS (drops the row) — we FAIL CLOSED here, so a proof is only produced when NO row is
+/// dropped, in which case this per-row map equals the reference result exactly (never a
+/// fabricated out-of-range substring). `before`/`length` are trusted compile-time constants.
+///
+/// SOUNDNESS: the operand bytes are pinned to the trusted root via
+/// [`resolve_authenticated_child_values`]/[`authenticate_string_column`]; `before`/`length` are
+/// bound into the query digest; char-slicing is deterministic — the caller's exact-match check
+/// leaves no biasable witness.
+fn expected_substring_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    string_column: usize,
+    before: usize,
+    length: usize,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let column_bytes = authenticate_string_column(&values, string_column, input.result_len)?;
+    let mut out = Vec::with_capacity(input.result_len);
+    for row_bytes in &column_bytes {
+        let text = std::str::from_utf8(row_bytes).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Substring operand row is not valid UTF-8",
+            )
+        })?;
+        let total_chars = text.chars().count();
+        // Non-negative already (validated at compile); `before + length` cannot overflow for any
+        // realistic string but guard anyway. Out of range => reference `sub_string` FAILS =>
+        // FAIL CLOSED (never fabricate a substring for a row the reference would drop).
+        let end = before.checked_add(length).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Substring before+length overflow",
+            )
+        })?;
+        if end > total_chars {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Substring before+length exceeds operand character length (out of range: reference sub_string fails closed)",
+            ));
+        }
+        let sub: String = text.chars().skip(before).take(length).collect();
+        out.push(CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: sub.into_bytes(),
+        });
+    }
+    Ok(out)
+}
+
+/// VERIFIER RECOMPUTE for WOQL `pad` — `utils:pad/4` (utils.pl:320) over a root-authenticated
+/// xsd:string column, LEFT-padding each row to `target_len` CODE POINTS with `pad_char`.
+///
+/// FIDELITY: `pad_char` is a single code point (validated at compile), stored as its exact UTF-8
+/// bytes; `L2 = target_len - char_count(text)`; prepending `pad_char`'s bytes `L2` times then the
+/// operand bytes reproduces `repeat_term`/`append` byte-for-byte. When `char_count(text) >
+/// target_len` (`L2 < 0`) the reference `utils:pad` THROWS `bad_pad_length` (the row has no
+/// solution) — we FAIL CLOSED at recompute rather than fabricate a truncated result, so a proof is
+/// only ever produced when NO row is dropped, in which case the per-row map equals the reference
+/// exactly. A non-UTF-8 operand row also fails closed.
+fn expected_pad_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    string_column: usize,
+    pad_char: &[u8],
+    target_len: usize,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let column_bytes = authenticate_string_column(&values, string_column, input.result_len)?;
+    let mut out = Vec::with_capacity(input.result_len);
+    for row_bytes in &column_bytes {
+        let text = std::str::from_utf8(row_bytes).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Pad operand row is not valid UTF-8",
+            )
+        })?;
+        // `string_length` counts CODE POINTS; `chars()` yields Unicode scalar values (= code
+        // points for valid UTF-8), so this equals SWI's char length.
+        let char_count = text.chars().count();
+        if char_count > target_len {
+            // `L2 < 0` => reference `utils:pad` throws `bad_pad_length` => FAIL CLOSED.
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL Pad operand is longer than the pad target length (bad_pad_length: reference pad throws)",
+            ));
+        }
+        let pad_count = target_len - char_count; // >= 0, and pad_char is exactly one code point
+        let mut lexical: Vec<u8> = Vec::with_capacity(pad_char.len() * pad_count + row_bytes.len());
+        for _ in 0..pad_count {
+            lexical.extend_from_slice(pad_char); // PREPEND the padding (append(Padding, A, Total))
+        }
+        lexical.extend_from_slice(row_bytes);
+        out.push(CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical,
+        });
+    }
+    Ok(out)
+}
+
+/// `true` iff byte `b` is passed through UNENCODED by the reference `encode_id_fragment`
+/// (`src/core/document/json.pl:191` = SWI `uri_encoded(segment, ...)`), EXCLUDING `+` (which
+/// `encode_id_fragment` subsequently rewrites to `%2B`). The exact set was captured from the
+/// reference's own SWI `uri_encoded/3` builtin (all 95 printable ASCII probed): unreserved plus a
+/// subset of `sub-delims`/`pchar` (`! $ & ' ( ) * , - . ; = @ _ ~`) plus alphanumerics. Every
+/// passthrough byte is single-byte ASCII, so operating BYTE-WISE is exactly equivalent to SWI's
+/// per-code-point encoding: any non-ASCII byte (>= 0x80, i.e. every byte of a multi-byte UTF-8
+/// sequence) is >= 0x80, never collides with a passthrough byte, and is percent-encoded — matching
+/// SWI's "encode to UTF-8 then percent-encode each byte" (verified: `é` -> `%C3%A9`).
+fn is_idgen_passthrough_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric()
+        || matches!(
+            b,
+            b'!' | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b','
+                | b'-'
+                | b'.'
+                | b';'
+                | b'='
+                | b'@'
+                | b'_'
+                | b'~'
+        )
+}
+
+/// Reproduce the reference `encode_id_fragment/2` (`json.pl:191`) for a plain string operand:
+/// `format(atom(F),'~w',[Elt])` (identity on an xsd:string's content) then `uri_encoded(segment,
+/// F, P)` then `re_replace('+' -> '%2B', P)`. Passthrough bytes are emitted verbatim; `+` becomes
+/// `%2B`; every other byte becomes `%XX` with UPPERCASE hex (matching SWI). The output is ALWAYS
+/// pure ASCII (passthrough bytes are ASCII; encoded bytes are `%` + ASCII hex).
+fn encode_id_fragment(bytes: &[u8]) -> Vec<u8> {
+    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = Vec::with_capacity(bytes.len());
+    for &b in bytes {
+        if is_idgen_passthrough_byte(b) {
+            out.push(b);
+        } else if b == b'+' {
+            // uri_encoded(segment) leaves '+' as-is; encode_id_fragment then rewrites it to %2B.
+            out.extend_from_slice(b"%2B");
+        } else {
+            out.push(b'%');
+            out.push(HEX_UPPER[(b >> 4) as usize]);
+            out.push(HEX_UPPER[(b & 0x0f) as usize]);
+        }
+    }
+    out
+}
+
+/// Resolve one `ConcatElement`'s bytes for a given row: a trusted literal's bytes, or the
+/// root-authenticated string column's row content (pre-authenticated into `column_bytes`).
+fn concat_element_row_bytes<'a>(
+    element: &'a ConcatElement,
+    column_bytes: &'a std::collections::BTreeMap<usize, Vec<Vec<u8>>>,
+    row: usize,
+) -> &'a [u8] {
+    match element {
+        ConcatElement::Literal(bytes) => bytes,
+        ConcatElement::Column { index } => &column_bytes[index][row],
+    }
+}
+
+/// VERIFIER RECOMPUTE for WOQL `hash`/`HashKey` — the exact `idgen_hash/3` recipe (json.pl:467)
+/// over root-authenticated `base` + `args`:
+///   suffix = args.map(encode_id_fragment).join("+");  hash = lowercase_hex(sha256(suffix));
+///   id = base ++ hash.
+///
+/// FIDELITY: `base` is RAW-prepended (never `idgen`-encoded — `format("~w~w",[Base,Hash])`); each
+/// `arg` is `encode_id_fragment`'d (NO `raw/2` transform, since `literally` already reduced every
+/// operand to a plain string — `raw/2` is identity on non-dicts, so no set-sorting applies);
+/// fragments are joined by a literal `'+'` (`merge_separator_split(_, '+', _)`); the hash is the
+/// lowercase 64-char hex SHA-256 of the (pure-ASCII) suffix bytes; and the digest is appended to
+/// base. Every byte is authenticated against the trusted root (columns) or comes from the trusted
+/// compiled query (literals); the id is revealed as a `CanonicalObject::Node` (the reference binds
+/// a `NodeValue`/URI).
+fn expected_hashkey_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    base: &ConcatElement,
+    args: &[ConcatElement],
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    // Authenticate each referenced string column (base's and args') ONCE, keyed by column index.
+    let mut column_bytes: std::collections::BTreeMap<usize, Vec<Vec<u8>>> =
+        std::collections::BTreeMap::new();
+    let mut authenticate = |element: &ConcatElement| -> std::io::Result<()> {
+        if let ConcatElement::Column { index } = element {
+            if !column_bytes.contains_key(index) {
+                column_bytes.insert(
+                    *index,
+                    authenticate_string_column(&values, *index, input.result_len)?,
+                );
+            }
+        }
+        Ok(())
+    };
+    authenticate(base)?;
+    for arg in args {
+        authenticate(arg)?;
+    }
+
+    let mut out = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        // Build the idgen suffix: encode each arg fragment, join by '+'. Pure ASCII by construction.
+        let mut suffix: Vec<u8> = Vec::new();
+        for (position, arg) in args.iter().enumerate() {
+            if position > 0 {
+                suffix.push(b'+');
+            }
+            let arg_bytes = concat_element_row_bytes(arg, &column_bytes, row);
+            suffix.extend_from_slice(&encode_id_fragment(arg_bytes));
+        }
+        // sha256 of the suffix bytes, lowercase hex (== SWI crypto_data_hash(..,[algorithm(sha256)])).
+        let digest_hex = hex::encode(Sha256::digest(&suffix));
+        // id = raw base ++ hex digest.
+        let base_bytes = concat_element_row_bytes(base, &column_bytes, row);
+        let mut id: Vec<u8> = Vec::with_capacity(base_bytes.len() + digest_hex.len());
+        id.extend_from_slice(base_bytes);
+        id.extend_from_slice(digest_hex.as_bytes());
+        out.push(CanonicalObject::Node(id));
+    }
+    Ok(out)
+}
+
 fn expected_cardinality_column(
     result_len: usize,
     emit_zero_for_empty: bool,
@@ -1913,6 +3227,62 @@ impl ProvedBgp {
     pub fn as_bag_union(&self) -> Option<(&[ProvedBgp], &BagUnionProof)> {
         match &self.statement {
             ProvedQueryStatement::BagUnion { branches, proof } => Some((branches, proof)),
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized strings of a top-level string op (currently `concat`), each a
+    /// TERMINAL revealed `xsd:string` the verifier RE-DERIVES from root-authenticated operands.
+    /// `None` for a non-string-op proof. Reading these AFTER a successful `verify` is sound:
+    /// `verify` re-derives and requires them to equal the verifier recomputation, so a value
+    /// returned here is exactly the store-faithful concatenation (never prover-chosen).
+    pub fn concat_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::Concat { result_objects, .. } => Some(result_objects),
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized strings of a top-level `Join`, each a TERMINAL revealed
+    /// `xsd:string` the verifier RE-DERIVES (separator interposed) from root-authenticated
+    /// operands. `None` for a non-join proof. Reading these AFTER a successful `verify` is sound
+    /// for the same reason as [`Self::concat_result_objects`].
+    pub fn join_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::Join { result_objects, .. } => Some(result_objects),
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized substrings of a top-level `Substring`, each a TERMINAL revealed
+    /// `xsd:string` the verifier RE-DERIVES by char-slicing the root-authenticated string column.
+    /// `None` for a non-substring proof. Reading these AFTER a successful `verify` is sound for
+    /// the same reason as [`Self::concat_result_objects`].
+    pub fn substring_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::Substring { result_objects, .. } => Some(result_objects),
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized strings of a top-level `Pad`, each a TERMINAL revealed `xsd:string`
+    /// the verifier RE-DERIVES by left-padding the root-authenticated string column to the trusted
+    /// target length. `None` for a non-pad proof. Reading these AFTER a successful `verify` is
+    /// sound for the same reason as [`Self::concat_result_objects`].
+    pub fn pad_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::Pad { result_objects, .. } => Some(result_objects),
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized document-ID URIs of a top-level `HashKey`/`hash`, each a TERMINAL
+    /// revealed `CanonicalObject::Node` the verifier RE-DERIVES via the exact `idgen_hash` recipe
+    /// over the root-authenticated base + args. `None` for a non-hash proof. Reading these AFTER a
+    /// successful `verify` is sound for the same reason as [`Self::concat_result_objects`].
+    pub fn hashkey_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::HashKey { result_objects, .. } => Some(result_objects),
             _ => None,
         }
     }
@@ -2550,6 +3920,333 @@ impl ProvedBgp {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "WOQL collection-extrema result is not the exact derived extremum",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::Eval { input },
+                CompiledRelationStatement::Eval {
+                    input: input_plan,
+                    expr,
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root. The
+                //     child's own `verify_relation` ends with `verify_columns`, binding every
+                //     operand column to the root — so operand VALUES are the store's values,
+                //     with no prover latitude.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) VERIFIER RE-EVALUATION: recompute the whole tree elementwise over the
+                //     root-authenticated operand columns (+ query-local literals) in checked
+                //     i128, narrowing to the declared i64 generated domain. The derived column
+                //     is appended to the (also authenticated) child columns; the result must
+                //     match exactly. Row count and domain are inherited from the child (Eval
+                //     is a per-row map, not a filter or aggregate).
+                let expected_columns =
+                    expected_eval_columns(input, input_plan, expr, layer, expected_root)?;
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Eval result is not the exact verifier-recomputed arithmetic column",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::Typecast { input },
+                CompiledRelationStatement::Typecast {
+                    input: input_plan,
+                    source_column,
+                    source_datatype,
+                    target_datatype,
+                },
+            ) => {
+                // (1) Authenticate the source-binding child against the trusted root — its own
+                //     `verify_relation` ends with `verify_columns`, pinning the source column to
+                //     the root, so the source VALUE is the store's value with no prover latitude.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) VERIFIER RE-DERIVATION: recompute the cast column from the root-authenticated
+                //     source (target-range check included — an out-of-range value fails closed,
+                //     matching Prolog's casting_error throw) and require an exact match. Row count
+                //     and domain are inherited from the child (Typecast is a per-row map).
+                let expected_columns = expected_typecast_column(
+                    input,
+                    input_plan,
+                    *source_column,
+                    *source_datatype,
+                    *target_datatype,
+                    layer,
+                    expected_root,
+                )?;
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Typecast result is not the exact verifier-recomputed cast column",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::Concat {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::Concat {
+                    input: input_plan,
+                    elements,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root. The
+                //     child's own `verify_relation` ends with `verify_columns`, binding every
+                //     operand column to the root — so operand string bytes are the store's
+                //     values, with no prover latitude.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: the committed columns are the child's operand
+                //     columns VERBATIM (no committed result column — a synthesized string does
+                //     not encode into a field element and feeds nothing downstream). Pin the
+                //     carried-through columns and the inherited row count/domain (concat is a
+                //     per-row map, not a filter/aggregate).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Concat must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: recompute the per-row concatenation over the
+                //     root-authenticated operands (+ query literals) and require the DELIVERED
+                //     result strings to match EXACTLY. A tampered/wrong result-string column, a
+                //     tampered operand (which shifts the recomputation), or a non-string operand
+                //     row all fail closed. There is no biasable witness — the inputs are pinned
+                //     to the trusted root and byte concatenation is deterministic.
+                let expected_objects =
+                    expected_concat_objects(input, input_plan, elements, layer, expected_root)?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Concat result is not the exact verifier-recomputed concatenation",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::Join {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::Join {
+                    input: input_plan,
+                    elements,
+                    separator,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root (its own
+                //     `verify_relation` ends with `verify_columns`, pinning operand columns).
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: the committed columns are the child's VERBATIM
+                //     (no committed result column). Pin the carried-through columns + row
+                //     count/domain (join is a per-row map, not a filter/aggregate).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Join must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: recompute the per-row separator-interposed join over
+                //     the root-authenticated operands (+ query literals) and require the DELIVERED
+                //     result strings to match EXACTLY. A tampered/wrong result column, a tampered
+                //     operand, or a non-string operand row all fail closed.
+                let expected_objects = expected_join_objects(
+                    input,
+                    input_plan,
+                    elements,
+                    separator,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Join result is not the exact verifier-recomputed join",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::Substring {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::Substring {
+                    input: input_plan,
+                    string_column,
+                    before,
+                    length,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM; pin
+                //     count/domain (substring is a per-row map — with a fail-closed drop guard).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Substring must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: char-slice the root-authenticated string column at
+                //     the trusted constant offsets and require an EXACT match. A tampered result
+                //     column, a tampered operand, an out-of-range row, or a non-UTF-8 row all fail
+                //     closed.
+                let expected_objects = expected_substring_objects(
+                    input,
+                    input_plan,
+                    *string_column,
+                    *before,
+                    *length,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Substring result is not the exact verifier-recomputed substring",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::Pad {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::Pad {
+                    input: input_plan,
+                    string_column,
+                    pad_char,
+                    target_len,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM; pin
+                //     count/domain (pad is a per-row map — with a fail-closed overflow guard).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Pad must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: left-pad the root-authenticated string column to the
+                //     trusted target length with the trusted pad char and require an EXACT match. A
+                //     tampered result, tampered operand, operand-longer-than-target, or non-UTF-8
+                //     row all fail closed.
+                let expected_objects = expected_pad_objects(
+                    input,
+                    input_plan,
+                    *string_column,
+                    pad_char,
+                    *target_len,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL Pad result is not the exact verifier-recomputed padding",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::HashKey {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::HashKey {
+                    input: input_plan,
+                    base,
+                    args,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM; pin
+                //     count/domain (hash is a per-row map, no drops).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL HashKey must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: run the exact `idgen_hash` recipe over the
+                //     root-authenticated base + args and require an EXACT match. A tampered result,
+                //     tampered operand, or tampered base/args all fail closed.
+                let expected_objects = expected_hashkey_objects(
+                    input,
+                    input_plan,
+                    base,
+                    args,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL HashKey result is not the exact verifier-recomputed idgen_hash",
                     ));
                 }
             }
@@ -3207,6 +4904,83 @@ impl ProvedBgp {
                 )?),
             },
             (
+                ProvedQueryStatement::Eval { .. },
+                CompiledRelationStatement::Eval { .. },
+            ) => {
+                // V1: Eval proofs are verify-only. There is no Store `RecursiveRelationProof`
+                // for the appended derived column yet, so re-encoding an Eval proof into a
+                // portable Store envelope is deferred (a follow-up would add a Store plan
+                // kind). Reject closed instead of emitting a truncated envelope.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL Eval proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::Typecast { .. },
+                CompiledRelationStatement::Typecast { .. },
+            ) => {
+                // V1: like Eval, Typecast proofs are verify-only — no Store `RecursiveRelationProof`
+                // exists for the appended cast column. Reject closed rather than emit a truncated
+                // envelope.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL Typecast proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::Concat { .. },
+                CompiledRelationStatement::Concat { .. },
+            ) => {
+                // V1: like Eval/Typecast, Concat proofs are verify-only. The terminal result is
+                // revealed and re-derived at verify, not carried as a Store `RecursiveRelationProof`
+                // column, so a portable Store envelope cannot represent it. Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL Concat proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::Join { .. },
+                CompiledRelationStatement::Join { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL Join proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::Substring { .. },
+                CompiledRelationStatement::Substring { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL Substring proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::Pad { .. },
+                CompiledRelationStatement::Pad { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL Pad proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::HashKey { .. },
+                CompiledRelationStatement::HashKey { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL HashKey proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -3444,6 +5218,329 @@ pub fn decode_verifier_commitment_and_verify_envelope(
     decode_and_verify_envelope(envelope_bytes, compiled, &commitment, expected_root)
 }
 
+/// Prove a top-level WOQL `Eval`: prove the operand-binding child through the Store, then
+/// APPEND the derived integer column computed by the SAME recompute the verifier re-runs.
+///
+/// The child's own columns and commitments are reused verbatim (they are already
+/// root-authenticated by the Store proof); only the one derived column is committed here,
+/// with the child's context/domain, so nothing about the existing committed columns changes.
+/// Because the appended column is produced by `expected_eval_columns` — the exact function
+/// `verify_relation` re-runs — a prover cannot deliver a different column and still verify.
+fn prove_eval_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    expr: &EvalExpr,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    // Recompute (child columns ++ derived column) against THIS layer's own root; identical to
+    // the verifier's re-derivation. Take the last (derived) column and commit it.
+    let expected =
+        expected_eval_columns(&child, input, expr, layer, layer.state.commitment_root)?;
+    let derived = expected
+        .last()
+        .cloned()
+        .expect("expected_eval_columns always appends the derived column");
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let domain = 1usize << result_log_domain;
+    let mut padded = derived.clone();
+    padded.resize(domain, ArkFr::zero());
+    let derived_commitment = context.commit_column(&padded)?;
+
+    let mut result_columns = child.result_columns.clone();
+    result_columns.push(derived);
+    let mut result_commitments = child.result_commitments.clone();
+    result_commitments.push(derived_commitment);
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::Eval {
+            input: Box::new(child),
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL `Typecast`: prove the source-binding child through the Store, then
+/// APPEND the derived cast column computed by the SAME recompute the verifier re-runs.
+///
+/// Structurally identical to [`prove_eval_relation`]: the child's columns/commitments are reused
+/// verbatim (already root-authenticated by the Store proof); only the one cast column is committed
+/// here. Because it is produced by `expected_typecast_column` — the exact function
+/// `verify_relation` re-runs (including the target-range fail-closed check) — a prover cannot
+/// deliver a different column and still verify, and cannot prove an out-of-range narrowing at all.
+fn prove_typecast_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    source_column: usize,
+    source_datatype: CanonicalDatatype,
+    target_datatype: CanonicalDatatype,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let expected = expected_typecast_column(
+        &child,
+        input,
+        source_column,
+        source_datatype,
+        target_datatype,
+        layer,
+        layer.state.commitment_root,
+    )?;
+    let derived = expected
+        .last()
+        .cloned()
+        .expect("expected_typecast_column always appends the derived column");
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let domain = 1usize << result_log_domain;
+    let mut padded = derived.clone();
+    padded.resize(domain, ArkFr::zero());
+    let derived_commitment = context.commit_column(&padded)?;
+
+    let mut result_columns = child.result_columns.clone();
+    result_columns.push(derived);
+    let mut result_commitments = child.result_commitments.clone();
+    result_commitments.push(derived_commitment);
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::Typecast {
+            input: Box::new(child),
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL `Concatenate`: prove the operand-binding child through the Store, then
+/// DELIVER the per-row concatenation computed by the SAME recompute the verifier re-runs.
+///
+/// Unlike `Eval`/`Typecast`, NO derived column is committed: the concat result is TERMINAL and
+/// revealed. The child's columns/commitments are reused verbatim (already root-authenticated by
+/// the Store proof); the synthesized strings are carried in the proved statement and re-derived
+/// (hence re-checked) at verify. Because they are produced by `expected_concat_objects` — the
+/// exact function `verify_relation` re-runs over the root-authenticated operands — a prover
+/// cannot deliver a different concatenation and still verify, and cannot prove a concat over a
+/// non-string operand row at all (it fails closed here, matching the verifier).
+fn prove_concat_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    elements: &[ConcatElement],
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    // Recompute the per-row concatenation against THIS layer's own root; identical to the
+    // verifier's re-derivation (fails closed on a non-string operand row, exactly as verify does).
+    let result_objects =
+        expected_concat_objects(&child, input, elements, layer, layer.state.commitment_root)?;
+
+    // The committed columns/commitments are the child's, unchanged (terminal result is revealed).
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::Concat {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL `Join`: prove the operand-binding child through the Store, then DELIVER
+/// the per-row separator-interposed join produced by the SAME recompute the verifier re-runs
+/// ([`expected_join_objects`]). Like `Concat`, NO derived column is committed — the child's
+/// columns/commitments are reused verbatim and the synthesized strings are re-checked at verify.
+fn prove_join_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    elements: &[ConcatElement],
+    separator: &ConcatElement,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects = expected_join_objects(
+        &child,
+        input,
+        elements,
+        separator,
+        layer,
+        layer.state.commitment_root,
+    )?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::Join {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL `Substring`: prove the operand-binding child through the Store, then
+/// DELIVER the per-row char-substring produced by the SAME recompute the verifier re-runs
+/// ([`expected_substring_objects`]). Fails closed here (exactly as verify does) on an out-of-range
+/// or non-UTF-8 operand row, so a prover cannot produce a proof over a row the reference drops.
+fn prove_substring_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    string_column: usize,
+    before: usize,
+    length: usize,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects = expected_substring_objects(
+        &child,
+        input,
+        string_column,
+        before,
+        length,
+        layer,
+        layer.state.commitment_root,
+    )?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::Substring {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a WOQL `Pad`: prove the operand-binding child through the Store, then DELIVER the per-row
+/// left-padded strings recomputed by the SAME [`expected_pad_objects`] the verifier re-runs — no
+/// new Store gadget, no committed result column, the committed columns are the child's verbatim.
+fn prove_pad_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    string_column: usize,
+    pad_char: &[u8],
+    target_len: usize,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects = expected_pad_objects(
+        &child,
+        input,
+        string_column,
+        pad_char,
+        target_len,
+        layer,
+        layer.state.commitment_root,
+    )?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::Pad {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a WOQL `HashKey`/`hash`: prove the operand-binding child through the Store, then DELIVER
+/// the per-row `idgen_hash` document-IDs recomputed by the SAME [`expected_hashkey_objects`] the
+/// verifier re-runs — no new Store gadget, no committed result column.
+fn prove_hashkey_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    base: &ConcatElement,
+    args: &[ConcatElement],
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects = expected_hashkey_objects(
+        &child,
+        input,
+        base,
+        args,
+        layer,
+        layer.state.commitment_root,
+    )?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::HashKey {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
 fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
@@ -3643,6 +5740,76 @@ impl CompiledBgp {
         context: &StoreProverContext<'_>,
         layer: &LayerCommitment,
     ) -> std::io::Result<ProvedBgp> {
+        // WOQL `Eval` is a woql2-side verifier-recompute layered over a Store-proven child.
+        // Prove the operand-binding child through the Store, then APPEND the derived integer
+        // column using the same recompute the verifier will re-run — no new Store gadget and
+        // no change to the existing committed columns.
+        if let CompiledRelationStatement::Eval { input, expr } = &self.relation.statement {
+            return prove_eval_relation(context, layer, input, expr);
+        }
+        // WOQL `Typecast` is likewise a woql2-side verifier-recompute over a Store-proven child.
+        if let CompiledRelationStatement::Typecast {
+            input,
+            source_column,
+            source_datatype,
+            target_datatype,
+        } = &self.relation.statement
+        {
+            return prove_typecast_relation(
+                context,
+                layer,
+                input,
+                *source_column,
+                *source_datatype,
+                *target_datatype,
+            );
+        }
+        // WOQL `Concatenate` is likewise a woql2-side verifier-recompute over a Store-proven
+        // child: prove the operand-binding child through the Store, then DELIVER the per-row
+        // concatenation recomputed by the same function the verifier re-runs — no new Store
+        // gadget, no committed result column, no change to the existing committed columns.
+        if let CompiledRelationStatement::Concat { input, elements, .. } = &self.relation.statement {
+            return prove_concat_relation(context, layer, input, elements);
+        }
+        // WOQL `Join` — Concat with the separator interposed; same woql2-side recompute discipline.
+        if let CompiledRelationStatement::Join {
+            input,
+            elements,
+            separator,
+            ..
+        } = &self.relation.statement
+        {
+            return prove_join_relation(context, layer, input, elements, separator);
+        }
+        // WOQL `Substring` — a per-row char-slice of a Store-proven authenticated string column.
+        if let CompiledRelationStatement::Substring {
+            input,
+            string_column,
+            before,
+            length,
+            ..
+        } = &self.relation.statement
+        {
+            return prove_substring_relation(context, layer, input, *string_column, *before, *length);
+        }
+        // WOQL `Pad` — a per-row left-pad of a Store-proven authenticated string column.
+        if let CompiledRelationStatement::Pad {
+            input,
+            string_column,
+            pad_char,
+            target_len,
+            ..
+        } = &self.relation.statement
+        {
+            return prove_pad_relation(context, layer, input, *string_column, pad_char, *target_len);
+        }
+        // WOQL `HashKey`/`hash` — a per-row `idgen_hash` over Store-proven authenticated operands.
+        if let CompiledRelationStatement::HashKey {
+            input, base, args, ..
+        } = &self.relation.statement
+        {
+            return prove_hashkey_relation(context, layer, input, base, args);
+        }
         let digest = compiled_query_digest(self)?;
         let plan = relation_proof_plan(&self.relation, digest)?;
         let envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &plan)?;
@@ -3783,6 +5950,13 @@ pub enum BgpPlanError {
     /// The triple targeted the schema graph.
     #[error("schema-graph triples unsupported: only the instance graph is queried")]
     SchemaGraphUnsupported,
+
+    /// One BGP leaf mixed column sources — a materialized `Triple` joined with a delta
+    /// `AddedTriple`/`DeletedTriple`, or additions joined with removals. Cross-source joins
+    /// are a follow-up feature; the store plan carries ONE source so such a join is
+    /// unrepresentable and rejects closed rather than authenticating a wrong relation.
+    #[error("cross-source conjunction unsupported: a BGP may not mix materialized/added/deleted triples")]
+    MixedColumnSource,
 
     /// Reserved for malformed externally-built plans. The compiler now composes
     /// disconnected components through authenticated Cartesian products.
@@ -4035,6 +6209,336 @@ pub enum BgpPlanError {
     /// A `Times` with `from > to` (an empty repetition range).
     #[error("Path `Times` range is empty (from > to)")]
     PathTimesInvalidRange,
+
+    // ---- Triple-SHAPED constructs that are NOT store BGP triples (`TypeOf`/`Dot`/`IsA`) ----
+    // These three woql2 leaves resemble a triple but do NOT denote a store triple pattern in
+    // TerminusDB's query semantics (verified against the Prolog reference — citations per
+    // variant). Lowering any of them to a BGP `Triple` would authenticate a relation the
+    // engine never computes, so each rejects closed rather than emit an unsound plan. Exact
+    // class filtering by stored type remains available as a plain `Triple(?x, <rdf:type>,
+    // Class)`; these operators are simply not that.
+
+    /// A `Query::TypeOf`. WOQL `typeof/2` is a value-SHAPE classifier, not a stored-class
+    /// lookup: a node/document IRI yields `sys#Top` UNCONDITIONALLY (it never reads the
+    /// instance's `rdf:type`), a typed literal yields its datatype IRI, a dictionary yields
+    /// `sys#Dictionary`, and a language-tagged literal yields its tag as `xsd:string`
+    /// (terminusdb `src/core/query/woql_compile.pl`, runtime `typeof/2`; `IsA`/`TypeOf`
+    /// both parsed in `src/core/query/json_woql.pl`). Lowering `TypeOf(v, t)` to
+    /// `t(v, <rdf:type>, t)` would authenticate the `rdf:type` relation — a DIFFERENT
+    /// relation than `typeof` computes (e.g. it would bind an instance's concrete class
+    /// where `typeof` binds `sys#Top`). Rejected closed.
+    #[error(
+        "TypeOf is a value-shape classifier (node→sys#Top, typed literal→datatype IRI), not a stored-class lookup: lowering it to an rdf:type triple would authenticate a different relation"
+    )]
+    TypeOfNotStoredType,
+
+    /// A `Query::Dot`. WOQL `dot/3` is IN-MEMORY dictionary field access on an ALREADY-BOUND
+    /// document value — it reads NO store triples (terminusdb
+    /// `src/core/query/woql_compile.pl`: `dot` compiles to `dot_field_unwrap` → `dot_field`,
+    /// which is `get_dict` over a resolved dictionary, and `find_resources(dot(_,_,_),…)` is
+    /// the empty set; the woql2 AST doc for `Dot` itself says "a bound document"). Lowering
+    /// `Dot(doc, field, value)` to a store edge `t(doc, field, value)` would authenticate a
+    /// graph-edge relation the operator never queries (different subject semantics, different
+    /// `get_dict` field-name resolution). Rejected closed.
+    #[error(
+        "Dot is in-memory dictionary field access on a bound document (reads no store triples), not a graph edge: lowering it to a store triple would authenticate a different relation"
+    )]
+    DotNotStoreEdge,
+
+    /// A `Query::IsA`. WOQL `isa/2` compiles to `is_instance`, which is SUBSUMPTION-closed:
+    /// it matches an instance whose single direct stored `rdf:type` is the queried class OR
+    /// any transitive subclass of it (terminusdb `src/core/document/instance.pl`,
+    /// `is_instance_class` + `class_subsumed`; the subclass edge is `sys:inherits`, i.e.
+    /// `http://terminusdb.com/schema/sys#inherits`, not `rdfs:subClassOf`). A direct
+    /// `t(element, <rdf:type>, type)` triple is INCOMPLETE — it misses every instance whose
+    /// direct type is a proper subclass — so it would be an unsound completeness claim.
+    /// Authenticated subsumption requires committing the schema graph (`sys:inherits`
+    /// closure), which is out of scope for this instance-graph BGP layer. Rejected closed.
+    #[error(
+        "IsA is subsumption-closed (matches subclasses via sys:inherits): a direct rdf:type triple is incomplete; authenticated subsumption needs the schema graph committed (out of scope)"
+    )]
+    IsASubsumptionUnsupported,
+
+    /// A malformed `Eval` composition: not a conjunction of an operand-binding child BGP with
+    /// exactly ONE `Eval`, or the child carried a projection/count/distinct wrapper the
+    /// per-row derived-column layer does not model.
+    #[error("Eval must be a conjunction of exactly one Eval with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    EvalUnsupportedShape,
+
+    /// `Eval`'s `result_value` was a numeric literal rather than a fresh result variable.
+    #[error("Eval result must be a variable")]
+    EvalResultNotVariable,
+
+    /// `Eval`'s result variable is already bound by the child BGP; the derived column must be
+    /// a fresh output column, never a redefinition of an authenticated binding.
+    #[error("Eval result variable `?{var}` is already bound by the operand-binding BGP")]
+    EvalResultAlreadyBound { var: String },
+
+    /// An out-of-scope arithmetic operator. `Divide` (`/`/`rdiv`) is EXACT RATIONAL and `Floor`
+    /// over rationals both need the rational value layer; a STATIC negative `Exp` exponent is a
+    /// rational result. All reject closed pending the rational layer. (Integer `Plus`/`Minus`/
+    /// `Times`/`Div`/`Exp`-with-nonneg-exponent ARE provable via verifier recompute.)
+    #[error("Eval operator `{operator}` is unsupported: only integer Plus/Minus/Times/Div/Exp (non-negative exponent) are provable")]
+    EvalUnsupportedOperator { operator: &'static str },
+
+    /// An `Eval` operand variable is not bound by any store read in the same query, so its
+    /// value cannot be authenticated. Arithmetic reads no store itself; an operand value must
+    /// come from an authenticated store-derived binding.
+    #[error("Eval operand `?{var}` is not bound by a store read in the same query: it cannot be authenticated")]
+    EvalOperandNotBound { var: String },
+
+    /// An `Eval` operand variable IS bound by the child, but not as a nonnullable, exact
+    /// fixed-width INTEGER value (e.g. it is a node, a predicate, nullable, a float/decimal, or
+    /// an unconstrained value whose datatype is not pinned by a range comparison). Only the
+    /// order-preserving fixed-width integer datatypes the value-auth path supports are allowed.
+    #[error("Eval operand `?{var}` is not a nonnullable exact fixed-width integer store value")]
+    EvalOperandNotInteger { var: String },
+
+    /// An `Eval` literal operand is not an integer (a float, decimal, string, boolean, or other
+    /// non-integer XSD datatype). Only exact integer literals are provable in v1.
+    #[error("Eval literal operand of datatype `{datatype}` is unsupported: only integer literals are provable in v1")]
+    EvalUnsupportedLiteral { datatype: &'static str },
+
+    /// A malformed `Typecast` composition: not a conjunction of exactly ONE `Typecast` with a
+    /// non-empty source-binding child BGP (no projection/count/distinct on the child).
+    #[error("Typecast must be a conjunction of exactly one Typecast with a non-empty source-binding child BGP (no projection/count/distinct on the child)")]
+    TypecastUnsupportedShape,
+
+    /// `Typecast`'s `value` (the source) is not a variable, so it is not an authenticated store
+    /// read. Only a store-bound source column can be verifier-recomputed.
+    #[error("Typecast source must be a variable bound by a store read")]
+    TypecastSourceNotVariable,
+
+    /// `Typecast`'s source variable is not bound by any store read in the same query, so its
+    /// value cannot be authenticated.
+    #[error("Typecast source `?{var}` is not bound by a store read in the same query: it cannot be authenticated")]
+    TypecastSourceNotBound { var: String },
+
+    /// `Typecast`'s source variable IS bound, but not as a nonnullable, exact fixed-width INTEGER
+    /// store value (e.g. a node, predicate, nullable, float/decimal, or a value whose datatype is
+    /// not pinned by a range comparison). Only fixed-width integer sources are provable.
+    #[error("Typecast source `?{var}` is not a nonnullable exact fixed-width integer store value")]
+    TypecastSourceNotInteger { var: String },
+
+    /// `Typecast`'s `result` is not a variable, or is already bound by the source BGP; the cast
+    /// column must be a fresh output column, never a literal or a redefinition of a binding.
+    #[error("Typecast result must be a fresh variable not already bound by the source BGP")]
+    TypecastResultInvalid,
+
+    /// `Typecast`'s target `type` is not a concrete node IRI (it is a variable), so the target
+    /// type is unknown at compile time. Reject closed.
+    #[error("Typecast target type must be a concrete node IRI, not a variable")]
+    TypecastTargetNotNode,
+
+    /// `Typecast`'s target type IRI is not one of the supported fixed-width integer types
+    /// (xsd:byte/short/int/long and their unsigned forms). A string/float/decimal target, or an
+    /// arbitrary-precision `xsd:integer`, needs a different value layer. Reject closed.
+    #[error("Typecast target type `{iri}` is unsupported: only fixed-width integer→integer casts are provable")]
+    TypecastUnsupportedTarget { iri: String },
+
+    /// A malformed `Concatenate` composition: not a conjunction of exactly ONE `Concatenate`
+    /// with a non-empty operand-binding child BGP (no projection/count/distinct on the child).
+    #[error("Concat must be a conjunction of exactly one Concatenate with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    ConcatUnsupportedShape,
+
+    /// `Concatenate`'s `result` (`result_string`) is not a variable (it is a literal/list), so
+    /// there is no fresh output variable to bind the synthesized string to.
+    #[error("Concat result must be a variable")]
+    ConcatResultNotVariable,
+
+    /// `Concatenate`'s result variable is already bound by the child BGP; the synthesized string
+    /// must be a fresh output, never a redefinition of an authenticated binding.
+    #[error("Concat result variable `?{var}` is already bound by the operand-binding BGP")]
+    ConcatResultAlreadyBound { var: String },
+
+    /// `Concatenate`'s list is a runtime list VARIABLE, not a concrete inline list. v1 needs the
+    /// element sequence known at compile time to pin string-ness/order into the query digest.
+    #[error("Concat list must be a concrete inline list, not a runtime list variable")]
+    ConcatListNotConcrete,
+
+    /// `Concatenate`'s list is empty. `interpolate_string([], "")` has no per-row operand to
+    /// authenticate; it is outside the per-row provable fragment.
+    #[error("Concat list must be non-empty")]
+    ConcatEmptyList,
+
+    /// A `Concatenate` operand VARIABLE is not bound by any store read in the same query, so its
+    /// value cannot be authenticated.
+    #[error("Concat operand `?{var}` is not bound by a store read in the same query: it cannot be authenticated")]
+    ConcatOperandNotBound { var: String },
+
+    /// A `Concatenate` operand variable IS bound, but not as a nonnullable node/value store value,
+    /// or it is pinned to a NON-string datatype. Only a store-authenticated xsd:string operand is
+    /// provable in v1 (a non-string would need SWI's stringification, a separate circuit).
+    #[error("Concat operand `?{var}` is not a nonnullable store-authenticated xsd:string value")]
+    ConcatOperandNotString { var: String },
+
+    /// A `Concatenate` list element is a NON-string scalar literal (a number/boolean/…). SWI
+    /// `interpolate_string` would stringify it; that rendering is a separate circuit. Reject closed.
+    #[error("Concat literal element is not an xsd:string: non-string element stringification is unsupported in v1")]
+    ConcatLiteralNotString,
+
+    /// A `Concatenate` list element is itself a nested list, not a scalar string operand.
+    #[error("Concat list element must be a scalar string, not a nested list")]
+    ConcatNestedList,
+
+    // ----- WOQL `Join` (separator-interposed concat) -----
+    /// A malformed `Join` composition: not a conjunction of exactly ONE `Join` with a non-empty
+    /// operand-binding child BGP (no projection/count/distinct on the child).
+    #[error("Join must be a conjunction of exactly one Join with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    JoinUnsupportedShape,
+
+    /// `Join`'s `result` (`result_string`) is not a variable (it is a literal/list); the
+    /// synthesized string binds a FRESH variable.
+    #[error("Join result must be a variable")]
+    JoinResultNotVariable,
+
+    /// `Join`'s result variable is already bound by the child BGP; it must be fresh.
+    #[error("Join result variable `?{var}` is already bound by the operand-binding BGP")]
+    JoinResultAlreadyBound { var: String },
+
+    /// `Join`'s list is a runtime list VARIABLE, not a concrete inline list.
+    #[error("Join list must be a concrete inline list, not a runtime list variable")]
+    JoinListNotConcrete,
+
+    /// `Join`'s list is empty. `join([], Sep, "")` has no per-row operand to authenticate.
+    #[error("Join list must be non-empty")]
+    JoinEmptyList,
+
+    // ----- WOQL `Substring` (per-row constant-index character substring) -----
+    /// A malformed `Substring` composition: not a conjunction of exactly ONE `Substring` with a
+    /// non-empty operand-binding child BGP (no projection/count/distinct on the child).
+    #[error("Substring must be a conjunction of exactly one Substring with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    SubstringUnsupportedShape,
+
+    /// `Substring`'s `String` operand is not a variable (it is a literal/list); the task requires
+    /// an AUTHENTICATED store xsd:string input, so a constant string rejects closed.
+    #[error("Substring input string must be a variable bound to a store-authenticated xsd:string")]
+    SubstringStringNotVariable,
+
+    /// `Substring`'s `String` variable is not bound by any store read in the same query.
+    #[error("Substring input string `?{var}` is not bound by a store read in the same query: it cannot be authenticated")]
+    SubstringStringNotBound { var: String },
+
+    /// `Substring`'s `String` variable IS bound, but not as a nonnullable node/value store value,
+    /// or it is pinned to a NON-string datatype.
+    #[error("Substring input string `?{var}` is not a nonnullable store-authenticated xsd:string value")]
+    SubstringStringNotAuthenticated { var: String },
+
+    /// `Substring`'s `Before`/`Length` is not an integer LITERAL (e.g. a variable index — a
+    /// per-row store-authenticated index is a deferred follow-up).
+    #[error("Substring before/length must be a non-negative integer literal (variable indices are a deferred follow-up)")]
+    SubstringIndexNotLiteral,
+
+    /// `Substring`'s `Before`/`Length` literal is not an exact integer (a float/decimal/other).
+    #[error("Substring before/length must be an integer literal")]
+    SubstringIndexNotInteger,
+
+    /// `Substring`'s `Before`/`Length` literal is NEGATIVE. SWI `sub_string/5` requires
+    /// non-negative offsets (a negative one fails/throws) — reject closed, matching the reference.
+    #[error("Substring before/length must be non-negative (SWI sub_string fails/throws on a negative offset)")]
+    SubstringNegativeIndex,
+
+    /// `Substring`'s `Before`/`Length` literal does not fit `usize`.
+    #[error("Substring before/length literal is too large")]
+    SubstringIndexTooLarge,
+
+    /// `Substring`'s `After` is not a fresh output variable (it is a constant/list, which would add
+    /// a length-equality filter, or it rebinds an existing column).
+    #[error("Substring after must be a fresh output variable (a bound After adds an unmodeled length/occurrence filter)")]
+    SubstringAfterNotVariable,
+
+    /// `Substring`'s `SubString` (result) is not a variable (it is a literal/list); the synthesized
+    /// substring binds a FRESH variable.
+    #[error("Substring result must be a variable")]
+    SubstringResultNotVariable,
+
+    /// `Substring`'s `After` or `SubString` result variable is already bound by the child BGP; it
+    /// must be fresh (a rebinding would be an unmodeled join/filter).
+    #[error("Substring after/result variable `?{var}` is already bound by the operand-binding BGP")]
+    SubstringResultAlreadyBound { var: String },
+
+    /// `Substring`'s `SubString` result variable aliases its `After` variable (an integer output
+    /// unified with a string output — the reference would fail on the type mismatch). Reject closed.
+    #[error("Substring result variable must differ from its after variable")]
+    SubstringResultAliasesAfter,
+
+    /// A DEFERRED string-case op (`Upper`/`Lower`) appeared. Their SWI `string_upper`/
+    /// `string_lower` fold case via LOCALE-DEPENDENT `towupper`/`towlower`; TerminusDB's Docker
+    /// deployment pins no `LC_CTYPE`, so under a Turkic locale even ASCII 'i'/'I' diverge from an
+    /// ASCII case map. Fidelity is unprovable across deployments, so reject closed (see
+    /// `reject_unsupported_string_case_ops`) pending a locale-pinning follow-up.
+    #[error("Upper/Lower are unsupported in v1: SWI string_upper/string_lower are locale-dependent (unpinned LC_CTYPE), so ASCII fidelity is not provable — deferred")]
+    StringCaseOpLocaleUnsupported,
+
+    /// `Pad` is not a conjunction of exactly one `Pad` with a non-empty operand-binding child BGP
+    /// (or the child carries a projection/count/distinct we cannot layer a pad over).
+    #[error("Pad must be a conjunction of exactly one Pad with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    PadUnsupportedShape,
+
+    /// `Pad`'s string operand is not a variable (a literal is a constant with no per-row read
+    /// tying it to the trusted root; the task requires an AUTHENTICATED xsd:string input).
+    #[error("Pad string operand must be a variable bound by a store read in the same query")]
+    PadStringNotVariable,
+
+    /// `Pad`'s string operand variable is not bound by a store read in the same query.
+    #[error("Pad string operand `?{var}` is not bound by a store read in the same query: it cannot be authenticated")]
+    PadStringNotBound { var: String },
+
+    /// `Pad`'s string operand is not a nonnullable store-authenticated xsd:string value.
+    #[error("Pad string operand `?{var}` is not a nonnullable store-authenticated xsd:string value")]
+    PadStringNotAuthenticated { var: String },
+
+    /// `Pad`'s pad char is not an xsd:string LITERAL (a variable pad char is a follow-up; a
+    /// non-string is unsupported).
+    #[error("Pad char must be an xsd:string literal (a variable pad char is a deferred follow-up)")]
+    PadCharNotLiteral,
+
+    /// `Pad`'s pad char literal is not an xsd:string.
+    #[error("Pad char literal must be an xsd:string")]
+    PadCharNotString,
+
+    /// `Pad`'s pad char is not exactly ONE code point (reference `utils:pad` throws
+    /// `pad_not_length_one` unless `string_length == 1`).
+    #[error("Pad char must be exactly one character (code point): reference utils:pad requires string_length == 1")]
+    PadCharNotSingleChar,
+
+    /// `Pad`'s target length is not an integer LITERAL (a variable target length is a follow-up).
+    #[error("Pad target length must be an integer literal (a variable target length is a deferred follow-up)")]
+    PadLengthNotLiteral,
+
+    /// `Pad`'s target-length literal is not an integer.
+    #[error("Pad target length literal must be an integer")]
+    PadLengthNotInteger,
+
+    /// `Pad`'s target length is negative (`L < 0` always throws `bad_pad_length` in the reference).
+    #[error("Pad target length must be non-negative")]
+    PadNegativeLength,
+
+    /// `Pad`'s target length exceeds `usize`.
+    #[error("Pad target length exceeds the platform usize")]
+    PadLengthTooLarge,
+
+    /// `Pad`'s result is not a variable.
+    #[error("Pad result must be a variable")]
+    PadResultNotVariable,
+
+    /// `Pad`'s result variable is already bound by the child BGP; it must be fresh.
+    #[error("Pad result variable `?{var}` is already bound by the operand-binding BGP")]
+    PadResultAlreadyBound { var: String },
+
+    /// `HashKey`/`hash` is not a conjunction of exactly one `HashKey` with a non-empty
+    /// operand-binding child BGP (or the child carries a projection/count/distinct).
+    #[error("HashKey must be a conjunction of exactly one HashKey with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    HashKeyUnsupportedShape,
+
+    /// `HashKey`/`hash`'s result URI is not a variable (a constant node result would add an
+    /// equality constraint we do not model).
+    #[error("HashKey result URI must be a variable")]
+    HashKeyResultNotVariable,
+
+    /// `HashKey`/`hash`'s result variable is already bound by the child BGP; it must be fresh.
+    #[error("HashKey result variable `?{var}` is already bound by the operand-binding BGP")]
+    HashKeyResultAlreadyBound { var: String },
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -4046,6 +6550,8 @@ fn query_variant_name(q: &Query) -> &'static str {
         Query::Not(_) => "Not",
         Query::True(_) => "True",
         Query::Triple(_) => "Triple",
+        Query::AddedTriple(_) => "AddedTriple",
+        Query::DeletedTriple(_) => "DeletedTriple",
         Query::AddTriple(_) => "AddTriple",
         Query::DeleteTriple(_) => "DeleteTriple",
         Query::Link(_) => "Link",
@@ -4109,6 +6615,11 @@ struct Atom {
 struct TypedTriple {
     triple: Triple,
     object_kind: ObjectKindFilter,
+    /// Which committed column set this atom reads. A plain `Triple`/`Link`/`Data` reads the
+    /// materialized head view; a WOQL `AddedTriple`/`DeletedTriple` reads this layer's own
+    /// addition/removal delta file. A single BGP leaf must be uniform in source (enforced by
+    /// [`uniform_column_source`]); a cross-source conjunction rejects closed.
+    source: ColumnSource,
 }
 
 fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
@@ -4591,6 +7102,1154 @@ fn plan_collection_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPla
         count_variable: None,
         full_row_distinct: false,
     }))
+}
+
+/// Compile a WOQL `Eval` over integer arithmetic into a per-row derived-column relation.
+///
+/// Shape: an `And` whose conjuncts are an operand-binding child BGP plus EXACTLY ONE `Eval`.
+/// The child is compiled with [`plan_bgp`] (so its triples + range comparisons authenticate
+/// and datatype-pin the operand columns exactly as the Sum forms rely on), and the `Eval`
+/// expression is lowered to an [`EvalExpr`] over child column indices and integer literals.
+///
+/// Everything outside the provable integer fragment rejects closed with a specific error:
+/// `Divide`/`Floor` (rational layer), a static negative `Exp` exponent, non-integer
+/// literals/operands, operands not bound by a store read, and result overflow (enforced later,
+/// in the recompute's checked i64 narrowing). `Div`/`Exp` (non-negative exponent) ARE provable.
+fn plan_eval_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let eval_positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::Eval(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if eval_positions.is_empty() {
+        // No Eval conjunct: let the other planners handle this query.
+        return Ok(None);
+    }
+    if eval_positions.len() > 1 {
+        // Multiple Evals would need a dependency-ordered chain of derived columns; v1 takes
+        // exactly one. Reject closed rather than proving only the first.
+        return Err(BgpPlanError::EvalUnsupportedShape);
+    }
+    let Query::Eval(eval) = &conjuncts[eval_positions[0]] else {
+        unreachable!("eval_positions only indexes Eval conjuncts")
+    };
+
+    // The operand-binding child is every OTHER conjunct.
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != eval_positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        // A bare Eval with no store binding cannot authenticate any operand variable.
+        return Err(BgpPlanError::EvalUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::EvalUnsupportedShape);
+    }
+
+    let result = match &eval.result_value {
+        ArithmeticValue::Variable(variable) => variable.clone(),
+        ArithmeticValue::Data(_) => return Err(BgpPlanError::EvalResultNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::EvalResultAlreadyBound { var: result });
+    }
+
+    let expr = compile_eval_expr(&eval.expression, &child)?;
+
+    let collection = child.collection.clone();
+    let mut schema = child.relation.schema.clone();
+    schema.push(result);
+    let mut domains = child.relation.domains.clone();
+    // The derived column is a generated integer, not an executor value domain.
+    domains.push(None);
+    let relation = CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::Eval {
+            input: Box::new(child.relation),
+            expr,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Lower a WOQL `ArithmeticExpression` to an [`EvalExpr`], rejecting every out-of-scope node.
+fn compile_eval_expr(
+    expression: &ArithmeticExpression,
+    child: &CompiledBgp,
+) -> Result<EvalExpr, BgpPlanError> {
+    match expression {
+        ArithmeticExpression::Value(value) => compile_eval_value(value, child),
+        ArithmeticExpression::Plus(plus) => Ok(EvalExpr::Plus(
+            Box::new(compile_eval_expr(&plus.left, child)?),
+            Box::new(compile_eval_expr(&plus.right, child)?),
+        )),
+        ArithmeticExpression::Minus(minus) => Ok(EvalExpr::Minus(
+            Box::new(compile_eval_expr(&minus.left, child)?),
+            Box::new(compile_eval_expr(&minus.right, child)?),
+        )),
+        ArithmeticExpression::Times(times) => Ok(EvalExpr::Times(
+            Box::new(compile_eval_expr(&times.left, child)?),
+            Box::new(compile_eval_expr(&times.right, child)?),
+        )),
+        // INTEGER FLOOR division: recompute-provable (verifier re-derives the floored quotient,
+        // fails closed on a zero divisor — see [`EvalExpr::Div`]).
+        ArithmeticExpression::Div(div) => Ok(EvalExpr::Div(
+            Box::new(compile_eval_expr(&div.left, child)?),
+            Box::new(compile_eval_expr(&div.right, child)?),
+        )),
+        // INTEGER power over a non-negative exponent: recompute-provable with checked pow.
+        // If the exponent is a STATIC negative literal, reject closed at compile time (its
+        // rational result is out of this integer layer); a runtime column exponent that turns
+        // out negative fails closed in the recompute instead.
+        ArithmeticExpression::Exp(exp) => {
+            if let ArithmeticExpression::Value(ArithmeticValue::Data(literal)) = exp.right.as_ref() {
+                if eval_integer_literal(literal)? < 0 {
+                    return Err(BgpPlanError::EvalUnsupportedOperator {
+                        operator: "Exp (negative exponent)",
+                    });
+                }
+            }
+            Ok(EvalExpr::Exp(
+                Box::new(compile_eval_expr(&exp.left, child)?),
+                Box::new(compile_eval_expr(&exp.right, child)?),
+            ))
+        }
+        // `Divide` (`/`/`rdiv`) is EXACT RATIONAL, and `Floor` over rationals needs the
+        // rational value layer; both are out of the integer fragment. Reject closed.
+        ArithmeticExpression::Divide(_) => Err(BgpPlanError::EvalUnsupportedOperator {
+            operator: "Divide",
+        }),
+        ArithmeticExpression::Floor(_) => Err(BgpPlanError::EvalUnsupportedOperator {
+            operator: "Floor",
+        }),
+    }
+}
+
+/// Lower an arithmetic LEAF (variable operand or literal) to an [`EvalExpr`] leaf.
+fn compile_eval_value(
+    value: &ArithmeticValue,
+    child: &CompiledBgp,
+) -> Result<EvalExpr, BgpPlanError> {
+    match value {
+        ArithmeticValue::Variable(variable) => {
+            let index = child
+                .relation
+                .schema
+                .iter()
+                .position(|candidate| candidate == variable)
+                .ok_or_else(|| BgpPlanError::EvalOperandNotBound {
+                    var: variable.clone(),
+                })?;
+            // The operand column must be a nonnullable node/value column (a store value), not a
+            // node IRI, predicate, or nullable Optional column.
+            let descriptors = relation_result_descriptors(&child.relation)
+                .map_err(|_| BgpPlanError::EvalOperandNotInteger {
+                    var: variable.clone(),
+                })?;
+            if descriptors[index].nullable
+                || descriptors[index].namespace != ResultIdNamespace::NodeValue
+            {
+                return Err(BgpPlanError::EvalOperandNotInteger {
+                    var: variable.clone(),
+                });
+            }
+            // Its exact fixed-width integer datatype must be pinned (by a range comparison, as
+            // in the Sum forms). Anything else — floats, decimals, unpinned values — rejects.
+            let datatype = match child.relation.domains.get(index).copied().flatten() {
+                Some(EqualityValueDomain::Datatype(
+                    datatype @ (CanonicalDatatype::UInt8
+                    | CanonicalDatatype::UInt16
+                    | CanonicalDatatype::UInt32
+                    | CanonicalDatatype::UInt64
+                    | CanonicalDatatype::Int8
+                    | CanonicalDatatype::Int16
+                    | CanonicalDatatype::Int32
+                    | CanonicalDatatype::Int64),
+                )) => datatype,
+                _ => {
+                    return Err(BgpPlanError::EvalOperandNotInteger {
+                        var: variable.clone(),
+                    })
+                }
+            };
+            Ok(EvalExpr::Column { index, datatype })
+        }
+        ArithmeticValue::Data(data) => Ok(EvalExpr::Literal(eval_integer_literal(data)?)),
+    }
+}
+
+/// Accept only exact integer XSD literals (all fit `i128`); reject float/decimal/other closed.
+fn eval_integer_literal(value: &XSDAnySimpleType) -> Result<i128, BgpPlanError> {
+    Ok(match value {
+        XSDAnySimpleType::UnsignedByte(v) => i128::from(*v),
+        XSDAnySimpleType::Byte(v) => i128::from(*v),
+        XSDAnySimpleType::UnsignedShort(v) => i128::from(*v),
+        XSDAnySimpleType::Short(v) => i128::from(*v),
+        XSDAnySimpleType::UnsignedInt(v) => i128::try_from(*v).map_err(|_| {
+            BgpPlanError::EvalUnsupportedLiteral {
+                datatype: "xsd:unsignedInt",
+            }
+        })?,
+        XSDAnySimpleType::Int(v) => i128::from(*v),
+        XSDAnySimpleType::UnsignedLong(v) => i128::from(*v),
+        XSDAnySimpleType::Long(v) => i128::from(*v),
+        XSDAnySimpleType::Integer(v) => i128::from(*v),
+        other => {
+            return Err(BgpPlanError::EvalUnsupportedLiteral {
+                datatype: xsd_simple_type_name(other),
+            })
+        }
+    })
+}
+
+/// A stable XSD datatype name for a non-integer literal, used only in reject-closed errors.
+fn xsd_simple_type_name(value: &XSDAnySimpleType) -> &'static str {
+    match value {
+        XSDAnySimpleType::String(_) => "xsd:string",
+        XSDAnySimpleType::Decimal(_) => "xsd:decimal",
+        XSDAnySimpleType::Float(_) => "xsd:double",
+        XSDAnySimpleType::Boolean(_) => "xsd:boolean",
+        XSDAnySimpleType::HexBinary(_) => "xsd:hexBinary",
+        XSDAnySimpleType::URI(_) => "xsd:anyURI",
+        XSDAnySimpleType::DateTime(_) => "xsd:dateTime",
+        XSDAnySimpleType::Date(_) => "xsd:date",
+        XSDAnySimpleType::Time(_) => "xsd:time",
+        XSDAnySimpleType::UnsignedByte(_) => "xsd:unsignedByte",
+        XSDAnySimpleType::Byte(_) => "xsd:byte",
+        XSDAnySimpleType::UnsignedShort(_) => "xsd:unsignedShort",
+        XSDAnySimpleType::Short(_) => "xsd:short",
+        XSDAnySimpleType::UnsignedInt(_) => "xsd:unsignedInt",
+        XSDAnySimpleType::Int(_) => "xsd:int",
+        XSDAnySimpleType::UnsignedLong(_) => "xsd:unsignedLong",
+        XSDAnySimpleType::Long(_) => "xsd:long",
+        XSDAnySimpleType::Integer(_) => "xsd:integer",
+    }
+}
+
+/// Compile a WOQL `Typecast` of ONE authenticated integer column to a fixed-width integer type
+/// into a per-row derived-column relation.
+///
+/// Shape: an `And` whose conjuncts are a source-binding child BGP plus EXACTLY ONE `Typecast`.
+/// The child is compiled with [`plan_bgp`] (so its triples + range comparisons authenticate and
+/// datatype-pin the source column exactly as the Eval/Sum forms rely on). Only a store-bound
+/// fixed-width-integer SOURCE cast to a fixed-width-integer TARGET is provable; every other case
+/// (rational/float/string targets, `xsd:integer`, a variable target, an unbound source, a literal
+/// or already-bound result) rejects closed with a specific error.
+fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let typecast_positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::Typecast(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if typecast_positions.is_empty() {
+        // No Typecast conjunct: let the other planners handle this query.
+        return Ok(None);
+    }
+    if typecast_positions.len() > 1 {
+        // Multiple casts would need a dependency-ordered chain of derived columns; v1 takes
+        // exactly one. Reject closed rather than proving only the first.
+        return Err(BgpPlanError::TypecastUnsupportedShape);
+    }
+    let Query::Typecast(typecast) = &conjuncts[typecast_positions[0]] else {
+        unreachable!("typecast_positions only indexes Typecast conjuncts")
+    };
+
+    // The source-binding child is every OTHER conjunct.
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != typecast_positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        // A bare Typecast with no store binding cannot authenticate the source variable.
+        return Err(BgpPlanError::TypecastUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::TypecastUnsupportedShape);
+    }
+
+    // Source: a variable bound as a nonnullable fixed-width integer store value.
+    let source_variable = match &typecast.value {
+        Value::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::TypecastSourceNotVariable),
+    };
+    let (source_column, source_datatype) = resolve_typecast_source(&child, &source_variable)?;
+
+    // Target: a concrete node IRI naming a supported fixed-width integer type.
+    let target_iri = match &typecast.type_uri {
+        NodeValue::Node(iri) => iri.clone(),
+        NodeValue::Variable(_) => return Err(BgpPlanError::TypecastTargetNotNode),
+    };
+    let target_datatype = canonical_integer_datatype_from_iri(&target_iri)
+        .ok_or(BgpPlanError::TypecastUnsupportedTarget { iri: target_iri })?;
+
+    // Result: a fresh output variable, never a literal and never a redefinition of a binding.
+    let result = match &typecast.result_value {
+        Value::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::TypecastResultInvalid),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::TypecastResultInvalid);
+    }
+
+    let collection = child.collection.clone();
+    let mut schema = child.relation.schema.clone();
+    schema.push(result);
+    let mut domains = child.relation.domains.clone();
+    // The derived cast column is a generated integer, not an executor value domain.
+    domains.push(None);
+    let relation = CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::Typecast {
+            input: Box::new(child.relation),
+            source_column,
+            source_datatype,
+            target_datatype,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Resolve a `Typecast` source variable to its (nonnullable, fixed-width-integer) child result
+/// column and pinned datatype — the same authentication contract Eval operands require.
+fn resolve_typecast_source(
+    child: &CompiledBgp,
+    variable: &str,
+) -> Result<(usize, CanonicalDatatype), BgpPlanError> {
+    let index = child
+        .relation
+        .schema
+        .iter()
+        .position(|candidate| candidate == variable)
+        .ok_or_else(|| BgpPlanError::TypecastSourceNotBound {
+            var: variable.to_string(),
+        })?;
+    // The source column must be a nonnullable node/value column (a store value), not a node IRI,
+    // predicate, or nullable Optional column.
+    let descriptors = relation_result_descriptors(&child.relation).map_err(|_| {
+        BgpPlanError::TypecastSourceNotInteger {
+            var: variable.to_string(),
+        }
+    })?;
+    if descriptors[index].nullable || descriptors[index].namespace != ResultIdNamespace::NodeValue {
+        return Err(BgpPlanError::TypecastSourceNotInteger {
+            var: variable.to_string(),
+        });
+    }
+    // Its exact fixed-width integer datatype must be pinned (by a range comparison, as in the Sum
+    // forms). Anything else — floats, decimals, unpinned values — rejects.
+    let datatype = match child.relation.domains.get(index).copied().flatten() {
+        Some(EqualityValueDomain::Datatype(
+            datatype @ (CanonicalDatatype::UInt8
+            | CanonicalDatatype::UInt16
+            | CanonicalDatatype::UInt32
+            | CanonicalDatatype::UInt64
+            | CanonicalDatatype::Int8
+            | CanonicalDatatype::Int16
+            | CanonicalDatatype::Int32
+            | CanonicalDatatype::Int64),
+        )) => datatype,
+        _ => {
+            return Err(BgpPlanError::TypecastSourceNotInteger {
+                var: variable.to_string(),
+            })
+        }
+    };
+    Ok((index, datatype))
+}
+
+/// Map a target type IRI (full `http://www.w3.org/2001/XMLSchema#long`, prefixed `xsd:long`, or a
+/// bare local name) to its fixed-width integer [`CanonicalDatatype`], or `None` for any
+/// non-fixed-width-integer type (string/float/decimal, `xsd:integer` arbitrary precision, the
+/// `positiveInteger`/`nonNegativeInteger`/… derived unbounded types, or an unknown IRI). Reject
+/// closed on `None`: only the eight order-preserving fixed-width integer widths are provable.
+fn canonical_integer_datatype_from_iri(iri: &str) -> Option<CanonicalDatatype> {
+    // The local name is the segment after the last '#' or ':' separator (covers all three forms).
+    let local = iri.rsplit(['#', ':']).next().unwrap_or(iri);
+    Some(match local {
+        "byte" => CanonicalDatatype::Int8,
+        "short" => CanonicalDatatype::Int16,
+        "int" => CanonicalDatatype::Int32,
+        "long" => CanonicalDatatype::Int64,
+        "unsignedByte" => CanonicalDatatype::UInt8,
+        "unsignedShort" => CanonicalDatatype::UInt16,
+        "unsignedInt" => CanonicalDatatype::UInt32,
+        "unsignedLong" => CanonicalDatatype::UInt64,
+        _ => return None,
+    })
+}
+
+/// Compile a WOQL `Concatenate` conjunct (`concat(List, Result)`) into a verifier-recompute
+/// [`CompiledRelationStatement::Concat`] — the FOUNDATION of the read-only string value-circuit
+/// family, modelled on [`plan_eval_form`].
+///
+/// V1 SCOPE (reject-closed everywhere else): the list must be a CONCRETE inline list whose
+/// elements are xsd:string LITERALS and/or variables bound (in the SAME query) as nonnullable
+/// store-authenticated node/value columns; the result must be a FRESH variable (not a literal,
+/// not already bound). Non-string list elements (numbers/nodes — `interpolate_string` would
+/// stringify them, a separate circuit), a runtime list variable, a pinned non-string operand
+/// datatype, and a result literal/already-bound variable all reject closed.
+///
+/// The result variable is deliberately NOT added to the committed schema: the concatenation is a
+/// TERMINAL, revealed value (a synthesized string does not encode into a committed field element
+/// and feeds nothing downstream). It is exposed post-verify via [`ProvedBgp::concat_result_objects`].
+fn plan_concat_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::Concatenate(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if positions.is_empty() {
+        // No Concatenate conjunct: let the other planners handle this query.
+        return Ok(None);
+    }
+    if positions.len() > 1 {
+        // Multiple concats would need a dependency-ordered chain of derived strings; v1 takes
+        // exactly one. Reject closed rather than proving only the first.
+        return Err(BgpPlanError::ConcatUnsupportedShape);
+    }
+    let Query::Concatenate(concat) = &conjuncts[positions[0]] else {
+        unreachable!("positions only indexes Concatenate conjuncts")
+    };
+
+    // The operand-binding child is every OTHER conjunct.
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        // A bare concat with no store binding cannot authenticate any operand variable. (A concat
+        // of only literals is a constant string with no rows — out of the per-row read fragment.)
+        return Err(BgpPlanError::ConcatUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::ConcatUnsupportedShape);
+    }
+
+    // The result must be a FRESH variable (never a literal, never a rebinding of an operand).
+    let result = match &concat.result_string {
+        DataValue::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::ConcatResultNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::ConcatResultAlreadyBound { var: result });
+    }
+
+    // The list must be a CONCRETE inline list (a runtime list variable's elements are unknown at
+    // compile time, so their string-ness/order cannot be pinned into the query — reject closed).
+    let items = match &concat.list {
+        ListOrVariable::List(items) => items,
+        ListOrVariable::Variable(_) => return Err(BgpPlanError::ConcatListNotConcrete),
+    };
+    if items.is_empty() {
+        // `interpolate_string([], "")` yields the empty string with no per-row derivation; there
+        // is no operand to authenticate, so it is out of the per-row provable fragment.
+        return Err(BgpPlanError::ConcatEmptyList);
+    }
+    let elements = items
+        .iter()
+        .map(|item| compile_concat_element(item, &child))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Keep the child schema/domains: the result variable is NOT a committed column (terminal,
+    // revealed). Track it only inside the statement (for the query digest and result exposure).
+    let collection = child.collection.clone();
+    let relation = CompiledRelation {
+        schema: child.relation.schema.clone(),
+        domains: child.relation.domains.clone(),
+        statement: CompiledRelationStatement::Concat {
+            input: Box::new(child.relation),
+            elements,
+            result,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Lower one `concat` list element (a `DataValue`) to a [`ConcatElement`].
+///
+/// A variable resolves to a nonnullable store-authenticated node/value column (its per-row
+/// xsd:string-ness is re-checked against the AUTHENTICATED value at recompute time — a runtime
+/// non-string row fails closed there); a pinned NON-string operand datatype rejects at compile
+/// time. A string literal contributes its UTF-8 bytes. Non-string literals and nested lists
+/// reject closed (they would require the stringification circuit).
+fn compile_concat_element(
+    value: &DataValue,
+    child: &CompiledBgp,
+) -> Result<ConcatElement, BgpPlanError> {
+    match value {
+        DataValue::Variable(variable) => {
+            let index = child
+                .relation
+                .schema
+                .iter()
+                .position(|candidate| candidate == variable)
+                .ok_or_else(|| BgpPlanError::ConcatOperandNotBound {
+                    var: variable.clone(),
+                })?;
+            // The operand column must be a nonnullable node/value column (a store value), not a
+            // node IRI, predicate, or nullable Optional column.
+            let descriptors = relation_result_descriptors(&child.relation).map_err(|_| {
+                BgpPlanError::ConcatOperandNotString {
+                    var: variable.clone(),
+                }
+            })?;
+            if descriptors[index].nullable
+                || descriptors[index].namespace != ResultIdNamespace::NodeValue
+            {
+                return Err(BgpPlanError::ConcatOperandNotString {
+                    var: variable.clone(),
+                });
+            }
+            // If a datatype IS pinned for this column (e.g. by a range comparison), it must be
+            // xsd:string. An UNPINNED column (`None`) is allowed: its string-ness is enforced
+            // per-row at recompute (a non-string row fails closed there). A pinned NON-string
+            // datatype (a number/bool via a range filter) rejects closed here.
+            match child.relation.domains.get(index).copied().flatten() {
+                None | Some(EqualityValueDomain::Datatype(CanonicalDatatype::String)) => {}
+                Some(_) => {
+                    return Err(BgpPlanError::ConcatOperandNotString {
+                        var: variable.clone(),
+                    })
+                }
+            }
+            Ok(ConcatElement::Column { index })
+        }
+        // An xsd:string literal contributes its UTF-8 content bytes verbatim.
+        DataValue::Data(XSDAnySimpleType::String(literal)) => {
+            Ok(ConcatElement::Literal(literal.clone().into_bytes()))
+        }
+        // A non-string scalar literal (number/bool/…) would be STRINGIFIED by SWI
+        // `interpolate_string` (`term_to_atom`/`atom_string`); that rendering is a separate
+        // circuit, so reject closed rather than guess it.
+        DataValue::Data(_) => Err(BgpPlanError::ConcatLiteralNotString),
+        // A nested list element is not a scalar string operand.
+        DataValue::List(_) => Err(BgpPlanError::ConcatNestedList),
+    }
+}
+
+/// Compile a WOQL `Join` conjunct (`join(List, Sep, Result)`) into a verifier-recompute
+/// [`CompiledRelationStatement::Join`] — a SEPARATOR-interposed extension of `plan_concat_form`.
+///
+/// V1 SCOPE (reject-closed everywhere else, mirroring concat): the list must be a CONCRETE inline
+/// list of xsd:string LITERALS and/or variables bound (in the SAME query) as nonnullable
+/// store-authenticated string columns; the SEPARATOR must be a string literal or such a bound
+/// variable (a non-string separator would be `term_to_atom`-stringified by `interpolate_string`,
+/// a separate circuit — reject); the result must be a FRESH variable. `join`'s reference mode is
+/// `[ground, ground, any]` (`woql_compile.pl:2902`), matched by the concrete-list + string-sep +
+/// fresh-result shape. Runtime list variable, non-string element/separator, unbound/pinned-
+/// non-string operand, result literal/already-bound all reject closed.
+///
+/// The result variable is NOT added to the committed schema (terminal, revealed — exactly as
+/// concat). Exposed post-verify via [`ProvedBgp::join_result_objects`].
+fn plan_join_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::Join(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if positions.is_empty() {
+        return Ok(None);
+    }
+    if positions.len() > 1 {
+        // Multiple joins would need a dependency-ordered chain of derived strings; v1 takes one.
+        return Err(BgpPlanError::JoinUnsupportedShape);
+    }
+    let Query::Join(join) = &conjuncts[positions[0]] else {
+        unreachable!("positions only indexes Join conjuncts")
+    };
+
+    // The operand-binding child is every OTHER conjunct.
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        // A bare join with no store binding cannot authenticate any operand variable.
+        return Err(BgpPlanError::JoinUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::JoinUnsupportedShape);
+    }
+
+    // The result must be a FRESH variable (never a literal, never a rebinding of an operand).
+    let result = match &join.result_string {
+        DataValue::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::JoinResultNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::JoinResultAlreadyBound { var: result });
+    }
+
+    // The list must be a CONCRETE inline list (a runtime list variable's elements/order/string-ness
+    // cannot be pinned into the query — reject closed).
+    let items = match &join.list {
+        ListOrVariable::List(items) => items,
+        ListOrVariable::Variable(_) => return Err(BgpPlanError::JoinListNotConcrete),
+    };
+    if items.is_empty() {
+        // `join([], Sep, "")` yields the empty string with no per-row derivation.
+        return Err(BgpPlanError::JoinEmptyList);
+    }
+    // Elements and separator reuse concat-element lowering (string literal or authenticated string
+    // column; non-string/unbound/pinned-non-string/nested-list all reject closed there). The
+    // concat-element errors surfaced here are still accurate for join operands.
+    let elements = items
+        .iter()
+        .map(|item| compile_concat_element(item, &child))
+        .collect::<Result<Vec<_>, _>>()?;
+    let separator = compile_concat_element(&join.separator, &child)?;
+
+    let collection = child.collection.clone();
+    let relation = CompiledRelation {
+        schema: child.relation.schema.clone(),
+        domains: child.relation.domains.clone(),
+        statement: CompiledRelationStatement::Join {
+            input: Box::new(child.relation),
+            elements,
+            separator,
+            result,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Extract a non-negative `usize` character index from a `Substring` position `DataValue`.
+///
+/// Accepts only an integer LITERAL (reusing [`eval_integer_literal`]'s exact-integer decode) that
+/// is `>= 0`; a variable index (a store-authenticated per-row index — a heavier circuit) is a
+/// documented follow-up and rejects closed, as does a non-integer literal and a NEGATIVE literal
+/// (SWI `sub_string/5` requires non-negative offsets — a negative one fails/throws, so FAIL
+/// CLOSED, matching the reference).
+fn substring_index_literal(value: &DataValue) -> Result<usize, BgpPlanError> {
+    let raw = match value {
+        DataValue::Data(data) => {
+            eval_integer_literal(data).map_err(|_| BgpPlanError::SubstringIndexNotInteger)?
+        }
+        DataValue::Variable(_) | DataValue::List(_) => {
+            return Err(BgpPlanError::SubstringIndexNotLiteral)
+        }
+    };
+    if raw < 0 {
+        return Err(BgpPlanError::SubstringNegativeIndex);
+    }
+    usize::try_from(raw).map_err(|_| BgpPlanError::SubstringIndexTooLarge)
+}
+
+/// Resolve a `Substring` string operand to an authenticated child string column index. The operand
+/// must be a VARIABLE bound (in the same query) as a nonnullable node/value column whose per-row
+/// xsd:string-ness is enforced at recompute (an unpinned column) or pinned to xsd:string; a pinned
+/// NON-string datatype, a nullable/node/predicate column, an unbound variable, or a literal all
+/// reject closed (the task requires an AUTHENTICATED xsd:string input).
+fn substring_string_column(value: &DataValue, child: &CompiledBgp) -> Result<usize, BgpPlanError> {
+    match value {
+        DataValue::Variable(variable) => {
+            let index = child
+                .relation
+                .schema
+                .iter()
+                .position(|candidate| candidate == variable)
+                .ok_or_else(|| BgpPlanError::SubstringStringNotBound {
+                    var: variable.clone(),
+                })?;
+            let descriptors = relation_result_descriptors(&child.relation).map_err(|_| {
+                BgpPlanError::SubstringStringNotAuthenticated {
+                    var: variable.clone(),
+                }
+            })?;
+            if descriptors[index].nullable
+                || descriptors[index].namespace != ResultIdNamespace::NodeValue
+            {
+                return Err(BgpPlanError::SubstringStringNotAuthenticated {
+                    var: variable.clone(),
+                });
+            }
+            match child.relation.domains.get(index).copied().flatten() {
+                None | Some(EqualityValueDomain::Datatype(CanonicalDatatype::String)) => {}
+                Some(_) => {
+                    return Err(BgpPlanError::SubstringStringNotAuthenticated {
+                        var: variable.clone(),
+                    })
+                }
+            }
+            Ok(index)
+        }
+        // A literal string is a constant substring (no per-row read tying it to the trusted root);
+        // the task requires an AUTHENTICATED input. Reject closed.
+        _ => Err(BgpPlanError::SubstringStringNotVariable),
+    }
+}
+
+/// Compile a WOQL `Substring` conjunct (`sub_string(String, Before, Length, After, SubString)`)
+/// into a verifier-recompute [`CompiledRelationStatement::Substring`].
+///
+/// V1 SCOPE (reject-closed everywhere else): `String` an authenticated child xsd:string column
+/// (variable); `Before`/`Length` NON-NEGATIVE integer LITERALS (the deterministic constant-index
+/// mode we prove faithful — variable indices are a follow-up); `After` a FRESH variable (an
+/// output — a bound `After` adds a length-equality/occurrence filter we do not model); `SubString`
+/// a FRESH variable (the terminal revealed result), distinct from `After`. Out-of-range is handled
+/// at recompute (FAIL CLOSED, matching SWI `sub_string`'s failure), so only the clean per-row-map
+/// case ever produces a proof (see the `Substring` variant docs for the full fidelity argument).
+///
+/// Neither `After` nor `SubString` is added to the committed schema (terminal, revealed — exactly
+/// as concat/join). The substring is exposed post-verify via
+/// [`ProvedBgp::substring_result_objects`]; `After` is derived but NOT revealed.
+fn plan_substring_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::Substring(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if positions.is_empty() {
+        return Ok(None);
+    }
+    if positions.len() > 1 {
+        return Err(BgpPlanError::SubstringUnsupportedShape);
+    }
+    let Query::Substring(substring) = &conjuncts[positions[0]] else {
+        unreachable!("positions only indexes Substring conjuncts")
+    };
+
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        return Err(BgpPlanError::SubstringUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::SubstringUnsupportedShape);
+    }
+
+    let string_column = substring_string_column(&substring.string, &child)?;
+    let before = substring_index_literal(&substring.before)?;
+    let length = substring_index_literal(&substring.length)?;
+
+    // `After` must be a FRESH output variable (not a constant filter, not a rebinding of an
+    // existing column).
+    let after = match &substring.after {
+        DataValue::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::SubstringAfterNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &after) {
+        return Err(BgpPlanError::SubstringResultAlreadyBound { var: after });
+    }
+
+    // `SubString` (the result) must be a FRESH variable, distinct from `After`.
+    let result = match &substring.substring {
+        DataValue::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::SubstringResultNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::SubstringResultAlreadyBound { var: result });
+    }
+    if result == after {
+        return Err(BgpPlanError::SubstringResultAliasesAfter);
+    }
+
+    let collection = child.collection.clone();
+    let relation = CompiledRelation {
+        schema: child.relation.schema.clone(),
+        domains: child.relation.domains.clone(),
+        statement: CompiledRelationStatement::Substring {
+            input: Box::new(child.relation),
+            string_column,
+            before,
+            length,
+            result,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Resolve a `Pad` string operand to an authenticated child string column index. Same discipline
+/// as [`substring_string_column`]: the operand must be a VARIABLE bound (in the same query) as a
+/// nonnullable node/value column whose per-row xsd:string-ness is enforced at recompute (unpinned)
+/// or pinned to xsd:string; a pinned NON-string datatype, a nullable/node column, an unbound
+/// variable, or a literal all reject closed (the task requires an AUTHENTICATED xsd:string input).
+fn pad_string_column(value: &DataValue, child: &CompiledBgp) -> Result<usize, BgpPlanError> {
+    match value {
+        DataValue::Variable(variable) => {
+            let index = child
+                .relation
+                .schema
+                .iter()
+                .position(|candidate| candidate == variable)
+                .ok_or_else(|| BgpPlanError::PadStringNotBound {
+                    var: variable.clone(),
+                })?;
+            let descriptors = relation_result_descriptors(&child.relation).map_err(|_| {
+                BgpPlanError::PadStringNotAuthenticated {
+                    var: variable.clone(),
+                }
+            })?;
+            if descriptors[index].nullable
+                || descriptors[index].namespace != ResultIdNamespace::NodeValue
+            {
+                return Err(BgpPlanError::PadStringNotAuthenticated {
+                    var: variable.clone(),
+                });
+            }
+            match child.relation.domains.get(index).copied().flatten() {
+                None | Some(EqualityValueDomain::Datatype(CanonicalDatatype::String)) => {}
+                Some(_) => {
+                    return Err(BgpPlanError::PadStringNotAuthenticated {
+                        var: variable.clone(),
+                    })
+                }
+            }
+            Ok(index)
+        }
+        // A literal string is a constant with no per-row read tying it to the trusted root; the
+        // task requires an AUTHENTICATED input. Reject closed.
+        _ => Err(BgpPlanError::PadStringNotVariable),
+    }
+}
+
+/// Resolve a `Pad` pad-char operand to its UTF-8 bytes. Reference `utils:pad` requires the char to
+/// interpolate to a string of `string_length == 1` (exactly ONE code point) else it throws
+/// `pad_not_length_one`. A variable char is a deferred follow-up; a non-string is unsupported.
+fn pad_char_literal(value: &DataValue) -> Result<Vec<u8>, BgpPlanError> {
+    match value {
+        DataValue::Data(XSDAnySimpleType::String(literal)) => {
+            // CODE-POINT count, not byte length: a multi-BYTE single char (e.g. 'é') is length 1.
+            if literal.chars().count() != 1 {
+                return Err(BgpPlanError::PadCharNotSingleChar);
+            }
+            Ok(literal.clone().into_bytes())
+        }
+        DataValue::Data(_) => Err(BgpPlanError::PadCharNotString),
+        DataValue::List(_) => Err(BgpPlanError::PadCharNotString),
+        DataValue::Variable(_) => Err(BgpPlanError::PadCharNotLiteral),
+    }
+}
+
+/// Resolve a `Pad` target-length operand to a non-negative `usize`. A negative `L` always throws
+/// `bad_pad_length` in the reference (`L2 = L - L1 < 0` for any `L1 >= 0`), so it rejects closed. A
+/// variable target length is a deferred follow-up.
+fn pad_target_length(value: &DataValue) -> Result<usize, BgpPlanError> {
+    let raw = match value {
+        DataValue::Data(data) => {
+            eval_integer_literal(data).map_err(|_| BgpPlanError::PadLengthNotInteger)?
+        }
+        DataValue::Variable(_) | DataValue::List(_) => {
+            return Err(BgpPlanError::PadLengthNotLiteral)
+        }
+    };
+    if raw < 0 {
+        return Err(BgpPlanError::PadNegativeLength);
+    }
+    usize::try_from(raw).map_err(|_| BgpPlanError::PadLengthTooLarge)
+}
+
+/// Compile a WOQL `Pad` conjunct (`pad(String, Char, Times, Result)`) into a verifier-recompute
+/// [`CompiledRelationStatement::Pad`].
+///
+/// V1 SCOPE (reject-closed everywhere else): `String` an authenticated child xsd:string column
+/// (variable); `Char` a single-code-point xsd:string LITERAL; `Times` (semantically the TARGET
+/// total CHARACTER length `L`) a NON-NEGATIVE integer LITERAL (a variable char/length is a
+/// follow-up); `Result` a FRESH variable (the terminal revealed result). Operand-longer-than-target
+/// is handled at recompute (FAIL CLOSED, matching `utils:pad`'s `bad_pad_length` throw), so only
+/// the clean per-row-map case ever produces a proof. The result is NOT added to the committed
+/// schema (terminal, revealed — exactly as concat/substring); it is exposed post-verify via
+/// [`ProvedBgp::pad_result_objects`].
+fn plan_pad_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::Pad(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if positions.is_empty() {
+        return Ok(None);
+    }
+    if positions.len() > 1 {
+        return Err(BgpPlanError::PadUnsupportedShape);
+    }
+    let Query::Pad(pad) = &conjuncts[positions[0]] else {
+        unreachable!("positions only indexes Pad conjuncts")
+    };
+
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        return Err(BgpPlanError::PadUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::PadUnsupportedShape);
+    }
+
+    let string_column = pad_string_column(&pad.string, &child)?;
+    let pad_char = pad_char_literal(&pad.char)?;
+    let target_len = pad_target_length(&pad.times)?;
+
+    let result = match &pad.result_string {
+        DataValue::Variable(variable) => variable.clone(),
+        _ => return Err(BgpPlanError::PadResultNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::PadResultAlreadyBound { var: result });
+    }
+
+    let collection = child.collection.clone();
+    let relation = CompiledRelation {
+        schema: child.relation.schema.clone(),
+        domains: child.relation.domains.clone(),
+        statement: CompiledRelationStatement::Pad {
+            input: Box::new(child.relation),
+            string_column,
+            pad_char,
+            target_len,
+            result,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Compile a WOQL `HashKey`/`hash` conjunct (`hash(Base, KeyList, Uri)`) into a verifier-recompute
+/// [`CompiledRelationStatement::HashKey`].
+///
+/// V1 SCOPE (reject-closed everywhere else): `Base` an authenticated child xsd:string column or an
+/// xsd:string LITERAL; each `KeyList` element likewise (authenticated column or string literal —
+/// reusing the [`compile_concat_element`] auth, so non-string/unbound/nested-list elements reject
+/// closed with the shared `Concat*` operand errors); `Uri` a FRESH variable (the terminal revealed
+/// result). `KeyList` is ALWAYS a concrete `Vec<DataValue>` in the AST (there is no runtime list
+/// variable to reject). The result is NOT added to the committed schema (terminal, revealed); it is
+/// exposed post-verify via [`ProvedBgp::hashkey_result_objects`] as a `CanonicalObject::Node`.
+fn plan_hashkey_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| matches!(conjunct, Query::HashKey(_)))
+        .map(|(index, _)| index)
+        .collect();
+    if positions.is_empty() {
+        return Ok(None);
+    }
+    if positions.len() > 1 {
+        return Err(BgpPlanError::HashKeyUnsupportedShape);
+    }
+    let Query::HashKey(hash) = &conjuncts[positions[0]] else {
+        unreachable!("positions only indexes HashKey conjuncts")
+    };
+
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        return Err(BgpPlanError::HashKeyUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::HashKeyUnsupportedShape);
+    }
+
+    // Base + args authenticated via the reusable ConcatElement lowering (Concat* operand errors on
+    // an unbound/non-string/nested-list operand). Base is later RAW-prepended; args are encoded.
+    let base = compile_concat_element(&hash.base, &child)?;
+    let args = hash
+        .key_list
+        .iter()
+        .map(|item| compile_concat_element(item, &child))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Result URI must be a FRESH variable (a constant node result would add an equality constraint).
+    let result = match &hash.uri {
+        NodeValue::Variable(variable) => variable.clone(),
+        NodeValue::Node(_) => return Err(BgpPlanError::HashKeyResultNotVariable),
+    };
+    if child.relation.schema.iter().any(|variable| variable == &result) {
+        return Err(BgpPlanError::HashKeyResultAlreadyBound { var: result });
+    }
+
+    let collection = child.collection.clone();
+    let relation = CompiledRelation {
+        schema: child.relation.schema.clone(),
+        domains: child.relation.domains.clone(),
+        statement: CompiledRelationStatement::HashKey {
+            input: Box::new(child.relation),
+            base,
+            args,
+            result,
+        },
+    };
+    Ok(Some(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    }))
+}
+
+/// Reject-closed for the DEFERRED string-case operators `Upper`/`Lower`.
+///
+/// SEMANTIC-FIDELITY DEFERRAL (soundness-first): WOQL `upper`/`lower` compile to SWI-Prolog
+/// `string_upper`/`string_lower`, which fold case per code point via C `towupper`/`towlower` —
+/// LOCALE-DEPENDENT (`LC_CTYPE`). TerminusDB's canonical Docker deployment pins NO locale
+/// (no `LANG`/`LC_ALL`/`LC_CTYPE` in the Dockerfiles or `start.pl`; SWI inherits the environment
+/// locale), so under a Turkic `LC_CTYPE` `string_upper("i")` yields "İ" (U+0130) and
+/// `string_lower("I")` yields "ı" (U+0131) — a NON-ASCII result diverging from a naive ASCII
+/// a–z↔A–Z map EVEN ON ASCII INPUT 'i'/'I'. A "reject non-ASCII INPUT" guard therefore does NOT
+/// establish fidelity. We cannot prove agreement with Rust ASCII casing across deployments, so
+/// we REJECT CLOSED here and defer upper/lower to a follow-up that pins the runtime locale (e.g.
+/// `LC_ALL=C`) or proves the case fold directly. (`concat`/`interpolate_string` is unaffected:
+/// it is pure `string_concat`, locale-independent — and IS shipped.)
+fn reject_unsupported_string_case_ops(query: &Query) -> Result<(), BgpPlanError> {
+    fn is_case_op(query: &Query) -> bool {
+        matches!(query, Query::Upper(_) | Query::Lower(_))
+    }
+    let present = match query {
+        Query::And(and) => and.and.iter().any(is_case_op),
+        other => is_case_op(other),
+    };
+    if present {
+        return Err(BgpPlanError::StringCaseOpLocaleUnsupported);
+    }
+    Ok(())
 }
 
 fn plan_collection_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
@@ -5151,6 +8810,7 @@ fn compile_ordered_triple_value_scan(
             graph: graph.clone(),
         },
         object_kind: ObjectKindFilter::Any,
+        source: ColumnSource::Materialized,
     };
     let mut atoms = vec![atom_from_triple(&typed)?];
     let comparisons = vec![NormalizedRange {
@@ -5670,6 +9330,38 @@ fn query_contains_path(query: &Query) -> bool {
     }
 }
 
+/// Reject the three woql2 leaves that are triple-SHAPED but are NOT store triple patterns in
+/// TerminusDB's semantics (`TypeOf`/`Dot`/`IsA`), returning the specific, documented
+/// [`BgpPlanError`] for the first one encountered. It runs as a pre-pass BEFORE any lowering
+/// or shape analysis (see the entry wiring in [`plan_bgp`]), mirroring the path pre-pass's
+/// traversal so that:
+///  * a NESTED occurrence (e.g. a `TypeOf` inside an `And` inside a `Select`) is caught with
+///    its precise soundness rationale rather than a generic fall-through error, and
+///  * the guard COMPOSES with the path lowering — a query carrying both a `Path` and one of
+///    these leaves rejects on the leaf, because this runs first.
+/// Recursion covers exactly the read-composition wrappers the lowering fragment threads
+/// through; a leaf buried inside a construct outside that fragment is instead rejected by
+/// `plan_bgp`'s own recursion (never silently dropped, which would itself be unsound).
+fn reject_non_bgp_typed_leaves(query: &Query) -> Result<(), BgpPlanError> {
+    match query {
+        Query::TypeOf(_) => return Err(BgpPlanError::TypeOfNotStoredType),
+        Query::Dot(_) => return Err(BgpPlanError::DotNotStoreEdge),
+        Query::IsA(_) => return Err(BgpPlanError::IsASubsumptionUnsupported),
+        Query::And(and) => and.and.iter().try_for_each(reject_non_bgp_typed_leaves)?,
+        Query::Or(or) => or.or.iter().try_for_each(reject_non_bgp_typed_leaves)?,
+        Query::Not(not) => reject_non_bgp_typed_leaves(&not.query)?,
+        Query::Select(select) => reject_non_bgp_typed_leaves(&select.query)?,
+        Query::Distinct(distinct) => reject_non_bgp_typed_leaves(&distinct.query)?,
+        Query::Count(count) => reject_non_bgp_typed_leaves(&count.query)?,
+        Query::Using(using) => reject_non_bgp_typed_leaves(&using.query)?,
+        Query::From(from) => reject_non_bgp_typed_leaves(&from.query)?,
+        Query::Pin(pin) => reject_non_bgp_typed_leaves(&pin.query)?,
+        Query::Immediately(immediately) => reject_non_bgp_typed_leaves(&immediately.query)?,
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Collect every variable name used in the fragment we lower through, so fresh path
 /// intermediates avoid them. Constructs outside this fragment reject closed and never
 /// share a join namespace with a lowered path, so their variables need not be gathered.
@@ -6067,7 +9759,14 @@ fn build_chain_query(
 /// left-deep join tree (each step shares one or two variables). Everything
 /// else is rejected closed with a descriptive [`BgpPlanError`].
 pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
-    // (0) Lower fixed-length property paths (`Query::Path`) to BGP + bag union before
+    // (0a) Reject the triple-SHAPED-but-not-BGP leaves (`TypeOf`/`Dot`/`IsA`) up front —
+    // before any lowering or shape analysis — so a NESTED occurrence gets its specific
+    // soundness rationale and the guard COMPOSES with the path lowering below (a query
+    // carrying both a `Path` and one of these leaves rejects on the leaf). See
+    // `reject_non_bgp_typed_leaves` for why each is unsound to lower to a store triple.
+    reject_non_bgp_typed_leaves(query)?;
+
+    // (0b) Lower fixed-length property paths (`Query::Path`) to BGP + bag union before
     // any shape analysis, so all soundness reuses the audited BGP machinery below.
     let lowered_query;
     let query = if query_contains_path(query) {
@@ -6352,6 +10051,161 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         return Ok(aggregate);
     }
 
+    if let Some(mut evaluated) = plan_eval_form(body)? {
+        if collection.is_some() {
+            if evaluated.collection.is_some() && evaluated.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            evaluated.collection = collection;
+        }
+        evaluated.count_variable = count_variable;
+        evaluated.projection = compile_projection(
+            &selections,
+            evaluated.count_variable.as_deref(),
+            &evaluated.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&evaluated.relation)?;
+        return Ok(evaluated);
+    }
+
+    if let Some(mut cast) = plan_typecast_form(body)? {
+        if collection.is_some() {
+            if cast.collection.is_some() && cast.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            cast.collection = collection;
+        }
+        cast.count_variable = count_variable;
+        cast.projection = compile_projection(
+            &selections,
+            cast.count_variable.as_deref(),
+            &cast.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&cast.relation)?;
+        return Ok(cast);
+    }
+
+    if let Some(mut concatenated) = plan_concat_form(body)? {
+        if collection.is_some() {
+            if concatenated.collection.is_some() && concatenated.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            concatenated.collection = collection;
+        }
+        // The concat result is terminal/revealed (not a committed schema column), so it cannot be
+        // projected or counted; a Select/Count naming it fails via `compile_projection`'s
+        // SelectedVariableNotInBgp / a count over the child columns. Distinct is rejected too.
+        concatenated.count_variable = count_variable;
+        concatenated.projection = compile_projection(
+            &selections,
+            concatenated.count_variable.as_deref(),
+            &concatenated.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&concatenated.relation)?;
+        return Ok(concatenated);
+    }
+
+    if let Some(mut joined) = plan_join_form(body)? {
+        if collection.is_some() {
+            if joined.collection.is_some() && joined.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            joined.collection = collection;
+        }
+        // The join result is terminal/revealed (not a committed schema column): a Select/Count
+        // naming it fails via `compile_projection`; Distinct is rejected too.
+        joined.count_variable = count_variable;
+        joined.projection = compile_projection(
+            &selections,
+            joined.count_variable.as_deref(),
+            &joined.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&joined.relation)?;
+        return Ok(joined);
+    }
+
+    if let Some(mut substr) = plan_substring_form(body)? {
+        if collection.is_some() {
+            if substr.collection.is_some() && substr.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            substr.collection = collection;
+        }
+        // The substring result is terminal/revealed (not a committed schema column): a
+        // Select/Count naming it (or `?after`) fails via `compile_projection`; Distinct too.
+        substr.count_variable = count_variable;
+        substr.projection = compile_projection(
+            &selections,
+            substr.count_variable.as_deref(),
+            &substr.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&substr.relation)?;
+        return Ok(substr);
+    }
+
+    if let Some(mut padded) = plan_pad_form(body)? {
+        if collection.is_some() {
+            if padded.collection.is_some() && padded.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            padded.collection = collection;
+        }
+        // The pad result is terminal/revealed (not a committed schema column): a Select/Count
+        // naming it fails via `compile_projection`; Distinct is rejected too.
+        padded.count_variable = count_variable;
+        padded.projection = compile_projection(
+            &selections,
+            padded.count_variable.as_deref(),
+            &padded.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&padded.relation)?;
+        return Ok(padded);
+    }
+
+    if let Some(mut hashed) = plan_hashkey_form(body)? {
+        if collection.is_some() {
+            if hashed.collection.is_some() && hashed.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            hashed.collection = collection;
+        }
+        // The hash result is terminal/revealed (not a committed schema column): a Select/Count
+        // naming it fails via `compile_projection`; Distinct is rejected too.
+        hashed.count_variable = count_variable;
+        hashed.projection = compile_projection(
+            &selections,
+            hashed.count_variable.as_deref(),
+            &hashed.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&hashed.relation)?;
+        return Ok(hashed);
+    }
+
+    // Deferred string-case ops (`Upper`/`Lower`) reject closed with a documented locale reason
+    // (see `reject_unsupported_string_case_ops`) before the generic UnsupportedConstruct path.
+    reject_unsupported_string_case_ops(body)?;
+
     if has_top_level_read_operator(body) {
         return plan_sequential_read_operators(
             body,
@@ -6363,7 +10217,12 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     }
     if !matches!(
         body,
-        Query::And(_) | Query::Triple(_) | Query::Link(_) | Query::Data(_)
+        Query::And(_)
+            | Query::Triple(_)
+            | Query::Link(_)
+            | Query::Data(_)
+            | Query::AddedTriple(_)
+            | Query::DeletedTriple(_)
     ) {
         return Err(BgpPlanError::UnsupportedConstruct {
             construct: query_variant_name(body),
@@ -6377,6 +10236,12 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let mut triples: Vec<TypedTriple> = Vec::new();
     let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
+
+    // (1c) CP-D: every atom of one BGP leaf must read the SAME column source. A materialized
+    // `Triple` joined with a delta atom, or an `AddedTriple` joined with a `DeletedTriple`, is
+    // a cross-source join we reject closed (the store plan carries ONE source, so such a join
+    // is unrepresentable and never silently authenticated).
+    let source = uniform_column_source(&triples)?;
 
     // (2) Lift each triple to an Atom, with all per-atom safety checks.
     let mut atoms: Vec<Atom> = triples
@@ -6400,7 +10265,11 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     atoms.sort_by_key(|atom| atom.kept.is_empty());
 
     // (3) Shape guard + left-deep planner: the safety-critical core.
-    let (plan, schema) = plan_left_deep(&atoms)?;
+    let (mut plan, schema) = plan_left_deep(&atoms)?;
+    // Thread the (uniform) column source into the store plan. The verifier reconstructs this
+    // same plan from its own trusted query, so the source is fixed by trusted compilation;
+    // `plan_digest`/the Fiat–Shamir transcript additionally bind it.
+    plan.source = source;
     let domains = infer_schema_domains(&schema, &atoms, &comparisons);
 
     let relation = CompiledRelation {
@@ -7090,6 +10959,13 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::CollectionExtrema { input, .. } => {
                 visit(input, depth + 1, nodes)
             }
+            CompiledRelationStatement::Eval { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::Typecast { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::Concat { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::Join { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::Substring { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::Pad { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::HashKey { input, .. } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;
@@ -7304,6 +11180,23 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         | CompiledRelationStatement::CollectionCount { .. }
         | CompiledRelationStatement::CollectionSum { .. }
         | CompiledRelationStatement::CollectionExtrema { .. } => true,
+        // Appending a per-row derived column is an injective row map: it can only make rows
+        // MORE distinguishable, never merge two distinct child rows, so uniqueness is
+        // inherited from the child. (Typecast appends a deterministic function of an existing
+        // child column, so the same argument holds.)
+        CompiledRelationStatement::Eval { input, .. }
+        | CompiledRelationStatement::Typecast { input, .. } => is_provably_duplicate_free(input),
+        // Concat/Join/Substring carry the child's committed columns through VERBATIM (their
+        // synthesized result is a terminal, non-committed value), so the committed rows'
+        // uniqueness is exactly the child's. Inherit it.
+        CompiledRelationStatement::Concat { input, .. }
+        | CompiledRelationStatement::Join { input, .. }
+        | CompiledRelationStatement::Substring { input, .. }
+        // Pad/HashKey likewise carry the child's committed columns through VERBATIM (their
+        // synthesized result is a terminal, non-committed value), so committed-row uniqueness is
+        // exactly the child's. Inherit it.
+        | CompiledRelationStatement::Pad { input, .. }
+        | CompiledRelationStatement::HashKey { input, .. } => is_provably_duplicate_free(input),
         // Bag-valued compositions can carry duplicate full rows.
         CompiledRelationStatement::BagUnion { .. }
         | CompiledRelationStatement::BagProjection { .. }
@@ -7472,6 +11365,33 @@ fn collect_conjunct<'a>(
         Query::Triple(triple) => triples.push(TypedTriple {
             triple: triple.clone(),
             object_kind: ObjectKindFilter::Any,
+            source: ColumnSource::Materialized,
+        }),
+        // CP-D delta reads: `AddedTriple`/`DeletedTriple` have the SAME shape as `Triple`
+        // (subject: NodeValue, predicate: NodeValue, object: Value, graph). The reference
+        // compiles them to `triple_addition`/`triple_removal` over EXACTLY this commit's
+        // layer delta file ("no deeper"), so we reuse the identical atom lowering pointed at
+        // the layer's additions/removals column source. The graph field is validated (instance
+        // only) by `atom_from_triple`, exactly as for `Triple`.
+        Query::AddedTriple(added) => triples.push(TypedTriple {
+            triple: Triple {
+                subject: added.subject.clone(),
+                predicate: added.predicate.clone(),
+                object: added.object.clone(),
+                graph: added.graph.clone(),
+            },
+            object_kind: ObjectKindFilter::Any,
+            source: ColumnSource::Additions,
+        }),
+        Query::DeletedTriple(deleted) => triples.push(TypedTriple {
+            triple: Triple {
+                subject: deleted.subject.clone(),
+                predicate: deleted.predicate.clone(),
+                object: deleted.object.clone(),
+                graph: deleted.graph.clone(),
+            },
+            object_kind: ObjectKindFilter::Any,
+            source: ColumnSource::Removals,
         }),
         Query::Link(link) => triples.push(TypedTriple {
             triple: Triple {
@@ -7484,6 +11404,7 @@ fn collect_conjunct<'a>(
                 graph: Some(link.graph.clone()),
             },
             object_kind: ObjectKindFilter::Node,
+            source: ColumnSource::Materialized,
         }),
         Query::Data(data) => {
             let object = match &data.object {
@@ -7501,6 +11422,7 @@ fn collect_conjunct<'a>(
                     graph: Some(data.graph.clone()),
                 },
                 object_kind: ObjectKindFilter::Literal,
+                source: ColumnSource::Materialized,
             });
         }
         Query::And(inner) => {
@@ -8422,6 +12344,7 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
             LayerBgpPlan {
                 atoms: atoms.iter().map(|atom| atom.layer_atom.clone()).collect(),
                 joins: Vec::new(),
+                source: ColumnSource::Materialized,
             },
             Vec::new(),
         ));
@@ -8525,9 +12448,25 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
         LayerBgpPlan {
             atoms: ordered_atoms,
             joins,
+            source: ColumnSource::Materialized,
         },
         acc_vars,
     ))
+}
+
+/// The single column source shared by every atom of one BGP leaf. A materialized `Triple`
+/// mixed with a delta atom, or additions mixed with removals, is a cross-source join we
+/// reject closed with [`BgpPlanError::MixedColumnSource`]. An empty triple list defaults to
+/// materialized (the surrounding `k == 0` check then rejects it as too few atoms).
+fn uniform_column_source(triples: &[TypedTriple]) -> Result<ColumnSource, BgpPlanError> {
+    let mut sources = triples.iter().map(|triple| triple.source);
+    let first = sources.next().unwrap_or(ColumnSource::Materialized);
+    for source in sources {
+        if source != first {
+            return Err(BgpPlanError::MixedColumnSource);
+        }
+    }
+    Ok(first)
 }
 
 /// How many of an atom's KEPT (variable) columns occur in the accumulator schema. Because

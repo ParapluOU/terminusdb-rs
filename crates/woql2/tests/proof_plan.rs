@@ -5,26 +5,35 @@ mod proof_common;
 use proof_common::*;
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
+use terminusdb_woql2::collection::Dot;
+use terminusdb_woql2::compare::{IsA, TypeOf, Typecast};
 use terminusdb_woql2::control::{
     Distinct, From, Immediately, Once, Pin, Select, Using, When, WoqlOptional,
 };
 use terminusdb_woql2::collection::{Length, Sum};
-use terminusdb_woql2::misc::{Collect, Comment, Count, InRange, Limit, Size, Start, TripleCount};
+use terminusdb_woql2::misc::{
+    Collect, Comment, Count, HashKey, InRange, Limit, Size, Start, TripleCount,
+};
 use terminusdb_woql2::order::{GroupBy, Order, OrderBy, OrderTemplate};
 use terminusdb_woql2::path::{
     InversePathPredicate, PathOr, PathPattern, PathPlus, PathPredicate, PathSequence, PathStar,
     PathTimes,
 };
-use terminusdb_woql2::query::{Not, Or, Path, Query, True};
-use terminusdb_woql2::triple::{
-    Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev,
+use terminusdb_woql2::expression::{
+    ArithmeticExpression, ArithmeticValue, Div, Divide, Exp, Floor, Minus, Plus, Times,
 };
-use terminusdb_woql2::value::{DataValue, NodeValue, Value};
+use terminusdb_woql2::query::{Eval, Not, Or, Path, Query, True};
+use terminusdb_woql2::string::{Concatenate, Join, Pad, Substring, Upper};
+use terminusdb_woql2::triple::{
+    AddedTriple, Data, DeletedTriple, Link, TripleNext, TriplePrevious, TripleSlice,
+    TripleSliceRev,
+};
+use terminusdb_woql2::value::{DataValue, ListOrVariable, NodeValue, Value};
 
 use terminus_store::proof::envelope::{
     CollectionSumTemplate, GeneratedU64ComparisonOp, RelationEqualityPlan,
 };
-use terminus_store::proof::query::{AtomTerm, ObjectKindFilter, ObjectRangeSpec};
+use terminus_store::proof::query::{AtomTerm, ColumnSource, ObjectKindFilter, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::ValueTriple;
@@ -98,6 +107,100 @@ fn triple_count_composes_with_select_and_outer_count() {
     }))
     .unwrap();
     assert_eq!(counted.count_variable.as_deref(), Some("Rows"));
+}
+
+fn added_triple(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::AddedTriple(AddedTriple {
+        subject: NodeValue::Variable(subj.into()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
+
+fn deleted_triple(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::DeletedTriple(DeletedTriple {
+        subject: NodeValue::Variable(subj.into()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
+
+#[test]
+fn added_and_deleted_triples_compile_to_source_tagged_bgp() {
+    let added = plan_bgp(&added_triple("s", "p", "o")).unwrap();
+    assert_eq!(added.bgp_plan().source, ColumnSource::Additions);
+    assert_eq!(added.relation.schema, ["s", "o"]);
+
+    let deleted = plan_bgp(&deleted_triple("s", "p", "o")).unwrap();
+    assert_eq!(deleted.bgp_plan().source, ColumnSource::Removals);
+
+    // A plain Triple stays Materialized — the unchanged base behavior.
+    let materialized = plan_bgp(&tv("s", "p", "o")).unwrap();
+    assert_eq!(materialized.bgp_plan().source, ColumnSource::Materialized);
+
+    // Outer Select composes: the BGP still proves the full delta relation, projection is
+    // read-side. (Count/Distinct compose identically to the base BGP path.)
+    let selected = plan_bgp(&Query::Select(Select {
+        variables: vec!["s".into()],
+        query: Box::new(added_triple("s", "p", "o")),
+    }))
+    .unwrap();
+    assert_eq!(selected.bgp_plan().source, ColumnSource::Additions);
+    assert_eq!(selected.projection, Some(vec![0]));
+}
+
+#[test]
+fn same_source_multi_atom_delta_bgp_compiles() {
+    // And(AddedTriple(?s,p,?o), AddedTriple(?o,q,?z)) is a same-source self-join over the
+    // additions relation — supported, mirroring the base layer's k>=2 join support.
+    let compiled = plan_bgp(&and_of(vec![
+        added_triple("s", "p", "o"),
+        added_triple("o", "q", "z"),
+    ]))
+    .unwrap();
+    assert_eq!(compiled.bgp_plan().source, ColumnSource::Additions);
+    assert_eq!(compiled.bgp_plan().atoms.len(), 2);
+    assert_eq!(compiled.bgp_plan().joins.len(), 1);
+}
+
+#[test]
+fn cross_source_conjunctions_reject_closed() {
+    // A delta atom joined with a materialized Triple.
+    reject(
+        and_of(vec![added_triple("s", "p", "o"), tv("o", "q", "z")]),
+        BgpPlanError::MixedColumnSource,
+    );
+    // Additions joined with removals.
+    reject(
+        and_of(vec![added_triple("s", "p", "o"), deleted_triple("o", "q", "z")]),
+        BgpPlanError::MixedColumnSource,
+    );
+}
+
+#[test]
+fn schema_graph_delta_reads_reject_closed() {
+    for graph in [GraphType::Schema] {
+        reject(
+            Query::AddedTriple(AddedTriple {
+                subject: NodeValue::Variable("s".into()),
+                predicate: NodeValue::Node(iri("p")),
+                object: Value::Variable("o".into()),
+                graph: Some(graph.clone()),
+            }),
+            BgpPlanError::SchemaGraphUnsupported,
+        );
+        reject(
+            Query::DeletedTriple(DeletedTriple {
+                subject: NodeValue::Variable("s".into()),
+                predicate: NodeValue::Node(iri("p")),
+                object: Value::Variable("o".into()),
+                graph: Some(graph),
+            }),
+            BgpPlanError::SchemaGraphUnsupported,
+        );
+    }
 }
 
 #[test]
@@ -3494,4 +3597,1122 @@ fn rejects_a_third_range_on_one_variable() {
         q,
         BgpPlanError::DuplicateRangeOnVariable { var: "a".into() },
     );
+}
+
+// ---------------------------------------------------------------------------
+// Triple-SHAPED constructs that are NOT store BGP triples: `TypeOf`/`Dot`/`IsA`.
+//
+// These three woql2 leaves resemble a triple, but direct verification against the
+// terminusdb Prolog reference proves none of them denote a store triple pattern, so
+// lowering any to `Triple` would authenticate a relation the engine never computes.
+// Each rejects closed with its own documented [`BgpPlanError`] (see the
+// `reject_non_bgp_typed_leaves` pre-pass in proof.rs), and the pre-pass runs before
+// path lowering so it composes with it.
+//   * TypeOf  → `typeof/2` is a value-shape classifier: a node IRI → `sys#Top`
+//               unconditionally (never reads `rdf:type`); a typed literal → its
+//               datatype IRI (woql_compile.pl runtime `typeof/2`).
+//   * Dot     → `dot/3` is `get_dict` on a BOUND document dict, reads no store triples
+//               (woql_compile.pl `dot_field`; `find_resources(dot(_,_,_),…)` = ∅).
+//   * IsA     → `isa/2` = `is_instance` is SUBSUMPTION-closed over `sys:inherits`
+//               (instance.pl `is_instance_class` + `class_subsumed`), so a direct
+//               rdf:type triple is incomplete.
+// ---------------------------------------------------------------------------
+
+fn typeof_leaf(value: Value, type_uri: &str) -> Query {
+    Query::TypeOf(TypeOf {
+        value,
+        type_uri: NodeValue::Node(iri(type_uri)),
+    })
+}
+
+fn dot_leaf(document: DataValue, field: DataValue, value: DataValue) -> Query {
+    Query::Dot(Dot {
+        document,
+        field,
+        value,
+    })
+}
+
+fn isa_leaf(element: &str, type_of: &str) -> Query {
+    Query::IsA(IsA {
+        element: NodeValue::Variable(element.into()),
+        type_of: NodeValue::Node(iri(type_of)),
+    })
+}
+
+#[test]
+fn typeof_rejects_closed_as_value_shape_classifier() {
+    // Top-level: WOQL `typeof` binds a node IRI's type to `sys#Top` and never reads
+    // `rdf:type`, so a `t(value, rdf:type, type)` lowering would authenticate a different
+    // relation — reject closed rather than emit an unsound plan.
+    reject(
+        typeof_leaf(value_var("x"), "Person"),
+        BgpPlanError::TypeOfNotStoredType,
+    );
+    // Nested inside an And inside a Select: the pre-pass recurses the read-composition
+    // wrappers, so the precise error still fires (not a generic fall-through).
+    reject(
+        Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(and_of(vec![
+                tv("x", "p", "y"),
+                typeof_leaf(value_var("x"), "Person"),
+            ])),
+        }),
+        BgpPlanError::TypeOfNotStoredType,
+    );
+}
+
+#[test]
+fn dot_rejects_closed_as_in_memory_dict_access() {
+    // Top-level: WOQL `dot` is `get_dict` on a bound document (no store triples); a
+    // store-edge lowering would authenticate a different relation.
+    reject(
+        dot_leaf(dvar("doc"), dstr("field"), dvar("v")),
+        BgpPlanError::DotNotStoreEdge,
+    );
+    // Nested inside an And: still caught with the precise error.
+    reject(
+        and_of(vec![
+            tv("s", "p", "o"),
+            dot_leaf(dvar("doc"), dstr("name"), dvar("v")),
+        ]),
+        BgpPlanError::DotNotStoreEdge,
+    );
+}
+
+#[test]
+fn isa_rejects_closed_as_subsumption_closed() {
+    // WOQL `isa` = `is_instance` is subsumption-closed (matches subclasses via
+    // `sys:inherits`; terminusdb src/core/document/instance.pl `is_instance_class` +
+    // `class_subsumed`). A direct `t(element, rdf:type, type)` triple is INCOMPLETE — it
+    // misses instances whose direct type is a proper subclass — so IsA rejects closed;
+    // authenticated subsumption would require committing the schema graph (out of scope).
+    reject(isa_leaf("x", "Person"), BgpPlanError::IsASubsumptionUnsupported);
+    // Nested inside an And inside a Select is caught too.
+    reject(
+        Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(and_of(vec![tv("x", "p", "y"), isa_leaf("x", "Agent")])),
+        }),
+        BgpPlanError::IsASubsumptionUnsupported,
+    );
+}
+
+#[test]
+fn non_bgp_leaf_composes_with_path_and_rejects_before_path_lowering() {
+    // Composition: a query containing BOTH a `Path` (which would otherwise lower cleanly to
+    // a single-atom BGP) and a `TypeOf` must reject on the `TypeOf`, proving the non-BGP-leaf
+    // pre-pass runs BEFORE path lowering and the two passes compose.
+    let path = Query::Path(Path {
+        subject: value_var("s"),
+        pattern: PathPattern::Predicate(PathPredicate {
+            predicate: Some(iri("knows")),
+        }),
+        object: value_var("o"),
+        path: None,
+    });
+    let q = and_of(vec![path, typeof_leaf(value_var("s"), "Person")]);
+    reject(q, BgpPlanError::TypeOfNotStoredType);
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Eval` integer arithmetic (verifier-recompute) — plan-level shape guard & reject-closed.
+// -------------------------------------------------------------------------------------------
+
+/// `Value(?var)` arithmetic leaf.
+fn a_var(name: &str) -> ArithmeticExpression {
+    ArithmeticExpression::Value(ArithmeticValue::Variable(name.into()))
+}
+
+/// `Value(literal)` arithmetic leaf.
+fn a_lit(value: XSDAnySimpleType) -> ArithmeticExpression {
+    ArithmeticExpression::Value(ArithmeticValue::Data(value))
+}
+
+fn a_plus(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Plus(Plus {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn a_minus(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Minus(Minus {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn a_times(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Times(Times {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+/// An `Eval` conjunct binding `?result` to `expr`.
+fn eval_conjunct(expr: ArithmeticExpression, result: &str) -> Query {
+    Query::Eval(Eval {
+        expression: expr,
+        result_value: ArithmeticValue::Variable(result.into()),
+    })
+}
+
+/// The canonical operand-binding child: `t(?x,p,?a) & t(?x,q,?b) & a>=0 & b>=0`, pinning
+/// `?a`,`?b` to xsd:unsignedInt (UInt32) exactly as the Sum forms rely on.
+fn ab_child() -> Vec<Query> {
+    vec![
+        tv("x", "p", "a"),
+        tv("x", "q", "b"),
+        gte(dvar("a"), duint(0)),
+        gte(dvar("b"), duint(0)),
+    ]
+}
+
+fn eval_query(expr: ArithmeticExpression, result: &str) -> Query {
+    let mut conjuncts = ab_child();
+    conjuncts.push(eval_conjunct(expr, result));
+    and_of(conjuncts)
+}
+
+#[test]
+fn eval_plus_over_two_integer_columns_compiles_to_eval_statement() {
+    let compiled = plan_bgp(&eval_query(a_plus(a_var("a"), a_var("b")), "r")).unwrap();
+    // The child columns are carried through and `?r` is appended as the derived column.
+    assert_eq!(compiled.relation.schema.last().map(String::as_str), Some("r"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "a"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "b"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Eval { .. }
+    ));
+}
+
+#[test]
+fn eval_nested_times_and_literal_tree_compiles() {
+    // Plus(Times(?a, 2), ?b) — nesting is free under verifier-recompute.
+    let expr = a_plus(a_times(a_var("a"), a_lit(XSDAnySimpleType::Int(2))), a_var("b"));
+    let compiled = plan_bgp(&eval_query(expr, "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Eval { .. }
+    ));
+}
+
+#[test]
+fn eval_minus_compiles() {
+    let compiled = plan_bgp(&eval_query(a_minus(a_var("a"), a_var("b")), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Eval { .. }
+    ));
+}
+
+#[test]
+fn eval_divide_rejects_closed() {
+    reject(
+        eval_query(
+            ArithmeticExpression::Divide(Divide {
+                left: Box::new(a_var("a")),
+                right: Box::new(a_var("b")),
+            }),
+            "r",
+        ),
+        BgpPlanError::EvalUnsupportedOperator { operator: "Divide" },
+    );
+}
+
+fn a_div(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Div(Div {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn a_exp(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Exp(Exp {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+#[test]
+fn eval_div_over_two_integer_columns_compiles_to_eval_statement() {
+    // Integer FLOOR division is verifier-recompute-provable now.
+    let compiled = plan_bgp(&eval_query(a_div(a_var("a"), a_var("b")), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Eval { .. }
+    ));
+}
+
+#[test]
+fn eval_exp_with_column_exponent_compiles_to_eval_statement() {
+    // Integer power over a (runtime) non-negative exponent is provable; a runtime-negative
+    // exponent fails closed later in the recompute, not at plan time.
+    let compiled = plan_bgp(&eval_query(a_exp(a_var("a"), a_var("b")), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Eval { .. }
+    ));
+}
+
+#[test]
+fn eval_exp_with_static_negative_exponent_rejects_closed() {
+    // A STATIC negative literal exponent is a rational result → reject at compile time.
+    reject(
+        eval_query(a_exp(a_var("a"), a_lit(XSDAnySimpleType::Int(-1))), "r"),
+        BgpPlanError::EvalUnsupportedOperator {
+            operator: "Exp (negative exponent)",
+        },
+    );
+}
+
+#[test]
+fn eval_floor_rejects_closed() {
+    // `Floor` over the rational layer is out of scope; still reject closed.
+    reject(
+        eval_query(
+            ArithmeticExpression::Floor(Floor {
+                argument: Box::new(a_var("a")),
+            }),
+            "r",
+        ),
+        BgpPlanError::EvalUnsupportedOperator { operator: "Floor" },
+    );
+}
+
+#[test]
+fn eval_float_literal_operand_rejects_closed() {
+    reject(
+        eval_query(a_plus(a_var("a"), a_lit(XSDAnySimpleType::Float(1.5))), "r"),
+        BgpPlanError::EvalUnsupportedLiteral {
+            datatype: "xsd:double",
+        },
+    );
+}
+
+#[test]
+fn eval_operand_bound_by_no_store_read_rejects_closed() {
+    // `?b` is never bound by a store read: it cannot be authenticated.
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        eval_conjunct(a_plus(a_var("a"), a_var("b")), "r"),
+    ]);
+    reject(query, BgpPlanError::EvalOperandNotBound { var: "b".into() });
+}
+
+#[test]
+fn eval_operand_without_pinned_integer_datatype_rejects_closed() {
+    // `?a` is a store object but its datatype is not pinned by a range comparison, so it is
+    // not a known exact fixed-width integer — reject rather than guess a datatype.
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        tv("x", "q", "b"),
+        gte(dvar("b"), duint(0)),
+        eval_conjunct(a_plus(a_var("a"), a_var("b")), "r"),
+    ]);
+    reject(query, BgpPlanError::EvalOperandNotInteger { var: "a".into() });
+}
+
+#[test]
+fn eval_result_already_bound_rejects_closed() {
+    // `?a` is already an authenticated binding; it may not be redefined as the derived column.
+    reject(
+        eval_query(a_plus(a_var("a"), a_var("b")), "a"),
+        BgpPlanError::EvalResultAlreadyBound { var: "a".into() },
+    );
+}
+
+#[test]
+fn eval_result_literal_rejects_closed() {
+    let query = {
+        let mut conjuncts = ab_child();
+        conjuncts.push(Query::Eval(Eval {
+            expression: a_plus(a_var("a"), a_var("b")),
+            result_value: ArithmeticValue::Data(XSDAnySimpleType::Int(0)),
+        }));
+        and_of(conjuncts)
+    };
+    reject(query, BgpPlanError::EvalResultNotVariable);
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Typecast` integer-width conversion (verifier-recompute) — plan-level shape guard.
+// -------------------------------------------------------------------------------------------
+
+/// A full XSD type IRI node value for a local type name.
+fn xsd_type(name: &str) -> NodeValue {
+    NodeValue::Node(format!("http://www.w3.org/2001/XMLSchema#{name}"))
+}
+
+/// A `Typecast(?source, target, ?result)` conjunct.
+fn typecast_conjunct(source: &str, target: NodeValue, result: &str) -> Query {
+    Query::Typecast(Typecast {
+        value: Value::Variable(source.into()),
+        type_uri: target,
+        result_value: Value::Variable(result.into()),
+    })
+}
+
+/// `t(?x,p,?a) & a>=0 & Typecast(?a, target, ?r)` — pins `?a` to xsd:unsignedInt (UInt32).
+fn typecast_query(target: NodeValue, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        typecast_conjunct("a", target, result),
+    ])
+}
+
+#[test]
+fn typecast_widening_unsigned_int_to_long_compiles() {
+    let compiled = plan_bgp(&typecast_query(xsd_type("long"), "r")).unwrap();
+    assert_eq!(compiled.relation.schema.last().map(String::as_str), Some("r"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Typecast { .. }
+    ));
+}
+
+#[test]
+fn typecast_narrowing_to_byte_compiles_range_check_deferred_to_prove() {
+    // The plan compiles; the per-row out-of-range fail-closed check happens in the recompute.
+    let compiled = plan_bgp(&typecast_query(xsd_type("byte"), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Typecast { .. }
+    ));
+}
+
+#[test]
+fn typecast_to_string_target_rejects_closed() {
+    reject(
+        typecast_query(xsd_type("string"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "http://www.w3.org/2001/XMLSchema#string".into(),
+        },
+    );
+}
+
+#[test]
+fn typecast_to_float_target_rejects_closed() {
+    reject(
+        typecast_query(xsd_type("double"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "http://www.w3.org/2001/XMLSchema#double".into(),
+        },
+    );
+}
+
+#[test]
+fn typecast_to_arbitrary_precision_integer_rejects_closed() {
+    // `xsd:integer` is arbitrary precision — not a fixed-width integer width — reject closed.
+    reject(
+        typecast_query(xsd_type("integer"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "http://www.w3.org/2001/XMLSchema#integer".into(),
+        },
+    );
+}
+
+#[test]
+fn typecast_variable_target_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        typecast_conjunct("a", NodeValue::Variable("t".into()), "r"),
+    ]);
+    reject(query, BgpPlanError::TypecastTargetNotNode);
+}
+
+#[test]
+fn typecast_source_bound_by_no_store_read_rejects_closed() {
+    // `?b` is never bound by a store read: it cannot be authenticated as a source.
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        typecast_conjunct("b", xsd_type("long"), "r"),
+    ]);
+    reject(query, BgpPlanError::TypecastSourceNotBound { var: "b".into() });
+}
+
+#[test]
+fn typecast_source_without_pinned_integer_datatype_rejects_closed() {
+    // `?a` is a store object but its datatype is not pinned by a range comparison.
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        typecast_conjunct("a", xsd_type("long"), "r"),
+    ]);
+    reject(query, BgpPlanError::TypecastSourceNotInteger { var: "a".into() });
+}
+
+#[test]
+fn typecast_result_already_bound_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        typecast_conjunct("a", xsd_type("long"), "a"),
+    ]);
+    reject(query, BgpPlanError::TypecastResultInvalid);
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Concatenate` (string value circuit) — plan/shape guard.
+// Child `t(?x, name, ?a) & t(?x, greet, ?b)` binds two unpinned node/value operand columns;
+// their per-row xsd:string-ness is enforced at recompute, so the plan accepts them here.
+// -------------------------------------------------------------------------------------------
+
+/// `Query::Concatenate(concat(elements, ?result))`.
+fn concat_conjunct(elements: Vec<DataValue>, result: &str) -> Query {
+    Query::Concatenate(Concatenate {
+        list: ListOrVariable::List(elements),
+        result_string: DataValue::Variable(result.to_string()),
+    })
+}
+
+/// `t(?x, name, ?a) & t(?x, greet, ?b) & concat(elements, ?result)`.
+fn concat_query(elements: Vec<DataValue>, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        concat_conjunct(elements, result),
+    ])
+}
+
+#[test]
+fn concat_two_string_columns_with_literal_compiles_to_concat_statement() {
+    let compiled = plan_bgp(&concat_query(
+        vec![dvar("a"), dstr(" "), dvar("b")],
+        "r",
+    ))
+    .unwrap();
+    // The child operand columns are carried through; the result variable is a TERMINAL/revealed
+    // value, so it is NOT added to the committed schema.
+    assert!(compiled.relation.schema.iter().any(|v| v == "a"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "b"));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "r"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Concat { .. }
+    ));
+}
+
+#[test]
+fn concat_all_literal_and_variable_elements_compiles() {
+    // A leading + trailing literal around a single column operand.
+    let compiled = plan_bgp(&concat_query(
+        vec![dstr("<<"), dvar("a"), dstr(">>")],
+        "r",
+    ))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Concat { .. }
+    ));
+}
+
+#[test]
+fn concat_non_string_literal_element_rejects_closed() {
+    // A numeric list element would be STRINGIFIED by SWI interpolate_string (a separate circuit).
+    reject(
+        concat_query(vec![dvar("a"), duint(42), dvar("b")], "r"),
+        BgpPlanError::ConcatLiteralNotString,
+    );
+}
+
+#[test]
+fn concat_unbound_operand_rejects_closed() {
+    // `?c` is not bound by any store read in the child.
+    reject(
+        concat_query(vec![dvar("a"), dvar("c")], "r"),
+        BgpPlanError::ConcatOperandNotBound { var: "c".into() },
+    );
+}
+
+#[test]
+fn concat_operand_pinned_non_string_datatype_rejects_closed() {
+    // Pinning `?a` to a numeric datatype via a range filter makes it a non-string operand.
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        gte(dvar("a"), duint(0)),
+        concat_conjunct(vec![dvar("a"), dvar("b")], "r"),
+    ]);
+    reject(query, BgpPlanError::ConcatOperandNotString { var: "a".into() });
+}
+
+#[test]
+fn concat_result_already_bound_rejects_closed() {
+    reject(
+        concat_query(vec![dvar("a"), dvar("b")], "a"),
+        BgpPlanError::ConcatResultAlreadyBound { var: "a".into() },
+    );
+}
+
+#[test]
+fn concat_result_literal_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::Concatenate(Concatenate {
+            list: ListOrVariable::List(vec![dvar("a"), dvar("b")]),
+            result_string: dstr("fixed"),
+        }),
+    ]);
+    reject(query, BgpPlanError::ConcatResultNotVariable);
+}
+
+#[test]
+fn concat_runtime_list_variable_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        Query::Concatenate(Concatenate {
+            list: ListOrVariable::Variable(dvar("a")),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::ConcatListNotConcrete);
+}
+
+#[test]
+fn concat_empty_list_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        Query::Concatenate(Concatenate {
+            list: ListOrVariable::List(vec![]),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::ConcatEmptyList);
+}
+
+#[test]
+fn concat_nested_list_element_rejects_closed() {
+    reject(
+        concat_query(vec![dvar("a"), dlist(vec![dstr("x")])], "r"),
+        BgpPlanError::ConcatNestedList,
+    );
+}
+
+#[test]
+fn concat_bare_without_operand_binding_rejects_closed() {
+    // A lone concat conjunct with no store-binding child.
+    let query = and_of(vec![concat_conjunct(vec![dstr("a"), dstr("b")], "r")]);
+    reject(query, BgpPlanError::ConcatUnsupportedShape);
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Join` (separator-interposed concat) — plan/shape guard.
+// -------------------------------------------------------------------------------------------
+
+/// `Query::Join(join(elements, sep, ?result))`.
+fn join_conjunct(elements: Vec<DataValue>, separator: DataValue, result: &str) -> Query {
+    Query::Join(Join {
+        list: ListOrVariable::List(elements),
+        separator,
+        result_string: DataValue::Variable(result.to_string()),
+    })
+}
+
+/// `t(?x, name, ?a) & t(?x, greet, ?b) & join(elements, sep, ?result)`.
+fn join_query(elements: Vec<DataValue>, separator: DataValue, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        join_conjunct(elements, separator, result),
+    ])
+}
+
+#[test]
+fn join_two_string_columns_with_literal_separator_compiles_to_join_statement() {
+    let compiled = plan_bgp(&join_query(vec![dvar("a"), dvar("b")], dstr(", "), "r")).unwrap();
+    // Child operand columns carried through; the result variable is TERMINAL (not committed).
+    assert!(compiled.relation.schema.iter().any(|v| v == "a"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "b"));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "r"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Join { .. }
+    ));
+}
+
+#[test]
+fn join_authenticated_string_variable_separator_compiles() {
+    // The separator is itself a bound store column (`?b`), not a literal.
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::Join(Join {
+            list: ListOrVariable::List(vec![dvar("a"), dstr("x"), dstr("y")]),
+            separator: dvar("b"),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Join { .. }
+    ));
+}
+
+#[test]
+fn join_runtime_list_variable_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        Query::Join(Join {
+            list: ListOrVariable::Variable(dvar("a")),
+            separator: dstr(","),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::JoinListNotConcrete);
+}
+
+#[test]
+fn join_non_string_element_rejects_closed() {
+    // A numeric list element would be stringified by SWI interpolate_string (a separate circuit).
+    reject(
+        join_query(vec![dvar("a"), duint(42)], dstr(","), "r"),
+        BgpPlanError::ConcatLiteralNotString,
+    );
+}
+
+#[test]
+fn join_non_string_separator_rejects_closed() {
+    // A numeric separator would likewise be stringified. Reject closed.
+    reject(
+        join_query(vec![dvar("a"), dvar("b")], duint(9), "r"),
+        BgpPlanError::ConcatLiteralNotString,
+    );
+}
+
+#[test]
+fn join_unbound_operand_rejects_closed() {
+    reject(
+        join_query(vec![dvar("a"), dvar("c")], dstr(","), "r"),
+        BgpPlanError::ConcatOperandNotBound { var: "c".into() },
+    );
+}
+
+#[test]
+fn join_unbound_separator_variable_rejects_closed() {
+    reject(
+        join_query(vec![dvar("a"), dvar("b")], dvar("c"), "r"),
+        BgpPlanError::ConcatOperandNotBound { var: "c".into() },
+    );
+}
+
+#[test]
+fn join_result_already_bound_rejects_closed() {
+    reject(
+        join_query(vec![dvar("a"), dvar("b")], dstr(","), "a"),
+        BgpPlanError::JoinResultAlreadyBound { var: "a".into() },
+    );
+}
+
+#[test]
+fn join_result_literal_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::Join(Join {
+            list: ListOrVariable::List(vec![dvar("a"), dvar("b")]),
+            separator: dstr(","),
+            result_string: dstr("fixed"),
+        }),
+    ]);
+    reject(query, BgpPlanError::JoinResultNotVariable);
+}
+
+#[test]
+fn join_empty_list_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        Query::Join(Join {
+            list: ListOrVariable::List(vec![]),
+            separator: dstr(","),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::JoinEmptyList);
+}
+
+#[test]
+fn join_bare_without_operand_binding_rejects_closed() {
+    let query = and_of(vec![join_conjunct(vec![dstr("a"), dstr("b")], dstr(","), "r")]);
+    reject(query, BgpPlanError::JoinUnsupportedShape);
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Substring` (per-row constant-index character substring) — plan/shape guard.
+// -------------------------------------------------------------------------------------------
+
+/// `t(?x, name, ?s) & sub_string(?s, before, length, ?after, ?sub)`.
+fn substring_query(before: DataValue, length: DataValue, after: &str, sub: &str) -> Query {
+    and_of(vec![
+        tv("x", "name", "s"),
+        Query::Substring(Substring {
+            string: dvar("s"),
+            before,
+            length,
+            after: DataValue::Variable(after.to_string()),
+            substring: DataValue::Variable(sub.to_string()),
+        }),
+    ])
+}
+
+#[test]
+fn substring_constant_index_over_authenticated_string_compiles() {
+    let compiled = plan_bgp(&substring_query(duint(1), duint(3), "after", "sub")).unwrap();
+    assert!(compiled.relation.schema.iter().any(|v| v == "s"));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "sub"));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "after"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Substring { .. }
+    ));
+}
+
+#[test]
+fn substring_literal_input_string_rejects_closed() {
+    // A constant string input is not an authenticated store value.
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        Query::Substring(Substring {
+            string: dstr("hello"),
+            before: duint(0),
+            length: duint(2),
+            after: DataValue::Variable("after".into()),
+            substring: DataValue::Variable("sub".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::SubstringStringNotVariable);
+}
+
+#[test]
+fn substring_unbound_input_string_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        Query::Substring(Substring {
+            string: dvar("z"),
+            before: duint(0),
+            length: duint(2),
+            after: DataValue::Variable("after".into()),
+            substring: DataValue::Variable("sub".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::SubstringStringNotBound { var: "z".into() });
+}
+
+#[test]
+fn substring_variable_index_rejects_closed() {
+    // A per-row store-authenticated index is a deferred follow-up.
+    reject(
+        substring_query(dvar("i"), duint(3), "after", "sub"),
+        BgpPlanError::SubstringIndexNotLiteral,
+    );
+}
+
+#[test]
+fn substring_negative_index_rejects_closed() {
+    // SWI sub_string requires non-negative offsets; a negative literal fails/throws — reject closed.
+    reject(
+        substring_query(dint(-1), duint(3), "after", "sub"),
+        BgpPlanError::SubstringNegativeIndex,
+    );
+}
+
+#[test]
+fn substring_non_integer_index_rejects_closed() {
+    reject(
+        substring_query(dstr("x"), duint(3), "after", "sub"),
+        BgpPlanError::SubstringIndexNotInteger,
+    );
+}
+
+#[test]
+fn substring_after_constant_rejects_closed() {
+    // A bound After adds an unmodeled length-equality filter.
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        Query::Substring(Substring {
+            string: dvar("s"),
+            before: duint(0),
+            length: duint(2),
+            after: duint(5),
+            substring: DataValue::Variable("sub".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::SubstringAfterNotVariable);
+}
+
+#[test]
+fn substring_result_literal_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        Query::Substring(Substring {
+            string: dvar("s"),
+            before: duint(0),
+            length: duint(2),
+            after: DataValue::Variable("after".into()),
+            substring: dstr("fixed"),
+        }),
+    ]);
+    reject(query, BgpPlanError::SubstringResultNotVariable);
+}
+
+#[test]
+fn substring_result_already_bound_rejects_closed() {
+    // The result var `?s` is already the (bound) input column.
+    reject(
+        substring_query(duint(0), duint(2), "after", "s"),
+        BgpPlanError::SubstringResultAlreadyBound { var: "s".into() },
+    );
+}
+
+#[test]
+fn substring_result_aliases_after_rejects_closed() {
+    reject(
+        substring_query(duint(0), duint(2), "same", "same"),
+        BgpPlanError::SubstringResultAliasesAfter,
+    );
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Pad` planning (`utils:pad/4`: constant single-char left-pad to a constant target length).
+// -------------------------------------------------------------------------------------------
+
+fn pad_conjunct(string: DataValue, char: DataValue, times: DataValue, result: &str) -> Query {
+    Query::Pad(Pad {
+        string,
+        char,
+        times,
+        result_string: DataValue::Variable(result.to_string()),
+    })
+}
+
+/// `t(?x, name, ?s) & pad(?s, char, times, ?result)`.
+fn pad_query(char: DataValue, times: DataValue, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "name", "s"),
+        pad_conjunct(dvar("s"), char, times, result),
+    ])
+}
+
+#[test]
+fn pad_authenticated_string_single_char_constant_length_compiles() {
+    let compiled = plan_bgp(&pad_query(dstr("0"), duint(5), "r")).unwrap();
+    // The input operand column is carried through; the result is TERMINAL/revealed (NOT committed).
+    assert!(compiled.relation.schema.iter().any(|v| v == "s"));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "r"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Pad { .. }
+    ));
+}
+
+#[test]
+fn pad_multi_char_pad_char_rejects_closed() {
+    // utils:pad requires string_length(C) == 1 (throws pad_not_length_one otherwise).
+    reject(
+        pad_query(dstr("ab"), duint(5), "r"),
+        BgpPlanError::PadCharNotSingleChar,
+    );
+}
+
+#[test]
+fn pad_variable_char_rejects_closed() {
+    // A per-row store-authenticated pad char is a deferred follow-up.
+    reject(
+        pad_query(dvar("c"), duint(5), "r"),
+        BgpPlanError::PadCharNotLiteral,
+    );
+}
+
+#[test]
+fn pad_non_string_char_rejects_closed() {
+    reject(
+        pad_query(duint(7), duint(5), "r"),
+        BgpPlanError::PadCharNotString,
+    );
+}
+
+#[test]
+fn pad_variable_length_rejects_closed() {
+    // A per-row store-authenticated target length is a deferred follow-up.
+    reject(
+        pad_query(dstr("0"), dvar("n"), "r"),
+        BgpPlanError::PadLengthNotLiteral,
+    );
+}
+
+#[test]
+fn pad_negative_length_rejects_closed() {
+    // A negative target length always throws bad_pad_length in the reference (L2 = L - L1 < 0).
+    reject(
+        pad_query(dstr("0"), dint(-1), "r"),
+        BgpPlanError::PadNegativeLength,
+    );
+}
+
+#[test]
+fn pad_non_integer_length_rejects_closed() {
+    reject(
+        pad_query(dstr("0"), dstr("five"), "r"),
+        BgpPlanError::PadLengthNotInteger,
+    );
+}
+
+#[test]
+fn pad_literal_input_string_rejects_closed() {
+    // A constant string input is not an authenticated store value.
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        pad_conjunct(dstr("hello"), dstr("0"), duint(5), "r"),
+    ]);
+    reject(query, BgpPlanError::PadStringNotVariable);
+}
+
+#[test]
+fn pad_unbound_input_string_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        pad_conjunct(dvar("z"), dstr("0"), duint(5), "r"),
+    ]);
+    reject(query, BgpPlanError::PadStringNotBound { var: "z".into() });
+}
+
+#[test]
+fn pad_pinned_non_string_input_rejects_closed() {
+    // Pinning `?s` to a numeric datatype via a range filter makes it a non-string operand.
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        gte(dvar("s"), duint(0)),
+        pad_conjunct(dvar("s"), dstr("0"), duint(5), "r"),
+    ]);
+    reject(query, BgpPlanError::PadStringNotAuthenticated { var: "s".into() });
+}
+
+#[test]
+fn pad_result_literal_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "s"),
+        Query::Pad(Pad {
+            string: dvar("s"),
+            char: dstr("0"),
+            times: duint(5),
+            result_string: dstr("fixed"),
+        }),
+    ]);
+    reject(query, BgpPlanError::PadResultNotVariable);
+}
+
+#[test]
+fn pad_result_already_bound_rejects_closed() {
+    // The result var `?s` is already the (bound) input column.
+    reject(
+        pad_query(dstr("0"), duint(5), "s"),
+        BgpPlanError::PadResultAlreadyBound { var: "s".into() },
+    );
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `HashKey`/`hash` planning (`idgen_hash/3`: SHA-256 document-ID over base + args).
+// -------------------------------------------------------------------------------------------
+
+fn hashkey_conjunct(base: DataValue, args: Vec<DataValue>, uri: &str) -> Query {
+    Query::HashKey(HashKey {
+        base,
+        key_list: args,
+        uri: NodeValue::Variable(uri.to_string()),
+    })
+}
+
+/// `t(?x, name, ?a) & t(?x, greet, ?b) & hash(base, args, ?uri)`.
+fn hashkey_query(base: DataValue, args: Vec<DataValue>, uri: &str) -> Query {
+    and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        hashkey_conjunct(base, args, uri),
+    ])
+}
+
+#[test]
+fn hashkey_literal_base_with_string_columns_compiles() {
+    let compiled =
+        plan_bgp(&hashkey_query(dstr("http://i/X/"), vec![dvar("a"), dvar("b")], "id")).unwrap();
+    // The arg operand columns are carried through; the result URI is TERMINAL/revealed (NOT committed).
+    assert!(compiled.relation.schema.iter().any(|v| v == "a"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "b"));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "id"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::HashKey { .. }
+    ));
+}
+
+#[test]
+fn hashkey_authenticated_base_variable_compiles() {
+    // Base may itself be an authenticated string column (raw-prepended before the hash).
+    let compiled = plan_bgp(&hashkey_query(dvar("a"), vec![dvar("b")], "id")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::HashKey { .. }
+    ));
+}
+
+#[test]
+fn hashkey_non_string_arg_rejects_closed() {
+    // A numeric arg would be stringified by SWI ~w (a separate circuit) — reject closed.
+    reject(
+        hashkey_query(dstr("X/"), vec![dvar("a"), duint(42)], "id"),
+        BgpPlanError::ConcatLiteralNotString,
+    );
+}
+
+#[test]
+fn hashkey_unbound_arg_rejects_closed() {
+    reject(
+        hashkey_query(dstr("X/"), vec![dvar("a"), dvar("c")], "id"),
+        BgpPlanError::ConcatOperandNotBound { var: "c".into() },
+    );
+}
+
+#[test]
+fn hashkey_result_node_constant_rejects_closed() {
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::HashKey(HashKey {
+            base: dstr("X/"),
+            key_list: vec![dvar("a")],
+            uri: NodeValue::Node("http://i/fixed".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::HashKeyResultNotVariable);
+}
+
+#[test]
+fn hashkey_result_already_bound_rejects_closed() {
+    // The result var `?a` is already a (bound) arg column.
+    reject(
+        hashkey_query(dstr("X/"), vec![dvar("a"), dvar("b")], "a"),
+        BgpPlanError::HashKeyResultAlreadyBound { var: "a".into() },
+    );
+}
+
+#[test]
+fn upper_rejects_closed_locale_deferred() {
+    // Deferred: SWI string_upper is locale-dependent (unpinned LC_CTYPE), so ASCII fidelity is
+    // unprovable across deployments (Turkic 'i' -> U+0130). Reject closed with the documented error.
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        Query::Upper(Upper {
+            mixed: DataValue::Variable("a".into()),
+            upper: DataValue::Variable("r".into()),
+        }),
+    ]);
+    reject(query, BgpPlanError::StringCaseOpLocaleUnsupported);
 }

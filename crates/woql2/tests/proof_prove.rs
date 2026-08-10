@@ -18,7 +18,7 @@ use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::envelope::RecursiveRelationEnvelope;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
-    prove_layer_bgp, verify_layer_bgp, generated_decimal_i64_field, AtomTerm, CanonicalResultValue, LayerBgpAtom, LayerBgpPlan,
+    prove_layer_bgp, verify_layer_bgp, generated_decimal_i64_field, AtomTerm, CanonicalResultValue, ColumnSource, LayerBgpAtom, LayerBgpPlan,
     ObjectKindFilter, ResultIdNamespace,
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
@@ -28,21 +28,29 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::{TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
+use terminusdb_woql2::expression::{
+    ArithmeticExpression, ArithmeticValue, Div, Exp, Minus, Plus, Times,
+};
+use terminusdb_woql2::compare::Typecast;
+use terminusdb_woql2::query::Eval;
 use terminusdb_woql2::control::{When, WoqlOptional};
 use terminusdb_woql2::control::{Distinct, Select, Using};
 use terminusdb_woql2::collection::{Length, Sum};
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
-    BgpPlanError, CompiledBgp, CompiledRelationStatement, ExecutedResultValue,
+    BgpPlanError, CompiledBgp, CompiledRelationStatement, ExecutedResultValue, ProvedQueryStatement,
 };
-use terminusdb_woql2::triple::{Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
+use terminusdb_woql2::triple::{
+    AddedTriple, Data, DeletedTriple, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev,
+};
 use terminusdb_woql2::{
-    misc::{Collect, Count, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
+    misc::{Collect, Count, HashKey, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
     path::{InversePathPredicate, PathOr, PathPattern, PathPredicate, PathSequence, PathTimes},
     query::{Not, Or, Path, Query},
-    value::{DataValue, NodeValue, Value},
+    string::{Concatenate, Join, Pad, Substring},
+    value::{DataValue, ListOrVariable, NodeValue, Value},
 };
 
 fn ordered_triple_value_layer() -> Arc<LayerCommitment> {
@@ -89,6 +97,109 @@ fn counted_comparison(comparison: Query) -> Query {
         triple_count_query("admin/db/local/branch/main/instance"),
         comparison,
     ])
+}
+
+fn added_triple_q(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::AddedTriple(AddedTriple {
+        subject: NodeValue::Variable(subj.into()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
+
+fn deleted_triple_q(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::DeletedTriple(DeletedTriple {
+        subject: NodeValue::Variable(subj.into()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
+
+/// Base p1 { a1..a4 -> b1..b4 }; child ADDS { a5,a6 } and REMOVES { a1,a2 } (all p1). So the
+/// commit's addition file == {a5,a6}, removal file == {a1,a2}, materialized head == {a3..a6}.
+fn delta_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for s in ["a1", "a2", "a3", "a4"] {
+        let o = format!("b{}", &s[1..]);
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(s), &iri("p1"), &iri(&o)))
+            .unwrap();
+    }
+    let base = builder.commit().unwrap();
+    let child = base.open_write().unwrap();
+    for s in ["a1", "a2"] {
+        let o = format!("b{}", &s[1..]);
+        child
+            .remove_value_triple(ValueTriple::new_node(&iri(s), &iri("p1"), &iri(&o)))
+            .unwrap();
+    }
+    for s in ["a5", "a6"] {
+        let o = format!("b{}", &s[1..]);
+        child
+            .add_value_triple(ValueTriple::new_node(&iri(s), &iri("p1"), &iri(&o)))
+            .unwrap();
+    }
+    child.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn subject_iris(values: &[Vec<CanonicalResultValue>]) -> Vec<String> {
+    let mut subjects: Vec<String> = values[0]
+        .iter()
+        .map(|value| match value {
+            CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => {
+                String::from_utf8(bytes.clone()).unwrap()
+            }
+            other => panic!("subject must be a node: {:?}", other),
+        })
+        .collect();
+    subjects.sort();
+    subjects
+}
+
+#[test]
+fn added_and_deleted_triples_prove_exact_delta_rows_end_to_end() {
+    let layer = delta_layer();
+    let root = layer.state.commitment_root;
+    assert!(layer.state.parent_state_root.is_some());
+    assert_eq!(layer.state.addition_count, 2);
+    assert_eq!(layer.state.removal_count, 2);
+    assert_eq!(layer.state.materialized_count, 4);
+
+    // AddedTriple(?s, p1, ?o) proves EXACTLY the child's added rows.
+    let added = plan_bgp(&added_triple_q("s", "p1", "o")).unwrap();
+    let added_proof = added.prove(&layer).unwrap();
+    assert_eq!(added_proof.result_len, 2);
+    let added_values = added_proof
+        .verify_and_resolve_values(&added, &layer, root)
+        .unwrap();
+    assert_eq!(subject_iris(&added_values), vec![iri("a5"), iri("a6")]);
+
+    // DeletedTriple(?s, p1, ?o) proves EXACTLY the child's removed rows.
+    let deleted = plan_bgp(&deleted_triple_q("s", "p1", "o")).unwrap();
+    let deleted_proof = deleted.prove(&layer).unwrap();
+    assert_eq!(deleted_proof.result_len, 2);
+    let deleted_values = deleted_proof
+        .verify_and_resolve_values(&deleted, &layer, root)
+        .unwrap();
+    assert_eq!(subject_iris(&deleted_values), vec![iri("a1"), iri("a2")]);
+
+    // NEGATIVE: an inherited row (a3, still live in `materialized`) was neither added nor
+    // removed by this child, so it is provable as neither an AddedTriple nor a DeletedTriple.
+    assert!(!subject_iris(&added_values).contains(&iri("a3")));
+    assert!(!subject_iris(&deleted_values).contains(&iri("a3")));
+
+    // SOURCE-SUBSTITUTION: the AddedTriple envelope fails to verify against a DeletedTriple or
+    // a plain (materialized) Triple compiled query — the reconstructed plan fixes the source,
+    // so its plan digest / opened columns diverge.
+    let envelope = added_proof.encode_envelope(&added, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &added, &layer, root).unwrap();
+    let materialized = plan_bgp(&tv("s", "p1", "o")).unwrap();
+    for wrong in [&deleted, &materialized] {
+        assert!(decode_and_verify_envelope(&envelope, wrong, &layer, root).is_err());
+    }
 }
 
 #[test]
@@ -4777,6 +4888,7 @@ fn composite_key_compiler_proves_exact_result_not_single_key_superset() {
             rel_key: 0,
             additional_keys: Vec::new(),
         }],
+        source: ColumnSource::Materialized,
     };
     let (proof, result_coms, m_bogus, ids) = prove_layer_bgp(&lc, &bogus).unwrap();
     // It VERIFIES — the crypto is faithful to the (wrong) plan.
@@ -6070,4 +6182,1035 @@ fn object_range_float64_le_boundary_includes_equal() {
         store_op_value(f64::make_entry(&1.5f64)),
         3,
     );
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Eval` integer arithmetic — end-to-end prove+verify via the VERIFIER-RECOMPUTE path.
+// -------------------------------------------------------------------------------------------
+
+/// A base layer with two integer predicates `p`,`q` per subject: `t(subj,p,a)`, `t(subj,q,b)`.
+fn eval_two_predicate_layer(rows: &[(&str, u32, u32)]) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, p, q) in rows {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri(subject),
+                &iri("p"),
+                u32::make_entry(p),
+            ))
+            .unwrap();
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri(subject),
+                &iri("q"),
+                u32::make_entry(q),
+            ))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn ea_var(name: &str) -> ArithmeticExpression {
+    ArithmeticExpression::Value(ArithmeticValue::Variable(name.into()))
+}
+
+fn ea_lit(value: XSDAnySimpleType) -> ArithmeticExpression {
+    ArithmeticExpression::Value(ArithmeticValue::Data(value))
+}
+
+fn ea_plus(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Plus(Plus {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn ea_minus(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Minus(Minus {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn ea_times(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Times(Times {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+/// `t(?x,p,?a) & t(?x,q,?b) & a>=0 & b>=0 & Eval(expr, ?result)`.
+fn eval_ab_query(expr: ArithmeticExpression, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "p", "a"),
+        tv("x", "q", "b"),
+        gte(dvar("a"), duint(0)),
+        gte(dvar("b"), duint(0)),
+        Query::Eval(Eval {
+            expression: expr,
+            result_value: ArithmeticValue::Variable(result.into()),
+        }),
+    ])
+}
+
+fn eval_u32(value: &CanonicalResultValue) -> u32 {
+    match value {
+        CanonicalResultValue::Object(CanonicalObject::Value {
+            datatype: CanonicalDatatype::UInt32,
+            lexical,
+        }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+        other => panic!("unexpected operand value {other:?}"),
+    }
+}
+
+fn eval_i64(value: &CanonicalResultValue) -> i64 {
+    match value {
+        CanonicalResultValue::GeneratedDecimalI64(value) => *value,
+        other => panic!("unexpected derived value {other:?}"),
+    }
+}
+
+/// Prove+verify `expr`, returning per-row `(a, b, r)` triples in result order.
+fn eval_ab_rows(
+    layer: &LayerCommitment,
+    expr: ArithmeticExpression,
+) -> (CompiledBgp, Vec<(u32, u32, i64)>) {
+    let compiled = plan_bgp(&eval_ab_query(expr, "r")).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let index = |name: &str| {
+        compiled
+            .relation
+            .schema
+            .iter()
+            .position(|variable| variable == name)
+            .unwrap()
+    };
+    let (ai, bi, ri) = (index("a"), index("b"), index("r"));
+    let rows = (0..values[ri].len())
+        .map(|row| {
+            (
+                eval_u32(&values[ai][row]),
+                eval_u32(&values[bi][row]),
+                eval_i64(&values[ri][row]),
+            )
+        })
+        .collect();
+    (compiled, rows)
+}
+
+#[test]
+fn eval_plus_proves_per_row_sum() {
+    let layer = eval_two_predicate_layer(&[("n1", 3, 4), ("n2", 10, 2), ("n3", 7, 7)]);
+    let (_compiled, rows) = eval_ab_rows(&layer, ea_plus(ea_var("a"), ea_var("b")));
+    assert_eq!(rows.len(), 3);
+    for (a, b, r) in rows {
+        assert_eq!(r, i64::from(a) + i64::from(b));
+    }
+}
+
+#[test]
+fn eval_times_proves_per_row_product() {
+    let layer = eval_two_predicate_layer(&[("n1", 3, 4), ("n2", 10, 2)]);
+    let (_compiled, rows) = eval_ab_rows(&layer, ea_times(ea_var("a"), ea_var("b")));
+    assert_eq!(rows.len(), 2);
+    for (a, b, r) in rows {
+        assert_eq!(r, i64::from(a) * i64::from(b));
+    }
+}
+
+#[test]
+fn eval_minus_proves_per_row_difference_including_negatives() {
+    let layer = eval_two_predicate_layer(&[("n1", 10, 3), ("n2", 2, 5)]);
+    let (_compiled, rows) = eval_ab_rows(&layer, ea_minus(ea_var("a"), ea_var("b")));
+    assert_eq!(rows.len(), 2);
+    let mut saw_negative = false;
+    for (a, b, r) in rows {
+        assert_eq!(r, i64::from(a) - i64::from(b));
+        saw_negative |= r < 0;
+    }
+    assert!(saw_negative, "the b>a row must produce a negative i64 result");
+}
+
+#[test]
+fn eval_nested_tree_plus_times_literal_proves() {
+    // Plus(Times(?a, 2), ?b) — nesting is free under verifier recompute.
+    let layer = eval_two_predicate_layer(&[("n1", 3, 4), ("n2", 10, 2)]);
+    let expr = ea_plus(ea_times(ea_var("a"), ea_lit(XSDAnySimpleType::Int(2))), ea_var("b"));
+    let (_compiled, rows) = eval_ab_rows(&layer, expr);
+    assert_eq!(rows.len(), 2);
+    for (a, b, r) in rows {
+        assert_eq!(r, i64::from(a) * 2 + i64::from(b));
+    }
+}
+
+#[test]
+fn eval_wrong_result_column_fails_verification() {
+    let layer = eval_two_predicate_layer(&[("n1", 3, 4), ("n2", 10, 2)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_plus(ea_var("a"), ea_var("b")), "r")).unwrap();
+    let ri = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "r")
+        .unwrap();
+
+    // (a) A wrong derived value WITH a rebuilt (internally consistent) commitment: passes the
+    //     commitment binding but the VERIFIER RE-DERIVATION rejects it — this is the core
+    //     soundness property (the delivered result must equal the recomputed arithmetic).
+    let mut wrong_value = compiled.prove(&layer).unwrap();
+    wrong_value.result_columns[ri][0] = generated_decimal_i64_field(9_999);
+    let domain = 1usize << wrong_value.result_log_domain;
+    wrong_value.result_commitments[ri] =
+        commit_column(&pad(&wrong_value.result_columns[ri], domain)).unwrap();
+    assert!(wrong_value
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+
+    // (b) A corrupted derived-column COMMITMENT with the correct column values: the recompute
+    //     matches, but the result-column-to-commitment binding (`verify_columns`) rejects it.
+    let mut wrong_commit = compiled.prove(&layer).unwrap();
+    let domain_b = 1usize << wrong_commit.result_log_domain;
+    wrong_commit.result_commitments[ri] =
+        commit_column(&pad(&[generated_decimal_i64_field(1)], domain_b)).unwrap();
+    assert!(wrong_commit
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn eval_tampered_operand_passthrough_fails_verification() {
+    // Change a carried-through OPERAND column (with a rebuilt commitment). The Eval arm pins
+    // the operand columns to the authenticated child, so an operand that differs from the
+    // store-derived value the result was computed from is rejected.
+    let layer = eval_two_predicate_layer(&[("n1", 3, 4), ("n2", 10, 2)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_plus(ea_var("a"), ea_var("b")), "r")).unwrap();
+    let ai = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "a")
+        .unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    // Swap two rows of the operand column so its value no longer matches the child's proven
+    // column (but the column still opens to a rebuilt commitment).
+    tampered.result_columns[ai].swap(0, 1);
+    let domain = 1usize << tampered.result_log_domain;
+    tampered.result_commitments[ai] =
+        commit_column(&pad(&tampered.result_columns[ai], domain)).unwrap();
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn eval_times_overflowing_i64_rejects_without_field_wraparound() {
+    // u32::MAX * u32::MAX ~= 1.84e19 exceeds i64::MAX (~9.2e18) but fits i128. The checked i64
+    // narrowing rejects it at prove time: the proof cannot be produced, so no wrapped field is
+    // ever committed.
+    let layer = eval_two_predicate_layer(&[("n1", u32::MAX, u32::MAX)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_times(ea_var("a"), ea_var("b")), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+fn ea_div(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Div(Div {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn ea_exp(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Exp(Exp {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+/// Reference FLOOR division (rounds toward −∞), matching SWI-Prolog `div/2` — the semantics the
+/// verifier recompute must reproduce. Deliberately NOT `div_euclid` (which differs when `b<0`).
+fn floor_div(a: i64, b: i64) -> i64 {
+    let q = a / b;
+    let r = a % b;
+    if r != 0 && ((r < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+
+#[test]
+fn eval_div_proves_per_row_floor_quotient() {
+    let layer = eval_two_predicate_layer(&[("n1", 7, 2), ("n2", 10, 3), ("n3", 9, 3)]);
+    let (_compiled, rows) = eval_ab_rows(&layer, ea_div(ea_var("a"), ea_var("b")));
+    assert_eq!(rows.len(), 3);
+    for (a, b, r) in rows {
+        assert_eq!(r, floor_div(i64::from(a), i64::from(b)));
+    }
+}
+
+#[test]
+fn eval_div_negative_divisor_floors_toward_negative_infinity() {
+    // divisor = 2 - b is NEGATIVE here; the result must FLOOR (toward −∞), which distinguishes
+    // Prolog `div` from truncation-toward-zero AND from Rust `div_euclid`.
+    let layer = eval_two_predicate_layer(&[("n1", 7, 4), ("n2", 10, 5)]);
+    let expr = ea_div(
+        ea_var("a"),
+        ea_minus(ea_lit(XSDAnySimpleType::Int(2)), ea_var("b")),
+    );
+    let (_compiled, rows) = eval_ab_rows(&layer, expr);
+    let mut saw_flooring = false;
+    for (a, b, r) in rows {
+        let divisor = 2 - i64::from(b);
+        assert_eq!(r, floor_div(i64::from(a), divisor));
+        if a == 7 && b == 4 {
+            // floor(7 / -2) = -4; truncation OR div_euclid would give -3.
+            assert_eq!(r, -4);
+            saw_flooring = true;
+        }
+    }
+    assert!(saw_flooring, "the (7 div -2) row must demonstrate flooring to -4");
+}
+
+#[test]
+fn eval_div_by_zero_fails_at_prove() {
+    // A zero divisor makes Prolog `div/2` THROW, so the query fails: the proof must FAIL CLOSED
+    // (never silently drop the row). `b >= 0` admits `b == 0`, so this exercises a real row.
+    let layer = eval_two_predicate_layer(&[("n1", 5, 0)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_div(ea_var("a"), ea_var("b")), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+#[test]
+fn eval_div_wrong_result_fails_verification() {
+    // A wrong Div result with a rebuilt (internally consistent) commitment still fails the
+    // verifier RE-DERIVATION — the core soundness property.
+    let layer = eval_two_predicate_layer(&[("n1", 7, 2)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_div(ea_var("a"), ea_var("b")), "r")).unwrap();
+    let ri = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "r")
+        .unwrap();
+    let mut wrong = compiled.prove(&layer).unwrap();
+    wrong.result_columns[ri][0] = generated_decimal_i64_field(999);
+    let domain = 1usize << wrong.result_log_domain;
+    wrong.result_commitments[ri] = commit_column(&pad(&wrong.result_columns[ri], domain)).unwrap();
+    assert!(wrong
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn eval_exp_proves_per_row_power() {
+    let layer = eval_two_predicate_layer(&[("n1", 3, 4), ("n2", 2, 10), ("n3", 5, 0)]);
+    let (_compiled, rows) = eval_ab_rows(&layer, ea_exp(ea_var("a"), ea_var("b")));
+    assert_eq!(rows.len(), 3);
+    for (a, b, r) in rows {
+        // 3^4 = 81, 2^10 = 1024, 5^0 = 1 (integer result, matching Prolog `**`).
+        assert_eq!(r, i64::from(a).pow(b));
+    }
+}
+
+#[test]
+fn eval_exp_overflowing_i64_fails_at_prove() {
+    // 2^63 = i64::MAX + 1 overflows the declared i64 width → FAIL CLOSED (no field wraparound).
+    let layer = eval_two_predicate_layer(&[("n1", 2, 63)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_exp(ea_var("a"), ea_var("b")), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+#[test]
+fn eval_exp_runtime_negative_exponent_fails_at_prove() {
+    // exponent = b - 5 is NEGATIVE for small b → rational result (out of the integer layer) →
+    // FAIL CLOSED in the recompute (a runtime-negative exponent, not a static literal).
+    let layer = eval_two_predicate_layer(&[("n1", 3, 2)]);
+    let expr = ea_exp(
+        ea_var("a"),
+        ea_minus(ea_var("b"), ea_lit(XSDAnySimpleType::Int(5))),
+    );
+    let compiled = plan_bgp(&eval_ab_query(expr, "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Typecast` integer-width conversion — end-to-end prove+verify via VERIFIER RECOMPUTE.
+// -------------------------------------------------------------------------------------------
+
+/// A single-predicate layer: `t(subj, p, value)` for each `(subj, value)`.
+fn typecast_single_predicate_layer(rows: &[(&str, u32)]) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, value) in rows {
+        builder
+            .add_value_triple(ValueTriple::new_value(
+                &iri(subject),
+                &iri("p"),
+                u32::make_entry(value),
+            ))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+/// A full XSD type IRI node value for a local type name.
+fn xsd_type_pv(name: &str) -> NodeValue {
+    NodeValue::Node(format!("http://www.w3.org/2001/XMLSchema#{name}"))
+}
+
+/// `t(?x,p,?a) & a>=0 & Typecast(?a, target, ?r)` — pins `?a` to xsd:unsignedInt (UInt32).
+fn typecast_query_e2e(target: NodeValue, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        Query::Typecast(Typecast {
+            value: Value::Variable("a".into()),
+            type_uri: target,
+            result_value: Value::Variable(result.into()),
+        }),
+    ])
+}
+
+/// The cast column may be delivered signed OR unsigned depending on the target; read either.
+fn typecast_result_i128(value: &CanonicalResultValue) -> i128 {
+    match value {
+        CanonicalResultValue::GeneratedDecimalI64(v) => i128::from(*v),
+        CanonicalResultValue::GeneratedDecimalU64(v) => i128::from(*v),
+        other => panic!("unexpected cast result {other:?}"),
+    }
+}
+
+/// Prove+verify a Typecast of `?a` to `target`, returning per-row `(source, cast)` in order.
+fn typecast_rows(layer: &LayerCommitment, target: NodeValue) -> (CompiledBgp, Vec<(u32, i128)>) {
+    let compiled = plan_bgp(&typecast_query_e2e(target, "r")).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let index = |name: &str| {
+        compiled
+            .relation
+            .schema
+            .iter()
+            .position(|variable| variable == name)
+            .unwrap()
+    };
+    let (ai, ri) = (index("a"), index("r"));
+    let rows = (0..values[ri].len())
+        .map(|row| (eval_u32(&values[ai][row]), typecast_result_i128(&values[ri][row])))
+        .collect();
+    (compiled, rows)
+}
+
+#[test]
+fn typecast_widening_unsigned_int_to_long_proves_identity() {
+    // Widening is always in range; the value is unchanged (lossless identity).
+    let layer = typecast_single_predicate_layer(&[("n1", 100), ("n2", u32::MAX)]);
+    let (_compiled, rows) = typecast_rows(&layer, xsd_type_pv("long"));
+    assert_eq!(rows.len(), 2);
+    for (a, r) in rows {
+        assert_eq!(r, i128::from(a));
+    }
+}
+
+#[test]
+fn typecast_unsigned_target_uses_unsigned_namespace_and_proves_identity() {
+    // An UNSIGNED target (unsignedLong) delivers the cast column in the U64 namespace.
+    // >= 2 rows: a query proof pads to a power of two and requires at least 2 real rows.
+    let layer = typecast_single_predicate_layer(&[("n1", u32::MAX), ("n2", 42)]);
+    let (compiled, rows) = typecast_rows(&layer, xsd_type_pv("unsignedLong"));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Typecast { .. }
+    ));
+    for (a, r) in rows {
+        assert_eq!(r, i128::from(a));
+    }
+}
+
+#[test]
+fn typecast_valid_narrowing_to_byte_proves_identity() {
+    // In-range narrowing to xsd:byte [-128,127] is a lossless identity on the value.
+    let layer = typecast_single_predicate_layer(&[("n1", 7), ("n2", 100)]);
+    let (_compiled, rows) = typecast_rows(&layer, xsd_type_pv("byte"));
+    assert_eq!(rows.len(), 2);
+    for (a, r) in rows {
+        assert_eq!(r, i128::from(a));
+    }
+}
+
+#[test]
+fn typecast_out_of_range_narrowing_to_byte_fails_at_prove() {
+    // 300 does not fit xsd:byte [-128,127]: Prolog `typecast` THROWS casting_error, so the proof
+    // must FAIL CLOSED (never wrap/truncate to 44). >= 2 rows (one in range, one not) so the
+    // failure is provably the range check, not the "too few rows" floor.
+    let layer = typecast_single_predicate_layer(&[("n1", 7), ("n2", 300)]);
+    let compiled = plan_bgp(&typecast_query_e2e(xsd_type_pv("byte"), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+#[test]
+fn typecast_wrong_result_column_fails_verification() {
+    // A wrong cast value with a rebuilt commitment still fails the verifier RE-DERIVATION.
+    // >= 2 rows: a query proof requires at least 2 real rows (power-of-two padding).
+    let layer = typecast_single_predicate_layer(&[("n1", 100), ("n2", 200)]);
+    let compiled = plan_bgp(&typecast_query_e2e(xsd_type_pv("long"), "r")).unwrap();
+    let ri = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "r")
+        .unwrap();
+    let mut wrong = compiled.prove(&layer).unwrap();
+    wrong.result_columns[ri][0] = generated_decimal_i64_field(9_999);
+    let domain = 1usize << wrong.result_log_domain;
+    wrong.result_commitments[ri] = commit_column(&pad(&wrong.result_columns[ri], domain)).unwrap();
+    assert!(wrong
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Concatenate` — end-to-end prove+verify via the VERIFIER-RECOMPUTE (byte) path.
+// -------------------------------------------------------------------------------------------
+
+/// A base layer with a `name` and a `greet` xsd:string per subject: `t(subj,name,a)`,
+/// `t(subj,greet,b)`. Callers pass `>= 2` subjects (a query proof needs `>= 2` real rows for
+/// power-of-two padding). One row below uses non-ASCII UTF-8 to show concat is byte-exact and
+/// locale-independent (unlike the deferred upper/lower).
+fn concat_name_greet_layer(rows: &[(&str, &str, &str)]) -> Arc<LayerCommitment> {
+    let mut triples = Vec::new();
+    for (subject, name, greet) in rows {
+        triples.push(ValueTriple::new_string_value(
+            &iri(subject),
+            &iri("name"),
+            name,
+        ));
+        triples.push(ValueTriple::new_string_value(
+            &iri(subject),
+            &iri("greet"),
+            greet,
+        ));
+    }
+    build_layer_triples(triples)
+}
+
+/// `t(?x,name,?a) & t(?x,greet,?b) & concat([?a, " ", ?b], ?r)` — includes a literal element.
+fn concat_name_greet_query() -> Query {
+    and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::Concatenate(Concatenate {
+            list: ListOrVariable::List(vec![
+                DataValue::Variable("a".into()),
+                DataValue::Data(XSDAnySimpleType::String(" ".into())),
+                DataValue::Variable("b".into()),
+            ]),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ])
+}
+
+fn concat_string(object: &CanonicalObject) -> String {
+    match object {
+        CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical,
+        } => String::from_utf8(lexical.clone()).unwrap(),
+        other => panic!("unexpected concat result object {other:?}"),
+    }
+}
+
+#[test]
+fn concat_proves_per_row_concatenation_with_literal_separator() {
+    let layer = concat_name_greet_layer(&[
+        ("n1", "Hello", "World"),
+        ("n2", "Foo", "Bar"),
+        // Non-ASCII UTF-8: concat is a byte concatenation, so it must round-trip exactly.
+        ("n3", "héllo", "wörld"),
+    ]);
+    let compiled = plan_bgp(&concat_name_greet_query()).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    // The synthesized strings are the terminal, revealed, verifier-re-derived output. Reading
+    // them after a successful verify is sound (verify re-derives and requires an exact match).
+    let mut got: Vec<String> = proved
+        .concat_result_objects()
+        .unwrap()
+        .iter()
+        .map(concat_string)
+        .collect();
+    got.sort();
+    let mut expected = vec![
+        "Hello World".to_string(),
+        "Foo Bar".to_string(),
+        "héllo wörld".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn concat_tampered_result_string_fails_verification() {
+    let layer = concat_name_greet_layer(&[("n1", "Hello", "World"), ("n2", "Foo", "Bar")]);
+    let compiled = plan_bgp(&concat_name_greet_query()).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    // Replace one DELIVERED concatenation with a wrong string; the verifier RE-DERIVATION over
+    // the root-authenticated operands rejects the mismatch.
+    if let ProvedQueryStatement::Concat { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: b"TAMPERED".to_vec(),
+        };
+    } else {
+        panic!("expected a Concat proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn concat_tampered_operand_column_fails_verification() {
+    // Swapping an operand column's rows (with a rebuilt commitment) breaks the delivered columns'
+    // agreement with the root-authenticated child; verify rejects (operands are pinned to root).
+    let layer = concat_name_greet_layer(&[("n1", "Hello", "World"), ("n2", "Foo", "Bar")]);
+    let compiled = plan_bgp(&concat_name_greet_query()).unwrap();
+    let ai = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "a")
+        .unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_columns[ai].swap(0, 1);
+    let domain = 1usize << tampered.result_log_domain;
+    tampered.result_commitments[ai] =
+        commit_column(&pad(&tampered.result_columns[ai], domain)).unwrap();
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Join` end-to-end faithfulness (separator-interposed concat).
+// -------------------------------------------------------------------------------------------
+
+/// `t(?x,name,?a) & t(?x,greet,?b) & join([?a, "END", ?b], "-", ?r)`. Exercises column elements,
+/// a LITERAL element, and a literal separator interposed BETWEEN each pair — so the expected row
+/// is `a + "-" + "END" + "-" + b` (intersperse then interpolate_string, `utils:join/3`).
+fn join_name_greet_query() -> Query {
+    and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::Join(Join {
+            list: ListOrVariable::List(vec![
+                DataValue::Variable("a".into()),
+                DataValue::Data(XSDAnySimpleType::String("END".into())),
+                DataValue::Variable("b".into()),
+            ]),
+            separator: DataValue::Data(XSDAnySimpleType::String("-".into())),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ])
+}
+
+#[test]
+fn join_proves_per_row_separator_interposition() {
+    let layer = concat_name_greet_layer(&[
+        ("n1", "Hello", "World"),
+        ("n2", "Foo", "Bar"),
+        // Non-ASCII UTF-8: join is a byte concatenation with the separator interposed, so it must
+        // round-trip exactly (locale-independent, unlike the deferred upper/lower).
+        ("n3", "héllo", "wörld"),
+    ]);
+    let compiled = plan_bgp(&join_name_greet_query()).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let mut got: Vec<String> = proved
+        .join_result_objects()
+        .unwrap()
+        .iter()
+        .map(concat_string)
+        .collect();
+    got.sort();
+    let mut expected = vec![
+        "Hello-END-World".to_string(),
+        "Foo-END-Bar".to_string(),
+        "héllo-END-wörld".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn join_single_element_list_emits_no_separator() {
+    // intersperse([e0]) = [e0] — the separator is NOT emitted for a single-element list.
+    let layer = concat_name_greet_layer(&[("n1", "Hello", "World"), ("n2", "Foo", "Bar")]);
+    let query = and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::Join(Join {
+            list: ListOrVariable::List(vec![DataValue::Variable("a".into())]),
+            separator: DataValue::Data(XSDAnySimpleType::String("SEP".into())),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let mut got: Vec<String> = proved
+        .join_result_objects()
+        .unwrap()
+        .iter()
+        .map(concat_string)
+        .collect();
+    got.sort();
+    // Just the `name` column verbatim — no separator.
+    assert_eq!(got, vec!["Foo".to_string(), "Hello".to_string()]);
+}
+
+#[test]
+fn join_tampered_result_string_fails_verification() {
+    let layer = concat_name_greet_layer(&[("n1", "Hello", "World"), ("n2", "Foo", "Bar")]);
+    let compiled = plan_bgp(&join_name_greet_query()).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::Join { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: b"TAMPERED".to_vec(),
+        };
+    } else {
+        panic!("expected a Join proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn join_tampered_operand_column_fails_verification() {
+    let layer = concat_name_greet_layer(&[("n1", "Hello", "World"), ("n2", "Foo", "Bar")]);
+    let compiled = plan_bgp(&join_name_greet_query()).unwrap();
+    let ai = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "a")
+        .unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_columns[ai].swap(0, 1);
+    let domain = 1usize << tampered.result_log_domain;
+    tampered.result_commitments[ai] =
+        commit_column(&pad(&tampered.result_columns[ai], domain)).unwrap();
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Substring` end-to-end faithfulness (per-row constant-index CHARACTER substring).
+// -------------------------------------------------------------------------------------------
+
+/// A base layer with a `word` xsd:string per subject: `t(subj, word, w)`.
+fn word_layer(rows: &[(&str, &str)]) -> Arc<LayerCommitment> {
+    let mut triples = Vec::new();
+    for (subject, word) in rows {
+        triples.push(ValueTriple::new_string_value(
+            &iri(subject),
+            &iri("word"),
+            word,
+        ));
+    }
+    build_layer_triples(triples)
+}
+
+/// `t(?x, word, ?s) & sub_string(?s, before, length, ?after, ?sub)`.
+fn substring_word_query(before: usize, length: usize) -> Query {
+    and_of(vec![
+        tv("x", "word", "s"),
+        Query::Substring(Substring {
+            string: DataValue::Variable("s".into()),
+            before: DataValue::Data(XSDAnySimpleType::UnsignedInt(before)),
+            length: DataValue::Data(XSDAnySimpleType::UnsignedInt(length)),
+            after: DataValue::Variable("after".into()),
+            substring: DataValue::Variable("sub".into()),
+        }),
+    ])
+}
+
+#[test]
+fn substring_proves_per_row_character_indexed_slice() {
+    // Every string has a MULTI-BYTE character (é/ö/ü) at code-point index 1, BEFORE the slice
+    // window [1,4). Char-slicing yields "éll"/"örl"/"üen"; a naive BYTE slice would cut the
+    // 2-byte UTF-8 sequence and differ — so a passing proof demonstrates CODE-POINT indexing.
+    let layer = word_layer(&[
+        ("w1", "héllo"), // chars: h é l l o  -> [1,4) = "éll"
+        ("w2", "wörld"), // chars: w ö r l d  -> [1,4) = "örl"
+        ("w3", "füenf"), // chars: f ü e n f  -> [1,4) = "üen"
+    ]);
+    let compiled = plan_bgp(&substring_word_query(1, 3)).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let mut got: Vec<String> = proved
+        .substring_result_objects()
+        .unwrap()
+        .iter()
+        .map(concat_string)
+        .collect();
+    got.sort();
+    let mut expected = vec!["éll".to_string(), "örl".to_string(), "üen".to_string()];
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn substring_tampered_result_fails_verification() {
+    let layer = word_layer(&[("w1", "héllo"), ("w2", "wörld")]);
+    let compiled = plan_bgp(&substring_word_query(1, 3)).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::Substring { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: "xxx".as_bytes().to_vec(),
+        };
+    } else {
+        panic!("expected a Substring proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn substring_out_of_range_fails_closed() {
+    // "abc" has 3 chars; before+length = 1+5 = 6 > 3 => reference sub_string FAILS on that row.
+    // We FAIL CLOSED at prove time (never fabricate an out-of-range substring). >= 2 real rows.
+    let layer = word_layer(&[("w1", "abc"), ("w2", "abcdef")]);
+    let compiled = plan_bgp(&substring_word_query(1, 5)).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `Pad` end-to-end faithfulness (per-row constant single-char left-pad to a target length).
+// -------------------------------------------------------------------------------------------
+
+/// `t(?x, word, ?s) & pad(?s, pad_char, target_len, ?r)`.
+fn pad_word_query(pad_char: &str, target_len: usize) -> Query {
+    and_of(vec![
+        tv("x", "word", "s"),
+        Query::Pad(Pad {
+            string: DataValue::Variable("s".into()),
+            char: DataValue::Data(XSDAnySimpleType::String(pad_char.into())),
+            times: DataValue::Data(XSDAnySimpleType::UnsignedInt(target_len)),
+            result_string: DataValue::Variable("r".into()),
+        }),
+    ])
+}
+
+#[test]
+fn pad_proves_per_row_left_pad_to_target_character_length() {
+    // Multi-BYTE pad char '→' (U+2192, 3 bytes, 1 CODE POINT) and a multi-BYTE input char 'é'
+    // (2 bytes, 1 code point) at target CHARACTER length 4:
+    //   "é"    -> 1 char  -> prepend 3 '→' -> "→→→é"  (a BYTE-length impl would prepend only 2 and
+    //                                                   differ, so a passing proof proves CHAR-length)
+    //   "ab"   -> 2 chars -> prepend 2 '→' -> "→→ab"
+    //   "wxyz" -> 4 chars -> prepend 0     -> "wxyz"  (L2 == 0 boundary: operand unchanged)
+    let layer = word_layer(&[("w1", "é"), ("w2", "ab"), ("w3", "wxyz")]);
+    let compiled = plan_bgp(&pad_word_query("→", 4)).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let mut got: Vec<String> = proved
+        .pad_result_objects()
+        .unwrap()
+        .iter()
+        .map(concat_string)
+        .collect();
+    got.sort();
+    let mut expected = vec![
+        "→→→é".to_string(),
+        "→→ab".to_string(),
+        "wxyz".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn pad_tampered_result_fails_verification() {
+    let layer = word_layer(&[("w1", "é"), ("w2", "ab")]);
+    let compiled = plan_bgp(&pad_word_query("→", 4)).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::Pad { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: b"xxxx".to_vec(),
+        };
+    } else {
+        panic!("expected a Pad proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn pad_input_longer_than_target_fails_closed() {
+    // "abcdef" has 6 chars; target 3 => L2 = 3 - 6 < 0 => reference utils:pad throws bad_pad_length.
+    // We FAIL CLOSED at prove time (never fabricate a truncation). >= 2 real rows.
+    let layer = word_layer(&[("w1", "abcdef"), ("w2", "ab")]);
+    let compiled = plan_bgp(&pad_word_query("0", 3)).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+// -------------------------------------------------------------------------------------------
+// WOQL `HashKey`/`hash` end-to-end faithfulness (per-row `idgen_hash` document-ID).
+// Expected ids are CROSS-VALIDATED against the reference `idgen_hash/3` (SWI) — see the proof
+// module's `expected_hashkey_objects` for the exact recipe.
+// -------------------------------------------------------------------------------------------
+
+/// Extract a revealed `CanonicalObject::Node` (a URI/id) as a String.
+fn node_string(object: &CanonicalObject) -> String {
+    match object {
+        CanonicalObject::Node(bytes) => String::from_utf8(bytes.clone()).unwrap(),
+        other => panic!("unexpected hashkey result object {other:?}"),
+    }
+}
+
+/// `t(?x, word, ?s) & hash(base, [?s], ?id)` — single authenticated arg.
+fn hashkey_word_query(base: &str) -> Query {
+    and_of(vec![
+        tv("x", "word", "s"),
+        Query::HashKey(HashKey {
+            base: DataValue::Data(XSDAnySimpleType::String(base.into())),
+            key_list: vec![DataValue::Variable("s".into())],
+            uri: NodeValue::Variable("id".into()),
+        }),
+    ])
+}
+
+/// `t(?x, name, ?a) & t(?x, greet, ?b) & hash(base, [?a, ?b], ?id)` — two authenticated args.
+fn hashkey_name_greet_query(base: &str) -> Query {
+    and_of(vec![
+        tv("x", "name", "a"),
+        tv("x", "greet", "b"),
+        Query::HashKey(HashKey {
+            base: DataValue::Data(XSDAnySimpleType::String(base.into())),
+            key_list: vec![
+                DataValue::Variable("a".into()),
+                DataValue::Variable("b".into()),
+            ],
+            uri: NodeValue::Variable("id".into()),
+        }),
+    ])
+}
+
+#[test]
+fn hashkey_proves_per_row_idgen_hash_matching_reference() {
+    // base "P/", single arg = the word (all-passthrough, so suffix == the word):
+    //   hello -> "P/" + sha256("hello");  world -> "P/" + sha256("world").
+    let layer = word_layer(&[("w1", "hello"), ("w2", "world")]);
+    let compiled = plan_bgp(&hashkey_word_query("P/")).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let mut got: Vec<String> = proved
+        .hashkey_result_objects()
+        .unwrap()
+        .iter()
+        .map(node_string)
+        .collect();
+    got.sort();
+    let mut expected = vec![
+        "P/2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".to_string(),
+        "P/486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn hashkey_proves_idgen_encoding_of_special_chars_matching_reference() {
+    // Two args exercise `encode_id_fragment`: '+' -> %2B, ' ' -> %20, 'é' -> %C3%A9 (per-UTF-8-byte,
+    // UPPERCASE hex), fragments joined by a literal '+'. Cross-validated against reference idgen_hash:
+    //   ["a+b","c d"] -> suffix "a%2Bb+c%20d" -> "Doc/2fa05155..."
+    //   ["café","x"]  -> suffix "caf%C3%A9+x" -> "Doc/2d3ff81b..."
+    let layer = concat_name_greet_layer(&[("n1", "a+b", "c d"), ("n2", "café", "x")]);
+    let compiled = plan_bgp(&hashkey_name_greet_query("Doc/")).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    proved
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+
+    let mut got: Vec<String> = proved
+        .hashkey_result_objects()
+        .unwrap()
+        .iter()
+        .map(node_string)
+        .collect();
+    got.sort();
+    let mut expected = vec![
+        "Doc/2fa05155d278d27d8be398a8828abf346db29fdd91780951fa72fd8ef2220dd2".to_string(),
+        "Doc/2d3ff81b3c1ce688026368c20da8dd7395fbc4035d74e0abe4b44effaac26f0c".to_string(),
+    ];
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn hashkey_tampered_result_fails_verification() {
+    let layer = word_layer(&[("w1", "hello"), ("w2", "world")]);
+    let compiled = plan_bgp(&hashkey_word_query("P/")).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    // Replace one DELIVERED id with a wrong node; the verifier RE-DERIVATION rejects the mismatch.
+    if let ProvedQueryStatement::HashKey { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Node(b"P/deadbeef".to_vec());
+    } else {
+        panic!("expected a HashKey proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn hashkey_tampered_operand_column_fails_verification() {
+    // Swapping the arg column's rows (with a rebuilt commitment) breaks its agreement with the
+    // root-authenticated child; verify rejects (the operand bytes are pinned to the trusted root).
+    let layer = word_layer(&[("w1", "hello"), ("w2", "world")]);
+    let compiled = plan_bgp(&hashkey_word_query("P/")).unwrap();
+    let si = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "s")
+        .unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_columns[si].swap(0, 1);
+    let domain = 1usize << tampered.result_log_domain;
+    tampered.result_commitments[si] =
+        commit_column(&pad(&tampered.result_columns[si], domain)).unwrap();
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
 }
