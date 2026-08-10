@@ -16,8 +16,8 @@ policy, not Store policy.
 | Repository | Checkpoint | State |
 | --- | --- | --- |
 | `modules/dory` | `2c571d4` | Caller-owned Arkworks/Blitzar G1 backend plus a profiled, canonical provider-neutral BN254 G2 boundary; proof bytes remain unchanged. |
-| `modules/terminusdb-store-paraplu` | `90ce857` | Store wire v20 authenticates immediate exact-integral `Collect`→`RangeMin`/`RangeMax`, preserving an original typed Store ID and emitting no row for empty input. |
-| `modules/terminusdb-rs` | `e910a34` | WOQL planning and verification cover strict forward immediate collected extrema with exact datatype, alias, and private-list guards. |
+| `modules/terminusdb-store-paraplu` | `62b233f` | Store wire v21 authenticates zero-/one-/two-node-key grouped extrema in canonical declared IRI tuple order. |
+| `modules/terminusdb-rs` | this checkpoint | WOQL planning and verification use the vector key contract and intentionally reject legacy arbitrary scalar group keys. |
 | `modules/terminusdb` | `98ec75e2` | Prolog emits `generated_decimal(CanonicalString)` for `TripleCount` and `Sum`; the Rust bridge recompiles descriptors before choosing U64/I64, while owned CPU/Blitzar prover selection remains application-controlled. |
 
 The canonical proof input is `woql2::Query`, not JSON-LD bytes. At the server
@@ -528,6 +528,19 @@ decoder round-trip passed for both extrema variants. The signed WOQL E2E passed 
 covering original Store-value resolution, empty no-row behavior, portable-envelope
 verification, and Min/Max plus predicate/query substitution rejection.
 
+Grouped `RangeMin`/`RangeMax` was modernized in Store wire version 21. The legacy plan
+accepted one arbitrary Store-ID key and sorted groups by numeric Store ID, which could
+diverge from leading SWI `bagof` term order and from declared key priority. The replacement
+accepts zero through two exact nonnullable node keys, resolves expanded IRI bytes through
+the root catalog, and shares the canonical tuple grouping used by grouped Sum/Length.
+Exact integral extrema are recomputed from the recursively authenticated child bag;
+strict comparison retains first-wins equality and the selected original Store ID. Global
+empty input emits no row. Legacy numeric, predicate, nullable, Boolean, and floating keys
+or values now reject intentionally. Store tests passed in 140.78s for two-key child-layer
+ordering/tamper and 35.39s for zero-key signed/empty behavior. WOQL planner tests passed
+4/4; the existing one-key min/max E2E passed in 247.98s, and the two-key visible declared
+tuple-order E2E passed in 235.68s with key-order and Min/Max substitution rejection.
+
 - [x] Exact non-ground dictionary absence, recursively composable.
 - [x] Full-row authenticated permutation, preserving multiplicity and tuple correlation.
 - [x] Bounded exact scalar ascending/descending `OrderBy` over a complete one-column recursively proved result, preserving duplicate multiplicity.
@@ -571,6 +584,9 @@ verification, and Min/Max plus predicate/query substitution rejection.
 - [x] Authenticate bounded Eq/Gt/Gte/Lt/Lte filters over the generated TripleCount
   decimal against exact integral decimal constants, including operand order and
   zero/maximum boundaries, without conflating generated scalars with Store IDs.
+- [x] Modernize immediate `GroupBy`→`RangeMin`/`RangeMax` to zero through two exact node
+  keys, canonical declared expanded-IRI tuple order, exact integral values, global empty
+  no-row behavior, and original Store-ID extrema; reject legacy arbitrary scalar keys.
 - [x] Authenticate immediate one-node-key `GroupBy`→`Sum` for UInt8/UInt16/UInt32/UInt64,
   preserving duplicate multiplicity, canonical SWI-compatible node group order, checked
   no-wrap arithmetic, and generated-decimal result typing without exposing the list.

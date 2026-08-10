@@ -964,6 +964,37 @@ fn grouped_score_extrema(kind: RangeOp) -> Query {
     })
 }
 
+fn two_key_grouped_score_extrema(max: bool) -> Query {
+    let child = and_of(vec![
+        Query::Link(Link {
+            subject: NodeValue::Variable("owner".into()),
+            predicate: NodeValue::Node(iri("link")),
+            object: NodeValue::Variable("category".into()),
+            graph: GraphType::Instance,
+        }),
+        tv("category", "score", "score"),
+        gte(dvar("score"), duint(0)),
+    ]);
+    let group = Query::GroupBy(GroupBy {
+        template: Value::Variable("score".into()),
+        group_by: vec!["category".into(), "owner".into()],
+        grouped_value: Value::Variable("scores".into()),
+        query: Box::new(child),
+    });
+    let extrema = if max {
+        Query::RangeMax(RangeMax {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("extremum".into()),
+        })
+    } else {
+        Query::RangeMin(RangeMin {
+            list: DataValue::Variable("scores".into()),
+            result: DataValue::Variable("extremum".into()),
+        })
+    };
+    and_of(vec![group, extrema])
+}
+
 fn grouped_u32_sum_query() -> Query {
     let child = and_of(vec![
         tv_pred_var("category", "predicate", "score"),
@@ -2176,8 +2207,7 @@ fn resolved_group_extrema(
     rows
 }
 
-#[test]
-fn grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() {
+fn assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() {
     let layer = build_grouped_score_layer();
     let mut min_envelope = None;
     for (kind, expected) in [
@@ -2251,6 +2281,93 @@ fn grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() {
         layer.state.commitment_root,
     )
     .is_err());
+}
+
+#[test]
+fn grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() {
+    std::thread::Builder::new()
+        .name("woql-group-extrema-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_two_key_grouped_extrema_preserves_visible_declared_tuple_order() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder.add_value_triple(ValueTriple::new_node(
+        &iri("z"), &iri("link"), &iri("a"),
+    )).unwrap();
+    for score in [10u32, 30] {
+        builder.add_value_triple(ValueTriple::new_value(
+            &iri("a"), &iri("score"), u32::make_entry(&score),
+        )).unwrap();
+    }
+    let base = builder.commit().unwrap();
+    let builder = base.open_write().unwrap();
+    builder.add_value_triple(ValueTriple::new_node(
+        &iri("a"), &iri("link"), &iri("z"),
+    )).unwrap();
+    for score in [5u32, 20] {
+        builder.add_value_triple(ValueTriple::new_value(
+            &iri("z"), &iri("score"), u32::make_entry(&score),
+        )).unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&two_key_grouped_score_extrema(false)).unwrap();
+    assert_eq!(compiled.relation.schema, ["category", "owner", "extremum"]);
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved.verify_and_resolve_values(
+        &compiled, &layer, layer.state.commitment_root,
+    ).unwrap();
+    let node = |column: usize, row: usize| match &values[column][row] {
+        CanonicalResultValue::Object(CanonicalObject::Node(bytes)) =>
+            String::from_utf8(bytes.clone()).unwrap(),
+        other => panic!("unexpected grouped-extrema key {other:?}"),
+    };
+    let score = |row: usize| match &values[2][row] {
+        CanonicalResultValue::Object(CanonicalObject::Value {
+            datatype: CanonicalDatatype::UInt32,
+            lexical,
+        }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+        other => panic!("unexpected grouped-extrema value {other:?}"),
+    };
+    assert_eq!(proved.result_len, 2);
+    assert_eq!(
+        vec![(node(0, 0), node(1, 0), score(0)), (node(0, 1), node(1, 1), score(1))],
+        vec![(iri("a"), iri("z"), 10), (iri("z"), iri("a"), 5)],
+    );
+    let envelope = proved.encode_envelope(
+        &compiled, &layer, layer.state.commitment_root,
+    ).unwrap();
+    decode_and_verify_envelope(
+        &envelope, &compiled, &layer, layer.state.commitment_root,
+    ).unwrap();
+
+    let max = plan_bgp(&two_key_grouped_score_extrema(true)).unwrap();
+    assert!(decode_and_verify_envelope(
+        &envelope, &max, &layer, layer.state.commitment_root,
+    ).is_err());
+    let mut reordered = compiled.clone();
+    let CompiledRelationStatement::GroupExtrema { key_columns, .. } =
+        &mut reordered.relation.statement else { unreachable!() };
+    key_columns.swap(0, 1);
+    assert!(decode_and_verify_envelope(
+        &envelope, &reordered, &layer, layer.state.commitment_root,
+    ).is_err());
+}
+
+#[test]
+fn two_key_grouped_extrema_preserves_visible_declared_tuple_order() {
+    std::thread::Builder::new()
+        .name("woql-two-key-group-extrema-proof".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(assert_two_key_grouped_extrema_preserves_visible_declared_tuple_order)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -2379,17 +2496,18 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
 }
 
 #[test]
-fn link_form_absent_from_prolog_json_rejects_before_proving() {
+fn link_form_compiles_at_woql2_ast_level() {
+    // `Link` is now implemented in the canonical woql2 proof AST (a typed-triple
+    // BGP with an explicit node-kind object filter). The leading TerminusDB JSON
+    // parser not yet exposing the `Link` variant is a separate node-integration
+    // concern, not an AST-compiler rejection.
     let query = Query::Link(Link {
         subject: terminusdb_woql2::value::NodeValue::Variable("x".into()),
         predicate: terminusdb_woql2::value::NodeValue::Node(iri("p")),
         object: terminusdb_woql2::value::NodeValue::Variable("y".into()),
         graph: GraphType::Instance,
     });
-    assert!(matches!(
-        plan_bgp(&query),
-        Err(BgpPlanError::UnsupportedConstruct { construct: "Link" })
-    ));
+    assert!(plan_bgp(&query).is_ok());
 }
 
 #[test]

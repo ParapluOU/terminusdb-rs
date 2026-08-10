@@ -217,6 +217,34 @@ mod tests {
     }
 
     #[test]
+    fn immediate_group_by_extrema_preserve_zero_and_two_declared_keys() {
+        for keys in [Vec::new(), vec!["right".into(), "left".into()]] {
+            let query = Query::And(And {
+                and: vec![
+                    Query::GroupBy(GroupBy {
+                        template: WoqlValue::Variable("score".into()),
+                        group_by: keys.clone(),
+                        grouped_value: WoqlValue::Variable("scores".into()),
+                        query: Box::new(Query::True(True {})),
+                    }),
+                    Query::RangeMin(RangeMin {
+                        list: DataValue::Variable("scores".into()),
+                        result: DataValue::Variable("extremum".into()),
+                    }),
+                ],
+            });
+            let json = query.to_woql_json();
+            assert_eq!(json["and"][0]["group_by"], serde_json::json!(keys));
+            assert_eq!(json["and"][1]["@type"], "RangeMin");
+            assert_eq!(
+                Query::from_json(json)
+                    .expect("domain decoder accepts bounded immediate grouped extrema"),
+                query,
+            );
+        }
+    }
+
+    #[test]
     fn immediate_group_by_length_uses_canonical_domain_decoder_shapes() {
         let query = Query::And(And {
             and: vec![
