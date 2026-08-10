@@ -3964,6 +3964,22 @@ pub enum BgpPlanError {
 
     #[error("nested Distinct wrappers are unsupported")]
     NestedDistinctUnsupported,
+
+    /// A full-schema `Distinct` whose child can carry duplicate full rows (an
+    /// `Or`/`BagUnion`, a `Not`/`LeftAnti`, an `Optional`/`LeftOuter`, a projection, a
+    /// `When`, ...). The transparent full-row path is only a sound no-op over a relation
+    /// whose rows are already set-valued and unique (a pure natural-join relation); over a
+    /// bag it would silently pass a NON-deduplicated result off as `Distinct`. Full-schema
+    /// dedup over a bag is deferred to a future real-dedup gadget and rejected closed.
+    #[error("full-schema Distinct over a duplicate-producing child requires a real dedup gadget; only Distinct over a pure natural-join relation is currently a sound no-op")]
+    DistinctOverDuplicateProducingChild,
+
+    /// A composite (two-key) correlated join whose packed key columns are not both Store-ID
+    /// (node/value or predicate) namespaces. The two keys are packed as `col0 + 2^64·col1`,
+    /// injective only when both keys are Store dictionary IDs (`< 2^64`); a generated-decimal
+    /// namespace can reach ~2^254 and collide, so it is rejected closed.
+    #[error("composite join key `?{var}` must be a Store-ID (node/value or predicate) namespace; packed two-key joins are injective only for keys below 2^64")]
+    CompositeJoinKeyNotStoreId { var: String },
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -6551,6 +6567,16 @@ fn when_key_pairs(
     Ok(pairs)
 }
 
+/// A Store dictionary ID namespace whose field values are guaranteed `< 2^64`. Composite
+/// two-key joins pack the two keys as `col0 + 2^64·col1`, which is injective only for such
+/// bounded keys; a generated-decimal namespace can reach ~2^254 and must never be packed.
+fn is_store_id_namespace(namespace: ResultIdNamespace) -> bool {
+    matches!(
+        namespace,
+        ResultIdNamespace::NodeValue | ResultIdNamespace::Predicate
+    )
+}
+
 fn shared_key_pairs(
     left: &CompiledRelation,
     right: &CompiledRelation,
@@ -6610,6 +6636,21 @@ fn shared_key_pairs(
             });
         }
     }
+    // A composite (two-key) correlation packs the two keys as `col0 + 2^64·col1`, injective
+    // only when both keys are Store dictionary IDs (`< 2^64`). Namespace equality alone does
+    // not bound the field width, so require every packed key to be a Store-ID namespace;
+    // scalar (one-key) joins use injective equality and are deliberately left unrestricted.
+    if shared.len() == 2 {
+        for (name, left_index, right_index) in &shared {
+            if !is_store_id_namespace(left_descriptors[*left_index].namespace)
+                || !is_store_id_namespace(right_descriptors[*right_index].namespace)
+            {
+                return Err(BgpPlanError::CompositeJoinKeyNotStoreId {
+                    var: (*name).clone(),
+                });
+            }
+        }
+    }
     Ok(shared
         .into_iter()
         .map(|(_, left, right)| (left, right))
@@ -6641,6 +6682,52 @@ fn merge_collection(
     }
 }
 
+/// Whether a compiled relation's rows are provably free of duplicate full rows by
+/// construction, so a full-schema `Distinct` over it is a sound transparent no-op. Only
+/// pure natural-join relations qualify: a leaf `Bgp` assigns set-valued (unique) triples,
+/// and the natural join of two duplicate-free relations stays unique because a repeated
+/// joined row would require a repeated row in one side. Row-eliminating filters, orders and
+/// slices preserve that uniqueness, and `Distinct`/aggregation statements themselves emit at
+/// most one row per key/group. Every bag-valued composition (`Or`/`BagUnion`, `Not`/
+/// `LeftAnti`, `Optional`/`LeftOuter`, `BagProjection`, `When`) can carry duplicate full
+/// rows and is rejected closed. The match is exhaustive on purpose: a new statement variant
+/// must consciously classify itself here rather than defaulting to a silent no-op.
+fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
+    match &relation.statement {
+        // Set-valued triple assignments are unique.
+        CompiledRelationStatement::Bgp(_) => true,
+        // A single generated count row is trivially unique.
+        CompiledRelationStatement::LayerTripleCount => true,
+        // Natural join of two duplicate-free relations is duplicate-free.
+        CompiledRelationStatement::InnerJoin { left, right, .. } => {
+            is_provably_duplicate_free(left) && is_provably_duplicate_free(right)
+        }
+        // Row-eliminating filters/orders/slices never introduce duplicates.
+        CompiledRelationStatement::GeneratedU64Filter { input, .. }
+        | CompiledRelationStatement::GeneratedI64Filter { input, .. }
+        | CompiledRelationStatement::Equality { input, .. }
+        | CompiledRelationStatement::ExactScalarOrder { input, .. }
+        | CompiledRelationStatement::ExactMultiOrder { input, .. }
+        | CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
+            is_provably_duplicate_free(input)
+        }
+        // Distinct and the aggregations emit at most one row per key/group, hence unique.
+        CompiledRelationStatement::Distinct { .. }
+        | CompiledRelationStatement::GroupExtrema { .. }
+        | CompiledRelationStatement::GroupSum { .. }
+        | CompiledRelationStatement::GroupCount { .. }
+        | CompiledRelationStatement::CollectionCount { .. }
+        | CompiledRelationStatement::CollectionSum { .. }
+        | CompiledRelationStatement::CollectionExtrema { .. } => true,
+        // Bag-valued compositions can carry duplicate full rows.
+        CompiledRelationStatement::BagUnion { .. }
+        | CompiledRelationStatement::BagProjection { .. }
+        | CompiledRelationStatement::When { .. }
+        | CompiledRelationStatement::LeftAnti { .. }
+        | CompiledRelationStatement::LeftOuter { .. } => false,
+    }
+}
+
 fn compile_distinct_relation(
     relation: CompiledRelation,
     distincts: &[&[String]],
@@ -6668,6 +6755,13 @@ fn compile_distinct_relation(
             });
         if !covers_schema {
             return Err(BgpPlanError::DistinctNotFullSchema);
+        }
+        // The transparent full-row no-op relies on the child's rows already being unique.
+        // Over a duplicate-producing child (Or/Not/Optional/projection/When) it would
+        // silently return a NON-deduplicated result marked as `Distinct`, so reject closed
+        // and defer real bag dedup to a future gadget.
+        if !is_provably_duplicate_free(&relation) {
+            return Err(BgpPlanError::DistinctOverDuplicateProducingChild);
         }
         return Ok((relation, true));
     }
@@ -7667,6 +7761,58 @@ mod collection_extrema_planner_tests {
             plan_bgp(&query),
             Err(BgpPlanError::CollectionExtremaUnsupportedValue)
         ));
+    }
+}
+
+#[cfg(test)]
+mod composite_join_key_namespace_tests {
+    use super::*;
+
+    /// One `LayerTripleCount` leaf: a single `GeneratedDecimalU64` column (not a Store ID).
+    fn generated_u64_leaf() -> CompiledRelation {
+        CompiledRelation {
+            schema: vec!["_".into()],
+            domains: vec![None],
+            statement: CompiledRelationStatement::LayerTripleCount,
+        }
+    }
+
+    /// A two-column relation whose columns `a`/`b` are both `GeneratedDecimalU64` — i.e. NOT
+    /// bounded Store dictionary IDs, so they must never reach the composite key packing.
+    fn two_generated_columns(a: &str, b: &str) -> CompiledRelation {
+        CompiledRelation {
+            schema: vec![a.into(), b.into()],
+            domains: vec![None, None],
+            statement: CompiledRelationStatement::InnerJoin {
+                left: Box::new(generated_u64_leaf()),
+                right: Box::new(generated_u64_leaf()),
+                key_pairs: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn composite_join_rejects_non_store_id_key_namespace() {
+        let left = two_generated_columns("a", "b");
+        let right = two_generated_columns("a", "b");
+        // Both a Not (LeftAnti) and an Optional (LeftOuter) route composite keys here.
+        for optional in [false, true] {
+            let err = shared_key_pairs(&left, &right, optional).unwrap_err();
+            assert!(
+                matches!(err, BgpPlanError::CompositeJoinKeyNotStoreId { .. }),
+                "expected CompositeJoinKeyNotStoreId, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_join_over_generated_key_stays_unrestricted() {
+        // A single shared key uses injective equality, never the 2^64 packing, so a
+        // generated-decimal scalar key must NOT be rejected by the composite guard.
+        let left = generated_u64_leaf();
+        let right = generated_u64_leaf();
+        let pairs = shared_key_pairs(&left, &right, false).unwrap();
+        assert_eq!(pairs, [(0, 0)]);
     }
 }
 

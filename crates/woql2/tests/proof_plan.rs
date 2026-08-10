@@ -1942,6 +1942,43 @@ fn accepts_distinct_on_the_complete_bgp_schema() {
 }
 
 #[test]
+fn rejects_full_schema_distinct_over_duplicate_producing_children() {
+    // Or/BagUnion: the honest-pipeline break `Distinct(["x","y"], Or(T, T))` must no longer
+    // be a silent no-op returning a NON-deduplicated bag marked as Distinct.
+    let over_or = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(Query::Or(Or {
+            or: vec![tv("x", "p", "y"), tv("x", "p", "y")],
+        })),
+    });
+    reject(over_or, BgpPlanError::DistinctOverDuplicateProducingChild);
+
+    // Not/LeftAnti under a full-schema Distinct is likewise a duplicate-producing child.
+    let over_not = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(and_of(vec![
+            tv("x", "p", "y"),
+            Query::Not(Not {
+                query: Box::new(tv("y", "q", "z")),
+            }),
+        ])),
+    });
+    reject(over_not, BgpPlanError::DistinctOverDuplicateProducingChild);
+
+    // Optional/LeftOuter under a full-schema Distinct is duplicate-producing as well.
+    let over_optional = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into(), "z".into()],
+        query: Box::new(and_of(vec![
+            tv("x", "p", "y"),
+            Query::WoqlOptional(WoqlOptional {
+                query: Box::new(tv("y", "q", "z")),
+            }),
+        ])),
+    });
+    reject(over_optional, BgpPlanError::DistinctOverDuplicateProducingChild);
+}
+
+#[test]
 fn rejects_distinct_combined_with_projection_until_dedup_is_proven() {
     let q = Query::Distinct(Distinct {
         variables: vec!["x".into(), "y".into(), "z".into()],
