@@ -1,5 +1,6 @@
 //! Collaboration operations (fetch, push, pull, clone)
 
+use super::auth::AuthApply;
 use {
     crate::debug::{OperationEntry, OperationType},
     ::tracing::{debug, error, instrument},
@@ -97,7 +98,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json");
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
@@ -215,7 +216,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json");
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
@@ -338,7 +339,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json");
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided
@@ -462,7 +463,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json");
 
         // Add AUTHORIZATION_REMOTE header if credentials are provided

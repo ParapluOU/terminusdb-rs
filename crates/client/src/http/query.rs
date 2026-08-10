@@ -1,5 +1,6 @@
 //! Query execution and WOQL operations
 
+use super::auth::AuthApply;
 use {
     crate::{
         debug::{OperationEntry, OperationType, QueryLogEntry},
@@ -357,7 +358,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri.clone())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(json_string);
 
@@ -408,7 +409,7 @@ impl super::client::TerminusDBHttpClient {
         let res = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -494,7 +495,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri.clone())
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(json_string);
 
@@ -690,7 +691,7 @@ impl super::client::TerminusDBHttpClient {
         let mut request = self
             .http
             .post(uri)
-            .basic_auth(&self.user, Some(&self.pass))
+            .apply_auth(self)
             .header("Content-Type", "application/json")
             .body(json);
 
