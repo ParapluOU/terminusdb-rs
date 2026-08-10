@@ -52,12 +52,6 @@ async fn server() -> anyhow::Result<terminusdb_bin::TerminusDBServer> {
 
 #[tokio::test]
 async fn clone_push_pull_converges_between_two_servers() -> anyhow::Result<()> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "terminusdb_client=info".into()),
-        )
-        .try_init();
     let a = server().await?;
     let b = server().await?;
     let ca = a.client().await?;
