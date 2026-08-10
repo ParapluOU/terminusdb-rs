@@ -17,7 +17,8 @@ configuration.
   > toolchain — e.g. mise exports `RUSTUP_TOOLCHAIN=1.97.1` (stable), which
   > silently beats `rust-toolchain.toml`. Run builds with
   > `RUSTUP_TOOLCHAIN=nightly cargo ...` (the benchmark script does this
-  > automatically).
+  > automatically). Note: cargo refuses to set `RUSTUP_TOOLCHAIN` from
+  > `.cargo/config.toml`'s `[env]` — it must be an environment variable.
 - **System dependencies** (for the embedded server used by integration tests):
 
   | OS | Packages |
