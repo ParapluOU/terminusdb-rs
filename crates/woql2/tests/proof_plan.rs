@@ -11,7 +11,10 @@ use terminusdb_woql2::control::{
 use terminusdb_woql2::collection::{Length, Sum};
 use terminusdb_woql2::misc::{Collect, Comment, Count, InRange, Limit, Size, Start, TripleCount};
 use terminusdb_woql2::order::{GroupBy, Order, OrderBy, OrderTemplate};
-use terminusdb_woql2::path::{PathPattern, PathPredicate, PathStar};
+use terminusdb_woql2::path::{
+    InversePathPredicate, PathOr, PathPattern, PathPlus, PathPredicate, PathSequence, PathStar,
+    PathTimes,
+};
 use terminusdb_woql2::query::{Not, Or, Path, Query, True};
 use terminusdb_woql2::triple::{
     Data, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev,
@@ -1908,6 +1911,7 @@ fn bounded_when_composes_in_or_optional_not_and_preserves_fail_closed_nullable_s
 
 #[test]
 fn rejects_path_star() {
+    // `Star` needs transitive closure — out of scope for the fixed-length lowering.
     let q = Query::Path(Path {
         subject: Value::Variable("x".into()),
         pattern: PathPattern::Star(PathStar {
@@ -1918,7 +1922,226 @@ fn rejects_path_star() {
         object: Value::Variable("y".into()),
         path: None,
     });
-    reject(q, BgpPlanError::UnsupportedConstruct { construct: "Path" });
+    reject(q, BgpPlanError::UnboundedPathUnsupported);
+}
+
+// ---------------------------------------------------------------------------
+// Fixed-length property-path lowering: `Query::Path` -> BGP / bag-union / projection.
+// ---------------------------------------------------------------------------
+
+fn path_pred(predicate: &str) -> PathPattern {
+    PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+fn path_inverse(predicate: &str) -> PathPattern {
+    PathPattern::InversePredicate(InversePathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+fn path_var_query(subject: &str, pattern: PathPattern, object: &str) -> Query {
+    Query::Path(Path {
+        subject: Value::Variable(subject.into()),
+        pattern,
+        object: Value::Variable(object.into()),
+        path: None,
+    })
+}
+
+/// The output-schema variable names after applying the compiled projection.
+fn projected_schema(compiled: &CompiledBgp) -> Vec<String> {
+    match &compiled.projection {
+        Some(indices) => indices
+            .iter()
+            .map(|i| compiled.relation.schema[*i].clone())
+            .collect(),
+        None => compiled.relation.schema.clone(),
+    }
+}
+
+#[test]
+fn path_predicate_lowers_to_single_atom_bgp() {
+    let compiled = plan_bgp(&path_var_query("s", path_pred("knows"), "o")).unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "o"]);
+    assert!(compiled.projection.is_none());
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Bgp(_)
+    ));
+}
+
+#[test]
+fn path_inverse_predicate_swaps_endpoints() {
+    // InversePredicate(p) from ?s to ?o lowers to Triple(?o, p, ?s): a single atom whose
+    // subject is ?o and object is ?s.
+    let compiled = plan_bgp(&path_var_query("s", path_inverse("knows"), "o")).unwrap();
+    assert_eq!(compiled.relation.schema, ["o", "s"]);
+    assert!(compiled.projection.is_none());
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Bgp(_)
+    ));
+}
+
+#[test]
+fn path_two_hop_sequence_projects_out_intermediate() {
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_pred("knows"), path_pred("likes")],
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    // Three variables (s, fresh intermediate, o); projection drops the intermediate and
+    // yields exactly the declared endpoints in [subject, object] order.
+    assert_eq!(compiled.relation.schema.len(), 3);
+    assert!(compiled.projection.is_some());
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Bgp(_)
+    ));
+}
+
+#[test]
+fn path_or_of_two_predicates_is_bag_union() {
+    let pattern = PathPattern::Or(PathOr {
+        or: vec![path_pred("knows"), path_pred("likes")],
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::BagUnion { .. }
+    ));
+}
+
+#[test]
+fn path_exact_times_one_is_a_single_hop() {
+    let pattern = PathPattern::Times(PathTimes {
+        times: Box::new(path_pred("knows")),
+        from: 1,
+        to: 1,
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "o"]);
+    assert!(compiled.projection.is_none());
+}
+
+#[test]
+fn rejects_path_plus() {
+    let q = path_var_query(
+        "s",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(path_pred("knows")),
+        }),
+        "o",
+    );
+    reject(q, BgpPlanError::UnboundedPathUnsupported);
+}
+
+#[test]
+fn rejects_path_times_two_two_repeated_predicate() {
+    // Times{2,2} unrolls to `knows,knows` — a repeated predicate. Edge-simple Prolog path
+    // semantics (no re-traversed edge) are NOT captured by a bag-join, which would over-count
+    // on a self-loop, so this rejects closed.
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(path_pred("knows")),
+            from: 2,
+            to: 2,
+        }),
+        "o",
+    );
+    reject(
+        q,
+        BgpPlanError::PathRepeatedPredicateUnsupported {
+            predicate: iri("knows"),
+        },
+    );
+}
+
+#[test]
+fn rejects_path_sequence_repeated_predicate() {
+    let q = path_var_query(
+        "s",
+        PathPattern::Sequence(PathSequence {
+            sequence: vec![path_pred("knows"), path_pred("knows")],
+        }),
+        "o",
+    );
+    reject(
+        q,
+        BgpPlanError::PathRepeatedPredicateUnsupported {
+            predicate: iri("knows"),
+        },
+    );
+}
+
+#[test]
+fn rejects_path_times_zero_identity() {
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(path_pred("knows")),
+            from: 0,
+            to: 2,
+        }),
+        "o",
+    );
+    reject(q, BgpPlanError::PathIdentityUnsupported);
+}
+
+#[test]
+fn rejects_path_times_range_too_large() {
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(path_pred("knows")),
+            from: 1,
+            to: u64::MAX,
+        }),
+        "o",
+    );
+    reject(q, BgpPlanError::UnboundedPathUnsupported);
+}
+
+#[test]
+fn rejects_path_wildcard_predicate() {
+    let q = path_var_query(
+        "s",
+        PathPattern::Predicate(PathPredicate { predicate: None }),
+        "o",
+    );
+    reject(q, BgpPlanError::PathWildcardUnsupported);
+}
+
+#[test]
+fn rejects_path_edge_list_capture() {
+    let q = Query::Path(Path {
+        subject: Value::Variable("s".into()),
+        pattern: path_pred("knows"),
+        object: Value::Variable("o".into()),
+        path: Some(Value::Variable("edges".into())),
+    });
+    reject(q, BgpPlanError::PathWitnessCaptureUnsupported);
+}
+
+#[test]
+fn rejects_path_or_with_multi_hop_branch() {
+    // One alternative is a two-hop chain (introduces an intermediate) — unsupported in a union.
+    let pattern = PathPattern::Or(PathOr {
+        or: vec![
+            path_pred("knows"),
+            PathPattern::Sequence(PathSequence {
+                sequence: vec![path_pred("likes"), path_pred("owns")],
+            }),
+        ],
+    });
+    reject(
+        path_var_query("s", pattern, "o"),
+        BgpPlanError::PathUnionBranchMultiHop,
+    );
 }
 
 #[test]

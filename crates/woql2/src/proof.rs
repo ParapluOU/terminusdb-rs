@@ -3980,6 +3980,61 @@ pub enum BgpPlanError {
     /// namespace can reach ~2^254 and collide, so it is rejected closed.
     #[error("composite join key `?{var}` must be a Store-ID (node/value or predicate) namespace; packed two-key joins are injective only for keys below 2^64")]
     CompositeJoinKeyNotStoreId { var: String },
+
+    // ---- Fixed-length property-path lowering (`Query::Path`) ----
+    /// A `Path` whose `Star`, `Plus`, or unbounded `Times` pattern requires authenticated
+    /// transitive closure / regular-path evaluation, which the fixed-length lowering does
+    /// not model. These need a future bounded-iteration/closure layer and reject closed.
+    #[error("unbounded property path (`Star`/`Plus`/open `Times`) requires transitive closure, which is out of scope for the fixed-length path lowering")]
+    UnboundedPathUnsupported,
+
+    /// A `Path` that captures the traversed edge list into its `path` field. The lowering
+    /// produces only the endpoint relation and cannot authenticate the edge-list witness.
+    #[error("Path edge-list capture (`path` field) is unsupported: the lowering proves only the endpoint relation")]
+    PathWitnessCaptureUnsupported,
+
+    /// A `Path` endpoint (`subject`/`object`) is neither a node IRI nor a variable.
+    #[error("Path endpoint must be a node IRI or a variable")]
+    PathEndpointUnsupported,
+
+    /// A `PathPredicate`/`InversePathPredicate` with no predicate (the `.` any-predicate
+    /// wildcard). The proof authenticates a concrete predicate IRI; a wildcard is rejected.
+    #[error("wildcard path predicate (`.`) is unsupported: a concrete predicate IRI is required")]
+    PathWildcardUnsupported,
+
+    /// A multi-hop path reuses a predicate across two hops. Leading-Prolog path evaluation
+    /// is edge-SIMPLE (`Open_Set` forbids re-traversing an identical edge within one path),
+    /// which plain conjunctive bag-join does NOT model: on self-loop/edge-reuse data the
+    /// join over-counts. Only paths whose hop predicates are pairwise distinct — where no
+    /// edge can repeat — are provably exact, so a repeated predicate rejects closed.
+    #[error("multi-hop path reuses predicate `{predicate}`; edge-simple path semantics are not captured by conjunctive bag-join, so repeated-predicate paths reject closed")]
+    PathRepeatedPredicateUnsupported { predicate: String },
+
+    /// A conjunctive-chain hop is itself a union/range that cannot be a pure triple chain
+    /// (an `Or`, or a bounded-range `Times`), so the enclosing `Sequence`/`Times` cannot be
+    /// expressed as a left-deep triple chain.
+    #[error("non-elementary path hop (`Or`/bounded-range `Times`) inside a sequence is unsupported")]
+    PathNonElementaryHopUnsupported,
+
+    /// A union alternative (a top-level `Or` branch or a bounded-range `Times` length) is a
+    /// multi-hop chain. Multi-hop union branches introduce per-branch intermediate variables
+    /// that would leak into (or make incompatible) the union schema, so they reject closed.
+    #[error("multi-hop path alternative in a union (`Or`/range `Times`) is unsupported: union branches must be single hops")]
+    PathUnionBranchMultiHop,
+
+    /// A `Times` whose range includes length 0 (the zero-length identity `S == T`). The
+    /// identity relation is not a triple pattern; per the leading-Prolog identity semantics
+    /// this rejects closed.
+    #[error("zero-length path (identity, `Times` from 0) is unsupported")]
+    PathIdentityUnsupported,
+
+    /// An empty path pattern (an empty `Sequence` or empty `Or`).
+    #[error("empty path pattern")]
+    PathEmptyPattern,
+
+    /// A `Times` with `from > to` (an empty repetition range).
+    #[error("Path `Times` range is empty (from > to)")]
+    PathTimesInvalidRange,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -5487,6 +5542,523 @@ fn plan_triple_count_comparison_body(
     Ok(Some(compiled))
 }
 
+// ============================================================================
+// Fixed-length property-path lowering: `Query::Path` -> BGP (`Triple`/`And`) +
+// bag union (`Or`) + endpoint projection (`Select`).
+//
+// The lowering reuses the audited BGP/join/union/projection machinery below; it
+// adds no cryptography. It is faithful to the leading-Prolog path evaluator
+// (`src/core/query/path.pl`), which:
+//   * binds the endpoint pair `(subject, object)` (the traversed edge list is
+//     bound only when the `path` field is present — we reject that case),
+//   * returns BAG multiplicity over endpoint pairs — one solution per distinct
+//     path — with NO deduplication (see the `path.pl` `test(p)` oracle), and
+//   * is edge-SIMPLE: `Open_Set`/`in_open_set` forbids re-traversing an identical
+//     `(source,predicate,target)` edge within a single path.
+//
+// A conjunctive bag-join over triples reproduces exactly one row per distinct
+// intermediate assignment — i.e. one per distinct path — so plain (non-distinct)
+// endpoint projection matches Prolog's bag multiplicity EXACTLY *provided no edge
+// can repeat*. Edge repetition needs two hops with the SAME predicate (edges with
+// different predicates are always distinct). We therefore accept a multi-hop chain
+// only when its hop predicates are pairwise distinct (edge-reuse impossible ->
+// join == Prolog on all data, including self-loops) and reject repeated-predicate
+// chains closed (`PathRepeatedPredicateUnsupported`) — this also excludes every
+// `Times{n>=2}`, whose n-fold expansion necessarily repeats a predicate.
+//
+// Supported (proven exact, data-independently):
+//   * `Predicate(p)`            -> `Triple(S, p, T)`
+//   * `InversePredicate(p)`     -> `Triple(T, p, S)`
+//   * `Sequence([..])`          -> left-deep `And` chain through fresh intermediates,
+//                                  projected to the endpoint variables, when hop
+//                                  predicates are pairwise distinct
+//   * `Or([..])`                -> bag-union `Or` of the (single-hop) alternatives
+//   * `Times(pat, n, n)`        -> the n-fold sequence (only n==1 survives the
+//                                  distinct-predicate guard)
+//   * `Times(pat, a, b)`        -> bag union over exact lengths a..=b (only single-hop
+//                                  lengths survive)
+// Rejected closed: `Star`/`Plus`/open `Times` (closure), wildcard `.` predicates,
+// repeated-predicate / multi-hop union alternatives, zero-length identity, and
+// edge-list capture.
+// ============================================================================
+
+/// The maximum `Times` repetition count / range width the lowering will expand,
+/// guarding against pathological (e.g. `u64::MAX`) bounds before any allocation.
+const PATH_TIMES_MAX_BOUND: u64 = 64;
+
+/// A resolved path endpoint or fresh intermediate: a bound node IRI or a variable.
+#[derive(Clone)]
+enum PathTerm {
+    Variable(String),
+    Node(String),
+}
+
+impl PathTerm {
+    /// This term in a `NodeValue` (subject / predicate-less) position.
+    fn as_subject(&self) -> NodeValue {
+        match self {
+            PathTerm::Variable(name) => NodeValue::Variable(name.clone()),
+            PathTerm::Node(iri) => NodeValue::Node(iri.clone()),
+        }
+    }
+    /// This term in a `Value` (object) position.
+    fn as_object(&self) -> Value {
+        match self {
+            PathTerm::Variable(name) => Value::Variable(name.clone()),
+            PathTerm::Node(iri) => Value::Node(iri.clone()),
+        }
+    }
+    fn variable_name(&self) -> Option<&str> {
+        match self {
+            PathTerm::Variable(name) => Some(name.as_str()),
+            PathTerm::Node(_) => None,
+        }
+    }
+}
+
+fn path_endpoint_term(value: &Value) -> Result<PathTerm, BgpPlanError> {
+    match value {
+        Value::Variable(name) => Ok(PathTerm::Variable(name.clone())),
+        Value::Node(iri) => Ok(PathTerm::Node(iri.clone())),
+        _ => Err(BgpPlanError::PathEndpointUnsupported),
+    }
+}
+
+/// Allocates fresh intermediate variable names that never collide with a query
+/// variable (nor with each other), so a lowered sequence's hidden waypoints can
+/// never alias a real binding.
+struct FreshPathVars {
+    reserved: std::collections::BTreeSet<String>,
+    counter: usize,
+}
+
+impl FreshPathVars {
+    fn new(reserved: std::collections::BTreeSet<String>) -> Self {
+        Self {
+            reserved,
+            counter: 0,
+        }
+    }
+    fn next(&mut self) -> String {
+        loop {
+            let candidate = format!("__path_hop_{}", self.counter);
+            self.counter += 1;
+            if self.reserved.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+    }
+}
+
+/// True iff a `Query::Path` occurs anywhere in the read-composition fragment the
+/// lowering rewrites through. (Paths buried in constructs outside this fragment are
+/// reached — and lowered — by `plan_bgp`'s own recursion, or rejected closed there.)
+fn query_contains_path(query: &Query) -> bool {
+    match query {
+        Query::Path(_) => true,
+        Query::And(and) => and.and.iter().any(query_contains_path),
+        Query::Or(or) => or.or.iter().any(query_contains_path),
+        Query::Not(not) => query_contains_path(&not.query),
+        Query::Select(select) => query_contains_path(&select.query),
+        Query::Distinct(distinct) => query_contains_path(&distinct.query),
+        Query::Count(count) => query_contains_path(&count.query),
+        Query::Using(using) => query_contains_path(&using.query),
+        Query::From(from) => query_contains_path(&from.query),
+        Query::Pin(pin) => query_contains_path(&pin.query),
+        Query::Immediately(immediately) => query_contains_path(&immediately.query),
+        _ => false,
+    }
+}
+
+/// Collect every variable name used in the fragment we lower through, so fresh path
+/// intermediates avoid them. Constructs outside this fragment reject closed and never
+/// share a join namespace with a lowered path, so their variables need not be gathered.
+fn collect_reserved_path_variables(query: &Query, out: &mut std::collections::BTreeSet<String>) {
+    fn push_value(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if let Value::Variable(name) = value {
+            out.insert(name.clone());
+        }
+    }
+    fn push_node(value: &NodeValue, out: &mut std::collections::BTreeSet<String>) {
+        if let NodeValue::Variable(name) = value {
+            out.insert(name.clone());
+        }
+    }
+    match query {
+        Query::Path(path) => {
+            push_value(&path.subject, out);
+            push_value(&path.object, out);
+            if let Some(captured) = &path.path {
+                push_value(captured, out);
+            }
+        }
+        Query::Triple(triple) => {
+            push_node(&triple.subject, out);
+            push_node(&triple.predicate, out);
+            push_value(&triple.object, out);
+        }
+        Query::And(and) => and
+            .and
+            .iter()
+            .for_each(|q| collect_reserved_path_variables(q, out)),
+        Query::Or(or) => or
+            .or
+            .iter()
+            .for_each(|q| collect_reserved_path_variables(q, out)),
+        Query::Not(not) => collect_reserved_path_variables(&not.query, out),
+        Query::Select(select) => {
+            out.extend(select.variables.iter().cloned());
+            collect_reserved_path_variables(&select.query, out);
+        }
+        Query::Distinct(distinct) => {
+            out.extend(distinct.variables.iter().cloned());
+            collect_reserved_path_variables(&distinct.query, out);
+        }
+        Query::Count(count) => {
+            if let DataValue::Variable(name) = &count.count {
+                out.insert(name.clone());
+            }
+            collect_reserved_path_variables(&count.query, out);
+        }
+        Query::Using(using) => collect_reserved_path_variables(&using.query, out),
+        Query::From(from) => collect_reserved_path_variables(&from.query, out),
+        Query::Pin(pin) => collect_reserved_path_variables(&pin.query, out),
+        Query::Immediately(immediately) => {
+            collect_reserved_path_variables(&immediately.query, out)
+        }
+        _ => {}
+    }
+}
+
+/// Rewrite every `Query::Path` in the read-composition fragment into its lowered
+/// `Triple`/`And`/`Or`/`Select` equivalent, leaving all other nodes structurally intact.
+fn rewrite_query_paths(query: &Query, alloc: &mut FreshPathVars) -> Result<Query, BgpPlanError> {
+    let rewrite_boxed =
+        |q: &Query, alloc: &mut FreshPathVars| -> Result<Box<Query>, BgpPlanError> {
+            Ok(Box::new(rewrite_query_paths(q, alloc)?))
+        };
+    Ok(match query {
+        Query::Path(path) => lower_path(path, alloc)?,
+        Query::And(and) => Query::And(crate::query::And {
+            and: and
+                .and
+                .iter()
+                .map(|q| rewrite_query_paths(q, alloc))
+                .collect::<Result<_, _>>()?,
+        }),
+        Query::Or(or) => Query::Or(crate::query::Or {
+            or: or
+                .or
+                .iter()
+                .map(|q| rewrite_query_paths(q, alloc))
+                .collect::<Result<_, _>>()?,
+        }),
+        Query::Not(not) => Query::Not(crate::query::Not {
+            query: rewrite_boxed(&not.query, alloc)?,
+        }),
+        Query::Select(select) => Query::Select(crate::control::Select {
+            variables: select.variables.clone(),
+            query: rewrite_boxed(&select.query, alloc)?,
+        }),
+        Query::Distinct(distinct) => Query::Distinct(crate::control::Distinct {
+            variables: distinct.variables.clone(),
+            query: rewrite_boxed(&distinct.query, alloc)?,
+        }),
+        Query::Count(count) => Query::Count(crate::misc::Count {
+            query: rewrite_boxed(&count.query, alloc)?,
+            count: count.count.clone(),
+        }),
+        Query::Using(using) => Query::Using(crate::control::Using {
+            collection: using.collection.clone(),
+            query: rewrite_boxed(&using.query, alloc)?,
+        }),
+        Query::From(from) => Query::From(crate::control::From {
+            graph: from.graph.clone(),
+            query: rewrite_boxed(&from.query, alloc)?,
+        }),
+        Query::Pin(pin) => Query::Pin(crate::control::Pin {
+            query: rewrite_boxed(&pin.query, alloc)?,
+        }),
+        Query::Immediately(immediately) => Query::Immediately(crate::control::Immediately {
+            query: rewrite_boxed(&immediately.query, alloc)?,
+        }),
+        other => other.clone(),
+    })
+}
+
+/// Lower a single `Path` node to an equivalent BGP/union `Query`.
+fn lower_path(
+    path: &crate::query::Path,
+    alloc: &mut FreshPathVars,
+) -> Result<Query, BgpPlanError> {
+    if path.path.is_some() {
+        return Err(BgpPlanError::PathWitnessCaptureUnsupported);
+    }
+    let source = path_endpoint_term(&path.subject)?;
+    let target = path_endpoint_term(&path.object)?;
+    lower_top(&path.pattern, &source, &target, alloc)
+}
+
+/// Top-level pattern lowering: may produce a bag union (`Or`) or a conjunctive chain
+/// projected to its endpoints (`Select` over `And`).
+fn lower_top(
+    pattern: &crate::path::PathPattern,
+    source: &PathTerm,
+    target: &PathTerm,
+    alloc: &mut FreshPathVars,
+) -> Result<Query, BgpPlanError> {
+    use crate::path::PathPattern;
+    match pattern {
+        PathPattern::Or(_) => {
+            let mut branches = Vec::new();
+            lower_union_branches(pattern, source, target, alloc, &mut branches)?;
+            match branches.len() {
+                0 => Err(BgpPlanError::PathEmptyPattern),
+                1 => Ok(branches.pop().unwrap()),
+                _ => Ok(Query::Or(crate::query::Or { or: branches })),
+            }
+        }
+        PathPattern::Times(times) if times.from != times.to => {
+            lower_times_range_union(times, source, target, alloc)
+        }
+        PathPattern::Plus(_) | PathPattern::Star(_) => {
+            Err(BgpPlanError::UnboundedPathUnsupported)
+        }
+        _ => {
+            let mut triples = Vec::new();
+            let mut predicates = Vec::new();
+            lower_chain(pattern, source, target, alloc, &mut triples, &mut predicates)?;
+            ensure_edge_simple_exact(&predicates)?;
+            build_chain_query(triples, source, target)
+        }
+    }
+}
+
+/// Expand a bounded-range `Times(pat, a, b)` into a bag union over each exact length.
+/// Every length must lower to a single hop (multi-hop union branches reject closed).
+fn lower_times_range_union(
+    times: &crate::path::PathTimes,
+    source: &PathTerm,
+    target: &PathTerm,
+    alloc: &mut FreshPathVars,
+) -> Result<Query, BgpPlanError> {
+    if times.to < times.from {
+        return Err(BgpPlanError::PathTimesInvalidRange);
+    }
+    if times.from == 0 {
+        return Err(BgpPlanError::PathIdentityUnsupported);
+    }
+    if times.to > PATH_TIMES_MAX_BOUND {
+        return Err(BgpPlanError::UnboundedPathUnsupported);
+    }
+    let mut branches = Vec::new();
+    for length in times.from..=times.to {
+        let mut triples = Vec::new();
+        let mut predicates = Vec::new();
+        lower_n_fold(&times.times, length, source, target, alloc, &mut triples, &mut predicates)?;
+        ensure_edge_simple_exact(&predicates)?;
+        if triples.len() != 1 {
+            return Err(BgpPlanError::PathUnionBranchMultiHop);
+        }
+        branches.push(triples.into_iter().next().unwrap());
+    }
+    match branches.len() {
+        0 => Err(BgpPlanError::PathEmptyPattern),
+        1 => Ok(branches.pop().unwrap()),
+        _ => Ok(Query::Or(crate::query::Or { or: branches })),
+    }
+}
+
+/// Flatten a union pattern into its single-hop alternative triples. Nested `Or`s
+/// flatten in source order; a multi-hop alternative rejects closed.
+fn lower_union_branches(
+    pattern: &crate::path::PathPattern,
+    source: &PathTerm,
+    target: &PathTerm,
+    alloc: &mut FreshPathVars,
+    out: &mut Vec<Query>,
+) -> Result<(), BgpPlanError> {
+    use crate::path::PathPattern;
+    match pattern {
+        PathPattern::Or(or) => {
+            if or.or.is_empty() {
+                return Err(BgpPlanError::PathEmptyPattern);
+            }
+            for branch in &or.or {
+                lower_union_branches(branch, source, target, alloc, out)?;
+            }
+            Ok(())
+        }
+        PathPattern::Plus(_) | PathPattern::Star(_) => Err(BgpPlanError::UnboundedPathUnsupported),
+        _ => {
+            let mut triples = Vec::new();
+            let mut predicates = Vec::new();
+            lower_chain(pattern, source, target, alloc, &mut triples, &mut predicates)?;
+            ensure_edge_simple_exact(&predicates)?;
+            if triples.len() != 1 {
+                return Err(BgpPlanError::PathUnionBranchMultiHop);
+            }
+            out.push(triples.into_iter().next().unwrap());
+            Ok(())
+        }
+    }
+}
+
+/// Lower a pattern that must be a pure conjunctive chain (no unions), threading
+/// `source -> ... -> target` through fresh intermediates and appending each hop's
+/// triple and predicate string. Rejects any construct that would introduce a union.
+fn lower_chain(
+    pattern: &crate::path::PathPattern,
+    source: &PathTerm,
+    target: &PathTerm,
+    alloc: &mut FreshPathVars,
+    triples: &mut Vec<Query>,
+    predicates: &mut Vec<String>,
+) -> Result<(), BgpPlanError> {
+    use crate::path::PathPattern;
+    match pattern {
+        PathPattern::Predicate(pred) => {
+            let predicate = pred
+                .predicate
+                .clone()
+                .ok_or(BgpPlanError::PathWildcardUnsupported)?;
+            triples.push(Query::Triple(Triple {
+                subject: source.as_subject(),
+                predicate: NodeValue::Node(predicate.clone()),
+                object: target.as_object(),
+                graph: None,
+            }));
+            predicates.push(predicate);
+            Ok(())
+        }
+        PathPattern::InversePredicate(pred) => {
+            let predicate = pred
+                .predicate
+                .clone()
+                .ok_or(BgpPlanError::PathWildcardUnsupported)?;
+            // Inverse: the edge points target -> source (swap subject/object).
+            triples.push(Query::Triple(Triple {
+                subject: target.as_subject(),
+                predicate: NodeValue::Node(predicate.clone()),
+                object: source.as_object(),
+                graph: None,
+            }));
+            predicates.push(predicate);
+            Ok(())
+        }
+        PathPattern::Sequence(sequence) => match sequence.sequence.len() {
+            0 => Err(BgpPlanError::PathEmptyPattern),
+            1 => lower_chain(&sequence.sequence[0], source, target, alloc, triples, predicates),
+            hops => {
+                let mut previous = source.clone();
+                for (index, sub) in sequence.sequence.iter().enumerate() {
+                    let next = if index == hops - 1 {
+                        target.clone()
+                    } else {
+                        PathTerm::Variable(alloc.next())
+                    };
+                    lower_chain(sub, &previous, &next, alloc, triples, predicates)?;
+                    previous = next;
+                }
+                Ok(())
+            }
+        },
+        PathPattern::Times(times) => {
+            if times.from != times.to {
+                // A bounded-RANGE repetition is a union; it cannot be a chain hop.
+                return Err(BgpPlanError::PathNonElementaryHopUnsupported);
+            }
+            if times.from == 0 {
+                return Err(BgpPlanError::PathIdentityUnsupported);
+            }
+            if times.from > PATH_TIMES_MAX_BOUND {
+                return Err(BgpPlanError::UnboundedPathUnsupported);
+            }
+            lower_n_fold(&times.times, times.from, source, target, alloc, triples, predicates)
+        }
+        PathPattern::Or(_) => Err(BgpPlanError::PathNonElementaryHopUnsupported),
+        PathPattern::Plus(_) | PathPattern::Star(_) => Err(BgpPlanError::UnboundedPathUnsupported),
+    }
+}
+
+/// Lower the `n`-fold sequence of `pattern` into a chain `source -> ... -> target`.
+fn lower_n_fold(
+    pattern: &crate::path::PathPattern,
+    n: u64,
+    source: &PathTerm,
+    target: &PathTerm,
+    alloc: &mut FreshPathVars,
+    triples: &mut Vec<Query>,
+    predicates: &mut Vec<String>,
+) -> Result<(), BgpPlanError> {
+    if n == 0 {
+        return Err(BgpPlanError::PathIdentityUnsupported);
+    }
+    if n == 1 {
+        return lower_chain(pattern, source, target, alloc, triples, predicates);
+    }
+    let mut previous = source.clone();
+    for index in 0..n {
+        let next = if index == n - 1 {
+            target.clone()
+        } else {
+            PathTerm::Variable(alloc.next())
+        };
+        lower_chain(pattern, &previous, &next, alloc, triples, predicates)?;
+        previous = next;
+    }
+    Ok(())
+}
+
+/// Reject a chain whose hop predicates are not pairwise distinct — the guard that
+/// keeps a bag-join faithful to edge-simple Prolog path semantics (see the module
+/// header). Distinct predicates make edge repetition impossible, so the join equals
+/// the Prolog result on ALL data; a repeat could over-count on self-loops.
+fn ensure_edge_simple_exact(predicates: &[String]) -> Result<(), BgpPlanError> {
+    let mut seen = std::collections::BTreeSet::new();
+    for predicate in predicates {
+        if !seen.insert(predicate.as_str()) {
+            return Err(BgpPlanError::PathRepeatedPredicateUnsupported {
+                predicate: predicate.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Assemble a conjunctive chain into a `Query`, projecting out intermediates by
+/// wrapping a multi-hop `And` in a `Select` over the endpoint variables. A single
+/// hop already has exactly the endpoint schema and needs no projection.
+fn build_chain_query(
+    triples: Vec<Query>,
+    source: &PathTerm,
+    target: &PathTerm,
+) -> Result<Query, BgpPlanError> {
+    let hops = triples.len();
+    if hops == 0 {
+        return Err(BgpPlanError::PathEmptyPattern);
+    }
+    if hops == 1 {
+        return Ok(triples.into_iter().next().unwrap());
+    }
+    let body = Query::And(crate::query::And { and: triples });
+    // Endpoint variables, in [subject, object] order, deduplicated (subject == object
+    // is a legal cycle query binding a single variable).
+    let mut endpoints: Vec<String> = Vec::new();
+    if let Some(name) = source.variable_name() {
+        endpoints.push(name.to_string());
+    }
+    if let Some(name) = target.variable_name() {
+        if !endpoints.iter().any(|existing| existing == name) {
+            endpoints.push(name.to_string());
+        }
+    }
+    Ok(Query::Select(crate::control::Select {
+        variables: endpoints,
+        query: Box::new(body),
+    }))
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -5495,6 +6067,19 @@ fn plan_triple_count_comparison_body(
 /// left-deep join tree (each step shares one or two variables). Everything
 /// else is rejected closed with a descriptive [`BgpPlanError`].
 pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
+    // (0) Lower fixed-length property paths (`Query::Path`) to BGP + bag union before
+    // any shape analysis, so all soundness reuses the audited BGP machinery below.
+    let lowered_query;
+    let query = if query_contains_path(query) {
+        let mut reserved = std::collections::BTreeSet::new();
+        collect_reserved_path_variables(query, &mut reserved);
+        let mut alloc = FreshPathVars::new(reserved);
+        lowered_query = rewrite_query_paths(query, &mut alloc)?;
+        &lowered_query
+    } else {
+        query
+    };
+
     // (1) Unwrap proof-transparent outer controls. `Using` is not discarded: it is
     // retained as routing metadata so an integration can resolve the intended layer.
     // `From(instance)` is safe for the instance-layer proof path; schema or wildcard

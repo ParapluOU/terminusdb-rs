@@ -40,7 +40,8 @@ use terminusdb_woql2::triple::{Data, Link, TripleNext, TriplePrevious, TripleSli
 use terminusdb_woql2::{
     misc::{Collect, Count, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
-    query::{Not, Or, Query},
+    path::{InversePathPredicate, PathOr, PathPattern, PathPredicate, PathSequence, PathTimes},
+    query::{Not, Or, Path, Query},
     value::{DataValue, NodeValue, Value},
 };
 
@@ -4373,6 +4374,226 @@ fn or_supports_empty_and_ground_branches() {
     let proved = compiled.prove(&lc).unwrap();
     proved
         .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &[vec![]])
+        .unwrap();
+}
+
+// ----------------------------------------------------------------------------
+// Fixed-length property paths (`Query::Path`) lowered to BGP / bag union, proven
+// end-to-end and checked against an independently computed bag of endpoint pairs.
+// ----------------------------------------------------------------------------
+
+fn path_predicate(predicate: &str) -> PathPattern {
+    PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+fn path_inverse(predicate: &str) -> PathPattern {
+    PathPattern::InversePredicate(InversePathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+fn path_query(subject: &str, pattern: PathPattern, object: &str) -> Query {
+    Query::Path(Path {
+        subject: Value::Variable(subject.into()),
+        pattern,
+        object: Value::Variable(object.into()),
+        path: None,
+    })
+}
+
+/// The committed object id of a node IRI in the layer's authenticated catalog.
+fn node_object_id(lc: &LayerCommitment, name: &str) -> u64 {
+    lc.node_value_catalog
+        .iter()
+        .find(|record| record.triple.object == CanonicalObject::Node(iri(name).into_bytes()))
+        .unwrap()
+        .object_id
+}
+
+#[test]
+fn path_predicate_proves_endpoint_pairs() {
+    let lc = build_layer(&[("a", "knows", "b"), ("b", "knows", "c"), ("x", "likes", "y")]);
+    let id = |name: &str| node_object_id(&lc, name);
+
+    let compiled = plan_bgp(&path_query("s", path_predicate("knows"), "o")).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    // Exact bag of (s, o) pairs connected by a single `knows` edge.
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[vec![id("a"), id("b")], vec![id("b"), id("c")]],
+        )
+        .unwrap();
+    // A pair the query does NOT connect must fail to verify.
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[vec![id("a"), id("b")], vec![id("x"), id("y")]],
+        )
+        .is_err());
+}
+
+#[test]
+fn path_inverse_predicate_proves_reversed_pairs() {
+    // Two people share a parent `b`. Path(?s, <parent, ?o) lowers to Triple(?o, parent, ?s):
+    // for every stored (x, parent, y) it binds o=x, s=y (schema order [o, s]).
+    let lc = build_layer(&[("a", "parent", "b"), ("c", "parent", "b")]);
+    let id = |name: &str| node_object_id(&lc, name);
+
+    let compiled = plan_bgp(&path_query("s", path_inverse("parent"), "o")).unwrap();
+    assert_eq!(compiled.relation.schema, ["o", "s"]);
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["o".into(), "s".into()],
+            &[vec![id("a"), id("b")], vec![id("c"), id("b")]],
+        )
+        .unwrap();
+}
+
+#[test]
+fn path_two_hop_sequence_proves_projected_bag_of_endpoint_pairs() {
+    // `knows,likes`. (a) reaches g through TWO intermediates (b and d) -> (a,g) has
+    // multiplicity two; e reaches h once; x is a dead end (no `likes` from y).
+    let lc = build_layer(&[
+        ("a", "knows", "b"),
+        ("b", "likes", "g"),
+        ("a", "knows", "d"),
+        ("d", "likes", "g"),
+        ("e", "knows", "f"),
+        ("f", "likes", "h"),
+        ("x", "knows", "y"),
+    ]);
+    let id = |name: &str| node_object_id(&lc, name);
+
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_predicate("knows"), path_predicate("likes")],
+    });
+    let compiled = plan_bgp(&path_query("s", pattern, "o")).unwrap();
+    assert!(compiled.projection.is_some());
+    let proved = compiled.prove(&lc).unwrap();
+    // Independently computed bag of connected (s, o) pairs, projecting the intermediate out.
+    // BAG multiplicity: (a,g) appears twice (two distinct 2-edge paths).
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[
+                vec![id("a"), id("g")],
+                vec![id("a"), id("g")],
+                vec![id("e"), id("h")],
+            ],
+        )
+        .unwrap();
+    // Dropping one of the duplicate (a,g) rows must fail — bag multiplicity is authenticated.
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[vec![id("a"), id("g")], vec![id("e"), id("h")]],
+        )
+        .is_err());
+}
+
+#[test]
+fn path_or_of_two_predicates_proves_exact_bag_union() {
+    let lc = build_layer(&[
+        ("a", "knows", "b"),
+        ("c", "likes", "d"),
+        ("c", "knows", "d"),
+        ("e", "likes", "f"),
+    ]);
+    let id = |name: &str| node_object_id(&lc, name);
+
+    let pattern = PathPattern::Or(PathOr {
+        or: vec![path_predicate("knows"), path_predicate("likes")],
+    });
+    let compiled = plan_bgp(&path_query("s", pattern, "o")).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    // knows: (a,b),(c,d) ; likes: (c,d),(e,f). Bag union keeps the overlapping (c,d) twice.
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[
+                vec![id("a"), id("b")],
+                vec![id("c"), id("d")],
+                vec![id("c"), id("d")],
+                vec![id("e"), id("f")],
+            ],
+        )
+        .unwrap();
+}
+
+#[test]
+fn path_exact_times_two_two_proves_via_sequence_on_distinct_predicates() {
+    // Times{2,2} over the SAME predicate rejects closed (edge-simple semantics), but its
+    // intended two-hop meaning is provable when the two hops use DISTINCT predicates: the
+    // sequence `parent,name`, repeated content of a fixed two-length path.
+    let lc = build_layer(&[
+        ("kid", "parent", "mum"),
+        ("mum", "name", "MumName"),
+        ("kid2", "parent", "mum"),
+    ]);
+    let id = |name: &str| node_object_id(&lc, name);
+
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_predicate("parent"), path_predicate("name")],
+    });
+    let compiled = plan_bgp(&path_query("s", pattern, "o")).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    // kid->mum->MumName and kid2->mum->MumName.
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[
+                vec![id("kid"), id("MumName")],
+                vec![id("kid2"), id("MumName")],
+            ],
+        )
+        .unwrap();
+}
+
+#[test]
+fn path_times_one_one_proves_single_hop() {
+    let lc = build_layer(&[("a", "knows", "b"), ("b", "knows", "c")]);
+    let id = |name: &str| node_object_id(&lc, name);
+
+    let pattern = PathPattern::Times(PathTimes {
+        times: Box::new(path_predicate("knows")),
+        from: 1,
+        to: 1,
+    });
+    let compiled = plan_bgp(&path_query("s", pattern, "o")).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            lc.state.commitment_root,
+            &["s".into(), "o".into()],
+            &[vec![id("a"), id("b")], vec![id("b"), id("c")]],
+        )
         .unwrap();
 }
 
