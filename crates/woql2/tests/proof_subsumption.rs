@@ -18,7 +18,7 @@ use terminus_store::proof::CanonicalObject;
 use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::compare::Subsumption;
-use terminusdb_woql2::proof::plan_bgp;
+use terminusdb_woql2::proof::{plan_bgp, BgpPlanError};
 use terminusdb_woql2::query::Query;
 use terminusdb_woql2::value::NodeValue;
 
@@ -410,13 +410,27 @@ fn subsumption_both_free_rejects_closed() {
 }
 
 #[test]
-fn isa_and_schema_from_still_reject_closed() {
-    // IsA remains reject-closed (deferred cross-layer regime) and a bare schema `From` still rejects.
+fn isa_bound_class_lowers_variable_class_and_schema_from_reject() {
+    // BOUND class (node regime): a standalone `?x isa A` NOW LOWERS to a cross-dictionary two-root
+    // hash join (the downward sys:inherits closure of A over the schema graph, hash-joined against the
+    // instance rdf:type relation via a full-field LogUp semi-join). So it PLANS successfully.
     let isa = Query::IsA(terminusdb_woql2::compare::IsA {
         element: NodeValue::Variable("x".into()),
         type_of: class("A"),
     });
-    assert!(plan_bgp(&isa).is_err(), "IsA is still reject-closed this pass");
+    plan_bgp(&isa).expect("standalone bound-class IsA lowers to a cross-root plan");
+
+    // VARIABLE class: rejects on the free class with its own distinct reason (the downward closure
+    // needs the class bound to seed it).
+    let isa_free_class = Query::IsA(terminusdb_woql2::compare::IsA {
+        element: NodeValue::Variable("x".into()),
+        type_of: NodeValue::Variable("C".into()),
+    });
+    assert_eq!(
+        plan_bgp(&isa_free_class).unwrap_err(),
+        BgpPlanError::IsAVariableClass,
+        "variable-class IsA rejects because the closure has no bound seed class"
+    );
 
     let schema_from = Query::From(terminusdb_woql2::control::From {
         graph: "schema".to_string(),
@@ -431,4 +445,118 @@ fn isa_and_schema_from_still_reject_closed() {
         plan_bgp(&schema_from).is_err(),
         "a bare schema-graph From (non-subsumption read) still rejects closed"
     );
+}
+
+// ---------------------------------------------------------------------------------------------------
+// PART C — IsA end-to-end (cross-dictionary two-root hash join via the full-field LogUp semi-join).
+// ---------------------------------------------------------------------------------------------------
+
+const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+/// An INSTANCE-graph layer of `(subject, class)` `rdf:type` triples.
+fn build_typed_instance_layer(types: &[(&str, &str)]) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, class) in types {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(subject), RDF_TYPE, &iri(class)))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn isa(element: &str, class_name: &str) -> Query {
+    Query::IsA(terminusdb_woql2::compare::IsA {
+        element: NodeValue::Variable(element.into()),
+        type_of: class(class_name),
+    })
+}
+
+/// The set of instance `?x` short-names an IsA proof delivered. `resolve_typed_result_objects` is
+/// COLUMN-major (`objects[col]` is a column of per-row values); IsA delivers a single `?x` column.
+fn resolved_instances(objects: &[Vec<CanonicalObject>]) -> BTreeSet<String> {
+    objects
+        .first()
+        .map(|column| {
+            column
+                .iter()
+                .map(|object| match object {
+                    CanonicalObject::Node(bytes) => String::from_utf8(bytes.clone())
+                        .unwrap()
+                        .strip_prefix("http://ex/")
+                        .unwrap()
+                        .to_string(),
+                    other => panic!("unexpected IsA result object {other:?}"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn isa_node_regime_cross_root_e2e() {
+    on_big_stack("isa-cross-root", || {
+        // Schema: A -inherits-> B (A is a subclass of B); C -inherits-> D is unrelated filler.
+        //   downward closure of B = {B, A}; downward closure of A = {A}.
+        let schema = build_schema_layer(&[("A", "B"), ("C", "D")]);
+        // Instance: x1:A, x2:B, x3:Other (a class OUTSIDE B's closure).
+        let instance = build_typed_instance_layer(&[("x1", "A"), ("x2", "B"), ("x3", "Other")]);
+        let db_root = database_root(&instance.state.commitment_root, &schema.state.commitment_root);
+
+        let run = |q: &Query| -> BTreeSet<String> {
+            let compiled = plan_bgp(q).unwrap();
+            let proved = compiled.prove_cross_root_layers(&*instance, &*schema).unwrap();
+            let objects = proved
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .unwrap();
+            resolved_instances(&objects)
+        };
+
+        // `?x isa B` = every x whose direct type is subsumed by B = {x1 (A<:B), x2 (B)}; EXCLUDES x3
+        // (Other is not in B's downward closure). This is the crux: x3's class "Other" is a DIFFERENT
+        // IRI (hence a different hash), so the full-field semi-join excludes it.
+        assert_eq!(
+            run(&isa("x", "B")),
+            names(&["x1", "x2"]),
+            "?x isa B = {{x1, x2}}; x3 (class Other) is excluded"
+        );
+        // `?x isa A` = {x1} only (A has no subclasses; x2:B and x3:Other are excluded).
+        assert_eq!(run(&isa("x", "A")), names(&["x1"]), "?x isa A = {{x1}}");
+        // A class with NO instances subsumed: `?x isa D` — closure {D, C}, but no instance has type
+        // C or D, so the result is empty.
+        assert!(run(&isa("x", "D")).is_empty(), "?x isa D has no matching instances");
+    });
+}
+
+#[test]
+fn isa_cross_root_rejects_wrong_root_and_swapped_graphs() {
+    on_big_stack("isa-cross-root-negatives", || {
+        let schema = build_schema_layer(&[("A", "B"), ("C", "D")]);
+        let instance = build_typed_instance_layer(&[("x1", "A"), ("x2", "B")]);
+        let db_root = database_root(&instance.state.commitment_root, &schema.state.commitment_root);
+        let compiled = plan_bgp(&isa("x", "B")).unwrap();
+        let proved = compiled.prove_cross_root_layers(&*instance, &*schema).unwrap();
+
+        // Correct verification succeeds.
+        proved
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+        // A tampered database_root rejects.
+        let mut bad = db_root;
+        bad[0] ^= 1;
+        assert!(
+            proved
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, bad)
+                .is_err(),
+            "a tampered database_root must reject"
+        );
+        // Swapping the instance and schema graphs rejects (the ordered two-hash database_root no longer
+        // matches, and each child is anchored to the wrong root).
+        assert!(
+            proved
+                .verify_over_graphs_and_resolve(&compiled, &*schema, &*instance, db_root)
+                .is_err(),
+            "swapping the instance/schema graphs must reject"
+        );
+    });
 }

@@ -4091,6 +4091,14 @@ fn isa_leaf(element: &str, type_of: &str) -> Query {
     })
 }
 
+/// An `IsA` whose CLASS (`type_of`) is a variable — the unbound-class regime.
+fn isa_leaf_var_class(element: &str, type_of: &str) -> Query {
+    Query::IsA(IsA {
+        element: NodeValue::Variable(element.into()),
+        type_of: NodeValue::Variable(type_of.into()),
+    })
+}
+
 #[test]
 fn typeof_rejects_closed_as_value_shape_classifier() {
     // Top-level: WOQL `typeof` binds a node IRI's type to `sys#Top` and never reads
@@ -4133,20 +4141,62 @@ fn dot_rejects_closed_as_in_memory_dict_access() {
 }
 
 #[test]
-fn isa_rejects_closed_as_subsumption_closed() {
-    // WOQL `isa` = `is_instance` is subsumption-closed (matches subclasses via
-    // `sys:inherits`; terminusdb src/core/document/instance.pl `is_instance_class` +
-    // `class_subsumed`). A direct `t(element, rdf:type, type)` triple is INCOMPLETE — it
-    // misses instances whose direct type is a proper subclass — so IsA rejects closed;
-    // authenticated subsumption would require committing the schema graph (out of scope).
-    reject(isa_leaf("x", "Person"), BgpPlanError::IsASubsumptionUnsupported);
-    // Nested inside an And inside a Select is caught too.
+fn isa_bound_class_lowers_to_cross_root_and_nested_rejects() {
+    // WOQL `isa` with a BOUND class = the node regime `is_instance_class` (terminusdb
+    // src/core/document/instance.pl:80-92): X isa C iff X has a DIRECT `rdf:type Class` with
+    // `class_subsumed(Class, C)` (Class in the DOWNWARD sys:inherits closure of C). A standalone
+    // `?x isa C` NOW LOWERS to a cross-dictionary two-root hash join (the downward sys:inherits
+    // closure of C over the schema graph, hash-joined against the instance rdf:type relation via a
+    // full-field LogUp semi-join) — see `plan_isa`. So it PLANS successfully.
+    plan_bgp(&isa_leaf("x", "Person")).expect("standalone bound-class IsA lowers to a cross-root plan");
+
+    // NESTED inside a BGP conjunction, IsA still rejects closed: the cross-root node is TOP-LEVEL
+    // only (it reads two graphs), so it cannot participate in an instance-graph BGP join.
     reject(
         Query::Select(Select {
             variables: vec!["x".into()],
             query: Box::new(and_of(vec![tv("x", "p", "y"), isa_leaf("x", "Agent")])),
         }),
         BgpPlanError::IsASubsumptionUnsupported,
+    );
+}
+
+#[test]
+fn isa_variable_class_rejects_closed_needs_bound_class() {
+    // `?x isa ?C` — an UNBOUND class cannot seed the downward sys:inherits subsumption closure
+    // (`{C} ∪ subclasses(C)`); a free class is a whole-schema enumeration (deferred). This rejects
+    // on the free class with its OWN precise reason, DISTINCT from the bound-class cross-dict blocker.
+    reject(isa_leaf_var_class("x", "C"), BgpPlanError::IsAVariableClass);
+    // Nested occurrence is caught with the same precise reason (the pre-pass recurses wrappers).
+    reject(
+        Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(and_of(vec![tv("x", "p", "y"), isa_leaf_var_class("x", "C")])),
+        }),
+        BgpPlanError::IsAVariableClass,
+    );
+}
+
+#[test]
+fn isa_element_regimes_variable_ships_bound_defers_literal_unrepresentable() {
+    // The LITERAL-subject regime of `is_instance` (XSD datatype lattice, `basetype_subsumption_of`,
+    // instance.pl:50-66) is structurally UNREPRESENTABLE from woql2 `IsA`: `element` is a `NodeValue`,
+    // only `Node(iri)` or `Variable` — never a typed literal. Of the two constructible element regimes:
+    //   * a VARIABLE element (`?x isa Person`) SHIPS as a cross-root plan;
+    //   * a BOUND element (`<n> isa Person`, a ground existence check) is DEFERRED (reject closed).
+    plan_bgp(&Query::IsA(IsA {
+        element: NodeValue::Variable("x".into()),
+        type_of: NodeValue::Node(iri("Person")),
+    }))
+    .expect("variable-element bound-class IsA lowers to a cross-root plan");
+    assert_eq!(
+        plan_bgp(&Query::IsA(IsA {
+            element: NodeValue::Node(iri("some-node")),
+            type_of: NodeValue::Node(iri("Person")),
+        }))
+        .unwrap_err(),
+        BgpPlanError::IsASubsumptionUnsupported,
+        "a BOUND-element ground existence check is deferred"
     );
 }
 

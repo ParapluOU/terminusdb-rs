@@ -200,6 +200,21 @@ pub enum CompiledRelationStatement {
         right: Box<CompiledRelation>,
         key_pairs: Vec<(usize, usize)>,
     },
+    /// CROSS-DICTIONARY two-root hash join (woql2 mirror of the store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::CrossRootHashJoin`]). The ONE node
+    /// that reads BOTH committed graphs: `left` reads the SCHEMA graph (a class hash SET — the downward
+    /// `sys:inherits` subsumption closure of `C`), `right` reads the INSTANCE graph
+    /// (`Triple(?x, rdf:type, ?class)`, `[?x, class]`). Each side's class-id column is authenticated to
+    /// its `hash_object(IRI)` against its OWN root; a full-field LogUp SEMI-JOIN keeps instance rows
+    /// whose class-hash is a member of the closure hash set. Emitted ONLY by [`plan_isa`]; routed via
+    /// the two-layer store `prove_cross_root`/`verify_cross_root`. `left` is a single class column
+    /// (`left_key_col == 0`); output = `right`'s `?x` column (instance namespace).
+    CrossRootHashJoin {
+        left: Box<CompiledRelation>,
+        right: Box<CompiledRelation>,
+        left_key_col: usize,
+        right_key_col: usize,
+    },
     LeftOuter {
         left: Box<CompiledRelation>,
         right: Box<CompiledRelation>,
@@ -1061,6 +1076,13 @@ pub enum ProvedQueryStatement {
         right: Box<ProvedBgp>,
         proof: Box<InnerJoinProof>,
     },
+    /// A proven top-level [`CompiledRelationStatement::CrossRootHashJoin`]. The whole two-root proof is
+    /// the store [`RecursiveRelationEnvelope`] from `prove_cross_root`, carried wholesale (not
+    /// decomposed) and verified by `verify_cross_root`, which binds BOTH per-graph roots to the trusted
+    /// `database_root`. The ONE statement that engages two commitment roots.
+    CrossRootHashJoin {
+        envelope: Box<RecursiveRelationEnvelope>,
+    },
     LeftOuter {
         left: Box<ProvedBgp>,
         right: Box<ProvedBgp>,
@@ -1402,6 +1424,13 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(left)?);
             hasher.update(relation_query_digest(right)?);
             digest_key_pairs(&mut hasher, key_pairs);
+        }
+        CompiledRelationStatement::CrossRootHashJoin { left, right, left_key_col, right_key_col } => {
+            hasher.update(b"/cross-root-hash-join");
+            hasher.update(relation_query_digest(left)?);
+            hasher.update(relation_query_digest(right)?);
+            hasher.update((*left_key_col as u64).to_le_bytes());
+            hasher.update((*right_key_col as u64).to_le_bytes());
         }
         CompiledRelationStatement::LeftOuter {
             left,
@@ -2045,6 +2074,15 @@ fn relation_result_descriptors(
             ));
             Ok(descriptors)
         }
+        CompiledRelationStatement::CrossRootHashJoin { right, right_key_col, .. } => {
+            // Output = the INSTANCE-side (`right`) columns minus the class key column.
+            let right_descriptors = relation_result_descriptors(right)?;
+            Ok(right_descriptors
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, descriptor)| (index != *right_key_col).then_some(descriptor))
+                .collect())
+        }
         CompiledRelationStatement::LeftOuter {
             left,
             right,
@@ -2329,6 +2367,14 @@ fn relation_proof_plan(
             RelationProofPlanKind::InnerJoin {
                 left: Box::new(child(left)?), right: Box::new(child(right)?),
                 key_pairs: key_pairs.clone(),
+            }
+        }
+        CompiledRelationStatement::CrossRootHashJoin { left, right, left_key_col, right_key_col } => {
+            RelationProofPlanKind::CrossRootHashJoin {
+                left: Box::new(child(left)?),
+                right: Box::new(child(right)?),
+                left_key_col: *left_key_col,
+                right_key_col: *right_key_col,
             }
         }
         CompiledRelationStatement::Equality { input, constraint } => {
@@ -5051,6 +5097,21 @@ impl ProvedBgp {
         schema: &impl VerifierLayer,
         database_root: ProofHash,
     ) -> std::io::Result<()> {
+        // The cross-root hash join (IsA) engages BOTH roots: route to the two-layer store verify, which
+        // validates both per-graph commitments against the trusted `database_root` itself.
+        if matches!(compiled.relation.statement, CompiledRelationStatement::CrossRootHashJoin { .. }) {
+            let digest = compiled_query_digest(compiled)?;
+            let plan = relation_proof_plan(&compiled.relation, digest)?;
+            return match &self.statement {
+                ProvedQueryStatement::CrossRootHashJoin { envelope } => {
+                    envelope.verify_cross_root(instance, schema, database_root, &plan)
+                }
+                _ => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL cross-root proof/plan mismatch",
+                )),
+            };
+        }
         // (1) Both per-graph commitments validated + combined into the trusted database anchor.
         terminus_store::proof::commitment::validate_database_root(instance, schema, &database_root)?;
         let digest = compiled_query_digest(compiled)?;
@@ -5078,6 +5139,35 @@ impl ProvedBgp {
         schema: &impl VerifierLayer,
         database_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
+        // The cross-root hash join (IsA): verify through the two-layer store entry (which binds both
+        // roots to the trusted `database_root`), then resolve the delivered `?x` ids against the
+        // INSTANCE dictionary (the output lives in the instance namespace).
+        if matches!(compiled.relation.statement, CompiledRelationStatement::CrossRootHashJoin { .. }) {
+            let digest = compiled_query_digest(compiled)?;
+            let plan = relation_proof_plan(&compiled.relation, digest)?;
+            match &self.statement {
+                ProvedQueryStatement::CrossRootHashJoin { envelope } => {
+                    envelope.verify_cross_root(instance, schema, database_root, &plan)?;
+                }
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL cross-root proof/plan mismatch",
+                    ))
+                }
+            }
+            if compiled.relation.schema.is_empty() {
+                return Ok(Vec::new());
+            }
+            let instance_root = instance.verifier_view().state.commitment_root;
+            let namespaces = compiled_result_descriptors(compiled)?
+                .into_iter()
+                .map(|descriptor| descriptor.namespace)
+                .collect::<Vec<_>>();
+            return resolve_typed_result_objects(
+                instance, instance_root, &self.result_columns, &namespaces,
+            );
+        }
         terminus_store::proof::commitment::validate_database_root(instance, schema, &database_root)?;
         // Both commitments are now anchored to the trusted `database_root`; select the correct
         // per-graph view and resolve through the UNGUARDED core (the read-graph guard on
@@ -8141,6 +8231,18 @@ fn prove_hashkey_relation(
 }
 
 fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
+    // The two-root cross-dictionary hash join is carried WHOLESALE (it engages two commitment roots
+    // and is verified by `verify_cross_root`, not the single-graph mirror), so it is wrapped directly
+    // rather than decomposed into the `ProvedQueryStatement` tree.
+    if matches!(envelope.proof, RecursiveRelationProof::CrossRootHashJoin { .. }) {
+        return ProvedBgp {
+            result_commitments: envelope.result_commitments.clone(),
+            result_columns: envelope.result_columns.clone(),
+            result_log_domain: envelope.result_log_domain,
+            result_len: envelope.result_len,
+            statement: ProvedQueryStatement::CrossRootHashJoin { envelope: Box::new(envelope) },
+        };
+    }
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::GeneratedU64Filter { input } => {
@@ -8246,6 +8348,12 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
                 input: Box::new(proved_from_recursive(*input)),
             }
         }
+        // The two-root cross-dictionary hash join is carried WHOLESALE by the early return at the top of
+        // this function (it engages two roots and is verified by `verify_cross_root`, not the
+        // single-graph mirror), so it never reaches this decomposition match.
+        RecursiveRelationProof::CrossRootHashJoin { .. } => unreachable!(
+            "cross-root envelopes are wrapped wholesale by the early return, not decomposed here"
+        ),
     };
     ProvedBgp {
         statement,
@@ -8543,11 +8651,54 @@ impl CompiledBgp {
         instance: &SyncStoreLayer,
         schema: &SyncStoreLayer,
     ) -> Result<ProvedBgp, QueryProofError> {
+        // The cross-root hash join (IsA) reads BOTH graphs: prove it through the two-layer store entry
+        // (left=schema, right=instance), binding both roots to the trusted `database_root`.
+        if matches!(self.relation.statement, CompiledRelationStatement::CrossRootHashJoin { .. }) {
+            let instance_commit = instance.proof_commitment()?;
+            let schema_commit = schema.proof_commitment()?;
+            let digest = compiled_query_digest(self)?;
+            let plan = relation_proof_plan(&self.relation, digest)?;
+            let envelope = RecursiveRelationEnvelope::prove_cross_root_with_context(
+                context, &instance_commit, &schema_commit, &plan,
+            )?;
+            return Ok(proved_from_recursive(envelope));
+        }
         let commitment = match relation_graph(&self.relation)? {
             ProofGraph::Instance => instance.proof_commitment()?,
             ProofGraph::Schema => schema.proof_commitment()?,
         };
         Ok(self.prove_with_context(context, &commitment)?)
+    }
+
+    /// Prove a top-level cross-root (IsA) query directly over two already-committed layers (the
+    /// instance and schema `LayerCommitment`s). Mirrors [`prove_on_layers`] for callers that hold
+    /// commitments rather than `SyncStoreLayer`s.
+    pub fn prove_cross_root_layers(
+        &self,
+        instance: &LayerCommitment,
+        schema: &LayerCommitment,
+    ) -> Result<ProvedBgp, QueryProofError> {
+        self.prove_cross_root_layers_with_context(&StoreProverContext::cpu(), instance, schema)
+    }
+
+    pub fn prove_cross_root_layers_with_context(
+        &self,
+        context: &StoreProverContext<'_>,
+        instance: &LayerCommitment,
+        schema: &LayerCommitment,
+    ) -> Result<ProvedBgp, QueryProofError> {
+        if !matches!(self.relation.statement, CompiledRelationStatement::CrossRootHashJoin { .. }) {
+            return Err(QueryProofError::Store(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "prove_cross_root_layers requires a cross-root (IsA) query",
+            )));
+        }
+        let digest = compiled_query_digest(self)?;
+        let plan = relation_proof_plan(&self.relation, digest)?;
+        let envelope = RecursiveRelationEnvelope::prove_cross_root_with_context(
+            context, instance, schema, &plan,
+        )?;
+        Ok(proved_from_recursive(envelope))
     }
 
     /// The externally-trusted combined `database_root` for a two-graph database: binds the instance
@@ -9050,19 +9201,55 @@ pub enum BgpPlanError {
     )]
     DotNotStoreEdge,
 
-    /// A `Query::IsA`. WOQL `isa/2` compiles to `is_instance`, which is SUBSUMPTION-closed:
-    /// it matches an instance whose single direct stored `rdf:type` is the queried class OR
-    /// any transitive subclass of it (terminusdb `src/core/document/instance.pl`,
-    /// `is_instance_class` + `class_subsumed`; the subclass edge is `sys:inherits`, i.e.
-    /// `http://terminusdb.com/schema/sys#inherits`, not `rdfs:subClassOf`). A direct
-    /// `t(element, <rdf:type>, type)` triple is INCOMPLETE — it misses every instance whose
-    /// direct type is a proper subclass — so it would be an unsound completeness claim.
-    /// Authenticated subsumption requires committing the schema graph (`sys:inherits`
-    /// closure), which is out of scope for this instance-graph BGP layer. Rejected closed.
+    /// A `Query::IsA` with a BOUND class (the node regime). WOQL `isa/2` compiles to `is_instance`,
+    /// whose node regime (`is_instance_class`, terminusdb `src/core/document/instance.pl:80-92`) is
+    /// SUBSUMPTION-closed: `X isa C` holds iff `X` has a DIRECT stored `rdf:type Class` where
+    /// `class_subsumed(Class, C)` — i.e. `Class` lies in the DOWNWARD `sys:inherits` closure of `C`
+    /// (`C` together with its subclasses; the subclass edge is `sys:inherits`,
+    /// `http://terminusdb.com/schema/sys#inherits`, not `rdfs:subClassOf`). A bare direct
+    /// `t(element, <rdf:type>, C)` triple is INCOMPLETE — it misses every instance whose direct type is
+    /// a proper subclass of `C`.
+    ///
+    /// The schema-graph foundation now EXISTS (`Subsumption` commits and closes the `sys:inherits`
+    /// hierarchy over the SCHEMA graph), so the blocker is no longer "the schema graph is uncommitted".
+    /// The blocker is a CROSS-DICTIONARY reconciliation. The direct `rdf:type Class` relation is read
+    /// from the INSTANCE graph (its `Class` values are INSTANCE-dictionary ids), while the downward
+    /// subsumption closure of `C` is computed over the SCHEMA graph (its class values are
+    /// SCHEMA-dictionary ids). The two graphs are SEPARATE committed layers with SEPARATE dictionaries
+    /// under SEPARATE `commitment_root`s (combined only by the two-hash `database_root`), so the SAME
+    /// class IRI generally has DIFFERENT ids in the two dicts, and two unrelated IRIs can share an id.
+    /// A raw dict-id join/equality between the instance `Class` column and the schema closure column is
+    /// therefore BOTH unsound (false matches from colliding ids) AND incomplete (missed matches for the
+    /// same IRI's differing ids). Every match must instead be authenticated as
+    /// `instance_rdf_type_class_IRI == a_closure_class_IRI`, with the instance-side dict membership
+    /// (`id → IRI`) anchored to the INSTANCE root and the schema-side dict membership (`closure id → IRI`)
+    /// anchored to the SCHEMA root, both bound under the trusted `database_root`.
+    ///
+    /// No such primitive exists yet, and it is not a thin layer over the audited gadgets. The proof
+    /// recursion anchors an ENTIRE relation to a SINGLE layer + `commitment_root` — `verify_relation`
+    /// and the `InnerJoin` arm thread one `expected_root` and verify BOTH join children against the SAME
+    /// layer, and [`relation_graph`] rejects a relation that mixes instance and schema leaves. The store
+    /// commits `(hash(IRI), id)` dict-membership PAIRS per layer (`prove_dict_membership`) but exposes
+    /// no in-circuit `id → hash(IRI)` JOINABLE column and no cross-root join binding BOTH roots.
+    /// Building the node-regime IsA soundly needs that NEW cross-dict IRI-reconciled join/membership
+    /// primitive: a multi-root relation carrying an authenticated `id → hash(IRI)` column on each side,
+    /// joined on the shared IRI-hash under both roots. Deferred; rejected closed rather than ship an
+    /// unsound raw-id join.
     #[error(
-        "IsA is subsumption-closed (matches subclasses via sys:inherits): a direct rdf:type triple is incomplete; authenticated subsumption needs the schema graph committed (out of scope)"
+        "IsA in an unsupported position/shape: a standalone `?x isa C` (variable element, BOUND class) NOW SHIPS as a cross-dictionary two-root hash join (downward sys:inherits closure of C over the schema graph, hash-joined against the instance rdf:type relation via a full-field LogUp semi-join). This variant is the residual reject: a NESTED IsA inside a BGP conjunction (the cross-root node is top-level only), a BOUND-ELEMENT ground existence check `<n> isa C`, and a Distinct-gated IsA are all deferred; reject closed"
     )]
     IsASubsumptionUnsupported,
+
+    /// A `Query::IsA` with an UNBOUND/variable class (`type_of` is a variable). The node regime's
+    /// downward `sys:inherits` subsumption closure (see [`Self::IsASubsumptionUnsupported`]) must be
+    /// SEEDED by a bound class constant to enumerate `{C} ∪ subclasses(C)`; a free class instead
+    /// requires enumerating EVERY class in the schema together with its per-class closure — a
+    /// whole-schema enumeration (the mirror of [`Self::SubsumptionBothEndpointsFree`]). Deferred;
+    /// rejected closed. (This case rejects on the free class independently of the cross-dict blocker.)
+    #[error(
+        "IsA with an unbound/variable class: the downward sys:inherits subsumption closure needs the class bound as a constant to seed it (a whole-schema class enumeration is deferred); reject closed"
+    )]
+    IsAVariableClass,
 
     /// A malformed `Eval` composition: not a conjunction of an operand-binding child BGP with
     /// exactly ONE `Eval`, or the child carried a projection/count/distinct wrapper the
@@ -12611,23 +12798,68 @@ fn query_contains_path(query: &Query) -> bool {
 /// through; a leaf buried inside a construct outside that fragment is instead rejected by
 /// `plan_bgp`'s own recursion (never silently dropped, which would itself be unsound).
 fn reject_non_bgp_typed_leaves(query: &Query) -> Result<(), BgpPlanError> {
+    // The whole query starts at BODY position (only outer read-control wrappers above it).
+    reject_non_bgp_typed_leaves_at(query, true)
+}
+
+/// `body_position` is true while `query` is still reachable as the top-level BODY through outer
+/// read-control wrappers ONLY (Select/Distinct/Count/From/…). A standalone (body-position) `IsA` NOW
+/// LOWERS via [`plan_isa`] (a cross-root two-root hash join), so it is allowed through here and its
+/// precise regime rejection (variable class / bound element) is decided by `plan_isa`. A NESTED `IsA`
+/// (inside And/Or/Not — a BGP conjunction or logical combinator) still rejects closed: the cross-root
+/// node reads two graphs and is top-level only. `TypeOf`/`Dot` never lower and reject in any position.
+fn reject_non_bgp_typed_leaves_at(query: &Query, body_position: bool) -> Result<(), BgpPlanError> {
     match query {
         Query::TypeOf(_) => return Err(BgpPlanError::TypeOfNotStoredType),
         Query::Dot(_) => return Err(BgpPlanError::DotNotStoreEdge),
-        Query::IsA(_) => return Err(BgpPlanError::IsASubsumptionUnsupported),
-        Query::And(and) => and.and.iter().try_for_each(reject_non_bgp_typed_leaves)?,
-        Query::Or(or) => or.or.iter().try_for_each(reject_non_bgp_typed_leaves)?,
-        Query::Not(not) => reject_non_bgp_typed_leaves(&not.query)?,
-        Query::Select(select) => reject_non_bgp_typed_leaves(&select.query)?,
-        Query::Distinct(distinct) => reject_non_bgp_typed_leaves(&distinct.query)?,
-        Query::Count(count) => reject_non_bgp_typed_leaves(&count.query)?,
-        Query::Using(using) => reject_non_bgp_typed_leaves(&using.query)?,
-        Query::From(from) => reject_non_bgp_typed_leaves(&from.query)?,
-        Query::Pin(pin) => reject_non_bgp_typed_leaves(&pin.query)?,
-        Query::Immediately(immediately) => reject_non_bgp_typed_leaves(&immediately.query)?,
+        Query::IsA(isa) => {
+            if !body_position {
+                return Err(isa_reject_reason(isa));
+            }
+        }
+        Query::And(and) => and
+            .and
+            .iter()
+            .try_for_each(|q| reject_non_bgp_typed_leaves_at(q, false))?,
+        Query::Or(or) => or
+            .or
+            .iter()
+            .try_for_each(|q| reject_non_bgp_typed_leaves_at(q, false))?,
+        Query::Not(not) => reject_non_bgp_typed_leaves_at(&not.query, false)?,
+        Query::Select(select) => reject_non_bgp_typed_leaves_at(&select.query, body_position)?,
+        Query::Distinct(distinct) => reject_non_bgp_typed_leaves_at(&distinct.query, body_position)?,
+        Query::Count(count) => reject_non_bgp_typed_leaves_at(&count.query, body_position)?,
+        Query::Using(using) => reject_non_bgp_typed_leaves_at(&using.query, body_position)?,
+        Query::From(from) => reject_non_bgp_typed_leaves_at(&from.query, body_position)?,
+        Query::Pin(pin) => reject_non_bgp_typed_leaves_at(&pin.query, body_position)?,
+        Query::Immediately(immediately) => {
+            reject_non_bgp_typed_leaves_at(&immediately.query, body_position)?
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// The PRECISE reject reason for a `Query::IsA` leaf, distinguished by its class term. Both regimes
+/// reject closed this pass, but with distinct, documented reasons (matching the reference split in
+/// terminusdb `src/core/document/instance.pl`):
+///   * a VARIABLE class (`type_of`) → [`BgpPlanError::IsAVariableClass`]: the downward `sys:inherits`
+///     subsumption closure needs the class bound as a constant to seed it;
+///   * a BOUND class (the node regime `is_instance_class`, instance.pl:80-92) →
+///     [`BgpPlanError::IsASubsumptionUnsupported`]: it needs a cross-dictionary IRI-reconciled join
+///     between the INSTANCE-graph `rdf:type` relation and the SCHEMA-graph downward subsumption closure
+///     (the two graphs commit SEPARATE dictionaries under SEPARATE roots, so no sound raw-id join
+///     exists — see that variant's rationale).
+///
+/// The LITERAL-subject regime of `is_instance` (the XSD datatype lattice, `basetype_subsumption_of`,
+/// instance.pl:50-66) is structurally UNREACHABLE from woql2 `IsA`: its `element` field is a
+/// [`crate::value::NodeValue`], which is only a node IRI or a variable and cannot carry a typed
+/// literal, so a "literal isa" cannot be constructed here and needs no separate arm.
+fn isa_reject_reason(isa: &crate::compare::IsA) -> BgpPlanError {
+    match &isa.type_of {
+        crate::value::NodeValue::Variable(_) => BgpPlanError::IsAVariableClass,
+        crate::value::NodeValue::Node(_) => BgpPlanError::IsASubsumptionUnsupported,
+    }
 }
 
 /// Collect every variable name used in the fragment we lower through, so fresh path
@@ -13498,6 +13730,109 @@ fn sys_inherits_edge() -> LayerBgpPlan {
     }
 }
 
+/// The `rdf:type` predicate IRI the instance `rdf:type` edge reads.
+const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+
+/// The INSTANCE-graph `Triple(?x, rdf:type, ?class)` edge — a single-atom 2-column node BGP delivering
+/// `[?x, class]` (subject var, `rdf:type` predicate, object var).
+fn rdf_type_edge() -> LayerBgpPlan {
+    LayerBgpPlan {
+        source: ColumnSource::Materialized,
+        atoms: vec![LayerBgpAtom::all_variables(RDF_TYPE_IRI.as_bytes().to_vec())],
+        joins: Vec::new(),
+    }
+}
+
+/// SCHEMA-GRAPH FOUNDATION — compile WOQL `IsA(?x, C)` (node regime, BOUND class `C`).
+///
+/// Reference (`src/core/document/instance.pl:80-92`, `is_instance_class`): `X isa C` holds iff `X` has
+/// a DIRECT stored `rdf:type Class` with `class_subsumed(Class, C)` — i.e. `Class` lies in the DOWNWARD
+/// `sys:inherits` closure of `C` (`{C} ∪ subclasses(C)`). We lower this to a CROSS-DICTIONARY two-root
+/// hash join:
+///   * LEFT (schema graph): the downward `sys:inherits` closure of `C` — the reflexive INVERTED
+///     transitive closure from `C` (walk the inverse subclass edge to collect `C`'s subclasses),
+///     delivering the class SET as one node column.
+///   * RIGHT (instance graph): `Triple(?x, rdf:type, ?class)` — the `[?x, class]` direct-type relation.
+///   * [`CompiledRelationStatement::CrossRootHashJoin`] joins the two by IRI-HASH (each side's class id
+///     authenticated to `hash_object(IRI)` against ITS OWN root; a full-field LogUp SEMI-JOIN keeps
+///     instance rows whose class-hash is a member of the closure set), delivering the `?x` set.
+///
+/// Reject-closed: a VARIABLE class ([`BgpPlanError::IsAVariableClass`]) has no seed for the downward
+/// closure; a BOUND ELEMENT (`<n> isa C`, a ground existence check) and any NESTED `IsA` (inside a BGP
+/// conjunction) are deferred ([`BgpPlanError::IsASubsumptionUnsupported`]); the LITERAL-subject regime
+/// is structurally unrepresentable (`element` is a `NodeValue`, never a typed literal).
+fn plan_isa(
+    isa: &crate::compare::IsA,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    let x_var = match &isa.element {
+        crate::value::NodeValue::Variable(v) => v.clone(),
+        // A bound element is a ground existence check `<n> isa C`; deferred (needs a different shape).
+        crate::value::NodeValue::Node(_) => return Err(BgpPlanError::IsASubsumptionUnsupported),
+    };
+    let class_iri = match &isa.type_of {
+        crate::value::NodeValue::Node(iri) => iri.clone(),
+        crate::value::NodeValue::Variable(_) => return Err(BgpPlanError::IsAVariableClass),
+    };
+    // The cross-root node is TOP-LEVEL only (it cannot be nested under a Store `Distinct`); a user
+    // `Distinct` gate is therefore deferred. `Count`/`Select` are `CompiledBgp`-level (no nesting).
+    if !distincts.is_empty() {
+        return Err(BgpPlanError::IsASubsumptionUnsupported);
+    }
+    // A fresh internal class variable that cannot collide with the user's `?x`.
+    let class_var = {
+        let mut name = String::from("__isa_class");
+        while name == x_var {
+            name.push('_');
+        }
+        name
+    };
+
+    // LEFT (schema): downward `sys:inherits` closure of `C` — reflexive, INVERTED (subclasses of C).
+    let closure = CompiledRelation {
+        schema: vec![class_var.clone()],
+        domains: vec![Some(EqualityValueDomain::Node)],
+        statement: CompiledRelationStatement::TransitiveClosure {
+            edge: sys_inherits_edge(),
+            seed: CanonicalObject::Node(class_iri.into_bytes()),
+            reflexive: true,
+            inverted: true,
+            graph: ProofGraph::Schema,
+        },
+    };
+    // RIGHT (instance): `Triple(?x, rdf:type, ?class)` = [?x, class].
+    let rdf_type = CompiledRelation {
+        schema: vec![x_var.clone(), class_var.clone()],
+        domains: vec![None, Some(EqualityValueDomain::Node)],
+        statement: CompiledRelationStatement::Bgp(rdf_type_edge()),
+    };
+    // The cross-root hash join delivers the `?x` set (right columns minus the class key at index 1).
+    let relation = CompiledRelation {
+        schema: vec![x_var.clone()],
+        domains: vec![None],
+        statement: CompiledRelationStatement::CrossRootHashJoin {
+            left: Box::new(closure),
+            right: Box::new(rdf_type),
+            left_key_col: 0,
+            right_key_col: 1,
+        },
+    };
+
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct: false,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
 /// Emit the one-endpoint-bound subsumption closure over the SCHEMA graph and gate it with the
 /// INTRINSIC endpoint `Distinct` (set semantics). `reflexive = true` always. `count`-gated closures
 /// are a deferred follow-up (mirrors the path closure planner).
@@ -14009,6 +14344,14 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // graph. Every unsupported subsumption shape (both endpoints free, count-gated, …) rejects closed.
     if let Query::Subsumption(sub) = body {
         return plan_subsumption(sub, &selections, collection, count_variable, &distincts);
+    }
+
+    // SCHEMA-GRAPH FOUNDATION — `IsA(?x, C)` (node regime, bound class) lowers to a CROSS-DICTIONARY
+    // two-root hash join: the downward `sys:inherits` closure of `C` (schema graph) hash-joined against
+    // the instance `rdf:type` relation (instance graph). Standalone only (a nested `IsA` inside a BGP
+    // conjunction rejects via `reject_non_bgp_typed_leaves`). See [`plan_isa`].
+    if let Query::IsA(isa) = body {
+        return plan_isa(isa, &selections, collection, count_variable, &distincts);
     }
 
     if matches!(body, Query::Start(_) | Query::Limit(_) | Query::Once(_)) {
@@ -15163,6 +15506,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::When { expanded } => visit(expanded, depth + 1, nodes),
             CompiledRelationStatement::LeftAnti { left, right, .. }
             | CompiledRelationStatement::InnerJoin { left, right, .. }
+            | CompiledRelationStatement::CrossRootHashJoin { left, right, .. }
             | CompiledRelationStatement::LeftOuter { left, right, .. } => {
                 visit(left, depth + 1, nodes)?;
                 visit(right, depth + 1, nodes)
@@ -15282,6 +15626,13 @@ fn relation_graph(relation: &CompiledRelation) -> std::io::Result<ProofGraph> {
                 walk(left, acc)?;
                 walk(right, acc)
             }
+            // The cross-root hash join reads TWO graphs; it is TOP-LEVEL only (handled by the two-layer
+            // prove_cross_root/verify_cross_root BEFORE this single-graph routing). Nested inside a
+            // single-graph relation it cannot be served — reject closed.
+            CompiledRelationStatement::CrossRootHashJoin { .. } => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "cross-root hash join must be the top-level relation (two-graph); reject closed",
+            )),
         }
     }
     let mut acc = None;
@@ -15480,6 +15831,11 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         CompiledRelationStatement::InnerJoin { left, right, .. } => {
             is_provably_duplicate_free(left) && is_provably_duplicate_free(right)
         }
+        // The cross-root SEMI-JOIN keeps a SUBSET of the instance `rdf:type` rows. Whether the kept
+        // `?x` column is duplicate-free depends on whether an instance can carry two DISTINCT subsumed
+        // types (two kept rows sharing `?x`); conservatively NOT provably unique (a `Distinct` is not
+        // proven redundant over it).
+        CompiledRelationStatement::CrossRootHashJoin { .. } => false,
         // Row-eliminating filters/orders/slices never introduce duplicates. Tuple
         // disequality only DROPS rows (edge-reuse over-counts), so it inherits uniqueness.
         CompiledRelationStatement::GeneratedU64Filter { input, .. }
