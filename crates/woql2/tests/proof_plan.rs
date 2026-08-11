@@ -51,7 +51,7 @@ use dory_pcs::primitives::arithmetic::Field;
 
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_executed_result_inputs, plan_bgp, BgpPlanError, CompiledBgp,
-    CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue,
+    CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue, StringNumericTarget,
 };
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
@@ -4502,17 +4502,53 @@ fn typecast_narrowing_to_byte_compiles_range_check_deferred_to_prove() {
 }
 
 #[test]
-fn typecast_to_string_target_rejects_closed() {
-    reject(
-        typecast_query(xsd_type("string"), "r"),
-        BgpPlanError::TypecastUnsupportedTarget {
-            iri: "http://www.w3.org/2001/XMLSchema#string".into(),
-        },
-    );
+fn typecast_numeric_to_string_compiles() {
+    // A numeric (pinned UInt32) source cast to xsd:string is the number→string cast — a TERMINAL
+    // revealed value (the result is NOT appended to the committed schema).
+    let compiled = plan_bgp(&typecast_query(xsd_type("string"), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::TypecastNumberToString { .. }
+    ));
+    // Terminal: the child schema is carried through verbatim (no committed result column).
+    assert!(!compiled.relation.schema.iter().any(|v| v == "r"));
+}
+
+/// `t(?x,p,?a) & Typecast(?a, target, ?r)` — `?a` is an UNPINNED store value (no range filter), so
+/// its type is enforced only at recompute (the shape used for string→number casts).
+fn typecast_unpinned_query(target: NodeValue, result: &str) -> Query {
+    and_of(vec![tv("x", "p", "a"), typecast_conjunct("a", target, result)])
+}
+
+#[test]
+fn typecast_string_to_integer_compiles() {
+    let compiled = plan_bgp(&typecast_unpinned_query(xsd_type("integer"), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::TypecastStringToNumber {
+            target: StringNumericTarget::Integer,
+            ..
+        }
+    ));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "r"));
+}
+
+#[test]
+fn typecast_string_to_decimal_compiles() {
+    let compiled = plan_bgp(&typecast_unpinned_query(xsd_type("decimal"), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::TypecastStringToNumber {
+            target: StringNumericTarget::Decimal,
+            ..
+        }
+    ));
 }
 
 #[test]
 fn typecast_to_float_target_rejects_closed() {
+    // xsd:double is neither a fixed-width integer NOR a number↔string target — reject closed
+    // (float↔string is NOT provable: SWI's float `~w` formatting is not reproduced byte-exact).
     reject(
         typecast_query(xsd_type("double"), "r"),
         BgpPlanError::TypecastUnsupportedTarget {
@@ -4522,13 +4558,23 @@ fn typecast_to_float_target_rejects_closed() {
 }
 
 #[test]
-fn typecast_to_arbitrary_precision_integer_rejects_closed() {
-    // `xsd:integer` is arbitrary precision — not a fixed-width integer width — reject closed.
+fn typecast_string_to_float_target_rejects_closed() {
+    // xsd:float is not a provable string→number target (float formatting not reproduced) — reject.
+    reject(
+        typecast_unpinned_query(xsd_type("float"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "http://www.w3.org/2001/XMLSchema#float".into(),
+        },
+    );
+}
+
+#[test]
+fn typecast_numeric_source_to_integer_rejects_closed() {
+    // A source PINNED to a fixed-width integer (UInt32) cast to xsd:integer would be a string→number
+    // cast, but the pinned datatype is not xsd:string — reject closed at compile (like Concat).
     reject(
         typecast_query(xsd_type("integer"), "r"),
-        BgpPlanError::TypecastUnsupportedTarget {
-            iri: "http://www.w3.org/2001/XMLSchema#integer".into(),
-        },
+        BgpPlanError::TypecastValueSourceInvalid { var: "a".into() },
     );
 }
 

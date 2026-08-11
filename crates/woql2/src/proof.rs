@@ -86,6 +86,10 @@ use num_integer::Integer as _;
 use num_rational::BigRational;
 use num_traits::{Num as _, One as _, Pow as _, Signed as _, ToPrimitive as _, Zero as _};
 use tdb_succinct::tfc::decimal::storage_to_decimal;
+// The store's own arbitrary-precision integer decoder (exact inverse of `bigint_to_storage`) — used
+// to render a root-authenticated `xsd:integer` (`CanonicalDatatype::BigInt`) source to base-10 for
+// the number→string cast. `rug::Integer` Display is base-10, matching SWI `format ~w`.
+use tdb_succinct::tfc::integer::storage_to_bigint;
 
 use crate::expression::{ArithmeticExpression, ArithmeticValue};
 use crate::misc::InRange;
@@ -568,6 +572,68 @@ pub enum CompiledRelationStatement {
         /// (tracked only for query identity / terminal exposure, like `Concat`'s `result`).
         result: String,
     },
+    /// WOQL `Typecast(NumericVal, xsd:string, Result)` — a per-row NUMBER→STRING cast, delivered
+    /// EXACTLY like [`Self::RationalArith`]/[`Self::Concat`]: a TERMINAL, REVEALED `xsd:string`
+    /// value (NOT a committed column — a synthesized lexical does not encode into a field element
+    /// and feeds nothing downstream). The child relation `input` binds AND authenticates the
+    /// numeric source column; the child columns pass through verbatim and the per-row cast string
+    /// is DELIVERED alongside and re-derived by the verifier (see [`expected_cast_to_string_objects`]).
+    ///
+    /// FIDELITY (`casting:typecast_switch`, `terminusdb/src/core/triple/casting.pl`): an integer
+    /// source (fixed-width `xsd:int`/`long`/… or arbitrary `xsd:integer`) casts to string via
+    /// `format(string(S),"~w",[Val])` = base-10, `-` sign, no leading zeros; an `xsd:decimal`
+    /// source casts via `rational_to_decimal_string(Val, S, 20)` — the SAME byte-exact renderer
+    /// [`rational_to_decimal_string_20`] the decimal layer already uses. A `float`/`double` source
+    /// (SWI's own float `~w` formatting) or any non-numeric source FAILS CLOSED at recompute
+    /// (reject-closed over approximate). SOUNDNESS is identical to `RationalArith`: the operand is
+    /// pinned to the trusted root, the render is deterministic and byte-exact, and the delivered
+    /// value must equal the recomputation.
+    TypecastNumberToString {
+        input: Box<CompiledRelation>,
+        /// Index of the authenticated (nonnullable node/value) numeric source column.
+        source_column: usize,
+        /// The fresh result VARIABLE name the cast binds — terminal/revealed, NOT a committed column.
+        result: String,
+    },
+    /// WOQL `Typecast(StringVal, xsd:integer | xsd:decimal, Result)` — a per-row STRING→NUMBER cast,
+    /// delivered like [`Self::RationalArith`]/[`Self::Concat`]: a TERMINAL, REVEALED numeric value
+    /// (NOT a committed column — an arbitrary `xsd:integer`/`xsd:decimal` does not encode into a
+    /// single field element and feeds nothing downstream). The child relation `input` binds AND
+    /// authenticates the `xsd:string` source column; the child columns pass through verbatim and the
+    /// parsed value is DELIVERED alongside and re-derived by the verifier (see
+    /// [`expected_cast_from_string_objects`]).
+    ///
+    /// FIDELITY (`casting:typecast_switch`): string→`xsd:integer` parses the `integer//1` grammar
+    /// (`^[+-]?[0-9]+$`, leading zeros allowed) — we ship exactly that (`+` accepted, matching SWI);
+    /// string→`xsd:decimal` parses `casting:string_decimal_to_rational/2` — we ship a BYTE-EXACT
+    /// SAFE SUBSET (`-?` sign, `D+` / `D+.D+` / `.D+`; trailing-dot `D+.` REJECTED because SWI's
+    /// `atom_number("")` fails; leading `+`, scientific `1e5` — which SWI's `atom_number` turns into
+    /// a FLOAT — hex, and Prolog rational literals all REJECTED closed). A malformed/out-of-grammar
+    /// string FAILS CLOSED at recompute (SWI `typecast` throws → the query fails → the proof fails
+    /// closed, never a wrong/silent value). The result is delivered as its client-facing lexical
+    /// (`xsd:integer` = base-10; `xsd:decimal` = [`rational_to_decimal_string_20`]).
+    TypecastStringToNumber {
+        input: Box<CompiledRelation>,
+        /// Index of the authenticated (nonnullable node/value) `xsd:string` source column.
+        source_column: usize,
+        /// The numeric target type the string is parsed into. Bound into the query digest.
+        target: StringNumericTarget,
+        /// The fresh result VARIABLE name the cast binds — terminal/revealed, NOT a committed column.
+        result: String,
+    },
+}
+
+/// The numeric target of a WOQL `xsd:string`→number [`CompiledRelationStatement::TypecastStringToNumber`]
+/// cast. Each parses a DISTINCT reference grammar and delivers a DISTINCT result datatype, so the
+/// discriminant is bound into the query digest (a proof for one target cannot be replayed as the
+/// other).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StringNumericTarget {
+    /// `xsd:integer` (arbitrary precision) via the `integer//1` grammar; delivered as base-10.
+    Integer,
+    /// `xsd:decimal` (exact rational) via `string_decimal_to_rational/2`; delivered via
+    /// [`rational_to_decimal_string_20`].
+    Decimal,
 }
 
 /// One element of a WOQL `concat` template.
@@ -1117,6 +1183,27 @@ pub enum ProvedQueryStatement {
         /// Per-row synthesized xsd:date results, revealed and re-derived by the verifier.
         result_objects: Vec<CanonicalObject>,
     },
+    /// A proved WOQL NUMBER→STRING `Typecast`: like `Concat`, the authenticated source-binding child
+    /// plus the DELIVERED per-row `xsd:string` cast. The committed columns are the child's verbatim
+    /// (the cast string is terminal/revealed); verification RE-DERIVES `result_objects` from the
+    /// child's root-authenticated numeric source column and requires an exact match, so a
+    /// tampered/wrong result fails closed.
+    TypecastNumberToString {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:string casts, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL STRING→NUMBER `Typecast`: like `Concat`, the authenticated source-binding child
+    /// plus the DELIVERED per-row numeric (`xsd:integer`/`xsd:decimal`) cast. The committed columns
+    /// are the child's verbatim (the numeric value is terminal/revealed); verification RE-DERIVES
+    /// `result_objects` by re-parsing the child's root-authenticated `xsd:string` source column with
+    /// the exact reference grammar and requires an exact match. A malformed/out-of-grammar string
+    /// FAILS CLOSED at re-derivation.
+    TypecastStringToNumber {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized numeric casts, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
 }
 
 /// A decoded envelope that has already been checked against the caller's query, trusted
@@ -1598,6 +1685,38 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 CalendarDateFn::MonthEndDate => 3u8,
             }]);
             hasher.update((*input_column as u64).to_le_bytes());
+        }
+        CompiledRelationStatement::TypecastNumberToString {
+            input,
+            source_column,
+            ..
+        } => {
+            // DISTINCT tag; bind the child + the authenticated numeric source column so a proof
+            // cannot be replayed as a different op or over a different source column. The source
+            // DATATYPE is NOT bound (it is read from the root-authenticated dictionary at recompute,
+            // like Concat's operand columns); the result variable NAME is a label (the output is
+            // fully determined by the recompute), matching Concat/RationalArith digest discipline.
+            hasher.update(b"/typecast-num-to-string");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*source_column as u64).to_le_bytes());
+        }
+        CompiledRelationStatement::TypecastStringToNumber {
+            input,
+            source_column,
+            target,
+            ..
+        } => {
+            // DISTINCT tag; bind the child, the authenticated xsd:string source column, AND the
+            // numeric target discriminant so a proof for string→integer cannot be replayed as
+            // string→decimal (they parse different grammars and deliver different datatypes). The
+            // result variable NAME is a label (output fully determined by the recompute).
+            hasher.update(b"/typecast-string-to-num");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*source_column as u64).to_le_bytes());
+            hasher.update([match target {
+                StringNumericTarget::Integer => 0u8,
+                StringNumericTarget::Decimal => 1u8,
+            }]);
         }
     }
     Ok(hasher.finalize().into())
@@ -2087,7 +2206,11 @@ fn relation_result_descriptors(
         }
         // CalendarDate, like Concat/RationalArith, carries the child's committed columns through
         // VERBATIM — its synthesized xsd:date result is terminal/revealed, not a committed column.
-        CompiledRelationStatement::CalendarDate { input, .. } => {
+        CompiledRelationStatement::CalendarDate { input, .. }
+        // TypecastNumberToString/TypecastStringToNumber, like Concat/RationalArith, carry the child's
+        // committed columns through VERBATIM — the cast result is terminal/revealed, not committed.
+        | CompiledRelationStatement::TypecastNumberToString { input, .. }
+        | CompiledRelationStatement::TypecastStringToNumber { input, .. } => {
             relation_result_descriptors(input)
         }
     }
@@ -2350,6 +2473,21 @@ fn relation_proof_plan(
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "WOQL calendar-integer relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // Number↔string Typecasts are woql2-side verifier-recompute ops (like Concat): the top-level
+        // `prove_with_context` intercepts them, so these recursive-planner arms are never reached for
+        // a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::TypecastNumberToString { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL number→string Typecast relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        CompiledRelationStatement::TypecastStringToNumber { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL string→number Typecast relations are proved by the query wrapper, not the Store recursive planner",
             ))
         }
         CompiledRelationStatement::CalendarDate { .. } => {
@@ -3348,6 +3486,249 @@ fn expected_rational_arith_objects(
             datatype: CanonicalDatatype::Decimal,
             lexical,
         });
+    }
+    Ok(out)
+}
+
+// ============================================================================================
+// WOQL NUMBER↔STRING Typecast value layer (verifier-recompute; TERMINAL revealed result).
+//
+// Two delivery disciplines, both TERMINAL/revealed exactly like Concat/RationalArith (NO store
+// change, NO commitment-format change, NO novel crypto):
+//   * NUMBER→STRING (`cast_number_to_string_bytes`): decode the root-authenticated numeric source
+//     and RENDER its client-facing lexical — integer family via base-10 (`format ~w`), xsd:decimal
+//     via the already-SWI-validated `rational_to_decimal_string_20`. Delivered as `xsd:string`.
+//   * STRING→NUMBER (`cast_string_to_integer_bigint` / `cast_string_to_decimal_rational`): PARSE
+//     the root-authenticated xsd:string source with the exact reference grammar and deliver the
+//     numeric value's client-facing lexical (`xsd:integer` base-10; `xsd:decimal` via
+//     `rational_to_decimal_string_20`). A malformed/out-of-grammar string FAILS CLOSED (SWI
+//     `typecast` throws → the query fails → the proof fails closed, never a wrong/silent value).
+//
+// Every grammar/render below was differentially validated against a live SWI-Prolog 10.0.2 running
+// the reference predicates (`casting:typecast_switch`, `casting:string_decimal_to_rational/2`,
+// `xsd_parser:integer//1`, `casting:rational_to_decimal_string/3`). SOUNDNESS is identical to
+// Concat/RationalArith: the operand is pinned to the trusted root (`resolve_authenticated_child_values`),
+// the cast is deterministic and byte-exact, and the delivered terminal result must equal the
+// recomputation — no biasable witness.
+
+/// Render ONE root-authenticated NUMERIC source value to its client-facing `xsd:string` lexical,
+/// reproducing `casting:typecast_switch(xsd:string, SourceType, Val, _, S)` BYTE-EXACT.
+///
+/// * integer family (fixed-width `Int*`/`UInt*` and arbitrary `BigInt`=xsd:integer): SWI
+///   `format(string(S),"~w",[Val])` = base-10 with a leading `-` for negatives and NO leading zeros;
+///   Rust `to_string()` on `i128`/`u64`/`rug::Integer` reproduces this exactly.
+/// * `xsd:decimal`: SWI `rational_to_decimal_string(Val, S, 20)` — the SAME renderer
+///   [`rational_to_decimal_string_20`] the decimal/rational layer already delivers byte-exact.
+///
+/// FAILS CLOSED (reject-closed over approximate) on a `float`/`double` source — whose SWI `~w`
+/// float formatting (shortest round-trip, forced `.0`) we do NOT reproduce — and on any non-numeric
+/// source (date/boolean/langString/node), a null, or a generated scalar. There is no biasable
+/// witness: the bytes come from the root-authenticated dictionary value.
+fn cast_number_to_string_bytes(value: &CanonicalResultValue) -> std::io::Result<Vec<u8>> {
+    let not_castable = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL number→string Typecast source row is not an authenticated integer/xsd:decimal value",
+        )
+    };
+    let CanonicalResultValue::Object(CanonicalObject::Value { datatype, lexical }) = value else {
+        return Err(not_castable());
+    };
+    let rendered = match datatype {
+        // Fixed-width integer family → base-10 (`format ~w`). `integral_group_sum_value` re-checks
+        // the exact datatype AND the canonical byte width against the root-authenticated lexical.
+        CanonicalDatatype::UInt8
+        | CanonicalDatatype::UInt16
+        | CanonicalDatatype::UInt32
+        | CanonicalDatatype::UInt64
+        | CanonicalDatatype::Int8
+        | CanonicalDatatype::Int16
+        | CanonicalDatatype::Int32
+        | CanonicalDatatype::Int64 => match integral_group_sum_value(value, *datatype)? {
+            GroupSumValue::Signed(v) => v.to_string(),
+            GroupSumValue::Unsigned(v) => v.to_string(),
+        },
+        // Arbitrary-precision xsd:integer → base-10 via the store's OWN bigint decoder (the exact
+        // inverse of the encoding the root-authenticated lexical carries); `rug::Integer` Display is
+        // base-10 with a leading `-`, matching SWI `format ~w`.
+        CanonicalDatatype::BigInt => storage_to_bigint(&mut &lexical[..]).to_string(),
+        // xsd:decimal → the exact rational (store BCD lexical → canonical string → rational), rendered
+        // by the SWI-validated 20-fractional-digit renderer.
+        CanonicalDatatype::Decimal => {
+            let rational = parse_decimal_to_rational(&storage_to_decimal(&mut &lexical[..]))?;
+            rational_to_decimal_string_20(&rational)?
+        }
+        // float/double (SWI float `~w`) + every other datatype are reject-closed.
+        _ => return Err(not_castable()),
+    };
+    Ok(rendered.into_bytes())
+}
+
+/// Parse an `xsd:string` operand into an `xsd:integer` (arbitrary precision), reproducing the
+/// reference `xsd_parser:integer//1` grammar (`casting.pl:569` `phrase(integer(Casted),C,[])`)
+/// BYTE-EXACT: `sign(+/-/none)` then `natural` (`number_string` over one-or-more digits). That is
+/// exactly `^[+-]?[0-9]+$` with LEADING ZEROS allowed (`"007" -> 7`, `"-0" -> 0`, `"+5" -> 5`),
+/// differentially confirmed against SWI 10.0.2. Anything else — whitespace, an empty/sign-only
+/// string, a decimal point, scientific `1e5`, hex `0x1f`, digit-group `1_000` — FAILS CLOSED (SWI's
+/// `phrase(...,[])` leaves input unconsumed and `typecast` throws → the proof fails closed).
+fn cast_string_to_integer_bigint(bytes: &[u8]) -> std::io::Result<BigInt> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL string→integer Typecast source is not a `[+-]?[0-9]+` integer lexical",
+        )
+    };
+    // xsd:string content is UTF-8; a non-UTF-8 lexical never occurs for a faithful store, and if it
+    // did we refuse rather than guess.
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid())?;
+    let (negative, digits) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(invalid());
+    }
+    // All-ASCII-digit run: base-10 (leading zeros collapse in VALUE, exactly like SWI `number_string`).
+    let mut value = BigInt::from_str_radix(digits, 10).map_err(|_| invalid())?;
+    if negative {
+        value = -value;
+    }
+    Ok(value)
+}
+
+/// Parse an `xsd:string` operand into an `xsd:decimal` (exact rational), reproducing a BYTE-EXACT
+/// SAFE SUBSET of the reference `casting:string_decimal_to_rational/2` (`casting.pl:555`).
+///
+/// Accepted (all differentially confirmed against SWI 10.0.2): an optional single leading `-`, then
+/// one of `D+` (integer), `D+.D+` (both runs non-empty), or `.D+` (leading dot, integer part 0). The
+/// value is `sign * (intdigits ++ fracdigits) / 10^len(fracdigits)` — arithmetically IDENTICAL to
+/// the reference's `IntPart*10^FracLen + FracPart` over `10^FracLen`.
+///
+/// REJECTED CLOSED (a strict subset of SWI's acceptance — rejecting is incompleteness-safe, never a
+/// wrong value): trailing dot `D+.` (SWI's `atom_number("")` FAILS → `typecast` throws), a leading
+/// `+` (SWI would route it through `atom_number`, which we do NOT reproduce), scientific `1e5`
+/// (SWI's `atom_number` yields a FLOAT — a DIFFERENT value/type), hex `0x1f`, Prolog rational
+/// literals `3r4`, multiple dots, whitespace, and the empty/sign-only string.
+fn cast_string_to_decimal_rational(bytes: &[u8]) -> std::io::Result<BigRational> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL string→decimal Typecast source is not a reproducible decimal lexical (reject-closed subset of string_decimal_to_rational)",
+        )
+    };
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid())?;
+    // The reference strips a leading `-` ONLY (never `+`); reproduce exactly.
+    let (negative, body) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if body.is_empty() || body.starts_with('+') {
+        return Err(invalid());
+    }
+    let (int_str, frac_str) = match body.split_once('.') {
+        Some((int_part, frac_part)) => {
+            // A SECOND '.' -> SWI `split_string` yields 3 parts and the clause fails. Reject.
+            if frac_part.contains('.') {
+                return Err(invalid());
+            }
+            // Trailing dot `D+.` -> SWI `atom_number("")` fails -> `typecast` throws. Reject.
+            if frac_part.is_empty() {
+                return Err(invalid());
+            }
+            (int_part, frac_part)
+        }
+        // No '.' -> integer form (SWI `atom_number(String)` over a pure-digit string).
+        None => (body, ""),
+    };
+    // Leading dot `.D+` -> the reference prepends "0"; treat an empty integer part as 0.
+    let int_digits = if int_str.is_empty() { "0" } else { int_str };
+    if !int_digits.bytes().all(|b| b.is_ascii_digit())
+        || (!frac_str.is_empty() && !frac_str.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(invalid());
+    }
+    let denominator = BigInt::from(10).pow(frac_str.len() as u32);
+    // numerator = (int_digits ++ frac_str) as one big decimal integer, signed.
+    let mut digits = String::with_capacity(int_digits.len() + frac_str.len());
+    digits.push_str(int_digits);
+    digits.push_str(frac_str);
+    let mut numerator = BigInt::from_str_radix(&digits, 10).map_err(|_| invalid())?;
+    if negative {
+        numerator = -numerator;
+    }
+    // `BigRational::new` auto-reduces to lowest terms with a positive denominator.
+    Ok(BigRational::new(numerator, denominator))
+}
+
+/// VERIFIER RECOMPUTE for a WOQL NUMBER→STRING `Typecast`: authenticate the numeric source column
+/// against the trusted root, RENDER each row's client-facing `xsd:string` lexical
+/// ([`cast_number_to_string_bytes`]), and deliver revealed `xsd:string` objects. A float/double or
+/// non-numeric operand row FAILS CLOSED, so a proof is only ever produced for rows the reference
+/// itself would cast, and the delivered value matches byte-for-byte.
+fn expected_cast_to_string_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    source_column: usize,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let column = values.get(source_column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL number→string Typecast source column out of range",
+        )
+    })?;
+    if column.len() != input.result_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL number→string Typecast source column length mismatch",
+        ));
+    }
+    let mut out = Vec::with_capacity(input.result_len);
+    for value in column {
+        out.push(CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: cast_number_to_string_bytes(value)?,
+        });
+    }
+    Ok(out)
+}
+
+/// VERIFIER RECOMPUTE for a WOQL STRING→NUMBER `Typecast`: authenticate the `xsd:string` source
+/// column against the trusted root ([`authenticate_string_column`]), PARSE each row with the exact
+/// reference grammar for `target`, and deliver the numeric value's client-facing lexical
+/// (`xsd:integer` base-10 tagged `BigInt`; `xsd:decimal` via [`rational_to_decimal_string_20`] tagged
+/// `Decimal`). A malformed/out-of-grammar string FAILS CLOSED (the reference throws), so a proof is
+/// only ever produced for rows the reference itself would cast, and the delivered value matches.
+fn expected_cast_from_string_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    source_column: usize,
+    target: StringNumericTarget,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    // Root-authenticated xsd:string bytes per row (a non-string operand row FAILS CLOSED here).
+    let source_bytes = authenticate_string_column(&values, source_column, input.result_len)?;
+    let mut out = Vec::with_capacity(input.result_len);
+    for bytes in &source_bytes {
+        let object = match target {
+            StringNumericTarget::Integer => CanonicalObject::Value {
+                datatype: CanonicalDatatype::BigInt,
+                lexical: cast_string_to_integer_bigint(bytes)?.to_string().into_bytes(),
+            },
+            StringNumericTarget::Decimal => {
+                let rational = cast_string_to_decimal_rational(bytes)?;
+                CanonicalObject::Value {
+                    datatype: CanonicalDatatype::Decimal,
+                    lexical: rational_to_decimal_string_20(&rational)?.into_bytes(),
+                }
+            }
+        };
+        out.push(object);
     }
     Ok(out)
 }
@@ -4531,6 +4912,33 @@ impl ProvedBgp {
         }
     }
 
+    /// The per-row synthesized `xsd:string` results of a top-level NUMBER→STRING `Typecast`, each a
+    /// TERMINAL revealed `CanonicalObject::Value` (datatype `xsd:string`) the verifier RE-DERIVES by
+    /// rendering the root-authenticated numeric source. `None` for any other proof. Reading these
+    /// AFTER a successful `verify` is sound for the same reason as [`Self::concat_result_objects`].
+    pub fn typecast_to_string_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::TypecastNumberToString { result_objects, .. } => {
+                Some(result_objects)
+            }
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized numeric results of a top-level STRING→NUMBER `Typecast`, each a
+    /// TERMINAL revealed `CanonicalObject::Value` (datatype `xsd:integer`=`BigInt` or `xsd:decimal`)
+    /// the verifier RE-DERIVES by re-parsing the root-authenticated `xsd:string` source. `None` for
+    /// any other proof. Reading these AFTER a successful `verify` is sound for the same reason as
+    /// [`Self::concat_result_objects`].
+    pub fn typecast_from_string_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::TypecastStringToNumber { result_objects, .. } => {
+                Some(result_objects)
+            }
+            _ => None,
+        }
+    }
+
     /// Verify against a caller-selected, independently trusted root.
     pub fn verify(
         &self,
@@ -5673,6 +6081,101 @@ impl ProvedBgp {
                 }
             }
             (
+                ProvedQueryStatement::TypecastNumberToString {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::TypecastNumberToString {
+                    input: input_plan,
+                    source_column,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the source-binding child against the trusted root — its own
+                //     `verify_relation` ends with `verify_columns`, pinning the numeric source column.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM (the
+                //     xsd:string cast is not a committed column); pin count/domain (per-row map).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL number→string Typecast must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: render the client-facing xsd:string per row from the
+                //     root-authenticated numeric source and require an EXACT match. A float/double or
+                //     non-numeric operand row fails closed — no biasable witness.
+                let expected_objects = expected_cast_to_string_objects(
+                    input,
+                    input_plan,
+                    *source_column,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL number→string Typecast result is not the exact verifier-recomputed xsd:string",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::TypecastStringToNumber {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::TypecastStringToNumber {
+                    input: input_plan,
+                    source_column,
+                    target,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the source-binding child against the trusted root.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM (the
+                //     parsed numeric value is not a committed column); pin count/domain (per-row map).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL string→number Typecast must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: re-parse the root-authenticated xsd:string per row with
+                //     the exact reference grammar for `target` and require an EXACT match. A
+                //     malformed/out-of-grammar string, or a non-string operand row, fails closed.
+                let expected_objects = expected_cast_from_string_objects(
+                    input,
+                    input_plan,
+                    *source_column,
+                    *target,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL string→number Typecast result is not the exact verifier-recomputed numeric value",
+                    ));
+                }
+            }
+            (
                 ProvedQueryStatement::CalendarInt { input },
                 CompiledRelationStatement::CalendarInt {
                     input: input_plan,
@@ -6616,6 +7119,26 @@ impl ProvedBgp {
                 ));
             }
             (
+                ProvedQueryStatement::TypecastNumberToString { .. },
+                CompiledRelationStatement::TypecastNumberToString { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL number→string Typecast proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::TypecastStringToNumber { .. },
+                CompiledRelationStatement::TypecastStringToNumber { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL string→number Typecast proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -6977,6 +7500,90 @@ fn prove_rational_arith_relation(
 
     Ok(ProvedBgp {
         statement: ProvedQueryStatement::RationalArith {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL NUMBER→STRING `Typecast`: prove the source-binding child through the Store,
+/// then DELIVER the per-row `xsd:string` cast produced by the SAME [`expected_cast_to_string_objects`]
+/// the verifier re-runs. Like `Concat`/`RationalArith`, NO derived column is committed — the child's
+/// columns/commitments are reused verbatim and the synthesized strings are re-checked at verify. A
+/// float/double or non-numeric operand row FAILS CLOSED here (exactly as verify does).
+fn prove_typecast_to_string_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    source_column: usize,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects = expected_cast_to_string_objects(
+        &child,
+        input,
+        source_column,
+        layer,
+        layer.state.commitment_root,
+    )?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::TypecastNumberToString {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL STRING→NUMBER `Typecast`: prove the source-binding child through the Store,
+/// then DELIVER the per-row numeric cast produced by the SAME [`expected_cast_from_string_objects`]
+/// the verifier re-runs. Like `Concat`/`RationalArith`, NO derived column is committed. A
+/// malformed/out-of-grammar string, or a non-string operand row, FAILS CLOSED here (exactly as
+/// verify does), so a prover cannot produce a proof for a row the reference would reject.
+fn prove_typecast_from_string_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    source_column: usize,
+    target: StringNumericTarget,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects = expected_cast_from_string_objects(
+        &child,
+        input,
+        source_column,
+        target,
+        layer,
+        layer.state.commitment_root,
+    )?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::TypecastStringToNumber {
             input: Box::new(child),
             result_objects,
         },
@@ -7648,6 +8255,33 @@ impl CompiledBgp {
         {
             return prove_rational_arith_relation(context, layer, input, expr);
         }
+        // WOQL NUMBER→STRING `Typecast` — a per-row terminal xsd:string delivery over a Store-proven
+        // authenticated numeric child.
+        if let CompiledRelationStatement::TypecastNumberToString {
+            input,
+            source_column,
+            ..
+        } = &self.relation.statement
+        {
+            return prove_typecast_to_string_relation(context, layer, input, *source_column);
+        }
+        // WOQL STRING→NUMBER `Typecast` — a per-row terminal numeric delivery over a Store-proven
+        // authenticated xsd:string child.
+        if let CompiledRelationStatement::TypecastStringToNumber {
+            input,
+            source_column,
+            target,
+            ..
+        } = &self.relation.statement
+        {
+            return prove_typecast_from_string_relation(
+                context,
+                layer,
+                input,
+                *source_column,
+                *target,
+            );
+        }
         // WOQL INTEGER-result calendar ops — a per-row map over a Store-proven authenticated date
         // column, appending the derived integer column(s) via the same recompute verify re-runs.
         if let CompiledRelationStatement::CalendarInt {
@@ -8245,6 +8879,12 @@ pub enum BgpPlanError {
     /// not pinned by a range comparison). Only fixed-width integer sources are provable.
     #[error("Typecast source `?{var}` is not a nonnullable exact fixed-width integer store value")]
     TypecastSourceNotInteger { var: String },
+
+    /// A NUMBER↔STRING `Typecast`'s source variable IS bound, but not as a nonnullable node/value
+    /// STORE value column (it is a node IRI, predicate, nullable Optional, or generated column), so
+    /// its per-row value cannot be authenticated and cast. Reject closed.
+    #[error("Typecast source `?{var}` is not a nonnullable store value column (number↔string cast)")]
+    TypecastValueSourceInvalid { var: String },
 
     /// `Typecast`'s `result` is not a variable, or is already bound by the source BGP; the cast
     /// column must be a fresh output column, never a literal or a redefinition of a binding.
@@ -9562,15 +10202,20 @@ fn xsd_simple_type_name(value: &XSDAnySimpleType) -> &'static str {
     }
 }
 
-/// Compile a WOQL `Typecast` of ONE authenticated integer column to a fixed-width integer type
-/// into a per-row derived-column relation.
+/// Compile a WOQL `Typecast` of ONE authenticated source column into a per-row cast relation.
 ///
 /// Shape: an `And` whose conjuncts are a source-binding child BGP plus EXACTLY ONE `Typecast`.
 /// The child is compiled with [`plan_bgp`] (so its triples + range comparisons authenticate and
-/// datatype-pin the source column exactly as the Eval/Sum forms rely on). Only a store-bound
-/// fixed-width-integer SOURCE cast to a fixed-width-integer TARGET is provable; every other case
-/// (rational/float/string targets, `xsd:integer`, a variable target, an unbound source, a literal
-/// or already-bound result) rejects closed with a specific error.
+/// datatype-pin the source column exactly as the Eval/Sum forms rely on). Provable cast families,
+/// dispatched on the TARGET type:
+///   * fixed-width integer → fixed-width integer (value-preserving; appends a COMMITTED derived
+///     integer column) — the source must be a pinned fixed-width integer;
+///   * number → `xsd:string` (integer via `~w`, xsd:decimal via `rational_to_decimal_string_20`),
+///     and `xsd:string` → `xsd:integer` / `xsd:decimal` (exact reference-grammar parse) — delivered
+///     as TERMINAL, revealed values (like `Concat`), the source a nonnullable store value column.
+/// Every other case (float/double↔string, scientific/`+`/malformed string parses, a non-numeric /
+/// non-string source, `xsd:string`→fixed-width, a variable target, an unbound source, a literal or
+/// already-bound result) rejects closed with a specific error, or fails closed at recompute.
 fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) => &and.and,
@@ -9618,20 +10263,17 @@ fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError
         return Err(BgpPlanError::TypecastUnsupportedShape);
     }
 
-    // Source: a variable bound as a nonnullable fixed-width integer store value.
+    // Source: a variable (its authentication contract differs per cast kind, resolved below).
     let source_variable = match &typecast.value {
         Value::Variable(variable) => variable.clone(),
         _ => return Err(BgpPlanError::TypecastSourceNotVariable),
     };
-    let (source_column, source_datatype) = resolve_typecast_source(&child, &source_variable)?;
 
-    // Target: a concrete node IRI naming a supported fixed-width integer type.
+    // Target: a concrete node IRI (never a variable).
     let target_iri = match &typecast.type_uri {
         NodeValue::Node(iri) => iri.clone(),
         NodeValue::Variable(_) => return Err(BgpPlanError::TypecastTargetNotNode),
     };
-    let target_datatype = canonical_integer_datatype_from_iri(&target_iri)
-        .ok_or(BgpPlanError::TypecastUnsupportedTarget { iri: target_iri })?;
 
     // Result: a fresh output variable, never a literal and never a redefinition of a binding.
     let result = match &typecast.result_value {
@@ -9643,20 +10285,78 @@ fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError
     }
 
     let collection = child.collection.clone();
-    let mut schema = child.relation.schema.clone();
-    schema.push(result);
-    let mut domains = child.relation.domains.clone();
-    // The derived cast column is a generated integer, not an executor value domain.
-    domains.push(None);
+
+    // A fixed-width INTEGER target is the value-PRESERVING integer→integer cast: it appends a
+    // COMMITTED derived integer column, and the source must be a pinned fixed-width integer.
+    if let Some(target_datatype) = canonical_integer_datatype_from_iri(&target_iri) {
+        let (source_column, source_datatype) = resolve_typecast_source(&child, &source_variable)?;
+        let mut schema = child.relation.schema.clone();
+        schema.push(result);
+        let mut domains = child.relation.domains.clone();
+        // The derived cast column is a generated integer, not an executor value domain.
+        domains.push(None);
+        let relation = CompiledRelation {
+            schema,
+            domains,
+            statement: CompiledRelationStatement::Typecast {
+                input: Box::new(child.relation),
+                source_column,
+                source_datatype,
+                target_datatype,
+            },
+        };
+        return Ok(Some(CompiledBgp {
+            relation,
+            projection: None,
+            collection,
+            count_variable: None,
+            full_row_distinct: false,
+        }));
+    }
+
+    // Otherwise: a NUMBER↔STRING cast, dispatched on the target's XSD local name. The source must be
+    // a NONNULLABLE node/value store column; its exact datatype (numeric for number→string,
+    // xsd:string for string→number) is re-checked against the ROOT-authenticated value at recompute,
+    // so a wrong-typed row FAILS CLOSED there. Unlike the integer→integer path, the result is a
+    // TERMINAL, revealed value (child schema/domains pass through verbatim; the result is NOT a
+    // committed column) — exactly like `plan_concat_form`.
+    let cast = cast_string_target_from_iri(&target_iri)
+        .ok_or(BgpPlanError::TypecastUnsupportedTarget { iri: target_iri })?;
+    let source_kind = match cast {
+        CastStringTarget::ToString => ValueSourceKind::Numeric,
+        CastStringTarget::FromStringInteger | CastStringTarget::FromStringDecimal => {
+            ValueSourceKind::Stringy
+        }
+    };
+    let source_column = resolve_authenticated_value_source(&child, &source_variable, source_kind)?;
+    let schema = child.relation.schema.clone();
+    let domains = child.relation.domains.clone();
+    let statement = match cast {
+        // number → xsd:string
+        CastStringTarget::ToString => CompiledRelationStatement::TypecastNumberToString {
+            input: Box::new(child.relation),
+            source_column,
+            result,
+        },
+        // xsd:string → xsd:integer
+        CastStringTarget::FromStringInteger => CompiledRelationStatement::TypecastStringToNumber {
+            input: Box::new(child.relation),
+            source_column,
+            target: StringNumericTarget::Integer,
+            result,
+        },
+        // xsd:string → xsd:decimal
+        CastStringTarget::FromStringDecimal => CompiledRelationStatement::TypecastStringToNumber {
+            input: Box::new(child.relation),
+            source_column,
+            target: StringNumericTarget::Decimal,
+            result,
+        },
+    };
     let relation = CompiledRelation {
         schema,
         domains,
-        statement: CompiledRelationStatement::Typecast {
-            input: Box::new(child.relation),
-            source_column,
-            source_datatype,
-            target_datatype,
-        },
+        statement,
     };
     Ok(Some(CompiledBgp {
         relation,
@@ -9665,6 +10365,103 @@ fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError
         count_variable: None,
         full_row_distinct: false,
     }))
+}
+
+/// Which NUMBER↔STRING cast a `Typecast` target IRI selects, by XSD local name (the segment after
+/// the last `#`/`:`, covering full-URI, prefixed, and bare-local forms — exactly like
+/// [`canonical_integer_datatype_from_iri`]). Disjoint from the fixed-width integer set that function
+/// recognizes: `integer`/`decimal`/`string` are never fixed-width integers.
+enum CastStringTarget {
+    /// target `xsd:string` — a NUMBER→STRING cast.
+    ToString,
+    /// target `xsd:integer` (arbitrary precision) — a STRING→INTEGER cast.
+    FromStringInteger,
+    /// target `xsd:decimal` — a STRING→DECIMAL cast.
+    FromStringDecimal,
+}
+
+fn cast_string_target_from_iri(iri: &str) -> Option<CastStringTarget> {
+    let local = iri.rsplit(['#', ':']).next().unwrap_or(iri);
+    Some(match local {
+        "string" => CastStringTarget::ToString,
+        "integer" => CastStringTarget::FromStringInteger,
+        "decimal" => CastStringTarget::FromStringDecimal,
+        _ => return None,
+    })
+}
+
+/// The kind of source a NUMBER↔STRING `Typecast` expects, used to reject a PINNED-incompatible
+/// source datatype at compile (an UNPINNED source is always allowed — its type is re-checked at
+/// recompute, exactly like `compile_concat_element`).
+#[derive(Clone, Copy)]
+enum ValueSourceKind {
+    /// number→string: the source must be numeric (integer family or `xsd:decimal`).
+    Numeric,
+    /// string→number: the source must be `xsd:string`.
+    Stringy,
+}
+
+/// Resolve a NUMBER↔STRING `Typecast` source variable to its child result-column index, requiring a
+/// NONNULLABLE node/value store column (a store value). Its exact per-row datatype is re-checked
+/// against the ROOT-authenticated value at recompute (numeric for number→string, xsd:string for
+/// string→number), so a wrong-typed row FAILS CLOSED there. A node IRI / predicate / nullable /
+/// generated column rejects here (namespace/nullable check); an unbound variable rejects here; and —
+/// mirroring `compile_concat_element` — a PINNED datatype INCOMPATIBLE with `kind` (e.g. a range
+/// comparison pinned the column to a fixed-width integer but the cast is string→number) rejects
+/// closed here, while an UNPINNED (`None`) column is allowed.
+fn resolve_authenticated_value_source(
+    child: &CompiledBgp,
+    variable: &str,
+    kind: ValueSourceKind,
+) -> Result<usize, BgpPlanError> {
+    let index = child
+        .relation
+        .schema
+        .iter()
+        .position(|candidate| candidate == variable)
+        .ok_or_else(|| BgpPlanError::TypecastSourceNotBound {
+            var: variable.to_string(),
+        })?;
+    let descriptors = relation_result_descriptors(&child.relation).map_err(|_| {
+        BgpPlanError::TypecastValueSourceInvalid {
+            var: variable.to_string(),
+        }
+    })?;
+    if descriptors[index].nullable || descriptors[index].namespace != ResultIdNamespace::NodeValue {
+        return Err(BgpPlanError::TypecastValueSourceInvalid {
+            var: variable.to_string(),
+        });
+    }
+    // Pinned-datatype compatibility (like Concat): `None` (unpinned) is always allowed; a pinned
+    // datatype must match the cast direction, else reject closed.
+    let compatible = match (kind, child.relation.domains.get(index).copied().flatten()) {
+        (_, None) => true,
+        (ValueSourceKind::Stringy, Some(EqualityValueDomain::Datatype(CanonicalDatatype::String))) => {
+            true
+        }
+        (
+            ValueSourceKind::Numeric,
+            Some(EqualityValueDomain::Datatype(
+                CanonicalDatatype::UInt8
+                | CanonicalDatatype::UInt16
+                | CanonicalDatatype::UInt32
+                | CanonicalDatatype::UInt64
+                | CanonicalDatatype::Int8
+                | CanonicalDatatype::Int16
+                | CanonicalDatatype::Int32
+                | CanonicalDatatype::Int64
+                | CanonicalDatatype::BigInt
+                | CanonicalDatatype::Decimal,
+            )),
+        ) => true,
+        (_, Some(_)) => false,
+    };
+    if !compatible {
+        return Err(BgpPlanError::TypecastValueSourceInvalid {
+            var: variable.to_string(),
+        });
+    }
+    Ok(index)
 }
 
 /// Resolve a `Typecast` source variable to its (nonnullable, fixed-width-integer) child result
@@ -13900,6 +14697,12 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::HashKey { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::CalendarInt { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::CalendarDate { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::TypecastNumberToString { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
+            CompiledRelationStatement::TypecastStringToNumber { input, .. } => {
+                visit(input, depth + 1, nodes)
+            }
         }
     }
     let mut nodes = 0;
@@ -14141,7 +14944,11 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         | CompiledRelationStatement::RationalArith { input, .. }
         // CalendarDate carries the child's committed columns through VERBATIM (its xsd:date result is
         // terminal/non-committed), so committed-row uniqueness is exactly the child's. Inherit it.
-        | CompiledRelationStatement::CalendarDate { input, .. } => is_provably_duplicate_free(input),
+        | CompiledRelationStatement::CalendarDate { input, .. }
+        // Number↔string Typecasts likewise carry the child's committed columns through VERBATIM (the
+        // cast result is a terminal, non-committed value), so uniqueness is exactly the child's.
+        | CompiledRelationStatement::TypecastNumberToString { input, .. }
+        | CompiledRelationStatement::TypecastStringToNumber { input, .. } => is_provably_duplicate_free(input),
         // CalendarInt appends per-row derived integer column(s) — an injective row map (like Eval),
         // so uniqueness is inherited from the child.
         CompiledRelationStatement::CalendarInt { input, .. } => is_provably_duplicate_free(input),

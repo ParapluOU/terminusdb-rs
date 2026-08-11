@@ -7085,6 +7085,234 @@ fn typecast_wrong_result_column_fails_verification() {
 }
 
 // -------------------------------------------------------------------------------------------
+// WOQL number↔string `Typecast` — end-to-end prove+verify via the TERMINAL verifier-recompute.
+// -------------------------------------------------------------------------------------------
+
+/// A base layer with one xsd:string value per subject at predicate `p`.
+fn string_p_layer(rows: &[(&str, &str)]) -> Arc<LayerCommitment> {
+    let mut triples = Vec::new();
+    for (subject, value) in rows {
+        triples.push(ValueTriple::new_string_value(&iri(subject), &iri("p"), value));
+    }
+    build_layer_triples(triples)
+}
+
+/// A base layer with one xsd:decimal value per subject at predicate `d`.
+fn decimal_p_layer(rows: &[(&str, &str)]) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, dec) in rows {
+        let entry = Decimal::make_entry(&Decimal::new((*dec).to_string()).unwrap());
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri(subject), &iri("d"), entry))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+/// `t(?x, pred, ?source) & Typecast(?source, target, ?r)` — an UNPINNED source (its type is enforced
+/// at recompute), the number↔string cast shape.
+fn cast_query(pred: &str, source: &str, target: NodeValue, result: &str) -> Query {
+    and_of(vec![
+        tv("x", pred, source),
+        Query::Typecast(Typecast {
+            value: Value::Variable(source.into()),
+            type_uri: target,
+            result_value: Value::Variable(result.into()),
+        }),
+    ])
+}
+
+fn pv_string_object(object: &CanonicalObject) -> String {
+    match object {
+        CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical,
+        } => String::from_utf8(lexical.clone()).unwrap(),
+        other => panic!("expected an xsd:string result object, got {other:?}"),
+    }
+}
+
+fn pv_numeric_object(object: &CanonicalObject) -> (CanonicalDatatype, String) {
+    match object {
+        CanonicalObject::Value { datatype, lexical } => {
+            (*datatype, String::from_utf8(lexical.clone()).unwrap())
+        }
+        other => panic!("expected a value result object, got {other:?}"),
+    }
+}
+
+/// Prove+verify a number→string cast, returning the delivered xsd:string lexicals (sorted).
+fn cast_to_string_outputs(layer: &LayerCommitment, query: &Query) -> Vec<String> {
+    let compiled = plan_bgp(query).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    proved
+        .verify(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let mut got: Vec<String> = proved
+        .typecast_to_string_result_objects()
+        .expect("expected a number→string Typecast proof")
+        .iter()
+        .map(pv_string_object)
+        .collect();
+    got.sort();
+    got
+}
+
+/// Prove+verify a string→number cast, returning `(datatype, lexical)` per row (sorted by lexical).
+fn cast_from_string_outputs(
+    layer: &LayerCommitment,
+    query: &Query,
+) -> Vec<(CanonicalDatatype, String)> {
+    let compiled = plan_bgp(query).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    proved
+        .verify(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let mut got: Vec<(CanonicalDatatype, String)> = proved
+        .typecast_from_string_result_objects()
+        .expect("expected a string→number Typecast proof")
+        .iter()
+        .map(pv_numeric_object)
+        .collect();
+    got.sort();
+    got
+}
+
+#[test]
+fn typecast_integer_to_string_proves_base10() {
+    // A fixed-width integer source cast to xsd:string is `format ~w` = base-10 (no leading zeros).
+    let layer = typecast_single_predicate_layer(&[("n1", 100), ("n2", u32::MAX)]);
+    let got = cast_to_string_outputs(&layer, &cast_query("p", "a", xsd_type_pv("string"), "r"));
+    assert_eq!(got, sorted(vec!["100".to_string(), "4294967295".to_string()]));
+}
+
+#[test]
+fn typecast_decimal_to_string_proves_terminating_and_20_digit_rounding() {
+    // Terminating "3.5"/"12.34" render verbatim; a stored decimal with MORE than 20 fractional
+    // digits renders ROUNDED to 20 (`rational_to_decimal_string_20`), matching casting.pl's
+    // `rational_to_decimal_string(Val, S, 20)`.
+    let layer = decimal_p_layer(&[
+        ("n1", "3.5"),
+        ("n2", "12.34"),
+        ("n3", "0.333333333333333333333333"),
+    ]);
+    let got = cast_to_string_outputs(&layer, &cast_query("d", "dd", xsd_type_pv("string"), "r"));
+    assert_eq!(
+        got,
+        sorted(vec![
+            "3.5".to_string(),
+            "12.34".to_string(),
+            "0.33333333333333333333".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn typecast_number_to_string_wrong_result_fails_verification() {
+    let layer = typecast_single_predicate_layer(&[("n1", 100), ("n2", 200)]);
+    let compiled = plan_bgp(&cast_query("p", "a", xsd_type_pv("string"), "r")).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::TypecastNumberToString { result_objects, .. } =
+        &mut tampered.statement
+    {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::String,
+            lexical: b"9999".to_vec(),
+        };
+    } else {
+        panic!("expected a TypecastNumberToString proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn typecast_string_to_integer_proves_base10_grammar() {
+    // `integer//1` grammar: leading zeros collapse ("007" -> 7), "-7" -> -7, plain "42" -> 42; all
+    // delivered as the canonical base-10 xsd:integer (CanonicalDatatype::BigInt) lexical.
+    let layer = string_p_layer(&[("n1", "42"), ("n2", "-7"), ("n3", "007")]);
+    let got = cast_from_string_outputs(&layer, &cast_query("p", "s", xsd_type_pv("integer"), "r"));
+    assert_eq!(
+        got,
+        sorted(vec![
+            (CanonicalDatatype::BigInt, "42".to_string()),
+            (CanonicalDatatype::BigInt, "-7".to_string()),
+            (CanonicalDatatype::BigInt, "7".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn typecast_string_to_decimal_proves_terminating_and_20_digit_rounding() {
+    // `string_decimal_to_rational` parse: "1.5"->3/2, "0.25"->1/4, and a 24-fractional-digit input
+    // parses to an EXACT rational then renders ROUNDED to 20 digits (client-facing xsd:decimal).
+    let layer = string_p_layer(&[
+        ("n1", "1.5"),
+        ("n2", "0.25"),
+        ("n3", "0.333333333333333333333333"),
+    ]);
+    let got = cast_from_string_outputs(&layer, &cast_query("p", "s", xsd_type_pv("decimal"), "r"));
+    assert_eq!(
+        got,
+        sorted(vec![
+            (CanonicalDatatype::Decimal, "1.5".to_string()),
+            (CanonicalDatatype::Decimal, "0.25".to_string()),
+            (CanonicalDatatype::Decimal, "0.33333333333333333333".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn typecast_string_to_number_wrong_result_fails_verification() {
+    let layer = string_p_layer(&[("n1", "1.5"), ("n2", "2.5")]);
+    let compiled = plan_bgp(&cast_query("p", "s", xsd_type_pv("decimal"), "r")).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::TypecastStringToNumber { result_objects, .. } =
+        &mut tampered.statement
+    {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::Decimal,
+            lexical: b"9.9".to_vec(),
+        };
+    } else {
+        panic!("expected a TypecastStringToNumber proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn typecast_string_to_integer_malformed_fails_closed() {
+    // "12a" is not `[+-]?[0-9]+`: SWI `phrase(integer(_),[])` fails -> `typecast` throws. The proof
+    // must FAIL CLOSED (never fabricate a value like 12). >= 2 rows so it is not the row floor.
+    let layer = string_p_layer(&[("n1", "7"), ("n2", "12a")]);
+    let compiled = plan_bgp(&cast_query("p", "s", xsd_type_pv("integer"), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+#[test]
+fn typecast_string_to_decimal_scientific_fails_closed() {
+    // "1e5" is parsed by SWI's `atom_number` into a FLOAT (1.0e+05), NOT a decimal/rational — a
+    // DIFFERENT value/type. We reject-close scientific notation, so the proof FAILS CLOSED here
+    // rather than fabricate 100000. (A trailing-dot "5." — which SWI also rejects — fails closed too.)
+    let layer = string_p_layer(&[("n1", "1.5"), ("n2", "1e5")]);
+    let compiled = plan_bgp(&cast_query("p", "s", xsd_type_pv("decimal"), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+#[test]
+fn typecast_string_to_decimal_trailing_dot_fails_closed() {
+    // "5." (trailing dot) — SWI `atom_number("")` fails so `string_decimal_to_rational` fails and
+    // `typecast` throws. We reject-close it; the proof FAILS CLOSED (never fabricate 5).
+    let layer = string_p_layer(&[("n1", "1.5"), ("n2", "5.")]);
+    let compiled = plan_bgp(&cast_query("p", "s", xsd_type_pv("decimal"), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+// -------------------------------------------------------------------------------------------
 // WOQL `Concatenate` — end-to-end prove+verify via the VERIFIER-RECOMPUTE (byte) path.
 // -------------------------------------------------------------------------------------------
 
