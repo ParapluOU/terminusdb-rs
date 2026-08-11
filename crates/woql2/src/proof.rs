@@ -42,11 +42,15 @@ use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
 };
 use terminus_store::proof::envelope::{
-    plan_digest, resolve_relation_equality_constraint, CollectionSumTemplate, EqualityValueDomain,
+    plan_digest, resolve_relation_equality_constraint, resolve_tuple_disequality_pairs,
+    CollectionSumTemplate, EqualityValueDomain,
     GeneratedU64ComparisonOp, LayerBgpEnvelope,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
-    RelationProofPlanKind, MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
+    RelationProofPlanKind, TransitiveClosureFixpoint, TransitiveClosureRound, TransitiveClosureSeed,
+    TupleDisequalityNode, TupleDisequalityPairPlan,
+    MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
 };
+use terminus_store::proof::disequality::{verify_tuple_disequality, TupleDisequalityProof};
 use terminus_store::proof::equality::{
     verify_relation_equality, RelationEqualityProof,
 };
@@ -179,6 +183,17 @@ pub enum CompiledRelationStatement {
         input: Box<CompiledRelation>,
         constraint: RelationEqualityPlan,
     },
+    /// EDGE-SIMPLE filter for a finite single-predicate repeated-predicate path: drops the
+    /// rows in which some hop-pair reuses a stored edge (the ONLY over-count of a
+    /// conjunctive bag-join versus Prolog's edge-simple `Open_Set` semantics), keeping
+    /// every node-repeating solution (`a->b->a`). `pairs` enumerates the `C(n,2)` hop-pairs
+    /// of an `n`-hop chain, referencing the join's node columns / bound endpoint constants;
+    /// the schema passes through unchanged (endpoint projection is a separate
+    /// `BagProjection`). See the store [`terminus_store::proof::disequality`] gadget.
+    TupleDisequality {
+        input: Box<CompiledRelation>,
+        pairs: Vec<TupleDisequalityPairPlan>,
+    },
     ExactScalarOrder {
         input: Box<CompiledRelation>,
         datatype: CanonicalDatatype,
@@ -207,6 +222,24 @@ pub enum CompiledRelationStatement {
         value_column: usize,
         datatype: CanonicalDatatype,
         kind: GroupExtremaKind,
+    },
+    /// Bounded transitive closure (`star`/`plus`) of a SINGLE predicate from a BOUND endpoint,
+    /// delivering the reachable node SET. This is the woql2 mirror of the store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::TransitiveClosure`] composite node;
+    /// it is emitted ONLY under an endpoint `Distinct` (set semantics), because the leading-Prolog
+    /// path evaluator returns an edge-simple BAG of endpoints that equals the reachable SET only once a
+    /// surrounding `Distinct`/`Count` collapses the bag. See [`plan_transitive_closure_path`].
+    TransitiveClosure {
+        /// The edge relation `E = Triple(?s, p, ?o)` (a single-atom 2-column node/value BGP).
+        edge: LayerBgpPlan,
+        /// The bound endpoint node the traversal starts from (`a` for a bound SOURCE, `b` for a bound
+        /// TARGET reached by traversing the inverse edge).
+        seed: CanonicalObject,
+        /// `true` = `star` (reflexive: the seed itself is in the set); `false` = `plus`.
+        reflexive: bool,
+        /// `false` walks `subject -> object` from a bound source; `true` walks the inverse edge
+        /// `object -> subject` (a bound target, or an inverse-predicate closure).
+        inverted: bool,
     },
     GroupSum {
         input: Box<CompiledRelation>,
@@ -490,6 +523,48 @@ pub enum CompiledRelationStatement {
         /// expression.
         expr: DecimalExpr,
         /// The fresh result VARIABLE name the arithmetic binds — terminal/revealed, NOT committed
+        /// (tracked only for query identity / terminal exposure, like `Concat`'s `result`).
+        result: String,
+    },
+    /// WOQL single-input INTEGER-result CALENDAR ops (`Weekday`/`WeekdaySundayStart`/`IsoWeek`) — the
+    /// integer face of the read-only calendar value layer, delivered EXACTLY like [`Self::Eval`]. The
+    /// child relation `input` binds AND authenticates the `xsd:date` operand column; this statement
+    /// carries the child columns through and appends ONE derived signed-integer column
+    /// (`GeneratedDecimalI64`) PER `outputs` entry, which the verifier RE-DERIVES from the
+    /// root-authenticated date (see [`expected_calendar_int_columns`]). `outputs` holds one function
+    /// per bound integer output — one for Weekday/WeekdaySundayStart, two (`[IsoWeekYear, IsoWeekWeek]`)
+    /// for IsoWeek — in the SAME order the corresponding result variables were appended to the schema.
+    ///
+    /// SOUNDNESS: identical to `Eval` — the operand date is pinned to the trusted root, each calendar
+    /// function is deterministic and ported byte-exact from the SWI reference, so there is no biasable
+    /// witness. The op kind + operand column are bound into the query digest under a DISTINCT tag.
+    CalendarInt {
+        input: Box<CompiledRelation>,
+        /// Index of the authenticated child `xsd:date` operand column.
+        date_column: usize,
+        /// The integer function per appended output column, in schema-append order. Bound into the
+        /// query digest so a proof cannot be replayed as a different calendar op / column layout.
+        outputs: Vec<CalendarIntFn>,
+    },
+    /// WOQL single-input DATE-result CALENDAR ops (`DayAfter`/`DayBefore`/`MonthStartDate`/
+    /// `MonthEndDate`) — the date face of the read-only calendar value layer, delivered EXACTLY like
+    /// [`Self::RationalArith`]/[`Self::Concat`]: a TERMINAL, REVEALED `xsd:date` value (NOT a committed
+    /// column). The child relation `input` binds AND authenticates the operand column (an `xsd:date`
+    /// for `Day*`, an `xsd:gYearMonth` for `Month*`); the child columns pass through verbatim and the
+    /// per-row result is DELIVERED alongside, re-derived by the verifier (see
+    /// [`expected_calendar_date_objects`]) as the client-facing `YYYY-MM-DD` lexical.
+    ///
+    /// SOUNDNESS: identical to `Concat` — the operand is pinned to the trusted root, the calendar
+    /// arithmetic is deterministic and ported byte-exact, and the delivered result must equal the
+    /// recomputation. The op kind + operand column are bound into the query digest under a DISTINCT tag.
+    CalendarDate {
+        input: Box<CompiledRelation>,
+        /// Which date function this statement computes.
+        op: CalendarDateFn,
+        /// Index of the authenticated child operand column (`xsd:date` for `Day*`, `xsd:gYearMonth`
+        /// for `Month*`).
+        input_column: usize,
+        /// The fresh result VARIABLE name the op binds — terminal/revealed, NOT a committed column
         /// (tracked only for query identity / terminal exposure, like `Concat`'s `result`).
         result: String,
     },
@@ -897,6 +972,10 @@ pub enum ProvedQueryStatement {
         input: Box<ProvedBgp>,
         proof: Box<RelationEqualityProof>,
     },
+    TupleDisequality {
+        input: Box<ProvedBgp>,
+        proof: Box<TupleDisequalityProof>,
+    },
     ExactScalarOrder {
         input: Box<ProvedBgp>,
         proof: Box<ExactScalarOrderProof>,
@@ -910,6 +989,17 @@ pub enum ProvedQueryStatement {
     },
     GroupExtrema {
         input: Box<ProvedBgp>,
+    },
+    /// A proved bounded transitive closure. The woql2 layer does NOT re-implement the closure
+    /// orchestration: it carries the store proof pieces (the edge sub-relation mirrored as a
+    /// `ProvedBgp`, plus the seed / rounds / empty-delta fixpoint), reconstructs the store
+    /// `RecursiveRelationEnvelope`, and DELEGATES to the audited store verify. See
+    /// [`plan_transitive_closure_path`].
+    TransitiveClosure {
+        edge: Box<ProvedBgp>,
+        seed: TransitiveClosureSeed,
+        rounds: Vec<TransitiveClosureRound>,
+        fixpoint: Box<TransitiveClosureFixpoint>,
     },
     GroupSum {
         input: Box<ProvedBgp>,
@@ -1008,6 +1098,23 @@ pub enum ProvedQueryStatement {
     RationalArith {
         input: Box<ProvedBgp>,
         /// Per-row synthesized xsd:decimal results, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL INTEGER-result calendar op (`Weekday`/`WeekdaySundayStart`/`IsoWeek`): like
+    /// `Eval`, the authenticated child relation plus one-or-more appended derived integer columns.
+    /// The proof carries no calendar-specific witness — verification re-derives the derived column(s)
+    /// from the child's root-authenticated `xsd:date` column.
+    CalendarInt {
+        input: Box<ProvedBgp>,
+    },
+    /// A proved WOQL DATE-result calendar op (`DayAfter`/`DayBefore`/`MonthStartDate`/`MonthEndDate`):
+    /// like `Concat`, the authenticated operand-binding child plus the DELIVERED per-row `xsd:date`
+    /// result. The committed columns are the child's verbatim (the result is terminal/revealed);
+    /// verification RE-DERIVES `result_objects` from the child's root-authenticated operand and
+    /// requires an exact match, so a tampered/wrong result fails closed.
+    CalendarDate {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:date results, revealed and re-derived by the verifier.
         result_objects: Vec<CanonicalObject>,
     },
 }
@@ -1192,6 +1299,11 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(input)?);
             digest_equality_plan(&mut hasher, constraint);
         }
+        CompiledRelationStatement::TupleDisequality { input, pairs } => {
+            hasher.update(b"/tuple-disequality");
+            hasher.update(relation_query_digest(input)?);
+            digest_tuple_disequality_pairs(&mut hasher, pairs);
+        }
         CompiledRelationStatement::ExactScalarOrder { input, datatype, direction } => {
             hasher.update(b"/exact-scalar-order");
             hasher.update(relation_query_digest(input)?);
@@ -1243,6 +1355,21 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 GroupExtremaKind::Min => 0,
                 GroupExtremaKind::Max => 1,
             }]);
+        }
+        CompiledRelationStatement::TransitiveClosure {
+            edge,
+            seed,
+            reflexive,
+            inverted,
+        } => {
+            // K-INDEPENDENT digest: only the closure PATTERN (edge, seed, star/plus, direction). The
+            // number of rounds K is a prover choice carried in the proof, never in this identity, so the
+            // verifier reconstructs this digest from its own trusted AST without knowing K.
+            hasher.update(b"/transitive-closure");
+            hasher.update(plan_digest(edge)?);
+            digest_canonical_object(&mut hasher, seed);
+            hasher.update([*reflexive as u8]);
+            hasher.update([*inverted as u8]);
         }
         CompiledRelationStatement::GroupSum {
             input,
@@ -1429,6 +1556,49 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             hasher.update(relation_query_digest(input)?);
             digest_decimal_expr(&mut hasher, expr);
         }
+        CompiledRelationStatement::CalendarInt {
+            input,
+            date_column,
+            outputs,
+        } => {
+            // DISTINCT tag; bind the child, the authenticated operand column, and the EXACT output
+            // function sequence (order + kind) so a proof cannot be replayed as a different calendar
+            // op, a different operand column, or a reordered/re-functioned output set. The result
+            // variable NAMES are labels (the outputs are fully determined by the recompute), matching
+            // Eval's digest discipline; the appended descriptors are already re-hashed above.
+            hasher.update(b"/calendar-int-i64");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update((*date_column as u64).to_le_bytes());
+            hasher.update((outputs.len() as u64).to_le_bytes());
+            for function in outputs {
+                hasher.update([match function {
+                    CalendarIntFn::Weekday => 0u8,
+                    CalendarIntFn::WeekdaySundayStart => 1u8,
+                    CalendarIntFn::IsoWeekYear => 2u8,
+                    CalendarIntFn::IsoWeekWeek => 3u8,
+                }]);
+            }
+        }
+        CompiledRelationStatement::CalendarDate {
+            input,
+            op,
+            input_column,
+            ..
+        } => {
+            // DISTINCT tag; bind the child, the op kind, and the authenticated operand column so a
+            // proof cannot be replayed as a different date op or over a different operand column. The
+            // result variable NAME is a label (the output is fully determined by the recompute),
+            // matching Concat/RationalArith digest discipline.
+            hasher.update(b"/calendar-date");
+            hasher.update(relation_query_digest(input)?);
+            hasher.update([match op {
+                CalendarDateFn::DayAfter => 0u8,
+                CalendarDateFn::DayBefore => 1u8,
+                CalendarDateFn::MonthStartDate => 2u8,
+                CalendarDateFn::MonthEndDate => 3u8,
+            }]);
+            hasher.update((*input_column as u64).to_le_bytes());
+        }
     }
     Ok(hasher.finalize().into())
 }
@@ -1600,6 +1770,26 @@ fn digest_equality_plan(hasher: &mut Sha256, plan: &RelationEqualityPlan) {
     }
 }
 
+fn digest_tuple_disequality_pairs(hasher: &mut Sha256, pairs: &[TupleDisequalityPairPlan]) {
+    let node = |hasher: &mut Sha256, node: &TupleDisequalityNode| match node {
+        TupleDisequalityNode::Column(column) => {
+            hasher.update([0]);
+            hasher.update((*column as u64).to_le_bytes());
+        }
+        TupleDisequalityNode::Constant(value) => {
+            hasher.update([1]);
+            digest_canonical_object(hasher, value);
+        }
+    };
+    hasher.update((pairs.len() as u64).to_le_bytes());
+    for pair in pairs {
+        node(hasher, &pair.a0);
+        node(hasher, &pair.a1);
+        node(hasher, &pair.b0);
+        node(hasher, &pair.b1);
+    }
+}
+
 fn digest_key_pairs(hasher: &mut Sha256, key_pairs: &[(usize, usize)]) {
     hasher.update((key_pairs.len() as u64).to_le_bytes());
     for (left, right) in key_pairs {
@@ -1622,6 +1812,13 @@ fn relation_result_descriptors(
         }
         CompiledRelationStatement::Bgp(plan) => {
             terminus_store::proof::query::result_column_descriptors(plan)
+        }
+        CompiledRelationStatement::TransitiveClosure { .. } => {
+            // The reachable set is one nonnullable node column.
+            Ok(vec![ResultColumnDescriptor {
+                namespace: ResultIdNamespace::NodeValue,
+                nullable: false,
+            }])
         }
         CompiledRelationStatement::BagUnion { branches, mappings } => {
             let mut expected = None;
@@ -1706,6 +1903,9 @@ fn relation_result_descriptors(
             Ok(descriptors)
         }
         CompiledRelationStatement::Equality { input, .. } => relation_result_descriptors(input),
+        CompiledRelationStatement::TupleDisequality { input, .. } => {
+            relation_result_descriptors(input)
+        }
         CompiledRelationStatement::ExactScalarOrder { input, .. } => {
             relation_result_descriptors(input)
         }
@@ -1872,6 +2072,24 @@ fn relation_result_descriptors(
         | CompiledRelationStatement::RationalArith { input, .. } => {
             relation_result_descriptors(input)
         }
+        CompiledRelationStatement::CalendarInt { input, outputs, .. } => {
+            // Child columns pass through; ONE signed generated-integer column is appended PER output
+            // (weekday/iso-week values are small positive integers, but the signed domain matches
+            // Eval's and keeps the descriptor family uniform).
+            let mut descriptors = relation_result_descriptors(input)?;
+            for _ in outputs {
+                descriptors.push(ResultColumnDescriptor {
+                    namespace: ResultIdNamespace::GeneratedDecimalI64,
+                    nullable: false,
+                });
+            }
+            Ok(descriptors)
+        }
+        // CalendarDate, like Concat/RationalArith, carries the child's committed columns through
+        // VERBATIM — its synthesized xsd:date result is terminal/revealed, not a committed column.
+        CompiledRelationStatement::CalendarDate { input, .. } => {
+            relation_result_descriptors(input)
+        }
     }
 }
 
@@ -1954,6 +2172,12 @@ fn relation_proof_plan(
                 constraint: constraint.clone(),
             }
         }
+        CompiledRelationStatement::TupleDisequality { input, pairs } => {
+            RelationProofPlanKind::ExactTupleDisequality {
+                input: Box::new(child(input)?),
+                pairs: pairs.clone(),
+            }
+        }
         CompiledRelationStatement::ExactScalarOrder { input, datatype, direction } => {
             RelationProofPlanKind::ExactScalarOrder {
                 input: Box::new(child(input)?),
@@ -1992,6 +2216,17 @@ fn relation_proof_plan(
             value_column: *value_column,
             datatype: *datatype,
             kind: *kind,
+        },
+        CompiledRelationStatement::TransitiveClosure {
+            edge,
+            seed,
+            reflexive,
+            inverted,
+        } => RelationProofPlanKind::TransitiveClosure {
+            edge: edge.clone(),
+            seed: seed.clone(),
+            reflexive: *reflexive,
+            inverted: *inverted,
         },
         CompiledRelationStatement::GroupSum {
             input,
@@ -2106,6 +2341,21 @@ fn relation_proof_plan(
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "WOQL rational-arithmetic relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // Calendar ops are woql2-side verifier-recompute layered OVER a Store-proven child; the
+        // top-level `prove_with_context` intercepts them, so these recursive-planner arms are never
+        // reached for a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::CalendarInt { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL calendar-integer relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        CompiledRelationStatement::CalendarDate { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL calendar-date relations are proved by the query wrapper, not the Store recursive planner",
             ))
         }
     };
@@ -3102,6 +3352,450 @@ fn expected_rational_arith_objects(
     Ok(out)
 }
 
+// ============================================================================================
+// WOQL CALENDAR value layer (verifier-recompute; xsd:date / xsd:gYearMonth operand only).
+//
+// Single-input date functions over the newly-committed dates. Two delivery disciplines, exactly
+// like the arithmetic/string layers (NO store change, NO commitment-format change, NO novel crypto):
+//   * INTEGER results (`Weekday`/`WeekdaySundayStart`/`IsoWeek`) — delivered like `Eval`: the child
+//     columns pass through and ONE derived `GeneratedDecimalI64` column is appended PER bound integer
+//     (1 for Weekday/WeekdaySundayStart, 2 for IsoWeek's {year, week}); the verifier RE-DERIVES them.
+//   * DATE results (`DayAfter`/`DayBefore`/`MonthStartDate`/`MonthEndDate`) — delivered like
+//     `Concat`/`RationalArith`: a TERMINAL, REVEALED `xsd:date` value the verifier RE-DERIVES and
+//     checks (no committed result column).
+//
+// Every calendar function below is ported BYTE-FOR-BYTE from the SWI-Prolog reference
+// (`terminusdb/src/core/query/woql_compile.pl`, cited per fn) and was differentially validated
+// against a live SWI-Prolog 10.0.2 on the reference test vectors. The operand date is authenticated
+// against the trusted root (`resolve_authenticated_child_values` — the SAME authentication
+// Eval/strings/decimal use), the function is recomputed deterministically, and the delivered
+// terminal/derived result must equal that recomputation. There is NO prover witness.
+//
+// FIDELITY GUARDS (reject-closed / fail-closed rather than approximate):
+//   * xsd:date operands ONLY. An `xsd:dateTime` operand is reject-closed: decoding its
+//     variable-width store lexical would require reproducing the store's private dateTime decoder,
+//     risking drift — reject-closed over approximate. (The reference `weekday`/`iso_week` also accept
+//     dateTime; that is a coverage boundary, not a soundness gap — a non-date operand fails closed.)
+//   * INPUT year >= 1: the ported integer algorithms use `//`/`mod`, which equal Rust `/`/`.rem_euclid`
+//     only over NON-NEGATIVE dividends; year >= 1 keeps every division non-negative, so the port is
+//     byte-exact. A year < 1 fails closed rather than risk a negative-division mismatch.
+//   * DATE outputs: timezone offset 0 ONLY, output year >= 1. The client lexical is `YYYY-MM-DD`
+//     (SWI `date_string`, `literals.pl:290` / `xsd_parser.pl:255`: `~|~`0t~d~4+-~|~`0t~d~2+-...`
+//     with an EMPTY offset suffix for offset 0) — reproduced exactly by `format!("{:04}-{:02}-{:02}")`
+//     for year >= 1. A non-zero offset (whose `±HH:MM` suffix we do not reproduce) or an out-of-range
+//     output year fails closed.
+
+/// Which single-input, INTEGER-result calendar function a [`CompiledRelationStatement::CalendarInt`]
+/// output column computes. Each maps a bound `xsd:date` to one `xsd:integer`, matching the SWI
+/// reference exactly. `IsoWeek` binds TWO integers, so it carries `[IsoWeekYear, IsoWeekWeek]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalendarIntFn {
+    /// `weekday(Date, W)` (`woql_compile.pl:1657`) via Sakamoto `iso_weekday_number` (`:1637`):
+    /// ISO-8601 weekday, Monday = 1 .. Sunday = 7.
+    Weekday,
+    /// `weekday_sunday_start(Date, W)` (`woql_compile.pl:1675`): US convention `(IsoDay mod 7) + 1`,
+    /// Sunday = 1 .. Saturday = 7.
+    WeekdaySundayStart,
+    /// `iso_week(Date, Year, W)` (`woql_compile.pl:1744` / `iso_week_date` `:1710`): the ISO-8601
+    /// week-numbering YEAR component.
+    IsoWeekYear,
+    /// `iso_week(Date, Year, W)`: the ISO-8601 WEEK-number component (1..53).
+    IsoWeekWeek,
+}
+
+/// Which single-input, DATE-result calendar function a [`CompiledRelationStatement::CalendarDate`]
+/// statement computes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CalendarDateFn {
+    /// `day_after(Date, Next)` (`woql_compile.pl:1285`): the calendar day after a bound `xsd:date`.
+    DayAfter,
+    /// `day_before(Date, Previous)` (`woql_compile.pl:1310`): the calendar day before a bound `xsd:date`.
+    DayBefore,
+    /// `month_start_date(YearMonth, Date)` (`woql_compile.pl:1205`): first day of the month of a
+    /// bound `xsd:gYearMonth` (`date(Y,M,1,Offset)`).
+    MonthStartDate,
+    /// `month_end_date(YearMonth, Date)` (`woql_compile.pl:1219`): last day of that month
+    /// (`date(Y,M,days_in_month(Y,M),Offset)`).
+    MonthEndDate,
+}
+
+/// SWI `is_leap_year/1` (`woql_compile.pl:1520`): the proleptic Gregorian leap rule.
+fn cal_is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+/// SWI `days_in_month/3` (`woql_compile.pl:1527`). `None` for a month outside `1..=12` (a corrupt
+/// operand lexical — a store `Date`/`GYearMonth` always carries a valid month, so this only guards
+/// against corruption and fails closed).
+fn cal_days_in_month(year: i64, month: u8) -> Option<u8> {
+    Some(match month {
+        1 => 31,
+        2 => if cal_is_leap_year(year) { 29 } else { 28 },
+        3 => 31,
+        4 => 30,
+        5 => 31,
+        6 => 30,
+        7 => 31,
+        8 => 31,
+        9 => 30,
+        10 => 31,
+        11 => 30,
+        12 => 31,
+        _ => return None,
+    })
+}
+
+/// SWI `iso_weekday_number/4` (`woql_compile.pl:1637`, Sakamoto's algorithm): ISO weekday
+/// Monday = 1 .. Sunday = 7. The caller guarantees `year >= 1` and `1 <= month <= 12`, so every
+/// `//` here is over a NON-NEGATIVE dividend and Rust `/`/`.rem_euclid(7)` equal SWI's `//`/`mod`
+/// byte-for-byte (they diverge only on negative operands, which the guards exclude).
+fn cal_iso_weekday_number(year: i64, month: u8, day: u8) -> i64 {
+    // `nth0(M, [0,0,3,2,5,0,3,5,1,4,6,2,4], T)` — index `month` (index 0 is unused, `month>=1`).
+    const MONTH_TABLE: [i64; 13] = [0, 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let t = MONTH_TABLE[month as usize];
+    let y1 = if month < 3 { year - 1 } else { year };
+    let dow = (y1 + y1 / 4 - y1 / 100 + y1 / 400 + t + i64::from(day)).rem_euclid(7);
+    // DoW: 0 = Sunday .. 6 = Saturday → ISO Monday = 1 .. Sunday = 7.
+    if dow == 0 {
+        7
+    } else {
+        dow
+    }
+}
+
+/// SWI `woql_weekday_sunday_start/2` (`woql_compile.pl:1675`): `USDay is (IsoDay mod 7) + 1`
+/// (Sunday = 1 .. Saturday = 7). `iso >= 1`, so `.rem_euclid(7)` equals SWI `mod 7` exactly.
+fn cal_us_weekday(year: i64, month: u8, day: u8) -> i64 {
+    cal_iso_weekday_number(year, month, day).rem_euclid(7) + 1
+}
+
+/// SWI `ordinal_day/4` (`woql_compile.pl:1693`): day-of-year (1..366). `None` on a corrupt month.
+fn cal_ordinal_day(year: i64, month: u8, day: u8) -> Option<i64> {
+    let mut acc: i64 = 0;
+    for m in 1..month {
+        acc += i64::from(cal_days_in_month(year, m)?);
+    }
+    Some(acc + i64::from(day))
+}
+
+/// SWI `iso_week_date/5` (`woql_compile.pl:1710`): the ISO-8601 (week-numbering year, week number).
+/// The caller guarantees `year >= 1` and `1 <= month <= 12`; every `//` is over a non-negative
+/// dividend (`adj - 1 >= 0` and `thursday - 1 >= 0` in their branches), so `.div_euclid(7)` equals
+/// SWI `//` byte-for-byte.
+fn cal_iso_week_date(year: i64, month: u8, day: u8) -> Option<(i64, i64)> {
+    let day_of_week = cal_iso_weekday_number(year, month, day);
+    let ordinal = cal_ordinal_day(year, month, day)?;
+    // Thursday of this week's ordinal day.
+    let thursday_ord = ordinal + (4 - day_of_week);
+    Some(if thursday_ord < 1 {
+        // Thursday is in the previous year.
+        let prev_year = year - 1;
+        let prev_days = if cal_is_leap_year(prev_year) { 366 } else { 365 };
+        let adj_ord = prev_days + thursday_ord;
+        (prev_year, (adj_ord - 1).div_euclid(7) + 1)
+    } else {
+        let year_days = if cal_is_leap_year(year) { 366 } else { 365 };
+        if thursday_ord > year_days {
+            // Thursday is in the next year.
+            (year + 1, 1)
+        } else {
+            (year, (thursday_ord - 1).div_euclid(7) + 1)
+        }
+    })
+}
+
+/// SWI `next_month/4` (`woql_compile.pl:1273`).
+fn cal_next_month(year: i64, month: u8) -> (i64, u8) {
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
+}
+
+/// SWI `prev_month/4` (`woql_compile.pl:1276`).
+fn cal_prev_month(year: i64, month: u8) -> (i64, u8) {
+    if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    }
+}
+
+/// SWI `woql_day_after/2` forward branch (`woql_compile.pl:1285`): given a bound date, the day after.
+/// `None` on a corrupt month.
+fn cal_day_after(year: i64, month: u8, day: u8) -> Option<(i64, u8, u8)> {
+    let max_day = cal_days_in_month(year, month)?;
+    Some(if day < max_day {
+        (year, month, day + 1)
+    } else {
+        let (next_year, next_month) = cal_next_month(year, month);
+        (next_year, next_month, 1)
+    })
+}
+
+/// SWI `woql_day_before/2` forward branch (`woql_compile.pl:1310`): given a bound date, the day before.
+/// `None` on a corrupt month.
+fn cal_day_before(year: i64, month: u8, day: u8) -> Option<(i64, u8, u8)> {
+    Some(if day > 1 {
+        (year, month, day - 1)
+    } else {
+        let (prev_year, prev_month) = cal_prev_month(year, month);
+        let prev_max = cal_days_in_month(prev_year, prev_month)?;
+        (prev_year, prev_month, prev_max)
+    })
+}
+
+/// Decode ONE root-authenticated `xsd:date` operand row to `(year, month, day, offset)`, reproducing
+/// tdb-succinct's `Date` lexical layout BYTE-FOR-BYTE — the SAME 12 bytes the store's
+/// `date_lexical_to_op_i64` decodes: `year:i64` offset-binary BE (8) | `month:u8` (1) | `day:u8` (1)
+/// | `offset:i16` offset-binary BE (2). FAILS CLOSED on a non-date row (node IRI, non-date value,
+/// null/generated), a wrong-width lexical, or an out-of-range calendar month/day (a corrupt lexical).
+fn cal_decode_date_operand(value: &CanonicalResultValue) -> std::io::Result<(i64, u8, u8, i16)> {
+    let not_date = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar operand row is not an authenticated xsd:date value",
+        )
+    };
+    let CanonicalResultValue::Object(CanonicalObject::Value {
+        datatype: CanonicalDatatype::Date,
+        lexical,
+    }) = value
+    else {
+        return Err(not_date());
+    };
+    let bytes: [u8; 12] = lexical.as_slice().try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar xsd:date lexical is not exactly 12 bytes",
+        )
+    })?;
+    let year = (u64::from_be_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]) ^ (1u64 << 63)) as i64;
+    let month = bytes[8];
+    let day = bytes[9];
+    let offset = (u16::from_be_bytes([bytes[10], bytes[11]]) ^ (1u16 << 15)) as i16;
+    // A store `Date` is always a valid calendar day; a corrupt lexical (bad month/day) fails closed.
+    match cal_days_in_month(year, month) {
+        Some(max) if (1..=max).contains(&day) => {}
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL calendar xsd:date has an out-of-range month or day",
+            ))
+        }
+    }
+    Ok((year, month, day, offset))
+}
+
+/// Decode ONE root-authenticated `xsd:gYearMonth` operand row to `(year, month, offset)`, reproducing
+/// tdb-succinct's `GYearMonth` lexical layout BYTE-FOR-BYTE: `year:i64` offset-binary BE (8) |
+/// `month:u8` (1) | `offset:i16` offset-binary BE (2). FAILS CLOSED on a non-gYearMonth row, a
+/// wrong-width lexical, or an out-of-range month.
+fn cal_decode_gyearmonth_operand(value: &CanonicalResultValue) -> std::io::Result<(i64, u8, i16)> {
+    let not_ym = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar operand row is not an authenticated xsd:gYearMonth value",
+        )
+    };
+    let CanonicalResultValue::Object(CanonicalObject::Value {
+        datatype: CanonicalDatatype::GYearMonth,
+        lexical,
+    }) = value
+    else {
+        return Err(not_ym());
+    };
+    let bytes: [u8; 11] = lexical.as_slice().try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar xsd:gYearMonth lexical is not exactly 11 bytes",
+        )
+    })?;
+    let year = (u64::from_be_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+    ]) ^ (1u64 << 63)) as i64;
+    let month = bytes[8];
+    let offset = (u16::from_be_bytes([bytes[9], bytes[10]]) ^ (1u16 << 15)) as i16;
+    if !(1..=12).contains(&month) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar xsd:gYearMonth has an out-of-range month",
+        ));
+    }
+    Ok((year, month, offset))
+}
+
+/// Render an output calendar date to the reference CLIENT lexical `YYYY-MM-DD`. Byte-exact to SWI
+/// `date_string` (`literals.pl:290`) for `year >= 1` (zero-padded to 4+, `~4+`), month/day `~2+`, and
+/// an offset-0 (empty) suffix. Reject-closed (fail closed) on `year < 1` — a negative/zero year's SWI
+/// column-fill rendering (or the offset suffix) is not reproduced here rather than guessed.
+fn cal_date_result_object(year: i64, month: u8, day: u8) -> std::io::Result<CanonicalObject> {
+    if year < 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar date result year < 1 is out of the byte-exact-rendered range (reject closed)",
+        ));
+    }
+    Ok(CanonicalObject::Value {
+        datatype: CanonicalDatatype::Date,
+        lexical: format!("{year:04}-{month:02}-{day:02}").into_bytes(),
+    })
+}
+
+/// VERIFIER RECOMPUTE for the INTEGER-result calendar ops (`Weekday`/`WeekdaySundayStart`/`IsoWeek`),
+/// the calendar analogue of [`expected_eval_columns`]. Carry the child columns through unchanged and
+/// append ONE derived `GeneratedDecimalI64` column PER `outputs` entry (1 for Weekday/WeekdaySundayStart,
+/// 2 for IsoWeek's `[year, week]`), each re-derived elementwise from the ROOT-authenticated `xsd:date`
+/// operand column. A non-date operand row, an `year < 1` input, or a corrupt lexical FAILS CLOSED.
+fn expected_calendar_int_columns(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    date_column: usize,
+    outputs: &[CalendarIntFn],
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let operand = values.get(date_column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar operand column out of range",
+        )
+    })?;
+    if operand.len() != input.result_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar operand column length mismatch",
+        ));
+    }
+    let mut columns = input.result_columns.clone();
+    let mut derived: Vec<Vec<ArkFr>> = outputs
+        .iter()
+        .map(|_| Vec::with_capacity(input.result_len))
+        .collect();
+    for row in 0..input.result_len {
+        let (year, month, day, _offset) = cal_decode_date_operand(&operand[row])?;
+        // Weekday/IsoWeek ignore the timezone offset entirely (the reference `extract_ymd` uses only
+        // Y/M/D), so any offset is fine; but the year must be >= 1 for the ported algorithms' `//`.
+        if year < 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL calendar integer op requires an input year >= 1 (reject closed)",
+            ));
+        }
+        // Compute the ISO week ONCE per row (both components share it); fail closed on a corrupt month.
+        let iso_week = if outputs
+            .iter()
+            .any(|f| matches!(f, CalendarIntFn::IsoWeekYear | CalendarIntFn::IsoWeekWeek))
+        {
+            Some(cal_iso_week_date(year, month, day).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL calendar iso_week has a corrupt operand month",
+                )
+            })?)
+        } else {
+            None
+        };
+        for (index, function) in outputs.iter().enumerate() {
+            let value: i64 = match function {
+                CalendarIntFn::Weekday => cal_iso_weekday_number(year, month, day),
+                CalendarIntFn::WeekdaySundayStart => cal_us_weekday(year, month, day),
+                CalendarIntFn::IsoWeekYear => iso_week.expect("iso_week computed above").0,
+                CalendarIntFn::IsoWeekWeek => iso_week.expect("iso_week computed above").1,
+            };
+            derived[index].push(generated_decimal_i64_field(value));
+        }
+    }
+    columns.extend(derived);
+    Ok(columns)
+}
+
+/// VERIFIER RECOMPUTE for the DATE-result calendar ops (`DayAfter`/`DayBefore`/`MonthStartDate`/
+/// `MonthEndDate`), the calendar analogue of [`expected_rational_arith_objects`]: a per-row TERMINAL,
+/// REVEALED `xsd:date` value re-derived from the ROOT-authenticated operand (`xsd:date` for `Day*`,
+/// `xsd:gYearMonth` for `Month*`). FAILS CLOSED on a wrong-typed operand, a non-zero timezone offset,
+/// an `year < 1` input/output, or a corrupt lexical — a proof is only ever produced for rows whose
+/// exact reference result this reproduces byte-for-byte, and the delivered value must equal it.
+fn expected_calendar_date_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    op: CalendarDateFn,
+    input_column: usize,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let operand = values.get(input_column).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar operand column out of range",
+        )
+    })?;
+    if operand.len() != input.result_len {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar operand column length mismatch",
+        ));
+    }
+    let nonzero_offset = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar date op requires a zero timezone offset (a ±HH:MM suffix is not reproduced; reject closed)",
+        )
+    };
+    let low_year = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar date op requires year >= 1 (reject closed)",
+        )
+    };
+    let corrupt = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar date op operand has a corrupt month",
+        )
+    };
+    let mut out = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        let (year, month, day) = match op {
+            CalendarDateFn::DayAfter | CalendarDateFn::DayBefore => {
+                let (year, month, day, offset) = cal_decode_date_operand(&operand[row])?;
+                // The reference PRESERVES the offset into the output date; we only render offset 0.
+                if offset != 0 {
+                    return Err(nonzero_offset());
+                }
+                if year < 1 {
+                    return Err(low_year());
+                }
+                match op {
+                    CalendarDateFn::DayAfter => cal_day_after(year, month, day).ok_or_else(corrupt)?,
+                    _ => cal_day_before(year, month, day).ok_or_else(corrupt)?,
+                }
+            }
+            CalendarDateFn::MonthStartDate | CalendarDateFn::MonthEndDate => {
+                let (year, month, offset) = cal_decode_gyearmonth_operand(&operand[row])?;
+                if offset != 0 {
+                    return Err(nonzero_offset());
+                }
+                if year < 1 {
+                    return Err(low_year());
+                }
+                let day = match op {
+                    CalendarDateFn::MonthStartDate => 1u8,
+                    _ => cal_days_in_month(year, month).ok_or_else(corrupt)?,
+                };
+                (year, month, day)
+            }
+        };
+        out.push(cal_date_result_object(year, month, day)?);
+    }
+    Ok(out)
+}
+
 /// The exact XSD value range `[min, max]` (as `i128`) and signedness of a fixed-width integer
 /// datatype, or `None` for any non-fixed-width-integer datatype. These bounds are the SAME
 /// ones the Prolog narrowing typecast enforces (`is_byte`/`is_short`/… in `util/types.pl`), so
@@ -3825,6 +4519,18 @@ impl ProvedBgp {
         }
     }
 
+    /// The per-row synthesized `xsd:date` results of a top-level DATE-result calendar op
+    /// (`DayAfter`/`DayBefore`/`MonthStartDate`/`MonthEndDate`), each a TERMINAL revealed
+    /// `CanonicalObject::Value` (datatype `xsd:date`, client-facing `YYYY-MM-DD` lexical) the verifier
+    /// RE-DERIVES from the root-authenticated operand. `None` for any other proof. Reading these AFTER
+    /// a successful `verify` is sound for the same reason as [`Self::concat_result_objects`].
+    pub fn calendar_date_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::CalendarDate { result_objects, .. } => Some(result_objects),
+            _ => None,
+        }
+    }
+
     /// Verify against a caller-selected, independently trusted root.
     pub fn verify(
         &self,
@@ -4249,6 +4955,33 @@ impl ProvedBgp {
                 transcript.append_bytes(b"pow/equality-envelope/root", &expected_root);
                 transcript.append_bytes(b"pow/equality-envelope/query", &query_digest);
                 verify_relation_equality(
+                    &input.relation_commit(None)?,
+                    &resolved,
+                    &self.result_commitments,
+                    self.result_len,
+                    self.result_log_domain,
+                    proof,
+                    &mut transcript,
+                )?;
+            }
+            (
+                ProvedQueryStatement::TupleDisequality { input, proof },
+                CompiledRelationStatement::TupleDisequality {
+                    input: input_plan,
+                    pairs,
+                },
+            ) => {
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                let resolved = resolve_tuple_disequality_pairs(layer, pairs)?;
+                let mut transcript = Transcript254::new(b"parture-tuple-disequality-envelope");
+                transcript.append_bytes(b"pow/tuple-disequality-envelope/root", &expected_root);
+                transcript.append_bytes(b"pow/tuple-disequality-envelope/query", &query_digest);
+                verify_tuple_disequality(
                     &input.relation_commit(None)?,
                     &resolved,
                     &self.result_commitments,
@@ -4939,6 +5672,121 @@ impl ProvedBgp {
                     ));
                 }
             }
+            (
+                ProvedQueryStatement::CalendarInt { input },
+                CompiledRelationStatement::CalendarInt {
+                    input: input_plan,
+                    date_column,
+                    outputs,
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root (its own
+                //     `verify_relation` ends with `verify_columns`, pinning the xsd:date column).
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) VERIFIER RE-DERIVATION: recompute the derived integer column(s) over the
+                //     root-authenticated date column and require the WHOLE column vector (child
+                //     columns ++ derived) to match EXACTLY. Row count/domain are inherited from the
+                //     child (a per-row map). A non-date operand row or an out-of-range year fails
+                //     closed — no biasable witness.
+                let expected_columns = expected_calendar_int_columns(
+                    input,
+                    input_plan,
+                    *date_column,
+                    outputs,
+                    layer,
+                    expected_root,
+                )?;
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL calendar-integer result is not the exact verifier-recomputed column(s)",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::CalendarDate {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::CalendarDate {
+                    input: input_plan,
+                    op,
+                    input_column,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM (the
+                //     xsd:date result is not a committed column); pin count/domain (per-row map).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL calendar-date op must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: recompute the per-row xsd:date and require the DELIVERED
+                //     result to match EXACTLY. A tampered result, tampered operand, non-zero offset,
+                //     out-of-range year, or wrong-typed operand all fail closed.
+                let expected_objects = expected_calendar_date_objects(
+                    input,
+                    input_plan,
+                    *op,
+                    *input_column,
+                    layer,
+                    expected_root,
+                )?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL calendar-date result is not the exact verifier-recomputed xsd:date",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::TransitiveClosure {
+                    edge,
+                    seed,
+                    rounds,
+                    fixpoint,
+                },
+                CompiledRelationStatement::TransitiveClosure {
+                    edge: edge_plan, ..
+                },
+            ) => {
+                // DELEGATE to the audited store verify: reconstruct the store closure envelope and run
+                // the store's own recursive verify (the edge BGP, every accumulate-and-dedupe round,
+                // and the empty-delta fixpoint). The woql2 layer re-implements NONE of the closure
+                // orchestration, so there is no second, drift-prone copy of it to keep sound.
+                let envelope = self.build_transitive_closure_envelope(
+                    layer,
+                    expected_root,
+                    query_digest,
+                    edge_plan,
+                    edge,
+                    seed,
+                    rounds,
+                    fixpoint,
+                )?;
+                let plan = relation_proof_plan(compiled, query_digest)?;
+                envelope.verify(layer, expected_root, &plan)?;
+            }
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -5303,6 +6151,102 @@ impl ProvedBgp {
     /// Materialize an envelope after the caller has verified the complete root relation.
     /// This must remain private: decoded/external envelopes still go through the full
     /// recursive `RecursiveRelationEnvelope::verify` path.
+    /// Reconstruct the store [`RecursiveRelationEnvelope`] for a bounded transitive closure from the
+    /// carried proof pieces, so the woql2 layer can DELEGATE to the audited store verify (it adds no
+    /// closure-specific verification of its own). The edge sub-relation reuses the closure's own query
+    /// digest as its identity tag (see `closure_edge_plan`), so no closure-internal information is
+    /// needed to rebuild it. Generic over the trusted layer so both the verify path and the
+    /// encode-after-verify path can call it.
+    #[allow(clippy::too_many_arguments)]
+    fn build_transitive_closure_envelope(
+        &self,
+        layer: &impl VerifierLayer,
+        expected_root: ProofHash,
+        query_digest: ProofHash,
+        edge_plan: &LayerBgpPlan,
+        edge: &ProvedBgp,
+        seed: &TransitiveClosureSeed,
+        rounds: &[TransitiveClosureRound],
+        fixpoint: &TransitiveClosureFixpoint,
+    ) -> std::io::Result<RecursiveRelationEnvelope> {
+        let invalid = |message: &str| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, message.to_string())
+        };
+        let (edge_proof, edge_predicate_ids) = match &edge.statement {
+            ProvedQueryStatement::Single {
+                proof,
+                predicate_ids,
+            } => (proof, predicate_ids),
+            _ => return Err(invalid("transitive closure edge is not a single BGP relation")),
+        };
+        // Rebuild the edge Bgp leaf envelope exactly as the `Single` reconstruction does.
+        let edge_descriptors =
+            terminus_store::proof::query::result_column_descriptors(edge_plan)?;
+        let edge_result_objects = resolve_typed_result_objects(
+            layer,
+            expected_root,
+            &edge.result_columns,
+            &result_id_namespaces(edge_plan)?,
+        )?;
+        let edge_result_values = resolve_result_values(
+            layer,
+            expected_root,
+            &edge.result_columns,
+            &edge_descriptors,
+        )?;
+        let edge_envelope = RecursiveRelationEnvelope {
+            layer_root: expected_root,
+            query_digest,
+            proof: RecursiveRelationProof::Bgp(Box::new(LayerBgpEnvelope {
+                layer_root: expected_root,
+                plan_digest: plan_digest(edge_plan)?,
+                query_digest,
+                proof: *edge_proof.clone(),
+                result_commitments: edge.result_commitments.clone(),
+                result_columns: edge.result_columns.clone(),
+                result_log_domain: edge.result_log_domain,
+                result_len: edge.result_len,
+                predicate_ids: edge_predicate_ids.clone(),
+                result_objects: edge_result_objects,
+            })),
+            result_commitments: edge.result_commitments.clone(),
+            result_columns: edge.result_columns.clone(),
+            result_log_domain: edge.result_log_domain,
+            result_len: edge.result_len,
+            ground_result: false,
+            result_descriptors: edge_descriptors,
+            result_values: edge_result_values,
+        };
+        // The delivered reachable set is one nonnullable node column.
+        let descriptors = vec![ResultColumnDescriptor {
+            namespace: ResultIdNamespace::NodeValue,
+            nullable: false,
+        }];
+        let result_values = resolve_result_values(
+            layer,
+            expected_root,
+            &self.result_columns,
+            &descriptors,
+        )?;
+        Ok(RecursiveRelationEnvelope {
+            layer_root: expected_root,
+            query_digest,
+            proof: RecursiveRelationProof::TransitiveClosure {
+                edge: Box::new(edge_envelope),
+                seed: seed.clone(),
+                rounds: rounds.to_vec(),
+                fixpoint: fixpoint.clone(),
+            },
+            result_commitments: self.result_commitments.clone(),
+            result_columns: self.result_columns.clone(),
+            result_log_domain: self.result_log_domain,
+            result_len: self.result_len,
+            ground_result: false,
+            result_descriptors: descriptors,
+            result_values,
+        })
+    }
+
     fn recursive_envelope_after_verification(
         &self,
         compiled: &CompiledRelation,
@@ -5313,6 +6257,32 @@ impl ProvedBgp {
         if let CompiledRelationStatement::When { expanded } = &compiled.statement {
             return self.recursive_envelope_after_verification(
                 expanded, layer, expected_root, query_digest,
+            );
+        }
+        // The transitive closure reconstructs its whole store envelope in one shot (it carries the
+        // store proof pieces directly), so it early-returns rather than threading a `proof` through the
+        // common wrapper below.
+        if let (
+            ProvedQueryStatement::TransitiveClosure {
+                edge,
+                seed,
+                rounds,
+                fixpoint,
+            },
+            CompiledRelationStatement::TransitiveClosure {
+                edge: edge_plan, ..
+            },
+        ) = (&self.statement, &compiled.statement)
+        {
+            return self.build_transitive_closure_envelope(
+                layer,
+                expected_root,
+                query_digest,
+                edge_plan,
+                edge,
+                seed,
+                rounds,
+                fixpoint,
             );
         }
         let proof = match (&self.statement, &compiled.statement) {
@@ -5430,6 +6400,20 @@ impl ProvedBgp {
                     input: input_plan, ..
                 },
             ) => RecursiveRelationProof::Equality {
+                input: Box::new(input.recursive_envelope_after_verification(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?),
+                proof: proof.clone(),
+            },
+            (
+                ProvedQueryStatement::TupleDisequality { input, proof },
+                CompiledRelationStatement::TupleDisequality {
+                    input: input_plan, ..
+                },
+            ) => RecursiveRelationProof::TupleDisequality {
                 input: Box::new(input.recursive_envelope_after_verification(
                     input_plan,
                     layer,
@@ -5609,6 +6593,26 @@ impl ProvedBgp {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "WOQL rational-arithmetic proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::CalendarInt { .. },
+                CompiledRelationStatement::CalendarInt { .. },
+            ) => {
+                // Verify-only in v1, exactly like Eval (appended derived column(s), no Store plan kind).
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL calendar-integer proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::CalendarDate { .. },
+                CompiledRelationStatement::CalendarDate { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL calendar-date proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
                 ));
             }
             (
@@ -5983,6 +6987,98 @@ fn prove_rational_arith_relation(
     })
 }
 
+/// Prove a top-level WOQL INTEGER-result calendar op (`Weekday`/`WeekdaySundayStart`/`IsoWeek`):
+/// prove the operand-binding child through the Store, then APPEND the derived integer column(s)
+/// computed by the SAME [`expected_calendar_int_columns`] the verifier re-runs. Structurally like
+/// [`prove_eval_relation`], but — because `IsoWeek` binds TWO integers — it appends ALL `outputs.len()`
+/// derived columns (each committed), NOT just the last: taking only `.last()` would silently drop a
+/// column and mis-shape the proof. A non-date operand row / out-of-range year FAILS CLOSED here
+/// (exactly as verify does), so a prover cannot produce a proof over a row the reference would reject.
+fn prove_calendar_int_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    date_column: usize,
+    outputs: &[CalendarIntFn],
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    // Recompute (child columns ++ one derived column PER output) against THIS layer's own root;
+    // identical to the verifier's re-derivation. The trailing `outputs.len()` columns are the derived
+    // ones — commit and append EACH (never just the last).
+    let expected =
+        expected_calendar_int_columns(&child, input, date_column, outputs, layer, layer.state.commitment_root)?;
+    let derived_start = expected.len().checked_sub(outputs.len()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL calendar-integer recompute produced fewer columns than outputs",
+        )
+    })?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let domain = 1usize << result_log_domain;
+    let mut result_columns = child.result_columns.clone();
+    let mut result_commitments = child.result_commitments.clone();
+    for derived in &expected[derived_start..] {
+        let mut padded = derived.clone();
+        padded.resize(domain, ArkFr::zero());
+        result_commitments.push(context.commit_column(&padded)?);
+        result_columns.push(derived.clone());
+    }
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::CalendarInt {
+            input: Box::new(child),
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL DATE-result calendar op (`DayAfter`/`DayBefore`/`MonthStartDate`/
+/// `MonthEndDate`): prove the operand-binding child through the Store, then DELIVER the per-row
+/// `xsd:date` result computed by the SAME [`expected_calendar_date_objects`] the verifier re-runs.
+/// Like `Concat`, NO derived column is committed — the child's columns/commitments are reused verbatim
+/// and the synthesized date is re-checked at verify. A non-zero offset / out-of-range year / wrong-typed
+/// operand FAILS CLOSED here (exactly as verify does).
+fn prove_calendar_date_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    op: CalendarDateFn,
+    input_column: usize,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects =
+        expected_calendar_date_objects(&child, input, op, input_column, layer, layer.state.commitment_root)?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::CalendarDate {
+            input: Box::new(child),
+            result_objects,
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
 /// Prove a top-level WOQL `Typecast`: prove the source-binding child through the Store, then
 /// APPEND the derived cast column computed by the SAME recompute the verifier re-runs.
 ///
@@ -6306,6 +7402,12 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
             input: Box::new(proved_from_recursive(*input)),
             proof,
         },
+        RecursiveRelationProof::TupleDisequality { input, proof } => {
+            ProvedQueryStatement::TupleDisequality {
+                input: Box::new(proved_from_recursive(*input)),
+                proof,
+            }
+        }
         RecursiveRelationProof::ExactScalarOrder { input, proof } => {
             ProvedQueryStatement::ExactScalarOrder {
                 input: Box::new(proved_from_recursive(*input)),
@@ -6327,6 +7429,17 @@ fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
         }
         RecursiveRelationProof::GroupSum { input } => ProvedQueryStatement::GroupSum {
             input: Box::new(proved_from_recursive(*input)),
+        },
+        RecursiveRelationProof::TransitiveClosure {
+            edge,
+            seed,
+            rounds,
+            fixpoint,
+        } => ProvedQueryStatement::TransitiveClosure {
+            edge: Box::new(proved_from_recursive(*edge)),
+            seed,
+            rounds,
+            fixpoint: Box::new(fixpoint),
         },
         RecursiveRelationProof::GroupCount { input } => ProvedQueryStatement::GroupCount {
             input: Box::new(proved_from_recursive(*input)),
@@ -6535,6 +7648,27 @@ impl CompiledBgp {
         {
             return prove_rational_arith_relation(context, layer, input, expr);
         }
+        // WOQL INTEGER-result calendar ops — a per-row map over a Store-proven authenticated date
+        // column, appending the derived integer column(s) via the same recompute verify re-runs.
+        if let CompiledRelationStatement::CalendarInt {
+            input,
+            date_column,
+            outputs,
+        } = &self.relation.statement
+        {
+            return prove_calendar_int_relation(context, layer, input, *date_column, outputs);
+        }
+        // WOQL DATE-result calendar ops — a per-row terminal xsd:date delivery over a Store-proven
+        // authenticated operand column (like Concat/RationalArith).
+        if let CompiledRelationStatement::CalendarDate {
+            input,
+            op,
+            input_column,
+            ..
+        } = &self.relation.statement
+        {
+            return prove_calendar_date_relation(context, layer, input, *op, *input_column);
+        }
         let digest = compiled_query_digest(self)?;
         let plan = relation_proof_plan(&self.relation, digest)?;
         let envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &plan)?;
@@ -6688,10 +7822,11 @@ pub enum BgpPlanError {
     #[error("schema-graph triples unsupported: only the instance graph is queried")]
     SchemaGraphUnsupported,
 
-    /// One BGP leaf mixed column sources — a materialized `Triple` joined with a delta
-    /// `AddedTriple`/`DeletedTriple`, or additions joined with removals. Cross-source joins
-    /// are a follow-up feature; the store plan carries ONE source so such a join is
-    /// unrepresentable and rejects closed rather than authenticating a wrong relation.
+    /// RESERVED (no longer produced): a BGP leaf that mixes column sources — a materialized
+    /// `Triple` joined with a delta `AddedTriple`/`DeletedTriple`, or additions joined with
+    /// removals. Cross-source joins are now SUPPORTED: each atom carries its own
+    /// [`ColumnSource`], and the store joins over the shared dictionaries. Retained as a public
+    /// variant for API stability.
     #[error("cross-source conjunction unsupported: a BGP may not mix materialized/added/deleted triples")]
     MixedColumnSource,
 
@@ -6916,10 +8051,22 @@ pub enum BgpPlanError {
     /// A multi-hop path reuses a predicate across two hops. Leading-Prolog path evaluation
     /// is edge-SIMPLE (`Open_Set` forbids re-traversing an identical edge within one path),
     /// which plain conjunctive bag-join does NOT model: on self-loop/edge-reuse data the
-    /// join over-counts. Only paths whose hop predicates are pairwise distinct — where no
-    /// edge can repeat — are provably exact, so a repeated predicate rejects closed.
-    #[error("multi-hop path reuses predicate `{predicate}`; edge-simple path semantics are not captured by conjunctive bag-join, so repeated-predicate paths reject closed")]
+    /// join over-counts. Paths with pairwise-distinct hop predicates (no edge can repeat)
+    /// lower straight to a bag-join; a SINGLE-predicate repeat is instead lowered with a
+    /// `TupleDisequality` edge-simple filter (see [`plan_deferred_repeated_predicate_path`]).
+    /// This error is the internal signal `ensure_edge_simple_exact` raises to route a
+    /// repeated-predicate chain to that deferred handler; it never escapes for a supported
+    /// single-predicate path.
+    #[error("multi-hop path reuses predicate `{predicate}`; edge-simple path semantics require a TupleDisequality filter (deferred lowering)")]
     PathRepeatedPredicateUnsupported { predicate: String },
+
+    /// A repeated-predicate path whose hops do NOT all use the SAME predicate (a
+    /// MIXED-predicate repeat, e.g. `(p;q)^2` or `Sequence([p, q, p])`). Edge-simple
+    /// exactness for a mixed repeat must fold the predicate id into the edge fingerprint,
+    /// which is a later sub-effort; only single-predicate repeats are provable here, so a
+    /// mixed-predicate repeat rejects closed.
+    #[error("mixed-predicate repeated path is unsupported: only single-predicate repeats have an edge-simple TupleDisequality lowering")]
+    PathMixedPredicateRepeatUnsupported,
 
     /// A conjunctive-chain hop is itself a union/range that cannot be a pure triple chain
     /// (an `Or`, or a bounded-range `Times`), so the enclosing `Sequence`/`Times` cannot be
@@ -6946,6 +8093,35 @@ pub enum BgpPlanError {
     /// A `Times` with `from > to` (an empty repetition range).
     #[error("Path `Times` range is empty (from > to)")]
     PathTimesInvalidRange,
+
+    // ---- Transitive-closure (`Star`/`Plus`) property paths ----
+    /// A `Star`/`Plus` path that is NOT under an endpoint `Distinct`. The reference emits an
+    /// edge-simple BAG of endpoints; a set closure equals that bag only once a surrounding `Distinct`
+    /// (or `Count`) collapses the multiplicity. A bare `star`/`plus` would ship bag semantics as a set,
+    /// so it rejects closed until the collapsing gate is present.
+    #[error("`Star`/`Plus` path is provable only under an endpoint `Distinct` (bare closure would ship a set for a bag); reject closed")]
+    ClosureRequiresDistinct,
+
+    /// A `Star`/`Plus` path with BOTH endpoints free (`path(?x, star(p), ?y)`). This is the identity
+    /// over the active domain, needing a domain-authenticated diagonal that this pass does not model.
+    #[error("`Star`/`Plus` path with two free endpoints requires a domain-authenticated diagonal (deferred); reject closed")]
+    ClosureBothEndpointsFree,
+
+    /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`). This is a boolean
+    /// reachability check, not a set query; it is a deferred follow-up.
+    #[error("`Star`/`Plus` path with two bound endpoints is a boolean reachability check (deferred); reject closed")]
+    ClosureBothEndpointsBound,
+
+    /// A `Star`/`Plus` over a COMPOUND sub-pattern (a sequence, union, or nested repetition rather than
+    /// a single predicate). Multi-atom closure bodies need the general BGP-in-the-loop lowering, a
+    /// deferred follow-up (B2).
+    #[error("`Star`/`Plus` over a compound sub-pattern (only a single predicate is provable) is deferred; reject closed")]
+    ClosureCompoundSubpattern,
+
+    /// A `Count`-gated `Star`/`Plus` closure. The reachable-set cardinality is provable, but the
+    /// `Count` integration is a follow-up; do the `Distinct` form first.
+    #[error("`Count`-gated `Star`/`Plus` closure is a follow-up (do the `Distinct` form first); reject closed")]
+    ClosureCountGateDeferred,
 
     // ---- Triple-SHAPED constructs that are NOT store BGP triples (`TypeOf`/`Dot`/`IsA`) ----
     // These three woql2 leaves resemble a triple but do NOT denote a store triple pattern in
@@ -7289,6 +8465,52 @@ pub enum BgpPlanError {
     /// `HashKey`/`hash`'s result variable is already bound by the child BGP; it must be fresh.
     #[error("HashKey result variable `?{var}` is already bound by the operand-binding BGP")]
     HashKeyResultAlreadyBound { var: String },
+
+    // ----- WOQL single-input CALENDAR ops (Weekday/WeekdaySundayStart/IsoWeek/Day*/Month*) -----
+    /// A malformed calendar composition: not a conjunction of exactly ONE calendar op with a
+    /// non-empty operand-binding child BGP (no projection/count/distinct on the child).
+    #[error("a calendar op must be a conjunction of exactly one calendar op with a non-empty operand-binding child BGP (no projection/count/distinct on the child)")]
+    CalendarUnsupportedShape,
+
+    /// A two-input / interval / duration / range-generator calendar op (`DateDuration`, `Interval`,
+    /// `IntervalStartDuration`, `IntervalDurationEnd`, `IntervalRelation`, `IntervalRelationTyped`,
+    /// the 3-arg `MonthStartDates`/`MonthEndDates`). These take multiple bound inputs and/or generate
+    /// multiple rows; they are heavier follow-ups and reject closed rather than being approximated.
+    #[error("calendar op `{op}` (two-input / interval / duration / range-generator) is a deferred follow-up: reject closed")]
+    CalendarTwoInputUnsupported { op: &'static str },
+
+    /// A single-input calendar op's operand is not a VARIABLE (it is a literal/list), so there is no
+    /// per-row store-authenticated operand to recompute over.
+    #[error("calendar op operand must be a variable bound by a store read")]
+    CalendarOperandNotVariable,
+
+    /// A calendar op's operand variable is not bound by any store read in the same query, so its
+    /// value cannot be authenticated.
+    #[error("calendar op operand `?{var}` is not bound by a store read in the same query: it cannot be authenticated")]
+    CalendarOperandNotBound { var: String },
+
+    /// A date-input calendar op's operand variable IS bound, but not as a nonnullable node/value store
+    /// value, or it is pinned to a NON-`xsd:date` datatype. Only a store-authenticated `xsd:date`
+    /// operand is provable (an `xsd:dateTime` operand is reject-closed — see the calendar layer notes).
+    #[error("calendar op operand `?{var}` is not a nonnullable store-authenticated xsd:date value")]
+    CalendarOperandNotDate { var: String },
+
+    /// A month-boundary calendar op's operand variable IS bound, but not as a nonnullable node/value
+    /// store value, or it is pinned to a NON-`xsd:gYearMonth` datatype. Only a store-authenticated
+    /// `xsd:gYearMonth` operand is provable for `MonthStartDate`/`MonthEndDate`.
+    #[error("calendar op operand `?{var}` is not a nonnullable store-authenticated xsd:gYearMonth value")]
+    CalendarOperandNotYearMonth { var: String },
+
+    /// A calendar op's result field is not a fresh output VARIABLE (it is a literal — i.e. the
+    /// reference's validate mode). Only a fresh variable the op binds is provable; a validate-mode
+    /// comparison against a bound value is out of the per-row derived-output fragment.
+    #[error("calendar op result must be a fresh output variable, not a literal (validate mode is reject-closed)")]
+    CalendarResultNotVariable,
+
+    /// A calendar op's result variable is already bound by the child BGP (or, for `IsoWeek`, the two
+    /// result variables collide); each derived output must be a fresh, distinct output column.
+    #[error("calendar op result variable `?{var}` is already bound by the operand-binding BGP or collides with another result")]
+    CalendarResultAlreadyBound { var: String },
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
@@ -7367,8 +8589,9 @@ struct TypedTriple {
     object_kind: ObjectKindFilter,
     /// Which committed column set this atom reads. A plain `Triple`/`Link`/`Data` reads the
     /// materialized head view; a WOQL `AddedTriple`/`DeletedTriple` reads this layer's own
-    /// addition/removal delta file. A single BGP leaf must be uniform in source (enforced by
-    /// [`uniform_column_source`]); a cross-source conjunction rejects closed.
+    /// addition/removal delta file. Threaded per-atom onto [`LayerBgpAtom::source`] (via
+    /// [`atom_from_triple`]), so a BGP leaf MAY mix sources — a cross-source join. The plan
+    /// DEFAULT is [`plan_default_column_source`] (the uniform source, else materialized).
     source: ColumnSource,
 }
 
@@ -10469,6 +11692,16 @@ fn rewrite_query_paths(query: &Query, alloc: &mut FreshPathVars) -> Result<Query
 }
 
 /// Lower a single `Path` node to an equivalent BGP/union `Query`.
+///
+/// A pairwise-distinct-predicate path (the edge-repetition-free case) lowers here to a
+/// plain bag-join `Query`. A single-predicate REPEATED path cannot be captured by a plain
+/// bag-join (it edge-simple over-counts), so `ensure_edge_simple_exact` raises
+/// `PathRepeatedPredicateUnsupported`; we catch exactly that signal and DEFER — returning
+/// the `Path` node UN-lowered so `plan_bgp` routes it to
+/// [`plan_deferred_repeated_predicate_path`], which builds the join chain plus the
+/// `TupleDisequality` edge-simple filter at the plan level (a `Query` cannot express that
+/// filter). Every other rejection (unbounded / wildcard / identity / edge capture)
+/// propagates unchanged.
 fn lower_path(
     path: &crate::query::Path,
     alloc: &mut FreshPathVars,
@@ -10476,9 +11709,28 @@ fn lower_path(
     if path.path.is_some() {
         return Err(BgpPlanError::PathWitnessCaptureUnsupported);
     }
+    // A `Star`/`Plus` transitive-closure path is compiled at the PLAN level: it needs the endpoint
+    // `Distinct` gate and the composite `TransitiveClosure` node, neither of which is expressible as a
+    // rewritten `Query`. Leave the `Path` node in place so `plan_bgp` routes it to
+    // `plan_transitive_closure_path` (which reject-closes every unsupported closure shape). A closure
+    // buried inside a larger `And` is NOT the plan body, so it reaches the conjunctive compiler as a
+    // non-triple conjunct and rejects closed there.
+    if matches!(
+        path.pattern,
+        crate::path::PathPattern::Star(_) | crate::path::PathPattern::Plus(_)
+    ) {
+        return Ok(Query::Path(path.clone()));
+    }
     let source = path_endpoint_term(&path.subject)?;
     let target = path_endpoint_term(&path.object)?;
-    lower_top(&path.pattern, &source, &target, alloc)
+    match lower_top(&path.pattern, &source, &target, alloc) {
+        // A repeated-predicate chain is provable via the deferred TupleDisequality
+        // lowering — leave the Path node in place for `plan_bgp` to route there.
+        Err(BgpPlanError::PathRepeatedPredicateUnsupported { .. }) => {
+            Ok(Query::Path(path.clone()))
+        }
+        other => other,
+    }
 }
 
 /// Top-level pattern lowering: may produce a bag union (`Or`) or a conjunctive chain
@@ -10741,6 +11993,631 @@ fn build_chain_query(
     }))
 }
 
+/// Build the `C(n,2)` hop-pair disequality specs for a lowered single-predicate chain.
+/// Each triple is one stored edge `(subject, object)` (the fixed predicate cancels); a
+/// pair drops rows where two edges coincide. A variable position becomes a committed-column
+/// reference (variable name -> the join schema index); a bound node position becomes a
+/// constant node reference. The verifier reconstructs these EXACT pairs from the trusted
+/// compiled plan (folded into the query digest), so the selection is not prover-chosen.
+fn build_disequality_pairs(
+    triples: &[Query],
+    schema: &[String],
+) -> Result<Vec<TupleDisequalityPairPlan>, BgpPlanError> {
+    fn column_of(name: &str, schema: &[String]) -> Result<TupleDisequalityNode, BgpPlanError> {
+        schema
+            .iter()
+            .position(|candidate| candidate == name)
+            .map(TupleDisequalityNode::Column)
+            .ok_or(BgpPlanError::PathEndpointUnsupported)
+    }
+    let subject_ref = |subject: &NodeValue| -> Result<TupleDisequalityNode, BgpPlanError> {
+        match subject {
+            NodeValue::Variable(name) => column_of(name, schema),
+            NodeValue::Node(iri) => Ok(TupleDisequalityNode::Constant(CanonicalObject::Node(
+                iri.clone().into_bytes(),
+            ))),
+        }
+    };
+    let object_ref = |object: &Value| -> Result<TupleDisequalityNode, BgpPlanError> {
+        match object {
+            Value::Variable(name) => column_of(name, schema),
+            Value::Node(iri) => Ok(TupleDisequalityNode::Constant(CanonicalObject::Node(
+                iri.clone().into_bytes(),
+            ))),
+            // Path node positions are only variables or bound node IRIs (endpoints are
+            // guarded by `path_endpoint_term`; intermediates are fresh variables).
+            _ => Err(BgpPlanError::PathEndpointUnsupported),
+        }
+    };
+    let mut edges = Vec::with_capacity(triples.len());
+    for triple in triples {
+        let Query::Triple(triple) = triple else {
+            return Err(BgpPlanError::PathNonElementaryHopUnsupported);
+        };
+        edges.push((subject_ref(&triple.subject)?, object_ref(&triple.object)?));
+    }
+    let mut pairs = Vec::new();
+    for e in 0..edges.len() {
+        for f in (e + 1)..edges.len() {
+            pairs.push(TupleDisequalityPairPlan {
+                a0: edges[e].0.clone(),
+                a1: edges[e].1.clone(),
+                b0: edges[f].0.clone(),
+                b1: edges[f].1.clone(),
+            });
+        }
+    }
+    Ok(pairs)
+}
+
+/// Project a filtered path chain to its endpoint variables (bag multiplicity preserved), so
+/// a single-length chain and every range branch share the `[source?, target?]` endpoint
+/// schema. Bound (constant) endpoints contribute no column; a fully-ground path projects to
+/// the canonical zero-column (unit) relation.
+fn project_path_endpoints(
+    relation: CompiledRelation,
+    source: &PathTerm,
+    target: &PathTerm,
+) -> Result<CompiledRelation, BgpPlanError> {
+    let mut endpoints: Vec<&str> = Vec::new();
+    if let Some(name) = source.variable_name() {
+        endpoints.push(name);
+    }
+    if let Some(name) = target.variable_name() {
+        if !endpoints.contains(&name) {
+            endpoints.push(name);
+        }
+    }
+    let mut indices = Vec::with_capacity(endpoints.len());
+    for name in &endpoints {
+        let index = relation
+            .schema
+            .iter()
+            .position(|candidate| candidate == name)
+            .ok_or(BgpPlanError::PathEndpointUnsupported)?;
+        indices.push(index);
+    }
+    let schema: Vec<String> = indices.iter().map(|i| relation.schema[*i].clone()).collect();
+    let domains: Vec<_> = indices.iter().map(|i| relation.domains[*i]).collect();
+    Ok(CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::BagProjection {
+            input: Box::new(relation),
+            indices,
+        },
+    })
+}
+
+/// Compile a DEFERRED finite single-predicate repeated-predicate path (see [`lower_path`])
+/// to `BagProjection(TupleDisequality(join-chain))` — the edge-simple-exact plan a plain
+/// bag-join cannot express. A range `Times{a,b}` fans out to a bag union over each exact
+/// length. Reuses the audited BGP compiler for the join chains and the `plan_or_relation`
+/// union path; adds only the `TupleDisequality` selection and the endpoint projection.
+fn plan_deferred_repeated_predicate_path(
+    path: &crate::query::Path,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    use crate::path::PathPattern;
+    if path.path.is_some() {
+        return Err(BgpPlanError::PathWitnessCaptureUnsupported);
+    }
+
+    // RANGE `Times{a,b}` (a != b): a bag union over each exact length, each an independently
+    // edge-simple-filtered chain projected to the endpoints. Delegating each length to a
+    // fresh `Query::Path` re-enters `plan_bgp` -> this handler (single-length arm) per branch.
+    if let PathPattern::Times(times) = &path.pattern {
+        if times.from != times.to {
+            if times.to < times.from {
+                return Err(BgpPlanError::PathTimesInvalidRange);
+            }
+            if times.from == 0 {
+                return Err(BgpPlanError::PathIdentityUnsupported);
+            }
+            if times.to > PATH_TIMES_MAX_BOUND {
+                return Err(BgpPlanError::UnboundedPathUnsupported);
+            }
+            let mut branches = Vec::with_capacity((times.to - times.from + 1) as usize);
+            for length in times.from..=times.to {
+                branches.push(Query::Path(crate::query::Path {
+                    subject: path.subject.clone(),
+                    pattern: PathPattern::Times(crate::path::PathTimes {
+                        times: times.times.clone(),
+                        from: length,
+                        to: length,
+                    }),
+                    object: path.object.clone(),
+                    path: None,
+                }));
+            }
+            let disjunction = crate::query::Or { or: branches };
+            return plan_or_relation(
+                &disjunction,
+                selections,
+                collection,
+                count_variable,
+                distincts,
+            );
+        }
+    }
+
+    // SINGLE-LENGTH: lower to the triple chain, then wrap it in the edge-simple filter.
+    let source = path_endpoint_term(&path.subject)?;
+    let target = path_endpoint_term(&path.object)?;
+    let mut reserved = std::collections::BTreeSet::new();
+    collect_reserved_path_variables(&Query::Path(path.clone()), &mut reserved);
+    let mut alloc = FreshPathVars::new(reserved);
+    let mut triples = Vec::new();
+    let mut predicates = Vec::new();
+    lower_chain(
+        &path.pattern,
+        &source,
+        &target,
+        &mut alloc,
+        &mut triples,
+        &mut predicates,
+    )?;
+
+    // Single predicate is the whole scope of this pass: a mixed-predicate repeat needs the
+    // predicate id folded into the fingerprint (a later sub-effort) and rejects closed.
+    let first = predicates.first().ok_or(BgpPlanError::PathEmptyPattern)?;
+    if predicates.iter().any(|predicate| predicate != first) {
+        return Err(BgpPlanError::PathMixedPredicateRepeatUnsupported);
+    }
+
+    // Compile the join chain by reusing the audited BGP machinery on the raw `And`.
+    let chain_query = if triples.len() == 1 {
+        triples[0].clone()
+    } else {
+        Query::And(crate::query::And { and: triples.clone() })
+    };
+    let chain = plan_bgp(&chain_query)?;
+    if chain.projection.is_some() || chain.count_variable.is_some() || chain.full_row_distinct {
+        // A bare triple chain never sets these; a defensive guard against a surprising shape.
+        return Err(BgpPlanError::PathNonElementaryHopUnsupported);
+    }
+    let mut relation = chain.relation;
+    let mut path_collection = collection;
+    merge_collection(
+        &mut path_collection,
+        chain.collection.as_ref(),
+        BgpPlanError::OrRoutingConflict,
+    )?;
+
+    // Wrap the join in the edge-simple TupleDisequality filter (all C(n,2) hop-pairs). A
+    // single hop yields no pair (nothing to filter) — but a deferred path always has >= 2.
+    let pairs = build_disequality_pairs(&triples, &relation.schema)?;
+    if !pairs.is_empty() {
+        let schema = relation.schema.clone();
+        let domains = relation.domains.clone();
+        relation = CompiledRelation {
+            schema,
+            domains,
+            statement: CompiledRelationStatement::TupleDisequality {
+                input: Box::new(relation),
+                pairs,
+            },
+        };
+    }
+
+    // Project to the endpoint variables so the schema matches Prolog's endpoint bindings
+    // (and every range branch shares one endpoint schema).
+    relation = project_path_endpoints(relation, &source, &target)?;
+
+    // Apply the outer Distinct/Select/Count wrappers exactly as the other body dispatches.
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(relation, distincts, selections, count_variable.as_deref())?;
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection: path_collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+/// Is this conjunct a single-input calendar-family op (whether ship-supported or reject-closed)?
+/// The planner claims ALL of them so a supported op compiles and an unsupported one reject-closes —
+/// never silently falling through to a mis-plan.
+/// Compile a `Star`/`Plus` transitive-closure property path to the store's `TransitiveClosure`
+/// composite node, ONLY under the endpoint-`Distinct` gate that makes the reference's edge-simple BAG
+/// of endpoints equal the reachable SET. Every unsupported shape rejects CLOSED with a specific error.
+///
+/// SCOPE (this pass): a SINGLE concrete predicate (forward or inverse), exactly one BOUND endpoint
+/// (bound source, or bound target reached by traversing the inverse edge), under a `Distinct` naming
+/// the free endpoint. Deferred (reject closed): compound sub-patterns, two free / two bound endpoints,
+/// wildcards, edge-list capture, and `Count`-gated closures.
+fn plan_transitive_closure_path(
+    path: &crate::query::Path,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    use crate::path::PathPattern;
+    if path.path.is_some() {
+        return Err(BgpPlanError::PathWitnessCaptureUnsupported);
+    }
+
+    // `star` = zero-or-more (identity branch always succeeds, path.pl:183); `plus` = one-or-more
+    // (path.pl:186). This function is only reached for these two top-level operators.
+    let (reflexive, inner) = match &path.pattern {
+        PathPattern::Star(star) => (true, star.star.as_ref()),
+        PathPattern::Plus(plus) => (false, plus.plus.as_ref()),
+        _ => return Err(BgpPlanError::UnboundedPathUnsupported),
+    };
+
+    // The closure body must be a SINGLE concrete predicate; a compound body (sequence/union/nested
+    // repetition) needs the general BGP-in-the-loop lowering (deferred). A wildcard `.` rejects closed.
+    let (predicate, inner_inverse) = match inner {
+        PathPattern::Predicate(pred) => (
+            pred.predicate
+                .clone()
+                .ok_or(BgpPlanError::PathWildcardUnsupported)?,
+            false,
+        ),
+        PathPattern::InversePredicate(pred) => (
+            pred.predicate
+                .clone()
+                .ok_or(BgpPlanError::PathWildcardUnsupported)?,
+            true,
+        ),
+        _ => return Err(BgpPlanError::ClosureCompoundSubpattern),
+    };
+
+    // Exactly one endpoint bound (the seed) and one free (the delivered reachable-set column). A bound
+    // TARGET mirrors the traversal to the inverse edge (path.pl:129-134 `run_pattern`, `invert_path`).
+    let source = path_endpoint_term(&path.subject)?;
+    let target = path_endpoint_term(&path.object)?;
+    let (seed_iri, endpoint_var, bound_target) = match (&source, &target) {
+        (PathTerm::Node(a), PathTerm::Variable(y)) => (a.clone(), y.clone(), false),
+        (PathTerm::Variable(x), PathTerm::Node(b)) => (b.clone(), x.clone(), true),
+        (PathTerm::Node(_), PathTerm::Node(_)) => {
+            return Err(BgpPlanError::ClosureBothEndpointsBound)
+        }
+        (PathTerm::Variable(_), PathTerm::Variable(_)) => {
+            return Err(BgpPlanError::ClosureBothEndpointsFree)
+        }
+    };
+
+    // Effective traversal direction. A bound target and an inverse predicate are each ONE mirroring;
+    // two mirrorings cancel (`invert_path(plus(n(P))) = plus(p(P))`, path.pl:114-134).
+    let inverted = bound_target ^ inner_inverse;
+
+    // `Count`-gated closures are a deferred follow-up; do the `Distinct` form first.
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+
+    // The edge relation E = Triple(?s, p, ?o): a single-atom 2-column [subject, object] node BGP.
+    let edge = LayerBgpPlan {
+        source: ColumnSource::Materialized,
+        atoms: vec![LayerBgpAtom::all_variables(predicate.into_bytes())],
+        joins: Vec::new(),
+    };
+    let relation = CompiledRelation {
+        schema: vec![endpoint_var],
+        domains: vec![None],
+        statement: CompiledRelationStatement::TransitiveClosure {
+            edge,
+            seed: CanonicalObject::Node(seed_iri.into_bytes()),
+            reflexive,
+            inverted,
+        },
+    };
+
+    // ENFORCE the gate: the closure delivers a SET, so the surrounding `Distinct` must name its full
+    // (single-column) schema. `compile_distinct_relation` returns `full_row_distinct == true` exactly
+    // when the `Distinct` covers the schema over a duplicate-free child (the closure is duplicate-free
+    // by construction — see `is_provably_duplicate_free`). Anything else (no `Distinct`, or a
+    // `Distinct` on a different variable) fails the gate and rejects closed.
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(relation, distincts, selections, count_variable.as_deref())?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+fn is_calendar_conjunct(query: &Query) -> bool {
+    matches!(
+        query,
+        Query::Weekday(_)
+            | Query::WeekdaySundayStart(_)
+            | Query::IsoWeek(_)
+            | Query::DayAfter(_)
+            | Query::DayBefore(_)
+            | Query::MonthStartDate(_)
+            | Query::MonthEndDate(_)
+            | Query::DateDuration(_)
+            | Query::Interval(_)
+            | Query::IntervalStartDuration(_)
+            | Query::IntervalDurationEnd(_)
+            | Query::IntervalRelation(_)
+            | Query::IntervalRelationTyped(_)
+            | Query::MonthStartDates(_)
+            | Query::MonthEndDates(_)
+    )
+}
+
+/// Resolve a calendar op's operand `DataValue` to an authenticated child column index, requiring it
+/// to be a VARIABLE bound as a nonnullable node/value store column whose pinned datatype (if any) is
+/// `required` (an UNPINNED column is allowed — the actual datatype is enforced per-row at recompute).
+fn calendar_operand_column(
+    operand: &DataValue,
+    child: &CompiledBgp,
+    required: CanonicalDatatype,
+    not_bound: impl Fn(String) -> BgpPlanError,
+    not_typed: impl Fn(String) -> BgpPlanError,
+) -> Result<usize, BgpPlanError> {
+    let variable = match operand {
+        DataValue::Variable(variable) => variable,
+        // A literal/list operand has no per-row store authentication.
+        _ => return Err(BgpPlanError::CalendarOperandNotVariable),
+    };
+    let index = child
+        .relation
+        .schema
+        .iter()
+        .position(|candidate| candidate == variable)
+        .ok_or_else(|| not_bound(variable.clone()))?;
+    let descriptors =
+        relation_result_descriptors(&child.relation).map_err(|_| not_typed(variable.clone()))?;
+    if descriptors[index].nullable || descriptors[index].namespace != ResultIdNamespace::NodeValue {
+        return Err(not_typed(variable.clone()));
+    }
+    // An UNPINNED column (`None`) is allowed (recompute enforces the datatype per row); a datatype
+    // pinned to EXACTLY `required` is allowed; any other pinned datatype rejects closed.
+    match child.relation.domains.get(index).copied().flatten() {
+        None => {}
+        Some(EqualityValueDomain::Datatype(datatype)) if datatype == required => {}
+        Some(_) => return Err(not_typed(variable.clone())),
+    }
+    Ok(index)
+}
+
+/// A calendar op's result field must be a FRESH output VARIABLE (never a literal / validate mode).
+fn calendar_result_var(result: &DataValue) -> Result<String, BgpPlanError> {
+    match result {
+        DataValue::Variable(variable) => Ok(variable.clone()),
+        _ => Err(BgpPlanError::CalendarResultNotVariable),
+    }
+}
+
+/// Build an INTEGER-result calendar [`CompiledBgp`]: append each `(result_var, function)` as a fresh
+/// committed output column (schema + `None` domain), mirroring `plan_eval_form`'s integer path but
+/// for one-or-more outputs. Each result variable must be fresh (not in the child schema) and DISTINCT
+/// from the others (the running `schema` already holds earlier results, so a single membership check
+/// enforces both).
+fn build_calendar_int(
+    child: CompiledBgp,
+    date_column: usize,
+    outputs: Vec<(String, CalendarIntFn)>,
+) -> Result<CompiledBgp, BgpPlanError> {
+    let mut schema = child.relation.schema.clone();
+    let mut domains = child.relation.domains.clone();
+    let collection = child.collection.clone();
+    let mut functions = Vec::with_capacity(outputs.len());
+    for (variable, function) in outputs {
+        if schema.iter().any(|candidate| candidate == &variable) {
+            return Err(BgpPlanError::CalendarResultAlreadyBound { var: variable });
+        }
+        schema.push(variable);
+        // The derived column is a generated integer, not an executor value domain.
+        domains.push(None);
+        functions.push(function);
+    }
+    let relation = CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::CalendarInt {
+            input: Box::new(child.relation),
+            date_column,
+            outputs: functions,
+        },
+    };
+    Ok(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
+/// Build a DATE-result calendar [`CompiledBgp`]: the result is TERMINAL/revealed (NOT a committed
+/// schema column), so the child schema/domains pass through unchanged and the result variable lives
+/// only in the statement — mirroring `plan_concat_form`. The result must be a fresh variable.
+fn build_calendar_date(
+    child: CompiledBgp,
+    input_column: usize,
+    op: CalendarDateFn,
+    result: String,
+) -> Result<CompiledBgp, BgpPlanError> {
+    if child
+        .relation
+        .schema
+        .iter()
+        .any(|candidate| candidate == &result)
+    {
+        return Err(BgpPlanError::CalendarResultAlreadyBound { var: result });
+    }
+    let collection = child.collection.clone();
+    let relation = CompiledRelation {
+        schema: child.relation.schema.clone(),
+        domains: child.relation.domains.clone(),
+        statement: CompiledRelationStatement::CalendarDate {
+            input: Box::new(child.relation),
+            op,
+            input_column,
+            result,
+        },
+    };
+    Ok(CompiledBgp {
+        relation,
+        projection: None,
+        collection,
+        count_variable: None,
+        full_row_distinct: false,
+    })
+}
+
+/// Compile a single-input WOQL CALENDAR op conjunct into a verifier-recompute
+/// [`CompiledRelationStatement::CalendarInt`] / [`CompiledRelationStatement::CalendarDate`], modelled
+/// on [`plan_eval_form`]/[`plan_concat_form`].
+///
+/// SHIP (reject-closed everywhere else): `Weekday`/`WeekdaySundayStart`/`IsoWeek` (INTEGER outputs
+/// over a bound `xsd:date`) and `DayAfter`/`DayBefore` (`xsd:date`) / `MonthStartDate`/`MonthEndDate`
+/// (`xsd:gYearMonth`) (DATE output). The operand must be a variable bound as a nonnullable store
+/// node/value column; every result must be a fresh, distinct output variable (validate mode and
+/// already-bound results reject closed). The two-input / interval / duration / 3-arg generator ops
+/// are claimed and reject-closed ([`BgpPlanError::CalendarTwoInputUnsupported`]).
+fn plan_calendar_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
+    let conjuncts = match query {
+        Query::And(and) => &and.and,
+        _ => return Ok(None),
+    };
+    let positions: Vec<usize> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(_, conjunct)| is_calendar_conjunct(conjunct))
+        .map(|(index, _)| index)
+        .collect();
+    if positions.is_empty() {
+        // No calendar conjunct: let the other planners handle this query.
+        return Ok(None);
+    }
+    if positions.len() > 1 {
+        // Multiple calendar ops would need a dependency-ordered chain; v1 takes exactly one.
+        return Err(BgpPlanError::CalendarUnsupportedShape);
+    }
+    let calendar = &conjuncts[positions[0]];
+
+    // Reject-closed the two-input / interval / duration / range-generator ops UP FRONT (before even
+    // building a child) — heavier follow-ups, never approximated.
+    let reject_op = match calendar {
+        Query::DateDuration(_) => Some("DateDuration"),
+        Query::Interval(_) => Some("Interval"),
+        Query::IntervalStartDuration(_) => Some("IntervalStartDuration"),
+        Query::IntervalDurationEnd(_) => Some("IntervalDurationEnd"),
+        Query::IntervalRelation(_) => Some("IntervalRelation"),
+        Query::IntervalRelationTyped(_) => Some("IntervalRelationTyped"),
+        Query::MonthStartDates(_) => Some("MonthStartDates"),
+        Query::MonthEndDates(_) => Some("MonthEndDates"),
+        _ => None,
+    };
+    if let Some(op) = reject_op {
+        return Err(BgpPlanError::CalendarTwoInputUnsupported { op });
+    }
+
+    // The operand-binding child is every OTHER conjunct.
+    let child_conjuncts: Vec<Query> = conjuncts
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != positions[0])
+        .map(|(_, conjunct)| conjunct.clone())
+        .collect();
+    if child_conjuncts.is_empty() {
+        // A bare calendar op with no store binding cannot authenticate its operand.
+        return Err(BgpPlanError::CalendarUnsupportedShape);
+    }
+    let child_query = if child_conjuncts.len() == 1 {
+        child_conjuncts.into_iter().next().unwrap()
+    } else {
+        Query::And(And {
+            and: child_conjuncts,
+        })
+    };
+    let child = plan_bgp(&child_query)?;
+    if child.projection.is_some() || child.count_variable.is_some() || child.full_row_distinct {
+        return Err(BgpPlanError::CalendarUnsupportedShape);
+    }
+
+    let date_operand = |operand: &DataValue, child: &CompiledBgp| {
+        calendar_operand_column(
+            operand,
+            child,
+            CanonicalDatatype::Date,
+            |var| BgpPlanError::CalendarOperandNotBound { var },
+            |var| BgpPlanError::CalendarOperandNotDate { var },
+        )
+    };
+    let yearmonth_operand = |operand: &DataValue, child: &CompiledBgp| {
+        calendar_operand_column(
+            operand,
+            child,
+            CanonicalDatatype::GYearMonth,
+            |var| BgpPlanError::CalendarOperandNotBound { var },
+            |var| BgpPlanError::CalendarOperandNotYearMonth { var },
+        )
+    };
+
+    let compiled = match calendar {
+        Query::Weekday(weekday) => {
+            let date_column = date_operand(&weekday.date, &child)?;
+            let result = calendar_result_var(&weekday.weekday)?;
+            build_calendar_int(child, date_column, vec![(result, CalendarIntFn::Weekday)])?
+        }
+        Query::WeekdaySundayStart(weekday) => {
+            let date_column = date_operand(&weekday.date, &child)?;
+            let result = calendar_result_var(&weekday.weekday)?;
+            build_calendar_int(child, date_column, vec![(result, CalendarIntFn::WeekdaySundayStart)])?
+        }
+        Query::IsoWeek(iso) => {
+            let date_column = date_operand(&iso.date, &child)?;
+            // The reference binds BOTH the week-numbering year and the week number; both must be
+            // fresh, distinct output variables (order [year, week] matches `definition.pl` fields).
+            let year = calendar_result_var(&iso.year)?;
+            let week = calendar_result_var(&iso.week)?;
+            build_calendar_int(
+                child,
+                date_column,
+                vec![
+                    (year, CalendarIntFn::IsoWeekYear),
+                    (week, CalendarIntFn::IsoWeekWeek),
+                ],
+            )?
+        }
+        Query::DayAfter(day) => {
+            let input_column = date_operand(&day.date, &child)?;
+            let result = calendar_result_var(&day.next)?;
+            build_calendar_date(child, input_column, CalendarDateFn::DayAfter, result)?
+        }
+        Query::DayBefore(day) => {
+            let input_column = date_operand(&day.date, &child)?;
+            let result = calendar_result_var(&day.previous)?;
+            build_calendar_date(child, input_column, CalendarDateFn::DayBefore, result)?
+        }
+        Query::MonthStartDate(month) => {
+            let input_column = yearmonth_operand(&month.year_month, &child)?;
+            let result = calendar_result_var(&month.date)?;
+            build_calendar_date(child, input_column, CalendarDateFn::MonthStartDate, result)?
+        }
+        Query::MonthEndDate(month) => {
+            let input_column = yearmonth_operand(&month.year_month, &child)?;
+            let result = calendar_result_var(&month.date)?;
+            build_calendar_date(child, input_column, CalendarDateFn::MonthEndDate, result)?
+        }
+        _ => unreachable!("is_calendar_conjunct + the reject filter cover every calendar variant"),
+    };
+    Ok(Some(compiled))
+}
+
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
 /// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
@@ -10810,6 +12687,35 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             }
             _ => break,
         };
+    }
+
+    // A finite single-predicate REPEATED-predicate path that `lower_path` DEFERRED (a plain
+    // bag-join over-counts edge-simple solutions). Compile it at the plan level: the join
+    // chain + a `TupleDisequality` edge-simple filter + endpoint projection. A deferred path
+    // that is NOT the whole body (nested inside a larger `And`) reaches the conjunctive
+    // compiler as a non-triple conjunct and rejects closed there.
+    if let Query::Path(path) = body {
+        // A `Star`/`Plus` closure routes to the transitive-closure planner; every other deferred path
+        // (single-predicate repeat / `Times`) routes to the edge-simple TupleDisequality planner.
+        if matches!(
+            path.pattern,
+            crate::path::PathPattern::Star(_) | crate::path::PathPattern::Plus(_)
+        ) {
+            return plan_transitive_closure_path(
+                path,
+                &selections,
+                collection,
+                count_variable,
+                &distincts,
+            );
+        }
+        return plan_deferred_repeated_predicate_path(
+            path,
+            &selections,
+            collection,
+            count_variable,
+            &distincts,
+        );
     }
 
     if matches!(body, Query::Start(_) | Query::Limit(_) | Query::Once(_)) {
@@ -11192,6 +13098,29 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         return Ok(hashed);
     }
 
+    if let Some(mut calendar) = plan_calendar_form(body)? {
+        if collection.is_some() {
+            if calendar.collection.is_some() && calendar.collection != collection {
+                return Err(BgpPlanError::OrRoutingConflict);
+            }
+            calendar.collection = collection;
+        }
+        // Integer-result calendar ops APPEND their result column(s) to the schema (Select/Count over
+        // them works); date-result calendar ops keep the result TERMINAL/revealed (a Select/Count
+        // naming it fails via `compile_projection`, exactly like Concat). Distinct is rejected too.
+        calendar.count_variable = count_variable;
+        calendar.projection = compile_projection(
+            &selections,
+            calendar.count_variable.as_deref(),
+            &calendar.relation.schema,
+        )?;
+        if !distincts.is_empty() {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
+        }
+        validate_compiled_structure(&calendar.relation)?;
+        return Ok(calendar);
+    }
+
     // Deferred string-case ops (`Upper`/`Lower`) reject closed with a documented locale reason
     // (see `reject_unsupported_string_case_ops`) before the generic UnsupportedConstruct path.
     reject_unsupported_string_case_ops(body)?;
@@ -11227,11 +13156,14 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let mut comparisons: Vec<NormalizedRange> = Vec::new();
     collect_conjunct(body, &mut triples, &mut comparisons)?;
 
-    // (1c) CP-D: every atom of one BGP leaf must read the SAME column source. A materialized
-    // `Triple` joined with a delta atom, or an `AddedTriple` joined with a `DeletedTriple`, is
-    // a cross-source join we reject closed (the store plan carries ONE source, so such a join
-    // is unrepresentable and never silently authenticated).
-    let source = uniform_column_source(&triples)?;
+    // (1c) CP-D: each atom carries its OWN column source (materialized head, or this layer's
+    // additions/removals delta), so a CROSS-SOURCE conjunction — e.g. `AddedTriple(?x,p,?y) &
+    // Triple(?y,q,?z)` (additions ⋈ materialized) or additions ⋈ removals — is now supported:
+    // all sources share the layer's predicate/node-value dictionaries, so their IDs are
+    // directly comparable and the audited store join gadget joins them unchanged. We only
+    // compute the plan DEFAULT source here (the uniform source when every atom agrees, else
+    // materialized); the per-atom sources are threaded onto each `LayerBgpAtom` below.
+    let source = plan_default_column_source(&triples);
 
     // (2) Lift each triple to an Atom, with all per-atom safety checks.
     let mut atoms: Vec<Atom> = triples
@@ -11254,11 +13186,15 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // existence bits. Stable ordering preserves query order within both groups.
     atoms.sort_by_key(|atom| atom.kept.is_empty());
 
-    // (3) Shape guard + left-deep planner: the safety-critical core.
+    // (3) Shape guard + left-deep planner: the safety-critical core. Each ordered plan atom
+    // already carries its own `source` (threaded via `atom_from_triple` and cloned through by
+    // `plan_left_deep`), so cross-source joins are represented directly.
     let (mut plan, schema) = plan_left_deep(&atoms)?;
-    // Thread the (uniform) column source into the store plan. The verifier reconstructs this
-    // same plan from its own trusted query, so the source is fixed by trusted compilation;
-    // `plan_digest`/the Fiat–Shamir transcript additionally bind it.
+    // Stamp the plan DEFAULT source (uniform source, else materialized) — the transcript
+    // baseline the store measures per-atom overrides against, and the domain of the all-ground
+    // unit. The verifier reconstructs this same plan (default + every atom's source) from its
+    // own trusted query, so all sources are fixed by trusted compilation; `plan_digest`/the
+    // Fiat–Shamir transcript additionally bind them.
     plan.source = source;
     let domains = infer_schema_domains(&schema, &atoms, &comparisons);
 
@@ -11906,7 +13842,10 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
         *nodes += 1;
         match &relation.statement {
             CompiledRelationStatement::Bgp(_)
-            | CompiledRelationStatement::LayerTripleCount => Ok(()),
+            | CompiledRelationStatement::LayerTripleCount
+            // The transitive closure is a leaf composite: it carries a raw edge BGP plan, not a
+            // CompiledRelation child, so there is nothing further to recurse into here.
+            | CompiledRelationStatement::TransitiveClosure { .. } => Ok(()),
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
             | CompiledRelationStatement::GeneratedI64Filter { input, .. } => {
                 visit(input, depth + 1, nodes)
@@ -11936,6 +13875,7 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 visit(right, depth + 1, nodes)
             }
             CompiledRelationStatement::Equality { input, .. }
+            | CompiledRelationStatement::TupleDisequality { input, .. }
             | CompiledRelationStatement::ExactScalarOrder { input, .. }
             | CompiledRelationStatement::ExactMultiOrder { input, .. }
             | CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
@@ -11958,6 +13898,8 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
             CompiledRelationStatement::Substring { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::Pad { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::HashKey { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::CalendarInt { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::CalendarDate { input, .. } => visit(input, depth + 1, nodes),
         }
     }
     let mut nodes = 0;
@@ -12155,15 +14097,19 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         CompiledRelationStatement::InnerJoin { left, right, .. } => {
             is_provably_duplicate_free(left) && is_provably_duplicate_free(right)
         }
-        // Row-eliminating filters/orders/slices never introduce duplicates.
+        // Row-eliminating filters/orders/slices never introduce duplicates. Tuple
+        // disequality only DROPS rows (edge-reuse over-counts), so it inherits uniqueness.
         CompiledRelationStatement::GeneratedU64Filter { input, .. }
         | CompiledRelationStatement::GeneratedI64Filter { input, .. }
         | CompiledRelationStatement::Equality { input, .. }
+        | CompiledRelationStatement::TupleDisequality { input, .. }
         | CompiledRelationStatement::ExactScalarOrder { input, .. }
         | CompiledRelationStatement::ExactMultiOrder { input, .. }
         | CompiledRelationStatement::ExactOrderedSlice { input, .. } => {
             is_provably_duplicate_free(input)
         }
+        // The transitive closure delivers the deduped reachable SET, so it is unique by construction.
+        CompiledRelationStatement::TransitiveClosure { .. } => true,
         // Distinct and the aggregations emit at most one row per key/group, hence unique.
         CompiledRelationStatement::Distinct { .. }
         | CompiledRelationStatement::GroupExtrema { .. }
@@ -12192,7 +14138,13 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         | CompiledRelationStatement::HashKey { input, .. }
         // RationalArith likewise carries the child's committed columns through VERBATIM (the
         // xsd:decimal result is terminal/non-committed), so uniqueness is exactly the child's.
-        | CompiledRelationStatement::RationalArith { input, .. } => is_provably_duplicate_free(input),
+        | CompiledRelationStatement::RationalArith { input, .. }
+        // CalendarDate carries the child's committed columns through VERBATIM (its xsd:date result is
+        // terminal/non-committed), so committed-row uniqueness is exactly the child's. Inherit it.
+        | CompiledRelationStatement::CalendarDate { input, .. } => is_provably_duplicate_free(input),
+        // CalendarInt appends per-row derived integer column(s) — an injective row map (like Eval),
+        // so uniqueness is inherited from the child.
+        CompiledRelationStatement::CalendarInt { input, .. } => is_provably_duplicate_free(input),
         // Bag-valued compositions can carry duplicate full rows.
         CompiledRelationStatement::BagUnion { .. }
         | CompiledRelationStatement::BagProjection { .. }
@@ -12533,6 +14485,12 @@ fn atom_from_triple(typed: &TypedTriple) -> Result<Atom, BgpPlanError> {
             object_range: None,
             object_kind,
             subject_object_equal,
+            // Thread THIS atom's committed column source (materialized head for
+            // `Triple`/`Link`/`Data`, additions for `AddedTriple`, removals for
+            // `DeletedTriple`). Making it per-atom is what admits a CROSS-SOURCE join; the
+            // store prove/verify read each atom's columns/count from this field, and it is
+            // bound by `plan_digest` + the Fiat–Shamir transcript.
+            source: typed.source,
         },
         kept,
         subj_var,
@@ -13501,19 +15459,24 @@ fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String>), BgpPlan
     ))
 }
 
-/// The single column source shared by every atom of one BGP leaf. A materialized `Triple`
-/// mixed with a delta atom, or additions mixed with removals, is a cross-source join we
-/// reject closed with [`BgpPlanError::MixedColumnSource`]. An empty triple list defaults to
-/// materialized (the surrounding `k == 0` check then rejects it as too few atoms).
-fn uniform_column_source(triples: &[TypedTriple]) -> Result<ColumnSource, BgpPlanError> {
+/// The plan DEFAULT column source for a BGP leaf. Each atom now carries its OWN source
+/// ([`LayerBgpAtom::source`], threaded in [`atom_from_triple`]), so a CROSS-SOURCE conjunction
+/// — a materialized `Triple` joined with a delta atom, or additions joined with removals — is
+/// now SUPPORTED (the store joins over the shared dictionaries). This returns the source to
+/// stamp on `plan.source`: when every atom agrees it is that uniform source (which keeps a
+/// single-source plan's transcript byte-identical to the pre-per-atom encoding — the store
+/// binds a per-atom source override ONLY when it diverges from `plan.source`); when they
+/// diverge it is `Materialized`, the neutral default that emits no plan-level source tag. An
+/// empty triple list defaults to materialized (the surrounding `k == 0` check then rejects it
+/// as too few atoms).
+fn plan_default_column_source(triples: &[TypedTriple]) -> ColumnSource {
     let mut sources = triples.iter().map(|triple| triple.source);
     let first = sources.next().unwrap_or(ColumnSource::Materialized);
-    for source in sources {
-        if source != first {
-            return Err(BgpPlanError::MixedColumnSource);
-        }
+    if sources.all(|source| source == first) {
+        first
+    } else {
+        ColumnSource::Materialized
     }
-    Ok(first)
 }
 
 /// How many of an atom's KEPT (variable) columns occur in the accumulator schema. Because

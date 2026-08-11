@@ -32,6 +32,9 @@ use terminusdb_woql2::expression::{
     ArithmeticExpression, ArithmeticValue, Div, Divide, Exp, Floor, Minus, Plus, Times,
 };
 use terminusdb_woql2::compare::Typecast;
+use terminusdb_woql2::interval::{
+    DayAfter, DayBefore, IsoWeek, MonthEndDate, MonthStartDate, Weekday, WeekdaySundayStart,
+};
 use terminusdb_woql2::query::Eval;
 use terminusdb_woql2::control::{When, WoqlOptional};
 use terminusdb_woql2::control::{Distinct, Select, Using};
@@ -47,7 +50,10 @@ use terminusdb_woql2::triple::{
 use terminusdb_woql2::{
     misc::{Collect, Count, HashKey, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
-    path::{InversePathPredicate, PathOr, PathPattern, PathPredicate, PathSequence, PathTimes},
+    path::{
+        InversePathPredicate, PathOr, PathPattern, PathPlus, PathPredicate, PathSequence, PathStar,
+        PathTimes,
+    },
     query::{Not, Or, Path, Query},
     string::{Concatenate, Join, Pad, Substring},
     value::{DataValue, ListOrVariable, NodeValue, Value},
@@ -157,6 +163,94 @@ fn subject_iris(values: &[Vec<CanonicalResultValue>]) -> Vec<String> {
         .collect();
     subjects.sort();
     subjects
+}
+
+/// Resolve a column-major node result into sorted rows (one `Vec<String>` per result row).
+fn join_rows(values: &[Vec<CanonicalResultValue>]) -> Vec<Vec<String>> {
+    let nrows = values.first().map_or(0, |col| col.len());
+    let mut rows: Vec<Vec<String>> = (0..nrows)
+        .map(|r| {
+            values
+                .iter()
+                .map(|col| match &col[r] {
+                    CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => {
+                        String::from_utf8(bytes.clone()).unwrap()
+                    }
+                    other => panic!("result cell must be a node: {:?}", other),
+                })
+                .collect()
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn cross_source_additions_join_materialized_proves_end_to_end() {
+    // Base pmat edges y_i -> z_i (inherited into materialized); child ADDS padd edges
+    // x_i -> y_i (into the additions delta AND the head). The conjunction
+    //   AddedTriple(?x, padd, ?y) & Triple(?y, pmat, ?z)
+    // is a CROSS-SOURCE join (additions ⋈ materialized) over the shared ?y — one BGP whose
+    // two atoms read DIFFERENT committed column sets.
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for i in ["1", "2"] {
+        builder
+            .add_value_triple(ValueTriple::new_node(
+                &iri(&format!("y{i}")),
+                &iri("pmat"),
+                &iri(&format!("z{i}")),
+            ))
+            .unwrap();
+    }
+    let base = builder.commit().unwrap();
+    let child = base.open_write().unwrap();
+    for i in ["1", "2"] {
+        child
+            .add_value_triple(ValueTriple::new_node(
+                &iri(&format!("x{i}")),
+                &iri("padd"),
+                &iri(&format!("y{i}")),
+            ))
+            .unwrap();
+    }
+    let layer = child.commit().unwrap().proof_commitment().unwrap();
+    let root = layer.state.commitment_root;
+    assert_eq!(layer.state.addition_count, 2);
+    assert_eq!(layer.state.materialized_count, 4);
+
+    let query = and_of(vec![
+        added_triple_q("x", "padd", "y"),
+        tv("y", "pmat", "z"),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    // The compiled plan threads per-atom sources: atom0 additions, atom1 materialized.
+    assert_eq!(compiled.bgp_plan().atoms.len(), 2);
+    assert_eq!(compiled.bgp_plan().atoms[0].source, ColumnSource::Additions);
+    assert_eq!(compiled.bgp_plan().atoms[1].source, ColumnSource::Materialized);
+    assert_eq!(compiled.relation.schema, ["x", "y", "z"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(proof.result_len, 2);
+    let values = proof
+        .verify_and_resolve_values(&compiled, &layer, root)
+        .unwrap();
+    assert_eq!(
+        join_rows(&values),
+        vec![
+            vec![iri("x1"), iri("y1"), iri("z1")],
+            vec![iri("x2"), iri("y2"), iri("z2")],
+        ]
+    );
+
+    // Envelope round-trip verifies; and re-verifying this CROSS-SOURCE envelope against an
+    // all-materialized compiled query fails — the reconstructed plan fixes each atom's source,
+    // so the plan digest (and the opened columns) diverge (per-atom source anti-substitution).
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+    let all_materialized =
+        plan_bgp(&and_of(vec![tv("x", "padd", "y"), tv("y", "pmat", "z")])).unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &all_materialized, &layer, root).is_err());
 }
 
 #[test]
@@ -4523,6 +4617,110 @@ fn node_object_id(lc: &LayerCommitment, name: &str) -> u64 {
         .object_id
 }
 
+/// `Distinct([endpoint], Path(<bound source>, star/plus(p), ?endpoint))`.
+fn distinct_closure_query(source: &str, reflexive: bool, predicate: &str, endpoint: &str) -> Query {
+    let inner = PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    });
+    let pattern = if reflexive {
+        PathPattern::Star(PathStar {
+            star: Box::new(inner),
+        })
+    } else {
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(inner),
+        })
+    };
+    Query::Distinct(Distinct {
+        variables: vec![endpoint.into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Node(iri(source)),
+            pattern,
+            object: Value::Variable(endpoint.into()),
+            path: None,
+        })),
+    })
+}
+
+fn closure_resolved_set(objects: &[Vec<CanonicalObject>]) -> std::collections::BTreeSet<String> {
+    objects[0]
+        .iter()
+        .map(|object| match object {
+            CanonicalObject::Node(bytes) => String::from_utf8(bytes.clone()).unwrap(),
+            other => panic!("unexpected closure result object {other:?}"),
+        })
+        .collect()
+}
+
+fn assert_transitive_closure_e2e() {
+    let lc = build_layer(&[("a", "p", "b"), ("b", "p", "c")]);
+    let root = lc.state.commitment_root;
+    let iri_set = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| iri(name))
+            .collect::<std::collections::BTreeSet<String>>()
+    };
+
+    // plus from a over a -> b -> c = {b, c}.
+    let plus_query = distinct_closure_query("a", false, "p", "y");
+    let plus_compiled = plan_bgp(&plus_query).unwrap();
+    let plus_proved = plus_compiled.prove(&lc).unwrap();
+    let plus_objects = plus_proved.verify_and_resolve(&plus_compiled, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&plus_objects), iri_set(&["b", "c"]));
+
+    // Portable envelope round-trips through the store decode+verify path.
+    let plus_bytes = plus_proved.encode_envelope(&plus_compiled, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_compiled, &lc, root).unwrap();
+
+    // star from a = {a, b, c} (adds the reflexive identity a).
+    let star_query = distinct_closure_query("a", true, "p", "y");
+    let star_compiled = plan_bgp(&star_query).unwrap();
+    let star_proved = star_compiled.prove(&lc).unwrap();
+    let star_objects = star_proved.verify_and_resolve(&star_compiled, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&star_objects), iri_set(&["a", "b", "c"]));
+
+    // The K-independent digest still binds star vs plus: a plus proof must not verify as the star
+    // query, in either the direct or the decoded-envelope path.
+    assert!(plus_proved.verify(&star_compiled, &lc, root).is_err());
+    assert!(decode_and_verify_envelope(&plus_bytes, &star_compiled, &lc, root).is_err());
+
+    // Bound TARGET via inversion: `Distinct([x], Path(?x, plus(p), c))` = the set of nodes that reach
+    // c over the inverse edge = {a, b}. Same edge relation, mirrored traversal.
+    let inverse_query = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable("x".into()),
+            pattern: PathPattern::Plus(PathPlus {
+                plus: Box::new(PathPattern::Predicate(PathPredicate {
+                    predicate: Some(iri("p")),
+                })),
+            }),
+            object: Value::Node(iri("c")),
+            path: None,
+        })),
+    });
+    let inverse_compiled = plan_bgp(&inverse_query).unwrap();
+    let inverse_proved = inverse_compiled.prove(&lc).unwrap();
+    let inverse_objects = inverse_proved
+        .verify_and_resolve(&inverse_compiled, &lc, root)
+        .unwrap();
+    assert_eq!(closure_resolved_set(&inverse_objects), iri_set(&["a", "b"]));
+    // The forward plus (into ?y from a) and the inverse plus (into c from ?x) are distinct queries.
+    assert!(inverse_proved.verify(&plus_compiled, &lc, root).is_err());
+}
+
+#[test]
+fn transitive_closure_star_plus_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-transitive-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_transitive_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn path_predicate_proves_endpoint_pairs() {
     let lc = build_layer(&[("a", "knows", "b"), ("b", "knows", "c"), ("x", "likes", "y")]);
@@ -7666,4 +7864,600 @@ fn decimal_operand_tampered_result_fails_verification() {
     assert!(tampered
         .verify(&compiled, &layer, layer.state.commitment_root)
         .is_err());
+}
+
+// ============================================================================================
+// WOQL single-input CALENDAR ops — end-to-end prove+verify over committed date layers.
+// Expected values are the SWI-Prolog reference vectors, differentially validated against a live
+// SWI-Prolog 10.0.2 (weekday numbering, iso_week boundaries, day arithmetic, month boundaries).
+// ============================================================================================
+
+/// An `xsd:gYearMonth` typed dict entry (offset 0 for the common case).
+fn gym_entry(y: i64, mo: u8, offset: i16) -> TypedDictEntry {
+    tdb_succinct::GYearMonth::make_entry(&tdb_succinct::GYearMonth {
+        year: y,
+        month: mo,
+        offset,
+    })
+}
+
+/// Decode a resolved `xsd:date` operand value to `(year, month, day)`.
+fn cal_date_of(value: &CanonicalResultValue) -> (i64, u8, u8) {
+    match value {
+        CanonicalResultValue::Object(CanonicalObject::Value {
+            datatype: CanonicalDatatype::Date,
+            lexical,
+        }) => {
+            use tdb_succinct::{Date, FromLexical};
+            let date = <Date as FromLexical<Date>>::from_lexical(&lexical[..]);
+            (date.year, date.month, date.day)
+        }
+        other => panic!("unexpected operand value {other:?}"),
+    }
+}
+
+/// Decode a revealed calendar DATE result object to its client-facing `YYYY-MM-DD` string.
+fn cal_date_string(object: &CanonicalObject) -> String {
+    match object {
+        CanonicalObject::Value {
+            datatype: CanonicalDatatype::Date,
+            lexical,
+        } => String::from_utf8(lexical.clone()).unwrap(),
+        other => panic!("unexpected calendar date result {other:?}"),
+    }
+}
+
+/// A layer of `xsd:date` values under predicate `d` (offset 0), one per subject.
+fn cal_date_layer(rows: &[(&str, i64, u8, u8)]) -> Arc<LayerCommitment> {
+    build_val_name_layer(
+        "d",
+        rows.iter()
+            .map(|(subject, y, mo, day)| (*subject, date_entry_off(*y, *mo, *day, 0)))
+            .collect(),
+    )
+}
+
+/// Prove+verify a single INTEGER-result calendar op over the `d` date layer, returning per-row
+/// `((y, mo, d), result_i64)` pairs (operand date paired with the derived integer).
+fn cal_int_rows(
+    layer: &LayerCommitment,
+    calendar: Query,
+    result_var: &str,
+) -> Vec<((i64, u8, u8), i64)> {
+    let compiled = plan_bgp(&and_of(vec![tv("x", "d", "date"), calendar])).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let index = |name: &str| {
+        compiled
+            .relation
+            .schema
+            .iter()
+            .position(|variable| variable == name)
+            .unwrap()
+    };
+    let (di, ri) = (index("date"), index(result_var));
+    (0..values[ri].len())
+        .map(|row| (cal_date_of(&values[di][row]), eval_i64(&values[ri][row])))
+        .collect()
+}
+
+/// Prove+verify a single DATE-result calendar op, returning the SORTED revealed result date strings.
+fn cal_date_out_sorted(layer: &LayerCommitment, pred: &str, calendar: Query) -> Vec<String> {
+    let compiled = plan_bgp(&and_of(vec![tv("x", pred, "date"), calendar])).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    proved
+        .verify(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let mut got: Vec<String> = proved
+        .calendar_date_result_objects()
+        .unwrap()
+        .iter()
+        .map(cal_date_string)
+        .collect();
+    got.sort();
+    got
+}
+
+#[test]
+fn weekday_proves_iso_monday_to_sunday() {
+    // 2024-01-01 Mon=1, 2024-01-06 Sat=6, 2024-01-07 Sun=7, 2024-02-29 (leap) Thu=4.
+    let layer = cal_date_layer(&[
+        ("mon", 2024, 1, 1),
+        ("sat", 2024, 1, 6),
+        ("sun", 2024, 1, 7),
+        ("thu", 2024, 2, 29),
+    ]);
+    let mut rows = cal_int_rows(
+        &layer,
+        Query::Weekday(Weekday {
+            date: dvar("date"),
+            weekday: dvar("w"),
+        }),
+        "w",
+    );
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ((2024, 1, 1), 1),
+            ((2024, 1, 6), 6),
+            ((2024, 1, 7), 7),
+            ((2024, 2, 29), 4),
+        ]
+    );
+}
+
+#[test]
+fn weekday_sunday_start_proves_us_sunday_one() {
+    // Sunday=1..Saturday=7: 2024-01-07 Sun=1, 2024-01-06 Sat=7, 2024-01-01 Mon=2.
+    let layer = cal_date_layer(&[("sun", 2024, 1, 7), ("sat", 2024, 1, 6), ("mon", 2024, 1, 1)]);
+    let mut rows = cal_int_rows(
+        &layer,
+        Query::WeekdaySundayStart(WeekdaySundayStart {
+            date: dvar("date"),
+            weekday: dvar("w"),
+        }),
+        "w",
+    );
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![((2024, 1, 1), 2), ((2024, 1, 6), 7), ((2024, 1, 7), 1)]
+    );
+}
+
+#[test]
+fn weekday_wrong_result_column_fails_verification() {
+    let layer = cal_date_layer(&[("mon", 2024, 1, 1), ("sun", 2024, 1, 7)]);
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "d", "date"),
+        Query::Weekday(Weekday {
+            date: dvar("date"),
+            weekday: dvar("w"),
+        }),
+    ]))
+    .unwrap();
+    let wi = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|variable| variable == "w")
+        .unwrap();
+    // A wrong derived weekday WITH a rebuilt (internally consistent) commitment: the VERIFIER
+    // RE-DERIVATION rejects it (delivered result must equal the recomputed weekday).
+    let mut wrong = compiled.prove(&layer).unwrap();
+    wrong.result_columns[wi][0] = generated_decimal_i64_field(5);
+    let domain = 1usize << wrong.result_log_domain;
+    wrong.result_commitments[wi] = commit_column(&pad(&wrong.result_columns[wi], domain)).unwrap();
+    assert!(wrong
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn iso_week_proves_year_and_week_across_boundaries() {
+    // 2024-01-01 -> 2024/w1; 2024-12-30 -> 2025/w1; 2023-01-01 -> 2022/w52; 2020-12-31 -> 2020/w53.
+    let layer = cal_date_layer(&[
+        ("a", 2024, 1, 1),
+        ("b", 2024, 12, 30),
+        ("c", 2023, 1, 1),
+        ("e", 2020, 12, 31),
+    ]);
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "d", "date"),
+        Query::IsoWeek(IsoWeek {
+            date: dvar("date"),
+            week: dvar("wk"),
+            year: dvar("yr"),
+        }),
+    ]))
+    .unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let index = |name: &str| {
+        compiled
+            .relation
+            .schema
+            .iter()
+            .position(|variable| variable == name)
+            .unwrap()
+    };
+    let (di, yi, wi) = (index("date"), index("yr"), index("wk"));
+    let mut rows: Vec<((i64, u8, u8), (i64, i64))> = (0..values[di].len())
+        .map(|row| {
+            (
+                cal_date_of(&values[di][row]),
+                (eval_i64(&values[yi][row]), eval_i64(&values[wi][row])),
+            )
+        })
+        .collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ((2020, 12, 31), (2020, 53)),
+            ((2023, 1, 1), (2022, 52)),
+            ((2024, 1, 1), (2024, 1)),
+            ((2024, 12, 30), (2025, 1)),
+        ]
+    );
+}
+
+#[test]
+fn day_after_proves_across_month_and_year_and_leap_boundaries() {
+    let layer = cal_date_layer(&[
+        ("eom", 2024, 1, 31),  // -> 2024-02-01
+        ("eoy", 2024, 12, 31), // -> 2025-01-01
+        ("leap", 2024, 2, 28), // -> 2024-02-29
+        ("mid", 2024, 3, 1),   // -> 2024-03-02
+    ]);
+    let got = cal_date_out_sorted(
+        &layer,
+        "d",
+        Query::DayAfter(DayAfter {
+            date: dvar("date"),
+            next: dvar("n"),
+        }),
+    );
+    assert_eq!(
+        got,
+        vec![
+            "2024-02-01".to_string(),
+            "2024-02-29".to_string(),
+            "2024-03-02".to_string(),
+            "2025-01-01".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn day_before_proves_across_month_and_leap_boundaries() {
+    let layer = cal_date_layer(&[
+        ("bom", 2024, 1, 31),  // -> 2024-01-30
+        ("boy", 2024, 12, 31), // -> 2024-12-30
+        ("feb", 2024, 2, 28),  // -> 2024-02-27
+        ("mar1", 2024, 3, 1),  // -> 2024-02-29 (leap)
+    ]);
+    let got = cal_date_out_sorted(
+        &layer,
+        "d",
+        Query::DayBefore(DayBefore {
+            date: dvar("date"),
+            previous: dvar("p"),
+        }),
+    );
+    assert_eq!(
+        got,
+        vec![
+            "2024-01-30".to_string(),
+            "2024-02-27".to_string(),
+            "2024-02-29".to_string(),
+            "2024-12-30".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn day_after_wrong_result_fails_verification() {
+    let layer = cal_date_layer(&[("eom", 2024, 1, 31), ("eoy", 2024, 12, 31)]);
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "d", "date"),
+        Query::DayAfter(DayAfter {
+            date: dvar("date"),
+            next: dvar("n"),
+        }),
+    ]))
+    .unwrap();
+    // Mutate one revealed result date; the VERIFIER RE-DERIVATION rejects it.
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::CalendarDate { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::Date,
+            lexical: b"1999-09-09".to_vec(),
+        };
+    } else {
+        panic!("expected a CalendarDate proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+/// A layer of `xsd:gYearMonth` values under predicate `ym` (offset 0), one per subject.
+fn cal_yearmonth_layer(rows: &[(&str, i64, u8)]) -> Arc<LayerCommitment> {
+    build_val_name_layer(
+        "ym",
+        rows.iter()
+            .map(|(subject, y, mo)| (*subject, gym_entry(*y, *mo, 0)))
+            .collect(),
+    )
+}
+
+#[test]
+fn month_start_date_proves_first_of_month() {
+    let layer = cal_yearmonth_layer(&[("jan", 2024, 1), ("feb", 2024, 2), ("dec", 2024, 12)]);
+    let got = cal_date_out_sorted(
+        &layer,
+        "ym",
+        Query::MonthStartDate(MonthStartDate {
+            year_month: dvar("date"),
+            date: dvar("out"),
+        }),
+    );
+    assert_eq!(
+        got,
+        vec![
+            "2024-01-01".to_string(),
+            "2024-02-01".to_string(),
+            "2024-12-01".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn month_end_date_proves_last_of_month_with_leap_rules() {
+    // 2024-01 -> 31; 2024-02 (leap) -> 29; 2023-02 (non-leap) -> 28; 2024-12 -> 31.
+    let layer = cal_yearmonth_layer(&[
+        ("jan", 2024, 1),
+        ("febL", 2024, 2),
+        ("febN", 2023, 2),
+        ("dec", 2024, 12),
+    ]);
+    let got = cal_date_out_sorted(
+        &layer,
+        "ym",
+        Query::MonthEndDate(MonthEndDate {
+            year_month: dvar("date"),
+            date: dvar("out"),
+        }),
+    );
+    assert_eq!(
+        got,
+        vec![
+            "2023-02-28".to_string(),
+            "2024-01-31".to_string(),
+            "2024-02-29".to_string(),
+            "2024-12-31".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn month_end_date_wrong_result_fails_verification() {
+    let layer = cal_yearmonth_layer(&[("febL", 2024, 2), ("jan", 2024, 1)]);
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "ym", "date"),
+        Query::MonthEndDate(MonthEndDate {
+            year_month: dvar("date"),
+            date: dvar("out"),
+        }),
+    ]))
+    .unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::CalendarDate { result_objects, .. } = &mut tampered.statement {
+        // Claim 2024-02 ends on the 28th (it is a leap year → 29): recompute rejects.
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::Date,
+            lexical: b"2024-02-28".to_vec(),
+        };
+    } else {
+        panic!("expected a CalendarDate proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// ============================================================================
+// Finite REPEATED-PREDICATE property paths (`Times{n,n}` / `Times{a,b}` / p^n).
+//
+// A single-predicate repeated path lowers to a conjunctive bag-join plus a
+// `TupleDisequality` EDGE-SIMPLE filter (drop rows where a hop-pair reuses a stored
+// edge) and endpoint projection. These e2e tests prove the compiled plan against a
+// committed layer, VERIFY, and check the resolved result equals the EDGE-SIMPLE bag
+// of the leading-Prolog `path.pl` oracle — INCLUDING node-repeating solutions
+// (`a->b->a`) and EXCLUDING only the self-loop-traversed-twice over-count.
+// ============================================================================
+
+/// The self-loop fixture: edges (all predicate `p`) a->a (self-loop), a->b, b->a, b->c.
+fn self_loop_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (s, o) in [("a", "a"), ("a", "b"), ("b", "a"), ("b", "c")] {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(s), &iri("p"), &iri(o)))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+/// `path(subject, Times(p, from, to), object)`.
+fn times_path(subject: Value, from: u64, to: u64, object: Value) -> Query {
+    Query::Path(Path {
+        subject,
+        pattern: PathPattern::Times(PathTimes {
+            times: Box::new(PathPattern::Predicate(PathPredicate {
+                predicate: Some(iri("p")),
+            })),
+            from,
+            to,
+        }),
+        object,
+        path: None,
+    })
+}
+
+#[test]
+fn path_times_two_two_constant_source_drops_self_loop_twice() {
+    // KEY test. `path(a, p^2, ?t)` over the self-loop graph. Edge-simple 2-hop bag from a:
+    //   a->a->b  (edges a->a, a->b — distinct)   -> t=b
+    //   a->b->a  (edges a->b, b->a — distinct)   -> t=a   (NODE repeat a..a kept!)
+    //   a->b->c  (edges a->b, b->c — distinct)   -> t=c
+    // EXCLUDED: a->a->a via the SAME edge (a,p,a) twice. A plain bag-join returns 4 rows
+    // (t = a,a,b,c); the TupleDisequality drops exactly the self-loop-twice t=a.
+    let layer = self_loop_layer();
+    let root = layer.state.commitment_root;
+
+    let compiled = plan_bgp(&times_path(
+        Value::Node(iri("a")),
+        2,
+        2,
+        Value::Variable("t".into()),
+    ))
+    .unwrap();
+    assert_eq!(compiled.relation.schema, ["t"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(proof.result_len, 3, "edge-simple drops exactly the self-loop-twice row");
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(
+        join_rows(&values),
+        vec![vec![iri("a")], vec![iri("b")], vec![iri("c")]],
+        "endpoints t = {{a (a->b->a), b (a->a->b), c (a->b->c)}}"
+    );
+
+    // Envelope round-trips and re-verifies.
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+#[test]
+fn path_times_two_two_variable_source_edge_simple_bag() {
+    // `path(?s, p^2, ?t)`: the WHOLE-graph edge-simple 2-hop bag.
+    //   a->a->b (a,b) | a->b->a (a,a) | a->b->c (a,c) | b->a->a (b,a) | b->a->b (b,b)
+    // (a->a->a via edge (a,p,a) twice is EXCLUDED.)
+    let layer = self_loop_layer();
+    let root = layer.state.commitment_root;
+    let compiled = plan_bgp(&times_path(
+        Value::Variable("s".into()),
+        2,
+        2,
+        Value::Variable("t".into()),
+    ))
+    .unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "t"]);
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(proof.result_len, 5);
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(
+        join_rows(&values),
+        vec![
+            vec![iri("a"), iri("a")],
+            vec![iri("a"), iri("b")],
+            vec![iri("a"), iri("c")],
+            vec![iri("b"), iri("a")],
+            vec![iri("b"), iri("b")],
+        ]
+    );
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+/// Fixture for the length-3 / range tests: self-loop at a plus a linear tail a->b->c.
+fn loop_tail_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (s, o) in [("a", "a"), ("a", "b"), ("b", "c")] {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(s), &iri("p"), &iri(o)))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+#[test]
+fn path_times_three_three_edge_simple_bag() {
+    // `path(a, p^3, ?t)` over {a->a, a->b, b->c}. The only edge-simple 3-hop path from a is
+    //   a->a->b->c  (edges a->a, a->b, b->c all distinct)  -> t=c.
+    // The reuse walks a->a->a->{a,b} (edge a->a twice) are dropped by the C(3,2)=3 filters.
+    let layer = loop_tail_layer();
+    let root = layer.state.commitment_root;
+    let compiled = plan_bgp(&times_path(
+        Value::Node(iri("a")),
+        3,
+        3,
+        Value::Variable("t".into()),
+    ))
+    .unwrap();
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(proof.result_len, 1);
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(join_rows(&values), vec![vec![iri("c")]]);
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+#[test]
+fn path_times_range_two_three_is_bag_union() {
+    // `path(a, Times{2,3}, ?t)` over {a->a, a->b, b->c}: the BAG union of the exact lengths.
+    //   p^2 from a (edge-simple): a->a->b (t=b), a->b->c (t=c)
+    //   p^3 from a (edge-simple): a->a->b->c (t=c)
+    // Bag union -> {b, c, c}.
+    let layer = loop_tail_layer();
+    let root = layer.state.commitment_root;
+    let compiled = plan_bgp(&times_path(
+        Value::Node(iri("a")),
+        2,
+        3,
+        Value::Variable("t".into()),
+    ))
+    .unwrap();
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(proof.result_len, 3);
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(
+        join_rows(&values),
+        vec![vec![iri("b")], vec![iri("c")], vec![iri("c")]]
+    );
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+#[test]
+fn path_times_two_two_soundness_negatives() {
+    let layer = self_loop_layer();
+    let root = layer.state.commitment_root;
+    let compiled = plan_bgp(&times_path(
+        Value::Node(iri("a")),
+        2,
+        2,
+        Value::Variable("t".into()),
+    ))
+    .unwrap();
+    let proof = compiled.prove(&layer).unwrap();
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+
+    // (a) The PLAIN 2-hop bag-join (no edge-simple filter) over-counts: it returns 4 walks
+    // from a (including the self-loop traversed twice) vs the path's 3. This is the exact
+    // over-count the TupleDisequality removes.
+    let plain = plan_bgp(&and_of(vec![
+        tv_subj_const("a", "p", "m"),
+        tv("m", "p", "t"),
+    ]))
+    .unwrap();
+    let plain_proof = plain.prove(&layer).unwrap();
+    assert_eq!(plain_proof.result_len, 4);
+    assert!(plain_proof.result_len > proof.result_len);
+
+    // (b) The disequality envelope cannot be re-verified as the plain join (the filter is
+    // bound into the plan/digest and the result shape).
+    assert!(decode_and_verify_envelope(&envelope, &plain, &layer, root).is_err());
+    // ... nor as a different length (p^3).
+    let p3 = plan_bgp(&times_path(
+        Value::Node(iri("a")),
+        3,
+        3,
+        Value::Variable("t".into()),
+    ))
+    .unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &p3, &layer, root).is_err());
+
+    // (c) A tampered result (claiming the dropped self-loop-twice row survived) fails.
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_len += 1;
+    assert!(tampered.verify(&compiled, &layer, root).is_err());
 }

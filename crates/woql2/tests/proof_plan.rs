@@ -22,6 +22,10 @@ use terminusdb_woql2::path::{
 use terminusdb_woql2::expression::{
     ArithmeticExpression, ArithmeticValue, Div, Divide, Exp, Floor, Minus, Plus, Times,
 };
+use terminusdb_woql2::interval::{
+    DayAfter, DayBefore, Interval, IsoWeek, MonthEndDate, MonthStartDate, Weekday,
+    WeekdaySundayStart,
+};
 use terminusdb_woql2::query::{Eval, Not, Or, Path, Query, True};
 use terminusdb_woql2::string::{Concatenate, Join, Pad, Substring, Upper};
 use terminusdb_woql2::triple::{
@@ -166,17 +170,33 @@ fn same_source_multi_atom_delta_bgp_compiles() {
 }
 
 #[test]
-fn cross_source_conjunctions_reject_closed() {
-    // A delta atom joined with a materialized Triple.
-    reject(
-        and_of(vec![added_triple("s", "p", "o"), tv("o", "q", "z")]),
-        BgpPlanError::MixedColumnSource,
-    );
+fn cross_source_conjunctions_now_compile_with_per_atom_sources() {
+    // A delta atom joined with a materialized Triple: additions ⋈ materialized. Each atom
+    // carries its own source; the plan default is Materialized (mixed).
+    let add_mat = plan_bgp(&and_of(vec![
+        added_triple("s", "p", "o"),
+        tv("o", "q", "z"),
+    ]))
+    .unwrap();
+    assert_eq!(add_mat.bgp_plan().source, ColumnSource::Materialized);
+    assert_eq!(add_mat.bgp_plan().atoms.len(), 2);
+    assert_eq!(add_mat.bgp_plan().joins.len(), 1);
+    // atoms[0] is the additions leaf (relational atoms precede ground; both are relational and
+    // input order is stable), atoms[1] the materialized leaf.
+    assert_eq!(add_mat.bgp_plan().atoms[0].source, ColumnSource::Additions);
+    assert_eq!(add_mat.bgp_plan().atoms[1].source, ColumnSource::Materialized);
+    assert_eq!(add_mat.relation.schema, ["s", "o", "z"]);
+
     // Additions joined with removals.
-    reject(
-        and_of(vec![added_triple("s", "p", "o"), deleted_triple("o", "q", "z")]),
-        BgpPlanError::MixedColumnSource,
-    );
+    let add_rem = plan_bgp(&and_of(vec![
+        added_triple("s", "p", "o"),
+        deleted_triple("o", "q", "z"),
+    ]))
+    .unwrap();
+    // No uniform source -> plan default is Materialized.
+    assert_eq!(add_rem.bgp_plan().source, ColumnSource::Materialized);
+    assert_eq!(add_rem.bgp_plan().atoms[0].source, ColumnSource::Additions);
+    assert_eq!(add_rem.bgp_plan().atoms[1].source, ColumnSource::Removals);
 }
 
 #[test]
@@ -2014,7 +2034,9 @@ fn bounded_when_composes_in_or_optional_not_and_preserves_fail_closed_nullable_s
 
 #[test]
 fn rejects_path_star() {
-    // `Star` needs transitive closure — out of scope for the fixed-length lowering.
+    // `Star` is now handled by the transitive-closure planner, but only under an endpoint `Distinct`
+    // and with exactly one bound endpoint. With BOTH endpoints free it needs a domain-authenticated
+    // diagonal (deferred), so it rejects closed with the specific closure error.
     let q = Query::Path(Path {
         subject: Value::Variable("x".into()),
         pattern: PathPattern::Star(PathStar {
@@ -2025,7 +2047,7 @@ fn rejects_path_star() {
         object: Value::Variable("y".into()),
         path: None,
     });
-    reject(q, BgpPlanError::UnboundedPathUnsupported);
+    reject(q, BgpPlanError::ClosureBothEndpointsFree);
 }
 
 // ---------------------------------------------------------------------------
@@ -2132,6 +2154,8 @@ fn path_exact_times_one_is_a_single_hop() {
 
 #[test]
 fn rejects_path_plus() {
+    // `Plus` with two free endpoints is a domain diagonal (deferred): the transitive-closure planner
+    // rejects it closed with the specific closure error rather than the generic unbounded-path error.
     let q = path_var_query(
         "s",
         PathPattern::Plus(PathPlus {
@@ -2139,14 +2163,230 @@ fn rejects_path_plus() {
         }),
         "o",
     );
-    reject(q, BgpPlanError::UnboundedPathUnsupported);
+    reject(q, BgpPlanError::ClosureBothEndpointsFree);
+}
+
+// ---------------------------------------------------------------------------
+// Transitive closure (`Star`/`Plus`) under an endpoint `Distinct`.
+// ---------------------------------------------------------------------------
+
+fn closure_pred(predicate: &str) -> PathPattern {
+    PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+/// `Distinct([endpoint], Path(bound_source, pattern, endpoint))`.
+fn distinct_closure(source: Value, pattern: PathPattern, endpoint: &str) -> Query {
+    Query::Distinct(Distinct {
+        variables: vec![endpoint.into()],
+        query: Box::new(Query::Path(Path {
+            subject: source,
+            pattern,
+            object: Value::Variable(endpoint.into()),
+            path: None,
+        })),
+    })
 }
 
 #[test]
-fn rejects_path_times_two_two_repeated_predicate() {
-    // Times{2,2} unrolls to `knows,knows` — a repeated predicate. Edge-simple Prolog path
-    // semantics (no re-traversed edge) are NOT captured by a bag-join, which would over-count
-    // on a self-loop, so this rejects closed.
+fn plus_under_distinct_bound_source_compiles_to_transitive_closure() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_pred("p")),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["y"]);
+    assert!(c.full_row_distinct, "endpoint Distinct is redundant over the already-set closure");
+    let CompiledRelationStatement::TransitiveClosure {
+        edge,
+        seed,
+        reflexive,
+        inverted,
+    } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure statement, got {:?}", c.relation.statement);
+    };
+    assert!(!reflexive, "plus is one-or-more (non-reflexive)");
+    assert!(!inverted, "a bound source with a forward predicate is a forward walk");
+    assert_eq!(
+        *seed,
+        terminus_store::proof::CanonicalObject::Node(iri("a").into_bytes())
+    );
+    assert_eq!(edge.atoms.len(), 1);
+    assert_eq!(edge.atoms[0].predicate_term, iri("p").into_bytes());
+}
+
+#[test]
+fn star_under_distinct_bound_source_is_reflexive() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Star(PathStar {
+            star: Box::new(closure_pred("p")),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::TransitiveClosure { reflexive, .. } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure statement");
+    };
+    assert!(reflexive, "star is zero-or-more (reflexive identity)");
+}
+
+#[test]
+fn plus_bound_target_compiles_to_inverted_closure() {
+    // `Distinct([x], Path(?x, plus(p), b))`: the reachable set INTO b. path.pl mirrors this to the
+    // inverse edge, so it compiles to an INVERTED closure seeded at b.
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable("x".into()),
+            pattern: PathPattern::Plus(PathPlus {
+                plus: Box::new(closure_pred("p")),
+            }),
+            object: Value::Node(iri("b")),
+            path: None,
+        })),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["x"]);
+    let CompiledRelationStatement::TransitiveClosure {
+        seed, inverted, reflexive, ..
+    } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure statement");
+    };
+    assert!(inverted, "a bound target mirrors to the inverse edge");
+    assert!(!reflexive);
+    assert_eq!(
+        *seed,
+        terminus_store::proof::CanonicalObject::Node(iri("b").into_bytes())
+    );
+}
+
+#[test]
+fn plus_inverse_predicate_forward_compiles_to_inverted_closure() {
+    // `Distinct([y], Path(a, plus(<p), ?y))`: an inverse-predicate closure from a bound source also
+    // walks the inverse edge, so it too compiles to an INVERTED closure (seeded at a).
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(PathPattern::InversePredicate(InversePathPredicate {
+                predicate: Some(iri("p")),
+            })),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::TransitiveClosure { seed, inverted, .. } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure statement");
+    };
+    assert!(inverted, "an inverse predicate walks the inverse edge");
+    assert_eq!(
+        *seed,
+        terminus_store::proof::CanonicalObject::Node(iri("a").into_bytes())
+    );
+}
+
+#[test]
+fn star_bound_source_inverse_predicate_cancels_to_forward() {
+    // Two mirrorings cancel: a bound SOURCE with a forward predicate is a plain forward closure.
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Star(PathStar {
+            star: Box::new(closure_pred("p")),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::TransitiveClosure { inverted, .. } = &c.relation.statement else {
+        panic!("expected a TransitiveClosure statement");
+    };
+    assert!(!inverted, "bound source + forward predicate is a forward walk");
+}
+
+#[test]
+fn bare_plus_without_distinct_rejects_requires_distinct() {
+    // Bound source, but NO endpoint Distinct: the reference emits an edge-simple BAG, so shipping a
+    // set would be unfaithful. Reject closed.
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_pred("p")),
+        }),
+        object: Value::Variable("y".into()),
+        path: None,
+    });
+    reject(q, BgpPlanError::ClosureRequiresDistinct);
+}
+
+#[test]
+fn closure_over_compound_subpattern_rejects() {
+    // `star` of a two-hop sequence needs the general BGP-in-the-loop lowering (deferred).
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Star(PathStar {
+            star: Box::new(PathPattern::Sequence(PathSequence {
+                sequence: vec![closure_pred("p"), closure_pred("q")],
+            })),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureCompoundSubpattern);
+}
+
+#[test]
+fn closure_with_two_bound_endpoints_rejects() {
+    // `path(a, plus(p), b)` is a boolean reachability check, not a set query (deferred).
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_pred("p")),
+        }),
+        object: Value::Node(iri("b")),
+        path: None,
+    });
+    reject(q, BgpPlanError::ClosureBothEndpointsBound);
+}
+
+#[test]
+fn closure_with_wildcard_predicate_rejects() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(PathPattern::Predicate(PathPredicate { predicate: None })),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::PathWildcardUnsupported);
+}
+
+#[test]
+fn closure_count_gate_is_deferred() {
+    // `Count(Distinct([y], Path(a, plus(p), ?y)))` is a follow-up; do the Distinct form first.
+    let q = Query::Count(Count {
+        query: Box::new(distinct_closure(
+            Value::Node(iri("a")),
+            PathPattern::Plus(PathPlus {
+                plus: Box::new(closure_pred("p")),
+            }),
+            "y",
+        )),
+        count: dvar("count"),
+    });
+    reject(q, BgpPlanError::ClosureCountGateDeferred);
+}
+
+#[test]
+fn path_times_two_two_repeated_predicate_uses_tuple_disequality() {
+    // Times{2,2} unrolls to `knows,knows` — a single repeated predicate. Edge-simple Prolog
+    // path semantics (no re-traversed edge) are recovered by a TupleDisequality edge-simple
+    // filter over the join's node columns, then endpoint projection — NOT rejected.
     let q = path_var_query(
         "s",
         PathPattern::Times(PathTimes {
@@ -2156,16 +2396,23 @@ fn rejects_path_times_two_two_repeated_predicate() {
         }),
         "o",
     );
-    reject(
-        q,
-        BgpPlanError::PathRepeatedPredicateUnsupported {
-            predicate: iri("knows"),
-        },
-    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "o"]);
+    assert!(compiled.projection.is_none());
+    // BagProjection( TupleDisequality( join ) ), one hop-pair for a 2-hop chain.
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement
+    else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    assert_eq!(pairs.len(), 1);
+    assert!(matches!(input.statement, CompiledRelationStatement::Bgp(_)));
 }
 
 #[test]
-fn rejects_path_sequence_repeated_predicate() {
+fn path_sequence_repeated_predicate_uses_tuple_disequality() {
     let q = path_var_query(
         "s",
         PathPattern::Sequence(PathSequence {
@@ -2173,12 +2420,84 @@ fn rejects_path_sequence_repeated_predicate() {
         }),
         "o",
     );
-    reject(
-        q,
-        BgpPlanError::PathRepeatedPredicateUnsupported {
-            predicate: iri("knows"),
-        },
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement
+    else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    assert!(matches!(
+        input.statement,
+        CompiledRelationStatement::TupleDisequality { .. }
+    ));
+}
+
+#[test]
+fn path_times_three_three_has_three_hop_pairs() {
+    // p^3 -> nodes [s, h0, h1, o], 3 edges -> C(3,2) = 3 hop-pair disequalities.
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(path_pred("knows")),
+            from: 3,
+            to: 3,
+        }),
+        "o",
     );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement
+    else {
+        panic!("expected endpoint BagProjection");
+    };
+    let CompiledRelationStatement::TupleDisequality { pairs, .. } = &input.statement else {
+        panic!("expected TupleDisequality filter");
+    };
+    assert_eq!(pairs.len(), 3);
+}
+
+#[test]
+fn path_times_range_two_three_is_bag_union_of_filtered_chains() {
+    // Times{2,3} -> bag union over exact lengths 2 and 3, each an edge-simple-filtered chain.
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(path_pred("knows")),
+            from: 2,
+            to: 3,
+        }),
+        "o",
+    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagUnion { branches, .. } = &compiled.relation.statement else {
+        panic!("expected BagUnion over the range, got {:?}", compiled.relation.statement);
+    };
+    assert_eq!(branches.len(), 2);
+    // Each length-branch is BagProjection( TupleDisequality( join ) ).
+    for branch in branches {
+        let CompiledRelationStatement::BagProjection { input, .. } = &branch.statement else {
+            panic!("expected per-length endpoint BagProjection");
+        };
+        assert!(matches!(
+            input.statement,
+            CompiledRelationStatement::TupleDisequality { .. }
+        ));
+    }
+}
+
+#[test]
+fn rejects_path_mixed_predicate_repeat() {
+    // `knows, likes, knows` repeats `knows` but is MIXED-predicate: the predicate id must be
+    // folded into the edge fingerprint (a later sub-effort), so it rejects closed here.
+    let q = path_var_query(
+        "s",
+        PathPattern::Sequence(PathSequence {
+            sequence: vec![path_pred("knows"), path_pred("likes"), path_pred("knows")],
+        }),
+        "o",
+    );
+    reject(q, BgpPlanError::PathMixedPredicateRepeatUnsupported);
 }
 
 #[test]
@@ -4911,4 +5230,230 @@ fn upper_rejects_closed_locale_deferred() {
         }),
     ]);
     reject(query, BgpPlanError::StringCaseOpLocaleUnsupported);
+}
+
+// ============================================================================================
+// WOQL single-input CALENDAR ops (Weekday/WeekdaySundayStart/IsoWeek + Day*/Month*)
+// ============================================================================================
+
+/// A child BGP that binds `?date` to an `xsd:date` store value (`t(?x, d, ?date)`).
+fn cal_child_date() -> Query {
+    tv("x", "d", "date")
+}
+
+#[test]
+fn weekday_compiles_to_calendar_int_appending_result() {
+    let compiled = plan_bgp(&and_of(vec![
+        cal_child_date(),
+        Query::Weekday(Weekday {
+            date: dvar("date"),
+            weekday: dvar("w"),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CalendarInt { .. }
+    ));
+    // The integer result is APPENDED to the committed schema (Select/Count over it works).
+    assert_eq!(compiled.relation.schema.last().map(String::as_str), Some("w"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "date"));
+}
+
+#[test]
+fn weekday_sunday_start_compiles_to_calendar_int() {
+    let compiled = plan_bgp(&and_of(vec![
+        cal_child_date(),
+        Query::WeekdaySundayStart(WeekdaySundayStart {
+            date: dvar("date"),
+            weekday: dvar("w"),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CalendarInt { .. }
+    ));
+    assert_eq!(compiled.relation.schema.last().map(String::as_str), Some("w"));
+}
+
+#[test]
+fn iso_week_compiles_to_calendar_int_appending_year_and_week() {
+    let compiled = plan_bgp(&and_of(vec![
+        cal_child_date(),
+        Query::IsoWeek(IsoWeek {
+            date: dvar("date"),
+            week: dvar("wk"),
+            year: dvar("yr"),
+        }),
+    ]))
+    .unwrap();
+    // TWO integer outputs are appended (year + week).
+    assert!(compiled.relation.schema.iter().any(|v| v == "yr"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "wk"));
+    if let CompiledRelationStatement::CalendarInt { outputs, .. } = &compiled.relation.statement {
+        assert_eq!(outputs.len(), 2);
+    } else {
+        panic!("expected a CalendarInt statement");
+    }
+}
+
+#[test]
+fn day_after_compiles_to_calendar_date_terminal_result() {
+    let compiled = plan_bgp(&and_of(vec![
+        cal_child_date(),
+        Query::DayAfter(DayAfter {
+            date: dvar("date"),
+            next: dvar("n"),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CalendarDate { .. }
+    ));
+    // Terminal/revealed: the result is NOT a committed schema column.
+    assert!(!compiled.relation.schema.iter().any(|v| v == "n"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "date"));
+}
+
+#[test]
+fn day_before_compiles_to_calendar_date() {
+    let compiled = plan_bgp(&and_of(vec![
+        cal_child_date(),
+        Query::DayBefore(DayBefore {
+            date: dvar("date"),
+            previous: dvar("p"),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CalendarDate { .. }
+    ));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "p"));
+}
+
+#[test]
+fn month_start_date_compiles_to_calendar_date_over_yearmonth() {
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "ym", "date"),
+        Query::MonthStartDate(MonthStartDate {
+            year_month: dvar("date"),
+            date: dvar("out"),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CalendarDate { .. }
+    ));
+    assert!(!compiled.relation.schema.iter().any(|v| v == "out"));
+}
+
+#[test]
+fn month_end_date_compiles_to_calendar_date_over_yearmonth() {
+    let compiled = plan_bgp(&and_of(vec![
+        tv("x", "ym", "date"),
+        Query::MonthEndDate(MonthEndDate {
+            year_month: dvar("date"),
+            date: dvar("out"),
+        }),
+    ]))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::CalendarDate { .. }
+    ));
+}
+
+// ---- reject-closed ----
+
+#[test]
+fn interval_op_rejects_closed_as_two_input() {
+    reject(
+        and_of(vec![
+            tv("x", "s", "a"),
+            Query::Interval(Interval {
+                start: dvar("a"),
+                end: dvar("b"),
+                interval: dvar("i"),
+            }),
+        ]),
+        BgpPlanError::CalendarTwoInputUnsupported { op: "Interval" },
+    );
+}
+
+#[test]
+fn weekday_over_numeric_range_pinned_operand_rejects_closed() {
+    // `?a` is pinned to a NUMERIC datatype by the range filter, so it is not an xsd:date operand.
+    reject(
+        and_of(vec![
+            tv("x", "p", "a"),
+            gte(dvar("a"), duint(0)),
+            Query::Weekday(Weekday {
+                date: dvar("a"),
+                weekday: dvar("w"),
+            }),
+        ]),
+        BgpPlanError::CalendarOperandNotDate { var: "a".into() },
+    );
+}
+
+#[test]
+fn weekday_result_literal_rejects_closed_validate_mode() {
+    reject(
+        and_of(vec![
+            cal_child_date(),
+            Query::Weekday(Weekday {
+                date: dvar("date"),
+                weekday: duint(1),
+            }),
+        ]),
+        BgpPlanError::CalendarResultNotVariable,
+    );
+}
+
+#[test]
+fn weekday_result_already_bound_rejects_closed() {
+    reject(
+        and_of(vec![
+            cal_child_date(),
+            Query::Weekday(Weekday {
+                date: dvar("date"),
+                weekday: dvar("date"),
+            }),
+        ]),
+        BgpPlanError::CalendarResultAlreadyBound {
+            var: "date".into(),
+        },
+    );
+}
+
+#[test]
+fn iso_week_colliding_result_variables_reject_closed() {
+    reject(
+        and_of(vec![
+            cal_child_date(),
+            Query::IsoWeek(IsoWeek {
+                date: dvar("date"),
+                week: dvar("w"),
+                year: dvar("w"),
+            }),
+        ]),
+        BgpPlanError::CalendarResultAlreadyBound { var: "w".into() },
+    );
+}
+
+#[test]
+fn day_after_bare_without_operand_binding_rejects_closed() {
+    // A bare calendar op (wrapped in a trivial And with only itself) has no store-authenticated
+    // operand to recompute over.
+    reject(
+        and_of(vec![Query::DayAfter(DayAfter {
+            date: dvar("date"),
+            next: dvar("n"),
+        })]),
+        BgpPlanError::CalendarUnsupportedShape,
+    );
 }
