@@ -6,7 +6,7 @@
 //!
 //! ## Environment Variables
 //!
-//! - `TERMINUSDB_VERSION`: Git branch or tag to build (default: "v12.1-rc-paraplu.1")
+//! - `TERMINUSDB_CODE_SOURCE`: repo URL with optional `/tree/<branch|tag>` ref (default: official `terminusdb/terminusdb` — auto-resolved to the highest `-rc` branch, fallback highest version tag)
 //! - `TERMINUSDB_FORCE_REBUILD`: Set to "1" to force rebuild even if binary exists
 //!
 //! ## Example (Low-level API)

@@ -32,7 +32,7 @@ To create pre-built binaries for a target platform:
 
 2. Clone and build TerminusDB:
    ```bash
-   git clone --depth=1 https://github.com/ParapluOU/terminusdb.git
+   git clone --depth=1 https://github.com/terminusdb/terminusdb.git
    cd terminusdb
    make install-deps
    make PROFILE=release dev

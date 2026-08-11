@@ -53,13 +53,17 @@ Key doc references (all in `docs/terminusdb/`): `numeric-precision-reference.md`
 ## P0 — Prerequisites & breaking-change correctness
 
 ### 0.1 Pin the embedded server to a v12 release
-`crates/bin/build.rs` builds the server from the `ParapluOU/terminusdb` fork's
-**unpinned `main`** (`build.rs:154`, `build.rs:1090-1097`). Everything else in
-this plan needs a reproducible v12 server to test against.
+`crates/bin/build.rs` builds the server from a **`TERMINUSDB_CODE_SOURCE`**
+(any GitHub repo URL; default `https://github.com/terminusdb/terminusdb`).
+Auto mode resolves the highest versioned `-rc` branch (e.g. `12.1-rc`),
+falling back to the highest version tag; explicit refs use the
+`/tree/<branch-or-tag>` URL form (e.g. `…/tree/v12.0.7`) for reproducible
+pins. The ParapluOU fork is no longer used (2026-08-11).
 
-- [ ] Rebase/update the `ParapluOU/terminusdb` fork onto upstream `v12.0.6` (or
-      point the clone at `terminusdb/terminusdb` directly if the fork carries no
-      needed patches).
+- [x] Point the clone at `terminusdb/terminusdb` directly (official repo; the
+      fork carried no needed patches after its PRs landed).
+- [ ] Change the default to a pinned v12 tag once v12.1 GA (or keep `/tree/`
+      refs in CI — the cache key uses `TERMINUSDB_CODE_SOURCE`).
 - [ ] Change the default `TERMINUSDB_VERSION` from `"main"` to a pinned v12 tag.
 - [ ] Verify the SWI-Prolog pin (`build.rs:572`, currently `10.0.0`) matches what
       v12.0.4+ requires (release notes: "SWI-Prolog 10 support").
