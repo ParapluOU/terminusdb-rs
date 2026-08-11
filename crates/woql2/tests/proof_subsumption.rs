@@ -329,6 +329,75 @@ fn subsumption_wrong_graph_and_tamper_reject() {
     });
 }
 
+/// LOW-LEVEL VERIFY GUARD (audit follow-up — the coverage the schema-graph audit found missing).
+///
+/// The prove side already guards this (`prove_on_layer` rejects a schema query, forcing schema proofs
+/// through `prove_on_layers`). The single-root VERIFY entries — `verify`, `verify_and_resolve`,
+/// `verify_and_resolve_values` — must carry the MIRROR guard: they trust a caller-supplied
+/// `expected_root` with no tie to the trusted combined `database_root`, so a schema query on any of
+/// them must reject closed and be routed to `verify_over_graphs`.
+///
+/// Concrete attack this blocks: a malicious prover FABRICATES a schema (the real `A -> B -> C` plus a
+/// forged `A sys:inherits Evil` edge), commits it → `schema'_root`, honestly proves the closure over
+/// that fabricated view, and hands a verifier `(compiled = "A << ?y", proof over schema',
+/// schema' view, schema'_root)`. Without the guard the low-level `verify` ACCEPTS and the fabricated
+/// `Evil ∈ supers(A)` is never tied to the trusted `database_root`. With the guard, all three
+/// low-level entries reject with the schema-query error — the query MUST go through the combined-root
+/// `verify_over_graphs`, which cannot bind the fabricated schema to a trusted out-of-band anchor.
+#[test]
+fn low_level_verify_entries_reject_schema_query() {
+    on_big_stack("subsumption-low-level-guard", || {
+        // FABRICATED schema: the real hierarchy PLUS a forged `A << Evil` superclass edge.
+        let fabricated = build_schema_layer(&[("A", "B"), ("B", "C"), ("A", "Evil")]);
+        let fab_root = fabricated.state.commitment_root;
+
+        // `A << ?y` — supers of A; over the fabricated schema this closure INCLUDES the forged `Evil`.
+        let query = subsumption(class("A"), var("y"));
+        let compiled = plan_bgp(&query).unwrap();
+
+        // The prover honestly proves the closure over its OWN fabricated schema view.
+        let proved = compiled.prove(&*fabricated).unwrap();
+
+        // The error is the GUARD (its message names the schema graph), not a downstream root/commitment
+        // mismatch — the guard fires at the TOP, before any verification work touches the root.
+        let is_schema_guard = |err: &std::io::Error| {
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "guard kind");
+            assert!(
+                err.to_string().contains("schema graph")
+                    && err.to_string().contains("verify_over_graphs"),
+                "guard message must route schema queries to verify_over_graphs, got: {err}"
+            );
+        };
+
+        // (1) `verify` against the fabricated view + its matching root: guard rejects.
+        let e = proved
+            .verify(&compiled, &*fabricated, fab_root)
+            .expect_err("low-level verify must reject a schema query");
+        is_schema_guard(&e);
+
+        // (2) `verify_and_resolve` (object resolution) against the same fabricated view/root: guard.
+        let e = proved
+            .verify_and_resolve(&compiled, &*fabricated, fab_root)
+            .expect_err("low-level verify_and_resolve must reject a schema query");
+        is_schema_guard(&e);
+
+        // (3) `verify_and_resolve_values` (value resolution): guard.
+        let e = proved
+            .verify_and_resolve_values(&compiled, &*fabricated, fab_root)
+            .expect_err("low-level verify_and_resolve_values must reject a schema query");
+        is_schema_guard(&e);
+
+        // The guard is ROOT-AGNOSTIC: it fires before the root is consulted, so it also rejects the
+        // fabricated view under an UNRELATED honest root with the SAME guard error (not a root
+        // mismatch) — the whole point is that no single caller-supplied root can gate a schema query.
+        let honest = build_schema_layer(&[("A", "B"), ("B", "C")]);
+        let e = proved
+            .verify(&compiled, &*fabricated, honest.state.commitment_root)
+            .expect_err("guard must reject regardless of which single root is supplied");
+        is_schema_guard(&e);
+    });
+}
+
 // ---------------------------------------------------------------------------------------------------
 // PLAN-LEVEL REJECT-CLOSED discipline.
 // ---------------------------------------------------------------------------------------------------

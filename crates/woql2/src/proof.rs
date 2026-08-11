@@ -4989,17 +4989,32 @@ impl ProvedBgp {
 
     /// Verify against a caller-selected, independently trusted root.
     ///
-    /// LOW-LEVEL primitive: verifies the plan against the SINGLE `layer` + `expected_root` the caller
-    /// supplies, graph-agnostically (byte-identical to before the schema-graph foundation). It is the
-    /// caller's responsibility to pass the correct per-graph view + root. The SAFE two-graph entry is
-    /// [`ProvedBgp::verify_over_graphs`], which reconstructs the read-graph from the trusted query and
-    /// anchors to the matching commitment automatically (and validates the combined `database_root`).
+    /// LOW-LEVEL primitive, INSTANCE-ONLY: verifies the plan against the SINGLE `layer` +
+    /// `expected_root` the caller supplies (byte-identical to before the schema-graph foundation for
+    /// instance queries). It is the caller's responsibility to pass the correct per-graph view + root.
+    ///
+    /// A query that reads the SCHEMA graph (`Subsumption`) REJECTS closed here — the mirror of the
+    /// [`CompiledBgp::prove_on_layer`] prove-side guard. A single caller-supplied `expected_root` is
+    /// NOT tied to the trusted combined `database_root`, so a prover could hand a verifier a FABRICATED
+    /// schema view + its matching root and have this low-level entry accept a forged superclass. Schema
+    /// queries MUST go through the SAFE two-graph entry [`ProvedBgp::verify_over_graphs`], which
+    /// reconstructs the read-graph from the trusted query and anchors to the matching commitment via
+    /// the combined `database_root`.
     pub fn verify(
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
         expected_root: ProofHash,
     ) -> std::io::Result<()> {
+        // SCHEMA-GRAPH GUARD (mirror of `prove_on_layer`): reject a schema-reading query on this
+        // single-root path — it must be verified through `verify_over_graphs` (combined database_root),
+        // which binds the schema commitment to the trusted anchor. Instance queries are unaffected.
+        if relation_graph(&compiled.relation)? != ProofGraph::Instance {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "query reads the schema graph; verify with `verify_over_graphs` (instance + schema commitments under the trusted database_root)",
+            ));
+        }
         self.verify_relation(
             &compiled.relation,
             layer,
@@ -5021,6 +5036,14 @@ impl ProvedBgp {
     ///
     /// An instance-only query verifies identically to [`verify`], with the added guarantee that its
     /// instance root belongs to the trusted database.
+    ///
+    /// TRUST ANCHOR — the `database_root` argument MUST be obtained from a trusted OUT-OF-BAND pin
+    /// (the commit log / a signature over the head), NEVER recomputed from the prover-supplied proof
+    /// bundle or from a prover-supplied schema view. If a verifier lets the prover choose both the
+    /// schema view AND the `database_root`, the prover can publish a FABRICATED schema (real ∪ a forged
+    /// `sys:inherits` edge), commit it, combine its root into a matching `database_root`, and this entry
+    /// will validate the pair — the forgery is only excluded because the trusted `database_root` is
+    /// fixed independently of the proof.
     pub fn verify_over_graphs(
         &self,
         compiled: &CompiledBgp,
@@ -5056,14 +5079,17 @@ impl ProvedBgp {
         database_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
         terminus_store::proof::commitment::validate_database_root(instance, schema, &database_root)?;
+        // Both commitments are now anchored to the trusted `database_root`; select the correct
+        // per-graph view and resolve through the UNGUARDED core (the read-graph guard on
+        // `verify_and_resolve` would otherwise reject the legitimate schema branch on this SAFE path).
         match relation_graph(&compiled.relation)? {
             ProofGraph::Instance => {
                 let root = instance.verifier_view().state.commitment_root;
-                self.verify_and_resolve(compiled, instance, root)
+                self.verify_and_resolve_inner(compiled, instance, root)
             }
             ProofGraph::Schema => {
                 let root = schema.verifier_view().state.commitment_root;
-                self.verify_and_resolve(compiled, schema, root)
+                self.verify_and_resolve_inner(compiled, schema, root)
             }
         }
     }
@@ -6427,7 +6453,33 @@ impl ProvedBgp {
 
     /// Verify the query proof and resolve every proven Store ID to the exact canonical
     /// node IRI or typed literal in the root-authenticated node/value dictionary.
+    ///
+    /// LOW-LEVEL, INSTANCE-ONLY (mirror of [`CompiledBgp::prove_on_layer`]): a schema-reading query
+    /// rejects closed here — resolve it through [`ProvedBgp::verify_over_graphs_and_resolve`], which
+    /// ties the schema commitment to the trusted combined `database_root`.
     pub fn verify_and_resolve(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &impl VerifierLayer,
+        expected_root: ProofHash,
+    ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
+        // SCHEMA-GRAPH GUARD (mirror of `prove_on_layer`): a schema-reading query must NOT resolve
+        // against a single caller-supplied root — route it through `verify_over_graphs_and_resolve`.
+        if relation_graph(&compiled.relation)? != ProofGraph::Instance {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "query reads the schema graph; verify with `verify_over_graphs` (instance + schema commitments under the trusted database_root)",
+            ));
+        }
+        self.verify_and_resolve_inner(compiled, layer, expected_root)
+    }
+
+    /// UNGUARDED core of [`verify_and_resolve`]: verify + resolve against the caller-supplied per-graph
+    /// view/root with NO read-graph guard. Reachable only from the guarded public entry (instance
+    /// queries) and from [`verify_over_graphs_and_resolve`], which has already validated BOTH
+    /// commitments into the trusted combined `database_root` and selected the correct per-graph view —
+    /// so the schema commitment is already anchored to the trusted database when this runs.
+    fn verify_and_resolve_inner(
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
@@ -6440,7 +6492,13 @@ impl ProvedBgp {
                 "nullable Optional results require verify_and_resolve_values",
             ));
         }
-        self.verify(compiled, layer, expected_root)?;
+        // Verify against the per-graph root directly (the read-graph guard already ran on the entry).
+        self.verify_relation(
+            &compiled.relation,
+            layer,
+            expected_root,
+            compiled_query_digest(compiled)?,
+        )?;
         if compiled.relation.schema.is_empty() {
             Ok(Vec::new())
         } else {
@@ -6452,12 +6510,22 @@ impl ProvedBgp {
         }
     }
 
+    /// LOW-LEVEL, INSTANCE-ONLY (mirror of [`CompiledBgp::prove_on_layer`]): a schema-reading query
+    /// rejects closed here — no combined-root values entry routes through it, so this is a hard reject.
     pub fn verify_and_resolve_values(
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
         expected_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
+        // SCHEMA-GRAPH GUARD (mirror of `prove_on_layer`): schema-reading queries must not resolve
+        // against a single caller-supplied root. Instance queries are unaffected (byte-identical).
+        if relation_graph(&compiled.relation)? != ProofGraph::Instance {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "query reads the schema graph; verify with `verify_over_graphs` (instance + schema commitments under the trusted database_root)",
+            ));
+        }
         self.verify(compiled, layer, expected_root)?;
         if compiled.relation.schema.is_empty() {
             Ok(Vec::new())
@@ -8486,6 +8554,12 @@ impl CompiledBgp {
     /// and schema per-graph commitment roots. A caller publishes this alongside a proof so a verifier
     /// can validate both commitments against it (see
     /// [`terminus_store::proof::commitment::database_root`]).
+    ///
+    /// TRUST ANCHOR: a verifier must obtain this `database_root` from a trusted OUT-OF-BAND pin (commit
+    /// log / signature over the head) — NEVER by recomputing it from a prover-supplied proof bundle or
+    /// schema view. A prover controls the schema layer it commits, so a `database_root` recomputed from
+    /// prover input would happily bind a FABRICATED schema (with an injected `sys:inherits` superclass)
+    /// and let a forged subsumption verify. See [`ProvedBgp::verify_over_graphs`].
     pub fn prove_on_layers_root(
         instance: &SyncStoreLayer,
         schema: &SyncStoreLayer,
