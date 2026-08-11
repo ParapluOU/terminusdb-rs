@@ -27,6 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Auto-discover this machine's cores/RAM/OS/linkers (works on any runner
+      # or container) and generate the gitignored .cargo/config.toml so cargo
+      # uses the right build jobs / test threads / linker flags.
+      - name: Generate .cargo/config.toml for this machine
+        run: scripts/ci-gen-cargo-config.sh
+
       # Build deps for the workspace and the embedded server build (bindgen needs
       # clang/libclang; the gRPC labelstore build needs protoc; the server build
       # provisions its own SWI-Prolog but wants make/gmp/openssl available).
