@@ -25,11 +25,11 @@ use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::{open_sync_memory_store, ValueTriple};
 
-use tdb_succinct::{TdbDataType, TypedDictEntry};
+use tdb_succinct::{Decimal, TdbDataType, TypedDictEntry};
 
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::expression::{
-    ArithmeticExpression, ArithmeticValue, Div, Exp, Minus, Plus, Times,
+    ArithmeticExpression, ArithmeticValue, Div, Divide, Exp, Floor, Minus, Plus, Times,
 };
 use terminusdb_woql2::compare::Typecast;
 use terminusdb_woql2::query::Eval;
@@ -5869,32 +5869,67 @@ fn build_val_name_layer(pred: &str, people: Vec<(&str, TypedDictEntry)>) -> Arc<
     layer.proof_commitment().unwrap()
 }
 
+/// The order-preserving `u64` code the store's range gadget compares for a committed value,
+/// as an INDEPENDENT oracle (decoded straight from tdb-succinct, not via the store's private
+/// `node_value_op_value`): a big-endian read of the fixed-width numeric lexical, OR — for
+/// `date`/`dateTime` — the decoded i64-nanoseconds key in offset-binary. Mirrors the store's
+/// encoding, which the store's own unit tests validate against first-principles instants.
+fn op_u64(datatype: CanonicalDatatype, lexical: &[u8]) -> u64 {
+    // Shared offset-binary transform of a signed i64 key: `(n as u64) ^ (1<<63)`.
+    fn offset_binary(n: i64) -> u64 {
+        (n as u64) ^ (1u64 << 63)
+    }
+    // i64 nanoseconds since the epoch for a UTC `NaiveDateTime`, saturating outside i64.
+    fn nanos(ndt: chrono::NaiveDateTime) -> i64 {
+        let utc = ndt.and_utc();
+        utc.timestamp_nanos_opt()
+            .unwrap_or(if utc.timestamp() >= 0 { i64::MAX } else { i64::MIN })
+    }
+    match datatype {
+        CanonicalDatatype::DateTime => {
+            let mut cursor = lexical;
+            offset_binary(nanos(tdb_succinct::tfc::datetime::storage_to_datetime(
+                &mut cursor,
+            )))
+        }
+        CanonicalDatatype::Date => {
+            use chrono::NaiveDate;
+            use tdb_succinct::{Date, FromLexical};
+            let d = <Date as FromLexical<Date>>::from_lexical(lexical);
+            let base = NaiveDate::from_ymd_opt(d.year as i32, u32::from(d.month), u32::from(d.day))
+                .map(|date| nanos(date.and_hms_opt(0, 0, 0).unwrap()))
+                .unwrap_or(if d.year >= 0 { i64::MAX } else { i64::MIN });
+            let key = match base {
+                i64::MIN | i64::MAX => base,
+                _ => base.saturating_add(i64::from(d.offset)),
+            };
+            offset_binary(key)
+        }
+        _ => {
+            let mut buf = [0u8; 8];
+            buf[8 - lexical.len()..].copy_from_slice(lexical);
+            u64::from_be_bytes(buf)
+        }
+    }
+}
+
 /// The committed `(datatype, order-preserving u64)` behind a node/value dict id, or `None`
-/// for a `Node` object. The OP value is the big-endian read of the fixed-width lexical —
-/// the SAME encoding the store's range gadget compares.
+/// for a `Node` object — the SAME code the store's range gadget compares.
 fn op_value_of(lc: &LayerCommitment, object_id: u64) -> Option<(CanonicalDatatype, u64)> {
     lc.node_value_catalog
         .iter()
         .find(|r| r.object_id == object_id)
         .and_then(|r| match &r.triple.object {
-            CanonicalObject::Value { datatype, lexical } => {
-                let mut buf = [0u8; 8];
-                buf[8 - lexical.len()..].copy_from_slice(lexical);
-                Some((*datatype, u64::from_be_bytes(buf)))
-            }
+            CanonicalObject::Value { datatype, lexical } => Some((*datatype, op_u64(*datatype, lexical))),
             CanonicalObject::Node(_) => None,
         })
 }
 
-/// The store's committed OP encoding of a typed dict entry as a `u64` (big-endian read of
-/// its fixed-width `to_lexical`). The compiler's emitted `c` must equal this.
+/// The store's committed OP encoding of a typed dict entry as a `u64`. The compiler's
+/// emitted `c` must equal this. Covers the fixed-width numerics AND date/dateTime.
 fn store_op_value(entry: TypedDictEntry) -> u64 {
     match CanonicalObject::from_store_object(&ValueTriple::new_value("", "", entry).object) {
-        CanonicalObject::Value { lexical, .. } => {
-            let mut buf = [0u8; 8];
-            buf[8 - lexical.len()..].copy_from_slice(&lexical);
-            u64::from_be_bytes(buf)
-        }
+        CanonicalObject::Value { datatype, lexical } => op_u64(datatype, &lexical),
         CanonicalObject::Node(_) => unreachable!(),
     }
 }
@@ -6181,6 +6216,183 @@ fn object_range_float64_le_boundary_includes_equal() {
         CanonicalDatatype::Float64,
         store_op_value(f64::make_entry(&1.5f64)),
         3,
+    );
+}
+
+// -------------------------------------------------------------------------------------------
+// date / dateTime object-value RANGE filters — end-to-end prove+verify. Each builds a
+// homogeneous `t(person,<pred>,<date>)` + `t(person,name,<node>)` layer (>= 2 real rows so
+// the Dory domain pads cleanly), compiles a range query, proves+verifies it, checks the
+// committed columns against the independent range-filtered join oracle, and asserts the
+// compiled `c`/datatype tag match the store's committed OP encoding. The OP key is the
+// DECODED i64-nanoseconds order (chronological for dateTime; (y,m,d,offset)-lexical for
+// date), NOT a big-endian read of the variable-width lexical.
+// -------------------------------------------------------------------------------------------
+
+/// UTC `NaiveDateTime` entry, from a (y-mo-d h:mi:s) instant.
+fn dt_entry(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> TypedDictEntry {
+    use chrono::{TimeZone, Utc};
+    chrono::NaiveDateTime::make_entry(&Utc.with_ymd_and_hms(y, mo, d, h, mi, s).unwrap().naive_utc())
+}
+
+/// `xsd:date` entry with an explicit timezone `offset` (minutes); offset 0 for the common case.
+fn date_entry_off(y: i64, mo: u8, d: u8, offset: i16) -> TypedDictEntry {
+    tdb_succinct::Date::make_entry(&tdb_succinct::Date {
+        year: y,
+        month: mo,
+        day: d,
+        offset,
+    })
+}
+
+/// dateTimes straddling 2020-06-15T12:00:00Z: 2019, 2020-06-15T12 (== the constant), 2021, 2022.
+fn datetime_fixture() -> Arc<LayerCommitment> {
+    build_val_name_layer(
+        "ts",
+        vec![
+            ("alice", dt_entry(2019, 1, 1, 0, 0, 0)),
+            ("bob", dt_entry(2020, 6, 15, 12, 0, 0)),
+            ("carol", dt_entry(2021, 1, 1, 0, 0, 0)),
+            ("dave", dt_entry(2022, 12, 31, 23, 59, 59)),
+        ],
+    )
+}
+
+#[test]
+fn object_range_datetime_gt_excludes_equal_and_earlier() {
+    // ?d > 2020-06-15T12:00:00Z -> {carol(2021), dave(2022)} = 2 (bob is EQUAL → excluded).
+    check_range_generic(
+        &datetime_fixture(),
+        "ts",
+        greater(dvar("a"), ddatetime(2020, 6, 15, 12, 0, 0)),
+        RangeOp::Gt,
+        CanonicalDatatype::DateTime,
+        store_op_value(dt_entry(2020, 6, 15, 12, 0, 0)),
+        2,
+    );
+}
+
+#[test]
+fn object_range_datetime_ge_includes_equal_boundary() {
+    // ?d >= 2020-06-15T12:00:00Z -> {bob(==), carol, dave} = 3 (boundary INCLUDED).
+    check_range_generic(
+        &datetime_fixture(),
+        "ts",
+        gte(dvar("a"), ddatetime(2020, 6, 15, 12, 0, 0)),
+        RangeOp::Ge,
+        CanonicalDatatype::DateTime,
+        store_op_value(dt_entry(2020, 6, 15, 12, 0, 0)),
+        3,
+    );
+}
+
+#[test]
+fn object_range_datetime_lt_selects_only_earlier() {
+    // ?d < 2020-06-15T12:00:00Z -> {alice(2019)} = 1.
+    check_range_generic(
+        &datetime_fixture(),
+        "ts",
+        less(dvar("a"), ddatetime(2020, 6, 15, 12, 0, 0)),
+        RangeOp::Lt,
+        CanonicalDatatype::DateTime,
+        store_op_value(dt_entry(2020, 6, 15, 12, 0, 0)),
+        1,
+    );
+}
+
+/// xsd:date birthdays (offset 0) straddling 2000-06-15.
+fn date_fixture() -> Arc<LayerCommitment> {
+    build_val_name_layer(
+        "bday",
+        vec![
+            ("alice", date_entry_off(1990, 1, 1, 0)),
+            ("bob", date_entry_off(2000, 6, 15, 0)),
+            ("carol", date_entry_off(2010, 12, 31, 0)),
+            ("dave", date_entry_off(2020, 1, 1, 0)),
+        ],
+    )
+}
+
+#[test]
+fn object_range_date_ge_includes_equal_boundary() {
+    // ?d >= 2000-06-15 -> {bob(==), carol, dave} = 3.
+    check_range_generic(
+        &date_fixture(),
+        "bday",
+        gte(dvar("a"), ddate(2000, 6, 15)),
+        RangeOp::Ge,
+        CanonicalDatatype::Date,
+        store_op_value(date_entry_off(2000, 6, 15, 0)),
+        3,
+    );
+}
+
+#[test]
+fn object_range_date_lt_selects_only_earlier() {
+    // ?d < 2000-06-15 -> {alice(1990)} = 1.
+    check_range_generic(
+        &date_fixture(),
+        "bday",
+        less(dvar("a"), ddate(2000, 6, 15)),
+        RangeOp::Lt,
+        CanonicalDatatype::Date,
+        store_op_value(date_entry_off(2000, 6, 15, 0)),
+        1,
+    );
+}
+
+#[test]
+fn woql_in_range_date_proves_half_open_filtered_join() {
+    // ?d in [2000-01-01, 2015-01-01) -> {bob(2000-06-15), carol(2010-12-31)} = 2
+    // (alice 1990 below start, dave 2020 at/after end).
+    let lc = date_fixture();
+    let q = and_of(vec![
+        tv("x", "bday", "a"),
+        tv("x", "name", "n"),
+        Query::InRange(InRange {
+            value: dvar("a"),
+            start: ddate(2000, 1, 1),
+            end: ddate(2015, 1, 1),
+        }),
+    ]);
+    let compiled = plan_bgp(&q).unwrap();
+    let (proof, coms, m, ids) = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
+    verify_layer_bgp(
+        &lc,
+        lc.state.commitment_root,
+        compiled.bgp_plan(),
+        &ids,
+        &coms,
+        m,
+        &proof,
+    )
+    .unwrap();
+    assert_eq!(m, 2, "half-open date InRange selects exactly bob and carol");
+}
+
+#[test]
+fn object_range_date_offset_tiebreaker_matches_woql_compound_order() {
+    // SOUNDNESS of the offset tiebreaker: three subjects share the SAME calendar day
+    // 2000-06-15 but differ by timezone offset. WOQL compares stored dates as
+    // `date(Y,M,D,Offset)` in standard order, so with constant 2000-06-15 (offset 0):
+    //   offset -60 < offset 0 (== const) < offset +60.
+    // Thus `?d > 2000-06-15` selects ONLY the +60 row (east), not the 0 or -60 rows.
+    let lc = build_val_name_layer(
+        "bday",
+        vec![
+            ("west", date_entry_off(2000, 6, 15, -60)), // < const
+            ("utc", date_entry_off(2000, 6, 15, 0)),    // == const
+            ("east", date_entry_off(2000, 6, 15, 60)),  // > const
+        ],
+    );
+    check_range_generic(
+        &lc,
+        "bday",
+        greater(dvar("a"), ddate(2000, 6, 15)),
+        RangeOp::Gt,
+        CanonicalDatatype::Date,
+        store_op_value(date_entry_off(2000, 6, 15, 0)),
+        1,
     );
 }
 
@@ -7210,6 +7422,247 @@ fn hashkey_tampered_operand_column_fails_verification() {
     let domain = 1usize << tampered.result_log_domain;
     tampered.result_commitments[si] =
         commit_column(&pad(&tampered.result_columns[si], domain)).unwrap();
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// =============================================================================================
+// WOQL exact-rational (xsd:decimal) value layer: Floor / Divide / decimal operands.
+// =============================================================================================
+
+use decimal_rs::Decimal as RsDecimal;
+use std::str::FromStr as _;
+
+/// A base layer of `t(?x, d, <decimal>)` triples (stored xsd:decimal values).
+fn decimal_d_layer(rows: &[(&str, &str)]) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (subject, dec) in rows {
+        let entry = Decimal::make_entry(&Decimal::new((*dec).to_string()).unwrap());
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri(subject), &iri("d"), entry))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn ea_divide(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Divide(Divide {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn ea_floor(argument: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Floor(Floor {
+        argument: Box::new(argument),
+    })
+}
+
+fn ea_dec(lexical: &str) -> ArithmeticExpression {
+    ArithmeticExpression::Value(ArithmeticValue::Data(XSDAnySimpleType::Decimal(
+        RsDecimal::from_str(lexical).unwrap(),
+    )))
+}
+
+/// `t(?x,d,?dd) & Eval(expr, ?result)`.
+fn eval_d_query(expr: ArithmeticExpression, result: &str) -> Query {
+    and_of(vec![
+        tv("x", "d", "dd"),
+        Query::Eval(Eval {
+            expression: expr,
+            result_value: ArithmeticValue::Variable(result.into()),
+        }),
+    ])
+}
+
+fn decimal_object_string(object: &CanonicalObject) -> String {
+    match object {
+        CanonicalObject::Value {
+            datatype: CanonicalDatatype::Decimal,
+            lexical,
+        } => String::from_utf8(lexical.clone()).unwrap(),
+        other => panic!("unexpected rational-arith result object {other:?}"),
+    }
+}
+
+/// Prove+verify a `RationalArith` query and return the delivered per-row xsd:decimal lexicals
+/// (as a sorted multiset, since row order is not observed here).
+fn rational_arith_strings(layer: &LayerCommitment, query: &Query) -> (CompiledBgp, Vec<String>) {
+    let compiled = plan_bgp(query).unwrap();
+    let proved = compiled.prove(layer).unwrap();
+    proved
+        .verify(&compiled, layer, layer.state.commitment_root)
+        .unwrap();
+    let mut got: Vec<String> = proved
+        .rational_arith_result_objects()
+        .expect("expected a RationalArith proof")
+        .iter()
+        .map(decimal_object_string)
+        .collect();
+    got.sort();
+    (compiled, got)
+}
+
+fn sorted<T: Ord>(mut v: Vec<T>) -> Vec<T> {
+    v.sort();
+    v
+}
+
+// ---- Floor ----
+
+#[test]
+fn floor_of_integer_column_proves_identity() {
+    // floor of an integer column is the identity; delivered as the generated-i64 result column.
+    let layer = eval_two_predicate_layer(&[("n1", 7, 2), ("n2", 3, 5)]);
+    let (_compiled, rows) = eval_ab_rows(&layer, ea_floor(ea_var("a")));
+    assert_eq!(rows.len(), 2);
+    for (a, _b, r) in rows {
+        assert_eq!(r, i64::from(a));
+    }
+}
+
+#[test]
+fn floor_of_decimal_column_floors_toward_negative_infinity() {
+    // floor(3.5)=3, floor(-3.5)=-4 (toward −∞, NOT toward zero), floor(5)=5.
+    let layer = decimal_d_layer(&[("n1", "3.5"), ("n2", "-3.5"), ("n3", "5")]);
+    let compiled = plan_bgp(&eval_d_query(ea_floor(ea_var("dd")), "r")).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .unwrap();
+    let ri = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|v| v == "r")
+        .unwrap();
+    let got: Vec<i64> = values[ri]
+        .iter()
+        .map(|v| match v {
+            CanonicalResultValue::GeneratedDecimalI64(x) => *x,
+            other => panic!("unexpected floor result {other:?}"),
+        })
+        .collect();
+    assert_eq!(sorted(got), vec![-4, 3, 5]);
+}
+
+#[test]
+fn floor_wrong_result_fails_verification() {
+    let layer = decimal_d_layer(&[("n1", "3.5"), ("n2", "-3.5")]);
+    let compiled = plan_bgp(&eval_d_query(ea_floor(ea_var("dd")), "r")).unwrap();
+    let ri = compiled
+        .relation
+        .schema
+        .iter()
+        .position(|v| v == "r")
+        .unwrap();
+    let mut wrong = compiled.prove(&layer).unwrap();
+    // A wrong floored value with a rebuilt (internally consistent) commitment still fails the
+    // verifier RE-DERIVATION.
+    wrong.result_columns[ri][0] = generated_decimal_i64_field(999);
+    let domain = 1usize << wrong.result_log_domain;
+    wrong.result_commitments[ri] = commit_column(&pad(&wrong.result_columns[ri], domain)).unwrap();
+    assert!(wrong
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// ---- Divide ----
+
+#[test]
+fn divide_proves_terminating_and_nonterminating_decimals() {
+    // Terminating 7/2=3.5, 6/2=3, 1/4=0.25; non-terminating 1/3 rendered to the reference's exact
+    // 20-fractional-digit lexical "0.33333333333333333333".
+    let layer = eval_two_predicate_layer(&[("n1", 7, 2), ("n2", 6, 2), ("n3", 1, 4), ("n4", 1, 3)]);
+    let (_compiled, got) =
+        rational_arith_strings(&layer, &eval_ab_query(ea_divide(ea_var("a"), ea_var("b")), "r"));
+    assert_eq!(
+        got,
+        sorted(vec![
+            "3.5".to_string(),
+            "3".to_string(),
+            "0.25".to_string(),
+            "0.33333333333333333333".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn divide_by_zero_column_fails_at_prove() {
+    // A runtime zero divisor (b=0 in one row) FAILS CLOSED at prove — Prolog `rdiv` throws.
+    let layer = eval_two_predicate_layer(&[("n1", 7, 2), ("n2", 5, 0)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_divide(ea_var("a"), ea_var("b")), "r")).unwrap();
+    assert!(compiled.prove(&layer).is_err());
+}
+
+#[test]
+fn divide_tampered_result_fails_verification() {
+    let layer = eval_two_predicate_layer(&[("n1", 7, 2), ("n2", 1, 4)]);
+    let compiled = plan_bgp(&eval_ab_query(ea_divide(ea_var("a"), ea_var("b")), "r")).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::RationalArith { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::Decimal,
+            lexical: b"9.9".to_vec(),
+        };
+    } else {
+        panic!("expected a RationalArith proof");
+    }
+    assert!(tampered
+        .verify(&compiled, &layer, layer.state.commitment_root)
+        .is_err());
+}
+
+// ---- Decimal operands in Plus / Times ----
+
+#[test]
+fn plus_with_stored_decimal_operand_proves() {
+    // Plus(?d, 1.5): 3.5+1.5=5 (whole -> "5"), 2.5+1.5=4 (whole -> "4").
+    let layer = decimal_d_layer(&[("n1", "3.5"), ("n2", "2.5")]);
+    let (_compiled, got) = rational_arith_strings(
+        &layer,
+        &eval_d_query(ea_plus(ea_var("dd"), ea_dec("1.5")), "r"),
+    );
+    assert_eq!(got, sorted(vec!["5".to_string(), "4".to_string()]));
+}
+
+#[test]
+fn times_with_stored_decimal_operand_proves() {
+    // Times(?d, 2.5): 3.5*2.5=8.75, 2.5*2.5=6.25.
+    let layer = decimal_d_layer(&[("n1", "3.5"), ("n2", "2.5")]);
+    let (_compiled, got) = rational_arith_strings(
+        &layer,
+        &eval_d_query(ea_times(ea_var("dd"), ea_dec("2.5")), "r"),
+    );
+    assert_eq!(got, sorted(vec!["8.75".to_string(), "6.25".to_string()]));
+}
+
+#[test]
+fn divide_two_stored_decimal_operands_proves() {
+    // Divide(?d, 2): 3.5/2=1.75, 7.5/2=3.75 — two stored decimals authenticated and divided.
+    let layer = decimal_d_layer(&[("n1", "3.5"), ("n2", "7.5")]);
+    let (_compiled, got) = rational_arith_strings(
+        &layer,
+        &eval_d_query(ea_divide(ea_var("dd"), ea_dec("2")), "r"),
+    );
+    assert_eq!(got, sorted(vec!["1.75".to_string(), "3.75".to_string()]));
+}
+
+#[test]
+fn decimal_operand_tampered_result_fails_verification() {
+    let layer = decimal_d_layer(&[("n1", "3.5"), ("n2", "2.5")]);
+    let compiled = plan_bgp(&eval_d_query(ea_times(ea_var("dd"), ea_dec("2.5")), "r")).unwrap();
+    let mut tampered = compiled.prove(&layer).unwrap();
+    if let ProvedQueryStatement::RationalArith { result_objects, .. } = &mut tampered.statement {
+        result_objects[0] = CanonicalObject::Value {
+            datatype: CanonicalDatatype::Decimal,
+            lexical: b"0.1".to_vec(),
+        };
+    } else {
+        panic!("expected a RationalArith proof");
+    }
     assert!(tampered
         .verify(&compiled, &layer, layer.state.commitment_root)
         .is_err());

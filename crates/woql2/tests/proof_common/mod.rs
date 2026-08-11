@@ -189,6 +189,24 @@ pub fn dlist(items: Vec<DataValue>) -> DataValue {
     DataValue::List(items)
 }
 
+/// A `DataValue::Data(xsd:dateTime)` constant — order-preserving via the store's decoded
+/// i64-nanoseconds key. Built from a UTC (y-m-d h:m:s) instant.
+pub fn ddatetime(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DataValue {
+    use chrono::{TimeZone, Utc};
+    DataValue::Data(XSDAnySimpleType::DateTime(
+        Utc.with_ymd_and_hms(y, mo, d, h, mi, s).unwrap(),
+    ))
+}
+
+/// A `DataValue::Data(xsd:date)` constant — order-preserving via the store's decoded
+/// midnight-UTC i64-nanoseconds key (the constant carries offset 0).
+pub fn ddate(y: i32, mo: u32, d: u32) -> DataValue {
+    use chrono::NaiveDate;
+    DataValue::Data(XSDAnySimpleType::Date(
+        NaiveDate::from_ymd_opt(y, mo, d).unwrap(),
+    ))
+}
+
 /// `Greater(left, right)` — `left > right`.
 pub fn greater(left: DataValue, right: DataValue) -> Query {
     Query::Greater(Greater { left, right })

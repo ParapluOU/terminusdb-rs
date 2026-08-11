@@ -65,9 +65,23 @@ use terminus_store::proof::query::{
 };
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::union::{verify_bag_union, BagUnionProof};
-use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
+use terminus_store::proof::{node_value_op_value, CanonicalDatatype, CanonicalObject, ProofHash};
 use terminus_store::store::sync::SyncStoreLayer;
 use terminus_store::ValueTriple;
+
+// Exact PURE-RUST big rationals + the store's decimal storage decoder for the xsd:decimal/rational
+// value layer (`Floor`, `Divide`, decimal operands). `num-bigint`/`num-rational` are GMP-free (the
+// same backend the workspace's `rug` shim uses) so the proof compiler stays cross-compilable. The
+// reference's `casting:rational_to_decimal_string/3` is itself exact integer arithmetic, so the
+// `BigInt` reproduction in `rational_to_decimal_string_20` matches it bit-for-bit.
+// `storage_to_decimal` is the store's own `xsd:decimal` lexical decoder (BCD storage bytes ->
+// canonical decimal string), the exact inverse of the encoding a stored decimal's
+// `CanonicalObject::Value` lexical carries.
+use num_bigint::{BigInt, Sign};
+use num_integer::Integer as _;
+use num_rational::BigRational;
+use num_traits::{Num as _, One as _, Pow as _, Signed as _, ToPrimitive as _, Zero as _};
+use tdb_succinct::tfc::decimal::storage_to_decimal;
 
 use crate::expression::{ArithmeticExpression, ArithmeticValue};
 use crate::misc::InRange;
@@ -427,6 +441,58 @@ pub enum CompiledRelationStatement {
         /// The fresh result VARIABLE name that `hash` binds — terminal/revealed, NOT committed.
         result: String,
     },
+    /// WOQL `Eval floor(x)` — the INTEGER-RESULT face of the exact-rational value layer. The child
+    /// relation `input` binds AND authenticates every operand column; this statement carries the
+    /// child columns through and appends exactly ONE derived signed-integer column
+    /// (`GeneratedDecimalI64`, EXACTLY as `Eval`) holding `floor(x)`, which the verifier
+    /// RE-DERIVES elementwise in EXACT rational arithmetic. See [`DecimalExpr`] for the operand and
+    /// operator set.
+    ///
+    /// FIDELITY (SWI `floor/1` under `prefer_rationals`): `floor(x)` rounds toward −∞ to an
+    /// INTEGER (`floor(7 rdiv 2)=3`, `floor(-7 rdiv 2)=-4`). An integer IS a rational, so
+    /// `infer_result_type` labels the result `xsd:decimal` — but its VALUE is integral, matching the
+    /// existing `Eval` integer-result delivery (a whole rational renders as an integer, see
+    /// `jsonld:value_jsonld`). SOUNDNESS: the argument is re-derived in exact `rug::Rational` from
+    /// ROOT-authenticated operands, floored toward −∞, and narrowed to the declared `i64` generated
+    /// domain; a result outside `i64` FAILS CLOSED (no field wraparound). The delivered column must
+    /// equal that recomputation — no biasable witness.
+    FloorEval {
+        input: Box<CompiledRelation>,
+        /// The rational argument of `floor`, over authenticated numeric child columns and query
+        /// literals. Bound into the query digest so a proof cannot be replayed under a different
+        /// expression.
+        expr: DecimalExpr,
+    },
+    /// WOQL exact-rational arithmetic whose result is `xsd:decimal` and POSSIBLY FRACTIONAL —
+    /// `Divide` (`/` -> `rdiv`) and `Plus`/`Minus`/`Times`/`Exp` that involve a stored `xsd:decimal`
+    /// operand or a decimal literal. Uses the SAME verifier-recompute architecture as `Eval`, but —
+    /// like `Concat` — the result is a TERMINAL, REVEALED xsd:decimal value, not a committed column
+    /// (a general rational does not encode into a single field element and feeds nothing downstream).
+    ///
+    /// FIDELITY (the load-bearing fidelity question). With `prefer_rationals=true`
+    /// (`terminus_config.pl:191`) WOQL `+`,`-`,`*`,`rdiv` yield EXACT rationals typed `xsd:decimal`
+    /// (`json_woql.pl`, `woql_compile:infer_result_type`). The CLIENT-facing lexical is produced by
+    /// `casting:rational_to_decimal_string(R, S, 20)` via `json:json_write_hook/4`
+    /// (`document/json.pl:135`): a decimal string with UP TO 20 FRACTIONAL digits, ROUND-HALF-UP at
+    /// the 20th (`(Rem*10^20*2 + Den) // (Den*2)`), TRAILING ZEROS TRIMMED, emitted as an unquoted
+    /// JSON number (whole rationals render as the bare integer). Terminating `7 rdiv 2` -> "3.5",
+    /// `6 rdiv 2` -> "3", `1 rdiv 4` -> "0.25"; non-terminating `1 rdiv 3` -> "0.33333333333333333333"
+    /// (twenty 3s). This is reproduced BYTE-EXACT by [`rational_to_decimal_string_20`] (rug/GMP is
+    /// the same big-integer library SWI uses). The verifier RE-DERIVES the exact rational from the
+    /// ROOT-authenticated operands and re-renders this lexical; a mismatch, a zero divisor, or a
+    /// non-numeric operand row FAILS CLOSED. Delivered as [`CanonicalObject::Value`] tagged
+    /// `xsd:decimal` with the rendered lexical bytes — the identical terminal-revealed discipline
+    /// `Concat` uses (no committed result column, no new format).
+    RationalArith {
+        input: Box<CompiledRelation>,
+        /// The exact-rational arithmetic expression. Bound into the query digest (operator, operand
+        /// order, column indices, literal bytes) so a proof cannot be replayed under a different
+        /// expression.
+        expr: DecimalExpr,
+        /// The fresh result VARIABLE name the arithmetic binds — terminal/revealed, NOT committed
+        /// (tracked only for query identity / terminal exposure, like `Concat`'s `result`).
+        result: String,
+    },
 }
 
 /// One element of a WOQL `concat` template.
@@ -492,6 +558,61 @@ pub enum EvalExpr {
     /// (out of the integer value layer) and an oversized result overflows the declared width;
     /// both FAIL CLOSED in the recompute (no field wraparound, no silent rational coercion).
     Exp(Box<EvalExpr>, Box<EvalExpr>),
+}
+
+/// A compiled EXACT-RATIONAL arithmetic expression tree for the WOQL `xsd:decimal`/rational value
+/// layer (`Floor`, `Divide`, decimal operands). It is the rational analogue of [`EvalExpr`]: every
+/// leaf is a query-local literal (trusted) or an authenticated numeric child column, and the
+/// interior nodes are re-evaluated per row by the verifier in EXACT `rug::Rational`.
+///
+/// SOUNDNESS (verifier recompute — no novel gadget, no crypto). This tree carries NO prover
+/// witness. At verification each operand column is resolved through the ROOT-authenticated
+/// node/value dictionary (`resolve_result_values`, exactly as `Eval`/`Sum` do); its EXACT datatype
+/// is read from the trusted dictionary value and decoded to an exact rational (integer family via
+/// the order-preserving decode, `xsd:decimal` via the store's own `storage_to_decimal` lexical
+/// decoder). The tree is then re-evaluated deterministically in exact rationals. The delivered
+/// result (a floored `i64` for [`CompiledRelationStatement::FloorEval`], a rendered decimal lexical
+/// for [`CompiledRelationStatement::RationalArith`]) must equal that recomputation, so there is
+/// nothing a malicious prover can bias: the inputs are pinned to the trusted root and the function
+/// is deterministic. A zero divisor, a non-numeric operand row, or an unparseable decimal FAILS
+/// CLOSED — never a fabricated or dropped row.
+///
+/// The compiler does NOT pin operand datatypes at compile time (a `xsd:decimal` operand has no
+/// order-preserving range-pin mechanism); instead the recompute reads the exact datatype from the
+/// trusted root value and rejects any non-numeric row. This is sound because the value is
+/// root-bound. A `Column` is admitted at compile time only when it is a nonnullable node/value
+/// store column (never a node IRI, predicate, or nullable Optional column).
+#[derive(Clone, Debug)]
+pub enum DecimalExpr {
+    /// The authenticated numeric value of child result column `index`. At recompute the exact
+    /// datatype is read from the ROOT-authenticated dictionary value (integer family OR
+    /// `xsd:decimal`) and decoded to an exact rational; any other datatype, a node IRI, or a null
+    /// rejects closed. No compile-time datatype claim is bound (the value is root-authenticated).
+    Column { index: usize },
+    /// A query-local exact integer literal (all supported fixed-width XSD integer literals fit
+    /// `i128`), interpreted as the rational `value/1`.
+    IntegerLiteral(i128),
+    /// A query-local exact `xsd:decimal` literal, as its CANONICAL decimal string (optional leading
+    /// `-`, digits, optional `.`+digits; NO exponent). Parsed to an exact rational — a
+    /// non-canonical/scientific/garbage form rejects closed at compile time.
+    DecimalLiteral(String),
+    Plus(Box<DecimalExpr>, Box<DecimalExpr>),
+    Minus(Box<DecimalExpr>, Box<DecimalExpr>),
+    Times(Box<DecimalExpr>, Box<DecimalExpr>),
+    /// WOQL `Divide` — EXACT RATIONAL division (`rdiv`), NOT integer/floor division. `left` is the
+    /// dividend, `right` the divisor. A zero divisor makes Prolog `rdiv`/`is` throw
+    /// (`evaluation_error(zero_divisor)`), so any zero-divisor row FAILS CLOSED in the recompute
+    /// (never dropped). A static zero literal divisor is also rejected at compile time.
+    Divide(Box<DecimalExpr>, Box<DecimalExpr>),
+    /// WOQL `Exp` — integer power (`**`) of a rational base raised to a NON-NEGATIVE INTEGER
+    /// exponent (computed as `numer^e / denom^e`). The exponent must be a static non-negative
+    /// integer literal (a negative/fractional/column exponent is out of this layer and rejects at
+    /// compile time). `left` is the base, `right` the exponent.
+    Exp(Box<DecimalExpr>, Box<DecimalExpr>),
+    /// `floor(x)` toward −∞ (SWI `floor/1`), yielding an integral rational. May appear nested (e.g.
+    /// `Divide(Floor(x), y)`); a TOP-LEVEL `floor` is lowered to
+    /// [`CompiledRelationStatement::FloorEval`] (integer delivery) instead.
+    Floor(Box<DecimalExpr>),
 }
 
 impl CompiledRelation {
@@ -869,6 +990,24 @@ pub enum ProvedQueryStatement {
     HashKey {
         input: Box<ProvedBgp>,
         /// Per-row synthesized URI/node ids, revealed and re-derived by the verifier.
+        result_objects: Vec<CanonicalObject>,
+    },
+    /// A proved WOQL `floor(x)`: like `Eval`, the authenticated child relation plus ONE appended
+    /// derived integer column. The proof carries no floor-specific witness — verification re-derives
+    /// the floored column in exact rationals from the child's root-authenticated operand columns.
+    FloorEval {
+        input: Box<ProvedBgp>,
+    },
+    /// A proved WOQL exact-rational arithmetic (`Divide`/decimal-operand `Plus`/`Minus`/`Times`/
+    /// `Exp`): like `Concat`, the authenticated operand-binding child plus the DELIVERED per-row
+    /// `xsd:decimal` result. The committed columns are the child's verbatim (the result is
+    /// terminal/revealed); verification RE-DERIVES `result_objects` by re-evaluating the exact
+    /// rational over the root-authenticated operands and re-rendering the canonical 20-fractional-
+    /// digit decimal lexical, requiring an exact match. A zero divisor, a non-numeric operand row,
+    /// or the astronomically-implausible carry-overflow case FAIL CLOSED at re-derivation.
+    RationalArith {
+        input: Box<ProvedBgp>,
+        /// Per-row synthesized xsd:decimal results, revealed and re-derived by the verifier.
         result_objects: Vec<CanonicalObject>,
     },
 }
@@ -1273,8 +1412,75 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
                 digest_concat_element(&mut hasher, arg);
             }
         }
+        CompiledRelationStatement::FloorEval { input, expr } => {
+            // DISTINCT tag; bind the child + the floored expression so a floor proof cannot be
+            // replayed as a different op or a different argument. The result variable NAME is a
+            // label (the output is fully determined by the recompute), matching Eval's discipline.
+            hasher.update(b"/decimal-floor-i64");
+            hasher.update(relation_query_digest(input)?);
+            digest_decimal_expr(&mut hasher, expr);
+        }
+        CompiledRelationStatement::RationalArith { input, expr, .. } => {
+            // DISTINCT tag from every other op; bind the child + the EXACT rational expression
+            // (operator, operand order, column indices, literal bytes) so a proof cannot be
+            // replayed as a different arithmetic. The result variable NAME is a label (the output
+            // is fully determined by the recompute), matching Concat/Eval digest discipline.
+            hasher.update(b"/decimal-rational-arith");
+            hasher.update(relation_query_digest(input)?);
+            digest_decimal_expr(&mut hasher, expr);
+        }
     }
     Ok(hasher.finalize().into())
+}
+
+/// Bind the exact rational arithmetic tree into the relation's query identity so a proof cannot be
+/// replayed under a different expression, operand column, literal, or operator/operand order. Each
+/// node carries a DISTINCT leading tag (anti-substitution), disjoint from [`digest_eval_expr`]'s
+/// tags because this whole statement already lives under a distinct `/decimal-*` statement tag.
+fn digest_decimal_expr(hasher: &mut Sha256, expr: &DecimalExpr) {
+    match expr {
+        DecimalExpr::Column { index } => {
+            hasher.update([0u8]);
+            hasher.update((*index as u64).to_le_bytes());
+        }
+        DecimalExpr::IntegerLiteral(value) => {
+            hasher.update([1u8]);
+            hasher.update(value.to_le_bytes());
+        }
+        DecimalExpr::DecimalLiteral(lexical) => {
+            hasher.update([2u8]);
+            digest_bytes(hasher, lexical.as_bytes());
+        }
+        DecimalExpr::Plus(left, right) => {
+            hasher.update([3u8]);
+            digest_decimal_expr(hasher, left);
+            digest_decimal_expr(hasher, right);
+        }
+        DecimalExpr::Minus(left, right) => {
+            hasher.update([4u8]);
+            digest_decimal_expr(hasher, left);
+            digest_decimal_expr(hasher, right);
+        }
+        DecimalExpr::Times(left, right) => {
+            hasher.update([5u8]);
+            digest_decimal_expr(hasher, left);
+            digest_decimal_expr(hasher, right);
+        }
+        DecimalExpr::Divide(left, right) => {
+            hasher.update([6u8]);
+            digest_decimal_expr(hasher, left);
+            digest_decimal_expr(hasher, right);
+        }
+        DecimalExpr::Exp(base, exponent) => {
+            hasher.update([7u8]);
+            digest_decimal_expr(hasher, base);
+            digest_decimal_expr(hasher, exponent);
+        }
+        DecimalExpr::Floor(argument) => {
+            hasher.update([8u8]);
+            digest_decimal_expr(hasher, argument);
+        }
+    }
 }
 
 /// Bind one concat element into the relation's query identity (anti-substitution): a literal's
@@ -1618,6 +1824,17 @@ fn relation_result_descriptors(
             });
             Ok(descriptors)
         }
+        CompiledRelationStatement::FloorEval { input, .. } => {
+            // Identical shape to `Eval`: child columns pass through, and `floor(x)` appends ONE
+            // signed generated-integer column (a floored rational is integral; negatives are
+            // representable in the i64 generated domain).
+            let mut descriptors = relation_result_descriptors(input)?;
+            descriptors.push(ResultColumnDescriptor {
+                namespace: ResultIdNamespace::GeneratedDecimalI64,
+                nullable: false,
+            });
+            Ok(descriptors)
+        }
         CompiledRelationStatement::Typecast {
             input,
             target_datatype,
@@ -1649,7 +1866,10 @@ fn relation_result_descriptors(
         // Pad/HashKey, like Concat, carry the child's committed columns through VERBATIM (their
         // synthesized result is terminal/revealed, not a committed column).
         | CompiledRelationStatement::Pad { input, .. }
-        | CompiledRelationStatement::HashKey { input, .. } => {
+        | CompiledRelationStatement::HashKey { input, .. }
+        // RationalArith, like Concat, carries the child's committed columns through VERBATIM — its
+        // synthesized xsd:decimal result is terminal/revealed, not a committed column.
+        | CompiledRelationStatement::RationalArith { input, .. } => {
             relation_result_descriptors(input)
         }
     }
@@ -1871,6 +2091,21 @@ fn relation_proof_plan(
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "WOQL HashKey relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        // FloorEval/RationalArith are woql2-side verifier-recompute ops (like Eval/Concat): the
+        // top-level `prove_with_context` intercepts them, so this recursive-planner arm is never
+        // reached for a well-formed plan. Reject closed rather than silently mis-plan.
+        CompiledRelationStatement::FloorEval { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL floor relations are proved by the query wrapper, not the Store recursive planner",
+            ))
+        }
+        CompiledRelationStatement::RationalArith { .. } => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL rational-arithmetic relations are proved by the query wrapper, not the Store recursive planner",
             ))
         }
     };
@@ -2575,6 +2810,296 @@ fn expected_eval_columns(
     }
     columns.push(derived);
     Ok(columns)
+}
+
+// ============================================================================================
+// Exact-rational (xsd:decimal) value layer: shared recompute for `Floor`, `Divide`, and decimal
+// operands. Every function here is verifier-recompute: it consumes ONLY root-authenticated operand
+// values and trusted query literals, and is deterministic — there is no prover witness.
+// ============================================================================================
+
+/// Parse a CANONICAL `xsd:decimal` lexical string (optional leading `-`, decimal digits, optional
+/// `.`+digits; NO exponent) to an EXACT `rug::Rational`. This mirrors the reference
+/// `casting:string_decimal_to_rational/2` (`numerator = int*10^fraclen + frac`, `denom = 10^fraclen`)
+/// exactly, using GMP big integers so ANY precision is preserved. A leading-`.` form (`.5`) is
+/// accepted as `0.5`. FAILS CLOSED on scientific notation, empty/garbage, or a non-digit character —
+/// never guesses a value. The store's own decimals decode to this canonical form
+/// (`storage_to_decimal`), and stored decimals are the only decimal OPERAND source; decimal LITERALS
+/// are canonicalized by the compiler before reaching here.
+fn parse_decimal_to_rational(text: &str) -> std::io::Result<BigRational> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "xsd:decimal lexical is not a canonical parseable decimal",
+        )
+    };
+    let (neg, body) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if body.is_empty() {
+        return Err(invalid());
+    }
+    // Split into integer / fractional digit runs; reject anything that is not pure decimal digits.
+    let (int_str, frac_str) = match body.split_once('.') {
+        Some((int_part, frac_part)) => (int_part, frac_part),
+        None => (body, ""),
+    };
+    // Leading `.5` -> integer part empty; treat as 0. A trailing `5.` -> fraction empty; treat as 0.
+    let int_digits = if int_str.is_empty() { "0" } else { int_str };
+    if !int_digits.bytes().all(|b| b.is_ascii_digit())
+        || (!frac_str.is_empty() && !frac_str.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(invalid());
+    }
+    let denom = BigInt::from(10).pow(frac_str.len() as u32);
+    // numerator = int_digits ++ frac_str  (as one big decimal integer), signed.
+    let mut digits = String::with_capacity(int_digits.len() + frac_str.len());
+    digits.push_str(int_digits);
+    digits.push_str(frac_str);
+    let mut numer = BigInt::from_str_radix(&digits, 10).map_err(|_| invalid())?;
+    if neg {
+        numer = -numer;
+    }
+    // `BigRational::new` auto-reduces to lowest terms with a positive denominator.
+    Ok(BigRational::new(numer, denom))
+}
+
+/// Decode ONE root-authenticated child value to an EXACT rational for the decimal/rational layer.
+/// The exact datatype is read from the TRUSTED dictionary value (never a compiler claim): the
+/// fixed-width integer family decodes via the SAME order-preserving path `Sum`/`Eval` use
+/// ([`integral_group_sum_value`]); `xsd:decimal` decodes via the store's own lexical decoder
+/// ([`storage_to_decimal`]) then [`parse_decimal_to_rational`]. Any other datatype, a node IRI, a
+/// null, or a generated value FAILS CLOSED — the recompute never fabricates or coerces a numeric.
+fn numeric_operand_rational(value: &CanonicalResultValue) -> std::io::Result<BigRational> {
+    let non_numeric = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WOQL decimal-layer operand row is not an authenticated numeric (integer/xsd:decimal) value",
+        )
+    };
+    let CanonicalResultValue::Object(CanonicalObject::Value { datatype, lexical }) = value else {
+        return Err(non_numeric());
+    };
+    match datatype {
+        CanonicalDatatype::Decimal => {
+            // The store's xsd:decimal lexical is the BCD storage encoding; decode it to the
+            // canonical decimal string, then to an exact rational. Always terminating/finite.
+            let decoded = storage_to_decimal(&mut &lexical[..]);
+            parse_decimal_to_rational(&decoded)
+        }
+        CanonicalDatatype::UInt8
+        | CanonicalDatatype::UInt16
+        | CanonicalDatatype::UInt32
+        | CanonicalDatatype::UInt64
+        | CanonicalDatatype::Int8
+        | CanonicalDatatype::Int16
+        | CanonicalDatatype::Int32
+        | CanonicalDatatype::Int64 => match integral_group_sum_value(value, *datatype)? {
+            GroupSumValue::Unsigned(v) => Ok(BigRational::from_integer(BigInt::from(v))),
+            GroupSumValue::Signed(v) => {
+                // Every supported signed fixed-width value fits i128 exactly (already is one).
+                Ok(BigRational::from_integer(BigInt::from(v)))
+            }
+        },
+        _ => Err(non_numeric()),
+    }
+}
+
+/// Re-evaluate a [`DecimalExpr`] for ONE row over the root-authenticated operand columns, in EXACT
+/// `rug::Rational`. All the fail-closed cases (zero divisor, non-numeric/unparseable operand,
+/// out-of-scope Exp exponent) surface here as errors — never a dropped or fabricated row.
+fn eval_decimal_expr_row(
+    expr: &DecimalExpr,
+    values: &[Vec<CanonicalResultValue>],
+    row: usize,
+) -> std::io::Result<BigRational> {
+    match expr {
+        DecimalExpr::Column { index } => {
+            let column = values.get(*index).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL decimal-layer operand column out of range",
+                )
+            })?;
+            let value = column.get(row).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL decimal-layer operand column is short",
+                )
+            })?;
+            numeric_operand_rational(value)
+        }
+        DecimalExpr::IntegerLiteral(value) => Ok(BigRational::from_integer(BigInt::from(*value))),
+        DecimalExpr::DecimalLiteral(lexical) => parse_decimal_to_rational(lexical),
+        DecimalExpr::Plus(left, right) => Ok(eval_decimal_expr_row(left, values, row)?
+            + eval_decimal_expr_row(right, values, row)?),
+        DecimalExpr::Minus(left, right) => Ok(eval_decimal_expr_row(left, values, row)?
+            - eval_decimal_expr_row(right, values, row)?),
+        DecimalExpr::Times(left, right) => Ok(eval_decimal_expr_row(left, values, row)?
+            * eval_decimal_expr_row(right, values, row)?),
+        DecimalExpr::Divide(left, right) => {
+            let dividend = eval_decimal_expr_row(left, values, row)?;
+            let divisor = eval_decimal_expr_row(right, values, row)?;
+            // Zero divisor: Prolog `rdiv`/`is` THROWS (`evaluation_error(zero_divisor)`), so the
+            // WOQL query fails. FAIL CLOSED for this row (never drop it; never panic on the
+            // divide). Static zero literal divisors are also rejected at compile time.
+            if divisor.numer().is_zero() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Divide by zero: Prolog `rdiv` throws, so the query fails closed",
+                ));
+            }
+            Ok(dividend / divisor)
+        }
+        DecimalExpr::Exp(base, exponent) => {
+            let base = eval_decimal_expr_row(base, values, row)?;
+            let exponent = eval_decimal_expr_row(exponent, values, row)?;
+            // Only a NON-NEGATIVE INTEGER exponent gives an exact rational power in this layer;
+            // the compiler already required a static non-negative integer literal, but re-check the
+            // recomputed rational to be safe (a fractional/negative exponent FAILS CLOSED).
+            if !exponent.is_integer() || exponent.numer().is_negative() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Exp in the decimal layer requires a non-negative integer exponent",
+                ));
+            }
+            let e = exponent.numer().to_u32().filter(|e| *e <= DECIMAL_LAYER_MAX_EXP).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "WOQL Exp exponent is too large for the decimal layer",
+                )
+            })?;
+            // base^e by exact repeated multiplication (base^0 = 1); rationals stay exact.
+            let mut acc = BigRational::one();
+            for _ in 0..e {
+                acc = acc * base.clone();
+            }
+            Ok(acc)
+        }
+        DecimalExpr::Floor(argument) => {
+            // floor toward −∞ (SWI `floor/1`); `BigRational::floor` returns the integral rational.
+            let value = eval_decimal_expr_row(argument, values, row)?;
+            Ok(value.floor())
+        }
+    }
+}
+
+/// Render an EXACT rational to the reference's client-facing `xsd:decimal` lexical, reproducing
+/// `casting:rational_to_decimal_string(R, S, 20)` BYTE-EXACT (validated differentially against
+/// SWI-Prolog): sign, integer part, then up to 20 fractional digits ROUNDED HALF-UP at the 20th
+/// (`(Rem*10^20*2 + Den) // (Den*2)`), with LEADING-zero padding to 20 and TRAILING zeros trimmed;
+/// a whole rational renders as the bare integer (no decimal point). `rug`/GMP is the SAME big-integer
+/// library SWI uses, and every operand here is non-negative (abs taken), so `//`/`mod` == floor ==
+/// rug truncating division — identical arithmetic. FAILS CLOSED on the astronomically-implausible
+/// carry-overflow case (the fraction rounds up to a full unit, `FracDigits == 10^20`, requiring a
+/// reduced denominator ≥ 2·10^20) rather than reproduce the reference's carry BUG there.
+const DECIMAL_LAYER_MAX_FRACTION_DIGITS: u32 = 20;
+/// Upper bound on a decimal-layer `Exp` exponent (keeps exact `rug` powers from blowing up; larger
+/// exponents reject closed rather than compute an astronomically large rational).
+const DECIMAL_LAYER_MAX_EXP: u32 = 256;
+
+fn rational_to_decimal_string_20(value: &BigRational) -> std::io::Result<String> {
+    let max_decimals = DECIMAL_LAYER_MAX_FRACTION_DIGITS;
+    let negative = value.numer().sign() == Sign::Minus;
+    let abs = value.abs();
+    // num-rational canonicalizes: denom > 0, gcd(numer,denom) = 1, sign in numer. After abs, >= 0.
+    let num = abs.numer().clone();
+    let den = abs.denom().clone();
+    let (int_part, remainder) = num.div_rem(&den);
+    if remainder.is_zero() {
+        // Whole number: no fractional part. (A negative whole renders with its sign.)
+        let sign = if negative && !int_part.is_zero() {
+            "-"
+        } else {
+            ""
+        };
+        return Ok(format!("{sign}{int_part}"));
+    }
+    let multiplier = BigInt::from(10).pow(max_decimals);
+    // Round-half-up: (Rem * Mult * 2 + Den) // (Den * 2). All operands positive => BigInt `/`
+    // truncates toward zero == floor == SWI `//`.
+    let frac_digits: BigInt =
+        (remainder * &multiplier * BigInt::from(2) + &den) / (den * BigInt::from(2));
+    if frac_digits >= multiplier {
+        // The fraction rounded up to a whole unit (needs denom >= 2·10^20). The reference has a
+        // carry BUG here; refuse rather than emit a value that might mismatch.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "xsd:decimal render carry overflow (denominator >= 2·10^20); refusing rather than reproduce the reference carry bug",
+        ));
+    }
+    // Pad with leading zeros to `max_decimals`, then trim trailing zeros.
+    let mut frac = frac_digits.to_string();
+    if (frac.len() as u32) < max_decimals {
+        let pad = (max_decimals as usize) - frac.len();
+        frac = format!("{}{}", "0".repeat(pad), frac);
+    }
+    let trimmed = frac.trim_end_matches('0');
+    // NOTE: `trimmed` CAN be empty. A tiny-but-nonzero remainder rounds to 0 at
+    // `max_decimals` digits once the reduced denominator exceeds 2·10^20, so `frac_digits`
+    // is 0, and after padding + trimming nothing survives — the output is then `"<int>."`
+    // (e.g. `"0."`). That trailing-dot form is exactly what the SWI reference emits here
+    // (confirmed byte-for-byte), so it is produced DELIBERATELY; "normalizing" it away
+    // (dropping the dot, or re-adding a `0`) would DIVERGE from the reference.
+    let sign = if negative { "-" } else { "" };
+    Ok(format!("{sign}{int_part}.{trimmed}"))
+}
+
+/// VERIFIER RECOMPUTE for WOQL `floor(x)`: carry the child columns through unchanged and append the
+/// derived integer column, re-derived elementwise from ROOT-authenticated operands in exact
+/// rationals then floored toward −∞ and narrowed to the declared `i64` generated domain (a result
+/// outside `i64` FAILS CLOSED — no field wraparound). Mirrors [`expected_eval_columns`].
+fn expected_floor_eval_columns(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    expr: &DecimalExpr,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<Vec<ArkFr>>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let mut columns = input.result_columns.clone();
+    let mut derived = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        // `expr` is the floor ARGUMENT (the compiler stores it here and floors it explicitly), so
+        // evaluate then floor toward −∞ to an integer.
+        let value = eval_decimal_expr_row(expr, &values, row)?;
+        let floored = value.floor().to_integer();
+        let narrowed = floored.to_i64().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "WOQL floor result exceeds the declared i64 integer width",
+            )
+        })?;
+        derived.push(generated_decimal_i64_field(narrowed));
+    }
+    columns.push(derived);
+    Ok(columns)
+}
+
+/// VERIFIER RECOMPUTE for WOQL exact-rational arithmetic (`Divide`/decimal-operand arithmetic): the
+/// per-row result is a TERMINAL, REVEALED `xsd:decimal` value (like `Concat`) — re-derive the exact
+/// rational from ROOT-authenticated operands and render the canonical 20-fractional-digit lexical.
+/// A zero divisor, a non-numeric operand row, or the carry-overflow case FAIL CLOSED, so a proof is
+/// only ever produced for rows the reference itself would compute, and the delivered value matches.
+fn expected_rational_arith_objects(
+    input: &ProvedBgp,
+    input_plan: &CompiledRelation,
+    expr: &DecimalExpr,
+    layer: &impl VerifierLayer,
+    expected_root: ProofHash,
+) -> std::io::Result<Vec<CanonicalObject>> {
+    let values = resolve_authenticated_child_values(input, input_plan, layer, expected_root)?;
+    let mut out = Vec::with_capacity(input.result_len);
+    for row in 0..input.result_len {
+        let value = eval_decimal_expr_row(expr, &values, row)?;
+        let lexical = rational_to_decimal_string_20(&value)?.into_bytes();
+        out.push(CanonicalObject::Value {
+            datatype: CanonicalDatatype::Decimal,
+            lexical,
+        });
+    }
+    Ok(out)
 }
 
 /// The exact XSD value range `[min, max]` (as `i128`) and signedness of a fixed-width integer
@@ -3283,6 +3808,19 @@ impl ProvedBgp {
     pub fn hashkey_result_objects(&self) -> Option<&[CanonicalObject]> {
         match &self.statement {
             ProvedQueryStatement::HashKey { result_objects, .. } => Some(result_objects),
+            _ => None,
+        }
+    }
+
+    /// The per-row synthesized `xsd:decimal` results of a top-level exact-rational arithmetic
+    /// (`Divide`/decimal-operand `Plus`/`Minus`/`Times`/`Exp`), each a TERMINAL revealed
+    /// `CanonicalObject::Value` (datatype `xsd:decimal`) the verifier RE-DERIVES by re-evaluating the
+    /// exact rational and re-rendering the canonical 20-fractional-digit lexical. `None` for a
+    /// non-rational-arithmetic proof. Reading these AFTER a successful `verify` is sound for the same
+    /// reason as [`Self::concat_result_objects`].
+    pub fn rational_arith_result_objects(&self) -> Option<&[CanonicalObject]> {
+        match &self.statement {
+            ProvedQueryStatement::RationalArith { result_objects, .. } => Some(result_objects),
             _ => None,
         }
     }
@@ -4328,6 +4866,79 @@ impl ProvedBgp {
                     ));
                 }
             }
+            (
+                ProvedQueryStatement::FloorEval { input },
+                CompiledRelationStatement::FloorEval {
+                    input: input_plan,
+                    expr,
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root (its own
+                //     `verify_relation` ends with `verify_columns`, pinning every operand column).
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) VERIFIER RE-DERIVATION: recompute the floored column in exact rationals over
+                //     the root-authenticated operands, narrowed to the i64 generated domain, and
+                //     require an EXACT match. Row count/domain are inherited (floor is a per-row
+                //     map). A result outside i64 or a non-numeric operand row fails closed.
+                let expected_columns =
+                    expected_floor_eval_columns(input, input_plan, expr, layer, expected_root)?;
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != expected_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL floor result is not the exact verifier-recomputed floored column",
+                    ));
+                }
+            }
+            (
+                ProvedQueryStatement::RationalArith {
+                    input,
+                    result_objects,
+                },
+                CompiledRelationStatement::RationalArith {
+                    input: input_plan,
+                    expr,
+                    ..
+                },
+            ) => {
+                // (1) Authenticate the operand-binding child against the trusted root.
+                input.verify_relation(
+                    input_plan,
+                    layer,
+                    expected_root,
+                    relation_query_digest(input_plan)?,
+                )?;
+                // (2) TERMINAL, REVEALED result: committed columns are the child's VERBATIM (the
+                //     xsd:decimal result is not a committed column); pin count/domain (per-row map).
+                if self.result_len != input.result_len
+                    || self.result_log_domain != input.result_log_domain
+                    || self.result_columns != input.result_columns
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL rational arithmetic must carry the child columns through unchanged",
+                    ));
+                }
+                // (3) VERIFIER RE-DERIVATION: recompute the exact rational per row and re-render the
+                //     canonical 20-fractional-digit xsd:decimal lexical, requiring an EXACT match. A
+                //     tampered result, tampered operand, zero divisor, non-numeric operand, or carry
+                //     overflow all fail closed — no biasable witness (inputs pinned to the root).
+                let expected_objects =
+                    expected_rational_arith_objects(input, input_plan, expr, layer, expected_root)?;
+                if *result_objects != expected_objects {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL rational-arithmetic result is not the exact verifier-recomputed xsd:decimal",
+                    ));
+                }
+            }
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -4981,6 +5592,26 @@ impl ProvedBgp {
                 ));
             }
             (
+                ProvedQueryStatement::FloorEval { .. },
+                CompiledRelationStatement::FloorEval { .. },
+            ) => {
+                // Verify-only in v1, exactly like Eval (appended derived column, no Store plan kind).
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL floor proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
+                ProvedQueryStatement::RationalArith { .. },
+                CompiledRelationStatement::RationalArith { .. },
+            ) => {
+                // Verify-only in v1, exactly like Concat (terminal revealed result). Reject closed.
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "WOQL rational-arithmetic proofs are verify-only in v1 and cannot be re-encoded into a Store recursive envelope",
+                ));
+            }
+            (
                 ProvedQueryStatement::ExactScalarOrder { input, proof },
                 CompiledRelationStatement::ExactScalarOrder {
                     input: input_plan, ..
@@ -5261,6 +5892,89 @@ fn prove_eval_relation(
     Ok(ProvedBgp {
         statement: ProvedQueryStatement::Eval {
             input: Box::new(child),
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL `floor(x)`: prove the operand-binding child through the Store, then APPEND
+/// the derived integer column computed by the SAME [`expected_floor_eval_columns`] the verifier
+/// re-runs. Structurally identical to [`prove_eval_relation`] (only the recompute differs — exact
+/// rationals then a floor), so a prover cannot deliver a different column and still verify, and
+/// cannot prove a floor whose i64 narrowing overflows or whose operand row is non-numeric.
+fn prove_floor_eval_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    expr: &DecimalExpr,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let expected =
+        expected_floor_eval_columns(&child, input, expr, layer, layer.state.commitment_root)?;
+    let derived = expected
+        .last()
+        .cloned()
+        .expect("expected_floor_eval_columns always appends the derived column");
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let domain = 1usize << result_log_domain;
+    let mut padded = derived.clone();
+    padded.resize(domain, ArkFr::zero());
+    let derived_commitment = context.commit_column(&padded)?;
+
+    let mut result_columns = child.result_columns.clone();
+    result_columns.push(derived);
+    let mut result_commitments = child.result_commitments.clone();
+    result_commitments.push(derived_commitment);
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::FloorEval {
+            input: Box::new(child),
+        },
+        result_commitments,
+        result_columns,
+        result_log_domain,
+        result_len,
+    })
+}
+
+/// Prove a top-level WOQL exact-rational arithmetic (`Divide`/decimal-operand arithmetic): prove the
+/// operand-binding child through the Store, then DELIVER the per-row xsd:decimal result computed by
+/// the SAME [`expected_rational_arith_objects`] the verifier re-runs. Like `Concat`, NO derived
+/// column is committed — the result is TERMINAL/revealed; the child's columns/commitments are reused
+/// verbatim. A zero divisor, a non-numeric operand row, or a carry-overflow render FAILS CLOSED here
+/// (exactly as verify does), so a prover cannot produce a proof for a row the reference would reject.
+fn prove_rational_arith_relation(
+    context: &StoreProverContext<'_>,
+    layer: &LayerCommitment,
+    input: &CompiledRelation,
+    expr: &DecimalExpr,
+) -> std::io::Result<ProvedBgp> {
+    let child_digest = relation_query_digest(input)?;
+    let child_plan = relation_proof_plan(input, child_digest)?;
+    let child_envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &child_plan)?;
+    let child = proved_from_recursive(child_envelope);
+
+    let result_objects =
+        expected_rational_arith_objects(&child, input, expr, layer, layer.state.commitment_root)?;
+
+    let result_len = child.result_len;
+    let result_log_domain = child.result_log_domain;
+    let result_columns = child.result_columns.clone();
+    let result_commitments = child.result_commitments.clone();
+
+    Ok(ProvedBgp {
+        statement: ProvedQueryStatement::RationalArith {
+            input: Box::new(child),
+            result_objects,
         },
         result_commitments,
         result_columns,
@@ -5810,6 +6524,17 @@ impl CompiledBgp {
         {
             return prove_hashkey_relation(context, layer, input, base, args);
         }
+        // WOQL `floor(x)` — a per-row exact-rational floor over a Store-proven authenticated child.
+        if let CompiledRelationStatement::FloorEval { input, expr } = &self.relation.statement {
+            return prove_floor_eval_relation(context, layer, input, expr);
+        }
+        // WOQL exact-rational arithmetic (`Divide`/decimal operands) — a per-row terminal
+        // xsd:decimal delivery over a Store-proven authenticated child.
+        if let CompiledRelationStatement::RationalArith { input, expr, .. } =
+            &self.relation.statement
+        {
+            return prove_rational_arith_relation(context, layer, input, expr);
+        }
         let digest = compiled_query_digest(self)?;
         let plan = relation_proof_plan(&self.relation, digest)?;
         let envelope = RecursiveRelationEnvelope::prove_with_context(context, layer, &plan)?;
@@ -5877,15 +6602,27 @@ pub enum BgpPlanError {
     #[error("range comparison has no variable: exactly one side must be the compared variable")]
     RangeBothConstants,
 
-    /// A comparison's constant is not a round-trip-aligned order-preserving numeric literal.
+    /// A comparison's constant is not a round-trip-aligned order-preserving literal.
     /// Supported: `xsd:boolean`, the explicit fixed-width XSD integer family, the bounded-i64
-    /// subset currently representable by the AST's `xsd:integer`, and `xsd:float`/`double`
-    /// (`Float64`). Strings, decimals, arbitrary-precision integers outside i64, other
-    /// datatypes, and list operands reject closed.
+    /// subset currently representable by the AST's `xsd:integer`, `xsd:float`/`double`
+    /// (`Float64`), and `xsd:date`/`xsd:dateTime` (via the store's decoded i64-nanoseconds
+    /// key). Strings, decimals, arbitrary-precision integers outside i64, other temporal
+    /// types (`dateTimeStamp`/`time`/`duration`/g*), other datatypes, and list operands
+    /// reject closed.
     #[error(
         "unsupported range constant `{datatype}`: no round-trip-aligned order-preserving encoding"
     )]
     UnsupportedRangeDatatype { datatype: &'static str },
+
+    /// A `date`/`dateTime` range constant lies at or outside the representable
+    /// i64-nanoseconds window (≈ 1677-09-21T00:12:43.145224192Z ..
+    /// 2262-04-11T23:47:16.854775807Z, endpoints EXCLUDED). The OP encoding SATURATES data
+    /// dates outside that window to `i64::MIN`/`i64::MAX`; requiring the constant strictly
+    /// inside it keeps every far data date strictly ordered against the constant, so the
+    /// filter stays sound. A constant that far out is astronomically implausible, so we
+    /// reject-close rather than special-case the saturated boundary.
+    #[error("date/dateTime range constant is outside the exact i64-nanoseconds window")]
+    DateRangeConstantOutOfExactRange,
 
     /// A ranged variable is not the object of any atom, so there is no object-binding atom
     /// to attach the range to.
@@ -6298,6 +7035,19 @@ pub enum BgpPlanError {
     /// non-integer XSD datatype). Only exact integer literals are provable in v1.
     #[error("Eval literal operand of datatype `{datatype}` is unsupported: only integer literals are provable in v1")]
     EvalUnsupportedLiteral { datatype: &'static str },
+
+    /// An exact-rational-layer (`Floor`/`Divide`/decimal) operand variable IS bound by the child,
+    /// but not as a nonnullable node/value STORE value (it is a node IRI, predicate, or nullable
+    /// Optional column). Only a store-authenticated numeric operand — an integer family or
+    /// `xsd:decimal` value, resolved at recompute — is provable; anything else rejects closed.
+    #[error("decimal-layer operand `?{var}` is not a nonnullable node/value store value (numeric integer/xsd:decimal)")]
+    EvalOperandNotNumeric { var: String },
+
+    /// A WOQL `Divide` (`rdiv`) has a STATIC zero constant divisor. Prolog `rdiv`/`is` throws
+    /// `evaluation_error(zero_divisor)`, so the query fails; reject closed at compile time (a
+    /// runtime/column zero divisor fails closed in the recompute instead).
+    #[error("Divide by a static zero divisor: Prolog `rdiv` throws, so the query fails closed")]
+    EvalDivideByZero,
 
     /// A malformed `Typecast` composition: not a conjunction of exactly ONE `Typecast` with a
     /// non-empty source-binding child BGP (no projection/count/distinct on the child).
@@ -7170,21 +7920,71 @@ fn plan_eval_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
         return Err(BgpPlanError::EvalResultAlreadyBound { var: result });
     }
 
-    let expr = compile_eval_expr(&eval.expression, &child)?;
-
+    // ROUTING. Pure-INTEGER arithmetic (pinned fixed-width integer operands, only
+    // Plus/Minus/Times/Div/Exp) keeps the existing integer `Eval` delivery (a committed
+    // `GeneratedDecimalI64` column). Anything with a RATIONAL SIGNAL — `Divide` (exact rational),
+    // `Floor`, or an `xsd:decimal` literal — uses the exact-rational value layer: a TOP-LEVEL
+    // `Floor` still delivers an integer (`GeneratedDecimalI64`), everything else delivers a
+    // TERMINAL, REVEALED `xsd:decimal` value (like `Concat`). Decimal OPERAND columns without such
+    // a signal are indistinguishable from unpinned integers at compile time, so they remain
+    // reject-closed (via the integer path) rather than guessed — a decimal operand is provable only
+    // when the tree ALSO carries a `Divide`/`Floor`/decimal-literal that routes it here.
     let collection = child.collection.clone();
-    let mut schema = child.relation.schema.clone();
-    schema.push(result);
-    let mut domains = child.relation.domains.clone();
-    // The derived column is a generated integer, not an executor value domain.
-    domains.push(None);
-    let relation = CompiledRelation {
-        schema,
-        domains,
-        statement: CompiledRelationStatement::Eval {
-            input: Box::new(child.relation),
-            expr,
-        },
+    if !arith_signals_rational(&eval.expression) {
+        // ---- Integer `Eval` (unchanged) ----
+        let expr = compile_eval_expr(&eval.expression, &child)?;
+        let mut schema = child.relation.schema.clone();
+        schema.push(result);
+        let mut domains = child.relation.domains.clone();
+        // The derived column is a generated integer, not an executor value domain.
+        domains.push(None);
+        let relation = CompiledRelation {
+            schema,
+            domains,
+            statement: CompiledRelationStatement::Eval {
+                input: Box::new(child.relation),
+                expr,
+            },
+        };
+        return Ok(Some(CompiledBgp {
+            relation,
+            projection: None,
+            collection,
+            count_variable: None,
+            full_row_distinct: false,
+        }));
+    }
+
+    // ---- Exact-rational value layer ----
+    let relation = if let ArithmeticExpression::Floor(floor) = &eval.expression {
+        // TOP-LEVEL `floor(x)` -> INTEGER delivery (append a `GeneratedDecimalI64` column, exactly
+        // like `Eval`). The floor is applied by `expected_floor_eval_columns`; store its ARGUMENT.
+        let expr = compile_decimal_expr(&floor.argument, &child)?;
+        let mut schema = child.relation.schema.clone();
+        schema.push(result);
+        let mut domains = child.relation.domains.clone();
+        domains.push(None);
+        CompiledRelation {
+            schema,
+            domains,
+            statement: CompiledRelationStatement::FloorEval {
+                input: Box::new(child.relation),
+                expr,
+            },
+        }
+    } else {
+        // Fractional-capable result -> TERMINAL, REVEALED `xsd:decimal` (like `Concat`): the child
+        // schema/domains pass through UNCHANGED and the result variable lives only in the statement.
+        let expr = compile_decimal_expr(&eval.expression, &child)?;
+        CompiledRelation {
+            schema: child.relation.schema.clone(),
+            domains: child.relation.domains.clone(),
+            statement: CompiledRelationStatement::RationalArith {
+                input: Box::new(child.relation),
+                expr,
+                result,
+            },
+        }
     };
     Ok(Some(CompiledBgp {
         relation,
@@ -7193,6 +7993,196 @@ fn plan_eval_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
         count_variable: None,
         full_row_distinct: false,
     }))
+}
+
+/// Does this arithmetic tree carry a RATIONAL SIGNAL that routes it to the exact-rational value
+/// layer? True iff it contains a `Divide` (`rdiv` — always fractional-capable), a `Floor`, or an
+/// `xsd:decimal` literal. `Div` (integer floor division) is NOT itself a signal (it stays on the
+/// integer path unless a nested `Divide`/`Floor`/decimal forces routing, in which case
+/// [`compile_decimal_expr`] rejects the integer-only `Div`). A bare integer/variable leaf is not a
+/// signal — so an UNPINNED store operand keeps its existing reject-closed behavior on the integer
+/// path rather than being silently reinterpreted as a decimal.
+fn arith_signals_rational(expression: &ArithmeticExpression) -> bool {
+    match expression {
+        ArithmeticExpression::Value(ArithmeticValue::Data(XSDAnySimpleType::Decimal(_))) => true,
+        ArithmeticExpression::Value(_) => false,
+        ArithmeticExpression::Divide(_) => true,
+        ArithmeticExpression::Floor(_) => true,
+        ArithmeticExpression::Plus(plus) => {
+            arith_signals_rational(&plus.left) || arith_signals_rational(&plus.right)
+        }
+        ArithmeticExpression::Minus(minus) => {
+            arith_signals_rational(&minus.left) || arith_signals_rational(&minus.right)
+        }
+        ArithmeticExpression::Times(times) => {
+            arith_signals_rational(&times.left) || arith_signals_rational(&times.right)
+        }
+        ArithmeticExpression::Div(div) => {
+            arith_signals_rational(&div.left) || arith_signals_rational(&div.right)
+        }
+        ArithmeticExpression::Exp(exp) => {
+            arith_signals_rational(&exp.left) || arith_signals_rational(&exp.right)
+        }
+    }
+}
+
+/// Lower a WOQL `ArithmeticExpression` to a [`DecimalExpr`] (exact-rational layer), rejecting every
+/// out-of-scope node. Integer-only `Div` is rejected here (it belongs to the integer `Eval` path);
+/// `Exp` requires a static non-negative integer exponent; a static zero `Divide` divisor rejects
+/// closed at compile time (a runtime zero divisor fails closed in the recompute).
+fn compile_decimal_expr(
+    expression: &ArithmeticExpression,
+    child: &CompiledBgp,
+) -> Result<DecimalExpr, BgpPlanError> {
+    match expression {
+        ArithmeticExpression::Value(value) => compile_decimal_value(value, child),
+        ArithmeticExpression::Plus(plus) => Ok(DecimalExpr::Plus(
+            Box::new(compile_decimal_expr(&plus.left, child)?),
+            Box::new(compile_decimal_expr(&plus.right, child)?),
+        )),
+        ArithmeticExpression::Minus(minus) => Ok(DecimalExpr::Minus(
+            Box::new(compile_decimal_expr(&minus.left, child)?),
+            Box::new(compile_decimal_expr(&minus.right, child)?),
+        )),
+        ArithmeticExpression::Times(times) => Ok(DecimalExpr::Times(
+            Box::new(compile_decimal_expr(&times.left, child)?),
+            Box::new(compile_decimal_expr(&times.right, child)?),
+        )),
+        ArithmeticExpression::Divide(divide) => {
+            // A STATIC zero divisor is `evaluation_error(zero_divisor)` in Prolog: reject at compile
+            // time (a runtime/column zero divisor fails closed in the recompute instead).
+            if arith_is_static_zero(&divide.right) {
+                return Err(BgpPlanError::EvalDivideByZero);
+            }
+            Ok(DecimalExpr::Divide(
+                Box::new(compile_decimal_expr(&divide.left, child)?),
+                Box::new(compile_decimal_expr(&divide.right, child)?),
+            ))
+        }
+        ArithmeticExpression::Exp(exp) => {
+            // Only a STATIC non-negative integer exponent gives an exact rational power here.
+            let exponent = match exp.right.as_ref() {
+                ArithmeticExpression::Value(ArithmeticValue::Data(literal)) => {
+                    eval_integer_literal(literal)?
+                }
+                _ => {
+                    return Err(BgpPlanError::EvalUnsupportedOperator {
+                        operator: "Exp (non-static exponent in the decimal layer)",
+                    })
+                }
+            };
+            if exponent < 0 {
+                return Err(BgpPlanError::EvalUnsupportedOperator {
+                    operator: "Exp (negative exponent)",
+                });
+            }
+            Ok(DecimalExpr::Exp(
+                Box::new(compile_decimal_expr(&exp.left, child)?),
+                Box::new(DecimalExpr::IntegerLiteral(exponent)),
+            ))
+        }
+        ArithmeticExpression::Floor(floor) => Ok(DecimalExpr::Floor(Box::new(compile_decimal_expr(
+            &floor.argument,
+            child,
+        )?))),
+        // Integer FLOOR division (`div`) is not part of the exact-rational layer (its operands must
+        // be integers, and its result is an integer already handled by the integer `Eval` path). If
+        // it appears alongside a rational signal, the mixed form is not provable: reject closed.
+        ArithmeticExpression::Div(_) => Err(BgpPlanError::EvalUnsupportedOperator {
+            operator: "Div (integer floor division mixed with rational arithmetic)",
+        }),
+    }
+}
+
+/// Lower an arithmetic LEAF (numeric operand variable or integer/decimal literal) to a
+/// [`DecimalExpr`] leaf for the exact-rational layer. An operand VARIABLE must be a nonnullable
+/// node/value store column (its exact numeric datatype is resolved at recompute — see
+/// [`DecimalExpr::Column`]); a non-numeric literal (float/string/boolean/…) rejects closed.
+fn compile_decimal_value(
+    value: &ArithmeticValue,
+    child: &CompiledBgp,
+) -> Result<DecimalExpr, BgpPlanError> {
+    match value {
+        ArithmeticValue::Variable(variable) => {
+            let index = child
+                .relation
+                .schema
+                .iter()
+                .position(|candidate| candidate == variable)
+                .ok_or_else(|| BgpPlanError::EvalOperandNotBound {
+                    var: variable.clone(),
+                })?;
+            // The operand column must be a nonnullable node/value STORE column (never a node IRI,
+            // predicate, or nullable Optional column). Its exact datatype (integer family or
+            // xsd:decimal) is NOT pinned at compile time — it is read from the ROOT-authenticated
+            // dictionary value at recompute, where a non-numeric row rejects closed.
+            let descriptors = relation_result_descriptors(&child.relation).map_err(|_| {
+                BgpPlanError::EvalOperandNotNumeric {
+                    var: variable.clone(),
+                }
+            })?;
+            if descriptors[index].nullable
+                || descriptors[index].namespace != ResultIdNamespace::NodeValue
+            {
+                return Err(BgpPlanError::EvalOperandNotNumeric {
+                    var: variable.clone(),
+                });
+            }
+            Ok(DecimalExpr::Column { index })
+        }
+        ArithmeticValue::Data(data) => match data {
+            // Exact integer literals (all fit i128) — interpreted as `value/1`.
+            XSDAnySimpleType::UnsignedByte(_)
+            | XSDAnySimpleType::Byte(_)
+            | XSDAnySimpleType::UnsignedShort(_)
+            | XSDAnySimpleType::Short(_)
+            | XSDAnySimpleType::UnsignedInt(_)
+            | XSDAnySimpleType::Int(_)
+            | XSDAnySimpleType::UnsignedLong(_)
+            | XSDAnySimpleType::Long(_)
+            | XSDAnySimpleType::Integer(_) => {
+                Ok(DecimalExpr::IntegerLiteral(eval_integer_literal(data)?))
+            }
+            // Exact xsd:decimal literal — canonicalize to its decimal string and validate it parses
+            // to an exact rational (rejecting scientific/garbage forms) so the recompute re-parses
+            // it identically.
+            XSDAnySimpleType::Decimal(decimal) => {
+                let lexical = decimal.to_string();
+                parse_decimal_to_rational(&lexical).map_err(|_| {
+                    BgpPlanError::EvalUnsupportedLiteral {
+                        datatype: "xsd:decimal (non-canonical)",
+                    }
+                })?;
+                Ok(DecimalExpr::DecimalLiteral(lexical))
+            }
+            other => Err(BgpPlanError::EvalUnsupportedLiteral {
+                datatype: xsd_simple_type_name(other),
+            }),
+        },
+    }
+}
+
+/// Is this arithmetic node a STATIC numeric literal equal to zero (an integer `0` or a decimal
+/// whose value is zero)? Used to reject a compile-time `Divide` by a zero constant.
+fn arith_is_static_zero(expression: &ArithmeticExpression) -> bool {
+    let ArithmeticExpression::Value(ArithmeticValue::Data(data)) = expression else {
+        return false;
+    };
+    match data {
+        XSDAnySimpleType::UnsignedByte(v) => *v == 0,
+        XSDAnySimpleType::Byte(v) => *v == 0,
+        XSDAnySimpleType::UnsignedShort(v) => *v == 0,
+        XSDAnySimpleType::Short(v) => *v == 0,
+        XSDAnySimpleType::UnsignedInt(v) => *v == 0,
+        XSDAnySimpleType::Int(v) => *v == 0,
+        XSDAnySimpleType::UnsignedLong(v) => *v == 0,
+        XSDAnySimpleType::Long(v) => *v == 0,
+        XSDAnySimpleType::Integer(v) => *v == 0,
+        XSDAnySimpleType::Decimal(d) => parse_decimal_to_rational(&d.to_string())
+            .map(|r| r.numer().is_zero())
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
 /// Lower a WOQL `ArithmeticExpression` to an [`EvalExpr`], rejecting every out-of-scope node.
@@ -10960,6 +11950,8 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
                 visit(input, depth + 1, nodes)
             }
             CompiledRelationStatement::Eval { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::FloorEval { input, .. } => visit(input, depth + 1, nodes),
+            CompiledRelationStatement::RationalArith { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::Typecast { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::Concat { input, .. } => visit(input, depth + 1, nodes),
             CompiledRelationStatement::Join { input, .. } => visit(input, depth + 1, nodes),
@@ -11185,6 +12177,7 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         // inherited from the child. (Typecast appends a deterministic function of an existing
         // child column, so the same argument holds.)
         CompiledRelationStatement::Eval { input, .. }
+        | CompiledRelationStatement::FloorEval { input, .. }
         | CompiledRelationStatement::Typecast { input, .. } => is_provably_duplicate_free(input),
         // Concat/Join/Substring carry the child's committed columns through VERBATIM (their
         // synthesized result is a terminal, non-committed value), so the committed rows'
@@ -11196,7 +12189,10 @@ fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         // synthesized result is a terminal, non-committed value), so committed-row uniqueness is
         // exactly the child's. Inherit it.
         | CompiledRelationStatement::Pad { input, .. }
-        | CompiledRelationStatement::HashKey { input, .. } => is_provably_duplicate_free(input),
+        | CompiledRelationStatement::HashKey { input, .. }
+        // RationalArith likewise carries the child's committed columns through VERBATIM (the
+        // xsd:decimal result is terminal/non-committed), so uniqueness is exactly the child's.
+        | CompiledRelationStatement::RationalArith { input, .. } => is_provably_duplicate_free(input),
         // Bag-valued compositions can carry duplicate full rows.
         CompiledRelationStatement::BagUnion { .. }
         | CompiledRelationStatement::BagProjection { .. }
@@ -11808,59 +12804,103 @@ fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry, &'static s
 fn encode_range_constant(
     xsd: &XSDAnySimpleType,
 ) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
-    if !matches!(
-        xsd,
+    match xsd {
+        // Order-preserving fixed-width numerics: the store's `to_lexical` bytes ARE the OP
+        // encoding, so `encode_via_store` -> `node_value_op_value` big-endian reads them.
         XSDAnySimpleType::Boolean(_)
-            | XSDAnySimpleType::UnsignedByte(_)
-            | XSDAnySimpleType::Byte(_)
-            | XSDAnySimpleType::UnsignedShort(_)
-            | XSDAnySimpleType::Short(_)
-            | XSDAnySimpleType::UnsignedInt(_)
-            | XSDAnySimpleType::Int(_)
-            | XSDAnySimpleType::UnsignedLong(_)
-            | XSDAnySimpleType::Long(_)
-            | XSDAnySimpleType::Integer(_)
-            | XSDAnySimpleType::Float(_)
-    ) {
-        return Err(BgpPlanError::UnsupportedRangeDatatype {
-            datatype: xsd_datatype_name(xsd),
-        });
+        | XSDAnySimpleType::UnsignedByte(_)
+        | XSDAnySimpleType::Byte(_)
+        | XSDAnySimpleType::UnsignedShort(_)
+        | XSDAnySimpleType::Short(_)
+        | XSDAnySimpleType::UnsignedInt(_)
+        | XSDAnySimpleType::Int(_)
+        | XSDAnySimpleType::UnsignedLong(_)
+        | XSDAnySimpleType::Long(_)
+        | XSDAnySimpleType::Integer(_)
+        | XSDAnySimpleType::Float(_) => {}
+        // date/dateTime: order-preserving via the store's DECODED i64-nanoseconds key
+        // (`node_value_op_value` decodes the native lexical). REJECT-CLOSE a constant at or
+        // outside the representable i64-nanoseconds window here, BEFORE building it, so the
+        // saturation of far DATA dates stays strictly order-correct against it (see
+        // `date_constant_nanos`). The encoding itself still comes from the store routing
+        // below (single source of truth) — this only gates the value.
+        XSDAnySimpleType::DateTime(_) | XSDAnySimpleType::Date(_) => {
+            let _ = date_constant_nanos(xsd)?;
+        }
+        // Everything else (string/decimal/hexBinary/anyURI/time/…) rejects closed.
+        _ => {
+            return Err(BgpPlanError::UnsupportedRangeDatatype {
+                datatype: xsd_datatype_name(xsd),
+            });
+        }
     }
     let entry = xsd_scalar_entry(xsd)
         .map_err(|datatype| BgpPlanError::UnsupportedRangeDatatype { datatype })?;
     encode_via_store(entry)
 }
 
+/// The i64 nanoseconds-since-epoch key of a `date`/`dateTime` range CONSTANT, or
+/// [`BgpPlanError::DateRangeConstantOutOfExactRange`] if it is not STRICTLY inside the
+/// representable i64-nanoseconds window (endpoints `i64::MIN`/`i64::MAX` excluded — those
+/// are exactly the saturated values a far DATA date takes, so excluding them keeps `c`
+/// strictly between every far-past and far-future data date). Used only as a pre-flight
+/// reject; the emitted `c` is still the store-routed value in [`encode_via_store`].
+///
+/// The constant carries no timezone offset (a WOQL `Date` is a bare `NaiveDate`; a
+/// `DateTime` a UTC instant), matching the `offset: 0` form [`xsd_scalar_entry`] builds —
+/// so the constant's key is a pure midnight (date) / instant (dateTime), and the `date`
+/// offset tiebreaker in `node_value_op_value` is only ever exercised by DATA rows.
+fn date_constant_nanos(xsd: &XSDAnySimpleType) -> Result<i64, BgpPlanError> {
+    let nanos = match xsd {
+        XSDAnySimpleType::DateTime(datetime) => datetime.timestamp_nanos_opt(),
+        XSDAnySimpleType::Date(date) => date
+            .and_hms_opt(0, 0, 0)
+            .and_then(|ndt| ndt.and_utc().timestamp_nanos_opt()),
+        // Only date/dateTime reach here.
+        _ => return Err(BgpPlanError::DateRangeConstantOutOfExactRange),
+    };
+    match nanos {
+        Some(n) if n != i64::MIN && n != i64::MAX => Ok(n),
+        _ => Err(BgpPlanError::DateRangeConstantOutOfExactRange),
+    }
+}
+
 /// Canonicalize a `TypedDictEntry` through the store's own value path and derive the
 /// `(datatype_tag, c)` pair. Fails closed if the resulting datatype is not one of the
-/// round-trip-verified order-preserving fixed-width numerics (see [`op_preserving_width`]).
+/// round-trip-verified order-preserving datatypes (fixed-width numerics, plus
+/// `date`/`dateTime`; see [`op_preserving_width`]).
 fn encode_via_store(
     entry: TypedDictEntry,
 ) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
     // Subject/predicate are irrelevant to the object canonicalization.
     let triple = ValueTriple::new_value("", "", entry);
-    let (datatype, lexical) = match CanonicalObject::from_store_object(&triple.object) {
-        CanonicalObject::Value { datatype, lexical } => (datatype, lexical),
+    let object = CanonicalObject::from_store_object(&triple.object);
+    let datatype = match &object {
+        CanonicalObject::Value { datatype, .. } => *datatype,
         // `new_value` always yields a Value object; fail closed rather than emit an
         // unaligned constant.
         CanonicalObject::Node(_) => {
             return Err(BgpPlanError::UnsupportedRangeDatatype { datatype: "node" })
         }
     };
-    // Guard: only order-preserving fixed-width numerics are sound to range over.
-    let width = op_preserving_width(datatype).ok_or(BgpPlanError::UnsupportedRangeDatatype {
-        datatype: "non-order-preserving datatype",
-    })?;
-    if lexical.len() != width {
+    // Guard: only order-preserving datatypes are sound to range over (the fixed-width
+    // numerics, plus date/dateTime).
+    if op_preserving_width(datatype).is_none() {
         return Err(BgpPlanError::UnsupportedRangeDatatype {
-            datatype: "unexpected lexical width",
+            datatype: "non-order-preserving datatype",
         });
     }
-    // c = big-endian unsigned integer of the fixed-width OP bytes (matches the store's
-    // `node_value_op_value`). Widths are ≤ 8, so it fits a u64.
-    let mut buf = [0u8; 8];
-    buf[8 - width..].copy_from_slice(&lexical);
-    let c = ArkFr::from_u64(u64::from_be_bytes(buf));
+    // c = the store's OWN order-preserving value for this object, computed by the EXACT
+    // function applied to the committed dict VALUE column (`node_value_op_value`). This is
+    // the single source of truth: for fixed-width numerics it big-endian reads the lexical;
+    // for date/dateTime it decodes the native lexical to the i64-nanoseconds key and
+    // re-encodes as offset-binary. So `c` is byte-identical to a stored value's committed OP
+    // entry BY CONSTRUCTION — no re-implemented byte layout here (the previous fixed-width
+    // BE read now lives inside `node_value_op_value`). A corrupt/short numeric lexical, or a
+    // date whose committed lexical is malformed, fails closed inside that function.
+    let c = node_value_op_value(&object).map_err(|_| BgpPlanError::UnsupportedRangeDatatype {
+        datatype: "value is not order-preserving",
+    })?;
     let datatype_tag = ArkFr::from_u64(datatype as u64);
     Ok((datatype_tag, c, datatype))
 }
@@ -11880,6 +12920,13 @@ fn op_preserving_width(datatype: CanonicalDatatype) -> Option<usize> {
         UInt16 | Int16 => 2,
         UInt32 | Int32 | Float32 => 4,
         UInt64 | Int64 | Float64 => 8,
+        // `Date`/`DateTime` are order-preserving at the `Int64` width (8), but — unlike
+        // every entry above — the OP value is NOT a big-endian read of the lexical: it is
+        // the store's DECODED i64-nanoseconds key (`node_value_op_value`), routed through
+        // that exact function in `encode_via_store`. This mirror table only gates that a
+        // range over the datatype is allowed and reports the gadget width; it does NOT
+        // imply an 8-byte lexical.
+        Date | DateTime => 8,
         _ => return None,
     })
 }
@@ -12477,4 +13524,101 @@ fn shared_count(acc_vars: &[String], kept: &[String]) -> usize {
     kept.iter()
         .filter(|kv| acc_vars.iter().any(|a| a == *kv))
         .count()
+}
+
+#[cfg(test)]
+mod decimal_layer_render_tests {
+    use super::*;
+
+    /// Build an exact `BigRational` from a decimal numerator/denominator pair.
+    fn rat(n: &str, d: &str) -> BigRational {
+        BigRational::new(
+            BigInt::from_str_radix(n, 10).unwrap(),
+            BigInt::from_str_radix(d, 10).unwrap(),
+        )
+    }
+
+    /// EVERY row is `(numerator, denominator, expected_lexical)` captured from a REAL SWI-Prolog run
+    /// of `casting:rational_to_decimal_string(N rdiv D, S, 20)` (with `prefer_rationals`). Locks the
+    /// renderer byte-exact against the reference across terminating, non-terminating (rounded to 20
+    /// fractional digits, round-half-up, trailing zeros trimmed), whole, negative, and
+    /// large-denominator cases — including the `den = 2·10^20` boundary that rounds up at digit 20.
+    #[test]
+    fn rational_to_decimal_string_matches_swipl_vectors() {
+        let vectors: &[(&str, &str, &str)] = &[
+            ("7", "2", "3.5"),
+            ("6", "2", "3"),
+            ("1", "4", "0.25"),
+            ("1", "3", "0.33333333333333333333"),
+            ("2", "3", "0.66666666666666666667"),
+            ("10", "4", "2.5"),
+            ("-7", "2", "-3.5"),
+            ("-1", "3", "-0.33333333333333333333"),
+            ("1", "8", "0.125"),
+            ("22", "7", "3.14285714285714285714"),
+            ("1", "40", "0.025"),
+            ("0", "5", "0"),
+            ("5", "1", "5"),
+            ("-5", "1", "-5"),
+            ("1", "7", "0.14285714285714285714"),
+            ("1", "6", "0.16666666666666666667"),
+            ("1", "9", "0.11111111111111111111"),
+            ("1", "11", "0.09090909090909090909"),
+            ("1", "13", "0.07692307692307692308"),
+            ("100", "3", "33.33333333333333333333"),
+            ("999", "1000", "0.999"),
+            ("1", "2", "0.5"),
+            ("3", "8", "0.375"),
+            ("-22", "7", "-3.14285714285714285714"),
+            ("123456", "1000", "123.456"),
+            ("1", "50", "0.02"),
+            ("7", "20", "0.35"),
+            ("1", "16", "0.0625"),
+            ("355", "113", "3.14159292035398230088"),
+            ("2", "7", "0.28571428571428571429"),
+            ("1", "17", "0.05882352941176470588"),
+            ("10", "3", "3.33333333333333333333"),
+            ("-10", "3", "-3.33333333333333333333"),
+            ("1", "80", "0.0125"),
+            ("17", "64", "0.265625"),
+            ("1", "1024", "0.0009765625"),
+            ("999999", "7", "142857"),
+            ("-1", "1000000", "-0.000001"),
+            ("12345678901234567890", "3", "4115226300411522630"),
+            ("1", "99999999999", "0.00000000001"),
+            ("50000000000000000000", "3", "16666666666666666666.66666666666666666667"),
+            ("1", "200000000000000000000", "0.00000000000000000001"),
+        ];
+        for (n, d, expected) in vectors {
+            let got = rational_to_decimal_string_20(&rat(n, d)).unwrap();
+            assert_eq!(&got, expected, "{n}/{d} rendered wrong");
+        }
+    }
+
+    /// The decimal-string parser is the exact inverse used for stored decimal operands and decimal
+    /// literals: parsing a canonical lexical then re-rendering must round-trip when it fits 20
+    /// fractional digits.
+    #[test]
+    fn parse_decimal_round_trips_canonical_lexicals() {
+        for s in ["3.5", "-3.5", "0.25", "42", "-42", "0", "0.025", "123.456", "-0.000001"] {
+            let r = parse_decimal_to_rational(s).unwrap();
+            assert_eq!(rational_to_decimal_string_20(&r).unwrap(), s, "round-trip {s}");
+        }
+        // Leading-dot and trailing-dot canonicalization.
+        assert_eq!(parse_decimal_to_rational(".5").unwrap(), rat("1", "2"));
+        // Non-canonical / scientific / garbage forms reject closed.
+        for bad in ["1e5", "1.2.3", "abc", "", "-", "1,5", " 1"] {
+            assert!(parse_decimal_to_rational(bad).is_err(), "should reject {bad:?}");
+        }
+    }
+
+    /// The carry-overflow guard: a fraction that rounds up to a whole unit at 20 digits (requires a
+    /// reduced denominator >= 2·10^20) FAILS CLOSED rather than reproduce the reference carry bug.
+    #[test]
+    fn rational_render_carry_overflow_fails_closed() {
+        // (3·10^20 - 1)/(3·10^20): true value 0.9999...9(6r6...), rounds up to 1.0 at 20 digits.
+        let den = "300000000000000000000";
+        let num = "299999999999999999999";
+        assert!(rational_to_decimal_string_20(&rat(num, den)).is_err());
+    }
 }

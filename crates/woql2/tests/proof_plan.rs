@@ -3078,6 +3078,132 @@ fn in_range_compiles_to_half_open_bounds() {
     assert_eq!(second.c, ArkFr::from_u64(40));
 }
 
+// ----------------------------------------------------------------------------
+// date / dateTime object-value RANGE filters. The compiled `c` must equal the store's
+// committed OP encoding (the decoded i64-nanoseconds key, offset-binary), and the
+// datatype tag must be `DateTime`/`Date`, so the range gadget masks the right rows.
+// ----------------------------------------------------------------------------
+
+/// The store's committed OP `c` (as a u64 offset-binary code) for a date/dateTime constant
+/// — computed via the store's OWN `node_value_op_value` on the value the compiler builds,
+/// then read back as the u64 the range gadget compares.
+fn store_date_op_u64(value: XSDAnySimpleType) -> u64 {
+    use terminus_store::proof::node_value_op_value;
+    let entry = match &value {
+        XSDAnySimpleType::DateTime(dt) => chrono::NaiveDateTime::make_entry(&dt.naive_utc()),
+        XSDAnySimpleType::Date(d) => {
+            use chrono::Datelike;
+            tdb_succinct::Date::make_entry(&tdb_succinct::Date {
+                year: i64::from(d.year()),
+                month: d.month() as u8,
+                day: d.day() as u8,
+                offset: 0,
+            })
+        }
+        other => panic!("not a date constant: {other:?}"),
+    };
+    let object = CanonicalObject::from_store_object(&ValueTriple::new_value("", "", entry).object);
+    let field = node_value_op_value(&object).unwrap();
+    // The gadget compares u64 offset-binary codes; recover it independently from the value's
+    // known nanos to cross-check the store field element too.
+    let nanos = match &value {
+        XSDAnySimpleType::DateTime(dt) => dt.timestamp_nanos_opt().unwrap(),
+        XSDAnySimpleType::Date(d) => d
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_nanos_opt()
+            .unwrap(),
+        _ => unreachable!(),
+    };
+    let code = (nanos as u64) ^ (1u64 << 63);
+    assert_eq!(field, ArkFr::from_u64(code), "store field == offset-binary code");
+    code
+}
+
+#[test]
+fn datetime_range_compiles_with_store_aligned_op_constant() {
+    // t(?x,age,?t): ?t > 2020-06-15T12:00:00Z -> Gt on the age atom with the DateTime tag.
+    let dt = ddatetime(2020, 6, 15, 12, 0, 0);
+    let c = age_name_range(greater(dvar("a"), dt.clone()));
+    let konst = match dt {
+        DataValue::Data(v) => v,
+        _ => unreachable!(),
+    };
+    assert_range(
+        range_of(&c, "age").unwrap(),
+        RangeOp::Gt,
+        CanonicalDatatype::DateTime,
+        store_date_op_u64(konst),
+    );
+    assert_eq!(c.relation.schema, vec!["a", "x", "n"]);
+}
+
+#[test]
+fn date_range_compiles_with_store_aligned_op_constant() {
+    // t(?x,age,?d): ?d <= 2021-01-01 -> Le on the age atom with the Date tag.
+    let date = ddate(2021, 1, 1);
+    let c = age_name_range(lte(dvar("a"), date.clone()));
+    let konst = match date {
+        DataValue::Data(v) => v,
+        _ => unreachable!(),
+    };
+    assert_range(
+        range_of(&c, "age").unwrap(),
+        RangeOp::Le,
+        CanonicalDatatype::Date,
+        store_date_op_u64(konst),
+    );
+}
+
+#[test]
+fn date_in_range_compiles_to_half_open_date_bounds() {
+    let q = and_of(vec![
+        tv("x", "age", "a"),
+        tv("x", "name", "n"),
+        Query::InRange(InRange {
+            value: dvar("a"),
+            start: ddate(2020, 1, 1),
+            end: ddate(2021, 1, 1),
+        }),
+    ]);
+    let c = plan_bgp(&q).unwrap();
+    let range = range_of(&c, "age").unwrap();
+    assert_eq!(range.op, RangeOp::Ge);
+    assert_eq!(
+        range.datatype,
+        ArkFr::from_u64(CanonicalDatatype::Date as u64)
+    );
+    let second = range.second.as_ref().unwrap();
+    assert_eq!(second.op, RangeOp::Lt);
+}
+
+#[test]
+fn datetime_range_out_of_i64_nanoseconds_window_rejects_closed() {
+    // Year 3000 is past 2262-04-11, so its instant overflows i64 nanoseconds → reject.
+    reject_range(
+        greater(dvar("a"), ddatetime(3000, 1, 1, 0, 0, 0)),
+        BgpPlanError::DateRangeConstantOutOfExactRange,
+    );
+    // Year 1600 is before 1677-09-21 → underflow → reject.
+    reject_range(
+        less(dvar("a"), ddate(1600, 1, 1)),
+        BgpPlanError::DateRangeConstantOutOfExactRange,
+    );
+}
+
+#[test]
+fn mixing_date_and_numeric_bounds_in_one_range_rejects_closed() {
+    // ?a >= 2020-01-01 (Date) AND ?a < 40 (UInt32) — two bounds, different datatypes.
+    reject_range(
+        and_of(vec![
+            gte(dvar("a"), ddate(2020, 1, 1)),
+            less(dvar("a"), duint(40)),
+        ]),
+        BgpPlanError::RangeDatatypeMismatch { var: "a".into() },
+    );
+}
+
 #[test]
 fn triple_slice_rejects_variable_subject_because_complete_order_key_is_not_proved() {
     let q = Query::TripleSlice(TripleSlice {
@@ -3809,18 +3935,91 @@ fn eval_minus_compiles() {
     ));
 }
 
+fn a_divide(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Divide(Divide {
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+}
+
+fn a_floor(argument: ArithmeticExpression) -> ArithmeticExpression {
+    ArithmeticExpression::Floor(Floor {
+        argument: Box::new(argument),
+    })
+}
+
 #[test]
-fn eval_divide_rejects_closed() {
+fn eval_divide_compiles_to_rational_arith_statement() {
+    // `Divide` (rdiv) is now provable via the exact-rational value layer: it delivers a TERMINAL,
+    // revealed xsd:decimal result (like Concat), so the statement is `RationalArith` and the child
+    // schema is UNCHANGED (the result variable is not a committed column).
+    let compiled = plan_bgp(&eval_query(a_divide(a_var("a"), a_var("b")), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::RationalArith { .. }
+    ));
+    // Terminal result: `?r` is NOT appended to the committed schema (unlike integer Eval).
+    assert!(!compiled.relation.schema.iter().any(|v| v == "r"));
+    assert!(compiled.relation.schema.iter().any(|v| v == "a"));
+}
+
+#[test]
+fn eval_divide_by_static_zero_rejects_closed() {
+    // A static zero constant divisor is `evaluation_error(zero_divisor)` in Prolog: reject closed.
     reject(
-        eval_query(
-            ArithmeticExpression::Divide(Divide {
-                left: Box::new(a_var("a")),
-                right: Box::new(a_var("b")),
-            }),
-            "r",
-        ),
-        BgpPlanError::EvalUnsupportedOperator { operator: "Divide" },
+        eval_query(a_divide(a_var("a"), a_lit(XSDAnySimpleType::Integer(0))), "r"),
+        BgpPlanError::EvalDivideByZero,
     );
+}
+
+#[test]
+fn eval_floor_of_integer_column_compiles_to_floor_statement() {
+    // Top-level `floor(x)` compiles to `FloorEval` and — like integer Eval — APPENDS the derived
+    // integer result column (`?r`) to the committed schema.
+    let compiled = plan_bgp(&eval_query(a_floor(a_var("a")), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::FloorEval { .. }
+    ));
+    assert_eq!(compiled.relation.schema.last().map(String::as_str), Some("r"));
+}
+
+#[test]
+fn eval_floor_of_divide_compiles_to_floor_statement() {
+    // `floor(a / b)` — a nested Divide under a top-level Floor still delivers an integer.
+    let compiled =
+        plan_bgp(&eval_query(a_floor(a_divide(a_var("a"), a_var("b"))), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::FloorEval { .. }
+    ));
+}
+
+#[test]
+fn eval_decimal_literal_operand_routes_to_rational_arith() {
+    // A `Plus` with an xsd:decimal literal is a rational signal: it routes to the exact-rational
+    // layer (terminal xsd:decimal delivery), NOT the integer Eval path.
+    use decimal_rs::Decimal;
+    use std::str::FromStr;
+    let compiled = plan_bgp(&eval_query(
+        a_plus(a_var("a"), a_lit(XSDAnySimpleType::Decimal(Decimal::from_str("1.5").unwrap()))),
+        "r",
+    ))
+    .unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::RationalArith { .. }
+    ));
+}
+
+#[test]
+fn eval_pure_integer_plus_still_uses_integer_eval() {
+    // No rational signal (no Divide/Floor/decimal) -> the existing integer Eval delivery is kept.
+    let compiled = plan_bgp(&eval_query(a_plus(a_var("a"), a_var("b")), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Eval { .. }
+    ));
 }
 
 fn a_div(left: ArithmeticExpression, right: ArithmeticExpression) -> ArithmeticExpression {
@@ -3870,17 +4069,14 @@ fn eval_exp_with_static_negative_exponent_rejects_closed() {
 }
 
 #[test]
-fn eval_floor_rejects_closed() {
-    // `Floor` over the rational layer is out of scope; still reject closed.
-    reject(
-        eval_query(
-            ArithmeticExpression::Floor(Floor {
-                argument: Box::new(a_var("a")),
-            }),
-            "r",
-        ),
-        BgpPlanError::EvalUnsupportedOperator { operator: "Floor" },
-    );
+fn eval_divide_with_unbound_operand_rejects_closed() {
+    // Even in the rational layer, an operand not bound by any store read cannot be authenticated.
+    let query = and_of(vec![
+        tv("x", "p", "a"),
+        gte(dvar("a"), duint(0)),
+        eval_conjunct(a_divide(a_var("a"), a_var("b")), "r"),
+    ]);
+    reject(query, BgpPlanError::EvalOperandNotBound { var: "b".into() });
 }
 
 #[test]
