@@ -49,10 +49,15 @@ use decimal_rs::Decimal;
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
+use terminusdb_woql2::compare::Subsumption;
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_executed_result_inputs, plan_bgp, BgpPlanError, CompiledBgp,
-    CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue, StringNumericTarget,
+    CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue, ProofGraph,
+    StringNumericTarget,
 };
+
+/// The `sys:inherits` edge IRI the Subsumption compiler emits.
+const SYS_INHERITS_IRI: &str = "http://terminusdb.com/schema/sys#inherits";
 
 /// Assert `plan_bgp` rejects `q` with exactly `want`. (`CompiledBgp` is not
 /// `PartialEq` — the plan types are foreign — so compare only the error.)
@@ -2206,6 +2211,7 @@ fn plus_under_distinct_bound_source_compiles_to_transitive_closure() {
         seed,
         reflexive,
         inverted,
+        ..
     } = &c.relation.statement
     else {
         panic!("expected a TransitiveClosure statement, got {:?}", c.relation.statement);
@@ -5501,5 +5507,142 @@ fn day_after_bare_without_operand_binding_rejects_closed() {
             next: dvar("n"),
         })]),
         BgpPlanError::CalendarUnsupportedShape,
+    );
+}
+
+// ---------------------------------------------------------------------------------------------------
+// SCHEMA-GRAPH FOUNDATION — `Subsumption` plan shape + graph-selector digest binding.
+// ---------------------------------------------------------------------------------------------------
+
+fn class_nv(name: &str) -> NodeValue {
+    NodeValue::Node(iri(name))
+}
+
+fn var_nv(name: &str) -> NodeValue {
+    NodeValue::Variable(name.to_string())
+}
+
+fn subsumption(child: NodeValue, parent: NodeValue) -> Query {
+    Query::Subsumption(Subsumption { child, parent })
+}
+
+#[test]
+fn subsumption_child_bound_compiles_to_forward_schema_closure() {
+    // `A << ?y` — forward reflexive sys:inherits closure over the SCHEMA graph, delivering ?y.
+    let c = plan_bgp(&subsumption(class_nv("A"), var_nv("y"))).unwrap();
+    assert_eq!(c.relation.schema, ["y"]);
+    // The intrinsic distinct([child,parent]) gate must be present.
+    assert!(c.full_row_distinct, "subsumption must be Distinct-gated (set semantics)");
+    let CompiledRelationStatement::TransitiveClosure {
+        reflexive,
+        inverted,
+        graph,
+        edge,
+        ..
+    } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure, got {:?}", c.relation.statement);
+    };
+    assert!(*reflexive, "class_subsumed is reflexive-transitive");
+    assert!(!*inverted, "child-bound is a forward walk");
+    assert_eq!(*graph, ProofGraph::Schema, "subsumption reads the schema graph");
+    // The edge predicate is the sys:inherits IRI (a single predicate-constant atom).
+    assert_eq!(edge.atoms.len(), 1);
+    assert_eq!(
+        edge.atoms[0].predicate_term,
+        SYS_INHERITS_IRI.as_bytes(),
+        "the closure edge must be the sys:inherits predicate"
+    );
+}
+
+#[test]
+fn subsumption_parent_bound_inverts_over_schema() {
+    // `?x << C` — inverted reflexive closure from the parent, delivering ?x.
+    let c = plan_bgp(&subsumption(var_nv("x"), class_nv("C"))).unwrap();
+    assert_eq!(c.relation.schema, ["x"]);
+    let CompiledRelationStatement::TransitiveClosure {
+        reflexive,
+        inverted,
+        graph,
+        ..
+    } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure, got {:?}", c.relation.statement);
+    };
+    assert!(*reflexive);
+    assert!(*inverted, "parent-bound mirrors to the inverse sys:inherits edge");
+    assert_eq!(*graph, ProofGraph::Schema);
+}
+
+#[test]
+fn subsumption_both_bound_compiles_to_membership_gate() {
+    // `A << B` — forward closure from A, gated to the constant B via a ColumnConstant equality.
+    let c = plan_bgp(&subsumption(class_nv("A"), class_nv("B"))).unwrap();
+    let CompiledRelationStatement::Equality { input, .. } = &c.relation.statement else {
+        panic!("expected an Equality (membership gate), got {:?}", c.relation.statement);
+    };
+    let CompiledRelationStatement::TransitiveClosure { graph, .. } = &input.statement else {
+        panic!("expected the gate to wrap a TransitiveClosure");
+    };
+    assert_eq!(*graph, ProofGraph::Schema);
+}
+
+#[test]
+fn subsumption_both_free_rejects_closed() {
+    assert_eq!(
+        plan_bgp(&subsumption(var_nv("x"), var_nv("y"))).unwrap_err(),
+        BgpPlanError::SubsumptionBothEndpointsFree,
+    );
+}
+
+#[test]
+fn subsumption_count_gated_rejects_closed() {
+    // A `Count`-gated subsumption closure is a deferred follow-up (mirrors the path closure).
+    let q = Query::Count(Count {
+        query: Box::new(subsumption(class_nv("A"), var_nv("y"))),
+        count: dvar("n"),
+    });
+    assert_eq!(
+        plan_bgp(&q).unwrap_err(),
+        BgpPlanError::ClosureCountGateDeferred,
+    );
+}
+
+#[test]
+fn graph_selector_is_digest_bound_instance_closure_stays_byte_identical() {
+    // Isolate the graph binding: an INSTANCE path closure and a SCHEMA subsumption closure that agree
+    // on edge (sys:inherits), seed (A), reflexive (star), and direction (forward) — differing ONLY in
+    // the graph selector — must have DISTINCT query digests. This proves (a) the selector is bound and
+    // (b) the instance closure's digest is unchanged by the additive `Schema` fold (byte-identity).
+    let schema_closure = plan_bgp(&subsumption(class_nv("A"), var_nv("y"))).unwrap();
+
+    // `Distinct([y], Path(A, star(<sys:inherits>), ?y))` — the SAME closure, but instance-graph.
+    let instance_path = Query::Distinct(Distinct {
+        variables: vec!["y".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Node(iri("A")),
+            pattern: PathPattern::Star(PathStar {
+                star: Box::new(PathPattern::Predicate(PathPredicate {
+                    predicate: Some(SYS_INHERITS_IRI.to_string()),
+                })),
+            }),
+            object: Value::Variable("y".into()),
+            path: None,
+        })),
+    });
+    let instance_closure = plan_bgp(&instance_path).unwrap();
+
+    // Same seed/edge/star/direction — but the instance closure reads graph=Instance.
+    let CompiledRelationStatement::TransitiveClosure { graph, .. } = &instance_closure.relation.statement
+    else {
+        panic!("expected the path to compile to a TransitiveClosure");
+    };
+    assert_eq!(*graph, ProofGraph::Instance);
+
+    let schema_digest = compiled_query_digest(&schema_closure).unwrap();
+    let instance_digest = compiled_query_digest(&instance_closure).unwrap();
+    assert_ne!(
+        schema_digest, instance_digest,
+        "the graph selector must change the query digest (anti-substitution binding)"
     );
 }

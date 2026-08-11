@@ -130,6 +130,28 @@ pub struct CompiledRelation {
     pub statement: CompiledRelationStatement,
 }
 
+/// SCHEMA-GRAPH FOUNDATION — the per-BGP-leaf graph selector.
+///
+/// A query-proof database commits TWO separate triple graphs (see
+/// [`terminus_store::proof::commitment::database_root`]): the INSTANCE graph and the
+/// SCHEMA graph, each as its own `LayerCommitment` with its own `commitment_root`. A
+/// triple-reading plan node (today: a transitive-closure edge) carries this selector to
+/// say WHICH committed graph its columns and dictionaries belong to.
+///
+/// `Instance` is the default and matches every pre-existing plan byte-for-byte: it is
+/// folded into no digest, engages no schema commitment, and anchors to the instance root
+/// exactly as before. `Schema` is engaged ONLY by a query that reads the schema graph
+/// (Subsumption); it routes the node to the schema commitment and folds a domain tag into
+/// the query digest so the choice is authenticated and cannot be substituted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProofGraph {
+    /// The instance triple graph (default; byte-identical to all prior behaviour).
+    #[default]
+    Instance,
+    /// The schema triple graph (`sys:inherits` etc.), a separate committed layer.
+    Schema,
+}
+
 #[derive(Clone, Debug)]
 pub enum CompiledRelationStatement {
     Bgp(LayerBgpPlan),
@@ -244,6 +266,16 @@ pub enum CompiledRelationStatement {
         /// `false` walks `subject -> object` from a bound source; `true` walks the inverse edge
         /// `object -> subject` (a bound target, or an inverse-predicate closure).
         inverted: bool,
+        /// SCHEMA-GRAPH FOUNDATION — which committed triple graph this closure's edge `E`, seed
+        /// dictionary lookup, and delivered-node dictionary rendering read against. `Instance` (the
+        /// universal default for every pre-existing instance-graph path closure) selects the instance
+        /// `LayerCommitment`; `Schema` selects the schema `LayerCommitment` (its own dictionaries /
+        /// columns / `commitment_root`), enabling the `sys:inherits` subsumption closure. The verifier
+        /// RECONSTRUCTS this selector from the trusted compiled query and it is bound into
+        /// `relation_query_digest` (additively — `Schema` folds a domain tag, `Instance` folds NOTHING,
+        /// keeping every instance-only digest byte-identical), so a prover cannot silently read the
+        /// wrong graph. See [`ProofGraph`] and [`relation_graph`].
+        graph: ProofGraph,
     },
     GroupSum {
         input: Box<CompiledRelation>,
@@ -1448,6 +1480,7 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             seed,
             reflexive,
             inverted,
+            graph,
         } => {
             // K-INDEPENDENT digest: only the closure PATTERN (edge, seed, star/plus, direction). The
             // number of rounds K is a prover choice carried in the proof, never in this identity, so the
@@ -1457,6 +1490,15 @@ fn relation_query_digest(relation: &CompiledRelation) -> std::io::Result<ProofHa
             digest_canonical_object(&mut hasher, seed);
             hasher.update([*reflexive as u8]);
             hasher.update([*inverted as u8]);
+            // SCHEMA-GRAPH FOUNDATION — bind the graph selector ADDITIVELY. `Instance` (every
+            // pre-existing path closure) folds NOTHING, so its digest is byte-identical to today; only a
+            // `Schema` closure folds a domain-separated tag. This authenticates the read-graph choice
+            // (the verifier reconstructs the same tag from the trusted query) without perturbing any
+            // instance-only proof identity, and makes a schema closure's identity distinct from an
+            // otherwise-identical instance closure so neither can be substituted for the other.
+            if let ProofGraph::Schema = graph {
+                hasher.update(b"/graph-schema");
+            }
         }
         CompiledRelationStatement::GroupSum {
             input,
@@ -2345,6 +2387,12 @@ fn relation_proof_plan(
             seed,
             reflexive,
             inverted,
+            // The graph selector is NOT carried into the store's `RelationProofPlanKind`: the store
+            // recursion is graph-blind and reads whichever single `LayerCommitment` (instance or schema)
+            // the prove/verify ENTRY selects for this query (see [`relation_graph`]). The selector's
+            // soundness is anchored by (a) its fold into `relation_query_digest` above and (b) the
+            // verifier picking the matching commitment + `commitment_root` from the trusted query.
+            graph: _,
         } => RelationProofPlanKind::TransitiveClosure {
             edge: edge.clone(),
             seed: seed.clone(),
@@ -4940,6 +4988,12 @@ impl ProvedBgp {
     }
 
     /// Verify against a caller-selected, independently trusted root.
+    ///
+    /// LOW-LEVEL primitive: verifies the plan against the SINGLE `layer` + `expected_root` the caller
+    /// supplies, graph-agnostically (byte-identical to before the schema-graph foundation). It is the
+    /// caller's responsibility to pass the correct per-graph view + root. The SAFE two-graph entry is
+    /// [`ProvedBgp::verify_over_graphs`], which reconstructs the read-graph from the trusted query and
+    /// anchors to the matching commitment automatically (and validates the combined `database_root`).
     pub fn verify(
         &self,
         compiled: &CompiledBgp,
@@ -4952,6 +5006,66 @@ impl ProvedBgp {
             expected_root,
             compiled_query_digest(compiled)?,
         )
+    }
+
+    /// SCHEMA-GRAPH FOUNDATION — verify a proof over a TWO-graph database.
+    ///
+    /// Trust flows from the single externally-supplied `database_root`:
+    ///   1. Validate BOTH per-graph verifier commitments independently AND confirm their roots combine
+    ///      to `database_root` ([`terminus_store::proof::commitment::validate_database_root`]). Neither
+    ///      per-graph root can be forged, swapped, or mismatched against the trusted anchor.
+    ///   2. Reconstruct — from the TRUSTED compiled query — which single graph this query reads
+    ///      ([`relation_graph`]); the graph selector is bound into the query digest, so a prover cannot
+    ///      make a schema query verify against the instance graph (or vice versa).
+    ///   3. Anchor the audited recursion to the matching commitment + its (now-trusted) root.
+    ///
+    /// An instance-only query verifies identically to [`verify`], with the added guarantee that its
+    /// instance root belongs to the trusted database.
+    pub fn verify_over_graphs(
+        &self,
+        compiled: &CompiledBgp,
+        instance: &impl VerifierLayer,
+        schema: &impl VerifierLayer,
+        database_root: ProofHash,
+    ) -> std::io::Result<()> {
+        // (1) Both per-graph commitments validated + combined into the trusted database anchor.
+        terminus_store::proof::commitment::validate_database_root(instance, schema, &database_root)?;
+        let digest = compiled_query_digest(compiled)?;
+        // (2)+(3) Reconstruct the read-graph from the trusted query and anchor to that commitment.
+        match relation_graph(&compiled.relation)? {
+            ProofGraph::Instance => {
+                let root = instance.verifier_view().state.commitment_root;
+                self.verify_relation(&compiled.relation, instance, root, digest)
+            }
+            ProofGraph::Schema => {
+                let root = schema.verifier_view().state.commitment_root;
+                self.verify_relation(&compiled.relation, schema, root, digest)
+            }
+        }
+    }
+
+    /// [`verify_over_graphs`] that also RESOLVES the delivered result objects (rendered against the
+    /// correct per-graph dictionary — e.g. Subsumption class IRIs come out of the SCHEMA node/value
+    /// dictionary). Same trust flow: validate both commitments against the trusted `database_root`,
+    /// reconstruct the read-graph, verify + resolve against that graph's view.
+    pub fn verify_over_graphs_and_resolve(
+        &self,
+        compiled: &CompiledBgp,
+        instance: &impl VerifierLayer,
+        schema: &impl VerifierLayer,
+        database_root: ProofHash,
+    ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
+        terminus_store::proof::commitment::validate_database_root(instance, schema, &database_root)?;
+        match relation_graph(&compiled.relation)? {
+            ProofGraph::Instance => {
+                let root = instance.verifier_view().state.commitment_root;
+                self.verify_and_resolve(compiled, instance, root)
+            }
+            ProofGraph::Schema => {
+                let root = schema.verifier_view().state.commitment_root;
+                self.verify_and_resolve(compiled, schema, root)
+            }
+        }
     }
 
     fn relation_commit(&self, mapping: Option<&[usize]>) -> std::io::Result<RelationCommit> {
@@ -8311,6 +8425,10 @@ impl CompiledBgp {
 
     /// Explicitly load the commitment from a synchronous Store layer and prove. Calling
     /// this method is the lifecycle decision; no worker or background job is started.
+    ///
+    /// INSTANCE-ONLY: this entry loads only the instance-graph commitment (byte-identical to before
+    /// the schema-graph foundation). A query that reads the SCHEMA graph (Subsumption) rejects closed
+    /// here — use [`CompiledBgp::prove_on_layers`], which also loads the schema commitment.
     pub fn prove_on_layer(&self, layer: &SyncStoreLayer) -> Result<ProvedBgp, QueryProofError> {
         self.prove_on_layer_with_context(&StoreProverContext::cpu(), layer)
     }
@@ -8322,8 +8440,62 @@ impl CompiledBgp {
         context: &StoreProverContext<'_>,
         layer: &SyncStoreLayer,
     ) -> Result<ProvedBgp, QueryProofError> {
+        // A schema-reading query cannot be proven with only the instance layer — reject closed rather
+        // than silently anchor a schema proof to the instance root.
+        if relation_graph(&self.relation)? != ProofGraph::Instance {
+            return Err(QueryProofError::Store(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "query reads the schema graph; prove with `prove_on_layers` (instance + schema layers)",
+            )));
+        }
         let commitment = layer.proof_commitment()?;
         Ok(self.prove_with_context(context, &commitment)?)
+    }
+
+    /// SCHEMA-GRAPH FOUNDATION — prove over BOTH committed graphs (instance + schema).
+    ///
+    /// Selects, from the compiled plan's single [`relation_graph`], which layer's `LayerCommitment`
+    /// the whole proof is built over: an instance query proves over the instance commitment exactly as
+    /// [`prove_on_layer`] (byte-identical), a Subsumption query proves over the schema commitment. The
+    /// audited recursion is handed that ONE commitment and stays graph-blind. The trust anchor a
+    /// verifier reconstructs is the combined [`terminus_store::proof::commitment::database_root`] of
+    /// the two per-graph roots (see [`CompiledBgp::prove_on_layers_root`]).
+    pub fn prove_on_layers(
+        &self,
+        instance: &SyncStoreLayer,
+        schema: &SyncStoreLayer,
+    ) -> Result<ProvedBgp, QueryProofError> {
+        self.prove_on_layers_with_context(&StoreProverContext::cpu(), instance, schema)
+    }
+
+    /// [`prove_on_layers`] with a caller-owned prover context.
+    pub fn prove_on_layers_with_context(
+        &self,
+        context: &StoreProverContext<'_>,
+        instance: &SyncStoreLayer,
+        schema: &SyncStoreLayer,
+    ) -> Result<ProvedBgp, QueryProofError> {
+        let commitment = match relation_graph(&self.relation)? {
+            ProofGraph::Instance => instance.proof_commitment()?,
+            ProofGraph::Schema => schema.proof_commitment()?,
+        };
+        Ok(self.prove_with_context(context, &commitment)?)
+    }
+
+    /// The externally-trusted combined `database_root` for a two-graph database: binds the instance
+    /// and schema per-graph commitment roots. A caller publishes this alongside a proof so a verifier
+    /// can validate both commitments against it (see
+    /// [`terminus_store::proof::commitment::database_root`]).
+    pub fn prove_on_layers_root(
+        instance: &SyncStoreLayer,
+        schema: &SyncStoreLayer,
+    ) -> Result<ProofHash, QueryProofError> {
+        let instance_root = instance.proof_commitment()?.state.commitment_root;
+        let schema_root = schema.proof_commitment()?.state.commitment_root;
+        Ok(terminus_store::proof::commitment::database_root(
+            &instance_root,
+            &schema_root,
+        ))
     }
 }
 
@@ -8756,6 +8928,18 @@ pub enum BgpPlanError {
     /// `Count` integration is a follow-up; do the `Distinct` form first.
     #[error("`Count`-gated `Star`/`Plus` closure is a follow-up (do the `Distinct` form first); reject closed")]
     ClosureCountGateDeferred,
+
+    /// A `Subsumption ?child << ?parent` with BOTH endpoints FREE. Reference `class_subsumed`
+    /// with two unbound classes enumerates the reflexive-transitive `sys:inherits` relation over the
+    /// WHOLE schema — a two-column pairs enumeration that needs a domain-authenticated diagonal /
+    /// pairs Distinct this pass does not model (mirrors [`ClosureBothEndpointsFree`]). Reject closed.
+    #[error("`Subsumption` with two free class endpoints needs a domain-authenticated pairs enumeration (deferred); reject closed")]
+    SubsumptionBothEndpointsFree,
+
+    /// A `Subsumption` endpoint that is neither a class-IRI node nor a variable (e.g. it parsed to an
+    /// unexpected `NodeValue`). Subsumption ranges over CLASS nodes only.
+    #[error("`Subsumption` endpoints must each be a class IRI or a variable")]
+    SubsumptionEndpointNotClass,
 
     // ---- Triple-SHAPED constructs that are NOT store BGP triples (`TypeOf`/`Dot`/`IsA`) ----
     // These three woql2 leaves resemble a triple but do NOT denote a store triple pattern in
@@ -13106,6 +13290,9 @@ fn plan_transitive_closure_path(
             seed: CanonicalObject::Node(seed_iri.into_bytes()),
             reflexive,
             inverted,
+            // A WOQL `Path` closure walks the INSTANCE graph — byte-identical to before the
+            // schema-graph foundation (the `Instance` selector folds nothing into the digest).
+            graph: ProofGraph::Instance,
         },
     };
 
@@ -13116,6 +13303,232 @@ fn plan_transitive_closure_path(
     // `Distinct` on a different variable) fails the gate and rejects closed.
     let (relation, full_row_distinct) =
         compile_distinct_relation(relation, distincts, selections, count_variable.as_deref())?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+/// The `sys:inherits` subclass edge IRI (schema.pl:223-235,591). An edge `(s, sys:inherits, o)` in
+/// the SCHEMA graph records that class `s` DIRECTLY inherits class `o` (subject = subclass, object =
+/// superclass). `class_subsumed(A,B)` = `B ∈ {A} ∪ transitive-supers(A)` is the REFLEXIVE-TRANSITIVE
+/// closure of these edges from `A` forward.
+const SYS_INHERITS_IRI: &str = "http://terminusdb.com/schema/sys#inherits";
+
+/// One resolved endpoint of a `Subsumption`: a bound class IRI or a free variable.
+enum SubsumptionEndpoint {
+    Class(String),
+    Variable(String),
+}
+
+fn subsumption_endpoint(value: &crate::value::NodeValue) -> Result<SubsumptionEndpoint, BgpPlanError> {
+    match value {
+        crate::value::NodeValue::Node(iri) => Ok(SubsumptionEndpoint::Class(iri.clone())),
+        crate::value::NodeValue::Variable(name) => Ok(SubsumptionEndpoint::Variable(name.clone())),
+    }
+}
+
+/// SCHEMA-GRAPH FOUNDATION — compile WOQL `Subsumption child << parent` (class subsumption).
+///
+/// Reference (`woql_compile.pl:2423`): `Subsumption(A,B)` compiles to `distinct([A,B],
+/// class_subsumed(A,B))`, and `class_subsumed` (schema.pl:223-235,591) is the REFLEXIVE-TRANSITIVE
+/// closure of the `sys:inherits` subclass edges. So `child << parent` holds iff `parent ∈ {child} ∪
+/// transitive-supers(child)`. Edge subject = subclass, object = superclass.
+///
+/// We emit EXACTLY the audited transitive-closure plan (reused UNCHANGED) over the SCHEMA graph:
+///   * `child` bound (a class), `parent` free  → seed=child, reflexive, FORWARD  → {child} ∪ supers(child),
+///     delivered as `parent`. (`class_subsumed(child, ·)`.)
+///   * `child` free, `parent` bound (a class)  → seed=parent, reflexive, INVERTED → {parent} ∪ subs(parent),
+///     delivered as `child`. (Walking the inverse `sys:inherits` edge collects subclasses.)
+///   * both bound → the FORWARD closure from `child` (a set) is MEMBERSHIP-GATED to the constant
+///     `parent` via an authenticated `ColumnConstant` equality (a ground existence check).
+///
+/// The `distinct([child,parent])` wrapper is INTRINSIC (the reference lowering supplies it), so it is
+/// synthesized here as the endpoint `Distinct` the closure planner already requires — never relying on
+/// the user to write it. `reflexive = true` always (the `Class ⊑ Class` base case). Both endpoints
+/// FREE is rejected closed (a whole-schema pairs enumeration; deferred).
+fn plan_subsumption(
+    sub: &crate::compare::Subsumption,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    let child = subsumption_endpoint(&sub.child)?;
+    let parent = subsumption_endpoint(&sub.parent)?;
+    match (child, parent) {
+        // `child` bound, `parent` free: forward reflexive closure from the child delivers the
+        // superclasses (incl. the child itself), bound to the `parent` variable.
+        (SubsumptionEndpoint::Class(child_iri), SubsumptionEndpoint::Variable(parent_var)) => {
+            build_subsumption_closure(
+                child_iri,
+                parent_var,
+                /* inverted */ false,
+                selections,
+                collection,
+                count_variable,
+                distincts,
+            )
+        }
+        // `parent` bound, `child` free: inverted reflexive closure from the parent walks the inverse
+        // `sys:inherits` edge, delivering the subclasses (incl. the parent itself), bound to `child`.
+        (SubsumptionEndpoint::Variable(child_var), SubsumptionEndpoint::Class(parent_iri)) => {
+            build_subsumption_closure(
+                parent_iri,
+                child_var,
+                /* inverted */ true,
+                selections,
+                collection,
+                count_variable,
+                distincts,
+            )
+        }
+        // Both bound: an existence check. Reflexive FORWARD closure from `child` delivers `{child} ∪
+        // supers(child)`; a `ColumnConstant` equality gate keeps only the rows equal to the constant
+        // `parent`, so the result is non-empty iff `child << parent`. Reuses the audited closure and
+        // the audited equality gadget — no new gadget.
+        (SubsumptionEndpoint::Class(child_iri), SubsumptionEndpoint::Class(parent_iri)) => {
+            build_subsumption_membership_gate(
+                child_iri,
+                parent_iri,
+                selections,
+                collection,
+                count_variable,
+                distincts,
+            )
+        }
+        // Both free: whole-schema pairs enumeration (deferred, mirrors `ClosureBothEndpointsFree`).
+        (SubsumptionEndpoint::Variable(_), SubsumptionEndpoint::Variable(_)) => {
+            Err(BgpPlanError::SubsumptionBothEndpointsFree)
+        }
+    }
+}
+
+/// The shared schema-graph `sys:inherits` edge `E = Triple(?s, sys:inherits, ?o)`: a single-atom
+/// 2-column node BGP over the SCHEMA graph (identical to the instance-layer edge BGP in
+/// [`plan_transitive_closure_path`], but the enclosing closure carries `graph: ProofGraph::Schema`).
+fn sys_inherits_edge() -> LayerBgpPlan {
+    LayerBgpPlan {
+        source: ColumnSource::Materialized,
+        atoms: vec![LayerBgpAtom::all_variables(SYS_INHERITS_IRI.as_bytes().to_vec())],
+        joins: Vec::new(),
+    }
+}
+
+/// Emit the one-endpoint-bound subsumption closure over the SCHEMA graph and gate it with the
+/// INTRINSIC endpoint `Distinct` (set semantics). `reflexive = true` always. `count`-gated closures
+/// are a deferred follow-up (mirrors the path closure planner).
+fn build_subsumption_closure(
+    seed_iri: String,
+    endpoint_var: String,
+    inverted: bool,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+    let relation = CompiledRelation {
+        schema: vec![endpoint_var.clone()],
+        domains: vec![None],
+        statement: CompiledRelationStatement::TransitiveClosure {
+            edge: sys_inherits_edge(),
+            seed: CanonicalObject::Node(seed_iri.into_bytes()),
+            // `class_subsumed` is REFLEXIVE-transitive: the seed class subsumes itself.
+            reflexive: true,
+            inverted,
+            graph: ProofGraph::Schema,
+        },
+    };
+    // The reference lowering is `distinct([child,parent], …)`: synthesize the endpoint `Distinct`
+    // (in addition to any user-supplied one) so the closure's bag-of-endpoints collapses to the set
+    // `class_subsumed` denotes. This is the exact Distinct-gate the closure planner requires.
+    let intrinsic = [endpoint_var.clone()];
+    let mut gated: Vec<&[String]> = distincts.to_vec();
+    gated.push(&intrinsic);
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(relation, &gated, selections, count_variable.as_deref())?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+/// Emit the BOTH-endpoints-bound subsumption existence check: the reflexive FORWARD closure from
+/// `child` delivers `{child} ∪ supers(child)` (a single node column), then an authenticated
+/// `ColumnConstant` equality gate keeps only the rows equal to the constant `parent`. The result is
+/// non-empty iff `child << parent`. The delivered column is pinned to the `Node` equality domain so
+/// the audited equality gadget can compare it against the `parent` node constant.
+fn build_subsumption_membership_gate(
+    child_iri: String,
+    parent_iri: String,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+    // A fresh internal endpoint variable: both user endpoints are constants, so this column is never
+    // user-visible; it exists only to carry the reachable set into the membership gate.
+    let endpoint_var = "__subsumption_super".to_string();
+    let closure = CompiledRelation {
+        schema: vec![endpoint_var.clone()],
+        // Pin the delivered column to the Node equality domain so the `ColumnConstant` gate below can
+        // compare it against the `parent` node constant (an unpinned column has no equality domain).
+        domains: vec![Some(EqualityValueDomain::Node)],
+        statement: CompiledRelationStatement::TransitiveClosure {
+            edge: sys_inherits_edge(),
+            seed: CanonicalObject::Node(child_iri.into_bytes()),
+            reflexive: true,
+            inverted: false,
+            graph: ProofGraph::Schema,
+        },
+    };
+    // Membership gate: keep only rows whose reachable class == the constant `parent`. Reuses the
+    // audited `RelationEqualityPlan::ColumnConstant` gadget over the Node domain.
+    let gated = CompiledRelation {
+        schema: closure.schema.clone(),
+        domains: closure.domains.clone(),
+        statement: CompiledRelationStatement::Equality {
+            input: Box::new(closure),
+            constraint: RelationEqualityPlan::ColumnConstant {
+                column: 0,
+                domain: EqualityValueDomain::Node,
+                value: CanonicalObject::Node(parent_iri.into_bytes()),
+                constant_on_left: false,
+            },
+        },
+    };
+    // Collapse to the set (intrinsic `distinct([child,parent])`), then project. With both endpoints
+    // constant the query has NO free variables, so the projection is empty and the result is a ground
+    // existence (0 rows = `child << parent` false, ≥1 row = true).
+    let intrinsic = [endpoint_var.clone()];
+    let mut gated_distincts: Vec<&[String]> = distincts.to_vec();
+    gated_distincts.push(&intrinsic);
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(gated, &gated_distincts, selections, count_variable.as_deref())?;
     if !full_row_distinct {
         return Err(BgpPlanError::ClosureRequiresDistinct);
     }
@@ -13513,6 +13926,15 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
             count_variable,
             &distincts,
         );
+    }
+
+    // SCHEMA-GRAPH FOUNDATION — `Subsumption child << parent` compiles to the reflexive-transitive
+    // `sys:inherits` closure over the SCHEMA graph, Distinct-gated (the reference's intrinsic
+    // `distinct([child,parent])`). Handled here — after outer-control unwrapping, alongside the path
+    // closure — so it reuses the same audited transitive-closure machinery, only pointed at the schema
+    // graph. Every unsupported subsumption shape (both endpoints free, count-gated, …) rejects closed.
+    if let Query::Subsumption(sub) = body {
+        return plan_subsumption(sub, &selections, collection, count_variable, &distincts);
     }
 
     if matches!(body, Query::Start(_) | Query::Limit(_) | Query::Once(_)) {
@@ -14707,6 +15129,90 @@ fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPla
     }
     let mut nodes = 0;
     visit(relation, 1, &mut nodes)
+}
+
+/// SCHEMA-GRAPH FOUNDATION — the SINGLE committed graph a compiled query reads (see [`ProofGraph`]).
+///
+/// Every triple-reading leaf reads one graph: a `Bgp`/`LayerTripleCount` reads the INSTANCE graph;
+/// a `TransitiveClosure` reads its own `graph` selector (Instance for a WOQL path, Schema for
+/// Subsumption). Wrappers (Distinct/Select/joins/aggregations/…) inherit their children's. This pass
+/// only ever emits SINGLE-GRAPH queries — instance-only, or the schema-only Subsumption closure — so
+/// the whole proof anchors to ONE `LayerCommitment` + `commitment_root`, and the audited recursion is
+/// handed exactly that layer (it stays graph-blind).
+///
+/// A query that MIXES an instance leaf with a schema leaf (the deferred cross-layer `IsA` regime — a
+/// schema subsumption set joined against instance `rdf:type` triples) is REJECTED CLOSED here: this
+/// pass does not thread two live views through a single BGP. An empty/ground relation (no reading
+/// leaf) defaults to `Instance`, byte-identical to today.
+fn relation_graph(relation: &CompiledRelation) -> std::io::Result<ProofGraph> {
+    fn combine(acc: &mut Option<ProofGraph>, g: ProofGraph) -> std::io::Result<()> {
+        match *acc {
+            None => {
+                *acc = Some(g);
+                Ok(())
+            }
+            Some(prev) if prev == g => Ok(()),
+            Some(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "cross-layer query mixes instance and schema graph leaves (deferred); reject closed",
+            )),
+        }
+    }
+    fn walk(relation: &CompiledRelation, acc: &mut Option<ProofGraph>) -> std::io::Result<()> {
+        match &relation.statement {
+            // Instance-graph reading leaves.
+            CompiledRelationStatement::Bgp(_) | CompiledRelationStatement::LayerTripleCount => {
+                combine(acc, ProofGraph::Instance)
+            }
+            // The closure is the ONE graph-parameterized leaf.
+            CompiledRelationStatement::TransitiveClosure { graph, .. } => combine(acc, *graph),
+            // Wrappers: inherit their children's graph (mirrors `validate_compiled_structure::visit`).
+            CompiledRelationStatement::GeneratedU64Filter { input, .. }
+            | CompiledRelationStatement::GeneratedI64Filter { input, .. }
+            | CompiledRelationStatement::BagProjection { input, .. }
+            | CompiledRelationStatement::Distinct { input, .. }
+            | CompiledRelationStatement::When { expanded: input }
+            | CompiledRelationStatement::Equality { input, .. }
+            | CompiledRelationStatement::TupleDisequality { input, .. }
+            | CompiledRelationStatement::ExactScalarOrder { input, .. }
+            | CompiledRelationStatement::ExactMultiOrder { input, .. }
+            | CompiledRelationStatement::ExactOrderedSlice { input, .. }
+            | CompiledRelationStatement::GroupExtrema { input, .. }
+            | CompiledRelationStatement::GroupSum { input, .. }
+            | CompiledRelationStatement::GroupCount { input, .. }
+            | CompiledRelationStatement::CollectionCount { input }
+            | CompiledRelationStatement::CollectionSum { input, .. }
+            | CompiledRelationStatement::CollectionExtrema { input, .. }
+            | CompiledRelationStatement::Eval { input, .. }
+            | CompiledRelationStatement::FloorEval { input, .. }
+            | CompiledRelationStatement::RationalArith { input, .. }
+            | CompiledRelationStatement::Typecast { input, .. }
+            | CompiledRelationStatement::Concat { input, .. }
+            | CompiledRelationStatement::Join { input, .. }
+            | CompiledRelationStatement::Substring { input, .. }
+            | CompiledRelationStatement::Pad { input, .. }
+            | CompiledRelationStatement::HashKey { input, .. }
+            | CompiledRelationStatement::CalendarInt { input, .. }
+            | CompiledRelationStatement::CalendarDate { input, .. }
+            | CompiledRelationStatement::TypecastNumberToString { input, .. }
+            | CompiledRelationStatement::TypecastStringToNumber { input, .. } => walk(input, acc),
+            CompiledRelationStatement::BagUnion { branches, .. } => {
+                for branch in branches {
+                    walk(branch, acc)?;
+                }
+                Ok(())
+            }
+            CompiledRelationStatement::LeftAnti { left, right, .. }
+            | CompiledRelationStatement::InnerJoin { left, right, .. }
+            | CompiledRelationStatement::LeftOuter { left, right, .. } => {
+                walk(left, acc)?;
+                walk(right, acc)
+            }
+        }
+    }
+    let mut acc = None;
+    walk(relation, &mut acc)?;
+    Ok(acc.unwrap_or(ProofGraph::Instance))
 }
 
 fn reject_subplan_wrappers(compiled: &CompiledBgp, optional: bool) -> Result<(), BgpPlanError> {

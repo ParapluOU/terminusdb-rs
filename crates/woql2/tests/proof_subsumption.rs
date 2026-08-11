@@ -1,0 +1,365 @@
+//! SCHEMA-GRAPH FOUNDATION + WOQL `Subsumption` — end-to-end.
+//!
+//! Proves the two-graph foundation (a schema `LayerCommitment` committed by the SAME per-layer
+//! machinery, combined with the instance root into a single `database_root`) and the `sys:inherits`
+//! subsumption closure (`Subsumption child << parent` = reflexive-transitive `class_subsumed`).
+//!
+//! Every e2e path runs on a 128 MiB stack (deep envelope/closure recursion) and each layer holds
+//! >= 2 real triples, per the harness requirements.
+
+mod proof_common;
+use proof_common::iri;
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use terminus_store::proof::commitment::{database_root, LayerCommitment};
+use terminus_store::proof::CanonicalObject;
+use terminus_store::{open_sync_memory_store, ValueTriple};
+
+use terminusdb_woql2::compare::Subsumption;
+use terminusdb_woql2::proof::plan_bgp;
+use terminusdb_woql2::query::Query;
+use terminusdb_woql2::value::NodeValue;
+
+/// The `sys:inherits` subclass edge IRI the compiler emits for `Subsumption`.
+const SYS_INHERITS: &str = "http://terminusdb.com/schema/sys#inherits";
+
+/// Build a SCHEMA-graph layer from `(subclass, superclass)` `sys:inherits` edges. This is an ordinary
+/// terminus-store layer committed by the SAME `proof_commitment()` machinery as any instance layer —
+/// the whole point of the foundation is that no new committed structure is needed for the schema graph.
+fn build_schema_layer(edges: &[(&str, &str)]) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (sub, sup) in edges {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(sub), SYS_INHERITS, &iri(sup)))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+/// A plain INSTANCE-graph layer (unrelated triples) — present only so the combined `database_root`
+/// has a real instance sub-root to bind. >= 2 triples.
+fn build_instance_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("i1"), &iri("p"), &iri("i2")))
+        .unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("i2"), &iri("p"), &iri("i3")))
+        .unwrap();
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+fn subsumption(child: NodeValue, parent: NodeValue) -> Query {
+    Query::Subsumption(Subsumption { child, parent })
+}
+
+fn class(name: &str) -> NodeValue {
+    NodeValue::Node(iri(name))
+}
+
+fn var(name: &str) -> NodeValue {
+    NodeValue::Variable(name.to_string())
+}
+
+/// The set of class IRIs (short names) a resolved closure delivered.
+fn resolved_classes(objects: &[Vec<CanonicalObject>]) -> BTreeSet<String> {
+    objects[0]
+        .iter()
+        .map(|object| match object {
+            CanonicalObject::Node(bytes) => {
+                let full = String::from_utf8(bytes.clone()).unwrap();
+                full.strip_prefix("http://ex/").unwrap().to_string()
+            }
+            other => panic!("unexpected subsumption result object {other:?}"),
+        })
+        .collect()
+}
+
+fn names(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|s| s.to_string()).collect()
+}
+
+/// Run `body` on a 128 MiB stack (deep envelope/closure recursion).
+fn on_big_stack(name: &str, body: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .name(name.into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(body)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// PART A — the foundation.
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn schema_layer_commits_and_database_root_combines_and_validates() {
+    // The schema graph is committed as its OWN LayerCommitment (reused machinery) with its own root.
+    let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
+    let instance = build_instance_layer();
+    let root_i = instance.state.commitment_root;
+    let root_s = schema.state.commitment_root;
+
+    // The two sub-roots are distinct and the schema layer round-trips through its own validation.
+    assert_ne!(root_i, root_s, "instance and schema commitments must differ");
+    schema.verifier_commitment().unwrap().validate().unwrap();
+    instance.verifier_commitment().unwrap().validate().unwrap();
+
+    // The combined database_root is the domain-separated two-hash of the sub-roots, order-fixed.
+    let db_root = database_root(&root_i, &root_s);
+    assert_eq!(db_root, database_root(&root_i, &root_s), "deterministic");
+    assert_ne!(
+        db_root,
+        database_root(&root_s, &root_i),
+        "instance/schema ordering is fixed and must not be transposable"
+    );
+
+    // The verifier validates BOTH commitments AND that they combine to the trusted database_root.
+    terminus_store::proof::commitment::validate_database_root(&*instance, &*schema, &db_root).unwrap();
+    // A wrong database_root is rejected.
+    let mut tampered = db_root;
+    tampered[0] ^= 1;
+    assert!(
+        terminus_store::proof::commitment::validate_database_root(&*instance, &*schema, &tampered)
+            .is_err(),
+        "a database_root that does not combine the two sub-roots must be rejected"
+    );
+    // Swapping which layer is the "schema" side is rejected against the true database_root.
+    assert!(
+        terminus_store::proof::commitment::validate_database_root(&*schema, &*instance, &db_root)
+            .is_err(),
+        "swapping instance/schema sub-commitments must be rejected"
+    );
+}
+
+#[test]
+fn instance_only_proof_is_byte_identical_regression() {
+    // REGRESSION: an existing instance-only query must prove/verify EXACTLY as before the foundation.
+    // Same query, proved twice, must yield byte-identical envelopes, and verify against the instance
+    // root unchanged. (`plan_bgp`/`prove`/`verify` for an instance query touch no schema machinery.)
+    on_big_stack("subsumption-instance-regression", || {
+        let instance = build_instance_layer();
+        let root = instance.state.commitment_root;
+
+        // `t(?s, <p>, ?o)` — a bare instance BGP, the canonical pre-existing query shape.
+        let query = Query::Triple(terminusdb_woql2::triple::Triple {
+            subject: NodeValue::Variable("s".into()),
+            predicate: NodeValue::Node(iri("p")),
+            object: terminusdb_woql2::value::Value::Variable("o".into()),
+            graph: None,
+        });
+        let compiled = plan_bgp(&query).unwrap();
+        let proved_a = compiled.prove(&*instance).unwrap();
+        let proved_b = compiled.prove(&*instance).unwrap();
+        let bytes_a = proved_a.encode_envelope(&compiled, &*instance, root).unwrap();
+        let bytes_b = proved_b.encode_envelope(&compiled, &*instance, root).unwrap();
+        assert_eq!(bytes_a, bytes_b, "instance proof must be byte-identical across runs");
+        // Verifies against the instance root exactly as today.
+        proved_a.verify(&compiled, &*instance, root).unwrap();
+
+        // And the combined-graph entry, with a schema layer added, still anchors an INSTANCE query to
+        // the instance root — the schema commitment is purely additive.
+        let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
+        let db_root = database_root(&root, &schema.state.commitment_root);
+        proved_a
+            .verify_over_graphs(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+    });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// PART B — Subsumption.
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn subsumption_hierarchy_diamond_and_directions_e2e() {
+    on_big_stack("subsumption-hierarchy", || {
+        // A -> B -> C plus a diamond A -> {B, C} -> D.
+        //   supers(A) (reflexive) = {A, B, C, D}; supers(B) = {B, D}; supers(C) = {C, D}.
+        //   subs(D)   (reflexive) = {A, B, C, D}; subs(B) = {A, B}.
+        let schema =
+            build_schema_layer(&[("A", "B"), ("B", "C"), ("A", "Cc"), ("Cc", "D"), ("C", "D")]);
+        let instance = build_instance_layer();
+        let root_s = schema.state.commitment_root;
+        let db_root = database_root(&instance.state.commitment_root, &root_s);
+
+        // Helper: prove a Subsumption query over the SCHEMA commitment, verify through the combined
+        // database_root path, and return the delivered class set.
+        let run = |q: &Query| -> BTreeSet<String> {
+            let compiled = plan_bgp(q).unwrap();
+            let proved = compiled.prove(&*schema).unwrap();
+            let objects = proved
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .unwrap();
+            resolved_classes(&objects)
+        };
+
+        // `A << ?y` — supers of A (reflexive-transitive), incl. the diamond join D.
+        assert_eq!(
+            run(&subsumption(class("A"), var("y"))),
+            names(&["A", "B", "C", "Cc", "D"]),
+            "A << ?y delivers the reflexive-transitive supers of A"
+        );
+        // `?x << D` — subclasses of D (inverted closure), the whole diamond below D.
+        assert_eq!(
+            run(&subsumption(var("x"), class("D"))),
+            names(&["A", "B", "C", "Cc", "D"]),
+            "?x << D delivers the subclasses of D (reflexive)"
+        );
+        // `B << ?y` — supers of B only.
+        assert_eq!(
+            run(&subsumption(class("B"), var("y"))),
+            names(&["B", "C", "D"]),
+            "B << ?y delivers the supers of B"
+        );
+        // `?x << B` — subclasses of B only.
+        assert_eq!(
+            run(&subsumption(var("x"), class("B"))),
+            names(&["A", "B"]),
+            "?x << B delivers the subclasses of B"
+        );
+    });
+}
+
+#[test]
+fn subsumption_both_bound_membership_gate_e2e() {
+    on_big_stack("subsumption-both-bound", || {
+        let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
+        let instance = build_instance_layer();
+        let db_root = database_root(&instance.state.commitment_root, &schema.state.commitment_root);
+
+        let holds = |child: &str, parent: &str| -> bool {
+            let q = subsumption(class(child), class(parent));
+            let compiled = plan_bgp(&q).unwrap();
+            let proved = compiled.prove(&*schema).unwrap();
+            // Both endpoints are constants → a ground existence: verify succeeds either way; the
+            // delivered row COUNT is the truth value (>=1 = holds, 0 = does not).
+            proved
+                .verify_over_graphs(&compiled, &*instance, &*schema, db_root)
+                .unwrap();
+            proved.result_len >= 1
+        };
+
+        assert!(holds("A", "C"), "A << C is true (A -> B -> C)");
+        assert!(holds("A", "B"), "A << B is true");
+        assert!(holds("A", "A"), "A << A is true (reflexive)");
+        assert!(!holds("C", "A"), "C << A is false (not in the closure of A)");
+        assert!(!holds("B", "A"), "B << A is false");
+    });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// SOUNDNESS NEGATIVES.
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn subsumption_wrong_graph_and_tamper_reject() {
+    on_big_stack("subsumption-soundness", || {
+        let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
+        let instance = build_instance_layer();
+        let root_s = schema.state.commitment_root;
+        let db_root = database_root(&instance.state.commitment_root, &root_s);
+
+        let query = subsumption(class("A"), var("y"));
+        let compiled = plan_bgp(&query).unwrap();
+
+        // Honest schema proof verifies through the combined path.
+        let proved = compiled.prove(&*schema).unwrap();
+        proved
+            .verify_over_graphs(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        // WRONG GRAPH (prover side): a proof built over the INSTANCE layer for a SCHEMA query must not
+        // verify. Two sound outcomes: proving fails closed (the seed class / sys:inherits predicate is
+        // absent from the instance dictionary), OR a proof is produced but the verifier — which
+        // reconstructs graph=Schema from the trusted query and anchors to the schema root — rejects it.
+        match compiled.prove(&*instance) {
+            Err(_) => { /* proving over the wrong graph already fails closed */ }
+            Ok(wrong) => assert!(
+                wrong
+                    .verify_over_graphs(&compiled, &*instance, &*schema, db_root)
+                    .is_err(),
+                "a schema query proved over the instance layer must be rejected by the verifier"
+            ),
+        }
+
+        // WRONG GRAPH (verifier anchor): even the low-level `verify` against the INSTANCE view + root
+        // must reject an honest schema proof (its columns are anchored to the schema root).
+        assert!(
+            proved
+                .verify(&compiled, &*instance, instance.state.commitment_root)
+                .is_err(),
+            "a schema proof must not verify against the instance commitment"
+        );
+
+        // TAMPERED database_root: the combined anchor no longer matches the two sub-roots.
+        let mut bad_db = db_root;
+        bad_db[0] ^= 1;
+        assert!(
+            proved
+                .verify_over_graphs(&compiled, &*instance, &*schema, bad_db)
+                .is_err(),
+            "a tampered database_root must be rejected"
+        );
+
+        // SPURIOUS SUPER: a schema with an injected extra edge has a DIFFERENT commitment root, so it
+        // fails to combine into the trusted database_root — the tamper cannot slip a forged superclass
+        // past the anchor. (And an honest proof over the injected schema delivers the wrong set only
+        // against its own, untrusted root.)
+        let spurious = build_schema_layer(&[("A", "B"), ("B", "C"), ("A", "Evil")]);
+        assert_ne!(
+            spurious.state.commitment_root, root_s,
+            "injecting a spurious super changes the schema commitment root"
+        );
+        assert!(
+            terminus_store::proof::commitment::validate_database_root(
+                &*instance,
+                &*spurious,
+                &db_root
+            )
+            .is_err(),
+            "a schema with a spurious super cannot combine into the trusted database_root"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// PLAN-LEVEL REJECT-CLOSED discipline.
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn subsumption_both_free_rejects_closed() {
+    // Two free class endpoints = a whole-schema pairs enumeration (deferred).
+    let q = subsumption(var("x"), var("y"));
+    assert!(plan_bgp(&q).is_err(), "both-free subsumption must reject closed");
+}
+
+#[test]
+fn isa_and_schema_from_still_reject_closed() {
+    // IsA remains reject-closed (deferred cross-layer regime) and a bare schema `From` still rejects.
+    let isa = Query::IsA(terminusdb_woql2::compare::IsA {
+        element: NodeValue::Variable("x".into()),
+        type_of: class("A"),
+    });
+    assert!(plan_bgp(&isa).is_err(), "IsA is still reject-closed this pass");
+
+    let schema_from = Query::From(terminusdb_woql2::control::From {
+        graph: "schema".to_string(),
+        query: Box::new(Query::Triple(terminusdb_woql2::triple::Triple {
+            subject: NodeValue::Variable("s".into()),
+            predicate: NodeValue::Node(iri("p")),
+            object: terminusdb_woql2::value::Value::Variable("o".into()),
+            graph: None,
+        })),
+    });
+    assert!(
+        plan_bgp(&schema_from).is_err(),
+        "a bare schema-graph From (non-subsumption read) still rejects closed"
+    );
+}

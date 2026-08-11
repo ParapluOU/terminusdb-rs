@@ -14,7 +14,7 @@ use dory_pcs::primitives::arithmetic::Field;
 
 use terminus_store::proof::argument::{commit_column, StoreProverContext};
 use terminus_store::proof::bgp::JoinStep;
-use terminus_store::proof::commitment::LayerCommitment;
+use terminus_store::proof::commitment::{database_root, LayerCommitment};
 use terminus_store::proof::envelope::RecursiveRelationEnvelope;
 use terminus_store::proof::join2::{binary_join_domain, compute_binary_join};
 use terminus_store::proof::query::{
@@ -31,7 +31,7 @@ use terminusdb_schema::{GraphType, XSDAnySimpleType};
 use terminusdb_woql2::expression::{
     ArithmeticExpression, ArithmeticValue, Div, Divide, Exp, Floor, Minus, Plus, Times,
 };
-use terminusdb_woql2::compare::Typecast;
+use terminusdb_woql2::compare::{Subsumption, Typecast};
 use terminusdb_woql2::interval::{
     DayAfter, DayBefore, IsoWeek, MonthEndDate, MonthStartDate, Weekday, WeekdaySundayStart,
 };
@@ -8688,4 +8688,244 @@ fn path_times_two_two_soundness_negatives() {
     let mut tampered = compiled.prove(&layer).unwrap();
     tampered.result_len += 1;
     assert!(tampered.verify(&compiled, &layer, root).is_err());
+}
+
+// ===================================================================================================
+// SCHEMA-GRAPH FOUNDATION — `Subsumption` proved+verified over a REAL committed schema layer, driven
+// end-to-end through the two-layer entry `CompiledBgp::prove_on_layers` and anchored to the combined
+// `database_root`. This is the acceptance bar: `prove_on_layers` actually loads/commits the schema
+// layer, the graph selector routes the closure to the schema commitment, and the verifier validates
+// BOTH sub-commitments against the externally-trusted combined root.
+// ===================================================================================================
+
+/// The `sys:inherits` subclass edge IRI the Subsumption compiler emits.
+const SUBSUMPTION_SYS_INHERITS: &str = "http://terminusdb.com/schema/sys#inherits";
+
+/// A committed SCHEMA-graph `SyncStoreLayer` from `(subclass, superclass)` `sys:inherits` edges.
+fn sync_schema_layer(edges: &[(&str, &str)]) -> terminus_store::store::sync::SyncStoreLayer {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (sub, sup) in edges {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(sub), SUBSUMPTION_SYS_INHERITS, &iri(sup)))
+            .unwrap();
+    }
+    builder.commit().unwrap()
+}
+
+/// A committed INSTANCE-graph `SyncStoreLayer` of plain node triples.
+fn sync_node_layer(triples: &[(&str, &str, &str)]) -> terminus_store::store::sync::SyncStoreLayer {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (s, p, o) in triples {
+        builder
+            .add_value_triple(ValueTriple::new_node(&iri(s), &iri(p), &iri(o)))
+            .unwrap();
+    }
+    builder.commit().unwrap()
+}
+
+fn subsumption_query(child: NodeValue, parent: NodeValue) -> Query {
+    Query::Subsumption(Subsumption { child, parent })
+}
+
+fn iri_set(names: &[&str]) -> std::collections::BTreeSet<String> {
+    names.iter().map(|n| iri(n)).collect()
+}
+
+fn assert_subsumption_prove_on_layers() {
+    // Diamond: A <: B, A <: C, B <: D, C <: D (A subclasses B and C; both subclass D).
+    let schema = sync_schema_layer(&[("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")]);
+    let instance = sync_node_layer(&[("i1", "p", "i2"), ("i2", "p", "i3")]);
+
+    // The externally-trusted combined anchor is computed by the prover-side helper.
+    let db_root = CompiledBgp::prove_on_layers_root(&instance, &schema).unwrap();
+    let instance_view = instance.proof_commitment().unwrap();
+    let schema_view = schema.proof_commitment().unwrap();
+
+    // One-endpoint-bound: prove via `prove_on_layers` (which selects+commits the SCHEMA layer) and
+    // verify+resolve through the combined-root path (validates BOTH sub-commitments).
+    let run = |q: &Query| -> std::collections::BTreeSet<String> {
+        let compiled = plan_bgp(q).unwrap();
+        let proved = compiled.prove_on_layers(&instance, &schema).unwrap();
+        let objects = proved
+            .verify_over_graphs_and_resolve(&compiled, &*instance_view, &*schema_view, db_root)
+            .unwrap();
+        closure_resolved_set(&objects)
+    };
+
+    // `A << ?y` = reflexive-transitive supers of A = {A, B, C, D}. Exact set — a spurious super
+    // (any class not reflexive-transitively above A) would break this equality.
+    assert_eq!(
+        run(&subsumption_query(NodeValue::Node(iri("A")), NodeValue::Variable("y".into()))),
+        iri_set(&["A", "B", "C", "D"]),
+    );
+    // `?x << D` = subclasses of D (inverted closure) = {A, B, C, D}.
+    assert_eq!(
+        run(&subsumption_query(NodeValue::Variable("x".into()), NodeValue::Node(iri("D")))),
+        iri_set(&["A", "B", "C", "D"]),
+    );
+    // `B << ?y` = supers of B = {B, D}.
+    assert_eq!(
+        run(&subsumption_query(NodeValue::Node(iri("B")), NodeValue::Variable("y".into()))),
+        iri_set(&["B", "D"]),
+    );
+
+    // Both-bound existence via the membership gate.
+    let holds = |child: &str, parent: &str| -> bool {
+        let q = subsumption_query(NodeValue::Node(iri(child)), NodeValue::Node(iri(parent)));
+        let compiled = plan_bgp(&q).unwrap();
+        let proved = compiled.prove_on_layers(&instance, &schema).unwrap();
+        proved
+            .verify_over_graphs(&compiled, &*instance_view, &*schema_view, db_root)
+            .unwrap();
+        proved.result_len >= 1
+    };
+    assert!(holds("A", "C"), "A << C (direct edge) holds");
+    assert!(holds("A", "B"), "A << B holds");
+    assert!(holds("A", "D"), "A << D (through the diamond) holds");
+    assert!(holds("A", "A"), "A << A (reflexive) holds");
+    // SPURIOUS SUPER: A is a SUB of everything; nothing subsumes A but A, so these are false.
+    assert!(!holds("C", "A"), "C << A is false (A is not a super of C)");
+    assert!(!holds("D", "A"), "D << A is false");
+    assert!(!holds("B", "C"), "B << C is false (siblings under D)");
+}
+
+#[test]
+fn subsumption_prove_on_layers_over_committed_schema_end_to_end() {
+    std::thread::Builder::new()
+        .name("subsumption-prove-on-layers".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_subsumption_prove_on_layers)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_subsumption_soundness_negatives() {
+    let schema = sync_schema_layer(&[("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")]);
+    let instance = sync_node_layer(&[("i1", "p", "i2"), ("i2", "p", "i3")]);
+    let db_root = CompiledBgp::prove_on_layers_root(&instance, &schema).unwrap();
+    let instance_view = instance.proof_commitment().unwrap();
+    let schema_view = schema.proof_commitment().unwrap();
+    let schema_root = schema_view.state.commitment_root;
+    let instance_root = instance_view.state.commitment_root;
+
+    let query = subsumption_query(NodeValue::Node(iri("A")), NodeValue::Variable("y".into()));
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove_on_layers(&instance, &schema).unwrap();
+
+    // Baseline: honest proof verifies and delivers exactly {A, B, C, D}.
+    let objects = proved
+        .verify_over_graphs_and_resolve(&compiled, &*instance_view, &*schema_view, db_root)
+        .unwrap();
+    assert_eq!(closure_resolved_set(&objects), iri_set(&["A", "B", "C", "D"]));
+
+    // (i) WRONG GRAPH — prover side: the INSTANCE-only entry rejects a schema query closed (it holds
+    // no schema layer, so it cannot honestly anchor the closure).
+    assert!(
+        compiled.prove_on_layer(&instance).is_err(),
+        "the instance-only entry must reject a schema-reading query"
+    );
+
+    // (ii) WRONG GRAPH — verifier anchor: the schema view swapped for the instance view. The verifier
+    // reconstructs graph=Schema and anchors to the (wrong) instance commitment; the seed class / edge
+    // are absent there, so verification fails.
+    assert!(
+        proved
+            .verify_over_graphs(
+                &compiled,
+                &*instance_view,
+                &*instance_view,
+                database_root(&instance_root, &instance_root),
+            )
+            .is_err(),
+        "verifying a schema proof against the instance commitment must fail"
+    );
+    // The low-level verify against the instance view + instance root likewise fails.
+    assert!(
+        proved.verify(&compiled, &*instance_view, instance_root).is_err(),
+        "a schema proof must not verify against the instance root"
+    );
+
+    // (iii) TAMPERED database_root: the combined anchor no longer matches the two sub-roots.
+    let mut bad_db = db_root;
+    bad_db[0] ^= 1;
+    assert!(
+        proved
+            .verify_over_graphs(&compiled, &*instance_view, &*schema_view, bad_db)
+            .is_err(),
+        "a tampered database_root must be rejected"
+    );
+
+    // (iv) TAMPERED result: flip a byte in the portable envelope → decode/verify fails closed. (The
+    // low-level portable path anchors directly to the schema view + schema root.)
+    let bytes = proved.encode_envelope(&compiled, &*schema_view, schema_root).unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &*schema_view, schema_root).unwrap();
+    let mut tampered = bytes.clone();
+    let mid = tampered.len() / 2;
+    tampered[mid] ^= 1;
+    assert!(
+        decode_and_verify_envelope(&tampered, &compiled, &*schema_view, schema_root).is_err(),
+        "a tampered subsumption envelope must fail to verify"
+    );
+
+    // (v) SPURIOUS SUPER via a tampered schema: injecting an extra `sys:inherits` edge changes the
+    // schema commitment root, so it can no longer combine into the trusted database_root.
+    let spurious = sync_schema_layer(&[("A", "B"), ("A", "C"), ("B", "D"), ("C", "D"), ("A", "Evil")]);
+    let spurious_view = spurious.proof_commitment().unwrap();
+    assert_ne!(spurious_view.state.commitment_root, schema_root);
+    assert!(
+        proved
+            .verify_over_graphs(&compiled, &*instance_view, &*spurious_view, db_root)
+            .is_err(),
+        "a schema with a spurious super cannot combine into the trusted database_root"
+    );
+}
+
+#[test]
+fn subsumption_soundness_negatives_end_to_end() {
+    std::thread::Builder::new()
+        .name("subsumption-soundness".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_subsumption_soundness_negatives)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_instance_only_backward_compat_via_prove_on_layer() {
+    // BACKWARD-COMPAT: an existing instance-only BGP proved through the UNCHANGED `prove_on_layer`
+    // entry must prove+verify, byte-identically across runs — the schema-graph foundation is additive.
+    let instance = sync_node_layer(&[("a", "p", "b"), ("b", "p", "c")]);
+    let commitment = instance.proof_commitment().unwrap();
+    let root = commitment.state.commitment_root;
+
+    let query = Query::Triple(terminusdb_woql2::triple::Triple {
+        subject: NodeValue::Variable("s".into()),
+        predicate: NodeValue::Node(iri("p")),
+        object: Value::Variable("o".into()),
+        graph: None,
+    });
+    let compiled = plan_bgp(&query).unwrap();
+
+    // `prove_on_layer` (the instance-only entry) is unchanged; two runs yield byte-identical envelopes.
+    let proved_a = compiled.prove_on_layer(&instance).unwrap();
+    let proved_b = compiled.prove_on_layer(&instance).unwrap();
+    let bytes_a = proved_a.encode_envelope(&compiled, &commitment, root).unwrap();
+    let bytes_b = proved_b.encode_envelope(&compiled, &commitment, root).unwrap();
+    assert_eq!(bytes_a, bytes_b, "instance-only proving must be byte-identical across runs");
+    proved_a.verify(&compiled, &commitment, root).unwrap();
+    decode_and_verify_envelope(&bytes_a, &compiled, &commitment, root).unwrap();
+}
+
+#[test]
+fn instance_only_backward_compat_via_prove_on_layer_byte_identical() {
+    std::thread::Builder::new()
+        .name("subsumption-backward-compat".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_instance_only_backward_compat_via_prove_on_layer)
+        .unwrap()
+        .join()
+        .unwrap();
 }
