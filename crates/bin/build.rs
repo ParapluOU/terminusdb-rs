@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=TERMINUSDB_VERSION");
+    println!("cargo:rerun-if-env-changed=TERMINUSDB_CODE_SOURCE");
     println!("cargo:rerun-if-env-changed=TERMINUSDB_FORCE_REBUILD");
     println!("cargo:rerun-if-env-changed=TERMINUSDB_SOURCE");
 
@@ -151,12 +151,24 @@ fn main() {
             (dir, false)
         } else {
             // Fall back to cloning from GitHub.
-            // Pinned to the ParapluOU/terminusdb fork tag rebased onto upstream
-            // TerminusDB 12.1 (upstream branch 12.1-rc; no v12.1 release tag yet).
-            // Override with TERMINUSDB_VERSION to track a moving branch or bump.
-            let version =
-                env::var("TERMINUSDB_VERSION").unwrap_or_else(|_| "v12.1-rc-paraplu.1".to_string());
-            println!("cargo:warning=Building TerminusDB version: {}", version);
+            // TERMINUSDB_CODE_SOURCE selects the TerminusDB code source:
+            //   https://github.com/owner/repo                 → auto-resolve:
+            //     highest versioned "-rc" branch (e.g. 12.1-rc), falling back
+            //     to the highest version tag (e.g. v12.0.7) when no -rc branch
+            //   https://github.com/owner/repo/tree/<branch|tag> → explicit ref
+            //   git@github.com:owner/repo.git                  → auto-resolve
+            // Default: the official upstream repo.
+            let source = env::var("TERMINUSDB_CODE_SOURCE")
+                .unwrap_or_else(|_| "https://github.com/terminusdb/terminusdb".to_string());
+            let (repo_url, explicit_ref) = parse_code_source(&source)
+                .unwrap_or_else(|e| panic!("{}", e));
+            let version = match explicit_ref {
+                Some(r) => r,
+                None => resolve_auto_rc(&repo_url)
+                    .or_else(|_| resolve_latest_tag(&repo_url))
+                    .unwrap_or_else(|e| panic!("Failed to resolve TerminusDB ref: {}", e)),
+            };
+            println!("cargo:warning=TerminusDB code source: {} (ref: {})", repo_url, version);
 
             let temp_dir = env::temp_dir().join("terminusdb-build");
             println!(
@@ -164,7 +176,7 @@ fn main() {
                 temp_dir.display()
             );
 
-            if let Err(e) = clone_terminusdb(&version, &temp_dir) {
+            if let Err(e) = clone_terminusdb(&version, &repo_url, &temp_dir) {
                 panic!("Failed to clone TerminusDB: {}", e);
             }
 
@@ -1136,7 +1148,111 @@ fn pack_swipl_home(swipl_root: &Path, out_file: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
+/// Parse TERMINUSDB_CODE_SOURCE into (repo_url, optional explicit ref).
+///
+/// Accepted forms (branch/tag URLs as on GitHub):
+///   https://github.com/owner/repo                      → (repo, None)
+///   https://github.com/owner/repo.git                  → (repo, None)
+///   https://github.com/owner/repo/tree/main            → (repo, Some("main"))        branch
+///   https://github.com/owner/repo/tree/v18.2.0         → (repo, Some("v18.2.0"))      tag
+///   git@github.com:owner/repo.git                      → (repo, None)                ssh
+fn parse_code_source(raw: &str) -> Result<(String, Option<String>), String> {
+    let raw = raw.trim();
+    if let Some(rest) = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("http://"))
+    {
+        if let Some((base, ref_part)) = rest.split_once("/tree/") {
+            let repo = format!("https://{}", base.trim_end_matches('/'));
+            let ref_ = ref_part.trim_end_matches('/').to_string();
+            if ref_.is_empty() {
+                return Err(format!("empty /tree/ ref in TERMINUSDB_CODE_SOURCE: {raw}"));
+            }
+            return Ok((repo, Some(ref_)));
+        }
+        return Ok((format!("https://{}", rest.trim_end_matches('/')), None));
+    }
+    if raw.starts_with("git@") {
+        return Ok((raw.trim_end_matches('/').to_string(), None));
+    }
+    Err(format!(
+        "invalid TERMINUSDB_CODE_SOURCE (expected https://github.com/owner/repo[/tree/<ref>] or ssh form): {raw}"
+    ))
+}
+
+/// Resolve the "auto" default: the highest upstream branch of the shape
+/// <major>.<minor>-rc (e.g. 12.1-rc), version-sorted numerically.
+fn resolve_auto_rc(repo_url: &str) -> Result<String, String> {
+    let out = Command::new("git")
+        .args(["ls-remote", "--heads", repo_url, "refs/heads/*-rc"])
+        .output()
+        .map_err(|e| format!("Failed to list upstream branches: {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git ls-remote failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut candidates: Vec<(u64, u64, String)> = Vec::new();
+    for line in stdout.lines() {
+        let name = line.rsplit('/').next().unwrap_or("").to_string();
+        let version = name.strip_suffix("-rc").unwrap_or("");
+        let version = version.strip_prefix('v').unwrap_or(version);
+        let mut parts = version.split('.');
+        let major = parts.next().and_then(|p| p.parse::<u64>().ok());
+        let minor = parts.next().and_then(|p| p.parse::<u64>().ok());
+        if let (Some(major), Some(minor)) = (major, minor) {
+            candidates.push((major, minor, name));
+        }
+    }
+    candidates.sort();
+    candidates
+        .pop()
+        .map(|(_, _, name)| name)
+        .ok_or_else(|| "no versioned -rc branch found on upstream".to_string())
+}
+
+/// Fallback when no -rc branch exists: the highest version-shaped tag
+/// (v<major>.<minor> or v<major>.<minor>.<patch>; -dev/-rc/paraplu excluded).
+fn resolve_latest_tag(repo_url: &str) -> Result<String, String> {
+    let out = Command::new("git")
+        .args(["ls-remote", "--tags", repo_url])
+        .output()
+        .map_err(|e| format!("Failed to list upstream tags: {}", e))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git ls-remote failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut candidates: Vec<(u64, u64, u64, String)> = Vec::new();
+    for line in stdout.lines() {
+        let name = line.rsplit('/').next().unwrap_or("").to_string();
+        if name.ends_with('^') {
+            continue; // peeled tag entries
+        }
+        let version = name.strip_prefix('v').unwrap_or(&name);
+        let parts: Vec<&str> = version.split('.').collect();
+        if parts.len() < 2 || parts.len() > 3 {
+            continue;
+        }
+        let major = parts[0].parse::<u64>().ok();
+        let minor = parts[1].parse::<u64>().ok();
+        let patch = parts.get(2).and_then(|p| p.parse::<u64>().ok()).unwrap_or(0);
+        if let (Some(major), Some(minor)) = (major, minor) {
+            candidates.push((major, minor, patch, name));
+        }
+    }
+    candidates.sort();
+    candidates
+        .pop()
+        .map(|(_, _, _, name)| name)
+        .ok_or_else(|| "no version-shaped tag found on upstream".to_string())
+}
+
+fn clone_terminusdb(version: &str, repo_url: &str, dest: &Path) -> Result<(), String> {
     // If destination already exists, try to update it instead of cloning fresh
     if dest.exists() {
         let git_dir = dest.join(".git");
@@ -1187,7 +1303,7 @@ fn clone_terminusdb(version: &str, dest: &Path) -> Result<(), String> {
             "--depth=1",
             "--branch",
             version,
-            "https://github.com/ParapluOU/terminusdb.git",
+            repo_url,
             dest.to_str().unwrap(),
         ])
         .status()

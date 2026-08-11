@@ -232,9 +232,12 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 ## TerminusDB version
 
 This workspace targets **TerminusDB 12.1** and is v12-only (no v11 compatibility).
-The embedded server (`terminusdb-bin`) builds the `ParapluOU/terminusdb` fork
-rebased onto upstream `12.1-rc`, pinned in `crates/bin/build.rs` (default
-`TERMINUSDB_VERSION = "v12.1-rc-paraplu.1"`). See
+The embedded server (`terminusdb-bin`) builds a TerminusDB code source selected
+by **`TERMINUSDB_CODE_SOURCE`** (default: the official `terminusdb/terminusdb`
+repo, auto-resolved to the **highest versioned `-rc` branch**, e.g. `12.1-rc`,
+falling back to the highest version tag). Explicit branch/tag refs use GitHub
+URL form `…/tree/<ref>` (e.g. `https://github.com/terminusdb/terminusdb/tree/12.1-rc`)
+or `…/tree/v12.0.7` for a reproducible pin — see `crates/bin/build.rs`. See
 `docs/terminusdb12-compat-plan.md` for the upgrade milestones and status, and the
 refreshed docs mirror in `docs/terminusdb/`.
 

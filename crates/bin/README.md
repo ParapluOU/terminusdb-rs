@@ -14,7 +14,7 @@ Build script crate that compiles TerminusDB from source and embeds it as a Rust 
 
 ## Environment Variables
 
-- `TERMINUSDB_VERSION`: Git branch/tag to build (default: "main")
+- `TERMINUSDB_CODE_SOURCE`: repo URL with optional `/tree/<branch|tag>` ref (default: `https://github.com/terminusdb/terminusdb` — auto-resolved to the highest `-rc` branch, fallback highest version tag)
 - `TERMINUSDB_FORCE_REBUILD`: Set to "1" to force rebuild even if cached
 
 ## Dependencies
