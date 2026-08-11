@@ -1,0 +1,65 @@
+# Release watch: rc lines + rc tags of the embedded-server code source
+#
+# The embedded-server pin (crates/bin/build.rs) defaults to
+# TERMINUSDB_CODE_SOURCE=auto: the highest versioned "-rc" branch (e.g.
+# 12.1-rc) of the official terminusdb/terminusdb repo, with explicit refs via
+# /tree/<branch|tag> URLs (any GitHub repo — forks supported). This job checks
+# weekly whether the rc line moved past the expected baseline or a
+# v<major>.<minor>-rc tag was published (the pin-worthy reproducible form),
+# and opens/updates an issue when it did.
+
+name: Server release watch
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  release-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check rc line + tags
+        id: watch
+        run: |
+          scripts/server-release-watch.sh --json > /tmp/release.json || true
+          cat /tmp/release.json
+
+      - name: Report moved rc line / new rc tag as an issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH=$(python3 -c "import json; print(json.load(open('/tmp/release.json'))['highest_rc_branch'])")
+          EXPECTED=$(python3 -c "import json; print(json.load(open('/tmp/release.json'))['expected_branch'])")
+          TAGS=$(python3 -c "import json; print(' '.join(json.load(open('/tmp/release.json'))['rc_tags']))")
+          STATUS=$(python3 -c "import json; print(json.load(open('/tmp/release.json'))['status'])")
+
+          TITLE="[release-watch] upstream rc line moved ($EXPECTED → $BRANCH)"
+          BODY="Server release watch ($(date -u +%Y-%m-%d)):
+- source mode: ${MODE:-auto}
+- highest versioned \`-rc\` branch: **$BRANCH** (expected baseline: $EXPECTED)
+- v<major>.<minor>-rc tags published: ${TAGS:-none}
+- status: $STATUS
+- auto mode in \`crates/bin/build.rs\` now resolves to $BRANCH — re-run the client
+  integration suite; pin \`TERMINUSDB_CODE_SOURCE\` (e.g. \`.../tree/$BRANCH\`)
+  for reproducible builds."
+          if [[ -n "$TAGS" && "$STATUS" == *"tags" ]]; then
+            TITLE="[release-watch] upstream rc tag published ($TAGS)"
+            BODY="Upstream v<major>.<minor>-rc tags detected: $TAGS — pin
+\`TERMINUSDB_CODE_SOURCE\` to one of them (e.g. \`.../tree/$TAGS\`) for
+reproducible builds."
+          fi
+
+          EXISTING=$(gh issue list --search "$TITLE" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [[ -n "$EXISTING" ]]; then
+            gh issue edit "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label "release-watch"
+          fi
