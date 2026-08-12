@@ -39,6 +39,10 @@ pub enum ReconciledReadError {
     /// The query is not one of the two reconciled shapes (single-atom filter / 2-atom join).
     #[error("unsupported reconciled shape: {0}")]
     UnsupportedShape(&'static str),
+    /// The proof's embedded shape does not match the verifier's OWN compiled query
+    /// (anti-substitution: a proof for a different supported query was presented).
+    #[error("proof shape does not match the verifier's query")]
+    QueryShapeMismatch,
     /// The query does not compile as a supported BGP.
     #[error("query does not compile as a BGP: {0}")]
     NotBgp(String),
@@ -48,7 +52,7 @@ pub enum ReconciledReadError {
 }
 
 /// The detected supported read shape (with the store-facing constants).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     SingleAtom { position: FilterPosition, constant_hash: ArkFr },
     Join { const_p: ArkFr, const_q: ArkFr },
@@ -141,14 +145,28 @@ fn detect_single_atom(t: &Triple) -> Result<Shape, ReconciledReadError> {
             "single-atom read needs exactly one constant position (the other two are output vars)",
         ));
     }
+    // The two non-constant positions must be DISTINCT variables. A repeated variable (e.g.
+    // `Triple(?s, p, ?s)`) is a same-row equality constraint the plain present-filter does NOT
+    // enforce, so lowering it as a filter would return an over-complete (strict-superset) answer.
+    // Reject-close it (matching every other unsupported shape).
     if let Some(pred) = pred_c {
         if !nv_is_var(&t.subject) || !val_is_var(&t.object) {
             return Err(ReconciledReadError::UnsupportedShape("non-constant positions must be variables"));
+        }
+        if nv_var(&t.subject) == val_var(&t.object) {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "repeated variable (subject == object) imposes an equality the filter cannot enforce; reject-closed",
+            ));
         }
         Ok(Shape::SingleAtom { position: FilterPosition::Predicate, constant_hash: hash_term(&pred) })
     } else if let Some(subj) = subj_c {
         if !nv_is_var(&t.predicate) || !val_is_var(&t.object) {
             return Err(ReconciledReadError::UnsupportedShape("non-constant positions must be variables"));
+        }
+        if nv_var(&t.predicate) == val_var(&t.object) {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "repeated variable (predicate == object) imposes an equality the filter cannot enforce; reject-closed",
+            ));
         }
         Ok(Shape::SingleAtom {
             position: FilterPosition::Subject,
@@ -158,6 +176,11 @@ fn detect_single_atom(t: &Triple) -> Result<Shape, ReconciledReadError> {
         let obj = obj_c.expect("exactly one constant, and it is the object");
         if !nv_is_var(&t.subject) || !nv_is_var(&t.predicate) {
             return Err(ReconciledReadError::UnsupportedShape("non-constant positions must be variables"));
+        }
+        if nv_var(&t.subject) == nv_var(&t.predicate) {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "repeated variable (subject == predicate) imposes an equality the filter cannot enforce; reject-closed",
+            ));
         }
         Ok(Shape::SingleAtom {
             position: FilterPosition::Object,
@@ -184,6 +207,14 @@ fn detect_join(t1: &Triple, t2: &Triple) -> Result<Shape, ReconciledReadError> {
     if y1 != y2 {
         return Err(ReconciledReadError::UnsupportedShape(
             "join must share atom-1 object with atom-2 subject",
+        ));
+    }
+    // The three output variables (?x, the shared ?y, ?z) must be PAIRWISE DISTINCT. Any reuse
+    // (e.g. the cyclic `Triple(?x,p,?y) & Triple(?y,q,?x)`, or ?x==?y) imposes an extra equality
+    // the 2-atom present-join does not enforce, yielding a strict-superset answer — reject-close.
+    if _x == y1 || _x == _z || y1 == _z {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "repeated variable across join positions imposes an equality the join cannot enforce; reject-closed",
         ));
     }
     Ok(Shape::Join { const_p: hash_term(&p), const_q: hash_term(&q) })
@@ -239,10 +270,27 @@ pub fn prove_reconciled_read(
 /// Verify a reconciled read proof against the trusted head root AND resolve its bindings to
 /// canonical `CanonicalObject`s (real IRIs / typed literals) — the readable answer, no re-run.
 pub fn verify_and_resolve_reconciled_read(
+    query: &Query,
     layers: &[&LayerCommitment],
     trusted_head_root: ProofHash,
     proof: &ReconciledReadProof,
 ) -> Result<Vec<Vec<CanonicalObject>>, ReconciledReadError> {
+    // Anti-substitution: bind the proof to the verifier's OWN compiled query. Re-derive the
+    // supported shape from `query` and require the proof to encode exactly that shape + constants,
+    // so a valid proof for a DIFFERENT supported query (different constant/predicate/position)
+    // cannot be accepted in this query's name.
+    let expected = detect_shape(query)?;
+    let proof_shape = match proof {
+        ReconciledReadProof::SingleAtom { position, constant_hash, .. } => {
+            Shape::SingleAtom { position: *position, constant_hash: *constant_hash }
+        }
+        ReconciledReadProof::Join { const_p, const_q, .. } => {
+            Shape::Join { const_p: *const_p, const_q: *const_q }
+        }
+    };
+    if expected != proof_shape {
+        return Err(ReconciledReadError::QueryShapeMismatch);
+    }
     match proof {
         ReconciledReadProof::SingleAtom { reconcile, filter, result, position, constant_hash } => {
             verify_and_resolve_single_atom(

@@ -97,7 +97,7 @@ fn woql_single_atom_filter_over_delta_stack() {
 
     let proof = prove_reconciled_read(&query, &lref).unwrap();
     let head_root = lref.last().unwrap().state.commitment_root;
-    let resolved = verify_and_resolve_reconciled_read(&lref, head_root, &proof).unwrap();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
 
     // The resolved answer equals the query over the materialized present set (real IRIs).
     let expected = vec![
@@ -110,7 +110,7 @@ fn woql_single_atom_filter_over_delta_stack() {
 
     // Soundness: a wrong chain anchor (the base root, not the head) rejects.
     let base_root = lref[0].state.commitment_root;
-    assert!(verify_and_resolve_reconciled_read(&lref, base_root, &proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn woql_two_atom_join_over_delta_stack() {
 
     let proof = prove_reconciled_read(&query, &lref).unwrap();
     let head_root = lref.last().unwrap().state.commitment_root;
-    let resolved = verify_and_resolve_reconciled_read(&lref, head_root, &proof).unwrap();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
 
     let mut expected = Vec::new();
     for x in ["x1", "x2", "x5"] {
@@ -136,7 +136,7 @@ fn woql_two_atom_join_over_delta_stack() {
 
     // Soundness: a wrong chain anchor rejects.
     let base_root = lref[0].state.commitment_root;
-    assert!(verify_and_resolve_reconciled_read(&lref, base_root, &proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn woql_tampered_result_rejects() {
     if let ReconciledReadProof::SingleAtom { result, .. } = &mut proof {
         result.columns[0][0] = ArkFr::from_u64(123_456_789);
     }
-    assert!(verify_and_resolve_reconciled_read(&lref, head_root, &proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
 }
 
 #[test]
@@ -169,4 +169,50 @@ fn woql_unsupported_shape_reject_closes() {
     // An all-variable single atom (no constant) also reject-closes on the reconciled path.
     let all_vars = tv_pred_var("s", "p", "o");
     assert!(!is_reconciled_read(&all_vars));
+}
+
+// --- Audit HOLE #1 regressions: repeated variables must reject-close (not over-answer) ---
+
+#[test]
+fn woql_repeated_var_single_atom_reject_closes() {
+    // Triple(?s, p1, ?s) — the S==O equality is NOT enforced by a plain predicate filter, so
+    // lowering it as a filter would return an over-complete answer. Must reject-close.
+    let repeated = tv("s", "p1", "s");
+    assert!(!is_reconciled_read(&repeated));
+    let layers = filter_stack();
+    let lref = refs(&layers);
+    assert!(prove_reconciled_read(&repeated, &lref).is_err());
+}
+
+#[test]
+fn woql_cyclic_join_reject_closes() {
+    // Triple(?x, p1, ?y) & Triple(?y, p2, ?x) — the ?x reuse (atom2.object == atom1.subject) is
+    // NOT enforced by the 2-atom join, so it would return a strict superset. Must reject-close.
+    let cyclic = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "x")]);
+    assert!(!is_reconciled_read(&cyclic));
+    let layers = join_stack();
+    let lref = refs(&layers);
+    assert!(prove_reconciled_read(&cyclic, &lref).is_err());
+}
+
+// --- Audit HOLE #2 regression: verify is bound to the verifier's OWN query (anti-substitution) ---
+
+#[test]
+fn woql_verify_rejects_proof_for_a_different_query() {
+    let layers = filter_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().state.commitment_root;
+
+    // A valid proof for Triple(?s, p1, ?o) ...
+    let proved_query = tv("s", "p1", "o");
+    let proof = prove_reconciled_read(&proved_query, &lref).unwrap();
+    // ... must NOT verify in the name of a DIFFERENT supported query (different predicate constant).
+    let other_query = tv("s", "p2", "o");
+    assert!(is_reconciled_read(&other_query));
+    assert!(
+        verify_and_resolve_reconciled_read(&other_query, &lref, head_root, &proof).is_err(),
+        "a proof for p1 must not verify as the answer to the p2 query"
+    );
+    // Sanity: it DOES verify against its own query.
+    assert!(verify_and_resolve_reconciled_read(&proved_query, &lref, head_root, &proof).is_ok());
 }
