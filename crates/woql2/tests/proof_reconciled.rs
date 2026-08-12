@@ -23,6 +23,28 @@ use terminusdb_woql2::query::Query;
 use terminusdb_woql2::reconciled::{
     is_reconciled_read, prove_reconciled_read, verify_and_resolve_reconciled_read,
 };
+use terminusdb_woql2::triple::{AddedTriple, DeletedTriple};
+use terminusdb_woql2::value::{NodeValue, Value};
+
+/// `AddedTriple(?subj, pred, ?obj)` — reads THIS commit's additions file.
+fn added_triple(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::AddedTriple(AddedTriple {
+        subject: NodeValue::Variable(subj.into()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
+
+/// `DeletedTriple(?subj, pred, ?obj)` — reads THIS commit's removals file.
+fn deleted_triple(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::DeletedTriple(DeletedTriple {
+        subject: NodeValue::Variable(subj.into()),
+        predicate: NodeValue::Node(iri(pred)),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
 
 fn node(s: &str) -> CanonicalObject {
     CanonicalObject::Node(iri(s).into_bytes())
@@ -326,6 +348,95 @@ fn woql_cyclic_join_over_delta_stack() {
     let query = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "x")]);
     let expected = vec![vec![node("x1"), node("y1")]];
     prove_resolve_expect(&layers, &query, expected);
+}
+
+/// Base {a1..a3 p1, a4 p2}; delta removes {a1,a2 p1} and adds {a5,a6 p1}. The head commit's
+/// ADDITIONS file == {a5->b5, a6->b6}; REMOVALS file == {a1->b1, a2->b2} (ANCESTOR/base terms);
+/// p2 (a4->c4) is inherited-only. Both delta groups have >= 2 rows (the group-domain floor).
+fn delta_read_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (s, p, o) in [("a1", "p1", "b1"), ("a2", "p1", "b2"), ("a3", "p1", "b3"), ("a4", "p2", "c4")] {
+        b.add_value_triple(ValueTriple::new_node(&iri(s), &iri(p), &iri(o))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("a1"), &iri("p1"), &iri("b1"))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("a2"), &iri("p1"), &iri("b2"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("a5"), &iri("p1"), &iri("b5"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("a6"), &iri("p1"), &iri("b6"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+#[test]
+fn woql_added_triple_over_delta_stack() {
+    // WOQL `AddedTriple(?s, p1, ?o)` proves EXACTLY this commit's p1 additions over the chain,
+    // routed through the restored delta-read path (predicate p1 is an ANCESTOR-defined constant,
+    // resolved via the combined chain dictionaries).
+    let layers = delta_read_stack();
+    let query = added_triple("s", "p1", "o");
+    let expected = vec![vec![node("a5"), node("b5")], vec![node("a6"), node("b6")]];
+    prove_resolve_expect(&layers, &query, expected);
+}
+
+#[test]
+fn woql_deleted_triple_over_delta_stack() {
+    // WOQL `DeletedTriple(?s, p1, ?o)` proves EXACTLY this commit's p1 removals — both reference
+    // ancestor (base-defined) terms, authenticated through the chain dictionaries.
+    let layers = delta_read_stack();
+    let query = deleted_triple("s", "p1", "o");
+    let expected = vec![vec![node("a1"), node("b1")], vec![node("a2"), node("b2")]];
+    prove_resolve_expect(&layers, &query, expected);
+}
+
+#[test]
+fn woql_added_triple_inherited_predicate_is_empty() {
+    // p2 appears only on the inherited base row a4->c4 (no addition this commit), so
+    // `AddedTriple(?s, p2, ?o)` is empty: an inherited/materialized row is NOT an AddedTriple.
+    let layers = delta_read_stack();
+    let lref = refs(&layers);
+    let query = added_triple("s", "p2", "o");
+    assert!(is_reconciled_read(&query));
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().state.commitment_root;
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert!(rows_of(&resolved).is_empty(), "an inherited row is not provable as an AddedTriple");
+}
+
+#[test]
+fn woql_delta_read_source_substitution_rejects() {
+    // Anti-substitution across the ROUTE: an AddedTriple proof (same BGP shape) must not verify
+    // as a DeletedTriple or a materialized Triple query — the source is part of the binding.
+    let layers = delta_read_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().state.commitment_root;
+    let added = added_triple("s", "p1", "o");
+    let proof = prove_reconciled_read(&added, &lref).unwrap();
+    let deleted = deleted_triple("s", "p1", "o");
+    let materialized = tv("s", "p1", "o");
+    assert!(
+        verify_and_resolve_reconciled_read(&deleted, &lref, head_root, &proof).is_err(),
+        "an AddedTriple proof must not verify as a DeletedTriple"
+    );
+    assert!(
+        verify_and_resolve_reconciled_read(&materialized, &lref, head_root, &proof).is_err(),
+        "an AddedTriple proof must not verify as a materialized Triple"
+    );
+    // Sanity: it verifies against its own query.
+    assert!(verify_and_resolve_reconciled_read(&added, &lref, head_root, &proof).is_ok());
+}
+
+#[test]
+fn woql_mixed_source_conjunction_reject_closes() {
+    // A CROSS-SOURCE conjunction (AddedTriple ⋈ materialized Triple) is not routable: each store
+    // read path reads a SINGLE committed group, so a mixed-source BGP reject-closes.
+    let layers = delta_read_stack();
+    let lref = refs(&layers);
+    let mixed = and_of(vec![added_triple("s", "p1", "o"), tv("s", "p1", "o")]);
+    assert!(!is_reconciled_read(&mixed));
+    assert!(prove_reconciled_read(&mixed, &lref).is_err());
 }
 
 #[test]
