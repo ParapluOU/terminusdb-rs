@@ -1,6 +1,9 @@
 //! CAPSTONE — end-to-end reconciled delta-stack read: compile a REAL woql2 query, PROVE it over
 //! a base+deltas layer chain via the reconcile + present-BGP path, VERIFY + RESOLVE without a
 //! re-run, and check the resolved canonical answer equals the query over the MATERIALIZED set.
+//!
+//! The lowering is GENERAL (matching the base path's BGP coverage over a delta stack): n-atom
+//! joins, constants in any position, repeated-variable same-row equality, and numeric ranges.
 
 mod proof_common;
 use proof_common::*;
@@ -11,16 +14,23 @@ use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
 use terminus_store::proof::commitment::LayerCommitment;
-use terminus_store::proof::CanonicalObject;
+use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::{open_sync_memory_store, ValueTriple};
 
+use tdb_succinct::TdbDataType;
+
+use terminusdb_woql2::query::Query;
 use terminusdb_woql2::reconciled::{
     is_reconciled_read, prove_reconciled_read, verify_and_resolve_reconciled_read,
-    ReconciledReadProof,
 };
 
 fn node(s: &str) -> CanonicalObject {
     CanonicalObject::Node(iri(s).into_bytes())
+}
+
+/// The canonical `xsd:unsignedInt` value object as the reconciled resolver renders it.
+fn uint(v: u32) -> CanonicalObject {
+    CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, lexical: v.to_be_bytes().to_vec() }
 }
 
 fn refs(layers: &[Arc<LayerCommitment>]) -> Vec<&LayerCommitment> {
@@ -88,17 +98,126 @@ fn join_stack() -> Vec<Arc<LayerCommitment>> {
     vec![base_lc, head.proof_commitment().unwrap()]
 }
 
+/// A base+delta stack whose present supports a 3-atom chain
+/// Triple(?x, p1, ?y) & Triple(?y, p2, ?z) & Triple(?z, p3, ?w):
+///   present p1 = {x1->y1, x2->y1, x4->y1}   (base x3->y3 removed; delta adds x4->y1)
+///   present p2 = {y1->z1}                    (base y1->z9 removed)
+///   present p3 = {z1->w1, z1->w2, z1->w3}    (delta adds z1->w3)
+/// Join on ?y=y1 (3 x) and ?z=z1 (3 w) => 3 x-bindings x 3 w-bindings = 9 solutions.
+fn bgp_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (s, p, o) in [
+        ("x1", "p1", "y1"), ("x2", "p1", "y1"), ("y1", "p2", "z1"),
+        ("z1", "p3", "w1"), ("z1", "p3", "w2"),
+        ("x3", "p1", "y3"), ("y1", "p2", "z9"),
+    ] {
+        b.add_value_triple(ValueTriple::new_node(&iri(s), &iri(p), &iri(o))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("x3"), &iri("p1"), &iri("y3"))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("y1"), &iri("p2"), &iri("z9"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("x4"), &iri("p1"), &iri("y1"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("z1"), &iri("p3"), &iri("w3"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// A stack whose present has self-loops (subject==object) and non-loops:
+/// present pself = {a1->a1, a2->a2, a3->b3, a5->a5, a6->b6}. Triple(?s, pself, ?s) => {a1,a2,a5}.
+fn self_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (s, o) in [("a1", "a1"), ("a2", "a2"), ("a3", "b3"), ("a4", "a4"), ("a7", "a7")] {
+        b.add_value_triple(ValueTriple::new_node(&iri(s), &iri("pself"), &iri(o))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("a4"), &iri("pself"), &iri("a4"))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("a7"), &iri("pself"), &iri("a7"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("a5"), &iri("pself"), &iri("a5"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("a6"), &iri("pself"), &iri("b6"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// A cyclic 2-atom stack: present p1 = {x1->y1, x2->y2, x3->y3}, p2 = {y1->x1, y2->x9, y3->x7}.
+/// Triple(?x, p1, ?y) & Triple(?y, p2, ?x) is a composite (x AND y) self-join that keeps only the
+/// round-trip x1<->y1 => {(x1,y1)}. The delta ADDS two records and REMOVES two records so each
+/// committed group satisfies the reconcile pass's ">= 2 records per non-empty group" rule.
+fn cyclic_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (s, p, o) in [
+        ("x1", "p1", "y1"), ("x2", "p1", "y2"), ("y1", "p2", "x1"),
+        ("y2", "p2", "x9"), ("x8", "p1", "y8"), ("y8", "p2", "x8"),
+    ] {
+        b.add_value_triple(ValueTriple::new_node(&iri(s), &iri(p), &iri(o))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    // Remove the base round-trip x8<->y8 so present's only p1&p2 cycle is x1<->y1, and add a
+    // non-cycling pair x3->y3 (p1) / y3->x7 (p2) — x7 != x3, so no new cycle.
+    child.remove_value_triple(ValueTriple::new_node(&iri("x8"), &iri("p1"), &iri("y8"))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("y8"), &iri("p2"), &iri("x8"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("x3"), &iri("p1"), &iri("y3"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("y3"), &iri("p2"), &iri("x7"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// present ages: alice=30, bob=15, carol=18, dave=40, erin=18, grace=25 (frank=99 removed,
+/// grace=25 added). Each person also has a `name` node edge.
+fn age_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (person, age) in [
+        ("alice", 30u32), ("bob", 15), ("carol", 18), ("dave", 40), ("erin", 18), ("frank", 99),
+    ] {
+        b.add_value_triple(ValueTriple::new_value(&iri(person), &iri("age"), u32::make_entry(&age)))
+            .unwrap();
+        b.add_value_triple(ValueTriple::new_node(&iri(person), &iri("name"), &iri(&format!("{person}_n"))))
+            .unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("frank"), &iri("age"), u32::make_entry(&99u32))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("frank"), &iri("name"), &iri("frank_n"))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("grace"), &iri("age"), u32::make_entry(&25u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("grace"), &iri("name"), &iri("grace_n"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// Prove + verify + resolve one query over `layers`, asserting the resolved answer bag-equals
+/// `expected` AND a wrong chain anchor (the base root) rejects.
+fn prove_resolve_expect(
+    layers: &[Arc<LayerCommitment>],
+    query: &Query,
+    expected: Vec<Vec<CanonicalObject>>,
+) -> Vec<Vec<CanonicalObject>> {
+    let lref = refs(layers);
+    assert!(is_reconciled_read(query), "query must route to the reconciled path");
+    let proof = prove_reconciled_read(query, &lref).unwrap();
+    let head_root = lref.last().unwrap().state.commitment_root;
+    let resolved = verify_and_resolve_reconciled_read(query, &lref, head_root, &proof).unwrap();
+    assert!(bag_eq(rows_of(&resolved), expected), "resolved must equal materialized");
+
+    // Soundness: a wrong chain anchor (the base root, not the head) rejects.
+    let base_root = lref[0].state.commitment_root;
+    assert!(verify_and_resolve_reconciled_read(query, &lref, base_root, &proof).is_err());
+    resolved
+}
+
 #[test]
 fn woql_single_atom_filter_over_delta_stack() {
     let layers = filter_stack();
-    let lref = refs(&layers);
     let query = tv("s", "p1", "o"); // Triple(?s, p1, ?o)
-    assert!(is_reconciled_read(&query));
-
-    let proof = prove_reconciled_read(&query, &lref).unwrap();
-    let head_root = lref.last().unwrap().state.commitment_root;
-    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
-
     // The resolved answer equals the query over the materialized present set (real IRIs).
     let expected = vec![
         vec![node("a3"), node("b3")],
@@ -106,37 +225,107 @@ fn woql_single_atom_filter_over_delta_stack() {
         vec![node("a3"), node("b5")],
         vec![node("a5"), node("b6")],
     ];
-    assert!(bag_eq(rows_of(&resolved), expected), "resolved filter must equal materialized");
-
-    // Soundness: a wrong chain anchor (the base root, not the head) rejects.
-    let base_root = lref[0].state.commitment_root;
-    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+    prove_resolve_expect(&layers, &query, expected);
 }
 
 #[test]
 fn woql_two_atom_join_over_delta_stack() {
     let layers = join_stack();
-    let lref = refs(&layers);
     // Triple(?x, p1, ?y) & Triple(?y, p2, ?z)
     let query = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "z")]);
-    assert!(is_reconciled_read(&query));
-
-    let proof = prove_reconciled_read(&query, &lref).unwrap();
-    let head_root = lref.last().unwrap().state.commitment_root;
-    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
-
     let mut expected = Vec::new();
     for x in ["x1", "x2", "x5"] {
         for z in ["z1", "z2", "z5"] {
             expected.push(vec![node(x), node("y1"), node(z)]);
         }
     }
+    let resolved = prove_resolve_expect(&layers, &query, expected);
     assert_eq!(resolved.len(), 3, "join delivers ?x, ?y, ?z");
-    assert!(bag_eq(rows_of(&resolved), expected), "resolved join must equal materialized");
+}
 
-    // Soundness: a wrong chain anchor rejects.
-    let base_root = lref[0].state.commitment_root;
-    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+#[test]
+fn woql_three_atom_bgp_over_delta_stack() {
+    // GENERAL n-atom BGP: Triple(?x, p1, ?y) & Triple(?y, p2, ?z) & Triple(?z, p3, ?w) — 9 rows.
+    let layers = bgp_stack();
+    let query = and_of(vec![
+        tv("x", "p1", "y"),
+        tv("y", "p2", "z"),
+        tv("z", "p3", "w"),
+    ]);
+    let mut expected = Vec::new();
+    for x in ["x1", "x2", "x4"] {
+        for w in ["w1", "w2", "w3"] {
+            expected.push(vec![node(x), node("y1"), node("z1"), node(w)]);
+        }
+    }
+    let resolved = prove_resolve_expect(&layers, &query, expected);
+    assert_eq!(resolved.len(), 4, "3-chain delivers ?x, ?y, ?z, ?w");
+    assert_eq!(resolved[0].len(), 9, "3-atom chain over the delta stack has 9 solutions");
+}
+
+#[test]
+fn woql_subject_constant_join_over_delta_stack() {
+    // Constant in the subject position: Triple(x1, p1, ?y) & Triple(?y, p2, ?z) pins ?y=y1.
+    let layers = bgp_stack();
+    let query = and_of(vec![tv_subj_const("x1", "p1", "y"), tv("y", "p2", "z")]);
+    let expected = vec![vec![node("y1"), node("z1")]];
+    prove_resolve_expect(&layers, &query, expected);
+}
+
+#[test]
+fn woql_range_filter_over_delta_stack() {
+    // Numeric object RANGE over the delta stack: Triple(?x, age, ?v) & ?v >= 18.
+    // present ages >= 18: alice=30, carol=18, dave=40, erin=18, grace=25.
+    let layers = age_stack();
+    let query = and_of(vec![tv("x", "age", "v"), gte(dvar("v"), duint(18))]);
+    let expected = vec![
+        vec![node("alice"), uint(30)],
+        vec![node("carol"), uint(18)],
+        vec![node("dave"), uint(40)],
+        vec![node("erin"), uint(18)],
+        vec![node("grace"), uint(25)],
+    ];
+    prove_resolve_expect(&layers, &query, expected);
+}
+
+#[test]
+fn woql_range_join_over_delta_stack() {
+    // Range + join: Triple(?x, age, ?v)[?v >= 18] & Triple(?x, name, ?n). Left-deep chain output
+    // order is [v, x, n] (r_other=[v] after dropping the acc key x, then key x, then s_other=[n]).
+    let layers = age_stack();
+    let query = and_of(vec![
+        tv("x", "age", "v"),
+        gte(dvar("v"), duint(18)),
+        tv("x", "name", "n"),
+    ]);
+    let expected = vec![
+        vec![uint(30), node("alice"), node("alice_n")],
+        vec![uint(18), node("carol"), node("carol_n")],
+        vec![uint(40), node("dave"), node("dave_n")],
+        vec![uint(18), node("erin"), node("erin_n")],
+        vec![uint(25), node("grace"), node("grace_n")],
+    ];
+    prove_resolve_expect(&layers, &query, expected);
+}
+
+#[test]
+fn woql_repeated_var_single_atom_over_delta_stack() {
+    // Triple(?s, pself, ?s) — the S==O same-row equality is now SUPPORTED (self-join). present
+    // self-loops = {a1,a2,a5}.
+    let layers = self_stack();
+    let query = tv("s", "pself", "s");
+    let expected = vec![vec![node("a1")], vec![node("a2")], vec![node("a5")]];
+    prove_resolve_expect(&layers, &query, expected);
+}
+
+#[test]
+fn woql_cyclic_join_over_delta_stack() {
+    // Triple(?x, p1, ?y) & Triple(?y, p2, ?x) — the ?x reuse (atom2.object == atom1.subject) is
+    // now SUPPORTED (cyclic join). present round-trips = {(x1, y1)}.
+    let layers = cyclic_stack();
+    let query = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "x")]);
+    let expected = vec![vec![node("x1"), node("y1")]];
+    prove_resolve_expect(&layers, &query, expected);
 }
 
 #[test]
@@ -147,55 +336,40 @@ fn woql_tampered_result_rejects() {
     let mut proof = prove_reconciled_read(&query, &lref).unwrap();
     let head_root = lref.last().unwrap().state.commitment_root;
     // A fabricated result binding fails the re-commitment bind to the authenticated result.
-    if let ReconciledReadProof::SingleAtom { result, .. } = &mut proof {
-        result.columns[0][0] = ArkFr::from_u64(123_456_789);
-    }
+    proof.result.columns[0][0] = ArkFr::from_u64(123_456_789);
     assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
 }
 
 #[test]
 fn woql_unsupported_shape_reject_closes() {
-    // A 3-atom BGP is out of scope for the reconciled path (deferred, general BGP).
-    let three = and_of(vec![
-        tv("x", "p1", "y"),
-        tv("y", "p2", "z"),
-        tv("z", "p3", "w"),
-    ]);
-    assert!(!is_reconciled_read(&three));
     let layers = filter_stack();
     let lref = refs(&layers);
-    assert!(prove_reconciled_read(&three, &lref).is_err());
 
-    // An all-variable single atom (no constant) also reject-closes on the reconciled path.
-    let all_vars = tv_pred_var("s", "p", "o");
-    assert!(!is_reconciled_read(&all_vars));
+    // A predicate-VARIABLE single atom reject-closes (present authenticates a constant predicate).
+    let pred_var = tv_pred_var("s", "p", "o");
+    assert!(!is_reconciled_read(&pred_var));
+    assert!(prove_reconciled_read(&pred_var, &lref).is_err());
+
+    // A fully-ground atom keeps no variable on the present path — reject-close.
+    let ground = tv_ground("a3", "p1", "b3");
+    assert!(!is_reconciled_read(&ground));
+
+    // A non-BGP construct (`Or`) does not compile as a BGP — reject-close via plan_bgp.
+    let non_bgp = terminusdb_woql2::query::Query::Or(terminusdb_woql2::query::Or {
+        or: vec![tv("s", "p1", "o"), tv("s", "p2", "o")],
+    });
+    assert!(!is_reconciled_read(&non_bgp));
+    assert!(prove_reconciled_read(&non_bgp, &lref).is_err());
+
+    // A schema-graph query reject-closes (only the instance graph is proven).
+    let schema = terminusdb_woql2::query::Query::Triple(terminusdb_woql2::triple::Triple {
+        subject: terminusdb_woql2::value::NodeValue::Variable("s".into()),
+        predicate: terminusdb_woql2::value::NodeValue::Node(iri("p1")),
+        object: terminusdb_woql2::value::Value::Variable("o".into()),
+        graph: Some(terminusdb_schema::GraphType::Schema),
+    });
+    assert!(!is_reconciled_read(&schema));
 }
-
-// --- Audit HOLE #1 regressions: repeated variables must reject-close (not over-answer) ---
-
-#[test]
-fn woql_repeated_var_single_atom_reject_closes() {
-    // Triple(?s, p1, ?s) — the S==O equality is NOT enforced by a plain predicate filter, so
-    // lowering it as a filter would return an over-complete answer. Must reject-close.
-    let repeated = tv("s", "p1", "s");
-    assert!(!is_reconciled_read(&repeated));
-    let layers = filter_stack();
-    let lref = refs(&layers);
-    assert!(prove_reconciled_read(&repeated, &lref).is_err());
-}
-
-#[test]
-fn woql_cyclic_join_reject_closes() {
-    // Triple(?x, p1, ?y) & Triple(?y, p2, ?x) — the ?x reuse (atom2.object == atom1.subject) is
-    // NOT enforced by the 2-atom join, so it would return a strict superset. Must reject-close.
-    let cyclic = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "x")]);
-    assert!(!is_reconciled_read(&cyclic));
-    let layers = join_stack();
-    let lref = refs(&layers);
-    assert!(prove_reconciled_read(&cyclic, &lref).is_err());
-}
-
-// --- Audit HOLE #2 regression: verify is bound to the verifier's OWN query (anti-substitution) ---
 
 #[test]
 fn woql_verify_rejects_proof_for_a_different_query() {
@@ -213,6 +387,17 @@ fn woql_verify_rejects_proof_for_a_different_query() {
         verify_and_resolve_reconciled_read(&other_query, &lref, head_root, &proof).is_err(),
         "a proof for p1 must not verify as the answer to the p2 query"
     );
-    // Sanity: it DOES verify against its own query.
+    // Anti-substitution also holds for a different SHAPE (a 2-atom join proof vs a single atom).
+    let join_layers = join_stack();
+    let jref = refs(&join_layers);
+    let join_query = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "z")]);
+    let join_proof = prove_reconciled_read(&join_query, &jref).unwrap();
+    let jhead = jref.last().unwrap().state.commitment_root;
+    assert!(
+        verify_and_resolve_reconciled_read(&proved_query, &jref, jhead, &join_proof).is_err(),
+        "a 2-atom join proof must not verify as the answer to a single-atom query"
+    );
+    // Sanity: each DOES verify against its own query.
     assert!(verify_and_resolve_reconciled_read(&proved_query, &lref, head_root, &proof).is_ok());
+    assert!(verify_and_resolve_reconciled_read(&join_query, &jref, jhead, &join_proof).is_ok());
 }

@@ -5,45 +5,59 @@
 //! query over the live delta stack, no re-run*. The chain (base + deltas, head last) is passed
 //! in because a `LayerCommitment` only carries `parent_state_root`, not the parent object.
 //!
-//! Supported shapes (mirroring the store present-path this crate already proves):
-//!   1. **Single-atom filter** `Triple(...)` with EXACTLY ONE constant position (predicate,
-//!      subject, or object node IRI) and two output variables → `prove_read_single_atom`.
-//!   2. **2-atom object→subject join** `Triple(?x, p, ?y) & Triple(?y, q, ?z)` (both predicates
-//!      constant, the shared variable is atom-1's object and atom-2's subject) →
-//!      `prove_read_two_atom_join`.
+//! The lowering is GENERAL: any conjunctive BGP the base path compiles ([`plan_bgp`]) — an
+//! n-atom left-deep join over shared variables, constants in any position, repeated-variable
+//! same-row equality, and numeric object ranges — is mapped onto the store's `present` BGP
+//! ([`prove_read_bgp`] / [`verify_and_resolve_bgp`]) and proved over the reconciled delta head.
+//! The compiled [`LayerBgpPlan`] is translated ~1:1 to `Vec<PresentBgpAtom>` + `Vec<JoinStep>`
+//! (the store `present` atom type MIRRORS the base [`LayerBgpAtom`], restricted to a constant
+//! predicate; the [`JoinStep`] plan is shared verbatim), so the reconciled path matches the base
+//! path's coverage over a delta stack instead of a single materialized layer.
 //!
-//! Everything else (general n-atom BGP, numeric range, object VALUE/list/dict constants, the
-//! schema graph) REJECT-CLOSES here; base / single-materialized-layer queries keep using the
-//! existing [`crate::proof::CompiledBgp::prove`] path unchanged.
+//! What still REJECT-CLOSES here (matching the base `present` path's limits):
+//!   * anything [`plan_bgp`] refuses (non-BGP constructs, the schema graph, ranges on
+//!     unsupported datatypes) — surfaced as [`ReconciledReadError::NotBgp`];
+//!   * a `Select` projection or a `Count` wrapper (the reconciled path delivers the full BGP
+//!     relation's rows, not a projection or a cardinality);
+//!   * a non-leaf compiled relation (Distinct/GroupBy/Or/join/order/… — anything the store
+//!     `present` BGP cannot express);
+//!   * a predicate VARIABLE atom (`present` authenticates a CONSTANT predicate hash);
+//!   * a delta-source atom (`AddedTriple`/`DeletedTriple`) — `present` IS the reconciled
+//!     materialized head, so additions/removals column sources do not map onto it;
+//!   * an object-KIND-restricted variable object (`Link`/`Data`) — `present` has no
+//!     object-kind channel;
+//!   * a fully-ground atom — the `present` path keeps at least one variable per atom.
 
 use dory_pcs::backends::arkworks::ArkFr;
+use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::dict::{hash_object, hash_term};
+use terminus_store::proof::query::{
+    AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
+};
 use terminus_store::proof::reconcile::{
-    prove_read_single_atom, prove_read_two_atom_join, verify_and_resolve_single_atom,
-    verify_and_resolve_two_atom_join, FilterPosition, PresentFilterProof, PresentJoinProof,
-    PresentReadResult, ReconcileProof,
+    prove_read_bgp, verify_and_resolve_bgp, PresentBgpAtom, PresentBgpProof, PresentReadResult,
+    PresentTerm, ReconcileProof,
 };
 use terminus_store::proof::{CanonicalObject, ProofHash};
 
-use terminusdb_schema::GraphType;
-
 use crate::proof::plan_bgp;
 use crate::query::Query;
-use crate::triple::Triple;
-use crate::value::{NodeValue, Value};
 
 /// Every reason the reconciled read path refuses a query.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ReconciledReadError {
-    /// The query is not one of the two reconciled shapes (single-atom filter / 2-atom join).
+    /// The compiled BGP uses a shape the store `present` path cannot express (predicate
+    /// variable, delta source, object-kind filter, fully-ground atom, projection/count, or a
+    /// non-leaf compiled relation).
     #[error("unsupported reconciled shape: {0}")]
     UnsupportedShape(&'static str),
-    /// The proof's embedded shape does not match the verifier's OWN compiled query
+    /// The proof's embedded atom/join spec does not match the verifier's OWN re-compiled query
     /// (anti-substitution: a proof for a different supported query was presented).
     #[error("proof shape does not match the verifier's query")]
     QueryShapeMismatch,
-    /// The query does not compile as a supported BGP.
+    /// The query does not compile as a supported BGP (`plan_bgp` rejected it: a non-BGP
+    /// construct, the schema graph, an unsupported range datatype, …).
     #[error("query does not compile as a BGP: {0}")]
     NotBgp(String),
     /// The underlying store reconcile/present-BGP/resolve path errored.
@@ -51,198 +65,143 @@ pub enum ReconciledReadError {
     Store(String),
 }
 
-/// The detected supported read shape (with the store-facing constants).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shape {
-    SingleAtom { position: FilterPosition, constant_hash: ArkFr },
-    Join { const_p: ArkFr, const_q: ArkFr },
+/// The lowered store-facing statement for a supported reconciled read: the mapped `present`
+/// BGP atoms plus the left-deep join plan. Re-derivable from a `&Query` by both prover and
+/// verifier, so it is the anti-substitution binding.
+#[derive(Clone, Debug)]
+struct LoweredBgp {
+    atoms: Vec<PresentBgpAtom>,
+    joins: Vec<JoinStep>,
 }
 
-/// A proved reconciled read: the store proof bundle plus the shape it was proved for (so the
-/// verifier routes identically).
-pub enum ReconciledReadProof {
-    SingleAtom {
-        reconcile: ReconcileProof,
-        filter: PresentFilterProof,
-        result: PresentReadResult,
-        position: FilterPosition,
-        constant_hash: ArkFr,
-    },
-    Join {
-        reconcile: ReconcileProof,
-        join: PresentJoinProof,
-        result: PresentReadResult,
-        const_p: ArkFr,
-        const_q: ArkFr,
-    },
+/// A proved reconciled read: the store proof bundle plus the lowered atom/join spec it was
+/// proved for (so [`verify_and_resolve_reconciled_read`] can bind it to the verifier's query).
+pub struct ReconciledReadProof {
+    pub reconcile: ReconcileProof,
+    pub bgp: PresentBgpProof,
+    pub result: PresentReadResult,
+    /// The lowered `present` atom spec the proof was produced for. Bound to the verifier's OWN
+    /// re-compiled query at verify time (anti-substitution); the verifier NEVER trusts these for
+    /// the store call, only compares them to its own re-derivation.
+    pub atoms: Vec<PresentBgpAtom>,
+    pub joins: Vec<JoinStep>,
 }
 
 impl ReconciledReadProof {
     /// The prover's (unverified) result columns, for convenience/inspection. The trusted,
     /// resolved answer comes from [`verify_and_resolve_reconciled_read`].
     pub fn result_columns(&self) -> &[Vec<ArkFr>] {
-        match self {
-            ReconciledReadProof::SingleAtom { result, .. } => &result.columns,
-            ReconciledReadProof::Join { result, .. } => &result.columns,
-        }
+        &self.result.columns
     }
 }
 
-fn nv_node_bytes(nv: &NodeValue) -> Option<Vec<u8>> {
-    match nv {
-        NodeValue::Node(iri) => Some(iri.clone().into_bytes()),
-        NodeValue::Variable(_) => None,
-    }
-}
-fn nv_is_var(nv: &NodeValue) -> bool {
-    matches!(nv, NodeValue::Variable(_))
-}
-fn nv_var<'a>(nv: &'a NodeValue) -> Option<&'a str> {
-    match nv {
-        NodeValue::Variable(v) => Some(v.as_str()),
-        NodeValue::Node(_) => None,
-    }
-}
-fn val_node_bytes(v: &Value) -> Option<Vec<u8>> {
-    match v {
-        Value::Node(iri) => Some(iri.clone().into_bytes()),
-        _ => None,
-    }
-}
-fn val_is_var(v: &Value) -> bool {
-    matches!(v, Value::Variable(_))
-}
-fn val_var<'a>(v: &'a Value) -> Option<&'a str> {
-    match v {
-        Value::Variable(name) => Some(name.as_str()),
-        _ => None,
-    }
-}
-
-fn require_instance_graph(t: &Triple) -> Result<(), ReconciledReadError> {
-    match &t.graph {
-        None | Some(GraphType::Instance) => Ok(()),
-        Some(GraphType::Schema) => {
-            Err(ReconciledReadError::UnsupportedShape("only the instance graph is supported"))
+/// Map one base [`AtomTerm`] to a store `present` [`PresentTerm`]: a query variable stays a
+/// variable; a node or (object) value constant becomes its public `hash_object(...)`.
+fn map_term(term: &AtomTerm) -> PresentTerm {
+    match term {
+        AtomTerm::Variable => PresentTerm::Variable,
+        AtomTerm::NodeConstant(iri) => {
+            PresentTerm::Constant(hash_object(&CanonicalObject::Node(iri.clone())))
         }
-    }
-}
-
-fn detect_single_atom(t: &Triple) -> Result<Shape, ReconciledReadError> {
-    require_instance_graph(t)?;
-    // Object VALUE / list / dict constants are deferred; only node-IRI constants are supported.
-    if matches!(t.object, Value::Data(_) | Value::Dictionary(_) | Value::List(_)) {
-        return Err(ReconciledReadError::UnsupportedShape(
-            "object value/list/dict constants are deferred (node-IRI constants only)",
-        ));
-    }
-    let subj_c = nv_node_bytes(&t.subject);
-    let pred_c = nv_node_bytes(&t.predicate);
-    let obj_c = val_node_bytes(&t.object);
-    let count = subj_c.is_some() as u8 + pred_c.is_some() as u8 + obj_c.is_some() as u8;
-    if count != 1 {
-        return Err(ReconciledReadError::UnsupportedShape(
-            "single-atom read needs exactly one constant position (the other two are output vars)",
-        ));
-    }
-    // The two non-constant positions must be DISTINCT variables. A repeated variable (e.g.
-    // `Triple(?s, p, ?s)`) is a same-row equality constraint the plain present-filter does NOT
-    // enforce, so lowering it as a filter would return an over-complete (strict-superset) answer.
-    // Reject-close it (matching every other unsupported shape).
-    if let Some(pred) = pred_c {
-        if !nv_is_var(&t.subject) || !val_is_var(&t.object) {
-            return Err(ReconciledReadError::UnsupportedShape("non-constant positions must be variables"));
-        }
-        if nv_var(&t.subject) == val_var(&t.object) {
-            return Err(ReconciledReadError::UnsupportedShape(
-                "repeated variable (subject == object) imposes an equality the filter cannot enforce; reject-closed",
-            ));
-        }
-        Ok(Shape::SingleAtom { position: FilterPosition::Predicate, constant_hash: hash_term(&pred) })
-    } else if let Some(subj) = subj_c {
-        if !nv_is_var(&t.predicate) || !val_is_var(&t.object) {
-            return Err(ReconciledReadError::UnsupportedShape("non-constant positions must be variables"));
-        }
-        if nv_var(&t.predicate) == val_var(&t.object) {
-            return Err(ReconciledReadError::UnsupportedShape(
-                "repeated variable (predicate == object) imposes an equality the filter cannot enforce; reject-closed",
-            ));
-        }
-        Ok(Shape::SingleAtom {
-            position: FilterPosition::Subject,
-            constant_hash: hash_object(&CanonicalObject::Node(subj)),
-        })
-    } else {
-        let obj = obj_c.expect("exactly one constant, and it is the object");
-        if !nv_is_var(&t.subject) || !nv_is_var(&t.predicate) {
-            return Err(ReconciledReadError::UnsupportedShape("non-constant positions must be variables"));
-        }
-        if nv_var(&t.subject) == nv_var(&t.predicate) {
-            return Err(ReconciledReadError::UnsupportedShape(
-                "repeated variable (subject == predicate) imposes an equality the filter cannot enforce; reject-closed",
-            ));
-        }
-        Ok(Shape::SingleAtom {
-            position: FilterPosition::Object,
-            constant_hash: hash_object(&CanonicalObject::Node(obj)),
-        })
-    }
-}
-
-fn detect_join(t1: &Triple, t2: &Triple) -> Result<Shape, ReconciledReadError> {
-    require_instance_graph(t1)?;
-    require_instance_graph(t2)?;
-    let p = nv_node_bytes(&t1.predicate)
-        .ok_or(ReconciledReadError::UnsupportedShape("atom-1 predicate must be a constant"))?;
-    let q = nv_node_bytes(&t2.predicate)
-        .ok_or(ReconciledReadError::UnsupportedShape("atom-2 predicate must be a constant"))?;
-    let _x = nv_var(&t1.subject)
-        .ok_or(ReconciledReadError::UnsupportedShape("atom-1 subject must be a variable"))?;
-    let y1 = val_var(&t1.object)
-        .ok_or(ReconciledReadError::UnsupportedShape("atom-1 object must be a variable"))?;
-    let y2 = nv_var(&t2.subject)
-        .ok_or(ReconciledReadError::UnsupportedShape("atom-2 subject must be a variable"))?;
-    let _z = val_var(&t2.object)
-        .ok_or(ReconciledReadError::UnsupportedShape("atom-2 object must be a variable"))?;
-    if y1 != y2 {
-        return Err(ReconciledReadError::UnsupportedShape(
-            "join must share atom-1 object with atom-2 subject",
-        ));
-    }
-    // The three output variables (?x, the shared ?y, ?z) must be PAIRWISE DISTINCT. Any reuse
-    // (e.g. the cyclic `Triple(?x,p,?y) & Triple(?y,q,?x)`, or ?x==?y) imposes an extra equality
-    // the 2-atom present-join does not enforce, yielding a strict-superset answer — reject-close.
-    if _x == y1 || _x == _z || y1 == _z {
-        return Err(ReconciledReadError::UnsupportedShape(
-            "repeated variable across join positions imposes an equality the join cannot enforce; reject-closed",
-        ));
-    }
-    Ok(Shape::Join { const_p: hash_term(&p), const_q: hash_term(&q) })
-}
-
-/// Detect the supported reconciled shape. Validates the query compiles as a BGP first (rejecting
-/// unsupported constructs), then matches the AST — the AST carries variable identity that the
-/// join needs.
-fn detect_shape(query: &Query) -> Result<Shape, ReconciledReadError> {
-    plan_bgp(query).map_err(|e| ReconciledReadError::NotBgp(e.to_string()))?;
-    match query {
-        Query::Triple(t) => detect_single_atom(t),
-        Query::And(and) if and.and.len() == 2 => match (&and.and[0], &and.and[1]) {
-            (Query::Triple(t1), Query::Triple(t2)) => detect_join(t1, t2),
-            _ => Err(ReconciledReadError::UnsupportedShape("both And conjuncts must be triples")),
-        },
-        Query::And(_) => Err(ReconciledReadError::UnsupportedShape(
-            "only a 2-atom And is supported (general n-atom BGP is deferred)",
-        )),
-        _ => Err(ReconciledReadError::UnsupportedShape(
-            "only a single triple or a 2-triple And is supported",
+        AtomTerm::ValueConstant(datatype, lexical) => PresentTerm::Constant(hash_object(
+            &CanonicalObject::Value { datatype: *datatype, lexical: lexical.clone() },
         )),
     }
+}
+
+/// Map one compiled [`LayerBgpAtom`] to a store `present` [`PresentBgpAtom`], reject-closing
+/// every shape `present` cannot express (see the module docs).
+fn map_atom(atom: &LayerBgpAtom) -> Result<PresentBgpAtom, ReconciledReadError> {
+    // `present` IS the reconciled MATERIALIZED head; delta-file column sources
+    // (AddedTriple/DeletedTriple) do not map onto it.
+    if atom.source != ColumnSource::Materialized {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "delta-source atoms (AddedTriple/DeletedTriple) are unsupported on the reconciled present path",
+        ));
+    }
+    // The `present` path authenticates a CONSTANT predicate hash; a predicate variable is not
+    // supported (its ids live in an independent Store namespace).
+    if atom.predicate_variable {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "predicate-variable atoms are unsupported on the reconciled present path",
+        ));
+    }
+    // `present` has no object-KIND channel: a Node/Literal-restricted VARIABLE object (`Link`
+    // / `Data`) cannot be enforced. A constant object already pins its kind through the
+    // authenticated dictionary entry, and `attach_ranges` clears a ranged object's kind to Any,
+    // so a residual non-Any kind here is a genuine restriction we cannot honor.
+    if atom.object_kind != ObjectKindFilter::Any {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "object-kind-restricted variable objects (Link/Data) are unsupported on the reconciled present path",
+        ));
+    }
+    // A value-literal SUBJECT is unrepresentable in woql2 (the subject is a NodeValue); guard it
+    // anyway so the mapping never silently hashes a nonsensical subject literal.
+    if matches!(atom.subject, AtomTerm::ValueConstant(..)) {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "value-literal subject is unsupported on the reconciled present path",
+        ));
+    }
+    let subject = map_term(&atom.subject);
+    let object = map_term(&atom.object);
+    // The `present` path keeps >= 1 variable per atom; a fully-ground atom (both positions
+    // constant, no same-row aliasing) has no kept column.
+    if matches!(subject, PresentTerm::Constant(_))
+        && matches!(object, PresentTerm::Constant(_))
+        && !atom.subject_object_equal
+    {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "fully-ground atoms keep no variable and are unsupported on the reconciled present path",
+        ));
+    }
+    Ok(PresentBgpAtom {
+        subject,
+        predicate_hash: hash_term(&atom.predicate_term),
+        object,
+        subject_object_equal: atom.subject_object_equal,
+        // Both the base `LayerBgpAtom` and the store `PresentBgpAtom` carry the SAME
+        // `terminus_store::proof::query::ObjectRangeSpec`, so the numeric-range filter maps by a
+        // direct clone (op/datatype/constant/bit-width/second-bound preserved).
+        object_range: atom.object_range.clone(),
+    })
+}
+
+/// Translate a compiled leaf [`LayerBgpPlan`] to the store `present` inputs. The join plan is
+/// shared verbatim (`JoinStep` is the same store type); only the atoms are re-classified.
+fn lower_plan(plan: &LayerBgpPlan) -> Result<LoweredBgp, ReconciledReadError> {
+    let atoms = plan.atoms.iter().map(map_atom).collect::<Result<Vec<_>, _>>()?;
+    Ok(LoweredBgp { atoms, joins: plan.joins.clone() })
+}
+
+/// Compile `query` with the base [`plan_bgp`] (reusing its full BGP classification: constants /
+/// variables / repeated vars / ranges, and its rejections), then lower the resulting leaf BGP to
+/// the store `present` inputs. Reject-closes anything the `present` path cannot deliver.
+fn lower_query(query: &Query) -> Result<LoweredBgp, ReconciledReadError> {
+    let compiled = plan_bgp(query).map_err(|e| ReconciledReadError::NotBgp(e.to_string()))?;
+    // The reconciled path delivers the FULL BGP relation's rows. A Select projection changes
+    // which columns are delivered and a Count delivers a cardinality, not rows — reject both so
+    // the delivered columns are exactly the compiled BGP schema.
+    if compiled.projection.is_some() {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "Select projection is unsupported on the reconciled present path (delivers the full BGP relation)",
+        ));
+    }
+    if compiled.count_variable.is_some() {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "Count is unsupported on the reconciled present path (it delivers rows, not a cardinality)",
+        ));
+    }
+    // Only a plain leaf BGP maps to the store `present` BGP; every composite relation
+    // (Distinct/GroupBy/join/order/anti/union/…) is out of scope for this path.
+    let plan = compiled.relation.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
+        "only a plain conjunctive BGP is supported on the reconciled present path (no distinct/group/join/order/etc.)",
+    ))?;
+    lower_plan(plan)
 }
 
 /// Returns `true` iff this WOQL query is routable to the reconciled delta-stack path.
 pub fn is_reconciled_read(query: &Query) -> bool {
-    detect_shape(query).is_ok()
+    lower_query(query).is_ok()
 }
 
 /// Prove a supported read-only WOQL query over an N-layer delta stack (base + deltas, head last)
@@ -253,18 +212,10 @@ pub fn prove_reconciled_read(
     query: &Query,
     layers: &[&LayerCommitment],
 ) -> Result<ReconciledReadProof, ReconciledReadError> {
-    match detect_shape(query)? {
-        Shape::SingleAtom { position, constant_hash } => {
-            let (reconcile, filter, result) = prove_read_single_atom(layers, position, constant_hash)
-                .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
-            Ok(ReconciledReadProof::SingleAtom { reconcile, filter, result, position, constant_hash })
-        }
-        Shape::Join { const_p, const_q } => {
-            let (reconcile, join, result) = prove_read_two_atom_join(layers, const_p, const_q)
-                .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
-            Ok(ReconciledReadProof::Join { reconcile, join, result, const_p, const_q })
-        }
-    }
+    let LoweredBgp { atoms, joins } = lower_query(query)?;
+    let (reconcile, bgp, result) = prove_read_bgp(layers, &atoms, &joins)
+        .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+    Ok(ReconciledReadProof { reconcile, bgp, result, atoms, joins })
 }
 
 /// Verify a reconciled read proof against the trusted head root AND resolve its bindings to
@@ -276,33 +227,70 @@ pub fn verify_and_resolve_reconciled_read(
     proof: &ReconciledReadProof,
 ) -> Result<Vec<Vec<CanonicalObject>>, ReconciledReadError> {
     // Anti-substitution: bind the proof to the verifier's OWN compiled query. Re-derive the
-    // supported shape from `query` and require the proof to encode exactly that shape + constants,
-    // so a valid proof for a DIFFERENT supported query (different constant/predicate/position)
-    // cannot be accepted in this query's name.
-    let expected = detect_shape(query)?;
-    let proof_shape = match proof {
-        ReconciledReadProof::SingleAtom { position, constant_hash, .. } => {
-            Shape::SingleAtom { position: *position, constant_hash: *constant_hash }
-        }
-        ReconciledReadProof::Join { const_p, const_q, .. } => {
-            Shape::Join { const_p: *const_p, const_q: *const_q }
-        }
-    };
-    if expected != proof_shape {
+    // lowered atom/join spec from `query` and require the proof to encode EXACTLY that spec, so a
+    // valid proof for a DIFFERENT supported query (different constant/predicate/join plan) cannot
+    // be accepted in this query's name. The verifier then feeds its OWN re-derived spec to the
+    // store verifier (never the prover's), so the cryptographic statement is likewise bound to
+    // the verifier's query.
+    let expected = lower_query(query)?;
+    if !bgp_spec_eq(&expected, proof) {
         return Err(ReconciledReadError::QueryShapeMismatch);
     }
-    match proof {
-        ReconciledReadProof::SingleAtom { reconcile, filter, result, position, constant_hash } => {
-            verify_and_resolve_single_atom(
-                layers, trusted_head_root, *position, *constant_hash, reconcile, filter, &result.columns,
-            )
-            .map_err(|e| ReconciledReadError::Store(e.to_string()))
+    verify_and_resolve_bgp(
+        layers,
+        trusted_head_root,
+        &expected.atoms,
+        &expected.joins,
+        &proof.reconcile,
+        &proof.bgp,
+        &proof.result.columns,
+    )
+    .map_err(|e| ReconciledReadError::Store(e.to_string()))
+}
+
+// --- Anti-substitution spec equality (field-wise; the store atom/join types are not `PartialEq`) ---
+
+fn object_range_eq(a: &Option<ObjectRangeSpec>, b: &Option<ObjectRangeSpec>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            x.op == y.op
+                && x.datatype == y.datatype
+                && x.c == y.c
+                && x.b_bits == y.b_bits
+                && match (&x.second, &y.second) {
+                    (None, None) => true,
+                    (Some(bx), Some(by)) => bx.op == by.op && bx.c == by.c,
+                    _ => false,
+                }
         }
-        ReconciledReadProof::Join { reconcile, join, result, const_p, const_q } => {
-            verify_and_resolve_two_atom_join(
-                layers, trusted_head_root, *const_p, *const_q, reconcile, join, &result.columns,
-            )
-            .map_err(|e| ReconciledReadError::Store(e.to_string()))
-        }
+        _ => false,
     }
+}
+
+fn atom_eq(a: &PresentBgpAtom, b: &PresentBgpAtom) -> bool {
+    a.subject == b.subject
+        && a.predicate_hash == b.predicate_hash
+        && a.object == b.object
+        && a.subject_object_equal == b.subject_object_equal
+        && object_range_eq(&a.object_range, &b.object_range)
+}
+
+fn join_eq(a: &JoinStep, b: &JoinStep) -> bool {
+    a.acc_key == b.acc_key && a.rel_key == b.rel_key && a.additional_keys == b.additional_keys
+}
+
+fn bgp_spec_eq(expected: &LoweredBgp, proof: &ReconciledReadProof) -> bool {
+    expected.atoms.len() == proof.atoms.len()
+        && expected.joins.len() == proof.joins.len()
+        && expected
+            .atoms
+            .iter()
+            .zip(proof.atoms.iter())
+            .all(|(x, y)| atom_eq(x, y))
+        && expected
+            .joins
+            .iter()
+            .zip(proof.joins.iter())
+            .all(|(x, y)| join_eq(x, y))
 }
