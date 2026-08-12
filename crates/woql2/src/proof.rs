@@ -98,6 +98,34 @@ use crate::triple::Triple;
 use crate::value::{DataValue, ListOrVariable, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
+/// Prover-context selector re-exports for the high-level prove API.
+///
+/// The `CompiledBgp::prove_*_with_context` entries take a
+/// [`StoreProverContext`](terminus_store::proof::argument::StoreProverContext).
+/// Re-exporting the context (and, when a `blitzar-*` feature is enabled, the
+/// Blitzar backend selector types) here lets downstream callers (node / SDK)
+/// pick the prover backend WITHOUT taking a direct `terminus-store` dependency.
+///
+/// The default backend is `StoreProverContext::cpu()`; `StoreProverContext::blitzar(&rt, tier)`
+/// selects Blitzar MSM acceleration (GPU under `blitzar-gpu`, CPU-MSM under `blitzar-cpu`).
+pub mod prover {
+    /// The prover-context handle passed to the `CompiledBgp::prove_*_with_context` entries.
+    pub use terminus_store::proof::argument::StoreProverContext;
+
+    /// Blitzar (GPU / CPU-MSM) backend selector types. Only available when a
+    /// `blitzar-cpu` / `blitzar-gpu` feature is compiled in.
+    ///
+    /// Usage:
+    /// ```ignore
+    /// use terminusdb_woql2::prover::{BlitzarRuntime, BlitzarRuntimeConfig, ProverSetupTier, StoreProverContext};
+    /// let rt = StoreProverContext::initialize_blitzar(BlitzarRuntimeConfig { num_precomputed_generators: 0 });
+    /// let ctx = StoreProverContext::blitzar(&rt, ProverSetupTier::Log20)?;
+    /// let proved = compiled.prove_with_context(&ctx, &layer)?;
+    /// ```
+    #[cfg(any(feature = "blitzar-cpu", feature = "blitzar-gpu"))]
+    pub use terminus_store::proof::argument::{BlitzarRuntime, BlitzarRuntimeConfig, ProverSetupTier};
+}
+
 /// A compiled, variable-blind BGP plan plus the metadata a caller needs to read the
 /// proof's result columns.
 #[derive(Clone, Debug)]

@@ -32,6 +32,10 @@ pub mod value;
 pub mod path_builder;
 #[cfg(feature = "proof")]
 pub mod proof;
+/// Prover-backend selector (`StoreProverContext` + Blitzar types) surfaced at the
+/// crate root as `terminusdb_woql2::prover` for the high-level prove API.
+#[cfg(feature = "proof")]
+pub use proof::prover;
 pub mod query_dsl;
 
 pub mod prelude {
