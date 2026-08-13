@@ -2630,7 +2630,54 @@ fn rejects_full_schema_distinct_over_duplicate_producing_children() {
 }
 
 #[test]
-fn rejects_distinct_combined_with_projection_until_dedup_is_proven() {
+fn visible_projected_distinct_one_column_compiles_to_the_store_gadget() {
+    // `SELECT DISTINCT ?x WHERE { ?x p ?y }` — ?x is duplicate-producing (many ?y per ?x), so
+    // the visible top-level Distinct routes the projected key column through the audited store
+    // distinct gadget (real bag dedup), NOT the transparent full-row no-op.
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(tv("x", "p", "y")),
+        })),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["x"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Distinct { ref key_columns, .. } if key_columns == &[0]
+    ));
+    assert_eq!(compiled.count_variable, None);
+    assert!(!compiled.full_row_distinct);
+    assert_eq!(compiled.projection, Some(vec![0]));
+}
+
+#[test]
+fn visible_projected_distinct_two_columns_compiles_to_the_store_gadget() {
+    // `SELECT DISTINCT ?x ?y WHERE { ?x p ?y . ?y q ?z }` — distinct over the (x,y) pair, a
+    // strict subset of the {x,y,z} BGP schema.
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into(), "y".into()],
+            query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "q", "z")])),
+        })),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["x", "y"]);
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Distinct { ref key_columns, .. } if key_columns.len() == 2
+    ));
+    assert_eq!(compiled.count_variable, None);
+    assert!(!compiled.full_row_distinct);
+    assert_eq!(compiled.projection, Some(vec![0, 1]));
+}
+
+#[test]
+fn visible_projected_distinct_over_three_columns_rejects_the_gadget_limit() {
+    // Formerly a blanket DistinctWithProjectionOrCount reject; the projected-distinct gadget
+    // path is now reached, but the store gadget supports at most two key columns.
     let q = Query::Distinct(Distinct {
         variables: vec!["x".into(), "y".into(), "z".into()],
         query: Box::new(Query::Select(Select {
@@ -2638,7 +2685,40 @@ fn rejects_distinct_combined_with_projection_until_dedup_is_proven() {
             query: Box::new(and_of(vec![tv("x", "p", "y"), tv("y", "p", "z")])),
         })),
     });
-    reject(q, BgpPlanError::DistinctWithProjectionOrCount);
+    reject(q, BgpPlanError::DistinctUnsupportedKeyCount { count: 3 });
+}
+
+#[test]
+fn visible_projected_distinct_over_a_non_bgp_inner_still_rejects() {
+    // A projected Distinct over a bag-union (Or) inner is NOT a compilable BGP: keep rejecting
+    // closed. (The beneath-Count composition remains the only bag-union distinct path for now.)
+    let branch = tv("x", "p", "y");
+    let over_or = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(Query::Or(Or {
+                or: vec![branch.clone(), branch],
+            })),
+        })),
+    });
+    reject(over_or, BgpPlanError::DistinctWithProjectionOrCount);
+}
+
+#[test]
+fn visible_projected_distinct_over_mixed_domain_object_rejects() {
+    // The projected key must be a node-position variable. A bare OBJECT (`?y` in `?x p ?y`) is a
+    // mixed node/literal `Value` position with no committed single-namespace domain, so it cannot
+    // be a distinct key even on the visible (no enclosing Count) path — reject closed, exactly as
+    // the beneath-Count path does (see `projected_distinct_rejects_visible_unknown_nullable_and_oversized_witnesses`).
+    let q = Query::Distinct(Distinct {
+        variables: vec!["y".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["y".into()],
+            query: Box::new(tv("x", "p", "y")),
+        })),
+    });
+    reject(q, BgpPlanError::DistinctUnsupportedDomain { var: "y".into() });
 }
 
 #[test]

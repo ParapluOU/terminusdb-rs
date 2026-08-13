@@ -1719,34 +1719,47 @@ pub(crate) fn compile_distinct_relation(
     }
     let variables = distincts[0];
     if count_variable.is_none() {
-        if !selections.is_empty() {
+        if selections.is_empty() {
+            // A bare `Distinct` over the COMPLETE schema is a transparent full-row no-op.
+            let covers_schema = variables.len() == relation.schema.len()
+                && relation.schema.iter().all(|name| {
+                    variables
+                        .iter()
+                        .filter(|candidate| *candidate == name)
+                        .count()
+                        == 1
+                });
+            if !covers_schema {
+                return Err(BgpPlanError::DistinctNotFullSchema);
+            }
+            // The transparent full-row no-op relies on the child's rows already being unique.
+            // Over a duplicate-producing child (Or/Not/Optional/projection/When) it would
+            // silently return a NON-deduplicated result marked as `Distinct`, so reject closed
+            // and defer real bag dedup to the gadget-backed path below.
+            if !is_provably_duplicate_free(&relation) {
+                return Err(BgpPlanError::DistinctOverDuplicateProducingChild);
+            }
+            return Ok((relation, true));
+        }
+        // A VISIBLE, top-level projected `Distinct` (e.g. `SELECT DISTINCT ?x …`): route the
+        // projected key columns through the audited store distinct gadget (real bag dedup),
+        // exactly as the beneath-`Count` path below does — the gadget proves the output tuples
+        // are EXACTLY the distinct key tuples of the authenticated input bag (so a
+        // duplicate-producing child is fine; it is what dedup exists for). Permitted ONLY over a
+        // compilable conjunctive BGP inner: every non-BGP inner (Or/BagUnion, property paths,
+        // subsumption closures, sequential read-operators, ordered/range constructs) keeps
+        // rejecting closed. Every selection here is `outside` (there is no enclosing Count), so
+        // the Select-inside-Count guard below is vacuous for this path.
+        if !matches!(relation.statement, CompiledRelationStatement::Bgp(_)) {
             return Err(BgpPlanError::DistinctWithProjectionOrCount);
         }
-        let covers_schema = variables.len() == relation.schema.len()
-            && relation.schema.iter().all(|name| {
-                variables
-                    .iter()
-                    .filter(|candidate| *candidate == name)
-                    .count()
-                    == 1
-            });
-        if !covers_schema {
-            return Err(BgpPlanError::DistinctNotFullSchema);
+    } else {
+        // A Select nested inside Count/Distinct changes the generated witness stream and is
+        // not merely a selection of the count binding. Keep it fail-closed. An outer Select
+        // of the Count binding has `outside == true` and is validated by compile_projection.
+        if selections.iter().any(|(_, outside)| !outside) {
+            return Err(BgpPlanError::DistinctWithProjectionOrCount);
         }
-        // The transparent full-row no-op relies on the child's rows already being unique.
-        // Over a duplicate-producing child (Or/Not/Optional/projection/When) it would
-        // silently return a NON-deduplicated result marked as `Distinct`, so reject closed
-        // and defer real bag dedup to a future gadget.
-        if !is_provably_duplicate_free(&relation) {
-            return Err(BgpPlanError::DistinctOverDuplicateProducingChild);
-        }
-        return Ok((relation, true));
-    }
-    // A Select nested inside Count/Distinct changes the generated witness stream and is
-    // not merely a selection of the count binding. Keep it fail-closed. An outer Select
-    // of the Count binding has `outside == true` and is validated by compile_projection.
-    if selections.iter().any(|(_, outside)| !outside) {
-        return Err(BgpPlanError::DistinctWithProjectionOrCount);
     }
     if !(1..=2).contains(&variables.len()) {
         return Err(BgpPlanError::DistinctUnsupportedKeyCount {

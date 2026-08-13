@@ -4064,6 +4064,112 @@ fn count_projected_distinct_empty_input_proves_zero() {
 }
 
 #[test]
+fn visible_projected_distinct_proves_the_exact_set_and_rejects_tamper() {
+    // A duplicate-producing base layer: subjects `a` (×3) and `b` (×2) each recur under predicate
+    // `p`. One extra `q` edge (a distinct predicate, disjoint subject `c`) exists ONLY so the
+    // anti-substitution control below can aim the `p` proof at a valid, present-in-the-layer `q`
+    // plan — it never matches the `p` query, so the distinct-`?subject` result stays exactly {a, b}.
+    let lc = build_layer(&[
+        ("a", "p", "x"),
+        ("a", "p", "y"),
+        ("a", "p", "z"),
+        ("b", "p", "x"),
+        ("b", "p", "y"),
+        ("c", "q", "z"),
+    ]);
+    // `SELECT DISTINCT ?subject WHERE { ?subject p ?object }` — a VISIBLE top-level projected
+    // Distinct with NO enclosing Count, routed through the audited store distinct gadget (real
+    // bag dedup), NOT the transparent full-row no-op.
+    let q = Query::Distinct(Distinct {
+        variables: vec!["subject".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["subject".into()],
+            query: Box::new(tv("subject", "p", "object")),
+        })),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert!(!compiled.full_row_distinct, "real gadget dedup, not the full-row no-op");
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Distinct { .. }
+    ));
+    assert_eq!(compiled.count_variable, None);
+    assert_eq!(compiled.projection, Some(vec![0]));
+
+    let proved = compiled.prove(&lc).unwrap();
+    // The exact distinct set is {a, b}: two output tuples collapsing the five input rows.
+    assert_eq!(proved.result_len, 2);
+    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+
+    let bytes = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.state.commitment_root).unwrap();
+
+    // NEGATIVE 1 — a DUPLICATED output tuple: re-present {a, a}. Re-commit so the tamper is not
+    // caught merely by a commitment mismatch; the distinct gadget's own uniqueness check rejects.
+    let mut duplicated = RecursiveRelationEnvelope::decode(&bytes).unwrap();
+    duplicated.result_columns[0][1] = duplicated.result_columns[0][0];
+    duplicated.result_values[0][1] = duplicated.result_values[0][0].clone();
+    duplicated.result_commitments[0] = commit_column(&duplicated.result_columns[0]).unwrap();
+    assert!(decode_and_verify_envelope(
+        &duplicated.encode().unwrap(),
+        &compiled,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+
+    // NEGATIVE 2 — a DROPPED distinct value: present only {a}. The equality classes no longer
+    // cover every input row, so the gadget rejects (class-coverage != input cardinality).
+    let mut dropped = RecursiveRelationEnvelope::decode(&bytes).unwrap();
+    dropped.result_len = 1;
+    dropped.result_log_domain = 1;
+    for column in &mut dropped.result_columns {
+        column.truncate(1);
+        column.resize(2, ArkFr::zero());
+    }
+    for values in &mut dropped.result_values {
+        values.truncate(1);
+    }
+    for (column, commitment) in dropped
+        .result_columns
+        .iter()
+        .zip(&mut dropped.result_commitments)
+    {
+        *commitment = commit_column(column).unwrap();
+    }
+    assert!(decode_and_verify_envelope(
+        &dropped.encode().unwrap(),
+        &compiled,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+
+    // ANTI-SUBSTITUTION — the `DISTINCT ?subject` proof must not verify as a DIFFERENT query's
+    // plan. The whole query (predicate included) is folded into the digest, so re-aiming this
+    // envelope at `DISTINCT ?subject WHERE { ?subject q ?object }` (predicate `q`, present in the
+    // layer above) recomputes a different Fiat-Shamir transcript and the distinct proof rejects.
+    //
+    // Note we cannot use `DISTINCT ?object` as the control: a bare object is a mixed node/literal
+    // `Value` position with no committed single-namespace domain, so it rejects at COMPILE time
+    // (`DistinctUnsupportedDomain`) — see `visible_projected_distinct_over_mixed_domain_object_rejects`
+    // in proof_plan.rs. Only a node-position variable (subject here) is a valid distinct key.
+    let other = plan_bgp(&Query::Distinct(Distinct {
+        variables: vec!["subject".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["subject".into()],
+            query: Box::new(tv("subject", "q", "object")),
+        })),
+    }))
+    .unwrap();
+    assert!(
+        decode_and_verify_envelope(&bytes, &other, &lc, lc.state.commitment_root).is_err()
+    );
+}
+
+#[test]
 fn repeated_variable_atom_proves_same_row_equality() {
     let lc = build_layer(&[
         ("a", "knows", "a"),
