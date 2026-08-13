@@ -269,6 +269,30 @@ pub(crate) fn relation_query_digest(relation: &CompiledRelation) -> std::io::Res
                 hasher.update(b"/graph-schema");
             }
         }
+        CompiledRelationStatement::OrderedListWalk {
+            subject,
+            predicate,
+            graph,
+        } => {
+            // K-INDEPENDENT digest: only the walk PATTERN (the bound subject + the list predicate).
+            // The number of cons cells K is a prover choice carried in the proof, never in this
+            // identity, so the verifier reconstructs the same digest from its own trusted AST without
+            // knowing K. Binding (subject, predicate) HERE is what stops a valid walk proof from being
+            // re-aimed at a DIFFERENT (subject, predicate) list — the store's verify rejects any proof
+            // whose query digest does not match this reconstruction.
+            hasher.update(b"/ordered-list-walk");
+            digest_canonical_object(&mut hasher, subject);
+            // Length-prefix the predicate bytes so no two (subject, predicate) pairs can collide by
+            // shifting bytes across the field boundary.
+            hasher.update((predicate.len() as u64).to_le_bytes());
+            hasher.update(predicate.as_slice());
+            // SCHEMA-GRAPH FOUNDATION — bind the graph selector ADDITIVELY, exactly like the closure
+            // arm: `Instance` folds NOTHING (byte-identical instance identity), only `Schema` folds a
+            // domain tag. OrderedListWalk is always `Instance` in this increment.
+            if let ProofGraph::Schema = graph {
+                hasher.update(b"/graph-schema");
+            }
+        }
         CompiledRelationStatement::GroupSum {
             input,
             key_columns,

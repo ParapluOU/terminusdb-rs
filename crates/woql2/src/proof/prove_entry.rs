@@ -681,6 +681,19 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
             statement: ProvedQueryStatement::CrossRootHashJoin { envelope: Box::new(envelope) },
         };
     }
+    // The ordered-list walk is a store-proven leaf whose composite proof is store-private (it cannot
+    // be decomposed into the `ProvedQueryStatement` tree the way a closure decomposes into
+    // edge/seed/rounds/fixpoint). So — exactly like the cross-root hash join — it is carried
+    // WHOLESALE and later verified by re-running the store envelope verify, not by reconstruction.
+    if matches!(envelope.proof, RecursiveRelationProof::OrderedListWalk(_)) {
+        return ProvedBgp {
+            result_commitments: envelope.result_commitments.clone(),
+            result_columns: envelope.result_columns.clone(),
+            result_log_domain: envelope.result_log_domain,
+            result_len: envelope.result_len,
+            statement: ProvedQueryStatement::OrderedListWalk { envelope: Box::new(envelope) },
+        };
+    }
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::GeneratedU64Filter { input } => {
@@ -791,6 +804,11 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
         // single-graph mirror), so it never reaches this decomposition match.
         RecursiveRelationProof::CrossRootHashJoin { .. } => unreachable!(
             "cross-root envelopes are wrapped wholesale by the early return, not decomposed here"
+        ),
+        // Wrapped wholesale by the early return above (its store proof is opaque to this layer), so it
+        // never reaches this decomposition match.
+        RecursiveRelationProof::OrderedListWalk(_) => unreachable!(
+            "ordered-list-walk envelopes are wrapped wholesale by the early return, not decomposed here"
         ),
     };
     ProvedBgp {

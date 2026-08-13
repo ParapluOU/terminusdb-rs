@@ -42,7 +42,8 @@ use terminusdb_woql2::collection::{Length, Sum};
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
-    BgpPlanError, CompiledBgp, CompiledRelationStatement, ExecutedResultValue, ProvedQueryStatement,
+    BgpPlanError, CompiledBgp, CompiledRelation, CompiledRelationStatement, ExecutedResultValue,
+    ProofGraph, ProvedQueryStatement,
 };
 use terminusdb_woql2::triple::{
     AddedTriple, Data, DeletedTriple, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev,
@@ -9283,6 +9284,177 @@ fn instance_only_backward_compat_via_prove_on_layer_byte_identical() {
         .name("subsumption-backward-compat".into())
         .stack_size(128 * 1024 * 1024)
         .spawn(assert_instance_only_backward_compat_via_prove_on_layer)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+// -----------------------------------------------------------------------------------------------
+// ReadDocument increment 2a — compiler mirror for the store's `OrderedListWalk` leaf.
+//
+// The store already PROVES the ordered walk of a stored `rdf:List` (see the store test
+// `ordered_list_walk_end_to_end`). This suite exercises the COMPILER side: a directly-constructed
+// `CompiledRelationStatement::OrderedListWalk` proves + verifies + resolves end-to-end through the
+// compiler->store path, carrying the store envelope WHOLESALE (its composite proof is store-private,
+// like `CrossRootHashJoin`). No WOQL construct lowers to this leaf yet (that is increment 2b), so it
+// is reached only by direct construction — which is exactly what 2a delivers.
+// -----------------------------------------------------------------------------------------------
+
+fn rdf_first() -> String {
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#first".to_string()
+}
+fn rdf_rest() -> String {
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest".to_string()
+}
+fn rdf_nil() -> String {
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil".to_string()
+}
+fn cons_cell(i: usize) -> String {
+    format!("http://ex/cell{i}")
+}
+
+/// Build a base layer from RAW node triples (IRIs used VERBATIM — NOT `iri()`-wrapped — so the RDF
+/// Collection constants keep their exact well-known IRIs). Mirrors the store's `list_layer`.
+fn list_layer(triples: Vec<(String, String, String)>) -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for (s, p, o) in &triples {
+        builder
+            .add_value_triple(ValueTriple::new_node(s.as_str(), p.as_str(), o.as_str()))
+            .unwrap();
+    }
+    builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+/// The standard cons chain `S -P-> [elements...]` using cells `cell0, cell1, …` and the RDF
+/// `first`/`rest`/`nil` constants. Mirrors the store's `chain_triples`.
+fn chain_triples(
+    subject: &str,
+    predicate: &str,
+    elements: &[&str],
+) -> Vec<(String, String, String)> {
+    let mut t = Vec::new();
+    if elements.is_empty() {
+        t.push((subject.to_string(), predicate.to_string(), rdf_nil()));
+        return t;
+    }
+    t.push((subject.to_string(), predicate.to_string(), cons_cell(0)));
+    for (i, e) in elements.iter().enumerate() {
+        t.push((cons_cell(i), rdf_first(), iri(e)));
+        let rest = if i + 1 < elements.len() {
+            cons_cell(i + 1)
+        } else {
+            rdf_nil()
+        };
+        t.push((cons_cell(i), rdf_rest(), rest));
+    }
+    t
+}
+
+/// A directly-constructed `CompiledBgp` for the ordered walk of `(subject, predicate)`'s list. The
+/// fields are pub, so the test crate builds the leaf without any WOQL query (there is none yet).
+fn ordered_list_walk_compiled(subject: &str, predicate: &str) -> CompiledBgp {
+    CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec!["elem".to_string()],
+            domains: vec![None],
+            statement: CompiledRelationStatement::OrderedListWalk {
+                subject: CanonicalObject::Node(iri(subject).into_bytes()),
+                predicate: iri(predicate).into_bytes(),
+                graph: ProofGraph::Instance,
+            },
+        },
+        projection: None,
+        collection: None,
+        count_variable: None,
+        full_row_distinct: false,
+    }
+}
+
+/// The single ordered element column, resolved to node IRIs (order AND multiplicity preserved).
+fn walk_resolved_elements(objects: &[Vec<CanonicalObject>]) -> Vec<String> {
+    objects[0]
+        .iter()
+        .map(|object| match object {
+            CanonicalObject::Node(bytes) => String::from_utf8(bytes.clone()).unwrap(),
+            other => panic!("unexpected list element object {other:?}"),
+        })
+        .collect()
+}
+
+fn assert_ordered_list_walk_e2e() {
+    // A list with a REPEATED element: both order and multiplicity are non-trivial (`a` at positions
+    // 0 and 2). A silent dedup or reorder in the mirror would be caught here.
+    let lc = list_layer(chain_triples(&iri("doc"), &iri("tracks"), &["a", "b", "a"]));
+    let root = lc.state.commitment_root;
+
+    let compiled = ordered_list_walk_compiled("doc", "tracks");
+    let proved = compiled.prove(&lc).unwrap();
+
+    // The proof node carries the store envelope wholesale (the increment-2a mirror shape).
+    assert!(matches!(
+        proved.statement,
+        ProvedQueryStatement::OrderedListWalk { .. }
+    ));
+    assert_eq!(proved.result_len, 3);
+
+    // Pure verify (instance graph) passes against the trusted root.
+    proved.verify(&compiled, &lc, root).unwrap();
+
+    // Verify + resolve delivers the ordered elements `[a, b, a]` — order and the duplicate preserved.
+    let objects = proved.verify_and_resolve(&compiled, &lc, root).unwrap();
+    assert_eq!(
+        walk_resolved_elements(&objects),
+        vec![iri("a"), iri("b"), iri("a")],
+    );
+
+    // Portable envelope round-trips through the store decode+verify path.
+    let bytes = proved.encode_envelope(&compiled, &lc, root).unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, root).unwrap();
+
+    // Single-element list: the smallest non-empty chain still walks correctly.
+    let solo = list_layer(chain_triples(&iri("solo"), &iri("tracks"), &["z"]));
+    let solo_root = solo.state.commitment_root;
+    let solo_compiled = ordered_list_walk_compiled("solo", "tracks");
+    let solo_proved = solo_compiled.prove(&solo).unwrap();
+    let solo_objects = solo_proved
+        .verify_and_resolve(&solo_compiled, &solo, solo_root)
+        .unwrap();
+    assert_eq!(walk_resolved_elements(&solo_objects), vec![iri("z")]);
+
+    // ---- NEGATIVE 1: a TAMPERED result column fails verify. ----
+    // Corrupt one committed element id in the OUTER proof node (leaving the wholesale envelope
+    // intact). The self==envelope binding in the verify arm — and the final `verify_columns` —
+    // reject it, so a caller cannot swap in a different answer than the store proved.
+    let mut tampered = compiled.prove(&lc).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+    assert!(
+        tampered.verify(&compiled, &lc, root).is_err(),
+        "a tampered result column must fail verify",
+    );
+
+    // ---- NEGATIVE 2: ANTI-SUBSTITUTION — the proof is bound to its (subject, predicate). ----
+    // Aim the honest proof at a DIFFERENT `(subject, predicate)` OrderedListWalk plan. The statement
+    // digest folds (subject, predicate), and the store's verify rejects any envelope whose query
+    // digest does not match the trusted plan — so the walk proof does not verify as another list.
+    let other_predicate = ordered_list_walk_compiled("doc", "elements");
+    assert!(
+        proved.verify(&other_predicate, &lc, root).is_err(),
+        "the walk proof must not verify against a different predicate",
+    );
+    let other_subject = ordered_list_walk_compiled("other", "tracks");
+    assert!(
+        proved.verify(&other_subject, &lc, root).is_err(),
+        "the walk proof must not verify against a different subject",
+    );
+}
+
+#[test]
+fn ordered_list_walk_compiler_mirror_end_to_end() {
+    std::thread::Builder::new()
+        .name("ordered-list-walk-proof".into())
+        .stack_size(512 * 1024 * 1024)
+        .spawn(assert_ordered_list_walk_e2e)
         .unwrap()
         .join()
         .unwrap();

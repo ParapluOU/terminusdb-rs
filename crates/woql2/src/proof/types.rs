@@ -209,6 +209,33 @@ pub enum CompiledRelationStatement {
         /// wrong graph. See [`ProofGraph`] and [`relation_graph`].
         graph: ProofGraph,
     },
+    /// Authenticated ORDERED walk of one stored `rdf:List`: given a BOUND subject node `S` and a
+    /// bound list-valued predicate `P`, deliver the list's elements IN ORDER as one nonnullable
+    /// node/value column (ReadDocument increment 2a). This is the woql2 mirror of the store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::OrderedListWalk`] composite
+    /// leaf; ALL of the proving (the cons-chain topology walk, the positional successor, the
+    /// `rdf:first`/`rdf:rest`/`rdf:nil` handling) lives in the store — the compiler only routes to
+    /// it, folds the digest, and passes the proof through, exactly as it does for
+    /// [`Self::TransitiveClosure`].
+    ///
+    /// Reached ONLY by direct construction in this increment: no WOQL construct lowers to it yet
+    /// (`Query::ReadDocument` wiring is increment 2b). It carries no `CompiledRelation` child — it
+    /// is a leaf, like `TransitiveClosure`.
+    OrderedListWalk {
+        /// The bound list-owning subject; must be a node IRI (a literal can never own a list edge).
+        /// Matches the store plan's `subject` field ([`CanonicalObject::Node`]).
+        subject: CanonicalObject,
+        /// The bound list-valued predicate IRI bytes (the `P` of `t(S,P,head)`). Matches the store
+        /// plan's `predicate` field.
+        predicate: Vec<u8>,
+        /// SCHEMA-GRAPH FOUNDATION — which committed graph this walk reads. Always `Instance` in
+        /// this increment (a stored `rdf:List` lives in the instance graph); carried so the
+        /// exhaustive graph/digest machinery treats it uniformly with `TransitiveClosure`. The
+        /// selector is bound ADDITIVELY into `relation_query_digest` (`Instance` folds nothing) and
+        /// is NOT forwarded into the store plan kind (the store recursion is graph-blind — the
+        /// prove/verify ENTRY picks the matching `LayerCommitment`). See [`relation_graph`].
+        graph: ProofGraph,
+    },
     GroupSum {
         input: Box<CompiledRelation>,
         key_columns: Vec<usize>,
@@ -1037,6 +1064,15 @@ pub enum ProvedQueryStatement {
         seed: TransitiveClosureSeed,
         rounds: Vec<TransitiveClosureRound>,
         fixpoint: Box<TransitiveClosureFixpoint>,
+    },
+    /// A proved ordered `rdf:List` walk. The store's `OrderedListWalk` composite proof is
+    /// store-private (it cannot be decomposed into this tree the way a closure decomposes into
+    /// edge/seed/rounds/fixpoint), so — exactly like [`Self::CrossRootHashJoin`] — the whole store
+    /// [`RecursiveRelationEnvelope`] is carried WHOLESALE and verified by re-running the store's own
+    /// recursive verify (which binds it to the trusted root AND the statement's query digest). See
+    /// [`CompiledRelationStatement::OrderedListWalk`].
+    OrderedListWalk {
+        envelope: Box<RecursiveRelationEnvelope>,
     },
     GroupSum {
         input: Box<ProvedBgp>,

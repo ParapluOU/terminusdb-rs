@@ -52,8 +52,8 @@ use dory_pcs::primitives::arithmetic::Field;
 use terminusdb_woql2::compare::Subsumption;
 use terminusdb_woql2::proof::{
     compiled_query_digest, decode_executed_result_inputs, plan_bgp, BgpPlanError, CompiledBgp,
-    CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue, ProofGraph,
-    StringNumericTarget,
+    CompiledRelation, CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue,
+    ProofGraph, StringNumericTarget,
 };
 
 /// The `sys:inherits` edge IRI the Subsumption compiler emits.
@@ -5845,4 +5845,50 @@ fn graph_selector_is_digest_bound_instance_closure_stays_byte_identical() {
         schema_digest, instance_digest,
         "the graph selector must change the query digest (anti-substitution binding)"
     );
+}
+
+// -----------------------------------------------------------------------------------------------
+// ReadDocument increment 2a — `OrderedListWalk` compiler-mirror SHAPE checks (no proving).
+//
+// The digest folds the bound `(subject, predicate)`, which is what binds a store proof to exactly
+// one list and stops it being re-aimed at another. These are cheap plan-layer assertions; the full
+// prove/verify/resolve e2e lives in `proof_prove::ordered_list_walk_compiler_mirror_end_to_end`.
+// -----------------------------------------------------------------------------------------------
+
+fn ordered_list_walk_bgp(subject: &str, predicate: &str) -> CompiledBgp {
+    CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec!["elem".to_string()],
+            domains: vec![None],
+            statement: CompiledRelationStatement::OrderedListWalk {
+                subject: CanonicalObject::Node(iri(subject).into_bytes()),
+                predicate: iri(predicate).into_bytes(),
+                graph: ProofGraph::Instance,
+            },
+        },
+        projection: None,
+        collection: None,
+        count_variable: None,
+        full_row_distinct: false,
+    }
+}
+
+#[test]
+fn ordered_list_walk_digest_binds_subject_and_predicate() {
+    let base = ordered_list_walk_bgp("doc", "tracks");
+    // The digest fold must succeed (exercises the `relation_query_digest` OrderedListWalk arm).
+    let base_digest = compiled_query_digest(&base).unwrap();
+
+    // DETERMINISTIC: the same (subject, predicate) reproduces byte-identical digests, so a verifier
+    // reconstructs the identity from its own trusted statement.
+    let base_again = ordered_list_walk_bgp("doc", "tracks");
+    assert_eq!(base_digest, compiled_query_digest(&base_again).unwrap());
+
+    // A DIFFERENT predicate changes the identity (anti-substitution at the plan layer).
+    let other_predicate = ordered_list_walk_bgp("doc", "elements");
+    assert_ne!(base_digest, compiled_query_digest(&other_predicate).unwrap());
+
+    // A DIFFERENT subject changes the identity too.
+    let other_subject = ordered_list_walk_bgp("other", "tracks");
+    assert_ne!(base_digest, compiled_query_digest(&other_subject).unwrap());
 }

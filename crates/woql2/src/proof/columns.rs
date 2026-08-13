@@ -34,6 +34,14 @@ pub(crate) fn relation_result_descriptors(
                 nullable: false,
             }])
         }
+        CompiledRelationStatement::OrderedListWalk { .. } => {
+            // The ordered element sequence is one nonnullable node/value column (identical shape to
+            // the closure's reachable set — one node column, resolved through the dictionary).
+            Ok(vec![ResultColumnDescriptor {
+                namespace: ResultIdNamespace::NodeValue,
+                nullable: false,
+            }])
+        }
         CompiledRelationStatement::BagUnion { branches, mappings } => {
             let mut expected = None;
             for (branch, mapping) in branches.iter().zip(mappings) {
@@ -468,6 +476,20 @@ pub(crate) fn relation_proof_plan(
             seed: seed.clone(),
             reflexive: *reflexive,
             inverted: *inverted,
+        },
+        CompiledRelationStatement::OrderedListWalk {
+            subject,
+            predicate,
+            // The graph selector is NOT carried into the store's plan kind (exactly as the closure
+            // above drops it): the store recursion is graph-blind and reads whichever single
+            // `LayerCommitment` the prove/verify ENTRY selects (see [`relation_graph`]). Its
+            // soundness is anchored by (a) the digest fold in `relation_query_digest` and (b) the
+            // verifier picking the matching commitment + `commitment_root` from the trusted query.
+            // (OrderedListWalk is always `Instance` in this increment.)
+            graph: _,
+        } => RelationProofPlanKind::OrderedListWalk {
+            subject: subject.clone(),
+            predicate: predicate.clone(),
         },
         CompiledRelationStatement::GroupSum {
             input,

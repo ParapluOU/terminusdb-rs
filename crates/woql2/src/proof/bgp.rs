@@ -1289,7 +1289,10 @@ pub(crate) fn validate_compiled_structure(relation: &CompiledRelation) -> Result
             | CompiledRelationStatement::LayerTripleCount
             // The transitive closure is a leaf composite: it carries a raw edge BGP plan, not a
             // CompiledRelation child, so there is nothing further to recurse into here.
-            | CompiledRelationStatement::TransitiveClosure { .. } => Ok(()),
+            | CompiledRelationStatement::TransitiveClosure { .. }
+            // The ordered-list walk is likewise a leaf: it carries a bound (subject, predicate), not
+            // a CompiledRelation child, so there is nothing to recurse into.
+            | CompiledRelationStatement::OrderedListWalk { .. } => Ok(()),
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
             | CompiledRelationStatement::GeneratedI64Filter { input, .. } => {
                 visit(input, depth + 1, nodes)
@@ -1392,6 +1395,9 @@ pub(crate) fn relation_graph(relation: &CompiledRelation) -> std::io::Result<Pro
             }
             // The closure is the ONE graph-parameterized leaf.
             CompiledRelationStatement::TransitiveClosure { graph, .. } => combine(acc, *graph),
+            // The ordered-list walk carries its own graph selector too (always `Instance` in this
+            // increment — a stored `rdf:List` lives in the instance graph).
+            CompiledRelationStatement::OrderedListWalk { graph, .. } => combine(acc, *graph),
             // Wrappers: inherit their children's graph (mirrors `validate_compiled_structure::visit`).
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
             | CompiledRelationStatement::GeneratedI64Filter { input, .. }
@@ -1696,6 +1702,13 @@ pub(crate) fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         // CalendarInt appends per-row derived integer column(s) — an injective row map (like Eval),
         // so uniqueness is inherited from the child.
         CompiledRelationStatement::CalendarInt { input, .. } => is_provably_duplicate_free(input),
+        // The ordered-list walk delivers a stored `rdf:List` IN ORDER, and a list is an ordered BAG:
+        // `[a, b, a]` yields the element `a` in two rows. So its single element column can carry
+        // duplicate rows — conservatively NOT provably unique (a surrounding `Distinct` is never
+        // proven redundant over it, so multiplicity is never silently collapsed). This is the ONE
+        // place OrderedListWalk deliberately classifies UNLIKE `TransitiveClosure` (whose reachable
+        // SET is deduped, hence `true`): the semantics differ (bag vs set), so the sound answer does.
+        CompiledRelationStatement::OrderedListWalk { .. } => false,
         // Bag-valued compositions can carry duplicate full rows.
         CompiledRelationStatement::BagUnion { .. }
         | CompiledRelationStatement::BagProjection { .. }
