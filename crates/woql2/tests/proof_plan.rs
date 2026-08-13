@@ -3807,6 +3807,9 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
         BgpPlanError::OrderByUnsupportedValue,
     );
 
+    // A free-subject two-column BGP `[subject, score]` sorted by `score` alone is now shape-legal
+    // (subset templates are supported), but the appended `subject` tie-break column is a node
+    // reference, not a fixed-width numeric value, so the plan rejects on the key datatype instead.
     let two_columns = and_of(vec![tv("subject", "score", "score"), gte(dvar("score"), duint(0))]);
     reject(
         Query::OrderBy(OrderBy {
@@ -3816,7 +3819,7 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
             }],
             query: Box::new(two_columns.clone()),
         }),
-        BgpPlanError::OrderByUnsupportedShape,
+        BgpPlanError::OrderByUnsupportedValue,
     );
     reject(
         Query::OrderBy(OrderBy {
@@ -3856,6 +3859,9 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
         })).unwrap();
     assert!(duplicate_order.relation.as_exact_scalar_order().unwrap().0.as_bag_union().is_some());
 
+    // Ordering by `score` alone is shape-legal, but the appended `label` tie-break column is nullable
+    // (bound only under WoqlOptional), so it has no well-defined fixed-width sort key and rejects on
+    // the key value/nullability check.
     let nullable_child = and_of(vec![
         tv_subj_const("metric", "score", "score"),
         gte(dvar("score"), duint(0)),
@@ -3871,7 +3877,7 @@ fn exact_scalar_order_rejects_unsupported_shapes_closed() {
             }],
             query: Box::new(nullable_child),
         }),
-        BgpPlanError::OrderByUnsupportedShape,
+        BgpPlanError::OrderByUnsupportedValue,
     );
 }
 
@@ -3921,10 +3927,29 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
     })).unwrap();
     let terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { input, .. } = &duplicate_compiled.relation.statement else { unreachable!() };
     assert!(input.as_bag_union().is_some());
-    for ordering in [
-        vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
-        vec![OrderTemplate { variable: "x".into(), order: Order::Asc }, OrderTemplate { variable: "x".into(), order: Order::Desc }],
-    ] { assert_eq!(plan_bgp(&query(ordering)).unwrap_err(), BgpPlanError::OrderByUnsupportedShape); }
+    // SUBSET template: naming only `x` sorts by `x` and appends the unnamed column `y` as an
+    // ascending total-order tie-break, so the plan is a full-row `ExactMultiOrder` with key
+    // priority [x, y] both ascending.
+    let subset = plan_bgp(&query(vec![OrderTemplate { variable: "x".into(), order: Order::Asc }])).unwrap();
+    assert_eq!(subset.relation.schema, ["x", "y"]);
+    assert!(matches!(subset.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, ref directions, .. }
+            if key_indices == &[0, 1]
+                && directions == &[terminus_store::proof::order::OrderDirection::Ascending; 2]));
+    // Naming only `y` descending appends `x` ascending as the tie-break: key priority [y, x].
+    let subset_desc = plan_bgp(&query(vec![OrderTemplate { variable: "y".into(), order: Order::Desc }])).unwrap();
+    assert!(matches!(subset_desc.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, ref directions, .. }
+            if key_indices == &[1, 0]
+                && directions == &[terminus_store::proof::order::OrderDirection::Descending, terminus_store::proof::order::OrderDirection::Ascending]));
+    // A repeated key names the same column twice — meaningless — and still rejects closed.
+    assert_eq!(
+        plan_bgp(&query(vec![
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+            OrderTemplate { variable: "x".into(), order: Order::Desc },
+        ])).unwrap_err(),
+        BgpPlanError::OrderByUnsupportedShape,
+    );
 
     let child3 = and_of(vec![
         tv_subj_const("left", "x", "x"), gte(dvar("x"), duint(0)),

@@ -12140,21 +12140,48 @@ fn plan_exact_scalar_order(
         return Err(BgpPlanError::OrderByUnsupportedShape);
     }
     let child = plan_bgp(&order_by.query)?;
+    // The audited Store order gadgets (`ExactScalarOrder`/`ExactMultiOrder`) prove a full-row
+    // permutation over one-to-three columns, so the inner BGP must expose a bare, non-projected,
+    // non-aggregated relation of arity 1..=3. The template may name only a SUBSET of those columns.
     if child.projection.is_some()
         || child.count_variable.is_some()
         || child.full_row_distinct
-        || child.relation.schema.len() != order_by.ordering.len()
+        || !(1..=3).contains(&child.relation.schema.len())
+        || order_by.ordering.len() > child.relation.schema.len()
     {
         return Err(BgpPlanError::OrderByUnsupportedShape);
     }
-    let key_indices = order_by.ordering.iter()
+    // Map each template key to its canonical column index; every key must name an existing column,
+    // and the named keys must be DISTINCT columns (SWI `order_by/2` with a repeated key is
+    // meaningless — the second sort on the same witness is a no-op — so reject rather than guess).
+    let named_indices = order_by.ordering.iter()
         .map(|ordering| child.relation.schema.iter().position(|schema| schema == &ordering.variable))
         .collect::<Option<Vec<_>>>()
         .ok_or(BgpPlanError::OrderByUnsupportedShape)?;
-    let mut complete_key_set = key_indices.clone();
-    complete_key_set.sort_unstable();
-    if complete_key_set != (0..child.relation.schema.len()).collect::<Vec<_>>() {
+    let mut distinct = named_indices.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() != named_indices.len() {
         return Err(BgpPlanError::OrderByUnsupportedShape);
+    }
+    // TOTAL-ORDER TIE-BREAK. SWI `order_by/2` leaves rows that agree on every named key in
+    // `findall/3` enumeration order — an implementation artefact, not a bindable property of the
+    // answer set. We canonicalise it: append EVERY column the template did not name as an ascending
+    // secondary key, in canonical schema order. The result is a deterministic lexicographic total
+    // order over the complete row, so a wrong tie-break (swapping two rows equal on all named keys
+    // but differing elsewhere) breaks the proven nondecreasing chain and the proof is rejected.
+    // `key_indices` is thus an exact permutation of `0..schema.len()` by construction, which is
+    // exactly the contract the Store `ExactMultiOrder` gadget requires.
+    let mut key_indices = named_indices.clone();
+    let mut directions = order_by.ordering.iter().map(|ordering| match ordering.order {
+        crate::order::Order::Asc => OrderDirection::Ascending,
+        crate::order::Order::Desc => OrderDirection::Descending,
+    }).collect::<Vec<_>>();
+    for column in 0..child.relation.schema.len() {
+        if !named_indices.contains(&column) {
+            key_indices.push(column);
+            directions.push(OrderDirection::Ascending);
+        }
     }
     let descriptor = relation_result_descriptors(&child.relation)
         .map_err(|_| BgpPlanError::OrderByUnsupportedShape)?;
@@ -12177,10 +12204,6 @@ fn plan_exact_scalar_order(
             ) => Ok(*datatype),
         _ => return Err(BgpPlanError::OrderByUnsupportedValue),
     }).collect::<Result<Vec<_>, _>>()?;
-    let directions = order_by.ordering.iter().map(|ordering| match ordering.order {
-        crate::order::Order::Asc => OrderDirection::Ascending,
-        crate::order::Order::Desc => OrderDirection::Descending,
-    }).collect::<Vec<_>>();
     let schema = child.relation.schema.clone();
     let domains = child.relation.domains.clone();
     let collection = child.collection;

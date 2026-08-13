@@ -1005,6 +1005,110 @@ fn multikey_order_nested_limit_e2e() {
         .spawn(assert_multikey_order_nested_limit_e2e).unwrap().join().unwrap();
 }
 
+fn assert_subset_order_tiebreak_e2e() {
+    use terminus_store::proof::order::OrderDirection;
+    // Base layer: cross product of {x=1, x=2} and {y=3, y=4} — inner BGP schema [x, y], four rows.
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for value in [1u32, 2] {
+        builder.add_value_triple(ValueTriple::new_value(&iri("left"), &iri("x"), u32::make_entry(&value))).unwrap();
+    }
+    for value in [3u32, 4] {
+        builder.add_value_triple(ValueTriple::new_value(&iri("right"), &iri("y"), u32::make_entry(&value))).unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let root = layer.state.commitment_root;
+
+    // The template names ONLY x; y is appended as an ascending total-order tie-break. Both x values
+    // repeat (each pairs with y in {3,4}), so the tie-break is load-bearing: it fixes the order
+    // WITHIN each x group. This is the case the pre-existing complete-row path rejected closed.
+    let child = || and_of(vec![
+        tv_subj_const("left", "x", "x"), gte(dvar("x"), duint(0)),
+        tv_subj_const("right", "y", "y"), gte(dvar("y"), duint(0)),
+    ]);
+    let ascending = |var: &str| Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: var.into(), order: Order::Asc }],
+        query: Box::new(child()),
+    });
+    let compiled = plan_bgp(&ascending("x")).unwrap();
+    assert!(matches!(compiled.relation.statement,
+        CompiledRelationStatement::ExactMultiOrder { ref key_indices, ref directions, .. }
+            if key_indices == &[0, 1] && directions == &[OrderDirection::Ascending; 2]),
+        "subset template must fold y in as an ascending tie-break: full-row order over [x, y]");
+
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    let number = |value: &CanonicalResultValue| match value {
+        CanonicalResultValue::Object(CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, lexical }) =>
+            u32::from_be_bytes(lexical.as_slice().try_into().unwrap()),
+        other => panic!("unexpected ordered value {other:?}"),
+    };
+    let rows = (0..values[0].len())
+        .map(|r| (number(&values[0][r]), number(&values[1][r])))
+        .collect::<Vec<_>>();
+    // Sorted by x ascending, ties on x broken by y ascending — a bound total order.
+    assert_eq!(rows, vec![(1, 3), (1, 4), (2, 3), (2, 4)]);
+
+    let envelope = proved.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+
+    // ANTI-SUBSTITUTION: the same envelope must not verify under a descending template — the key
+    // direction is folded into both the query digest and the bound sort key.
+    let descending = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Desc }],
+        query: Box::new(child()),
+    })).unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &descending, &layer, root).is_err());
+
+    // NEGATIVE — TIE-BREAK SWAP: exchange the two x=1 rows (indices 0 and 1). The output stays a
+    // permutation of the input AND stays sorted on x (1,1,2,2), but y within the x=1 group becomes
+    // descending (4 then 3), so the proven lexicographic-nondecreasing chain over [x, y] breaks.
+    let mut tie_swapped = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    for column in tie_swapped.result_columns.iter_mut() { column.swap(0, 1); }
+    for (commitment, column) in tie_swapped.result_commitments.iter_mut().zip(&tie_swapped.result_columns) {
+        *commitment = commit_column(&pad(column, 1usize << tie_swapped.result_log_domain)).unwrap();
+    }
+    assert!(decode_and_verify_envelope(&tie_swapped.encode().unwrap(), &compiled, &layer, root).is_err());
+
+    // NEGATIVE — REORDER across x groups: swap rows 0 (1,3) and 3 (2,4) — no longer sorted on x.
+    let mut reordered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    let last = reordered.result_len - 1;
+    for column in reordered.result_columns.iter_mut() { column.swap(0, last); }
+    for (commitment, column) in reordered.result_commitments.iter_mut().zip(&reordered.result_columns) {
+        *commitment = commit_column(&pad(column, 1usize << reordered.result_log_domain)).unwrap();
+    }
+    assert!(decode_and_verify_envelope(&reordered.encode().unwrap(), &compiled, &layer, root).is_err());
+
+    // NEGATIVE — TRUNCATION: dropping the final row is no longer a full-row permutation of the input.
+    let mut truncated = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    let drop = truncated.result_len - 1;
+    for column in truncated.result_columns.iter_mut() { column[drop] = ArkFr::zero(); }
+    truncated.result_len = drop;
+    for (commitment, column) in truncated.result_commitments.iter_mut().zip(&truncated.result_columns) {
+        *commitment = commit_column(&pad(column, 1usize << truncated.result_log_domain)).unwrap();
+    }
+    assert!(decode_and_verify_envelope(&truncated.encode().unwrap(), &compiled, &layer, root).is_err());
+
+    // NEGATIVE — ROW SUBSTITUTION (add/drop a row): replace a committed key with a different catalog
+    // id, so the output multiset no longer equals the input relation.
+    let mut substituted = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    let replacement = layer.node_value_catalog.iter()
+        .find(|record| matches!(record.triple.object, CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, .. })
+            && ArkFr::from_u64(record.object_id) != substituted.result_columns[1][0])
+        .map(|record| ArkFr::from_u64(record.object_id)).unwrap();
+    substituted.result_columns[1][0] = replacement;
+    for (commitment, column) in substituted.result_commitments.iter_mut().zip(&substituted.result_columns) {
+        *commitment = commit_column(&pad(column, 1usize << substituted.result_log_domain)).unwrap();
+    }
+    assert!(decode_and_verify_envelope(&substituted.encode().unwrap(), &compiled, &layer, root).is_err());
+}
+
+#[test]
+fn subset_order_tiebreak_e2e() {
+    std::thread::Builder::new().name("woql-subset-order-tiebreak".into()).stack_size(256 * 1024 * 1024)
+        .spawn(assert_subset_order_tiebreak_e2e).unwrap().join().unwrap();
+}
+
 fn assert_bounded_when_success_plus_true_e2e() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();
