@@ -2689,20 +2689,65 @@ fn visible_projected_distinct_over_three_columns_rejects_the_gadget_limit() {
 }
 
 #[test]
-fn visible_projected_distinct_over_a_non_bgp_inner_still_rejects() {
-    // A projected Distinct over a bag-union (Or) inner is NOT a compilable BGP: keep rejecting
-    // closed. (The beneath-Count composition remains the only bag-union distinct path for now.)
-    let branch = tv("x", "p", "y");
-    let over_or = Query::Distinct(Distinct {
-        variables: vec!["x".into()],
+fn visible_projected_distinct_over_a_bag_union_compiles_to_the_store_gadget() {
+    // `SELECT DISTINCT ?subject WHERE { {?subject p ?o} OR {?subject q ?o} }` — the two Or branches
+    // produce an overlapping/duplicate bag of ?subject. The visible top-level projected Distinct now
+    // routes the node-position key column through the audited store distinct gadget over a BAG-UNION
+    // inner (real bag dedup) — the SAME audited gadget the beneath-Count path already uses (see
+    // `count_projected_distinct_composes_over_duplicate_bag_union`). The bag union is just an
+    // authenticated bag, so the dedup gadget proving `output == distinct keys of the input bag`
+    // collapses the branch overlap exactly as it would for a single BGP bag.
+    //
+    // (The two branches share the object variable `?o` so their schemas unify into `[subject, o]`;
+    // the distinct key is the node-position subject — the only column with a committed single
+    // namespace domain, since a bare object is a mixed node/literal `Value` with no distinct key.)
+    let q = Query::Distinct(Distinct {
+        variables: vec!["subject".into()],
         query: Box::new(Query::Select(Select {
-            variables: vec!["x".into()],
+            variables: vec!["subject".into()],
             query: Box::new(Query::Or(Or {
-                or: vec![branch.clone(), branch],
+                or: vec![tv("subject", "p", "o"), tv("subject", "q", "o")],
             })),
         })),
     });
-    reject(over_or, BgpPlanError::DistinctWithProjectionOrCount);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["subject"]);
+    let CompiledRelationStatement::Distinct { input, key_columns } = &compiled.relation.statement
+    else {
+        panic!(
+            "expected a Distinct statement over a bag union, got {:?}",
+            compiled.relation.statement
+        );
+    };
+    assert_eq!(key_columns, &[0]);
+    assert!(
+        input.as_bag_union().is_some(),
+        "the visible projected distinct gadget must wrap the bag-union inner"
+    );
+    assert_eq!(compiled.count_variable, None);
+    assert!(!compiled.full_row_distinct);
+    assert_eq!(compiled.projection, Some(vec![0]));
+}
+
+#[test]
+fn visible_projected_distinct_over_a_non_bag_union_non_bgp_inner_still_rejects() {
+    // A bag-union (Or) inner is now accepted on the visible path (previous test), but every OTHER
+    // non-BGP inner keeps rejecting closed. Here `?x p ?y . NOT { ?y q ?z }` compiles to a
+    // `LeftAnti` statement — an anti-join is NOT a plain authenticated bag the dedup gadget can key
+    // on — so a visible projected Distinct over it must still fail closed at the same guard.
+    let anti = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["x".into()],
+            query: Box::new(and_of(vec![
+                tv("x", "p", "y"),
+                Query::Not(Not {
+                    query: Box::new(tv("y", "q", "z")),
+                }),
+            ])),
+        })),
+    });
+    reject(anti, BgpPlanError::DistinctWithProjectionOrCount);
 }
 
 #[test]

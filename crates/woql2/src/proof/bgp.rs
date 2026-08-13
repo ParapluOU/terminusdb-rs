@@ -1744,13 +1744,32 @@ pub(crate) fn compile_distinct_relation(
         // A VISIBLE, top-level projected `Distinct` (e.g. `SELECT DISTINCT ?x …`): route the
         // projected key columns through the audited store distinct gadget (real bag dedup),
         // exactly as the beneath-`Count` path below does — the gadget proves the output tuples
-        // are EXACTLY the distinct key tuples of the authenticated input bag (so a
-        // duplicate-producing child is fine; it is what dedup exists for). Permitted ONLY over a
-        // compilable conjunctive BGP inner: every non-BGP inner (Or/BagUnion, property paths,
-        // subsumption closures, sequential read-operators, ordered/range constructs) keeps
-        // rejecting closed. Every selection here is `outside` (there is no enclosing Count), so
-        // the Select-inside-Count guard below is vacuous for this path.
-        if !matches!(relation.statement, CompiledRelationStatement::Bgp(_)) {
+        // are EXACTLY the distinct key tuples of the authenticated input BAG (so a
+        // duplicate-producing child is fine; that is what dedup exists for). Two inner shapes are
+        // sound here, for the SAME reason:
+        //   * a compilable conjunctive `Bgp` — a single authenticated bag of rows; and
+        //   * an audited `BagUnion` (a WOQL `Or`) — the multiset UNION of its branch bags is still
+        //     just an authenticated bag, and the store's Distinct envelope node is generic over its
+        //     input (it runs `prove_bounded` on whatever child it wraps, including a `BagUnion`
+        //     envelope). The dedup gadget proves output == the distinct key tuples of that bag, so
+        //     the overlap/duplicates the `Or` branches produce are exactly what it collapses. This
+        //     is precisely the reasoning the beneath-`Count` path already relies on (it has no
+        //     statement-type guard and composes over `Or` today — see the passing test
+        //     `count_projected_distinct_composes_over_duplicate_bag_union`).
+        // EVERYTHING else still rejects closed on the visible path: property-path closures
+        // (`TransitiveClosure`/`TupleDisequality`), subsumption/cross-root joins, sequential
+        // read-operators (`LeftAnti`/`LeftOuter`/`When`/`Equality`), and ordered/range/slice
+        // constructs — their committed-output order or bag shape is not a plain authenticated bag
+        // that the dedup gadget can key on. The soundness of the accepted cases does NOT rest on
+        // the statement shape alone: the downstream key-column checks below (domain KNOWN,
+        // non-nullable, ≤2 keys) still run and still gate every case. They resolve the key columns
+        // against `relation.schema`, which for a `BagUnion` is the branches' UNIFIED schema — the
+        // identical resolution the count path performs. Every selection here is `outside` (there is
+        // no enclosing Count), so the Select-inside-Count guard below is vacuous for this path.
+        if !matches!(
+            relation.statement,
+            CompiledRelationStatement::Bgp(_) | CompiledRelationStatement::BagUnion { .. }
+        ) {
             return Err(BgpPlanError::DistinctWithProjectionOrCount);
         }
     } else {

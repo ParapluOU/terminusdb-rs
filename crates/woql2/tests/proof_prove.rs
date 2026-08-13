@@ -4170,6 +4170,131 @@ fn visible_projected_distinct_proves_the_exact_set_and_rejects_tamper() {
 }
 
 #[test]
+fn visible_projected_distinct_over_bag_union_proves_the_exact_set_and_rejects_tamper() {
+    // GROUND TRUTH for the compiler relaxation: a VISIBLE top-level projected Distinct over a
+    // bag-union (`Or`) inner really proves+verifies through the store, with no enclosing Count.
+    //
+    // The layer makes the union bag genuinely overlapping AND internally duplicated, so dedup is
+    // non-trivial. `?subject` under predicate `p` yields the bag [a, a, b, c]; under predicate `q`
+    // it yields [a, c, d]. The union `{?subject p ?o} OR {?subject q ?o}` is therefore the 7-row bag
+    // a×3, b×1, c×2, d×1 — whose DISTINCT set is exactly {a, b, c, d} (a and c overlap both
+    // branches). We size the distinct set to a power of two (4) so the committed result columns pad
+    // cleanly for the re-commit tampers below. (The branches share the object variable `?o` so their
+    // schemas unify; the distinct key is the node-position subject.)
+    let lc = build_layer(&[
+        ("a", "p", "x"),
+        ("a", "p", "y"),
+        ("b", "p", "x"),
+        ("c", "p", "x"),
+        ("a", "q", "z"),
+        ("c", "q", "z"),
+        ("d", "q", "z"),
+    ]);
+    let q = Query::Distinct(Distinct {
+        variables: vec!["subject".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["subject".into()],
+            query: Box::new(Query::Or(Or {
+                or: vec![tv("subject", "p", "o"), tv("subject", "q", "o")],
+            })),
+        })),
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert!(!compiled.full_row_distinct, "real gadget dedup, not the full-row no-op");
+    let CompiledRelationStatement::Distinct { input, .. } = &compiled.relation.statement else {
+        panic!("expected a Distinct statement, got {:?}", compiled.relation.statement);
+    };
+    assert!(
+        input.as_bag_union().is_some(),
+        "the distinct gadget must wrap the bag-union inner"
+    );
+    assert_eq!(compiled.count_variable, None);
+    assert_eq!(compiled.projection, Some(vec![0]));
+
+    let proved = compiled.prove(&lc).unwrap();
+    // The exact distinct set is {a, b, c, d}: four output tuples collapsing the seven input rows.
+    assert_eq!(proved.result_len, 4);
+    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+
+    // The resolved distinct subjects are exactly {a, b, c, d} (order-agnostic).
+    let resolved = proved
+        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    let got: std::collections::BTreeSet<CanonicalObject> = resolved[0].iter().cloned().collect();
+    let want: std::collections::BTreeSet<CanonicalObject> = ["a", "b", "c", "d"]
+        .into_iter()
+        .map(|n| CanonicalObject::Node(iri(n).into_bytes()))
+        .collect();
+    assert_eq!(got, want);
+
+    let bytes = proved
+        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.state.commitment_root).unwrap();
+
+    // NEGATIVE 1 — a DUPLICATED output tuple: re-present {a, a, ...}. Re-commit so the tamper is not
+    // caught merely by a commitment mismatch; the distinct gadget's own uniqueness check rejects.
+    let mut duplicated = RecursiveRelationEnvelope::decode(&bytes).unwrap();
+    duplicated.result_columns[0][1] = duplicated.result_columns[0][0];
+    duplicated.result_values[0][1] = duplicated.result_values[0][0].clone();
+    duplicated.result_commitments[0] = commit_column(&duplicated.result_columns[0]).unwrap();
+    assert!(decode_and_verify_envelope(
+        &duplicated.encode().unwrap(),
+        &compiled,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+
+    // NEGATIVE 2 — a DROPPED distinct value: present only {a}. The equality classes no longer cover
+    // every input row of the union bag, so the gadget rejects (class-coverage != input cardinality).
+    let mut dropped = RecursiveRelationEnvelope::decode(&bytes).unwrap();
+    dropped.result_len = 1;
+    dropped.result_log_domain = 1;
+    for column in &mut dropped.result_columns {
+        column.truncate(1);
+        column.resize(2, ArkFr::zero());
+    }
+    for values in &mut dropped.result_values {
+        values.truncate(1);
+    }
+    for (column, commitment) in dropped
+        .result_columns
+        .iter()
+        .zip(&mut dropped.result_commitments)
+    {
+        *commitment = commit_column(column).unwrap();
+    }
+    assert!(decode_and_verify_envelope(
+        &dropped.encode().unwrap(),
+        &compiled,
+        &lc,
+        lc.state.commitment_root,
+    )
+    .is_err());
+
+    // ANTI-SUBSTITUTION — the bag-union `DISTINCT ?subject` proof must not verify as a DIFFERENT
+    // valid query's plan. Re-aiming this envelope at the single-branch `DISTINCT ?subject WHERE {
+    // ?subject p ?object }` (a valid Distinct-over-BGP, predicate `p` present in the layer) folds a
+    // different query into the Fiat-Shamir transcript, so verification rejects.
+    let other = plan_bgp(&Query::Distinct(Distinct {
+        variables: vec!["subject".into()],
+        query: Box::new(Query::Select(Select {
+            variables: vec!["subject".into()],
+            query: Box::new(tv("subject", "p", "object")),
+        })),
+    }))
+    .unwrap();
+    assert!(matches!(
+        other.relation.statement,
+        CompiledRelationStatement::Distinct { .. }
+    ));
+    assert!(
+        decode_and_verify_envelope(&bytes, &other, &lc, lc.state.commitment_root).is_err()
+    );
+}
+
+#[test]
 fn repeated_variable_atom_proves_same_row_equality() {
     let lc = build_layer(&[
         ("a", "knows", "a"),
