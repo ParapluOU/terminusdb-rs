@@ -300,7 +300,7 @@ fn read_document_flat_and_list_end_to_end() {
         // ---- ADVERSARIAL 3: tamper the delivered list order / forge the walk envelope. ----
         // Corrupt one committed element id in the list-walk sub-proof: the store walk re-verify (bound
         // to the trusted instance root and the (subject, predicate) digest) rejects the swap.
-        bundle.lists[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.lists[0].walk.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
@@ -828,7 +828,7 @@ fn read_document_inherited_frame_end_to_end() {
         }
 
         // ---- ADVERSARIAL: tamper the INHERITED list order / forge the walk envelope. ----
-        bundle.lists[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.lists[0].walk.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
@@ -1036,7 +1036,7 @@ fn read_document_subdocument_inlining_end_to_end() {
         // ---- ADVERSARIAL: tamper the NESTED list-walk order → verify fails. ----
         match &mut bundle.links[0].target {
             ProvedLinkTarget::Inline(m1) => {
-                m1.lists[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+                m1.lists[0].walk.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
             }
             _ => panic!("the meta link should be inlined"),
         }

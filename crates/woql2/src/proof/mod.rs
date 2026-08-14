@@ -42,9 +42,10 @@ use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
 };
 use terminus_store::proof::envelope::{
-    plan_digest, resolve_relation_equality_constraint, resolve_tuple_disequality_pairs,
-    CollectionSumTemplate, EqualityValueDomain,
-    GeneratedU64ComparisonOp, LayerBgpEnvelope,
+    plan_digest, prove_ordered_list_walk_reconciled, resolve_relation_equality_constraint,
+    resolve_tuple_disequality_pairs, verify_ordered_list_walk_reconciled, CollectionSumTemplate,
+    EqualityValueDomain,
+    GeneratedU64ComparisonOp, LayerBgpEnvelope, OrderedListWalkReconciledProof,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
     RelationProofPlanKind, TransitiveClosureFixpoint, TransitiveClosureRound, TransitiveClosureSeed,
     TupleDisequalityNode, TupleDisequalityPairPlan,

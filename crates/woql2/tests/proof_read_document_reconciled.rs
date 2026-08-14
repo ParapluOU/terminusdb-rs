@@ -10,15 +10,18 @@
 //!     (verifying the reconciled bundle through the materialized entry) each fail; AND for 6b: a dropped
 //!     inlined child sub-bundle, an injected duplicate child, a `Stop` over a re-derived subdocument
 //!     child, and a subdocument cycle each reject;
-//!   * REJECT BOUNDARY (delta path) — a top-level `List` / `Array` property, a subdocument node that
-//!     itself bears a `List` (rejected from INSIDE the recursion), and a delta-head schema each
-//!     reject-close with the specific `BgpPlanError`.
+//!   * LIST PARITY (delta path, 6c-iii) — a top-level `List` property proves over the delta stack, the
+//!     resolved list is the exact ordered `[a, b, a]`, the whole document EQUALS the materialized-path
+//!     result, and a tampered list order reject-closes.
+//!   * REJECT BOUNDARY (delta path) — a top-level `Array` property, a subdocument node that itself
+//!     bears an `Array` (rejected from INSIDE the recursion), and a delta-head schema each reject-close
+//!     with the specific `BgpPlanError`.
 //!
-//! Increment 6b LIFTS the 6a subdocument reject: a FLAT subdocument (scalar / langString / Optional /
-//! Set / non-subdoc-link nested to the budget) now INLINES over the delta stack via the inc-3 recursion
-//! threaded over the reconciled instance source — the child's own `D` / type-checks route over
-//! `present`. A subdocument node that bears a `List`/`Array` still rejects (the walk composites are not
-//! reconciled until 6c/6d), through `ReadDocumentDeltaWalkDeferred` raised inside the recursion.
+//! Increment 6c LIFTS the delta-path `List` reject: an ordered `List` now proves over the reconciled
+//! `present` via the store's reconciled `OrderedListWalk` (built on the 6c-i foundation + the audited
+//! gluing gadgets — NO new crypto). Increment 6b already INLINES a FLAT subdocument over the delta
+//! stack, so a subdocument's `List` proves recursively too. A node bearing an `Array` still rejects
+//! (the `OrderedArrayWalk` composite is not reconciled until 6d), through `ReadDocumentDeltaWalkDeferred`.
 //!
 //! Reconcile is proof-heavy (each bound-subject read reconciles the whole present set), so the delta
 //! stack is kept SMALL (base + 1 delta) and each committed group carries >= 2 records (the reconcile
@@ -39,8 +42,8 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::document::ReadDocument;
 use terminusdb_woql2::proof::{
-    plan_read_document, BgpPlanError, CompiledReadDocument, InstanceSubjectProof, ProvedChildTypeWitness,
-    ProvedLink, ProvedLinkTarget, QueryProofError, ResolvedValue,
+    plan_read_document, BgpPlanError, CompiledReadDocument, InstanceSubjectProof, ListWalkProof,
+    ProvedChildTypeWitness, ProvedLink, ProvedLinkTarget, QueryProofError, ResolvedValue,
 };
 use terminusdb_woql2::value::{NodeValue, Value};
 
@@ -49,6 +52,8 @@ use terminusdb_woql2::value::{NodeValue, Value};
 // ---------------------------------------------------------------------------------------------------
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const SYS_CLASS: &str = "http://terminusdb.com/schema/sys#Class";
@@ -356,20 +361,129 @@ fn assert_reconciled_prove_rejects(
     });
 }
 
-#[test]
-fn read_document_reconciled_rejects_list() {
-    let schema = reject_schema(vec![
+/// A cons cell IRI `http://ex/cell{i}`.
+fn cell(i: usize) -> String {
+    iri(&format!("cell{i}"))
+}
+
+/// The cons chain `subject -predicate-> [string elements...]` — `t(subject,predicate,cell0)` then per
+/// element `t(celli, rdf:first, "e"^^xsd:string)` + `t(celli, rdf:rest, celli+1 | rdf:nil)`.
+fn cons_string_facts(subject: &str, predicate: &str, elements: &[&str]) -> Vec<Fact> {
+    let mut facts = Vec::new();
+    if elements.is_empty() {
+        facts.push(Fact::Node(subject.into(), predicate.into(), RDF_NIL.into()));
+        return facts;
+    }
+    facts.push(Fact::Node(subject.into(), predicate.into(), cell(0)));
+    for (i, e) in elements.iter().enumerate() {
+        facts.push(Fact::Str(cell(i), RDF_FIRST.into(), (*e).into()));
+        let rest = if i + 1 < elements.len() { cell(i + 1) } else { RDF_NIL.to_string() };
+        facts.push(Fact::Node(cell(i), RDF_REST.into(), rest));
+    }
+    facts
+}
+
+/// The reject-fixture schema plus a `lst: List<xsd:string>` property.
+fn list_schema() -> Arc<LayerCommitment> {
+    reject_schema(vec![
         Fact::Node(iri("C"), iri("lst"), iri("ListDesc")),
         Fact::Node(iri("ListDesc"), RDF_TYPE.into(), SYS_LIST.into()),
         Fact::Node(iri("ListDesc"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
-    ]);
-    // A single head edge makes the list PRESENT (its ordered walk is not reconciled → reject).
-    let layers = reject_stack(vec![Fact::Node(iri("doc"), iri("lst"), iri("head0"))]);
-    assert_reconciled_prove_rejects("reconciled-rejects-list", schema, layers, |e| {
-        matches!(
-            e,
-            QueryProofError::Plan(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" })
-        )
+    ])
+}
+
+/// A delta stack carrying `doc rdf:type C`, a `fill` value, and the cons chain in the BASE, with two
+/// more `fill` values in the delta (so each committed group has >= 2 records). The whole list is thus
+/// read over the reconciled `present` (base ⊎ delta), not a single materialized layer.
+fn list_stack(list_facts: Vec<Fact>) -> Vec<Arc<LayerCommitment>> {
+    let mut base = vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Str(iri("doc"), iri("fill"), "a".into()),
+    ];
+    base.extend(list_facts);
+    let delta = vec![
+        Fact::Str(iri("doc"), iri("fill"), "b".into()),
+        Fact::Str(iri("doc"), iri("fill"), "c".into()),
+    ];
+    delta_stack(base, delta)
+}
+
+/// The materialized reference instance holding the SAME final present as [`list_stack`].
+fn list_materialized_instance(list_facts: Vec<Fact>) -> Arc<LayerCommitment> {
+    let mut facts = vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Str(iri("doc"), iri("fill"), "a".into()),
+        Fact::Str(iri("doc"), iri("fill"), "b".into()),
+        Fact::Str(iri("doc"), iri("fill"), "c".into()),
+    ];
+    facts.extend(list_facts);
+    layer(facts)
+}
+
+/// 6c-iii PARITY: a top-level `List` property proves over the delta stack, the resolved list is the
+/// EXACT ordered `[a, b, a]`, the whole document EQUALS the materialized-path result, and a tampered
+/// list order reject-closes.
+#[test]
+fn read_document_reconciled_list_parity() {
+    on_big_stack("read-document-reconciled-list-parity", 1024, || {
+        let schema = list_schema();
+        let schema_root = schema.state.commitment_root;
+        let compiled = compiled_read(&iri("doc"));
+
+        // ---- Materialized path (the reference answer for the SAME final state). ----
+        let mat_instance =
+            list_materialized_instance(cons_string_facts(&iri("doc"), &iri("lst"), &["a", "b", "a"]));
+        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
+        let mat_doc = mat_bundle
+            .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
+            .unwrap();
+
+        // ---- Delta-stack (reconciled) path over the SAME final state. ----
+        let layers = list_stack(cons_string_facts(&iri("doc"), &iri("lst"), &["a", "b", "a"]));
+        let lref = refs(&layers);
+        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let db_root = database_root(&instance_head_root, &schema_root);
+        let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
+        let delta_doc = bundle
+            .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+            .unwrap();
+
+        // PARITY: the delta-stack document is byte-for-byte the materialized-path document.
+        assert_eq!(delta_doc, mat_doc, "delta-stack list document must equal the materialized document");
+
+        // The list renders as the EXACT ordered `[a, b, a]` (order + duplicate multiplicity).
+        match delta_doc.get(&iri("lst")).unwrap() {
+            ResolvedValue::List(elements) => {
+                let ls: Vec<Vec<u8>> = elements.iter().map(as_value_lexical).collect();
+                assert_eq!(ls, vec![b"a".to_vec(), b"b".to_vec(), b"a".to_vec()]);
+            }
+            other => panic!("lst should be a List, got {other:?}"),
+        }
+
+        // ---- SOUNDNESS: a corrupted combined root fails. ----
+        let mut bad = db_root;
+        bad[0] ^= 0xFF;
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, bad)
+                .is_err(),
+            "a corrupted combined root must fail verify",
+        );
+
+        // ---- SOUNDNESS: a TAMPERED list order rejects. Reorder the reconciled walk's public element
+        //      ids so they no longer open the authenticated `com_elements` (the chain value-resolution
+        //      re-commit binding fails closed). ----
+        match &mut bundle.lists[0].walk {
+            ListWalkProof::Reconciled(walk) => walk.element_ids.swap(0, 1),
+            ListWalkProof::Materialized(_) => panic!("delta-path list walk must be Reconciled"),
+        }
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+                .is_err(),
+            "a tampered list order must fail verify",
+        );
     });
 }
 
@@ -391,31 +505,31 @@ fn read_document_reconciled_rejects_array() {
 }
 
 #[test]
-fn read_document_reconciled_subdocument_with_list_rejects() {
-    // 6b INLINES a FLAT subdocument over the delta stack, but a subdocument node that itself bears a
-    // `List` property STILL reject-closes — the ordered `OrderedListWalk` composite is not reconciled
-    // over `present` until 6c. Crucially the reject is raised from INSIDE the subdocument recursion (the
-    // child `addr1`'s own `prove_body` hits the delta-path list reject), proving the still-reject
-    // boundary is the top-level 6a restriction applied recursively.
+fn read_document_reconciled_subdocument_with_array_rejects() {
+    // 6c INLINES a subdocument's `List` over the delta stack (its ordered walk is now reconciled), but
+    // a subdocument node that bears an `Array` STILL reject-closes — the `OrderedArrayWalk` composite is
+    // not reconciled over `present` until 6d. Crucially the reject is raised from INSIDE the subdocument
+    // recursion (the child `addr1`'s own `prove_body` hits the delta-path array reject), proving the
+    // still-reject boundary is the array restriction applied recursively.
     let schema = reject_schema(vec![
         Fact::Node(iri("C"), iri("addr"), iri("Address")),
         Fact::Node(iri("Address"), RDF_TYPE.into(), SYS_CLASS.into()),
         Fact::Node(iri("Address"), SYS_SUBDOC.into(), RDF_NIL.into()),
-        Fact::Node(iri("Address"), iri("items"), iri("ItemsList")),
-        Fact::Node(iri("ItemsList"), RDF_TYPE.into(), SYS_LIST.into()),
-        Fact::Node(iri("ItemsList"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+        Fact::Node(iri("Address"), iri("items"), iri("ItemsArray")),
+        Fact::Node(iri("ItemsArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+        Fact::Node(iri("ItemsArray"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
     ]);
-    // The subdocument child `addr1` is typed `Address` and carries a PRESENT list head edge (one head
-    // edge makes the nested list present ⇒ the recursive `prove_body` hits the delta-path walk reject).
+    // The subdocument child `addr1` is typed `Address` and carries a PRESENT array cell edge (one cell
+    // edge makes the nested array present ⇒ the recursive `prove_body` hits the delta-path walk reject).
     let layers = reject_stack(vec![
         Fact::Node(iri("doc"), iri("addr"), iri("addr1")),
         Fact::Node(iri("addr1"), RDF_TYPE.into(), iri("Address")),
-        Fact::Node(iri("addr1"), iri("items"), iri("head0")),
+        Fact::Node(iri("addr1"), iri("items"), iri("cell0")),
     ]);
-    assert_reconciled_prove_rejects("reconciled-subdoc-with-list", schema, layers, |e| {
+    assert_reconciled_prove_rejects("reconciled-subdoc-with-array", schema, layers, |e| {
         matches!(
             e,
-            QueryProofError::Plan(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" })
+            QueryProofError::Plan(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "array" })
         )
     });
 }

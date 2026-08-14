@@ -341,13 +341,42 @@ pub struct ProvedFrame {
     pub ranges: Vec<ProvedRangeClassification>,
 }
 
+/// The ordered-list-walk proof carried for one PRESENT list property, ROUTED by the entry point (the
+/// materialized-vs-reconciled analogue of [`InstanceSubjectProof`], added for increment 6c-iii). The
+/// materialized arm is byte-identical to increments 2b–5; the reconciled arm carries the store's
+/// standalone `OrderedListWalk`-over-`present` proof. [`ListWalkProof::resolve`] pairs the carried
+/// variant against the entry's [`InstanceSource`]; a variant that disagrees reject-closes.
+#[derive(Debug)]
+pub enum ListWalkProof {
+    /// The materialized `OrderedListWalk` envelope over a single instance layer (the base path).
+    Materialized(ProvedBgp),
+    /// The reconciled ordered-list walk over the delta stack's `present` (the 6c-iii delta path) —
+    /// carried WHOLESALE (a store-private composite), re-verified by the store's own verify entry.
+    Reconciled(Box<OrderedListWalkReconciledProof>),
+}
+
+impl ListWalkProof {
+    /// Test/inspection helper mirroring [`InstanceSubjectProof::expect_materialized_mut`]: the
+    /// materialized envelope (panics on a reconciled walk), so the materialized suite's tamper cases
+    /// reach the committed walk result columns after the field-type change.
+    pub fn expect_materialized_mut(&mut self) -> &mut ProvedBgp {
+        match self {
+            ListWalkProof::Materialized(bgp) => bgp,
+            ListWalkProof::Reconciled(_) => {
+                panic!("expected a materialized list walk proof, found a reconciled one")
+            }
+        }
+    }
+}
+
 /// One PRESENT list property's ordered-walk sub-proof.
 #[derive(Debug)]
 pub struct ProvedListProperty {
     /// The list-valued predicate IRI.
     pub predicate: Vec<u8>,
-    /// The store's `OrderedListWalk` proof for `(id, predicate)` — the exact ordered element sequence.
-    pub walk: ProvedBgp,
+    /// The `OrderedListWalk` proof for `(id, predicate)` — the exact ordered element sequence — over
+    /// the materialized layer OR the reconciled `present`, routed by the entry point.
+    pub walk: ListWalkProof,
 }
 
 /// One PRESENT 1-D dense array property's ordered-walk sub-proof (increment 4). The exact analogue of
@@ -1804,21 +1833,29 @@ fn prove_body(
                         .into())
                     }
                 }
-                // DELTA-PATH REJECT (6a). A PRESENT list reject-closes: the `OrderedListWalk` composite
-                // reads a single MATERIALIZED layer and is not reconciled over `present` yet (6c).
-                // Rendering the raw cons head would drop the order — refuse rather than under-deliver.
-                if instance.is_reconciled() {
-                    return Err(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" }.into());
-                }
-                let layer = instance.root_binding_layer();
-                let instance_root = instance.instance_root();
-                let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), &prop.predicate);
-                let walk = walk_compiled.prove_with_context(ctx, layer)?;
                 // The list's ORDERED elements come from the authenticated walk (NOT the raw cons head);
                 // re-resolve them to run the per-element ACTUAL-TYPE / `@unfold` reject over the real
-                // element sequence, identically to verify.
-                let columns = walk.verify_and_resolve(&walk_compiled, layer, instance_root)?;
-                let elements = columns.into_iter().next().unwrap_or_default();
+                // element sequence, identically to verify. The walk is routed by the ENTRY POINT: a
+                // materialized layer proves the `OrderedListWalk` composite; a delta head proves the
+                // reconciled ordered-list walk over `present` (6c-iii) — NO new crypto, the reconciled
+                // walk reuses the 6c-i foundation + the audited gluing gadgets.
+                let (walk, elements) = match instance {
+                    InstanceProver::Materialized { layer, root } => {
+                        let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), &prop.predicate);
+                        let walk = walk_compiled.prove_with_context(ctx, layer)?;
+                        let columns = walk.verify_and_resolve(&walk_compiled, *layer, *root)?;
+                        let elements = columns.into_iter().next().unwrap_or_default();
+                        (ListWalkProof::Materialized(walk), elements)
+                    }
+                    InstanceProver::Reconciled { layers, .. } => {
+                        let (walk, elements) = prove_ordered_list_walk_reconciled(
+                            layers,
+                            &CanonicalObject::Node(id.as_bytes().to_vec()),
+                            &prop.predicate,
+                        )?;
+                        (ListWalkProof::Reconciled(Box::new(walk)), elements)
+                    }
+                };
                 collections.push(prove_collection_elements(
                     ctx,
                     instance,
@@ -2486,25 +2523,38 @@ fn verify_node<S: VerifierLayer>(
                     }
                     .into());
                 }
-                // DELTA-PATH REJECT (6a): the ordered `OrderedListWalk` is not reconciled over `present`
-                // yet; a present list reject-closes rather than render the raw cons head.
-                if instance.is_reconciled() {
-                    return Err(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" }.into());
-                }
-                let instance_layer = instance.root_binding_view();
                 let list_property = walk_map.get(predicate).copied().ok_or_else(|| {
                     BgpPlanError::ReadDocumentMalformedListHead {
                         predicate: iri_string(predicate),
                     }
                 })?;
                 used_walks.insert(predicate.clone());
-                let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), predicate);
-                let columns = list_property.walk.verify_and_resolve(
-                    &walk_compiled,
-                    &instance_layer,
-                    instance_root,
-                )?;
-                let elements = columns.into_iter().next().unwrap_or_default();
+                // Route the ordered element resolution by the ENTRY POINT (never the carried variant):
+                // a materialized layer re-verifies the `OrderedListWalk` envelope; a delta head
+                // re-verifies the reconciled ordered-list walk over `present` (6c-iii). A walk whose
+                // variant disagrees with the entry's `InstanceSource` reject-closes.
+                let elements = match (instance, &list_property.walk) {
+                    (InstanceSource::Materialized(view), ListWalkProof::Materialized(bgp)) => {
+                        let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), predicate);
+                        let columns =
+                            bgp.verify_and_resolve(&walk_compiled, view, instance_root)?;
+                        columns.into_iter().next().unwrap_or_default()
+                    }
+                    (InstanceSource::Reconciled(layers), ListWalkProof::Reconciled(walk)) => {
+                        verify_ordered_list_walk_reconciled(
+                            layers,
+                            instance_root,
+                            &CanonicalObject::Node(id.as_bytes().to_vec()),
+                            predicate,
+                            walk,
+                        )?
+                    }
+                    _ => {
+                        return Err(invalid(
+                            "list walk proof route does not match the entry point's instance source",
+                        ))
+                    }
+                };
                 // Per-element ACTUAL-TYPE / `@unfold` reject over the authenticated ordered elements
                 // (v1 renders bare ids; refuse any element the reference would unfold).
                 let unfold = unfold_of.get(predicate).copied().unwrap_or(false);
