@@ -909,13 +909,16 @@ pub enum BgpPlanError {
     #[error("ReadDocument top-level id class is a subdocument; a subdocument is inlined into a parent, not read directly by id; reject closed")]
     ReadDocumentSubdocumentDeferred,
 
-    /// A single-valued class LINK child whose authenticated type (or an ancestor) is `@unfoldable`
-    /// (`sys:unfoldable`), OR whose property is declared `@unfold` (`sys:unfold` on the frame range
-    /// node). `get_document(unfold(true))` UNFOLDS such a target inline; increment 3 only inlines true
-    /// SUBDOCUMENTS, so silently rendering an unfoldable/unfold target as a bare link would OMIT the
-    /// inlined content the reference includes. That is a SOUNDNESS gap (a smaller-than-reference
-    /// document), so we reject closed rather than under-deliver.
-    #[error("ReadDocument single-valued class LINK target is `@unfoldable`/`@unfold` (reference unfolds it inline); increment 3 inlines only true subdocuments, so reject closed rather than omit content")]
+    /// A target the reference would UNFOLD inline that v1 renders as a bare id. Raised for a single-valued
+    /// class LINK child whose authenticated type (or an ancestor) is `@unfoldable` (`sys:unfoldable`) OR
+    /// whose property is declared `@unfold` (`sys:unfold` on the frame range node); AND (increment-3 audit
+    /// fix) for a `Set`/`List` collection that would unfold — an `@unfold` collection property, or an
+    /// element whose ACTUAL authenticated type (reflexive `sys:inherits` closure) bears
+    /// `sys:subdocument` / `sys:unfoldable`. `get_document(unfold(true))` inlines such content; v1 inlines
+    /// only true single-valued SUBDOCUMENTS and never collection elements, so silently rendering a bare id
+    /// would OMIT the inlined content the reference includes. That is a SOUNDNESS gap (a smaller-than-
+    /// reference document), so we reject closed rather than under-deliver.
+    #[error("ReadDocument link/collection target is `@unfoldable`/`@unfold` or has a subdocument/unfoldable actual type (reference unfolds it inline); v1 inlines only single-valued subdocuments and never collection elements, so reject closed rather than omit content")]
     ReadDocumentUnfoldableDeferred,
 
     /// A subdocument INLINE recursion reached a child IRI already on the inline path (a cycle). Genuine

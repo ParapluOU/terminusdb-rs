@@ -1177,3 +1177,125 @@ fn read_document_rejects_list_of_subdocument() {
         ),
     );
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Increment 3 — collection-element unfold hole (audit fix).
+//
+// v1 does NOT inline `Set`/`List` elements; it renders each as a bare id. The audit found three
+// reachable forgeries where the reference `get_document(unfold=true)` WOULD unfold a collection element
+// but the proof rendered a bare id — a silent content OMISSION. Each MUST now reject-close.
+// ---------------------------------------------------------------------------------------------------
+
+/// (a) A `Set<E>` whose DECLARED element class `E` is `@unfoldable` (`sys:unfoldable`, non-subdocument).
+/// `get_document(unfold(true))` unfolds EACH element inline (json.pl set/list clauses 2445-2476 ->
+/// `should_unfold_property_`); v1 renders collection elements as bare ids, so the new `has_unfoldable`
+/// gate in `check_element_class` reject-closes the declared element class rather than omit the content.
+#[test]
+fn read_document_rejects_set_of_unfoldable_element() {
+    assert_prove_rejects(
+        "rd-set-of-unfoldable",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("tags"), iri("UnfoldSet")),
+            Fact::Node(iri("UnfoldSet"), RDF_TYPE.into(), SYS_SET.into()),
+            Fact::Node(iri("UnfoldSet"), SYS_CLASS_PRED.into(), iri("E")),
+            Fact::Node(iri("E"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("E"), SYS_UNFOLDABLE.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("tags"), iri("e1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "unfoldable-element"
+            })
+        ),
+    );
+}
+
+/// (a-List) A `List<E>` whose DECLARED element class `E` is `@unfoldable` — same reject as the `Set`
+/// case, via the same `check_element_class` gate.
+#[test]
+fn read_document_rejects_list_of_unfoldable_element() {
+    assert_prove_rejects(
+        "rd-list-of-unfoldable",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("items"), iri("UnfoldList")),
+            Fact::Node(iri("UnfoldList"), RDF_TYPE.into(), SYS_LIST.into()),
+            Fact::Node(iri("UnfoldList"), SYS_CLASS_PRED.into(), iri("E")),
+            Fact::Node(iri("E"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("E"), SYS_UNFOLDABLE.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("items"), iri("i1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "unfoldable-element"
+            })
+        ),
+    );
+}
+
+/// (b) A `Set` collection PROPERTY bearing `sys:unfold` (`schema_property_is_unfold`, schema.pl:716, on
+/// the `Set` descriptor node). The reference unfolds EVERY element inline; the `@unfold` flag — now read
+/// for `Set`/`List` (not only `Link`) — makes the PRESENT collection reject-close rather than render bare
+/// ids. A LITERAL element isolates the reject to the `@unfold` flag alone (a string element cannot
+/// unfold, so the per-element type check is a no-op here).
+#[test]
+fn read_document_rejects_unfold_collection_property() {
+    assert_prove_rejects(
+        "rd-unfold-collection",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("tags"), iri("UnfoldSet")),
+            Fact::Node(iri("UnfoldSet"), RDF_TYPE.into(), SYS_SET.into()),
+            Fact::Node(iri("UnfoldSet"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            // The collection descriptor bears `sys:unfold` → the reference unfolds every element.
+            Fact::Node(iri("UnfoldSet"), SYS_UNFOLD.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Str(iri("doc"), iri("tags"), "x".into()),
+        ],
+        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentUnfoldableDeferred)),
+    );
+}
+
+/// (c) A collection element whose DECLARED class is a plain non-subdocument class, but whose ACTUAL
+/// object type is a `sys:inherits`-SUBCLASS that introduces subdocument-ness (`Esub sys:inherits E`,
+/// `Esub sys:subdocument`). The reference inlines such an element; the DECLARED-class-only
+/// `check_element_class` misses it, so the per-element ACTUAL-TYPE witness (the element's
+/// root-authenticated `rdf:type` + reflexive `sys:inherits` closure — the SAME machinery the single-
+/// `Link` path uses) reject-closes it. The element's class inherits, so the prover proves its closure
+/// (an envelope recursion) → the larger stack.
+#[test]
+fn read_document_rejects_collection_element_actual_subdocument() {
+    assert_inherited_prove_rejects(
+        "rd-collection-element-actual-subdoc",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("items"), iri("ItemSet")),
+            Fact::Node(iri("ItemSet"), RDF_TYPE.into(), SYS_SET.into()),
+            // DECLARED element class `E` is a plain non-subdocument class (passes `check_element_class`).
+            Fact::Node(iri("ItemSet"), SYS_CLASS_PRED.into(), iri("E")),
+            Fact::Node(iri("E"), RDF_TYPE.into(), SYS_CLASS.into()),
+            // `Esub` is a SUBDOCUMENT subclass of `E` — the ACTUAL type of the element object below.
+            Fact::Node(iri("Esub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Esub"), SYS_INHERITS.into(), iri("E")),
+            Fact::Node(iri("Esub"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("items"), iri("o1")),
+            // `o1`'s ACTUAL type is the subdocument subclass `Esub` — the reference would inline it.
+            Fact::Node(iri("o1"), RDF_TYPE.into(), iri("Esub")),
+        ],
+        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentUnfoldableDeferred)),
+    );
+}

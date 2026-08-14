@@ -284,6 +284,32 @@ pub struct ProvedListProperty {
     pub walk: ProvedBgp,
 }
 
+/// One PRESENT `Set`/`List` collection property's per-element ACTUAL-TYPE witnesses (increment-3 audit
+/// fix). v1 does NOT inline collection elements — it renders each as a bare id — so it must PROVE that
+/// the reference would NOT unfold the collection. For each NODE-valued element the witness authenticates
+/// the element's ACTUAL `rdf:type` + reflexive `sys:inherits` closure (the SAME machinery a single-`Link`
+/// STOP uses), and verify rejects if any class in that closure bears `sys:subdocument` / `sys:unfoldable`
+/// (the reference would unfold such an element). LITERAL/scalar elements carry no witness — only
+/// node-valued elements can unfold. The `@unfold`-collection-property reject is enforced separately (it
+/// needs no per-element witness).
+#[derive(Debug)]
+pub struct ProvedCollectionProperty {
+    /// The `Set`/`List`-valued predicate IRI.
+    pub predicate: Vec<u8>,
+    /// One entry per DISTINCT node-valued element object (deduplicated by element id — an element's type
+    /// depends only on its IRI, so one witness suffices for repeated elements).
+    pub elements: Vec<ProvedCollectionElement>,
+}
+
+/// One `Set`/`List` element's ACTUAL-type witness (increment-3 audit fix).
+#[derive(Debug)]
+pub struct ProvedCollectionElement {
+    /// The element object IRI.
+    pub child_id: Vec<u8>,
+    /// The element's ACTUAL-type witness (identical shape + verification to a STOP link witness).
+    pub witness: ProvedChildTypeWitness,
+}
+
 /// A single-valued class LINK child's SUBDOCUMENT-DECISION witness (increment 3): everything needed to
 /// authenticate the child's `rdf:type` and decide whether that class is a subdocument — WITHOUT
 /// classifying the child's own property frame. A STOP link (child is NOT a subdocument) carries ONLY
@@ -349,6 +375,10 @@ pub struct ProvedReadDocument {
     pub lists: Vec<ProvedListProperty>,
     /// One entry per PRESENT single-valued class LINK property object (stop link or inlined subdoc).
     pub links: Vec<ProvedLink>,
+    /// One entry per PRESENT `Set`/`List` property — the per-element ACTUAL-TYPE witnesses that prove no
+    /// element would be unfolded by the reference (increment-3 audit fix; v1 renders collection elements
+    /// as bare ids, so it reject-closes any collection the reference would unfold).
+    pub collections: Vec<ProvedCollectionProperty>,
 }
 
 /// A rendered property value.
@@ -669,10 +699,11 @@ enum RangeShape {
     List,
 }
 
-/// One classified frame property: its predicate, its range shape, and — for a `Link` — whether the
-/// frame RANGE node bears `sys:unfold` (making it an `@unfold` property, `schema_property_is_unfold`,
-/// schema.pl:716). The `unfold` flag is only consulted for a `Link` that turns out to be a STOP (a
-/// non-subdocument target): the reference would unfold it, so we reject-close.
+/// One classified frame property: its predicate, its range shape, and whether the frame RANGE node
+/// bears `sys:unfold` (making it an `@unfold` property, `schema_property_is_unfold`, schema.pl:716).
+/// The `unfold` flag is consulted for a STOP `Link` (a non-subdocument target the reference would
+/// unfold) AND for a present `Set`/`List` collection (the reference unfolds EVERY element): in either
+/// case v1 renders bare ids, so an `@unfold` property reject-closes rather than omit the unfolded body.
 #[derive(Clone, Debug)]
 struct ClassifiedProperty {
     predicate: Vec<u8>,
@@ -893,6 +924,17 @@ fn check_element_class(
     if info.has_subdocument {
         return Err(shape_reject("subdocument-element"));
     }
+    // A DECLARED `@unfoldable` element class (`schema_is_unfoldable`, schema.pl:674) is unfolded inline
+    // by the reference for EVERY element (json.pl set/list clauses 2445-2476 -> `should_unfold_property_`
+    // 2343-2352). v1 renders collection elements as bare ids, so an unfoldable declared element would
+    // silently OMIT the unfolded content — reject closed. (Reflexive-closure completeness is already
+    // satisfied: an INHERITING element reject-closes just below, so a non-inheriting element's reflexive
+    // `sys:inherits` closure is exactly itself, making this direct `has_unfoldable` check the whole-
+    // closure check. The ACTUAL element object's type — which may be an unfoldable/subdocument SUBCLASS
+    // of this declared class — is checked separately, per element, at render time.)
+    if info.has_unfoldable {
+        return Err(shape_reject("unfoldable-element"));
+    }
     if info.has_inherits {
         return Err(shape_reject("inheriting-element"));
     }
@@ -1016,18 +1058,19 @@ fn classify_frame(
     let mut properties: Vec<ClassifiedProperty> = Vec::with_capacity(union.len());
     for (predicate, range) in &union {
         let shape = classify_range(range, reader)?;
-        // Detect the `@unfold` property annotation: the frame RANGE node bears `sys:unfold`. Only a
-        // `Link` can carry it meaningfully (base-type / collection ranges never unfold); the read is
-        // cached, so this costs no extra sub-proof.
-        let unfold = if shape == RangeShape::Link {
-            match range {
+        // Detect the `@unfold` property annotation: the frame RANGE node bears `sys:unfold`
+        // (`schema_property_is_unfold`, schema.pl:716). It is meaningful for a `Link` (a single-valued
+        // reference the reference unfolds inline) AND for a `Set`/`List` collection descriptor (whose
+        // presence makes the reference unfold EVERY element) — read it for all three. A base-type /
+        // scalar range never unfolds. The range read is cached, so this costs no extra sub-proof.
+        let unfold = match shape {
+            RangeShape::Link | RangeShape::Set | RangeShape::List => match range {
                 CanonicalObject::Node(r) if !is_base_type(r) => {
                     summarize(&reader.read(r)?).has_unfold
                 }
                 _ => false,
-            }
-        } else {
-            false
+            },
+            RangeShape::Scalar => false,
         };
         properties.push(ClassifiedProperty {
             predicate: predicate.clone(),
@@ -1208,6 +1251,81 @@ fn prove_core(
     })
 }
 
+/// Prove the per-element ACTUAL-TYPE witnesses for a PRESENT `Set`/`List` collection property, and
+/// reject-close if the reference would UNFOLD the collection (increment-3 audit fix). v1 renders
+/// collection elements as bare ids, so this refuses any collection `get_document(unfold=true)` would
+/// inline, in two ways:
+///   1. an `@unfold` collection property (`unfold` true) — the reference unfolds EVERY element — rejects
+///      immediately (no per-element witness needed);
+///   2. any NODE-valued element whose ACTUAL type (its reflexive `sys:inherits` closure) bears
+///      `sys:subdocument` / `sys:unfoldable` — the reference would unfold that element — rejects. The
+///      element's ACTUAL type is read from the root-authenticated instance graph (via [`prove_core`], the
+///      SAME decision core the single-`Link` path uses), so a SUBCLASS that introduces subdocument-ness
+///      is caught even when the DECLARED element class is a plain non-subdocument class.
+/// LITERAL/scalar elements cannot unfold and carry no witness. Returns one witness per DISTINCT node
+/// element (empty for an all-literal collection); prove and verify request the identical witness set.
+#[allow(clippy::too_many_arguments)]
+fn prove_collection_elements(
+    ctx: &StoreProverContext<'_>,
+    instance: &LayerCommitment,
+    schema: &LayerCommitment,
+    instance_root: ProofHash,
+    schema_root: ProofHash,
+    db_root: ProofHash,
+    predicate: &[u8],
+    elements: &[CanonicalObject],
+    unfold: bool,
+) -> Result<ProvedCollectionProperty, QueryProofError> {
+    // (1) An `@unfold` collection property: the reference unfolds every element inline. Reject before
+    //     touching the elements (fail-closed) — v1 cannot reproduce the unfolded body.
+    if unfold {
+        return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+    }
+    let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
+    let mut witnesses = Vec::new();
+    for element in elements {
+        // (2) Only a NODE element can unfold; a literal/scalar element needs no type check.
+        let child_id = match element {
+            CanonicalObject::Node(bytes) => bytes.clone(),
+            _ => continue,
+        };
+        // One witness per DISTINCT element id (an element's type depends only on its IRI).
+        if !seen.insert(child_id.clone()) {
+            continue;
+        }
+        let child_iri = std::str::from_utf8(&child_id)
+            .map_err(|_| invalid("collection element IRI is not valid UTF-8"))?
+            .to_string();
+        // Read the element's ACTUAL type + closure (never the schema's DECLARED element class). A
+        // typeless/dangling element yields clean natures (the reference renders it as a bare id too).
+        let child_core = prove_core(
+            ctx,
+            instance,
+            schema,
+            instance_root,
+            schema_root,
+            db_root,
+            &child_iri,
+        )?;
+        if child_core.natures.has_subdocument || child_core.natures.has_unfoldable {
+            return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+        }
+        witnesses.push(ProvedCollectionElement {
+            child_id,
+            witness: ProvedChildTypeWitness {
+                subject_bgp: child_core.subject_bgp,
+                class_schema: child_core.class_schema,
+                ancestor_closure: child_core.ancestor_closure,
+                ancestor_reads: child_core.ancestor_reads,
+            },
+        });
+    }
+    Ok(ProvedCollectionProperty {
+        predicate: predicate.to_vec(),
+        elements: witnesses,
+    })
+}
+
 /// Prove a RENDERED node (the root or an inlined subdocument) by EXTENDING an already-proven
 /// [`ProvenCore`]: classify the effective frame, prove one ordered-list walk per present list, and
 /// recurse into each present single-valued class LINK (inlining a subdocument child, stopping at a
@@ -1275,6 +1393,7 @@ fn prove_body(
 
     let mut lists = Vec::new();
     let mut links = Vec::new();
+    let mut collections = Vec::new();
     for prop in &properties {
         match prop.shape {
             RangeShape::List => {
@@ -1290,6 +1409,22 @@ fn prove_body(
                 }
                 let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), &prop.predicate);
                 let walk = walk_compiled.prove_with_context(ctx, instance)?;
+                // The list's ORDERED elements come from the authenticated walk (NOT the raw cons head);
+                // re-resolve them to run the per-element ACTUAL-TYPE / `@unfold` reject over the real
+                // element sequence, identically to verify.
+                let columns = walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let elements = columns.into_iter().next().unwrap_or_default();
+                collections.push(prove_collection_elements(
+                    ctx,
+                    instance,
+                    schema,
+                    instance_root,
+                    schema_root,
+                    db_root,
+                    &prop.predicate,
+                    &elements,
+                    prop.unfold,
+                )?);
                 lists.push(ProvedListProperty {
                     predicate: prop.predicate.clone(),
                     walk,
@@ -1374,7 +1509,25 @@ fn prove_body(
                     }
                 }
             }
-            RangeShape::Scalar | RangeShape::Set => {}
+            RangeShape::Set => {
+                // A present `Set`: its elements are the direct bound-subject objects. Run the
+                // per-element ACTUAL-TYPE / `@unfold` reject; still render the set as bare ids (v1 does
+                // not inline collection elements — this only refuses the collections it would omit).
+                if let Some(objects) = by_predicate.get(&prop.predicate) {
+                    collections.push(prove_collection_elements(
+                        ctx,
+                        instance,
+                        schema,
+                        instance_root,
+                        schema_root,
+                        db_root,
+                        &prop.predicate,
+                        objects,
+                        prop.unfold,
+                    )?);
+                }
+            }
+            RangeShape::Scalar => {}
         }
     }
 
@@ -1389,6 +1542,7 @@ fn prove_body(
         },
         lists,
         links,
+        collections,
     })
 }
 
@@ -1531,6 +1685,98 @@ fn verify_child_witness<I: VerifierLayer, S: VerifierLayer>(
         }
     }
     Ok((Some(class), natures))
+}
+
+/// Verify a PRESENT `Set`/`List` property's per-element ACTUAL-TYPE witnesses and reject-close if the
+/// reference would UNFOLD the collection (increment-3 audit fix; the verify twin of
+/// [`prove_collection_elements`], run IDENTICALLY so a prover cannot skip it). `elements` are the
+/// authenticated element objects (a `Set`'s direct objects, or a `List`'s ordered WALK elements). The
+/// bundle must carry EXACTLY the witnesses for the DISTINCT node-valued elements — no missing, no
+/// injected — and each element's ACTUAL type (reflexive `sys:inherits` closure, re-verified against the
+/// trusted roots) must NOT bear `sys:subdocument` / `sys:unfoldable`. An `@unfold` collection property
+/// rejects outright. Marks `predicate` used in `used_collections` (the caller separately rejects any
+/// UNUSED — i.e. injected — collection entry).
+#[allow(clippy::too_many_arguments)]
+fn verify_collection_elements<I: VerifierLayer, S: VerifierLayer>(
+    predicate: &[u8],
+    elements: &[CanonicalObject],
+    unfold: bool,
+    collection_map: &BTreeMap<Vec<u8>, &ProvedCollectionProperty>,
+    used_collections: &mut BTreeSet<Vec<u8>>,
+    instance: &I,
+    schema: &S,
+    instance_root: ProofHash,
+    schema_root: ProofHash,
+    database_root: ProofHash,
+) -> Result<(), QueryProofError> {
+    // (1) An `@unfold` collection property: the reference unfolds every element inline → reject.
+    if unfold {
+        return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+    }
+    let collection = *collection_map.get(predicate).ok_or_else(|| {
+        invalid(format!(
+            "bundle is missing the collection element witnesses for predicate {}",
+            iri_string(predicate)
+        ))
+    })?;
+    used_collections.insert(predicate.to_vec());
+    // Index the carried witnesses by element id (reject a duplicate).
+    let mut witness_map: BTreeMap<Vec<u8>, &ProvedChildTypeWitness> = BTreeMap::new();
+    for element in &collection.elements {
+        if witness_map
+            .insert(element.child_id.clone(), &element.witness)
+            .is_some()
+        {
+            return Err(invalid(format!(
+                "collection property {} carries a duplicate element witness for {}",
+                iri_string(predicate),
+                iri_string(&element.child_id)
+            )));
+        }
+    }
+    // (2) Every DISTINCT node-valued element MUST carry a witness whose ACTUAL type is non-inlinable.
+    let mut used: BTreeSet<Vec<u8>> = BTreeSet::new();
+    for element in elements {
+        let child_id = match element {
+            CanonicalObject::Node(bytes) => bytes.clone(),
+            _ => continue, // literal/scalar element cannot unfold
+        };
+        if !used.insert(child_id.clone()) {
+            continue; // already checked this distinct element
+        }
+        let witness = *witness_map.get(&child_id).ok_or_else(|| {
+            invalid(format!(
+                "bundle is missing the collection element witness for predicate {} element {}",
+                iri_string(predicate),
+                iri_string(&child_id)
+            ))
+        })?;
+        let (_child_class, child_natures) = verify_child_witness(
+            witness,
+            &child_id,
+            instance,
+            schema,
+            instance_root,
+            schema_root,
+            database_root,
+        )?;
+        // A subdocument / unfoldable ACTUAL element type would be unfolded by the reference; v1 renders
+        // bare ids, so reject rather than omit the unfolded body.
+        if child_natures.has_subdocument || child_natures.has_unfoldable {
+            return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+        }
+    }
+    // No injected element witness (for an element not present in the collection, or a literal element).
+    for child_id in witness_map.keys() {
+        if !used.contains(child_id) {
+            return Err(invalid(format!(
+                "collection property {} carries an unused (injected) element witness for {}",
+                iri_string(predicate),
+                iri_string(child_id)
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Verify + render ONE document node (the root or an inlined subdocument), recursively. Returns the
@@ -1677,6 +1923,19 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
     }
     let mut used_links: BTreeSet<(Vec<u8>, Vec<u8>)> = BTreeSet::new();
 
+    // Index the collection element-witness sub-proofs by predicate (reject a duplicate). One entry per
+    // PRESENT `Set`/`List` property (increment-3 audit fix).
+    let mut collection_map: BTreeMap<Vec<u8>, &ProvedCollectionProperty> = BTreeMap::new();
+    for collection in &node.collections {
+        if collection_map
+            .insert(collection.predicate.clone(), collection)
+            .is_some()
+        {
+            return Err(invalid("bundle carries a duplicate collection property sub-proof"));
+        }
+    }
+    let mut used_collections: BTreeSet<Vec<u8>> = BTreeSet::new();
+
     // Render each present property.
     let mut rendered: Vec<(Vec<u8>, ResolvedValue)> = Vec::new();
     for (predicate, objects) in &by_predicate {
@@ -1701,6 +1960,21 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 let columns =
                     list_property.walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
                 let elements = columns.into_iter().next().unwrap_or_default();
+                // Per-element ACTUAL-TYPE / `@unfold` reject over the authenticated ordered elements
+                // (v1 renders bare ids; refuse any element the reference would unfold).
+                let unfold = unfold_of.get(predicate).copied().unwrap_or(false);
+                verify_collection_elements(
+                    predicate,
+                    &elements,
+                    unfold,
+                    &collection_map,
+                    &mut used_collections,
+                    instance,
+                    schema,
+                    instance_root,
+                    schema_root,
+                    database_root,
+                )?;
                 rendered.push((predicate.clone(), ResolvedValue::List(elements)));
             }
             RangeShape::Link => {
@@ -1831,7 +2105,25 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 };
                 rendered.push((predicate.clone(), value));
             }
-            RangeShape::Scalar | RangeShape::Set => {
+            RangeShape::Set => {
+                // Per-element ACTUAL-TYPE / `@unfold` reject over the set's direct objects (v1 renders
+                // bare ids; refuse any element the reference would unfold), then render the ids.
+                let unfold = unfold_of.get(predicate).copied().unwrap_or(false);
+                verify_collection_elements(
+                    predicate,
+                    objects,
+                    unfold,
+                    &collection_map,
+                    &mut used_collections,
+                    instance,
+                    schema,
+                    instance_root,
+                    schema_root,
+                    database_root,
+                )?;
+                rendered.push((predicate.clone(), ResolvedValue::Direct(objects.clone())));
+            }
+            RangeShape::Scalar => {
                 rendered.push((predicate.clone(), ResolvedValue::Direct(objects.clone())));
             }
         }
@@ -1852,6 +2144,15 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 "bundle carries an unused (injected) link sub-proof for predicate {} child {}",
                 iri_string(&key.0),
                 iri_string(&key.1)
+            )));
+        }
+    }
+    // No injected collection element-witness sub-proof (for an absent or non-collection predicate).
+    for predicate in collection_map.keys() {
+        if !used_collections.contains(predicate) {
+            return Err(invalid(format!(
+                "bundle carries an unused (injected) collection property sub-proof for {}",
+                iri_string(predicate)
             )));
         }
     }
