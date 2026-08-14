@@ -104,9 +104,19 @@ const BUILT_IN_PREDICATES: &[&str] = &[
     "http://terminusdb.com/schema/sys#metadata",
 ];
 
-/// The full `base_type/1` list (`core/triple/base_type.pl`). A range whose IRI is a base type is a
-/// SCALAR (a primitive with no schema triples of its own); the classification needs no schema read for
-/// it. Copied verbatim so the SCALAR boundary matches the reference exactly.
+/// A curated subset of the server's `base_type/1` list (`core/triple/base_type.pl`). A range whose IRI
+/// is a base type is a SCALAR (a primitive with no schema triples of its own); the classification needs
+/// no schema read for it.
+///
+/// SOUNDNESS INVARIANT — this list MUST remain a strict SUBSET of the server's `base_type/1`. A subset
+/// is SAFE: the only effect of omitting a genuine base type is that an honest scalar document
+/// reject-closes (a liveness loss, never an unsound accept). A SUPERSET is a SOUNDNESS RISK — adding a
+/// datatype the server does NOT treat as a base type would make the verifier render, as a scalar, a
+/// value the reference resolves as a link/collection (a shape v1 cannot faithfully reproduce). NEVER
+/// add a datatype here that `base_type/1` (base_type.pl) does not list. (The server list is a strict
+/// superset: it additionally has `xdd#html`, `sys#JSON`, `sys#JSONDocument`, and `sys#Dictionary`,
+/// deliberately omitted here; omitting them is safe per the invariant above. The
+/// `base_types_subset_guard` unit test mechanically enforces the subset.)
 const BASE_TYPES: &[&str] = &[
     "http://www.w3.org/2001/XMLSchema#anySimpleType",
     "http://www.w3.org/2001/XMLSchema#string",
@@ -542,6 +552,33 @@ impl NodeInfo {
             || self.has_type(SYS_JSON)
             || self.has_type(SYS_JSONDOCUMENT)
     }
+
+    /// Bears ANY of the server's full `system_class/1` set (schema.pl:143) — `sys:Class`,
+    /// `TaggedUnion`, `Enum`, `Unit`, `Foreign`, `JSON`, `JSONDocument`. These are the kinds the
+    /// reference resolves (as unit/foreign/enum/class) at `schema_type_descriptor_compute` steps
+    /// ~1147-1164, i.e. BEFORE it ever consults a collection descriptor. Used only by the
+    /// conflicting-type guard; classification proper still uses the narrower `is_simple_class`.
+    fn bears_system_class_type(&self) -> bool {
+        self.has_type(SYS_CLASS_TYPE)
+            || self.has_type(SYS_TAGGED_UNION)
+            || self.has_type(SYS_ENUM)
+            || self.has_type(SYS_UNIT)
+            || self.has_type(SYS_FOREIGN)
+            || self.has_type(SYS_JSON)
+            || self.has_type(SYS_JSONDOCUMENT)
+    }
+
+    /// Bears ANY collection / cardinality descriptor type (schema.pl:1166-1215) — `sys:Set`, `List`,
+    /// `Array`, `Table`, `Cardinality`, `Optional`. Disjoint from `bears_system_class_type` on a
+    /// well-formed (single-typed) schema node.
+    fn bears_collection_descriptor_type(&self) -> bool {
+        self.has_type(SYS_SET)
+            || self.has_type(SYS_LIST)
+            || self.has_type(SYS_ARRAY)
+            || self.has_type(SYS_TABLE)
+            || self.has_type(SYS_CARDINALITY)
+            || self.has_type(SYS_OPTIONAL)
+    }
 }
 
 fn summarize(rows: &SubjectRows) -> NodeInfo {
@@ -593,6 +630,18 @@ fn classify_range(
     let info = summarize(&rows);
     if info.rdf_types.is_empty() {
         return Err(shape_reject("undefined-range"));
+    }
+    // PRECEDENCE HARDENING (fail-closed). The server (`schema_type_descriptor_compute`,
+    // schema.pl:1147-1215) settles a node's system-class identity FIRST — `is_schema_simple_class` at
+    // ~1162 — and only THEN, if that failed, considers the collection descriptors (`sys:Set`/`List`/…
+    // at ~1166-1215). This classifier checks the collection descriptors first (below), so a MALFORMED
+    // node claiming BOTH a system-class type (`sys:Class`, `TaggedUnion`, …) AND a collection type
+    // would classify differently here (as a set/list) than the server would (as a class/link). A
+    // well-formed schema descriptor node is single-typed, so a node that is both a class and a
+    // collection cannot arise in a validated (trusted-root) schema. Rather than silently pick a
+    // reading and risk diverging from the server, refuse it.
+    if info.bears_system_class_type() && info.bears_collection_descriptor_type() {
+        return Err(shape_reject("conflicting-class-and-collection"));
     }
     if info.has_subdocument {
         return Err(BgpPlanError::ReadDocumentSubdocumentDeferred.into());
@@ -989,5 +1038,99 @@ impl ProvedReadDocument {
             class,
             properties: rendered,
         })
+    }
+}
+
+#[cfg(test)]
+mod base_types_subset_guard {
+    use super::BASE_TYPES;
+
+    /// A snapshot of the server's AUTHORITATIVE `base_type/1` set (`core/triple/base_type.pl`, all 64
+    /// facts). Mirrored here ONLY to mechanically enforce the [`BASE_TYPES`] subset invariant — if
+    /// `base_type.pl` changes, update this snapshot too. A `BASE_TYPES` entry missing from here is a
+    /// SUPERSET, which is a soundness risk (see the `BASE_TYPES` doc comment).
+    const REFERENCE_BASE_TYPES: &[&str] = &[
+        "http://www.w3.org/2001/XMLSchema#anySimpleType",
+        "http://www.w3.org/2001/XMLSchema#string",
+        "http://www.w3.org/2001/XMLSchema#boolean",
+        "http://www.w3.org/2001/XMLSchema#decimal",
+        "http://www.w3.org/2001/XMLSchema#double",
+        "http://www.w3.org/2001/XMLSchema#float",
+        "http://www.w3.org/2001/XMLSchema#time",
+        "http://www.w3.org/2001/XMLSchema#date",
+        "http://www.w3.org/2001/XMLSchema#dateTime",
+        "http://www.w3.org/2001/XMLSchema#dateTimeStamp",
+        "http://www.w3.org/2001/XMLSchema#gYear",
+        "http://www.w3.org/2001/XMLSchema#gMonth",
+        "http://www.w3.org/2001/XMLSchema#gDay",
+        "http://www.w3.org/2001/XMLSchema#gYearMonth",
+        "http://www.w3.org/2001/XMLSchema#gMonthDay",
+        "http://www.w3.org/2001/XMLSchema#duration",
+        "http://www.w3.org/2001/XMLSchema#yearMonthDuration",
+        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+        "http://www.w3.org/2001/XMLSchema#byte",
+        "http://www.w3.org/2001/XMLSchema#short",
+        "http://www.w3.org/2001/XMLSchema#int",
+        "http://www.w3.org/2001/XMLSchema#long",
+        "http://www.w3.org/2001/XMLSchema#unsignedByte",
+        "http://www.w3.org/2001/XMLSchema#unsignedShort",
+        "http://www.w3.org/2001/XMLSchema#unsignedInt",
+        "http://www.w3.org/2001/XMLSchema#unsignedLong",
+        "http://www.w3.org/2001/XMLSchema#integer",
+        "http://www.w3.org/2001/XMLSchema#positiveInteger",
+        "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
+        "http://www.w3.org/2001/XMLSchema#negativeInteger",
+        "http://www.w3.org/2001/XMLSchema#nonPositiveInteger",
+        "http://www.w3.org/2001/XMLSchema#base64Binary",
+        "http://www.w3.org/2001/XMLSchema#hexBinary",
+        "http://www.w3.org/2001/XMLSchema#anyURI",
+        "http://www.w3.org/2001/XMLSchema#language",
+        "http://www.w3.org/2001/XMLSchema#normalizedString",
+        "http://www.w3.org/2001/XMLSchema#token",
+        "http://www.w3.org/2001/XMLSchema#NMTOKEN",
+        "http://www.w3.org/2001/XMLSchema#Name",
+        "http://www.w3.org/2001/XMLSchema#NCName",
+        "http://www.w3.org/2001/XMLSchema#NOTATION",
+        "http://www.w3.org/2001/XMLSchema#QName",
+        "http://www.w3.org/2001/XMLSchema#ID",
+        "http://www.w3.org/2001/XMLSchema#IDREF",
+        "http://www.w3.org/2001/XMLSchema#ENTITY",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral",
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+        "http://www.w3.org/2000/01/rdf-schema#Literal",
+        "http://terminusdb.com/schema/xdd#coordinate",
+        "http://terminusdb.com/schema/xdd#coordinatePolygon",
+        "http://terminusdb.com/schema/xdd#coordinatePolyline",
+        "http://terminusdb.com/schema/xdd#dateRange",
+        "http://terminusdb.com/schema/xdd#dateTimeInterval",
+        "http://terminusdb.com/schema/xdd#gYearRange",
+        "http://terminusdb.com/schema/xdd#integerRange",
+        "http://terminusdb.com/schema/xdd#decimalRange",
+        "http://terminusdb.com/schema/xdd#json",
+        "http://terminusdb.com/schema/xdd#url",
+        "http://terminusdb.com/schema/xdd#email",
+        "http://terminusdb.com/schema/xdd#html",
+        "http://terminusdb.com/schema/sys#JSONDocument",
+        "http://terminusdb.com/schema/sys#JSON",
+        "http://terminusdb.com/schema/sys#Dictionary",
+    ];
+
+    /// Every entry the classifier treats as a base type MUST be a genuine server base type. This guards
+    /// the soundness invariant on `BASE_TYPES`: a superset would let the verifier render a non-primitive
+    /// as a scalar.
+    #[test]
+    fn base_types_is_a_strict_subset_of_reference() {
+        for ty in BASE_TYPES {
+            assert!(
+                REFERENCE_BASE_TYPES.contains(ty),
+                "BASE_TYPES entry `{ty}` is NOT in the server's base_type/1 — a SUPERSET is a soundness risk",
+            );
+        }
+        // A subset, and strictly so (the server has base types v1 deliberately does not accept).
+        assert!(
+            BASE_TYPES.len() < REFERENCE_BASE_TYPES.len(),
+            "BASE_TYPES must remain a STRICT subset of the reference base_type/1",
+        );
     }
 }

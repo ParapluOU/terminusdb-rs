@@ -452,6 +452,40 @@ fn read_document_rejects_cardinality_bearing_set() {
 }
 
 #[test]
+fn read_document_rejects_conflicting_class_and_collection_range() {
+    // Defense-in-depth precedence guard. The range node `WeirdRange` is MALFORMED: it claims to be
+    // BOTH a system class (`sys:Class`) AND a collection (`sys:List`), and even carries a valid list
+    // element class (`sys:class Track`). The server settles the system-class identity FIRST (it would
+    // treat this as a class/link); this classifier checks collections first, so WITHOUT the guard it
+    // would have accepted it as a `List`. Such a node cannot arise in a validated schema, so v1
+    // reject-closes rather than diverge from the server.
+    assert_prove_rejects(
+        "rd-conflicting-class-collection",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("weird"), iri("WeirdRange")),
+            Fact::Node(iri("WeirdRange"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("WeirdRange"), RDF_TYPE.into(), SYS_LIST.into()),
+            Fact::Node(iri("WeirdRange"), SYS_CLASS_PRED.into(), iri("Track")),
+            Fact::Node(iri("Track"), RDF_TYPE.into(), SYS_CLASS.into()),
+        ],
+        // `doc` needs >= 2 direct triples so the instance subject BGP satisfies the store's
+        // minimum-rows-per-proof constraint and prove reaches frame classification (where the guard
+        // fires). The `weird` edge also makes the conflicting property genuinely present.
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("weird"), iri("target1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "conflicting-class-and-collection"
+            })
+        ),
+    );
+}
+
+#[test]
 fn read_document_rejects_one_of_tagged_union() {
     assert_prove_rejects(
         "rd-oneof",
