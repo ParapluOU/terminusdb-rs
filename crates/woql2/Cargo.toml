@@ -59,4 +59,43 @@ thiserror = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 
 # Added dev-dependencies from the workspace
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] } 
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# The proof compiler/executor lives behind the optional `proof` feature (see
+# [features] above). These five integration tests exercise that cryptographic
+# stack (they reference `proof::`, `tdb_succinct`, `make_entry`, …), so they only
+# compile when `proof` is enabled. Declaring them explicitly with
+# `required-features = ["proof"]` stops Cargo's test auto-discovery from trying to
+# build them under DEFAULT features — where `cargo test -p terminusdb-woql2`
+# (no `--features proof`) would otherwise fail to compile on unresolved symbols.
+# The other integration tests in tests/ stay auto-discovered (they are non-proof),
+# and tests/proof_common/ is a shared helper module included by these five, not a
+# test target of its own.
+[[test]]
+name = "proof_plan"
+required-features = ["proof"]
+
+[[test]]
+name = "proof_prove"
+required-features = ["proof"]
+
+[[test]]
+name = "proof_reconciled"
+required-features = ["proof"]
+
+[[test]]
+name = "proof_subsumption"
+required-features = ["proof"]
+
+[[test]]
+name = "proof_read_document"
+required-features = ["proof"]
+
+# `cargo test` also compiles examples, and this one drives the same proof stack
+# (`tdb_succinct`, `terminus_store::proof`, …). Gate it identically so the DEFAULT
+# `cargo test -p terminusdb-woql2` build doesn't fail on those unresolved symbols;
+# it stays runnable via `--features proof`. All other examples are non-proof and
+# remain auto-discovered.
+[[example]]
+name = "proof_performance"
+required-features = ["proof"]
