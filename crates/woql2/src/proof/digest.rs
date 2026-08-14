@@ -310,6 +310,32 @@ pub(crate) fn relation_query_digest(relation: &CompiledRelation) -> std::io::Res
                 hasher.update(b"/graph-schema");
             }
         }
+        CompiledRelationStatement::OrderedArrayWalk {
+            subject,
+            predicate,
+            graph,
+        } => {
+            // n-INDEPENDENT digest: only the walk PATTERN (the bound subject + the array predicate).
+            // The cell count n is a prover choice carried in the proof, never in this identity, so the
+            // verifier reconstructs the same digest from its own trusted AST without knowing n. Binding
+            // (subject, predicate) HERE is what stops a valid array-walk proof from being re-aimed at a
+            // DIFFERENT (subject, predicate) array — the store's verify rejects any proof whose query
+            // digest does not match this reconstruction. The distinct `/ordered-array-walk` domain tag
+            // (vs `/ordered-list-walk`) also keeps an array walk's identity disjoint from an otherwise-
+            // identical list walk, so neither can be substituted for the other.
+            hasher.update(b"/ordered-array-walk");
+            digest_canonical_object(&mut hasher, subject);
+            // Length-prefix the predicate bytes so no two (subject, predicate) pairs can collide by
+            // shifting bytes across the field boundary.
+            hasher.update((predicate.len() as u64).to_le_bytes());
+            hasher.update(predicate.as_slice());
+            // SCHEMA-GRAPH FOUNDATION — bind the graph selector ADDITIVELY, exactly like the list-walk
+            // arm: `Instance` folds NOTHING, only `Schema` folds a domain tag. OrderedArrayWalk is
+            // always `Instance` in this increment.
+            if let ProofGraph::Schema = graph {
+                hasher.update(b"/graph-schema");
+            }
+        }
         CompiledRelationStatement::GroupSum {
             input,
             key_columns,

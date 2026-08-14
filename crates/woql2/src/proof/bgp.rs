@@ -1292,7 +1292,9 @@ pub(crate) fn validate_compiled_structure(relation: &CompiledRelation) -> Result
             | CompiledRelationStatement::TransitiveClosure { .. }
             // The ordered-list walk is likewise a leaf: it carries a bound (subject, predicate), not
             // a CompiledRelation child, so there is nothing to recurse into.
-            | CompiledRelationStatement::OrderedListWalk { .. } => Ok(()),
+            | CompiledRelationStatement::OrderedListWalk { .. }
+            // The ordered-array walk is a leaf too (a bound (subject, predicate), no child relation).
+            | CompiledRelationStatement::OrderedArrayWalk { .. } => Ok(()),
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
             | CompiledRelationStatement::GeneratedI64Filter { input, .. } => {
                 visit(input, depth + 1, nodes)
@@ -1398,6 +1400,9 @@ pub(crate) fn relation_graph(relation: &CompiledRelation) -> std::io::Result<Pro
             // The ordered-list walk carries its own graph selector too (always `Instance` in this
             // increment — a stored `rdf:List` lives in the instance graph).
             CompiledRelationStatement::OrderedListWalk { graph, .. } => combine(acc, *graph),
+            // The ordered-array walk likewise carries its graph selector (always `Instance` — a stored
+            // `sys:Array` lives in the instance graph).
+            CompiledRelationStatement::OrderedArrayWalk { graph, .. } => combine(acc, *graph),
             // Wrappers: inherit their children's graph (mirrors `validate_compiled_structure::visit`).
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
             | CompiledRelationStatement::GeneratedI64Filter { input, .. }
@@ -1709,6 +1714,12 @@ pub(crate) fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         // place OrderedListWalk deliberately classifies UNLIKE `TransitiveClosure` (whose reachable
         // SET is deduped, hence `true`): the semantics differ (bag vs set), so the sound answer does.
         CompiledRelationStatement::OrderedListWalk { .. } => false,
+        // The ordered-array walk delivers a 1-D DENSE `sys:Array` IN INDEX ORDER, and an array is an
+        // ordered BAG: the same value can appear at two positions (`[a, b, a]` yields `a` in two rows).
+        // So — exactly like `OrderedListWalk` — its single element column can carry duplicate rows and
+        // is conservatively NOT provably unique (a surrounding `Distinct` is never proven redundant
+        // over it, so multiplicity is never silently collapsed).
+        CompiledRelationStatement::OrderedArrayWalk { .. } => false,
         // Bag-valued compositions can carry duplicate full rows.
         CompiledRelationStatement::BagUnion { .. }
         | CompiledRelationStatement::BagProjection { .. }

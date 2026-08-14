@@ -882,9 +882,12 @@ pub enum BgpPlanError {
 
     /// A property's frame shape is one v1 cannot render faithfully (e.g. a cardinality-bearing `Set`,
     /// `Optional`, `Table`, `sys:oneOf` tagged union, enum/foreign/unit range, an inheriting link/element
-    /// target, an undefined or non-node range). Rendering it as a plain property could omit or
-    /// misclassify data, so it reject-closes. `shape` names the specific unsupported form.
-    #[error("ReadDocument property shape `{shape}` is unsupported in v1 (flat scalar/link/set + non-subdocument list); reject closed")]
+    /// target, an undefined or non-node range, or a MULTI-DIMENSIONAL `sys:Array` — `shape =
+    /// "array-multidim"` — the store composite reads only the level-1 `sys:index`). Rendering it as a
+    /// plain property could omit or misclassify data, so it reject-closes. `shape` names the specific
+    /// unsupported form. (A 1-D DENSE array of scalar/plain-link elements is now SUPPORTED — increment 4;
+    /// a SPARSE/gapped array is rejected downstream by the store density certificate, not here.)
+    #[error("ReadDocument property shape `{shape}` is unsupported in v1 (flat scalar/link/set + non-subdocument list + 1-D dense array); reject closed")]
     ReadDocumentUnsupportedPropertyShape { shape: &'static str },
 
     /// The complete, root-authenticated direct-triple set of the document carries a predicate `P` that
@@ -932,12 +935,6 @@ pub enum BgpPlanError {
     /// reject-closes rather than truncate.
     #[error("ReadDocument subdocument inlining exceeded the depth/node budget; reject closed rather than truncate")]
     ReadDocumentSubdocumentBudgetExceeded,
-
-    /// A property's range is a `sys:'Array'` descriptor. Arrays are ordered by an authenticated
-    /// `sys:index` key (a different mechanism from the list cons-walk) and may be multi-dimensional /
-    /// sparse; v1 reject-closes (array fidelity is increment 4).
-    #[error("ReadDocument array-range property is deferred to increment 4 (sys:index ordering); reject closed")]
-    ReadDocumentArrayDeferred,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and

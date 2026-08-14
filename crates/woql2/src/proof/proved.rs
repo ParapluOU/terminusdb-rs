@@ -1653,6 +1653,34 @@ impl ProvedBgp {
                     ));
                 }
             }
+            (
+                ProvedQueryStatement::OrderedArrayWalk { envelope },
+                CompiledRelationStatement::OrderedArrayWalk { .. },
+            ) => {
+                // DELEGATE to the audited store verify. The store envelope carries the WHOLE
+                // OrderedArrayWalk composite proof (its internals are store-private), so — like the
+                // `OrderedListWalk` / `CrossRootHashJoin` leaf — the woql2 layer carries it wholesale
+                // rather than decomposing it. Rebuild the plan from the TRUSTED compiled statement: its
+                // `query_digest` folds the bound (subject, predicate) (see `relation_query_digest`),
+                // and the store's own `verify` rejects any envelope whose root or query digest does not
+                // match this plan — so the proof is BOUND to this exact (subject, predicate) array and
+                // cannot be re-aimed at another.
+                let plan = relation_proof_plan(compiled, query_digest)?;
+                envelope.verify(layer, expected_root, &plan)?;
+                // BIND the wholesale envelope's delivered result to THIS proof node's delivered columns
+                // (identical to the list-walk arm above): a mismatched outer copy cannot slip a
+                // different answer past verification.
+                if self.result_commitments != envelope.result_commitments
+                    || self.result_columns != envelope.result_columns
+                    || self.result_len != envelope.result_len
+                    || self.result_log_domain != envelope.result_log_domain
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL ordered-array-walk delivered result does not match the proven store envelope",
+                    ));
+                }
+            }
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -2201,6 +2229,17 @@ impl ProvedBgp {
         if let (
             ProvedQueryStatement::OrderedListWalk { envelope },
             CompiledRelationStatement::OrderedListWalk { .. },
+        ) = (&self.statement, &compiled.statement)
+        {
+            return Ok((**envelope).clone());
+        }
+        // The ordered-array walk carries its whole store envelope WHOLESALE (its composite proof is
+        // store-private and cannot be decomposed into the `ProvedQueryStatement` tree), so — after
+        // `verify_relation` has already checked it against the trusted root and statement digest —
+        // reconstruction just returns the carried envelope. Mirrors the ordered-list walk above.
+        if let (
+            ProvedQueryStatement::OrderedArrayWalk { envelope },
+            CompiledRelationStatement::OrderedArrayWalk { .. },
         ) = (&self.statement, &compiled.statement)
         {
             return Ok((**envelope).clone());

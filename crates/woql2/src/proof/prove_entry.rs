@@ -694,6 +694,19 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
             statement: ProvedQueryStatement::OrderedListWalk { envelope: Box::new(envelope) },
         };
     }
+    // The ordered-array walk is likewise a store-proven leaf whose composite proof is store-private
+    // (the cell-set BGP, functional binds, type filter, dictionary lookup, and density permutation
+    // cannot be decomposed into the `ProvedQueryStatement` tree), so — exactly like the ordered-list
+    // walk — it is carried WHOLESALE and later verified by re-running the store envelope verify.
+    if matches!(envelope.proof, RecursiveRelationProof::OrderedArrayWalk(_)) {
+        return ProvedBgp {
+            result_commitments: envelope.result_commitments.clone(),
+            result_columns: envelope.result_columns.clone(),
+            result_log_domain: envelope.result_log_domain,
+            result_len: envelope.result_len,
+            statement: ProvedQueryStatement::OrderedArrayWalk { envelope: Box::new(envelope) },
+        };
+    }
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::GeneratedU64Filter { input } => {
@@ -809,6 +822,11 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
         // never reaches this decomposition match.
         RecursiveRelationProof::OrderedListWalk(_) => unreachable!(
             "ordered-list-walk envelopes are wrapped wholesale by the early return, not decomposed here"
+        ),
+        // Wrapped wholesale by the early return above (its store proof is opaque to this layer), so it
+        // never reaches this decomposition match.
+        RecursiveRelationProof::OrderedArrayWalk(_) => unreachable!(
+            "ordered-array-walk envelopes are wrapped wholesale by the early return, not decomposed here"
         ),
     };
     ProvedBgp {

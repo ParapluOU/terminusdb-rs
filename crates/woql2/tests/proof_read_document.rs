@@ -17,6 +17,7 @@ use std::sync::Arc;
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
+use tdb_succinct::TdbDataType;
 use terminus_store::proof::commitment::{database_root, LayerCommitment};
 use terminus_store::proof::CanonicalObject;
 use terminus_store::{open_sync_memory_store, ValueTriple};
@@ -40,6 +41,9 @@ const SYS_CLASS: &str = "http://terminusdb.com/schema/sys#Class";
 const SYS_SET: &str = "http://terminusdb.com/schema/sys#Set";
 const SYS_LIST: &str = "http://terminusdb.com/schema/sys#List";
 const SYS_ARRAY: &str = "http://terminusdb.com/schema/sys#Array";
+const SYS_INDEX: &str = "http://terminusdb.com/schema/sys#index";
+const SYS_VALUE: &str = "http://terminusdb.com/schema/sys#value";
+const SYS_DIMENSIONS: &str = "http://terminusdb.com/schema/sys#dimensions";
 const SYS_CLASS_PRED: &str = "http://terminusdb.com/schema/sys#class";
 const SYS_SUBDOC: &str = "http://terminusdb.com/schema/sys#subdocument";
 const SYS_UNFOLDABLE: &str = "http://terminusdb.com/schema/sys#unfoldable";
@@ -53,10 +57,13 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 // Layer building.
 // ---------------------------------------------------------------------------------------------------
 
-/// One triple to seed: a node/node/node edge, or a node/predicate/string-literal.
+/// One triple to seed: a node/node/node edge, a node/predicate/string-literal, or a
+/// node/`sys:index`/`UInt64`-literal (the order-preserving unsigned datatype the array-walk composite
+/// authenticates the index against — see `array_walk.rs`).
 enum Fact {
     Node(String, String, String),
     Str(String, String, String),
+    Index(String, u64),
 }
 
 fn layer(facts: Vec<Fact>) -> Arc<LayerCommitment> {
@@ -70,9 +77,37 @@ fn layer(facts: Vec<Fact>) -> Arc<LayerCommitment> {
             Fact::Str(s, p, o) => builder
                 .add_value_triple(ValueTriple::new_string_value(s, p, o))
                 .unwrap(),
+            Fact::Index(cell, index) => builder
+                .add_value_triple(ValueTriple::new_value(cell, SYS_INDEX, u64::make_entry(index)))
+                .unwrap(),
         }
     }
     builder.commit().unwrap().proof_commitment().unwrap()
+}
+
+/// Seed a 1-D DENSE `sys:Array` `t(subject, predicate, {cells})`: each cell is `<prefix>k` with
+/// `rdf:type sys:Array`, a `UInt64` `sys:index`, and a `sys:value` element. `cells` are `(index,
+/// value)`; a `link` value is a node edge, otherwise a `sys:value` string literal. Physical cell order
+/// (0,1,…) may differ from index order to exercise the ordering.
+fn dense_array(
+    subject: &str,
+    predicate: &str,
+    prefix: &str,
+    cells: &[(u64, &str)],
+    link: bool,
+    facts: &mut Vec<Fact>,
+) {
+    for (k, (index, value)) in cells.iter().enumerate() {
+        let cell = iri(&format!("{prefix}{k}"));
+        facts.push(Fact::Node(subject.to_string(), predicate.to_string(), cell.clone()));
+        facts.push(Fact::Node(cell.clone(), RDF_TYPE.into(), SYS_ARRAY.into()));
+        facts.push(Fact::Index(cell.clone(), *index));
+        if link {
+            facts.push(Fact::Node(cell, SYS_VALUE.into(), iri(value)));
+        } else {
+            facts.push(Fact::Str(cell, SYS_VALUE.into(), value.to_string()));
+        }
+    }
 }
 
 /// The instance-side cons chain `t(subject, predicate, [elements...])` (node elements). Mirrors the
@@ -413,21 +448,32 @@ fn read_document_rejects_top_level_subdocument() {
     );
 }
 
+/// A MULTI-DIMENSIONAL `sys:Array` range (`sys:dimensions = 2`). v1 renders 1-D dense arrays only (the
+/// store composite reads just the level-1 `sys:index` column), so a multi-dim descriptor reject-closes
+/// at CLASSIFICATION (before any walk is proven) with `shape = "array-multidim"`. (Repurposed from the
+/// old `read_document_rejects_array_range`: a 1-D dense array is now SUPPORTED — increment 4.)
 #[test]
-fn read_document_rejects_array_range() {
+fn read_document_rejects_multidim_array() {
     assert_prove_rejects(
-        "rd-array",
+        "rd-array-multidim",
         vec![
             Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
             Fact::Node(iri("C"), iri("cells"), iri("CellsArray")),
             Fact::Node(iri("CellsArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
             Fact::Node(iri("CellsArray"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            // Two dimensions → multi-dimensional → reject closed.
+            Fact::Str(iri("CellsArray"), SYS_DIMENSIONS.into(), "2".into()),
         ],
         vec![
             Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
             Fact::Node(iri("doc"), iri("cells"), iri("acell")),
         ],
-        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentArrayDeferred)),
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "array-multidim"
+            })
+        ),
     );
 }
 
@@ -1298,4 +1344,268 @@ fn read_document_rejects_collection_element_actual_subdocument() {
         ],
         |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentUnfoldableDeferred)),
     );
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Increment 4 — array fidelity (1-D dense `sys:Array`, `OrderedArrayWalk` mirror + frame integration).
+//
+// A 1-D dense array of scalar/plain-link elements now proves + verifies through the compiler bundle
+// (the store `OrderedArrayWalk` composite delivers the exact `sys:index`-ordered `sys:value` column).
+// Multi-dimensional / sparse / array-of-unfoldable / `@unfold` arrays reject-close.
+// ---------------------------------------------------------------------------------------------------
+
+/// Schema with two 1-D dense array properties: `scores: [xsd:string]` (scalar elements) and
+/// `refs: [Person]` (plain-link elements). No inheritance / subdocuments / dimensions (default 1-D).
+fn array_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("C"), iri("scores"), iri("ScoresArray")),
+        Fact::Node(iri("ScoresArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+        Fact::Node(iri("ScoresArray"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+        Fact::Node(iri("C"), iri("refs"), iri("RefsArray")),
+        Fact::Node(iri("RefsArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+        Fact::Node(iri("RefsArray"), SYS_CLASS_PRED.into(), iri("Person")),
+        Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
+    ])
+}
+
+/// Instance: `doc` of class `C` with `scores = [x, y, z]` (scalars, seeded in NON-index physical order
+/// `[z@2, x@0, y@1]` so the `sys:index` ordering is genuinely exercised) and `refs = [linkA, linkB]`
+/// (plain links). `linkA`/`linkB` are typeless dangling nodes (plain-link targets), like `person1`.
+fn array_instance() -> Arc<LayerCommitment> {
+    let mut facts = vec![Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C"))];
+    dense_array(
+        &iri("doc"),
+        &iri("scores"),
+        "scell",
+        &[(2, "z"), (0, "x"), (1, "y")],
+        /* link */ false,
+        &mut facts,
+    );
+    dense_array(
+        &iri("doc"),
+        &iri("refs"),
+        "rcell",
+        &[(0, "linkA"), (1, "linkB")],
+        /* link */ true,
+        &mut facts,
+    );
+    layer(facts)
+}
+
+#[test]
+fn read_document_array_end_to_end() {
+    on_big_stack("read-document-array-e2e", 1024, || {
+        let instance = array_instance();
+        let schema = array_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+
+        // Prove the whole document (subject BGP + frame BGP + range BGPs + 2 ordered-array walks).
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        // ---- HAPPY PATH: verify + resolve against the trusted combined root. ----
+        let resolved = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+        assert_eq!(resolved.id, iri("doc").into_bytes());
+        assert_eq!(resolved.class, iri("C").into_bytes());
+
+        // `scores` — a SCALAR array, in ASCENDING `sys:index` order `[x, y, z]` (stored physical order
+        // was `[z, x, y]`), rendered from the authenticated OrderedArrayWalk (NOT the raw cell ids).
+        match resolved.get(&iri("scores")).unwrap() {
+            ResolvedValue::Array(elements) => {
+                let lexicals: Vec<Vec<u8>> = elements.iter().map(as_value_lexical).collect();
+                assert_eq!(lexicals, vec![b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]);
+            }
+            other => panic!("scores should be an Array, got {other:?}"),
+        }
+
+        // `refs` — a PLAIN-LINK array, in index order `[linkA, linkB]` (element ids, edge only).
+        match resolved.get(&iri("refs")).unwrap() {
+            ResolvedValue::Array(elements) => {
+                let nodes: Vec<Vec<u8>> = elements.iter().map(as_node).collect();
+                assert_eq!(
+                    nodes,
+                    vec![iri("linkA").into_bytes(), iri("linkB").into_bytes()],
+                );
+            }
+            other => panic!("refs should be an Array, got {other:?}"),
+        }
+
+        // ---- ADVERSARIAL: tamper the delivered array value column. ----
+        // Corrupt one committed element id in an array-walk sub-proof: the store walk re-verify (bound
+        // to the trusted instance root and the (subject, predicate) digest) rejects the swap.
+        bundle.arrays[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered array-walk result column must fail verify",
+        );
+    });
+}
+
+/// ANTI-SUBSTITUTION: aim one array property's render at the OTHER array's walk. Each walk's store
+/// envelope digest is bound to its OWN `(subject, predicate)`; verify reconstructs the plan for the
+/// RENDER predicate, so the store recursive verify rejects the mismatched digest (a valid array proof
+/// cannot be re-aimed at a different `(id, P)`).
+#[test]
+fn read_document_array_anti_substitution_rejects() {
+    on_big_stack("read-document-array-subst", 1024, || {
+        let instance = array_instance();
+        let schema = array_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+        // Sanity: the honest two-array document verifies.
+        bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        // Swap the two arrays' walk envelopes (keep the predicate labels): each render now points at a
+        // walk proven for a DIFFERENT predicate.
+        assert_eq!(bundle.arrays.len(), 2, "expected both array properties present");
+        let (first, rest) = bundle.arrays.split_at_mut(1);
+        std::mem::swap(&mut first[0].walk, &mut rest[0].walk);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "an array walk aimed at a different (id, P) must fail verify",
+        );
+    });
+}
+
+/// A SPARSE (gapped) array `[0, 2]` (n = 2, index 2 ≥ n). The reference `null`-fills the gap, so a
+/// sparse array is NOT a dense one; the store density certificate rejects it at PROVE (out-of-range
+/// index) — a `QueryProofError::Store`, not a plan-level reject. Proof-heavy (the walk is proven before
+/// the density check fails), so it runs on the large stack.
+#[test]
+fn read_document_rejects_sparse_array() {
+    on_big_stack("rd-array-sparse", 1024, || {
+        let schema = layer(vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("scores"), iri("ScoresArray")),
+            Fact::Node(iri("ScoresArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+            Fact::Node(iri("ScoresArray"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+        ]);
+        let mut facts = vec![Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C"))];
+        dense_array(
+            &iri("doc"),
+            &iri("scores"),
+            "scell",
+            &[(0, "a"), (2, "c")], // gap at index 1 → sparse
+            /* link */ false,
+            &mut facts,
+        );
+        let instance = layer(facts);
+        let compiled = compiled_read(&iri("doc"));
+        let err = compiled.prove_on_layers(&*instance, &*schema).unwrap_err();
+        assert!(
+            matches!(err, QueryProofError::Store(_)),
+            "a sparse array must reject at the store density certificate, got {err:?}",
+        );
+    });
+}
+
+/// An ARRAY-OF-SUBDOCUMENT element. v1 renders array elements as bare ids; a subdocument element class
+/// reject-closes at CLASSIFICATION (the same `check_element_class` gate the `Set`/`List` paths use),
+/// before any walk is proven.
+#[test]
+fn read_document_rejects_array_of_subdocument() {
+    assert_prove_rejects(
+        "rd-array-of-subdocument",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("items"), iri("SubArray")),
+            Fact::Node(iri("SubArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+            Fact::Node(iri("SubArray"), SYS_CLASS_PRED.into(), iri("Sub")),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        ],
+        // The array property must be PRESENT (like the set/list-of-subdocument fixtures) so prove
+        // reaches frame classification; the reject fires at `classify_range`/`check_element_class`.
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("items"), iri("cell0")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "subdocument-element"
+            })
+        ),
+    );
+}
+
+/// An ARRAY whose DECLARED element class is `@unfoldable` — the reference unfolds each element inline;
+/// v1 renders bare ids, so `check_element_class` reject-closes at CLASSIFICATION (same gate as
+/// `Set`/`List`).
+#[test]
+fn read_document_rejects_array_of_unfoldable_element() {
+    assert_prove_rejects(
+        "rd-array-of-unfoldable",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("items"), iri("UnfoldArray")),
+            Fact::Node(iri("UnfoldArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+            Fact::Node(iri("UnfoldArray"), SYS_CLASS_PRED.into(), iri("E")),
+            Fact::Node(iri("E"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("E"), SYS_UNFOLDABLE.into(), RDF_NIL.into()),
+        ],
+        // The array property must be PRESENT (like the set/list-of-unfoldable fixtures) so prove
+        // reaches frame classification; the reject fires at `classify_range`/`check_element_class`.
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("items"), iri("cell0")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "unfoldable-element"
+            })
+        ),
+    );
+}
+
+/// An `@unfold` array PROPERTY (`sys:unfold` on the `sys:Array` descriptor node). The reference unfolds
+/// EVERY element inline; the `@unfold` flag — now read for arrays too — makes the PRESENT array
+/// reject-close rather than render bare ids. A single scalar element keeps the fixture minimal; the
+/// reject is on the `@unfold` flag alone. Proof-heavy (the walk is proven before the collection element
+/// check fires), so it runs on the large stack.
+#[test]
+fn read_document_rejects_unfold_array_property() {
+    on_big_stack("rd-unfold-array", 1024, || {
+        let schema = layer(vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("scores"), iri("UnfoldArray")),
+            Fact::Node(iri("UnfoldArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
+            Fact::Node(iri("UnfoldArray"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            // The array descriptor bears `sys:unfold` → the reference unfolds every element inline.
+            Fact::Node(iri("UnfoldArray"), SYS_UNFOLD.into(), RDF_NIL.into()),
+        ]);
+        let mut facts = vec![Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C"))];
+        dense_array(
+            &iri("doc"),
+            &iri("scores"),
+            "scell",
+            &[(0, "x")],
+            /* link */ false,
+            &mut facts,
+        );
+        let instance = layer(facts);
+        let compiled = compiled_read(&iri("doc"));
+        let err = compiled.prove_on_layers(&*instance, &*schema).unwrap_err();
+        assert!(
+            matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentUnfoldableDeferred)),
+            "an @unfold array property must reject closed, got {err:?}",
+        );
+    });
 }

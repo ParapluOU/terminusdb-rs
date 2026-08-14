@@ -236,6 +236,36 @@ pub enum CompiledRelationStatement {
         /// prove/verify ENTRY picks the matching `LayerCommitment`). See [`relation_graph`].
         graph: ProofGraph,
     },
+    /// Authenticated ORDERED walk of one stored 1-D DENSE `sys:Array`: given a BOUND subject node `S`
+    /// and a bound array-valued predicate `P`, deliver the array's elements IN ASCENDING `sys:index`
+    /// ORDER as one nonnullable node/value column (ReadDocument increment 4). This is the woql2 mirror
+    /// of the store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::OrderedArrayWalk`] composite
+    /// leaf; ALL of the proving (the complete cell-set BGP, the `sys:index`/`sys:value`/`rdf:type`
+    /// functional binds, the `sys:Array` type filter, the authenticated dictionary index lookup, and
+    /// the density+order permutation) lives in the store — the compiler only routes to it, folds the
+    /// digest, and passes the proof through, EXACTLY as it does for [`Self::OrderedListWalk`]. (An array
+    /// is a FLAT bag of numbered cells rather than a cons chain, but from the compiler's vantage the two
+    /// leaves are indistinguishable: a bound `(subject, predicate)` in, one ordered element column out.)
+    ///
+    /// Reached ONLY by direct construction (from the `ReadDocument` bundle's `ordered_array_walk_bgp`);
+    /// no WOQL relation surface lowers to it. It carries no `CompiledRelation` child — it is a leaf,
+    /// like `OrderedListWalk`.
+    OrderedArrayWalk {
+        /// The bound array-owning subject; must be a node IRI (a literal can never own an array edge).
+        /// Matches the store plan's `subject` field ([`CanonicalObject::Node`]).
+        subject: CanonicalObject,
+        /// The bound array-valued predicate IRI bytes (the `P` of `t(S,P,cell)`). Matches the store
+        /// plan's `predicate` field.
+        predicate: Vec<u8>,
+        /// SCHEMA-GRAPH FOUNDATION — which committed graph this walk reads. Always `Instance` in this
+        /// increment (a stored `sys:Array` lives in the instance graph); carried so the exhaustive
+        /// graph/digest machinery treats it uniformly with `OrderedListWalk`. The selector is bound
+        /// ADDITIVELY into `relation_query_digest` (`Instance` folds nothing) and is NOT forwarded into
+        /// the store plan kind (the store recursion is graph-blind — the prove/verify ENTRY picks the
+        /// matching `LayerCommitment`). See [`relation_graph`].
+        graph: ProofGraph,
+    },
     GroupSum {
         input: Box<CompiledRelation>,
         key_columns: Vec<usize>,
@@ -1072,6 +1102,15 @@ pub enum ProvedQueryStatement {
     /// recursive verify (which binds it to the trusted root AND the statement's query digest). See
     /// [`CompiledRelationStatement::OrderedListWalk`].
     OrderedListWalk {
+        envelope: Box<RecursiveRelationEnvelope>,
+    },
+    /// A proved ordered 1-D DENSE `sys:Array` walk. The store's `OrderedArrayWalk` composite proof is
+    /// store-private (it cannot be decomposed into this tree the way a closure decomposes into
+    /// edge/seed/rounds/fixpoint), so — exactly like [`Self::OrderedListWalk`] / [`Self::CrossRootHashJoin`]
+    /// — the whole store [`RecursiveRelationEnvelope`] is carried WHOLESALE and verified by re-running the
+    /// store's own recursive verify (which binds it to the trusted root AND the statement's query digest).
+    /// See [`CompiledRelationStatement::OrderedArrayWalk`].
+    OrderedArrayWalk {
         envelope: Box<RecursiveRelationEnvelope>,
     },
     GroupSum {

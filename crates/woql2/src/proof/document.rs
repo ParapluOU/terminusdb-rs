@@ -101,6 +101,11 @@ const SYS_TABLE: &str = "http://terminusdb.com/schema/sys#Table";
 const SYS_CARDINALITY: &str = "http://terminusdb.com/schema/sys#Cardinality";
 const SYS_OPTIONAL: &str = "http://terminusdb.com/schema/sys#Optional";
 const SYS_CLASS_PRED: &str = "http://terminusdb.com/schema/sys#class";
+/// The `sys:dimensions` descriptor on a `sys:Array` range node (`schema.pl` array clause): its integer
+/// value is the array's dimensionality (default 1 when ABSENT). v1 renders 1-D DENSE arrays only, so a
+/// present `sys:dimensions` value other than `1` (a multi-dimensional array, carrying `sys:index2…`
+/// columns the store composite does not read) reject-closes.
+const SYS_DIMENSIONS: &str = "http://terminusdb.com/schema/sys#dimensions";
 const SYS_SUBDOCUMENT: &str = "http://terminusdb.com/schema/sys#subdocument";
 const SYS_UNFOLDABLE: &str = "http://terminusdb.com/schema/sys#unfoldable";
 const SYS_UNFOLD: &str = "http://terminusdb.com/schema/sys#unfold";
@@ -284,6 +289,18 @@ pub struct ProvedListProperty {
     pub walk: ProvedBgp,
 }
 
+/// One PRESENT 1-D dense array property's ordered-walk sub-proof (increment 4). The exact analogue of
+/// [`ProvedListProperty`] for `sys:Array`: the store's `OrderedArrayWalk` proof for `(id, predicate)`
+/// delivers the `sys:index`-ordered `sys:value` column.
+#[derive(Debug)]
+pub struct ProvedArrayProperty {
+    /// The array-valued predicate IRI.
+    pub predicate: Vec<u8>,
+    /// The store's `OrderedArrayWalk` proof for `(id, predicate)` — the exact `sys:index`-ordered
+    /// element sequence.
+    pub walk: ProvedBgp,
+}
+
 /// One PRESENT `Set`/`List` collection property's per-element ACTUAL-TYPE witnesses (increment-3 audit
 /// fix). v1 does NOT inline collection elements — it renders each as a bare id — so it must PROVE that
 /// the reference would NOT unfold the collection. For each NODE-valued element the witness authenticates
@@ -373,6 +390,8 @@ pub struct ProvedReadDocument {
     pub frame: ProvedFrame,
     /// One walk per PRESENT list property.
     pub lists: Vec<ProvedListProperty>,
+    /// One walk per PRESENT 1-D dense array property (increment 4).
+    pub arrays: Vec<ProvedArrayProperty>,
     /// One entry per PRESENT single-valued class LINK property object (stop link or inlined subdoc).
     pub links: Vec<ProvedLink>,
     /// One entry per PRESENT `Set`/`List` property — the per-element ACTUAL-TYPE witnesses that prove no
@@ -391,6 +410,11 @@ pub enum ResolvedValue {
     /// A list property: the ordered element sequence from the authenticated `OrderedListWalk` (order
     /// AND duplicate multiplicity preserved).
     List(Vec<CanonicalObject>),
+    /// A 1-D DENSE array property: the `sys:index`-ordered `sys:value` sequence from the authenticated
+    /// `OrderedArrayWalk` (ascending-index order AND duplicate multiplicity preserved; density —
+    /// `{indices} == {0,…,n-1}` — certified by the store composite). DISTINCT from [`Self::List`]: an
+    /// array is `@container:@array`, ordered by an authenticated numeric key rather than chain topology.
+    Array(Vec<CanonicalObject>),
     /// A single-valued subdocument property: the INLINED child document (recursively resolved). The
     /// child's class is a subdocument (`sys:subdocument`, inheritance-closed), authenticated from the
     /// child's OWN root-verified `rdf:type` — so its full contents are part of THIS document, exactly
@@ -513,6 +537,29 @@ fn ordered_list_walk_bgp(subject_iri: &[u8], predicate_iri: &[u8]) -> CompiledBg
             schema: vec!["elem".to_string()],
             domains: vec![None],
             statement: CompiledRelationStatement::OrderedListWalk {
+                subject: CanonicalObject::Node(subject_iri.to_vec()),
+                predicate: predicate_iri.to_vec(),
+                graph: ProofGraph::Instance,
+            },
+        },
+        projection: None,
+        collection: None,
+        count_variable: None,
+        full_row_distinct: false,
+    }
+}
+
+/// The `OrderedArrayWalk` leaf for `(subject, predicate)` — the exact `sys:index`-ordered `sys:value`
+/// sequence of a stored 1-D DENSE `sys:Array` (increment 4). Direct construction (there is no WOQL
+/// surface for the leaf), the exact analogue of [`ordered_list_walk_bgp`]. The store carries the whole
+/// array-walk composite (the cell-set BGP, functional binds, type filter, dictionary index lookup, and
+/// density+order permutation) wholesale.
+fn ordered_array_walk_bgp(subject_iri: &[u8], predicate_iri: &[u8]) -> CompiledBgp {
+    CompiledBgp {
+        relation: CompiledRelation {
+            schema: vec!["elem".to_string()],
+            domains: vec![None],
+            statement: CompiledRelationStatement::OrderedArrayWalk {
                 subject: CanonicalObject::Node(subject_iri.to_vec()),
                 predicate: predicate_iri.to_vec(),
                 graph: ProofGraph::Instance,
@@ -697,6 +744,10 @@ enum RangeShape {
     Link,
     Set,
     List,
+    /// A 1-D DENSE `sys:Array` property (increment 4). Rendered from an authenticated `OrderedArrayWalk`
+    /// (the exact `sys:index`-ordered `sys:value` column), DISTINCT from a `List` (a cons chain) — an
+    /// array is `@container:@array`, ordered by an authenticated numeric key rather than chain topology.
+    Array,
 }
 
 /// One classified frame property: its predicate, its range shape, and whether the frame RANGE node
@@ -716,6 +767,10 @@ struct ClassifiedProperty {
 struct NodeInfo {
     rdf_types: Vec<Vec<u8>>,
     sys_class: Option<CanonicalObject>,
+    /// `sys:dimensions` on THIS node — meaningful only on a `sys:Array` descriptor. `None` = the
+    /// default (1-D); a `Some` whose value is not the literal `1` is a multi-dimensional array, rejected
+    /// (`classify_range`).
+    sys_dimensions: Option<CanonicalObject>,
     has_subdocument: bool,
     /// `sys:unfoldable` (`schema_is_unfoldable`, schema.pl:674) — the class asks to be unfolded inline
     /// even though it is NOT a subdocument. Increment 3 does not inline these; a single-valued LINK to
@@ -783,6 +838,8 @@ fn summarize(rows: &SubjectRows) -> NodeInfo {
             }
         } else if predicate == SYS_CLASS_PRED.as_bytes() {
             info.sys_class = Some(object.clone());
+        } else if predicate == SYS_DIMENSIONS.as_bytes() {
+            info.sys_dimensions = Some(object.clone());
         } else if predicate == SYS_SUBDOCUMENT.as_bytes() {
             info.has_subdocument = true;
         } else if predicate == SYS_UNFOLDABLE.as_bytes() {
@@ -846,7 +903,29 @@ fn classify_range(
     // lets [`render`] key the inline/stop decision off the child. The `Array` / cardinality / choice /
     // enum / collection guards below still reject-close (those shapes are unrelated to inlining).
     if info.has_type(SYS_ARRAY) {
-        return Err(BgpPlanError::ReadDocumentArrayDeferred.into());
+        // INCREMENT 4: a 1-D DENSE `sys:Array` of scalar/plain-link elements is now ACCEPTED (rendered
+        // from an authenticated `OrderedArrayWalk`). Reject-close the shapes v1 cannot render:
+        //   * MULTI-DIMENSIONAL — a present `sys:dimensions` != `1` (the store composite reads only the
+        //     level-1 `sys:index` column; a multi-dim array carries `sys:index2…`). ABSENT = default 1-D.
+        //   * a non-`check_element_class`-clean element (subdocument / inheriting / `@unfoldable` /
+        //     collection / `langString` element — identical element guard to `List`/`Set`).
+        if let Some(dimensions) = info.sys_dimensions.as_ref() {
+            let is_one_d = match dimensions {
+                // The order-preserving lexical of a `1`-valued integer literal is exactly `"1"`.
+                CanonicalObject::Value { lexical, .. } => lexical.as_slice() == b"1",
+                // A non-literal `sys:dimensions` (a node) is malformed — treat as not 1-D (reject).
+                _ => false,
+            };
+            if !is_one_d {
+                return Err(shape_reject("array-multidim"));
+            }
+        }
+        let element = info
+            .sys_class
+            .as_ref()
+            .ok_or_else(|| shape_reject("array-without-class"))?;
+        check_element_class(element, reader)?;
+        return Ok(RangeShape::Array);
     }
     if info.has_type(SYS_SET) {
         if info.has_min_cardinality || info.has_max_cardinality {
@@ -1064,7 +1143,10 @@ fn classify_frame(
         // presence makes the reference unfold EVERY element) — read it for all three. A base-type /
         // scalar range never unfolds. The range read is cached, so this costs no extra sub-proof.
         let unfold = match shape {
-            RangeShape::Link | RangeShape::Set | RangeShape::List => match range {
+            // A `Link` / `Set` / `List` / `Array` range node may bear `sys:unfold` (the reference unfolds
+            // the reference / EVERY element inline). v1 renders bare ids, so an `@unfold` collection —
+            // arrays included, per the inc-3 collection rule — reject-closes rather than omit the body.
+            RangeShape::Link | RangeShape::Set | RangeShape::List | RangeShape::Array => match range {
                 CanonicalObject::Node(r) if !is_base_type(r) => {
                     summarize(&reader.read(r)?).has_unfold
                 }
@@ -1392,6 +1474,7 @@ fn prove_body(
     }
 
     let mut lists = Vec::new();
+    let mut arrays = Vec::new();
     let mut links = Vec::new();
     let mut collections = Vec::new();
     for prop in &properties {
@@ -1426,6 +1509,45 @@ fn prove_body(
                     prop.unfold,
                 )?);
                 lists.push(ProvedListProperty {
+                    predicate: prop.predicate.clone(),
+                    walk,
+                });
+            }
+            RangeShape::Array => {
+                // An array property has `n` cell edges `t(id, P, cell)` (NOT a single head like a list),
+                // so DO NOT apply the list-specific `!= 1` head reject: absent (0 cells) → skip, any
+                // present count → prove the ordered walk. The store composite proves cell-set
+                // completeness itself, so we do not re-count here.
+                let present = by_predicate
+                    .get(&prop.predicate)
+                    .map(|objects| !objects.is_empty())
+                    .unwrap_or(false);
+                if !present {
+                    continue;
+                }
+                let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), &prop.predicate);
+                let walk = walk_compiled.prove_with_context(ctx, instance)?;
+                // The array's ORDERED elements come from the authenticated walk (the `sys:index`-ordered
+                // `sys:value` column, NOT the raw cell ids); re-resolve them to run the per-element
+                // ACTUAL-TYPE / `@unfold` reject over the real element sequence, identically to verify.
+                // This is the one genuinely-new soundness point of inc 4: an array of actually-unfoldable
+                // (subdocument / `@unfoldable`) elements must reject, EXACTLY as `Set`/`List` do — the
+                // store composite delivers element ids, so the compiler must refuse the ones the
+                // reference would inline.
+                let columns = walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let elements = columns.into_iter().next().unwrap_or_default();
+                collections.push(prove_collection_elements(
+                    ctx,
+                    instance,
+                    schema,
+                    instance_root,
+                    schema_root,
+                    db_root,
+                    &prop.predicate,
+                    &elements,
+                    prop.unfold,
+                )?);
+                arrays.push(ProvedArrayProperty {
                     predicate: prop.predicate.clone(),
                     walk,
                 });
@@ -1541,6 +1663,7 @@ fn prove_body(
             ranges,
         },
         lists,
+        arrays,
         links,
         collections,
     })
@@ -1911,6 +2034,19 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
     }
     let mut used_walks: BTreeSet<Vec<u8>> = BTreeSet::new();
 
+    // Index the array-walk sub-proofs by predicate (reject a duplicate). One entry per PRESENT array
+    // property (increment 4) — the exact analogue of `walk_map` for lists.
+    let mut array_map: BTreeMap<Vec<u8>, &ProvedArrayProperty> = BTreeMap::new();
+    for array_property in &node.arrays {
+        if array_map
+            .insert(array_property.predicate.clone(), array_property)
+            .is_some()
+        {
+            return Err(invalid("bundle carries a duplicate array-walk sub-proof"));
+        }
+    }
+    let mut used_arrays: BTreeSet<Vec<u8>> = BTreeSet::new();
+
     // Index the link sub-proofs by (predicate, child_id) (reject a duplicate).
     let mut link_map: BTreeMap<(Vec<u8>, Vec<u8>), &ProvedLink> = BTreeMap::new();
     for link in &node.links {
@@ -1976,6 +2112,41 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                     database_root,
                 )?;
                 rendered.push((predicate.clone(), ResolvedValue::List(elements)));
+            }
+            RangeShape::Array => {
+                // An array property carries `n` cell edges (NOT a single head), so — unlike the `List`
+                // arm — there is NO `objects.len() != 1` reject. A PRESENT array property (it is present
+                // here because `by_predicate` has ≥1 row for it) MUST carry exactly one authenticated
+                // walk; a missing walk reject-closes (a prover cannot render the raw cell ids).
+                let array_property = array_map.get(predicate).copied().ok_or_else(|| {
+                    invalid(format!(
+                        "bundle is missing the array-walk sub-proof for present array property {}",
+                        iri_string(predicate)
+                    ))
+                })?;
+                used_arrays.insert(predicate.clone());
+                let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), predicate);
+                let columns = array_property
+                    .walk
+                    .verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let elements = columns.into_iter().next().unwrap_or_default();
+                // Per-element ACTUAL-TYPE / `@unfold` reject over the authenticated ordered elements
+                // (v1 renders bare ids; refuse any element the reference would unfold), reusing the
+                // inc-3 collection machinery IDENTICALLY to prove — the array analogue of the list check.
+                let unfold = unfold_of.get(predicate).copied().unwrap_or(false);
+                verify_collection_elements(
+                    predicate,
+                    &elements,
+                    unfold,
+                    &collection_map,
+                    &mut used_collections,
+                    instance,
+                    schema,
+                    instance_root,
+                    schema_root,
+                    database_root,
+                )?;
+                rendered.push((predicate.clone(), ResolvedValue::Array(elements)));
             }
             RangeShape::Link => {
                 let unfold = unfold_of.get(predicate).copied().unwrap_or(false);
@@ -2136,6 +2307,16 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 predicate: iri_string(predicate),
             }
             .into());
+        }
+    }
+    // No injected array-walk sub-proof (for an absent or non-array predicate). Every carried array walk
+    // must have been demanded by a present array property above.
+    for predicate in array_map.keys() {
+        if !used_arrays.contains(predicate) {
+            return Err(invalid(format!(
+                "bundle carries an unused (injected) array-walk sub-proof for {}",
+                iri_string(predicate)
+            )));
         }
     }
     for key in link_map.keys() {
