@@ -172,6 +172,8 @@ mod proved;
 mod prove_entry;
 mod errors;
 mod bgp;
+// WOQL `ReadDocument` — the compiler-only document bundle (increment 2b).
+mod document;
 
 // The per-construct lowering families (see the layout note above).
 mod eval;
@@ -189,6 +191,7 @@ pub use columns::*;
 pub use prove_entry::*;
 pub use errors::*;
 pub use bgp::*;
+pub use document::*;
 
 // The `plan_*_form` families expose only `pub(crate)` planners (no external `pub`
 // items) — hoist them crate-internally so `bgp::plan_bgp` can dispatch to them.

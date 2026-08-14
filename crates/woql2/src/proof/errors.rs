@@ -862,6 +862,53 @@ pub enum BgpPlanError {
     /// result variables collide); each derived output must be a fresh, distinct output column.
     #[error("calendar op result variable `?{var}` is already bound by the operand-binding BGP or collides with another result")]
     CalendarResultAlreadyBound { var: String },
+
+    // ----- WOQL `ReadDocument` (increment 2b: frame-authenticated flat + list documents) -----
+    /// The `ReadDocument` identifier is a VARIABLE, not a bound node IRI. A document proof binds
+    /// exactly ONE stored subject, so v1 needs a ground id; a variable id (enumerate all documents)
+    /// is a deferred follow-up.
+    #[error("ReadDocument identifier must be a bound node IRI, not a variable")]
+    ReadDocumentUnboundIdentifier,
+
+    /// The document's class `C` carries a `sys:inherits` edge on the schema graph. v1 reads only the
+    /// DIRECT property frame of `C`; an inherited frame needs the reflexive `sys:inherits`
+    /// property-enumeration closure (the immediate follow-up), so it reject-closes rather than
+    /// silently omitting inherited properties.
+    #[error("ReadDocument class has a sys:inherits edge; the inherited-frame closure is deferred (v1 reads direct frames only)")]
+    ReadDocumentInheritedFrame,
+
+    /// A property's frame shape is one v1 cannot render faithfully (e.g. a cardinality-bearing `Set`,
+    /// `Optional`, `Table`, `sys:oneOf` tagged union, enum/foreign/unit range, an inheriting link/element
+    /// target, an undefined or non-node range). Rendering it as a plain property could omit or
+    /// misclassify data, so it reject-closes. `shape` names the specific unsupported form.
+    #[error("ReadDocument property shape `{shape}` is unsupported in v1 (flat scalar/link/set + non-subdocument list); reject closed")]
+    ReadDocumentUnsupportedPropertyShape { shape: &'static str },
+
+    /// The complete, root-authenticated direct-triple set of the document carries a predicate `P` that
+    /// the class frame does NOT define (schema non-conformance / injection). The delivered document
+    /// could not be rendered faithfully without this property being frame-classified, so it
+    /// reject-closes — the no-injection guarantee.
+    #[error("ReadDocument instance property `{predicate}` is absent from the authenticated class frame (no-injection violation)")]
+    ReadDocumentUnknownInstanceProperty { predicate: String },
+
+    /// A `List`-typed property does not have EXACTLY ONE head edge `t(id, P, head)` in the
+    /// authenticated direct-triple set (0 = absent is fine, but a PRESENT list must be single-headed;
+    /// >1 head is malformed), or its ordered-walk sub-proof is missing / mismatched.
+    #[error("ReadDocument list property `{predicate}` is malformed: not exactly one head edge, or its ordered-walk sub-proof is missing/extra")]
+    ReadDocumentMalformedListHead { predicate: String },
+
+    /// A property's range is (directly) a subdocument class. A subdocument value is INLINED by
+    /// `get_document` (the child's own triples are part of the parent); v1 renders only the edge, so it
+    /// reject-closes rather than silently dropping the inlined child. Subdocument inlining is
+    /// increment 3.
+    #[error("ReadDocument subdocument-range property is deferred to increment 3 (inline-closure); reject closed")]
+    ReadDocumentSubdocumentDeferred,
+
+    /// A property's range is a `sys:'Array'` descriptor. Arrays are ordered by an authenticated
+    /// `sys:index` key (a different mechanism from the list cons-walk) and may be multi-dimensional /
+    /// sparse; v1 reject-closes (array fidelity is increment 4).
+    #[error("ReadDocument array-range property is deferred to increment 4 (sys:index ordering); reject closed")]
+    ReadDocumentArrayDeferred,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and

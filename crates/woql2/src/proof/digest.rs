@@ -14,6 +14,23 @@ pub(crate) fn digest_bytes(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+/// Bundle-identity digest for a compiled `ReadDocument` (increment 2b).
+///
+/// A `ReadDocument` proof is a BUNDLE of ordinary sub-proofs (one instance bound-subject BGP, the
+/// schema-graph frame BGPs, and one ordered-list walk per list property). Each sub-proof already
+/// carries its OWN [`compiled_query_digest`] that binds it to its exact `(subject, predicate)` /
+/// closure query, so this fold does not re-hash the sub-plans. It only pins the ONE thing that is a
+/// pure function of the surface query — the bound document `id` — under a distinct domain tag, so a
+/// bundle cannot be re-aimed at a different document. The class `C`, property set, and list count are
+/// DATA (discovered at prove, re-authenticated at verify from the root-bound frame) and deliberately
+/// NOT folded here.
+pub fn read_document_digest(id: &[u8]) -> ProofHash {
+    let mut hasher = Sha256::new();
+    hasher.update(b"terminusdb-woql2/read-document/v1");
+    digest_bytes(&mut hasher, id);
+    hasher.finalize().into()
+}
+
 /// Stable identity of all public WOQL interpretation metadata layered over the Store
 /// plan. This prevents reusing one envelope under a different schema, projection,
 /// collection, count binding, or `Distinct` interpretation.
