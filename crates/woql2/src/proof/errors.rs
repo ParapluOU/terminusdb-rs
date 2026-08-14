@@ -935,6 +935,33 @@ pub enum BgpPlanError {
     /// reject-closes rather than truncate.
     #[error("ReadDocument subdocument inlining exceeded the depth/node budget; reject closed rather than truncate")]
     ReadDocumentSubdocumentBudgetExceeded,
+
+    // ----- WOQL `ReadDocument` (increment 6a: the DELTA-STACK / reconciled path) -----
+    /// On the DELTA path a PRESENT `List` or `Array` property reject-closes: the ordered-walk store
+    /// composites (`OrderedListWalk` / `OrderedArrayWalk`) read a single MATERIALIZED instance layer and
+    /// are NOT yet reconciled over `present` (increments 6c / 6d). Rendering the raw cons head / cell ids
+    /// instead would drop the ordered element sequence, so the delta path refuses rather than under-
+    /// deliver. `shape` names which container (`"list"` / `"array"`). (The base/materialized path still
+    /// PROVES both — this reject fires only when the instance source is a delta stack.)
+    #[error("ReadDocument {shape} property is unsupported on the delta-stack path (the ordered-walk composite is not reconciled over `present` yet); reject closed")]
+    ReadDocumentDeltaWalkDeferred { shape: &'static str },
+
+    /// On the DELTA path a single-valued class LINK whose CHILD is a subdocument reject-closes:
+    /// subdocument INLINING over a delta stack is a later increment (6b, gated on a reconcile-once
+    /// optimization). This reject is SOUND, not silent — the child's subdocument nature is RE-DERIVED
+    /// from root-authenticated data (the child's own bound-subject read over `present` + its reflexive
+    /// `sys:inherits` closure on the materialized schema), so the delta path REFUSES rather than omit the
+    /// inlined body a subdocument child would contribute. (A plain, non-subdocument link renders its id
+    /// as usual — that IS supported on the delta path.)
+    #[error("ReadDocument subdocument inlining is unsupported on the delta-stack path (the child is a re-derived subdocument); reject closed rather than omit the inlined body")]
+    ReadDocumentDeltaSubdocumentDeferred,
+
+    /// On the DELTA path the SCHEMA commitment must be MATERIALIZED (a base layer, `parent_state_root ==
+    /// None`): the frame BGPs and the `sys:inherits` closure read the schema graph directly, and the
+    /// delta-stacked schema graph (reconciled frame reads + closure over `present`) is a later increment
+    /// (6e). A schema commitment that is itself a delta head reject-closes.
+    #[error("ReadDocument delta-stack path requires a materialized schema; the supplied schema commitment is itself a delta head; reject closed")]
+    ReadDocumentDeltaSchemaHead,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and

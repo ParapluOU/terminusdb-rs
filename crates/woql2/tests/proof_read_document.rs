@@ -346,7 +346,7 @@ fn read_document_tampered_direct_triples_fail_verify() {
 
         // Corrupt one committed value of the COMPLETE direct-triple set: a prover cannot deliver a
         // partial/altered document — the bound-subject BGP re-verify rejects it.
-        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.subject_bgp.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
@@ -630,7 +630,7 @@ fn read_document_cardinality_end_to_end() {
         }
 
         // ---- ADVERSARIAL: tamper the COMPLETE direct-triple set → verify fails. ----
-        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.subject_bgp.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
@@ -1739,7 +1739,7 @@ fn read_document_optional_end_to_end() {
         );
 
         // ---- ADVERSARIAL: tamper the COMPLETE direct-triple set → verify fails. ----
-        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.subject_bgp.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
@@ -1793,7 +1793,7 @@ fn read_document_langstring_end_to_end() {
         }
 
         // ---- ADVERSARIAL: tamper the langString value → verify fails. ----
-        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.subject_bgp.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)

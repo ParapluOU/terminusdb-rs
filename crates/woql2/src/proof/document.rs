@@ -83,7 +83,19 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::ReadDocument;
-use terminus_store::proof::commitment::{database_root, validate_database_root};
+use terminus_store::proof::commitment::{database_root, validate_database_root, VerifierCommitmentRef};
+
+// The reconciled (delta-stack) instance-read machinery reused VERBATIM for increment 6a. A bound-subject
+// read over a NON-materialized delta head routes to the store's single-atom present FILTER
+// (`FilterPosition::Subject`, constant `hash_object(Node(id))`), which delivers the subject's
+// `[predicate, object]` rows exactly like a materialized bound-subject BGP. NO new store crypto — this is
+// pure compiler-side routing over already-audited store entries.
+use dory_pcs::backends::arkworks::ArkFr;
+use terminus_store::proof::dict::hash_object;
+use terminus_store::proof::reconcile::{
+    prove_read_single_atom, verify_and_resolve_single_atom, FilterPosition, PresentFilterProof,
+    ReconcileProof,
+};
 
 // ---------------------------------------------------------------------------------------------------
 // Well-known IRIs — the schema-frame vocabulary. Mirrors the server Prolog `schema.pl`
@@ -255,6 +267,46 @@ impl CompiledReadDocument {
     }
 }
 
+/// A source-agnostic instance-graph bound-subject read (increment 6a). EVERY instance bound-subject
+/// read in a `ReadDocument` bundle — the node's own direct triples, each child type-check read, each
+/// collection-element read — is one of these. Both variants deliver the SAME logical answer (the
+/// complete, deduplicated `(predicate, object)` rows of one bound subject), so everything downstream
+/// (`extract_class`, `classify_frame`, the completeness/no-injection cross-checks) is source-agnostic
+/// and reused VERBATIM.
+///
+/// SOUNDNESS: the route is chosen by the ENTRY POINT (materialized vs reconciled), never by this
+/// prover-supplied variant. [`InstanceSubjectProof::resolve`] pairs the leaf against the entry's
+/// [`InstanceSource`]; a leaf whose variant disagrees reject-closes. On BOTH paths the delivered rows
+/// are re-verified against the trusted root before use (`present` is a complete duplicate-free SET by
+/// the reconcile invariant, and the `FilterPosition::Subject` filter selects EXACTLY `id`'s rows).
+#[derive(Debug)]
+pub enum InstanceSubjectProof {
+    /// A materialized bound-subject BGP `Triple(id, ?p, ?o)` over a single instance `LayerCommitment`
+    /// (the base path — byte-identical to increments 2b–5).
+    Materialized(ProvedBgp),
+    /// A reconciled single-atom present filter over a base..head delta stack (the 6a delta path): the
+    /// reconcile proof, the `FilterPosition::Subject` present-filter proof, and the prover's published
+    /// result columns (re-committed + resolved against the trusted head root at verify).
+    Reconciled {
+        reconcile: ReconcileProof,
+        filter: PresentFilterProof,
+        columns: Vec<Vec<ArkFr>>,
+    },
+}
+
+impl InstanceSubjectProof {
+    /// Test/inspection helper: the materialized BGP (panics on a reconciled leaf). Lets the
+    /// materialized suite's tamper cases reach the committed result columns after the field-type change.
+    pub fn expect_materialized_mut(&mut self) -> &mut ProvedBgp {
+        match self {
+            InstanceSubjectProof::Materialized(bgp) => bgp,
+            InstanceSubjectProof::Reconciled { .. } => {
+                panic!("expected a materialized instance subject proof, found a reconciled one")
+            }
+        }
+    }
+}
+
 /// One range/element schema node's classification sub-proof: a bound-subject BGP `Triple(node, ?p, ?o)`
 /// on the SCHEMA graph, delivering the node's direct schema triples. The verifier reconstructs the
 /// plan from `node` (a pure function of the node IRI) and verifies against the schema root, so the
@@ -343,9 +395,11 @@ pub struct ProvedCollectionElement {
 /// link to a document with, say, an `Optional` field does not reject the parent.
 #[derive(Debug)]
 pub struct ProvedChildTypeWitness {
-    /// The child's instance bound-subject BGP → its `rdf:type` = `C_child` (+ its direct triples,
-    /// unused for a stop link). Reconstructed at verify from `child_id`.
-    pub subject_bgp: ProvedBgp,
+    /// The child's instance bound-subject read → its `rdf:type` = `C_child` (+ its direct triples,
+    /// unused for a stop link). Source-AGNOSTIC (materialized BGP or reconciled present filter), so a
+    /// child type-check over a delta head routes to the same single-atom present filter. Reconstructed
+    /// at verify from `child_id`.
+    pub subject_bgp: InstanceSubjectProof,
     /// `C_child`'s OWN schema frame read `Triple(C_child, ?p, ?r)`. `None` iff the child has NO
     /// `rdf:type` row (a typeless / dangling link) — the reference renders such a target as a plain
     /// link id, and so do we (a typeless target is trivially non-subdocument).
@@ -390,11 +444,12 @@ pub enum ProvedLinkTarget {
 /// no-injection cross-checks (including the recursive per-link demand/reject of increment 3).
 #[derive(Debug)]
 pub struct ProvedReadDocument {
-    /// The prover's `Triple(id, ?p, ?o)` plan (informational). Verify reconstructs its own copy from
-    /// the node `id` and never trusts this one.
-    pub subject_compiled: CompiledBgp,
-    /// The instance bound-subject BGP proof — the COMPLETE direct triples of this node.
-    pub subject_bgp: ProvedBgp,
+    /// The instance bound-subject read — the COMPLETE direct triples of this node. Source-AGNOSTIC: a
+    /// MATERIALIZED bound-subject BGP (base path) OR a RECONCILED single-atom present filter over a
+    /// delta stack (6a). Verify reconstructs the plan from the node `id` and never trusts a prover-
+    /// supplied compiled plan; the route (materialized vs reconciled) is fixed by the ENTRY POINT, so a
+    /// leaf whose variant disagrees with the entry's instance source reject-closes.
+    pub subject_bgp: InstanceSubjectProof,
     /// The authenticated class frame.
     pub frame: ProvedFrame,
     /// One walk per PRESENT list property.
@@ -634,6 +689,210 @@ fn resolve_subject_rows(
         rows.push((predicate, object.clone()));
     }
     Ok(rows)
+}
+
+/// Reshape a reconciled single-atom `FilterPosition::Subject` result — two columns `[predicate, object]`
+/// (mirroring the materialized bound-subject BGP; see `filter_output_kinds`) — into [`SubjectRows`],
+/// EXACTLY as [`resolve_subject_rows`] does. `verify_and_resolve_single_atom` already re-committed the
+/// columns to the filter proof AND resolved them against the trusted head-root-bound chain catalogs, so
+/// the rows are root-authenticated.
+fn reshape_present_subject_rows(
+    columns: Vec<Vec<CanonicalObject>>,
+) -> Result<SubjectRows, QueryProofError> {
+    if columns.len() != 2 {
+        return Err(invalid(
+            "reconciled single-atom subject read must resolve to two columns (predicate, object)",
+        ));
+    }
+    let predicates = &columns[0];
+    let objects = &columns[1];
+    if predicates.len() != objects.len() {
+        return Err(invalid(
+            "reconciled subject read predicate/object columns differ in length",
+        ));
+    }
+    let mut rows = Vec::with_capacity(predicates.len());
+    for (predicate, object) in predicates.iter().zip(objects.iter()) {
+        let predicate = match predicate {
+            CanonicalObject::Node(bytes) => bytes.clone(),
+            _ => return Err(invalid("reconciled subject read predicate column is not a node")),
+        };
+        rows.push((predicate, object.clone()));
+    }
+    Ok(rows)
+}
+
+/// The `FilterPosition::Subject` constant for a document/child IRI: `hash_object(Node(id))` — a PURE
+/// function of `id`, used identically by prove and verify (so the verifier's re-derived filter constant
+/// binds the read to exactly this subject).
+fn subject_filter_constant(id: &str) -> ArkFr {
+    hash_object(&CanonicalObject::Node(id.as_bytes().to_vec()))
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Instance-graph SOURCE / PROVER routing (increment 6a). The route — a single MATERIALIZED layer vs a
+// RECONCILED delta stack — is chosen by the ENTRY POINT and threaded through the whole node tree, so it
+// is a PURE FUNCTION of the query (never prover-supplied data). Every instance bound-subject read in the
+// tree resolves through this one source; everything else (schema frame reads + the `sys:inherits`
+// closure) stays on the materialized schema on BOTH paths.
+// ---------------------------------------------------------------------------------------------------
+
+/// The instance-graph VERIFY source for a `ReadDocument` node tree.
+enum InstanceSource<'a> {
+    /// A single materialized instance layer (the base path).
+    Materialized(VerifierCommitmentRef<'a>),
+    /// A reconciled delta stack (base..head, head last) — the 6a delta path.
+    Reconciled(&'a [&'a LayerCommitment]),
+}
+
+impl InstanceSource<'_> {
+    /// The trusted instance-graph root: a materialized layer's own commitment root, or the delta
+    /// stack's head root (== the trusted delta-head anchor — the head layer's commitment root, which
+    /// the reconcile verifier pins to `trusted_head_root`).
+    fn instance_root(&self) -> ProofHash {
+        match self {
+            InstanceSource::Materialized(view) => view.state.commitment_root,
+            InstanceSource::Reconciled(layers) => layers
+                .last()
+                .expect("delta instance stack is non-empty")
+                .state
+                .commitment_root,
+        }
+    }
+
+    /// The verifier view used ONLY to anchor a SCHEMA-graph read (the `sys:inherits` closure) into the
+    /// combined `database_root`. A schema read never touches instance data — it needs the instance
+    /// solely for the root binding — so the delta stack's HEAD layer view (whose commitment root is the
+    /// trusted head anchor) is the correct, sound instance anchor.
+    fn root_binding_view(&self) -> VerifierCommitmentRef<'_> {
+        match self {
+            InstanceSource::Materialized(view) => *view,
+            InstanceSource::Reconciled(layers) => layers
+                .last()
+                .expect("delta instance stack is non-empty")
+                .verifier_view(),
+        }
+    }
+
+    fn is_reconciled(&self) -> bool {
+        matches!(self, InstanceSource::Reconciled(_))
+    }
+}
+
+impl InstanceSubjectProof {
+    /// Verify + resolve this bound-subject read against the entry-chosen [`InstanceSource`], returning
+    /// the `(predicate, object)` rows. The route is fixed by `source` (the ENTRY POINT), NOT by this
+    /// proof's own variant: a leaf whose variant disagrees with `source` reject-closes (the
+    /// pure-function-of-the-query invariant — a prover cannot pick the route). On both arms the rows are
+    /// re-verified against the trusted root before return.
+    fn resolve(
+        &self,
+        id: &str,
+        source: &InstanceSource<'_>,
+        instance_root: ProofHash,
+    ) -> Result<SubjectRows, QueryProofError> {
+        match (self, source) {
+            (InstanceSubjectProof::Materialized(bgp), InstanceSource::Materialized(view)) => {
+                let compiled = bound_subject_bgp(id)?;
+                resolve_subject_rows(bgp, &compiled, view, instance_root)
+            }
+            (
+                InstanceSubjectProof::Reconciled { reconcile, filter, columns },
+                InstanceSource::Reconciled(layers),
+            ) => {
+                // The single-atom present filter re-verifies `present` against the trusted head root,
+                // pins the selection to EXACTLY `id`'s rows (constant `hash_object(Node(id))` in the
+                // Subject position), and resolves the two output columns [predicate, object] against the
+                // chain catalogs — the reconciled analogue of `resolve_subject_rows`.
+                let resolved = verify_and_resolve_single_atom(
+                    layers,
+                    instance_root,
+                    FilterPosition::Subject,
+                    subject_filter_constant(id),
+                    reconcile,
+                    filter,
+                    columns,
+                )?;
+                reshape_present_subject_rows(resolved)
+            }
+            // The leaf variant (prover data) disagrees with the entry-chosen route → reject.
+            _ => Err(invalid(
+                "instance subject proof route does not match the entry point's instance source",
+            )),
+        }
+    }
+}
+
+/// The instance-graph PROVE routing — the prove-side twin of [`InstanceSource`], likewise chosen by the
+/// prove ENTRY POINT. It produces a source-agnostic [`InstanceSubjectProof`] plus the resolved rows for
+/// any bound subject.
+enum InstanceProver<'a> {
+    /// Prove bound-subject reads as materialized BGPs over a single instance layer.
+    Materialized { layer: &'a LayerCommitment, root: ProofHash },
+    /// Prove bound-subject reads as reconciled single-atom present filters over a delta stack.
+    Reconciled { layers: &'a [&'a LayerCommitment], head_root: ProofHash },
+}
+
+impl InstanceProver<'_> {
+    fn instance_root(&self) -> ProofHash {
+        match self {
+            InstanceProver::Materialized { root, .. } => *root,
+            InstanceProver::Reconciled { head_root, .. } => *head_root,
+        }
+    }
+
+    /// The `LayerCommitment` used to anchor a SCHEMA-graph read (the `sys:inherits` closure) into the
+    /// combined `database_root`, and to prove a materialized-path ordered walk. Always a
+    /// `&LayerCommitment` (the materialized layer, or the delta stack's head), so the schema closure
+    /// prove/verify monomorphizes identically on both paths.
+    fn root_binding_layer(&self) -> &LayerCommitment {
+        match self {
+            InstanceProver::Materialized { layer, .. } => layer,
+            InstanceProver::Reconciled { layers, .. } => {
+                *layers.last().expect("delta instance stack is non-empty")
+            }
+        }
+    }
+
+    fn is_reconciled(&self) -> bool {
+        matches!(self, InstanceProver::Reconciled { .. })
+    }
+
+    /// Prove ONE bound-subject read and resolve its rows. Materialized → a bound-subject BGP; delta →
+    /// a reconciled single-atom present filter (`FilterPosition::Subject`). The reconciled arm proves
+    /// AND re-verifies (to recover the resolved rows the prover needs to discover the frame), exactly as
+    /// the materialized arm proves-then-resolves.
+    fn read_subject(
+        &self,
+        ctx: &StoreProverContext<'_>,
+        id: &str,
+    ) -> Result<(InstanceSubjectProof, SubjectRows), QueryProofError> {
+        match self {
+            InstanceProver::Materialized { layer, root } => {
+                let compiled = bound_subject_bgp(id)?;
+                let proved = compiled.prove_with_context(ctx, layer)?;
+                let rows = resolve_subject_rows(&proved, &compiled, *layer, *root)?;
+                Ok((InstanceSubjectProof::Materialized(proved), rows))
+            }
+            InstanceProver::Reconciled { layers, head_root } => {
+                let constant = subject_filter_constant(id);
+                let (reconcile, filter, read) =
+                    prove_read_single_atom(layers, FilterPosition::Subject, constant)?;
+                let columns = read.columns;
+                let resolved = verify_and_resolve_single_atom(
+                    layers,
+                    *head_root,
+                    FilterPosition::Subject,
+                    constant,
+                    &reconcile,
+                    &filter,
+                    &columns,
+                )?;
+                let rows = reshape_present_subject_rows(resolved)?;
+                Ok((InstanceSubjectProof::Reconciled { reconcile, filter, columns }, rows))
+            }
+        }
+    }
 }
 
 /// Verify + resolve the ancestor-closure sub-proof and return its authenticated class SET as node-IRI
@@ -1300,8 +1559,7 @@ fn extract_class_opt(rows: &SubjectRows) -> Result<Option<Vec<u8>>, QueryProofEr
 /// link keeps ONLY this (never the child's body); the root and an inlined subdocument EXTEND it into a
 /// full node, REUSING every proven piece (no re-proving).
 struct ProvenCore {
-    subject_compiled: CompiledBgp,
-    subject_bgp: ProvedBgp,
+    subject: InstanceSubjectProof,
     d_rows: SubjectRows,
     /// `None` => the node has NO `rdf:type` row (typeless/dangling link → non-subdocument stop).
     class: Option<Vec<u8>>,
@@ -1321,23 +1579,20 @@ struct ProvenCore {
 /// is never touched.
 fn prove_core(
     ctx: &StoreProverContext<'_>,
-    instance: &LayerCommitment,
+    instance: &InstanceProver<'_>,
     schema: &LayerCommitment,
-    instance_root: ProofHash,
     schema_root: ProofHash,
     db_root: ProofHash,
     id: &str,
 ) -> Result<ProvenCore, QueryProofError> {
-    // (D) COMPLETE direct triples of this node (instance graph).
-    let subject_compiled = bound_subject_bgp(id)?;
-    let subject_bgp = subject_compiled.prove_with_context(ctx, instance)?;
-    let d_rows = resolve_subject_rows(&subject_bgp, &subject_compiled, instance, instance_root)?;
+    // (D) COMPLETE direct triples of this node (instance graph) — a materialized bound-subject BGP OR a
+    // reconciled single-atom present filter, chosen by the entry point. Source-agnostic downstream.
+    let (subject, d_rows) = instance.read_subject(ctx, id)?;
 
     // (F0) Bind the class. A typeless target (dangling link) is a non-subdocument stop.
     let Some(class) = extract_class_opt(&d_rows)? else {
         return Ok(ProvenCore {
-            subject_compiled,
-            subject_bgp,
+            subject,
             d_rows,
             class: None,
             class_schema: None,
@@ -1362,7 +1617,16 @@ fn prove_core(
     let (ancestor_closure, ancestor_set) = if summarize(&class_rows).has_inherits {
         let closure_compiled = ancestor_closure_bgp(class_iri)?;
         let closure = closure_compiled.prove_with_context(ctx, schema)?;
-        let set = resolve_closure_set(&closure, &closure_compiled, instance, schema, db_root)?;
+        // The closure is a SCHEMA-graph read; `root_binding_layer()` supplies the instance layer used
+        // ONLY to anchor it into the combined `database_root` (the materialized layer, or the delta
+        // stack's head whose commitment root is the trusted head anchor).
+        let set = resolve_closure_set(
+            &closure,
+            &closure_compiled,
+            instance.root_binding_layer(),
+            schema,
+            db_root,
+        )?;
         (Some(closure), set)
     } else {
         (None, vec![class.clone()])
@@ -1380,8 +1644,7 @@ fn prove_core(
     let natures = closure_natures(&class, &class_rows, &ancestor_set, &mut reader)?;
 
     Ok(ProvenCore {
-        subject_compiled,
-        subject_bgp,
+        subject,
         d_rows,
         class: Some(class),
         class_schema: Some(class_schema),
@@ -1410,9 +1673,8 @@ fn prove_core(
 #[allow(clippy::too_many_arguments)]
 fn prove_collection_elements(
     ctx: &StoreProverContext<'_>,
-    instance: &LayerCommitment,
+    instance: &InstanceProver<'_>,
     schema: &LayerCommitment,
-    instance_root: ProofHash,
     schema_root: ProofHash,
     db_root: ProofHash,
     predicate: &[u8],
@@ -1441,22 +1703,15 @@ fn prove_collection_elements(
             .to_string();
         // Read the element's ACTUAL type + closure (never the schema's DECLARED element class). A
         // typeless/dangling element yields clean natures (the reference renders it as a bare id too).
-        let child_core = prove_core(
-            ctx,
-            instance,
-            schema,
-            instance_root,
-            schema_root,
-            db_root,
-            &child_iri,
-        )?;
+        // On the delta path this is itself a reconciled bound-subject read over `present`.
+        let child_core = prove_core(ctx, instance, schema, schema_root, db_root, &child_iri)?;
         if child_core.natures.has_subdocument || child_core.natures.has_unfoldable {
             return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
         }
         witnesses.push(ProvedCollectionElement {
             child_id,
             witness: ProvedChildTypeWitness {
-                subject_bgp: child_core.subject_bgp,
+                subject_bgp: child_core.subject,
                 class_schema: child_core.class_schema,
                 ancestor_closure: child_core.ancestor_closure,
                 ancestor_reads: child_core.ancestor_reads,
@@ -1478,9 +1733,8 @@ fn prove_collection_elements(
 #[allow(clippy::too_many_arguments)]
 fn prove_body(
     ctx: &StoreProverContext<'_>,
-    instance: &LayerCommitment,
+    instance: &InstanceProver<'_>,
     schema: &LayerCommitment,
-    instance_root: ProofHash,
     schema_root: ProofHash,
     db_root: ProofHash,
     id: &str,
@@ -1491,8 +1745,7 @@ fn prove_body(
     node_count: &mut usize,
 ) -> Result<ProvedReadDocument, QueryProofError> {
     let ProvenCore {
-        subject_compiled,
-        subject_bgp,
+        subject,
         d_rows,
         class,
         class_schema,
@@ -1551,18 +1804,25 @@ fn prove_body(
                         .into())
                     }
                 }
+                // DELTA-PATH REJECT (6a). A PRESENT list reject-closes: the `OrderedListWalk` composite
+                // reads a single MATERIALIZED layer and is not reconciled over `present` yet (6c).
+                // Rendering the raw cons head would drop the order — refuse rather than under-deliver.
+                if instance.is_reconciled() {
+                    return Err(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" }.into());
+                }
+                let layer = instance.root_binding_layer();
+                let instance_root = instance.instance_root();
                 let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), &prop.predicate);
-                let walk = walk_compiled.prove_with_context(ctx, instance)?;
+                let walk = walk_compiled.prove_with_context(ctx, layer)?;
                 // The list's ORDERED elements come from the authenticated walk (NOT the raw cons head);
                 // re-resolve them to run the per-element ACTUAL-TYPE / `@unfold` reject over the real
                 // element sequence, identically to verify.
-                let columns = walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let columns = walk.verify_and_resolve(&walk_compiled, layer, instance_root)?;
                 let elements = columns.into_iter().next().unwrap_or_default();
                 collections.push(prove_collection_elements(
                     ctx,
                     instance,
                     schema,
-                    instance_root,
                     schema_root,
                     db_root,
                     &prop.predicate,
@@ -1586,8 +1846,18 @@ fn prove_body(
                 if !present {
                     continue;
                 }
+                // DELTA-PATH REJECT (6a). A PRESENT array reject-closes: the `OrderedArrayWalk`
+                // composite reads a single MATERIALIZED layer and is not reconciled over `present` yet
+                // (6d). Rendering the raw cell ids would drop the index order — refuse.
+                if instance.is_reconciled() {
+                    return Err(
+                        BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "array" }.into()
+                    );
+                }
+                let layer = instance.root_binding_layer();
+                let instance_root = instance.instance_root();
                 let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), &prop.predicate);
-                let walk = walk_compiled.prove_with_context(ctx, instance)?;
+                let walk = walk_compiled.prove_with_context(ctx, layer)?;
                 // The array's ORDERED elements come from the authenticated walk (the `sys:index`-ordered
                 // `sys:value` column, NOT the raw cell ids); re-resolve them to run the per-element
                 // ACTUAL-TYPE / `@unfold` reject over the real element sequence, identically to verify.
@@ -1595,13 +1865,12 @@ fn prove_body(
                 // (subdocument / `@unfoldable`) elements must reject, EXACTLY as `Set`/`List` do — the
                 // store composite delivers element ids, so the compiler must refuse the ones the
                 // reference would inline.
-                let columns = walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let columns = walk.verify_and_resolve(&walk_compiled, layer, instance_root)?;
                 let elements = columns.into_iter().next().unwrap_or_default();
                 collections.push(prove_collection_elements(
                     ctx,
                     instance,
                     schema,
-                    instance_root,
                     schema_root,
                     db_root,
                     &prop.predicate,
@@ -1627,17 +1896,18 @@ fn prove_body(
                         .map_err(|_| invalid("link child IRI is not valid UTF-8"))?
                         .to_string();
                     // Prove the child's decision core → the inline/stop decision is keyed off the
-                    // CHILD's authenticated type + closure, NEVER the schema range.
-                    let child_core = prove_core(
-                        ctx,
-                        instance,
-                        schema,
-                        instance_root,
-                        schema_root,
-                        db_root,
-                        &child_iri,
-                    )?;
+                    // CHILD's authenticated type + closure, NEVER the schema range. On the delta path
+                    // this reads the child's `rdf:type` over `present` (a reconciled bound-subject read),
+                    // so the child's subdocument nature is re-derived from ROOT-AUTHENTICATED data.
+                    let child_core =
+                        prove_core(ctx, instance, schema, schema_root, db_root, &child_iri)?;
                     if child_core.natures.has_subdocument {
+                        // DELTA-PATH REJECT (6a), SOUND not silent. The child IS a subdocument (re-derived
+                        // above), which the reference would INLINE; subdocument inlining over a delta
+                        // stack is a later increment (6b). Refuse rather than omit the inlined body.
+                        if instance.is_reconciled() {
+                            return Err(BgpPlanError::ReadDocumentDeltaSubdocumentDeferred.into());
+                        }
                         // INLINE (single-valued only).
                         if objects.len() != 1 {
                             return Err(shape_reject("multi-valued-subdocument"));
@@ -1657,7 +1927,6 @@ fn prove_body(
                             ctx,
                             instance,
                             schema,
-                            instance_root,
                             schema_root,
                             db_root,
                             &child_iri,
@@ -1675,7 +1944,8 @@ fn prove_body(
                     } else {
                         // STOP (plain link). The reference UNFOLDS an `@unfoldable` class or an
                         // `@unfold` property inline; increment 3 inlines only true subdocuments, so
-                        // rendering such a target as a bare link would OMIT content — reject closed.
+                        // rendering such a target as a bare link would OMIT content — reject closed. A
+                        // plain non-subdocument link IS supported on the delta path (render its id).
                         if child_core.natures.has_unfoldable || prop.unfold {
                             return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
                         }
@@ -1683,7 +1953,7 @@ fn prove_body(
                             predicate: prop.predicate.clone(),
                             child_id,
                             target: ProvedLinkTarget::Stop(ProvedChildTypeWitness {
-                                subject_bgp: child_core.subject_bgp,
+                                subject_bgp: child_core.subject,
                                 class_schema: child_core.class_schema,
                                 ancestor_closure: child_core.ancestor_closure,
                                 ancestor_reads: child_core.ancestor_reads,
@@ -1701,7 +1971,6 @@ fn prove_body(
                         ctx,
                         instance,
                         schema,
-                        instance_root,
                         schema_root,
                         db_root,
                         &prop.predicate,
@@ -1715,8 +1984,7 @@ fn prove_body(
     }
 
     Ok(ProvedReadDocument {
-        subject_compiled,
-        subject_bgp,
+        subject_bgp: subject,
         frame: ProvedFrame {
             class,
             class_schema,
@@ -1753,8 +2021,11 @@ impl CompiledReadDocument {
         let instance_root = instance.state.commitment_root;
         let schema_root = schema.state.commitment_root;
         let db_root = database_root(&instance_root, &schema_root);
+        // MATERIALIZED route: the entry FIXES the source (never prover data), so every instance
+        // bound-subject read in the tree is a `InstanceSubjectProof::Materialized` bound-subject BGP.
+        let instance = InstanceProver::Materialized { layer: instance, root: instance_root };
 
-        let core = prove_core(ctx, instance, schema, instance_root, schema_root, db_root, &self.id)?;
+        let core = prove_core(ctx, &instance, schema, schema_root, db_root, &self.id)?;
         // The ROOT of a `ReadDocument` must be a real typed document.
         if core.class.is_none() {
             return Err(invalid("document has no rdf:type row"));
@@ -1767,9 +2038,62 @@ impl CompiledReadDocument {
         let mut node_count = 1usize;
         prove_body(
             ctx,
-            instance,
+            &instance,
             schema,
-            instance_root,
+            schema_root,
+            db_root,
+            &self.id,
+            core,
+            /* allow_subdocument */ false,
+            0,
+            &mut visited,
+            &mut node_count,
+        )
+    }
+
+    /// Prove a RESTRICTED `ReadDocument` over a delta INSTANCE stack (`instance_layers`, base..head,
+    /// head last) + a MATERIALIZED schema (increment 6a — the delta-stack path). Every instance
+    /// bound-subject read (the node's own `D`, each child type-check read, each collection-element read)
+    /// routes to the store's single-atom present FILTER over `present` (`FilterPosition::Subject`); every
+    /// SCHEMA read (frame BGPs + the `sys:inherits` closure) stays on the materialized schema. NO new
+    /// store crypto — the reconcile filter and the schema machinery are reused verbatim; this entry only
+    /// FIXES the instance route (never prover data). Reject-closes (delta path): `List`/`Array` (the
+    /// ordered walks are not reconciled yet), subdocument INLINING (re-derived SOUNDLY from the child's
+    /// authenticated nature), and a delta-head schema — PLUS every base reject.
+    pub fn prove_on_layers_reconciled(
+        &self,
+        instance_layers: &[&LayerCommitment],
+        schema: &LayerCommitment,
+    ) -> Result<ProvedReadDocument, QueryProofError> {
+        // The SCHEMA graph must be MATERIALIZED (6e reconciles the schema stack). A schema commitment
+        // that is itself a delta head reject-closes.
+        if schema.state.parent_state_root.is_some() {
+            return Err(BgpPlanError::ReadDocumentDeltaSchemaHead.into());
+        }
+        let head = instance_layers
+            .last()
+            .ok_or_else(|| invalid("delta instance stack is empty"))?;
+        let instance_head_root = head.state.commitment_root;
+        let schema_root = schema.state.commitment_root;
+        let db_root = database_root(&instance_head_root, &schema_root);
+        let ctx = StoreProverContext::cpu();
+        // RECONCILED route: the entry FIXES the source, so every instance read is a
+        // `InstanceSubjectProof::Reconciled` single-atom present filter over the delta stack.
+        let instance =
+            InstanceProver::Reconciled { layers: instance_layers, head_root: instance_head_root };
+
+        let core = prove_core(&ctx, &instance, schema, schema_root, db_root, &self.id)?;
+        // The ROOT of a `ReadDocument` must be a real typed document.
+        if core.class.is_none() {
+            return Err(invalid("document has no rdf:type row"));
+        }
+        let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
+        visited.insert(self.id.as_bytes().to_vec());
+        let mut node_count = 1usize;
+        prove_body(
+            &ctx,
+            &instance,
+            schema,
             schema_root,
             db_root,
             &self.id,
@@ -1792,22 +2116,19 @@ impl CompiledReadDocument {
 /// every carried sub-proof, rejecting an injected one. The CALLER uses the returned natures to force
 /// the render mode (a stop witness whose child is actually a subdocument reject-closes as an omission).
 #[allow(clippy::too_many_arguments)]
-fn verify_child_witness<I: VerifierLayer, S: VerifierLayer>(
+fn verify_child_witness<S: VerifierLayer>(
     witness: &ProvedChildTypeWitness,
     child_id: &[u8],
-    instance: &I,
+    instance: &InstanceSource<'_>,
     schema: &S,
-    instance_root: ProofHash,
     schema_root: ProofHash,
     database_root: ProofHash,
 ) -> Result<(Option<Vec<u8>>, ClosureNatures), QueryProofError> {
     let child_iri =
         std::str::from_utf8(child_id).map_err(|_| invalid("link child IRI is not valid UTF-8"))?;
-    // The child's type — reconstruct the plan from `child_id` (pure function), verify over the
-    // instance root.
-    let subject_compiled = bound_subject_bgp(child_iri)?;
-    let d_rows =
-        resolve_subject_rows(&witness.subject_bgp, &subject_compiled, instance, instance_root)?;
+    // The child's type — a source-agnostic bound-subject read (materialized BGP or reconciled present
+    // filter), reconstructed from `child_id` and re-verified against the trusted instance root.
+    let d_rows = witness.subject_bgp.resolve(child_iri, instance, instance.instance_root())?;
     let Some(class) = extract_class_opt(&d_rows)? else {
         // Typeless / dangling link target → non-subdocument stop. It must carry NO schema sub-proofs.
         if witness.class_schema.is_some()
@@ -1833,7 +2154,13 @@ fn verify_child_witness<I: VerifierLayer, S: VerifierLayer>(
         let closure = witness.ancestor_closure.as_ref().ok_or_else(|| {
             invalid("inheriting link witness is missing its ancestor closure")
         })?;
-        resolve_closure_set(closure, &closure_compiled, instance, schema, database_root)?
+        resolve_closure_set(
+            closure,
+            &closure_compiled,
+            &instance.root_binding_view(),
+            schema,
+            database_root,
+        )?
     } else {
         if witness.ancestor_closure.is_some() {
             return Err(invalid("non-inheriting link witness carries an ancestor closure"));
@@ -1881,15 +2208,14 @@ fn verify_child_witness<I: VerifierLayer, S: VerifierLayer>(
 /// rejects outright. Marks `predicate` used in `used_collections` (the caller separately rejects any
 /// UNUSED — i.e. injected — collection entry).
 #[allow(clippy::too_many_arguments)]
-fn verify_collection_elements<I: VerifierLayer, S: VerifierLayer>(
+fn verify_collection_elements<S: VerifierLayer>(
     predicate: &[u8],
     elements: &[CanonicalObject],
     unfold: bool,
     collection_map: &BTreeMap<Vec<u8>, &ProvedCollectionProperty>,
     used_collections: &mut BTreeSet<Vec<u8>>,
-    instance: &I,
+    instance: &InstanceSource<'_>,
     schema: &S,
-    instance_root: ProofHash,
     schema_root: ProofHash,
     database_root: ProofHash,
 ) -> Result<(), QueryProofError> {
@@ -1940,7 +2266,6 @@ fn verify_collection_elements<I: VerifierLayer, S: VerifierLayer>(
             &child_id,
             instance,
             schema,
-            instance_root,
             schema_root,
             database_root,
         )?;
@@ -1970,12 +2295,11 @@ fn verify_collection_elements<I: VerifierLayer, S: VerifierLayer>(
 /// list walks, AND the recursive per-link demand/reject) run here. `allow_subdocument` is `false` for
 /// the root (its own class must not be a subdocument) and `true` for an inlined child.
 #[allow(clippy::too_many_arguments)]
-fn verify_node<I: VerifierLayer, S: VerifierLayer>(
+fn verify_node<S: VerifierLayer>(
     node: &ProvedReadDocument,
     id: &str,
-    instance: &I,
+    instance: &InstanceSource<'_>,
     schema: &S,
-    instance_root: ProofHash,
     schema_root: ProofHash,
     database_root: ProofHash,
     allow_subdocument: bool,
@@ -1983,10 +2307,10 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
     visited: &mut BTreeSet<Vec<u8>>,
     node_count: &mut usize,
 ) -> Result<(ResolvedDocument, ClosureNatures), QueryProofError> {
-    // (2) COMPLETE direct triples — reconstruct the plan from `id`, verify over the instance root.
-    let subject_compiled = bound_subject_bgp(id)?;
-    let d_rows =
-        resolve_subject_rows(&node.subject_bgp, &subject_compiled, instance, instance_root)?;
+    let instance_root = instance.instance_root();
+    // (2) COMPLETE direct triples — a source-agnostic bound-subject read (materialized BGP or reconciled
+    // present filter), reconstructed from `id` and re-verified against the trusted instance root.
+    let d_rows = node.subject_bgp.resolve(id, instance, instance_root)?;
 
     // (F0) Derive C from the authenticated rdf:type row (the instance-C == schema-C tie).
     let class = extract_class(&d_rows)?;
@@ -2006,7 +2330,15 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
         let closure = node.frame.ancestor_closure.as_ref().ok_or_else(|| {
             invalid("class bears a sys:inherits edge but the bundle omits the ancestor closure")
         })?;
-        resolve_closure_set(closure, &closure_compiled, instance, schema, database_root)?
+        // The closure is a SCHEMA read; `root_binding_view()` supplies the instance anchor for the
+        // combined `database_root` (the materialized layer view, or the delta stack's head view).
+        resolve_closure_set(
+            closure,
+            &closure_compiled,
+            &instance.root_binding_view(),
+            schema,
+            database_root,
+        )?
     } else {
         if node.frame.ancestor_closure.is_some() {
             return Err(invalid(
@@ -2147,6 +2479,12 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                     }
                     .into());
                 }
+                // DELTA-PATH REJECT (6a): the ordered `OrderedListWalk` is not reconciled over `present`
+                // yet; a present list reject-closes rather than render the raw cons head.
+                if instance.is_reconciled() {
+                    return Err(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" }.into());
+                }
+                let instance_layer = instance.root_binding_view();
                 let list_property = walk_map.get(predicate).copied().ok_or_else(|| {
                     BgpPlanError::ReadDocumentMalformedListHead {
                         predicate: iri_string(predicate),
@@ -2154,8 +2492,11 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 })?;
                 used_walks.insert(predicate.clone());
                 let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), predicate);
-                let columns =
-                    list_property.walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let columns = list_property.walk.verify_and_resolve(
+                    &walk_compiled,
+                    &instance_layer,
+                    instance_root,
+                )?;
                 let elements = columns.into_iter().next().unwrap_or_default();
                 // Per-element ACTUAL-TYPE / `@unfold` reject over the authenticated ordered elements
                 // (v1 renders bare ids; refuse any element the reference would unfold).
@@ -2168,7 +2509,6 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                     &mut used_collections,
                     instance,
                     schema,
-                    instance_root,
                     schema_root,
                     database_root,
                 )?;
@@ -2179,6 +2519,14 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 // arm — there is NO `objects.len() != 1` reject. A PRESENT array property (it is present
                 // here because `by_predicate` has ≥1 row for it) MUST carry exactly one authenticated
                 // walk; a missing walk reject-closes (a prover cannot render the raw cell ids).
+                // DELTA-PATH REJECT (6a): the ordered `OrderedArrayWalk` is not reconciled over `present`
+                // yet; a present array reject-closes rather than render the raw cell ids.
+                if instance.is_reconciled() {
+                    return Err(
+                        BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "array" }.into()
+                    );
+                }
+                let instance_layer = instance.root_binding_view();
                 let array_property = array_map.get(predicate).copied().ok_or_else(|| {
                     invalid(format!(
                         "bundle is missing the array-walk sub-proof for present array property {}",
@@ -2187,9 +2535,11 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                 })?;
                 used_arrays.insert(predicate.clone());
                 let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), predicate);
-                let columns = array_property
-                    .walk
-                    .verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let columns = array_property.walk.verify_and_resolve(
+                    &walk_compiled,
+                    &instance_layer,
+                    instance_root,
+                )?;
                 let elements = columns.into_iter().next().unwrap_or_default();
                 // Per-element ACTUAL-TYPE / `@unfold` reject over the authenticated ordered elements
                 // (v1 renders bare ids; refuse any element the reference would unfold), reusing the
@@ -2203,7 +2553,6 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                     &mut used_collections,
                     instance,
                     schema,
-                    instance_root,
                     schema_root,
                     database_root,
                 )?;
@@ -2230,6 +2579,14 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                         .to_string();
                     match &link.target {
                         ProvedLinkTarget::Inline(child_node) => {
+                            // DELTA-PATH REJECT (6a): subdocument inlining over a delta stack is deferred
+                            // (6b). A delta bundle must never carry an inlined child — reject rather than
+                            // recurse (the honest delta prover never emits one; this fails a forged one).
+                            if instance.is_reconciled() {
+                                return Err(
+                                    BgpPlanError::ReadDocumentDeltaSubdocumentDeferred.into()
+                                );
+                            }
                             if visited.contains(&child_id) {
                                 return Err(BgpPlanError::ReadDocumentSubdocumentCycle.into());
                             }
@@ -2250,7 +2607,6 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                                 &child_iri,
                                 instance,
                                 schema,
-                                instance_root,
                                 schema_root,
                                 database_root,
                                 /* allow_subdocument */ true,
@@ -2273,10 +2629,18 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                                 &child_id,
                                 instance,
                                 schema,
-                                instance_root,
                                 schema_root,
                                 database_root,
                             )?;
+                            // DELTA-PATH REJECT (6a), SOUND not silent: the child's subdocument nature is
+                            // RE-DERIVED from root-authenticated data (its own present read + schema
+                            // closure). A subdocument child would be inlined by the reference; the delta
+                            // path defers inlining (6b), so REFUSE rather than omit the inlined body.
+                            if instance.is_reconciled() && child_natures.has_subdocument {
+                                return Err(
+                                    BgpPlanError::ReadDocumentDeltaSubdocumentDeferred.into()
+                                );
+                            }
                             // The prover chose STOP; force the child to NOT be a subdocument (else it is
                             // an OMISSION — the reference would inline the child's contents).
                             if child_natures.has_subdocument {
@@ -2317,7 +2681,6 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                                     &child_id,
                                     instance,
                                     schema,
-                                    instance_root,
                                     schema_root,
                                     database_root,
                                 )?;
@@ -2349,7 +2712,6 @@ fn verify_node<I: VerifierLayer, S: VerifierLayer>(
                     &mut used_collections,
                     instance,
                     schema,
-                    instance_root,
                     schema_root,
                     database_root,
                 )?;
@@ -2427,8 +2789,10 @@ impl ProvedReadDocument {
         // (1) Bind BOTH per-graph commitments to the trusted combined root. From here every per-graph
         //     root the verifier reads is trusted (neither can be forged/swapped).
         validate_database_root(instance, schema, &database_root)?;
-        let instance_root = instance.verifier_view().state.commitment_root;
         let schema_root = schema.verifier_view().state.commitment_root;
+        // MATERIALIZED route: the ENTRY fixes the instance source, so every bound-subject read in the
+        // tree resolves the `Materialized` leaf against this single layer view (byte-identical to before).
+        let source = InstanceSource::Materialized(instance.verifier_view());
 
         // The ROOT node: `visited` seeds with the root id, `node_count` counts the root, and
         // `allow_subdocument = false` so a subdocument top-level class reject-closes. The budget is the
@@ -2439,9 +2803,62 @@ impl ProvedReadDocument {
         let (resolved, _natures) = verify_node(
             self,
             &compiled.id,
-            instance,
+            &source,
             schema,
-            instance_root,
+            schema_root,
+            database_root,
+            /* allow_subdocument */ false,
+            0,
+            &mut visited,
+            &mut node_count,
+        )?;
+        Ok(resolved)
+    }
+
+    /// Verify + resolve a `ReadDocument` proven over a delta INSTANCE stack (`instance_layers`,
+    /// base..head, head last) + a MATERIALIZED schema (increment 6a). Mirrors
+    /// [`Self::verify_over_graphs_and_resolve`]: every instance bound-subject sub-proof is re-verified as
+    /// a reconciled single-atom present filter bound to the trusted delta-HEAD anchor, and the schema
+    /// frame BGPs + `sys:inherits` closure verify against the materialized schema root; all under the
+    /// trusted combined `database_root = database_root(instance_head_root, schema_root)`. The delta-path
+    /// rejects (`List`/`Array`, subdocument inlining, delta-head schema) run inside the shared node
+    /// verify, so a forged bundle claiming an unsupported shape reject-closes.
+    ///
+    /// TRUST ANCHOR: `database_root` MUST come from a trusted OUT-OF-BAND pin (commit log / signature),
+    /// never recomputed from the prover-supplied bundle.
+    pub fn verify_over_graphs_and_resolve_reconciled(
+        &self,
+        compiled: &CompiledReadDocument,
+        instance_layers: &[&LayerCommitment],
+        schema: &impl VerifierLayer,
+        database_root: ProofHash,
+    ) -> Result<ResolvedDocument, QueryProofError> {
+        // The SCHEMA graph must be MATERIALIZED (6e reconciles the schema stack). A delta-head schema
+        // reject-closes.
+        let schema_view = schema.verifier_view();
+        if schema_view.state.parent_state_root.is_some() {
+            return Err(BgpPlanError::ReadDocumentDeltaSchemaHead.into());
+        }
+        let head = instance_layers
+            .last()
+            .ok_or_else(|| invalid("delta instance stack is empty"))?;
+        // (1) Bind the delta-HEAD instance root + the materialized schema root to the trusted combined
+        //     root. The head layer's commitment root is the trusted delta-head anchor the reconcile
+        //     verifier pins, so this ties every instance present-read to the SAME anchor.
+        validate_database_root(*head, schema, &database_root)?;
+        let schema_root = schema_view.state.commitment_root;
+        // RECONCILED route: the ENTRY fixes the instance source to the delta stack; a leaf whose variant
+        // disagrees (a materialized BGP) reject-closes in `InstanceSubjectProof::resolve`.
+        let source = InstanceSource::Reconciled(instance_layers);
+
+        let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
+        visited.insert(compiled.id.as_bytes().to_vec());
+        let mut node_count = 1usize;
+        let (resolved, _natures) = verify_node(
+            self,
+            &compiled.id,
+            &source,
+            schema,
             schema_root,
             database_root,
             /* allow_subdocument */ false,
