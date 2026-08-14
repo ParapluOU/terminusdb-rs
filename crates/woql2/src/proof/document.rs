@@ -1902,12 +1902,16 @@ fn prove_body(
                     let child_core =
                         prove_core(ctx, instance, schema, schema_root, db_root, &child_iri)?;
                     if child_core.natures.has_subdocument {
-                        // DELTA-PATH REJECT (6a), SOUND not silent. The child IS a subdocument (re-derived
-                        // above), which the reference would INLINE; subdocument inlining over a delta
-                        // stack is a later increment (6b). Refuse rather than omit the inlined body.
-                        if instance.is_reconciled() {
-                            return Err(BgpPlanError::ReadDocumentDeltaSubdocumentDeferred.into());
-                        }
+                        // INCREMENT 6b: a subdocument child is INLINED — the inc-3 recursion, now threaded
+                        // over the reconciled instance source. `prove_body` recurses with the SAME
+                        // `instance` (a materialized layer OR a delta stack), so a nested subdocument
+                        // node's own `D` / child type-checks / collection-element reads route over
+                        // `present` exactly like the root's — no new proof logic, just the reconciled
+                        // reads from 6a lifted into the recursion. If a nested node itself bears a
+                        // `List`/`Array` property, the recursive `prove_body` reject-closes with
+                        // `ReadDocumentDeltaWalkDeferred` (the ordered-walk composites are not reconciled
+                        // until 6c/6d), so 6b supports FLAT subdocuments nested to the budget — the
+                        // top-level 6a restriction applied recursively.
                         // INLINE (single-valued only).
                         if objects.len() != 1 {
                             return Err(shape_reject("multi-valued-subdocument"));
@@ -2057,9 +2061,12 @@ impl CompiledReadDocument {
     /// routes to the store's single-atom present FILTER over `present` (`FilterPosition::Subject`); every
     /// SCHEMA read (frame BGPs + the `sys:inherits` closure) stays on the materialized schema. NO new
     /// store crypto — the reconcile filter and the schema machinery are reused verbatim; this entry only
-    /// FIXES the instance route (never prover data). Reject-closes (delta path): `List`/`Array` (the
-    /// ordered walks are not reconciled yet), subdocument INLINING (re-derived SOUNDLY from the child's
-    /// authenticated nature), and a delta-head schema — PLUS every base reject.
+    /// FIXES the instance route (never prover data). A FLAT subdocument child now INLINES over the delta
+    /// stack (increment 6b): the inc-3 recursion runs with the reconciled instance source threaded
+    /// through, so a nested node's instance reads route over `present` while its schema frame + closure
+    /// stay materialized. Reject-closes (delta path): `List`/`Array` — at the TOP level OR inside a nested
+    /// subdocument — because the ordered walks are not reconciled yet (6c/6d); and a delta-head schema
+    /// (6e) — PLUS every base reject.
     pub fn prove_on_layers_reconciled(
         &self,
         instance_layers: &[&LayerCommitment],
@@ -2579,14 +2586,14 @@ fn verify_node<S: VerifierLayer>(
                         .to_string();
                     match &link.target {
                         ProvedLinkTarget::Inline(child_node) => {
-                            // DELTA-PATH REJECT (6a): subdocument inlining over a delta stack is deferred
-                            // (6b). A delta bundle must never carry an inlined child — reject rather than
-                            // recurse (the honest delta prover never emits one; this fails a forged one).
-                            if instance.is_reconciled() {
-                                return Err(
-                                    BgpPlanError::ReadDocumentDeltaSubdocumentDeferred.into()
-                                );
-                            }
+                            // INCREMENT 6b: RECURSE into the inlined subdocument child — the inc-3
+                            // recursion, threaded over the reconciled `instance` source (a nested node's
+                            // instance reads route over `present`; the schema frame + closure stay
+                            // materialized). The child's authenticated subdocument-ness is re-checked
+                            // BELOW (a non-subdocument `Inline` is an injected body ⇒ reject), and a nested
+                            // `List`/`Array` inside the child reject-closes with
+                            // `ReadDocumentDeltaWalkDeferred` — IDENTICALLY on the materialized and delta
+                            // paths. The `visited`/depth/node budget bounds the recursion on BOTH paths.
                             if visited.contains(&child_id) {
                                 return Err(BgpPlanError::ReadDocumentSubdocumentCycle.into());
                             }
@@ -2632,17 +2639,14 @@ fn verify_node<S: VerifierLayer>(
                                 schema_root,
                                 database_root,
                             )?;
-                            // DELTA-PATH REJECT (6a), SOUND not silent: the child's subdocument nature is
-                            // RE-DERIVED from root-authenticated data (its own present read + schema
-                            // closure). A subdocument child would be inlined by the reference; the delta
-                            // path defers inlining (6b), so REFUSE rather than omit the inlined body.
-                            if instance.is_reconciled() && child_natures.has_subdocument {
-                                return Err(
-                                    BgpPlanError::ReadDocumentDeltaSubdocumentDeferred.into()
-                                );
-                            }
                             // The prover chose STOP; force the child to NOT be a subdocument (else it is
-                            // an OMISSION — the reference would inline the child's contents).
+                            // an OMISSION — the reference would inline the child's contents). SOURCE-
+                            // AGNOSTIC (increment 6b): the child's subdocument nature is re-derived from
+                            // root-authenticated data (its own bound-subject read — a materialized BGP or a
+                            // reconciled `present` filter — plus its schema `sys:inherits` closure), so a
+                            // forged `Stop` over a real subdocument child reject-closes on the delta path
+                            // EXACTLY as on the materialized path. The honest delta prover now emits an
+                            // `Inline` for a subdocument child (6b), so a `Stop` here is a genuine omission.
                             if child_natures.has_subdocument {
                                 return Err(invalid(
                                     "bundle stops at a subdocument link target (missing inlined body)",
@@ -2820,9 +2824,12 @@ impl ProvedReadDocument {
     /// [`Self::verify_over_graphs_and_resolve`]: every instance bound-subject sub-proof is re-verified as
     /// a reconciled single-atom present filter bound to the trusted delta-HEAD anchor, and the schema
     /// frame BGPs + `sys:inherits` closure verify against the materialized schema root; all under the
-    /// trusted combined `database_root = database_root(instance_head_root, schema_root)`. The delta-path
-    /// rejects (`List`/`Array`, subdocument inlining, delta-head schema) run inside the shared node
-    /// verify, so a forged bundle claiming an unsupported shape reject-closes.
+    /// trusted combined `database_root = database_root(instance_head_root, schema_root)`. A FLAT
+    /// subdocument child INLINES recursively (increment 6b) — `verify_node` recurses with the reconciled
+    /// source threaded through, and the child's authenticated subdocument-ness forces the inline/stop
+    /// render mode exactly as on the materialized path. The delta-path rejects (`List`/`Array` at the top
+    /// level OR inside a nested subdocument, delta-head schema) run inside the shared node verify, so a
+    /// forged bundle claiming an unsupported shape reject-closes.
     ///
     /// TRUST ANCHOR: `database_root` MUST come from a trusted OUT-OF-BAND pin (commit log / signature),
     /// never recomputed from the prover-supplied bundle.

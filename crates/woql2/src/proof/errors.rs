@@ -946,15 +946,11 @@ pub enum BgpPlanError {
     #[error("ReadDocument {shape} property is unsupported on the delta-stack path (the ordered-walk composite is not reconciled over `present` yet); reject closed")]
     ReadDocumentDeltaWalkDeferred { shape: &'static str },
 
-    /// On the DELTA path a single-valued class LINK whose CHILD is a subdocument reject-closes:
-    /// subdocument INLINING over a delta stack is a later increment (6b, gated on a reconcile-once
-    /// optimization). This reject is SOUND, not silent — the child's subdocument nature is RE-DERIVED
-    /// from root-authenticated data (the child's own bound-subject read over `present` + its reflexive
-    /// `sys:inherits` closure on the materialized schema), so the delta path REFUSES rather than omit the
-    /// inlined body a subdocument child would contribute. (A plain, non-subdocument link renders its id
-    /// as usual — that IS supported on the delta path.)
-    #[error("ReadDocument subdocument inlining is unsupported on the delta-stack path (the child is a re-derived subdocument); reject closed rather than omit the inlined body")]
-    ReadDocumentDeltaSubdocumentDeferred,
+    // (Increment 6b removed `ReadDocumentDeltaSubdocumentDeferred`: a FLAT subdocument child now INLINES
+    // over the delta stack via the inc-3 recursion threaded over the reconciled instance source. A nested
+    // subdocument that itself bears a `List`/`Array` still reject-closes — but through
+    // `ReadDocumentDeltaWalkDeferred` (the walk composites are not reconciled until 6c/6d), raised from
+    // inside the recursion — so no dedicated subdocument-deferred reject remains.)
 
     /// On the DELTA path the SCHEMA commitment must be MATERIALIZED (a base layer, `parent_state_root ==
     /// None`): the frame BGPs and the `sys:inherits` closure read the schema graph directly, and the

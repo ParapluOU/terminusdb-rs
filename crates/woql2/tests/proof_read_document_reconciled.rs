@@ -1,14 +1,24 @@
-//! WOQL `ReadDocument` over the DELTA-STACK (reconciled) path — increment 6a.
+//! WOQL `ReadDocument` over the DELTA-STACK (reconciled) path — increments 6a + 6b.
 //!
 //! Builds a delta INSTANCE stack (base + 1 delta, head last) + a MATERIALIZED schema, and proves a
 //! whole document whose every instance bound-subject read routes to the store's single-atom present
 //! FILTER over the reconciled `present`; the schema frame BGPs + `sys:inherits` closure stay on the
 //! materialized schema. Asserts:
-//!   * PARITY — the delta-stack document EQUALS the materialized-path document for the same final state;
+//!   * PARITY (6a flat + 6b subdocument) — the delta-stack document EQUALS the materialized-path
+//!     document for the same final state, INCLUDING a recursively-inlined FLAT subdocument child;
 //!   * SOUNDNESS — a corrupted combined root, a tampered reconciled column, and a route mismatch
-//!     (verifying the reconciled bundle through the materialized entry) each fail;
-//!   * REJECT BOUNDARY (delta path) — a `List` / `Array` property, a subdocument link, and a
-//!     delta-head schema each reject-close with the specific `BgpPlanError`.
+//!     (verifying the reconciled bundle through the materialized entry) each fail; AND for 6b: a dropped
+//!     inlined child sub-bundle, an injected duplicate child, a `Stop` over a re-derived subdocument
+//!     child, and a subdocument cycle each reject;
+//!   * REJECT BOUNDARY (delta path) — a top-level `List` / `Array` property, a subdocument node that
+//!     itself bears a `List` (rejected from INSIDE the recursion), and a delta-head schema each
+//!     reject-close with the specific `BgpPlanError`.
+//!
+//! Increment 6b LIFTS the 6a subdocument reject: a FLAT subdocument (scalar / langString / Optional /
+//! Set / non-subdoc-link nested to the budget) now INLINES over the delta stack via the inc-3 recursion
+//! threaded over the reconciled instance source — the child's own `D` / type-checks route over
+//! `present`. A subdocument node that bears a `List`/`Array` still rejects (the walk composites are not
+//! reconciled until 6c/6d), through `ReadDocumentDeltaWalkDeferred` raised inside the recursion.
 //!
 //! Reconcile is proof-heavy (each bound-subject read reconciles the whole present set), so the delta
 //! stack is kept SMALL (base + 1 delta) and each committed group carries >= 2 records (the reconcile
@@ -29,8 +39,8 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::document::ReadDocument;
 use terminusdb_woql2::proof::{
-    plan_read_document, BgpPlanError, CompiledReadDocument, InstanceSubjectProof, QueryProofError,
-    ResolvedValue,
+    plan_read_document, BgpPlanError, CompiledReadDocument, InstanceSubjectProof, ProvedChildTypeWitness,
+    ProvedLink, ProvedLinkTarget, QueryProofError, ResolvedValue,
 };
 use terminusdb_woql2::value::{NodeValue, Value};
 
@@ -381,29 +391,31 @@ fn read_document_reconciled_rejects_array() {
 }
 
 #[test]
-fn read_document_reconciled_rejects_subdocument_link() {
-    // `author -> Person` where `Person` is a SUBDOCUMENT. The child's subdocument nature is re-derived
-    // from `person`'s reconciled `rdf:type` read (SOUND, not silent) → reject rather than omit.
+fn read_document_reconciled_subdocument_with_list_rejects() {
+    // 6b INLINES a FLAT subdocument over the delta stack, but a subdocument node that itself bears a
+    // `List` property STILL reject-closes — the ordered `OrderedListWalk` composite is not reconciled
+    // over `present` until 6c. Crucially the reject is raised from INSIDE the subdocument recursion (the
+    // child `addr1`'s own `prove_body` hits the delta-path list reject), proving the still-reject
+    // boundary is the top-level 6a restriction applied recursively.
     let schema = reject_schema(vec![
-        Fact::Node(iri("C"), iri("author"), iri("Person")),
-        Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
-        Fact::Node(iri("Person"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("C"), iri("addr"), iri("Address")),
+        Fact::Node(iri("Address"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Address"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Address"), iri("items"), iri("ItemsList")),
+        Fact::Node(iri("ItemsList"), RDF_TYPE.into(), SYS_LIST.into()),
+        Fact::Node(iri("ItemsList"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
     ]);
-    // The child `person1` is typed in the delta; the author edge lives in the base.
-    let base = vec![
-        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
-        Fact::Str(iri("doc"), iri("fill"), "a".into()),
-        Fact::Node(iri("doc"), iri("author"), iri("person1")),
-    ];
-    let delta = vec![
-        Fact::Node(iri("person1"), RDF_TYPE.into(), iri("Person")),
-        Fact::Str(iri("doc"), iri("fill"), "b".into()),
-    ];
-    let layers = delta_stack(base, delta);
-    assert_reconciled_prove_rejects("reconciled-rejects-subdoc", schema, layers, |e| {
+    // The subdocument child `addr1` is typed `Address` and carries a PRESENT list head edge (one head
+    // edge makes the nested list present ⇒ the recursive `prove_body` hits the delta-path walk reject).
+    let layers = reject_stack(vec![
+        Fact::Node(iri("doc"), iri("addr"), iri("addr1")),
+        Fact::Node(iri("addr1"), RDF_TYPE.into(), iri("Address")),
+        Fact::Node(iri("addr1"), iri("items"), iri("head0")),
+    ]);
+    assert_reconciled_prove_rejects("reconciled-subdoc-with-list", schema, layers, |e| {
         matches!(
             e,
-            QueryProofError::Plan(BgpPlanError::ReadDocumentDeltaSubdocumentDeferred)
+            QueryProofError::Plan(BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "list" })
         )
     });
 }
@@ -444,5 +456,294 @@ fn read_document_reconciled_rejects_delta_head_schema() {
             matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentDeltaSchemaHead)),
             "a delta-head schema must reject as ReadDocumentDeltaSchemaHead, got {err:?}",
         );
+    });
+}
+
+// ===================================================================================================
+// Increment 6b: FLAT subdocument inlining over the delta stack.
+//
+// `C` (a plain class) has a top-level scalar (`name`) and a single-valued SUBDOCUMENT link
+// (`addr -> Address`). `Address` bears `sys:subdocument` and has a FLAT body — two scalars (`street`,
+// `city`) and a `Set<xsd:string>` (`tags`) — so it INLINES recursively over the delta stack: the inc-3
+// recursion runs with the reconciled instance source threaded through, so the child `addr1`'s own `D`
+// routes over `present` exactly like the root's. The multi-object `tags` set lives in the BASE (its
+// element order matches the merged materialized layer, keeping the byte-for-byte parity robust); the
+// delta carries the child's single-valued scalars (≥ 2 records per committed group either way).
+// ===================================================================================================
+
+fn subdoc_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("C"), iri("name"), XSD_STRING.into()),
+        Fact::Node(iri("C"), iri("addr"), iri("Address")),
+        Fact::Node(iri("Address"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Address"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Address"), iri("street"), XSD_STRING.into()),
+        Fact::Node(iri("Address"), iri("city"), XSD_STRING.into()),
+        Fact::Node(iri("Address"), iri("tags"), iri("TagsSet")),
+        Fact::Node(iri("TagsSet"), RDF_TYPE.into(), SYS_SET.into()),
+        Fact::Node(iri("TagsSet"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+    ])
+}
+
+fn subdoc_base() -> Vec<Fact> {
+    vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Str(iri("doc"), iri("name"), "alice".into()),
+        Fact::Node(iri("doc"), iri("addr"), iri("addr1")),
+        Fact::Node(iri("addr1"), RDF_TYPE.into(), iri("Address")),
+        Fact::Str(iri("addr1"), iri("tags"), "home".into()),
+        Fact::Str(iri("addr1"), iri("tags"), "work".into()),
+    ]
+}
+
+fn subdoc_delta() -> Vec<Fact> {
+    vec![
+        Fact::Str(iri("addr1"), iri("street"), "Main St".into()),
+        Fact::Str(iri("addr1"), iri("city"), "Springfield".into()),
+    ]
+}
+
+fn subdoc_materialized_instance() -> Arc<LayerCommitment> {
+    let mut facts = subdoc_base();
+    facts.extend(subdoc_delta());
+    layer(facts)
+}
+
+/// PARITY e2e: a document with a FLAT subdocument property proves over the delta stack, and the resolved
+/// nested `ResolvedDocument` equals the materialized-path result for the SAME final state (a 1-level
+/// nest — a 2-level nest re-reconciles one more child per node, kept out to bound proof cost). Plus two
+/// adversarial checks: a corrupted combined root and a DROPPED inlined child sub-bundle both fail verify.
+#[test]
+fn read_document_reconciled_subdocument_parity() {
+    on_big_stack("read-document-reconciled-subdoc-parity", 1024, || {
+        let schema = subdoc_schema();
+        let schema_root = schema.state.commitment_root;
+        let compiled = compiled_read(&iri("doc"));
+
+        // ---- Materialized path (the reference answer for the SAME final state). ----
+        let mat_instance = subdoc_materialized_instance();
+        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
+        let mat_doc = mat_bundle
+            .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
+            .unwrap();
+
+        // ---- Delta-stack (reconciled) path over the SAME final state. ----
+        let layers = delta_stack(subdoc_base(), subdoc_delta());
+        let lref = refs(&layers);
+        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let db_root = database_root(&instance_head_root, &schema_root);
+        let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
+        let delta_doc = bundle
+            .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+            .unwrap();
+
+        // PARITY: the delta-stack document (INCLUDING the inlined subdocument) is byte-for-byte the
+        // materialized-path document.
+        assert_eq!(
+            delta_doc, mat_doc,
+            "delta-stack subdocument must equal the materialized document",
+        );
+        assert_eq!(delta_doc.id, iri("doc").into_bytes());
+        assert_eq!(delta_doc.class, iri("C").into_bytes());
+
+        // Top-level scalar.
+        match delta_doc.get(&iri("name")).unwrap() {
+            ResolvedValue::Direct(o) => assert_eq!(as_value_lexical(&o[0]), b"alice".to_vec()),
+            other => panic!("name should be Direct, got {other:?}"),
+        }
+        // `addr` INLINED as a nested subdocument (Address bears sys:subdocument, re-derived over `present`).
+        let addr = match delta_doc.get(&iri("addr")).unwrap() {
+            ResolvedValue::Subdocument(nested) => nested,
+            other => panic!("addr should be an inlined Subdocument, got {other:?}"),
+        };
+        assert_eq!(addr.id, iri("addr1").into_bytes());
+        assert_eq!(addr.class, iri("Address").into_bytes());
+        match addr.get(&iri("street")).unwrap() {
+            ResolvedValue::Direct(o) => assert_eq!(as_value_lexical(&o[0]), b"Main St".to_vec()),
+            other => panic!("nested street should be Direct, got {other:?}"),
+        }
+        match addr.get(&iri("city")).unwrap() {
+            ResolvedValue::Direct(o) => assert_eq!(as_value_lexical(&o[0]), b"Springfield".to_vec()),
+            other => panic!("nested city should be Direct, got {other:?}"),
+        }
+        match addr.get(&iri("tags")).unwrap() {
+            ResolvedValue::Direct(o) => {
+                let mut ls: Vec<Vec<u8>> = o.iter().map(as_value_lexical).collect();
+                ls.sort();
+                assert_eq!(ls, vec![b"home".to_vec(), b"work".to_vec()]);
+            }
+            other => panic!("nested tags should be Direct set, got {other:?}"),
+        }
+
+        // ---- SOUNDNESS: a corrupted combined root fails. ----
+        let mut bad = db_root;
+        bad[0] ^= 0xFF;
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, bad)
+                .is_err(),
+            "a corrupted combined root must fail verify",
+        );
+
+        // ---- ADVERSARIAL: DROP the inlined child sub-bundle → verify DEMANDS the link, reject-closes. ----
+        bundle.links.clear();
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+                .is_err(),
+            "a dropped inlined child sub-bundle must fail verify",
+        );
+    });
+}
+
+/// ADVERSARIAL: a `Stop` link whose child is actually a SUBDOCUMENT reject-closes over the delta stack.
+/// The honest delta prover INLINES a subdocument child (6b), so a forged `Stop` is an OMISSION — verify
+/// RE-DERIVES the child's subdocument nature over `present` (the child's own bound-subject read + its
+/// schema closure) and refuses. (This is the 6b lift of the 6a `SOUND-not-silent` reject: instead of
+/// deferring, we now inline the honest case and still reject the dishonest `Stop`.)
+#[test]
+fn read_document_reconciled_stop_over_subdocument_rejects() {
+    on_big_stack("read-document-reconciled-stop-over-subdoc", 1024, || {
+        let schema = subdoc_schema();
+        let schema_root = schema.state.commitment_root;
+        let compiled = compiled_read(&iri("doc"));
+        let layers = delta_stack(subdoc_base(), subdoc_delta());
+        let lref = refs(&layers);
+        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let db_root = database_root(&instance_head_root, &schema_root);
+        let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
+
+        // Sanity: the honest FLAT subdocument INLINES + verifies.
+        bundle
+            .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+            .unwrap();
+
+        // FORGE a STOP over the subdocument child: rebuild the `addr` link as a plain-link `Stop` witness
+        // carrying the child's OWN reconciled type read + schema (Address does not inherit ⇒ no strict
+        // ancestors, no closure). Verify re-derives Address's `sys:subdocument` nature and reject-closes.
+        let idx = bundle
+            .links
+            .iter()
+            .position(|l| l.child_id == iri("addr1").into_bytes())
+            .expect("the honest delta bundle inlines the addr subdocument child");
+        let link = bundle.links.remove(idx);
+        let predicate = link.predicate.clone();
+        let child_id = link.child_id.clone();
+        let child = match link.target {
+            ProvedLinkTarget::Inline(child) => *child,
+            _ => panic!("the addr link should be inlined on the honest delta bundle"),
+        };
+        bundle.links.push(ProvedLink {
+            predicate,
+            child_id,
+            target: ProvedLinkTarget::Stop(ProvedChildTypeWitness {
+                subject_bgp: child.subject_bgp,
+                class_schema: Some(child.frame.class_schema),
+                ancestor_closure: child.frame.ancestor_closure,
+                ancestor_reads: Vec::new(),
+            }),
+        });
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+                .is_err(),
+            "a Stop over a re-derived subdocument child must fail verify (missing inlined body)",
+        );
+    });
+}
+
+/// A `C` with TWO subdocument links (`meta`, `note`) to the same subdocument class `Meta` — the fixture
+/// for the injected/duplicate-child cross-check.
+fn two_subdoc_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("C"), iri("meta"), iri("Meta")),
+        Fact::Node(iri("C"), iri("note"), iri("Meta")),
+        Fact::Node(iri("Meta"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Meta"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Meta"), iri("title"), XSD_STRING.into()),
+    ])
+}
+
+fn two_subdoc_stack() -> Vec<Arc<LayerCommitment>> {
+    let base = vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Node(iri("doc"), iri("meta"), iri("m1")),
+        Fact::Node(iri("doc"), iri("note"), iri("n1")),
+        Fact::Node(iri("m1"), RDF_TYPE.into(), iri("Meta")),
+        Fact::Str(iri("m1"), iri("title"), "a".into()),
+    ];
+    let delta = vec![
+        Fact::Node(iri("n1"), RDF_TYPE.into(), iri("Meta")),
+        Fact::Str(iri("n1"), iri("title"), "b".into()),
+    ];
+    delta_stack(base, delta)
+}
+
+/// ADVERSARIAL: an INJECTED (un-demanded) inlined child sub-bundle reject-closes over the delta stack.
+/// Re-key the SECOND inlined child onto the FIRST's `(predicate, child)` → the verifier's per-link
+/// cross-check sees a duplicate/injected sub-bundle (present ⇒ reject). The cross-check is source-
+/// agnostic, so it fires on the delta path exactly as on the materialized path.
+#[test]
+fn read_document_reconciled_injected_child_rejects() {
+    on_big_stack("read-document-reconciled-subdoc-injection", 1024, || {
+        let schema = two_subdoc_schema();
+        let schema_root = schema.state.commitment_root;
+        let compiled = compiled_read(&iri("doc"));
+        let layers = two_subdoc_stack();
+        let lref = refs(&layers);
+        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let db_root = database_root(&instance_head_root, &schema_root);
+        let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
+
+        // Sanity: the honest two-subdocument document INLINES both + verifies.
+        bundle
+            .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+            .unwrap();
+        assert_eq!(bundle.links.len(), 2);
+
+        // Re-key the second link onto the first's (predicate, child) → an injected/duplicate sub-bundle.
+        let predicate = bundle.links[0].predicate.clone();
+        let child_id = bundle.links[0].child_id.clone();
+        bundle.links[1].predicate = predicate;
+        bundle.links[1].child_id = child_id;
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &lref, &*schema, db_root)
+                .is_err(),
+            "an injected/duplicate inlined child sub-bundle must fail verify",
+        );
+    });
+}
+
+/// ADVERSARIAL: a subdocument CYCLE (`m1 -> m1` via a subdoc-typed property) reject-closes rather than
+/// loops. The recursion's `visited` set — enforced IDENTICALLY over the reconciled source — catches the
+/// repeat and raises `ReadDocumentSubdocumentCycle` at PROVE time (before any unbounded recursion).
+#[test]
+fn read_document_reconciled_subdocument_cycle_rejects() {
+    let schema = layer(vec![
+        Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("C"), iri("meta"), iri("Meta")),
+        Fact::Node(iri("Meta"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Meta"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Meta"), iri("title"), XSD_STRING.into()),
+        Fact::Node(iri("Meta"), iri("note"), XSD_STRING.into()),
+        Fact::Node(iri("Meta"), iri("selfref"), iri("Meta")),
+    ]);
+    let base = vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Node(iri("doc"), iri("meta"), iri("m1")),
+        Fact::Node(iri("m1"), RDF_TYPE.into(), iri("Meta")),
+        Fact::Node(iri("m1"), iri("selfref"), iri("m1")),
+    ];
+    let delta = vec![
+        Fact::Str(iri("m1"), iri("title"), "x".into()),
+        Fact::Str(iri("m1"), iri("note"), "y".into()),
+    ];
+    let layers = delta_stack(base, delta);
+    assert_reconciled_prove_rejects("reconciled-subdoc-cycle", schema, layers, |e| {
+        matches!(e, QueryProofError::Plan(BgpPlanError::ReadDocumentSubdocumentCycle))
     });
 }
