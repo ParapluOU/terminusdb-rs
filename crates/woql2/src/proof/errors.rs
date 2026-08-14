@@ -870,10 +870,13 @@ pub enum BgpPlanError {
     #[error("ReadDocument identifier must be a bound node IRI, not a variable")]
     ReadDocumentUnboundIdentifier,
 
-    /// The document's class `C` carries a `sys:inherits` edge on the schema graph. v1 reads only the
-    /// DIRECT property frame of `C`; an inherited frame needs the reflexive `sys:inherits`
-    /// property-enumeration closure (the immediate follow-up), so it reject-closes rather than
-    /// silently omitting inherited properties.
+    /// RESERVED (no longer produced). `ReadDocument` now proves INHERITING document classes: the
+    /// effective frame is the union of directly-declared properties across the AUTHENTICATED reflexive
+    /// `sys:inherits` closure `{C} ∪ ancestors(C)` (see `proof/document.rs`). A `sys:inherits` edge is
+    /// therefore accepted, not rejected. Retained as a public variant for API stability; the residual
+    /// inherited-frame rejects are now specific shapes (`conflicting-inherited-range`, an inherited
+    /// subdocument via [`Self::ReadDocumentSubdocumentDeferred`], an inherited tagged-union/enum via
+    /// [`Self::ReadDocumentUnsupportedPropertyShape`]).
     #[error("ReadDocument class has a sys:inherits edge; the inherited-frame closure is deferred (v1 reads direct frames only)")]
     ReadDocumentInheritedFrame,
 

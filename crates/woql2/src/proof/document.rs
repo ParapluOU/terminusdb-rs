@@ -10,6 +10,10 @@
 //!   * a FRAME read on the schema graph — a bound-subject BGP `Triple(C, ?p, ?r)` that enumerates
 //!     the class `C`'s direct properties, plus one bound-subject BGP per non-primitive range/element
 //!     node to classify each property (scalar / link / set / list, or reject-close);
+//!   * for an INHERITING class — the reflexive forward `sys:inherits` closure from `C` over the
+//!     SCHEMA graph (the audited subsumption-closure gadget), proving the complete ancestor SET
+//!     `{C} ∪ ancestors(C)`, plus one bound-subject frame BGP per STRICT ancestor, so the frame is
+//!     the UNION of the directly-declared properties across the whole super-chain;
 //!   * one authenticated `OrderedListWalk` per PRESENT list property — delivering its exact ordered
 //!     element sequence (the store leaf shipped in increment 1/2a).
 //!
@@ -28,6 +32,19 @@
 //!    `rdf:type` row, and reuses that same `C` IRI to reconstruct the schema frame plan. Sound because
 //!    both roots are pinned to the trusted combined `database_root` and there is a single subject.
 //!
+//! 3. **The inherited frame is COMPLETE via the AUTHENTICATED ancestor closure.** When `C` inherits,
+//!    the frame is the union of the directly-declared properties across `{C} ∪ ancestors(C)`. That
+//!    ancestor SET is NOT a prover-supplied list: it is the proven output of the reflexive forward
+//!    `sys:inherits` closure from `C`, whose EMPTY-DELTA FIXPOINT proves no ancestor is omitted. The
+//!    verifier RE-BUILDS the closure `CompiledBgp` from the derived `C` and re-verifies it against the
+//!    schema root, then re-reads EVERY ancestor's properties — so a prover cannot hide an inherited
+//!    property by dropping an ancestor (a dropped ancestor would either fail the closure re-verify or,
+//!    if its property is used by the instance, trip the no-injection cross-check as an un-framed
+//!    predicate). Whether to prove the closure at all is itself decided from AUTHENTICATED data: `C`'s
+//!    complete, root-authenticated frame BGP either carries a `sys:inherits` edge (⇒ prove the closure)
+//!    or provably does not (⇒ `C` has no ancestors, the reflexive closure is exactly `{C}`), so a
+//!    prover cannot skip the closure for a class that actually inherits.
+//!
 //! ## Completeness / no-injection (the bundle cross-checks in verify)
 //!
 //! The bound-subject BGP `D` is COMPLETE + root-authenticated, so a prover cannot omit a property.
@@ -38,20 +55,27 @@
 //! property, and the set of list-walk sub-proofs must match the present list properties EXACTLY (no
 //! injected or missing walk). Cons-internal triples have subject `!= id`, so they never enter `D`.
 //!
-//! ## v1 scope / reject boundary
+//! ## Scope / reject boundary
 //!
-//! Accept a bound-node `id` whose class has no inheritance and whose direct properties are scalar,
-//! link (non-subdocument), `Set` (no cardinality), or `List` (non-subdocument element). Reject-close:
-//! variable id, inherited frame, subdocument / array / optional / cardinality / oneOf / enum / table
-//! range, `rdf:langString`, an instance property absent from the frame, and a list property with != 1
-//! head edge. Compiler-only; nothing under `terminusdb-store-paraplu` changes.
+//! Accept a bound-node `id` whose class is a plain `sys:Class` — WITH OR WITHOUT single- or
+//! multi-level `sys:inherits` — and whose effective (inherited-union) properties are scalar, link
+//! (non-subdocument), `Set` (no cardinality), or `List` (non-subdocument element). Reject-close:
+//! variable id; subdocument / array / optional / cardinality / oneOf / enum / table range;
+//! `rdf:langString`; an instance property absent from the (inherited) frame; a list property with != 1
+//! head edge; a conflicting inherited range (the same predicate declared with two different ranges up
+//! the chain); ANY inheritance-closed subdocument nature or ANY tagged-union/`sys:oneOf`/enum nature
+//! anywhere in the ancestor chain (fail-closed: subdocument-ness IS inheritance-closed, and the
+//! oneOf-choice properties of a tagged-union ancestor are not enumerable by the direct frame BGP, so
+//! we refuse rather than risk omitting them). A LINK/ELEMENT target class that itself inherits still
+//! reject-closes (its inherited subdocument-ness is not ruled out — a separate, larger effort).
+//! Compiler-only; nothing under `terminusdb-store-paraplu` changes.
 
 use super::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::document::ReadDocument;
-use terminus_store::proof::commitment::validate_database_root;
+use terminus_store::proof::commitment::{database_root, validate_database_root};
 
 // ---------------------------------------------------------------------------------------------------
 // Well-known IRIs — the schema-frame vocabulary. Mirrors the server Prolog `schema.pl`
@@ -228,16 +252,24 @@ pub struct ProvedRangeClassification {
 }
 
 /// The authenticated class frame of the document: the class `C`, the schema BGP enumerating `C`'s
-/// direct properties, and one classification sub-proof per non-primitive range/element node.
+/// direct properties, the reflexive `sys:inherits` ancestor closure (for an inheriting `C`), and one
+/// classification sub-proof per non-primitive range/element node AND per strict ancestor class.
 #[derive(Debug)]
 pub struct ProvedFrame {
     /// The prover's `C` (informational). The verifier DERIVES `C` from the root-authenticated instance
     /// `rdf:type` row and uses ITS derived `C` to reconstruct the frame plan — it never trusts this.
     pub class: Vec<u8>,
-    /// `Triple(C, ?p, ?r)` proved over the schema commitment.
+    /// `Triple(C, ?p, ?r)` proved over the schema commitment — `C`'s OWN direct properties.
     pub class_schema: ProvedBgp,
-    /// One entry per distinct schema node the classification reads (property ranges + element classes,
-    /// excluding primitives).
+    /// The reflexive forward `sys:inherits` closure from `C` over the schema graph — the authenticated
+    /// ancestor SET `{C} ∪ ancestors(C)`, delivered as ONE node column. Present ONLY when `C`'s
+    /// complete, root-authenticated frame bears a `sys:inherits` edge; a non-inheriting `C` has NO
+    /// ancestors (so the set is exactly `{C}` and no closure is proved). The verifier RE-BUILDS this
+    /// `CompiledBgp` from the derived `C` and re-verifies it, so the set is the closure's proven output
+    /// (the empty-delta fixpoint proves it is COMPLETE — no ancestor omitted), never trusted from here.
+    pub ancestor_closure: Option<ProvedBgp>,
+    /// One entry per distinct schema node the classification reads — property ranges + element classes
+    /// (excluding primitives) AND every strict ancestor class of `C`.
     pub ranges: Vec<ProvedRangeClassification>,
 }
 
@@ -360,6 +392,30 @@ fn bound_subject_bgp(subject_iri: &str) -> Result<CompiledBgp, BgpPlanError> {
     }))
 }
 
+/// The internal endpoint variable the ancestor closure delivers its class set under. Never
+/// user-visible (a `ReadDocument` has no query variables); it only names the closure's one output
+/// column.
+const ANCESTOR_ENDPOINT_VAR: &str = "__rd_ancestor";
+
+/// The reflexive FORWARD `sys:inherits` closure from `class_iri` over the SCHEMA graph — the ancestor
+/// SET `{class} ∪ ancestors(class)`, delivered as one node column. Built through the AUDITED
+/// subsumption-closure gadget ([`build_subsumption_closure`], `inverted = false` = walk `sys:inherits`
+/// object-ward to gather superclasses; `reflexive = true` = the seed subsumes itself) so its proof /
+/// verify / digest machinery is exactly the shipped Subsumption closure. A PURE function of `class_iri`
+/// (used identically by prove and verify), like [`bound_subject_bgp`]. Empty `selections`/`distincts`
+/// deliver the full endpoint column; the intrinsic set-collapse `Distinct` is synthesized inside.
+fn ancestor_closure_bgp(class_iri: &str) -> Result<CompiledBgp, BgpPlanError> {
+    build_subsumption_closure(
+        class_iri.to_string(),
+        ANCESTOR_ENDPOINT_VAR.to_string(),
+        /* inverted */ false,
+        /* selections */ &[],
+        /* collection */ None,
+        /* count_variable */ None,
+        /* distincts */ &[],
+    )
+}
+
 /// The `OrderedListWalk` leaf for `(subject, predicate)` — the exact ordered element sequence of the
 /// stored `rdf:List`. Direct construction (there is no WOQL surface for the leaf), mirroring the
 /// increment-2a test helper. The store carries all of the walk proof wholesale.
@@ -434,6 +490,34 @@ fn resolve_subject_rows(
         rows.push((predicate, object.clone()));
     }
     Ok(rows)
+}
+
+/// Verify + resolve the ancestor-closure sub-proof and return its authenticated class SET as node-IRI
+/// byte vectors. The closure carries `graph: ProofGraph::Schema` in its plan, so — UNLIKE the
+/// graph-blind bound-subject frame reads — it must be routed through `verify_over_graphs_and_resolve`
+/// (which anchors it to the SCHEMA root under the trusted combined `database_root`), not the
+/// instance-guarded `verify_and_resolve`. The delivered set is the closure's proven output: complete
+/// (empty-delta fixpoint) and de-duplicated (the closure's intrinsic set-collapse `Distinct`).
+fn resolve_closure_set(
+    proved: &ProvedBgp,
+    compiled: &CompiledBgp,
+    instance: &impl VerifierLayer,
+    schema: &impl VerifierLayer,
+    database_root: ProofHash,
+) -> Result<Vec<Vec<u8>>, QueryProofError> {
+    let columns = proved.verify_over_graphs_and_resolve(compiled, instance, schema, database_root)?;
+    let column = match columns.as_slice() {
+        [single] => single,
+        _ => return Err(invalid("ancestor closure must resolve to exactly one class column")),
+    };
+    let mut set = Vec::with_capacity(column.len());
+    for object in column {
+        match object {
+            CanonicalObject::Node(bytes) => set.push(bytes.clone()),
+            _ => return Err(invalid("ancestor closure column carries a non-node value")),
+        }
+    }
+    Ok(set)
 }
 
 /// Bind the class `C` from the document's direct triples (F0): EXACTLY ONE `rdf:type` row, whose
@@ -740,24 +824,31 @@ fn check_element_class(
     Err(shape_reject("unknown-element"))
 }
 
-/// Read + classify the class frame from `C`'s direct schema triples (F1-F3). Rejects an inherited
-/// frame (`sys:inherits`), a tagged-union (`sys:oneOf`), a subdocument class, and a non-`sys:Class`
-/// class; returns the accepted `(predicate, shape)` property list. Each property's range is classified
-/// through `reader` (which records/looks-up the range sub-proofs).
-fn classify_frame(
-    class_rows: &SubjectRows,
-    reader: &mut dyn SchemaReader,
-) -> Result<Vec<(Vec<u8>, RangeShape)>, QueryProofError> {
-    let info = summarize(class_rows);
-    // F3 + class sanity: the document class must be a plain `sys:Class` with no inheritance.
+/// Nature-check ONE class in the reflexive super-closure and fold its directly-declared properties
+/// into the EFFECTIVE-FRAME UNION. This is one class's contribution to the reference
+/// `schema_class_predicate_type` (schema.pl:332), which is the UNION over `{C} ∪ ancestors(C)` of each
+/// class's OWN declared `(predicate, range)` pairs (built-ins filtered).
+///
+/// INHERITANCE-CLOSED NATURES (fail-closed). `sys:subdocument` IS inheritance-closed
+/// (`schema_is_subdocument`, schema.pl:654 — a class is a subdocument iff IT or ANY super bears it), so
+/// a subdocument nature ANYWHERE in the closure makes `C` a subdocument → reject. A tagged-union /
+/// `sys:oneOf` / enum nature is NOT strictly inheritance-closed in the reference (a subclass of a
+/// tagged union is not itself one), BUT a tagged-union ancestor's oneOf-CHOICE properties DO flow into
+/// `C`'s effective frame through a `sys:oneOf`-group node that the direct `Triple(K, ?p, ?r)` BGP does
+/// NOT enumerate — so rendering `C` without them would silently OMIT inherited properties. We therefore
+/// refuse ANY such nature anywhere in the chain (conservative, never unsound). Every class in a valid
+/// super-chain is a plain `sys:Class` (validation forbids inheriting from anything but
+/// `sys:Class`/`TaggedUnion`, and we reject the latter), so a non-`sys:Class` class also rejects.
+fn collect_class_frame(
+    rows: &SubjectRows,
+    union: &mut BTreeMap<Vec<u8>, CanonicalObject>,
+) -> Result<(), QueryProofError> {
+    let info = summarize(rows);
     if !info.has_type(SYS_CLASS_TYPE) {
         return Err(shape_reject("class-not-sys-class"));
     }
     if info.has_type(SYS_TAGGED_UNION) || info.has_type(SYS_ENUM) {
         return Err(shape_reject("tagged-union-or-enum-class"));
-    }
-    if info.has_inherits {
-        return Err(BgpPlanError::ReadDocumentInheritedFrame.into());
     }
     if info.has_oneof {
         return Err(shape_reject("tagged-union"));
@@ -765,15 +856,71 @@ fn classify_frame(
     if info.has_subdocument {
         return Err(BgpPlanError::ReadDocumentSubdocumentDeferred.into());
     }
-    let mut properties: Vec<(Vec<u8>, RangeShape)> = Vec::new();
     let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
-    for (predicate, range) in class_rows {
+    for (predicate, range) in rows {
         if is_built_in(predicate) {
             continue;
         }
+        // A predicate declared twice WITHIN one class's own frame is malformed (preserves the flat
+        // path's duplicate-property reject; the cross-class case is handled by the union below).
         if !seen.insert(predicate.clone()) {
             return Err(shape_reject("duplicate-property"));
         }
+        match union.get(predicate) {
+            None => {
+                union.insert(predicate.clone(), range.clone());
+            }
+            // Reached again with the SAME range — an identical (re)declaration up the chain, or a
+            // diamond reaching one ancestor via two paths. De-duplicate, exactly as the reference's
+            // tabling collapses identical `(predicate, type)` tuples.
+            Some(existing) if existing == range => {}
+            // The SAME predicate declared with a DIFFERENT range across the closure. A validated schema
+            // cannot produce this (`schema_class_predicate_type` would return two conflicting answers,
+            // which schema validation forbids). Fail-closed rather than pick one arbitrarily.
+            Some(_) => return Err(shape_reject("conflicting-inherited-range")),
+        }
+    }
+    Ok(())
+}
+
+/// Read + classify the EFFECTIVE (inherited-union) class frame (F1-F3). `class`/`class_rows` are `C`
+/// and its OWN direct schema triples (from the already-proved `class_schema` BGP); `ancestor_set` is
+/// the AUTHENTICATED reflexive `sys:inherits` closure `{C} ∪ ancestors(C)` (exactly `{C}` for a
+/// non-inheriting `C`). For EACH class in the set the frame reads its directly-declared properties —
+/// `C` from `class_rows`, every STRICT ancestor through `reader` (a bound-subject schema BGP recorded
+/// at prove / root-looked-up at verify, like a range node) — nature-checks it across the whole closure,
+/// and UNIONs the `(predicate, range)` pairs; every unioned range is then classified exactly as the
+/// flat path. Prove and verify run this identically over the identical authenticated inputs, so they
+/// request the identical set of schema nodes (which is what keeps the range-map missing/injected
+/// cross-checks exact).
+fn classify_frame(
+    class: &[u8],
+    class_rows: &SubjectRows,
+    ancestor_set: &[Vec<u8>],
+    reader: &mut dyn SchemaReader,
+) -> Result<Vec<(Vec<u8>, RangeShape)>, QueryProofError> {
+    // The reflexive closure MUST contain the seed `C` itself. A valid `build_subsumption_closure` proof
+    // always does (`reflexive = true`); assert it defensively (fail-closed) so a degenerate set can
+    // never silently drop `C`'s own frame.
+    if !ancestor_set.iter().any(|k| k.as_slice() == class) {
+        return Err(invalid("ancestor closure omits the document class itself"));
+    }
+    // Union the directly-declared (predicate -> range) pairs across the reflexive super-closure.
+    let mut union: BTreeMap<Vec<u8>, CanonicalObject> = BTreeMap::new();
+    for k in ancestor_set {
+        if k.as_slice() == class {
+            // `C`'s own rows come from the already-proved `class_schema` BGP (never re-read here).
+            collect_class_frame(class_rows, &mut union)?;
+        } else {
+            // Every STRICT ancestor is read through the reader (recorded at prove, root-verified at
+            // verify). Both sides iterate the IDENTICAL authenticated `ancestor_set`.
+            let rows = reader.read(k)?;
+            collect_class_frame(&rows, &mut union)?;
+        }
+    }
+    // Classify each unioned range (reads any non-primitive range/element node through `reader`).
+    let mut properties: Vec<(Vec<u8>, RangeShape)> = Vec::with_capacity(union.len());
+    for (predicate, range) in &union {
         let shape = classify_range(range, reader)?;
         properties.push((predicate.clone(), shape));
     }
@@ -816,13 +963,28 @@ impl CompiledReadDocument {
         let class_iri =
             std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
 
-        // (F1) C's direct schema properties.
+        // (F1) C's OWN direct schema properties.
         let class_compiled = bound_subject_bgp(class_iri)?;
         let class_schema = class_compiled.prove_with_context(ctx, schema)?;
         let class_rows =
             resolve_subject_rows(&class_schema, &class_compiled, schema, schema_root)?;
 
-        // (F2-F3) Classify the frame; this proves each range/element schema BGP as a side effect.
+        // (F1b) The ancestor set. If `C`'s COMPLETE (root-authenticated) frame bears a `sys:inherits`
+        // edge, prove the reflexive forward closure over the schema graph → {C} ∪ ancestors(C).
+        // Otherwise `C` has NO ancestors and the reflexive closure is exactly {C} — nothing to walk, so
+        // skip the proof (which also keeps flat documents free of any closure cost).
+        let (ancestor_closure, ancestor_set) = if summarize(&class_rows).has_inherits {
+            let closure_compiled = ancestor_closure_bgp(class_iri)?;
+            let closure = closure_compiled.prove_with_context(ctx, schema)?;
+            let db_root = database_root(&instance_root, &schema_root);
+            let set = resolve_closure_set(&closure, &closure_compiled, instance, schema, db_root)?;
+            (Some(closure), set)
+        } else {
+            (None, vec![class.clone()])
+        };
+
+        // (F2-F3) Classify the EFFECTIVE (inherited-union) frame; this proves each strict-ancestor and
+        // range/element schema BGP as a side effect (recorded in `reader.ranges`).
         let mut reader = ProveReader {
             ctx,
             schema,
@@ -830,7 +992,7 @@ impl CompiledReadDocument {
             cache: BTreeMap::new(),
             ranges: Vec::new(),
         };
-        let properties = classify_frame(&class_rows, &mut reader)?;
+        let properties = classify_frame(&class, &class_rows, &ancestor_set, &mut reader)?;
         let ranges = reader.ranges;
 
         // One ordered-list walk per PRESENT list property (a list absent from the instance is simply
@@ -868,6 +1030,7 @@ impl CompiledReadDocument {
             frame: ProvedFrame {
                 class,
                 class_schema,
+                ancestor_closure,
                 ranges,
             },
             lists,
@@ -911,13 +1074,37 @@ impl ProvedReadDocument {
         let class_iri =
             std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
 
-        // (4/F1) Reconstruct the frame plan from the DERIVED C; verify over the schema root.
+        // (4/F1) Reconstruct the frame plan from the DERIVED C; verify over the schema root. This is
+        //         C's OWN direct schema triples.
         let class_compiled = bound_subject_bgp(class_iri)?;
         let class_rows =
             resolve_subject_rows(&self.frame.class_schema, &class_compiled, schema, schema_root)?;
 
-        // (5) Root-verify every range/element sub-proof (plan reconstructed from its node IRI, a pure
-        //     function) into a trusted node -> rows map.
+        // (4b/F1b) RE-DERIVE the ancestor set. Whether a closure is required is decided from C's
+        //          COMPLETE, root-authenticated frame — the IDENTICAL decision the prover made: a
+        //          `sys:inherits` edge ⇒ RE-BUILD the closure plan from the DERIVED C and RE-VERIFY it
+        //          against the schema root → the authenticated {C} ∪ ancestors(C); no edge ⇒ C has no
+        //          ancestors and the set is exactly {C}. A prover can neither DROP a genuine closure
+        //          (the authenticated frame demands it) nor INJECT a spurious one (rejected below), and
+        //          cannot shorten the ancestor set (the closure's empty-delta fixpoint proves it is
+        //          complete). This is the frame-completeness pillar.
+        let ancestor_set = if summarize(&class_rows).has_inherits {
+            let closure_compiled = ancestor_closure_bgp(class_iri)?;
+            let closure = self.frame.ancestor_closure.as_ref().ok_or_else(|| {
+                invalid("class bears a sys:inherits edge but the bundle omits the ancestor closure")
+            })?;
+            resolve_closure_set(closure, &closure_compiled, instance, schema, database_root)?
+        } else {
+            if self.frame.ancestor_closure.is_some() {
+                return Err(invalid(
+                    "class bears no sys:inherits edge but the bundle carries an ancestor closure",
+                ));
+            }
+            vec![class.clone()]
+        };
+
+        // (5) Root-verify every range/element AND strict-ancestor sub-proof (plan reconstructed from
+        //     its node IRI, a pure function) into a trusted node -> rows map.
         let mut range_map: BTreeMap<Vec<u8>, SubjectRows> = BTreeMap::new();
         for classification in &self.frame.ranges {
             let node_iri = std::str::from_utf8(&classification.node)
@@ -934,12 +1121,12 @@ impl ProvedReadDocument {
             }
         }
 
-        // (6/F2-F3) RE-DERIVE the classification from the authenticated frame + verified range map.
+        // (6/F2-F3) RE-DERIVE the classification from the authenticated frame + closure + range map.
         let mut reader = VerifyReader {
             map: &range_map,
             used: BTreeSet::new(),
         };
-        let properties = classify_frame(&class_rows, &mut reader)?;
+        let properties = classify_frame(&class, &class_rows, &ancestor_set, &mut reader)?;
         let used_nodes = reader.used;
         // No injected/unused range sub-proof may ride along.
         for node in range_map.keys() {

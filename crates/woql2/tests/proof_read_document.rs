@@ -372,6 +372,24 @@ fn assert_prove_rejects(
     });
 }
 
+/// Like [`assert_prove_rejects`] but for an INHERITING class: the prover proves the reflexive
+/// `sys:inherits` closure (an envelope recursion) BEFORE `classify_frame` rejects, so it runs on the
+/// larger envelope stack.
+fn assert_inherited_prove_rejects(
+    name: &'static str,
+    schema_facts: Vec<Fact>,
+    instance_facts: Vec<Fact>,
+    check: impl Fn(&QueryProofError) -> bool + Send + 'static,
+) {
+    on_big_stack(name, 1024, move || {
+        let instance = layer(instance_facts);
+        let schema = layer(schema_facts);
+        let compiled = compiled_read(&iri("doc"));
+        let err = compiled.prove_on_layers(&*instance, &*schema).unwrap_err();
+        assert!(check(&err), "unexpected error for {name}: {err:?}");
+    });
+}
+
 #[test]
 fn read_document_rejects_subdocument_range() {
     assert_prove_rejects(
@@ -408,21 +426,82 @@ fn read_document_rejects_array_range() {
     );
 }
 
+/// An INHERITED subdocument nature. `Super` bears `sys:subdocument` and `Sub` inherits it; because
+/// subdocument-ness is inheritance-closed (`schema_is_subdocument`, schema.pl:654), `Sub` IS a
+/// subdocument → reject. (Repurposed from the old `read_document_rejects_inherited_class`: an inheriting
+/// class is no longer a blanket reject — see `read_document_inherited_frame_end_to_end`.)
 #[test]
-fn read_document_rejects_inherited_class() {
-    assert_prove_rejects(
-        "rd-inherit",
+fn read_document_rejects_inherited_subdocument() {
+    assert_inherited_prove_rejects(
+        "rd-inherited-subdoc",
         vec![
-            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
-            Fact::Node(iri("C"), SYS_INHERITS.into(), iri("Base")),
-            Fact::Node(iri("Base"), RDF_TYPE.into(), SYS_CLASS.into()),
-            Fact::Node(iri("C"), iri("name"), XSD_STRING.into()),
+            Fact::Node(iri("Super"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Super"), SYS_SUBDOC.into(), RDF_NIL.into()),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_INHERITS.into(), iri("Super")),
+            Fact::Node(iri("Sub"), iri("name"), XSD_STRING.into()),
         ],
         vec![
-            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Sub")),
             Fact::Str(iri("doc"), iri("name"), "hi".into()),
         ],
-        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentInheritedFrame)),
+        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentSubdocumentDeferred)),
+    );
+}
+
+/// An INHERITED tagged-union nature. `Super` bears `sys:oneOf` and `Sub` inherits it. A tagged-union
+/// ancestor's oneOf-CHOICE properties flow into `Sub`'s frame through a `sys:oneOf`-group node the
+/// direct frame BGP does not enumerate, so rendering `Sub` without them would omit inherited data — the
+/// frame refuses ANY `sys:oneOf`/tagged-union nature anywhere in the chain (fail-closed).
+#[test]
+fn read_document_rejects_inherited_tagged_union() {
+    assert_inherited_prove_rejects(
+        "rd-inherited-oneof",
+        vec![
+            Fact::Node(iri("Super"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Super"), SYS_ONEOF.into(), iri("ChoiceDesc")),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_INHERITS.into(), iri("Super")),
+            Fact::Node(iri("Sub"), iri("name"), XSD_STRING.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Sub")),
+            Fact::Str(iri("doc"), iri("name"), "hi".into()),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "tagged-union"
+            })
+        ),
+    );
+}
+
+/// A CONFLICTING inherited range: `Super` declares `p` with a scalar range (`xsd:string`) and `Sub`
+/// re-declares `p` with a LINK range (`Person`). A validated schema cannot produce this, so the effective
+/// frame's cross-closure union reject-closes rather than pick one arbitrarily.
+#[test]
+fn read_document_rejects_conflicting_inherited_range() {
+    assert_inherited_prove_rejects(
+        "rd-conflicting-inherited-range",
+        vec![
+            Fact::Node(iri("Super"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Super"), iri("p"), XSD_STRING.into()),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_INHERITS.into(), iri("Super")),
+            Fact::Node(iri("Sub"), iri("p"), iri("Person")),
+            Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Sub")),
+            Fact::Node(iri("doc"), iri("p"), iri("person1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "conflicting-inherited-range"
+            })
+        ),
     );
 }
 
@@ -504,4 +583,231 @@ fn read_document_rejects_one_of_tagged_union() {
             })
         ),
     );
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Inheritance: the effective (inherited-union) frame, proved via the reflexive `sys:inherits` closure.
+// ---------------------------------------------------------------------------------------------------
+
+/// A TWO-LEVEL chain `Sub -> Mid -> Super`. `Super` declares a scalar (`name`) and a `List` (`tracks`),
+/// `Mid` declares a scalar (`rating`), and `Sub` declares a link (`author`). No subdocuments; the
+/// link/element target classes (`Person`, `Track`) are plain non-inheriting classes.
+fn inherited_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        // Super: an inherited scalar + an inherited list.
+        Fact::Node(iri("Super"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Super"), iri("name"), XSD_STRING.into()),
+        Fact::Node(iri("Super"), iri("tracks"), iri("TracksList")),
+        Fact::Node(iri("TracksList"), RDF_TYPE.into(), SYS_LIST.into()),
+        Fact::Node(iri("TracksList"), SYS_CLASS_PRED.into(), iri("Track")),
+        Fact::Node(iri("Track"), RDF_TYPE.into(), SYS_CLASS.into()),
+        // Mid: inherits Super, adds a scalar.
+        Fact::Node(iri("Mid"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Mid"), SYS_INHERITS.into(), iri("Super")),
+        Fact::Node(iri("Mid"), iri("rating"), XSD_STRING.into()),
+        // Sub: inherits Mid, adds a link.
+        Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Sub"), SYS_INHERITS.into(), iri("Mid")),
+        Fact::Node(iri("Sub"), iri("author"), iri("Person")),
+        Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
+    ])
+}
+
+/// A `doc` of class `Sub` that uses an inherited scalar (`name`, from `Super`), a second inherited
+/// scalar (`rating`, from `Mid`), its OWN link (`author`), and an inherited ordered `List`
+/// (`tracks=[a,b,a]`, from `Super`).
+fn inherited_instance() -> Arc<LayerCommitment> {
+    let mut facts = vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Sub")),
+        Fact::Str(iri("doc"), iri("name"), "hello".into()),
+        Fact::Str(iri("doc"), iri("rating"), "five".into()),
+        Fact::Node(iri("doc"), iri("author"), iri("person1")),
+    ];
+    cons_chain(&iri("doc"), &iri("tracks"), &["a", "b", "a"], &mut facts);
+    layer(facts)
+}
+
+/// A LIGHT single-level inherited schema (no list): `Sub -> Super`, `Super` declares a scalar
+/// (`name`), `Sub` declares a link (`author`). Used by the no-walk adversarial cases.
+fn flat_inherited_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("Super"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Super"), iri("name"), XSD_STRING.into()),
+        Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Sub"), SYS_INHERITS.into(), iri("Super")),
+        Fact::Node(iri("Sub"), iri("author"), iri("Person")),
+        Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
+    ])
+}
+
+fn flat_inherited_instance() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Sub")),
+        Fact::Str(iri("doc"), iri("name"), "hi".into()),
+        Fact::Node(iri("doc"), iri("author"), iri("person1")),
+    ])
+}
+
+/// The headline: a `Sub -> Mid -> Super` document renders inherited scalars, an inherited ordered list
+/// (order + duplicate preserved), and an own link — the effective frame is the UNION across the whole
+/// super-chain, proved via the AUTHENTICATED reflexive `sys:inherits` closure. Then two adversarial
+/// tampers on the same bundle each fail verify.
+#[test]
+fn read_document_inherited_frame_end_to_end() {
+    on_big_stack("read-document-inherited-e2e", 1024, || {
+        let instance = inherited_instance();
+        let schema = inherited_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        // ---- HAPPY PATH: verify + resolve the whole inherited document. ----
+        let resolved = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        assert_eq!(resolved.id, iri("doc").into_bytes());
+        assert_eq!(resolved.class, iri("Sub").into_bytes());
+
+        // Inherited scalar `name` (declared on Super).
+        match resolved.get(&iri("name")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_value_lexical(&objects[0]), b"hello".to_vec());
+            }
+            other => panic!("name should be Direct, got {other:?}"),
+        }
+
+        // Inherited scalar `rating` (declared on Mid).
+        match resolved.get(&iri("rating")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_value_lexical(&objects[0]), b"five".to_vec());
+            }
+            other => panic!("rating should be Direct, got {other:?}"),
+        }
+
+        // Own link `author` (declared on Sub).
+        match resolved.get(&iri("author")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_node(&objects[0]), iri("person1").into_bytes());
+            }
+            other => panic!("author should be Direct, got {other:?}"),
+        }
+
+        // Inherited ordered list `tracks=[a,b,a]` (declared on Super) — order + duplicate preserved,
+        // rendered from the authenticated OrderedListWalk.
+        match resolved.get(&iri("tracks")).unwrap() {
+            ResolvedValue::List(elements) => {
+                let nodes: Vec<Vec<u8>> = elements.iter().map(as_node).collect();
+                assert_eq!(
+                    nodes,
+                    vec![
+                        iri("a").into_bytes(),
+                        iri("b").into_bytes(),
+                        iri("a").into_bytes()
+                    ],
+                );
+            }
+            other => panic!("tracks should be a List, got {other:?}"),
+        }
+
+        // ---- ADVERSARIAL: tamper the INHERITED list order / forge the walk envelope. ----
+        bundle.lists[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered inherited list-walk result column must fail verify",
+        );
+
+        // ---- ADVERSARIAL: deliver the inherited list property WITHOUT its walk. ----
+        bundle.lists.clear();
+        let err = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap_err();
+        assert!(
+            matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentMalformedListHead { .. })),
+            "an inherited list property with no walk must reject as MalformedListHead, got {err:?}",
+        );
+    });
+}
+
+/// Dropped/forged ancestor set. The ancestor SET is the proven output of the reflexive `sys:inherits`
+/// closure, RE-VERIFIED at verify from the derived class; a prover cannot shorten it. Corrupting the
+/// closure's committed class column makes the closure re-verify fail — so `Super` (and its inherited
+/// `name`) can never be silently dropped from the frame. (The complementary defence — a genuinely
+/// un-framed inherited property tripping the no-injection cross-check — is exercised by
+/// `read_document_inherited_injected_instance_property_fails_verify`.)
+#[test]
+fn read_document_inherited_dropped_ancestor_fails_verify() {
+    on_big_stack("read-document-inherited-drop-ancestor", 1024, || {
+        let instance = flat_inherited_instance();
+        let schema = flat_inherited_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+        // Sanity: the honest inherited document verifies.
+        bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        // Corrupt the AUTHENTICATED ancestor set: verify re-builds the closure plan from the derived
+        // class and re-verifies it against the schema root — the tampered column no longer opens.
+        bundle
+            .frame
+            .ancestor_closure
+            .as_mut()
+            .expect("an inheriting class carries an ancestor closure")
+            .result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered (dropped/forged) ancestor closure must fail verify",
+        );
+    });
+}
+
+/// No-injection across inheritance. The instance carries `t(doc, ghost, "boom")`, a predicate NO class
+/// in the super-chain declares. The prover CAN assemble a bundle (D is honest, ghost is not a list), but
+/// verify computes the complete authenticated D, sees `ghost` is not in the effective (inherited) frame,
+/// and reject-closes.
+#[test]
+fn read_document_inherited_injected_instance_property_fails_verify() {
+    on_big_stack("read-document-inherited-injection", 1024, || {
+        // `name` is an inherited frame property (fine); `ghost` is declared by NO class in the chain.
+        let instance = layer(vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Sub")),
+            Fact::Str(iri("doc"), iri("name"), "hi".into()),
+            Fact::Str(iri("doc"), iri("ghost"), "boom".into()),
+        ]);
+        let schema = flat_inherited_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+
+        let bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+        let err = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QueryProofError::Plan(BgpPlanError::ReadDocumentUnknownInstanceProperty { .. })
+            ),
+            "an un-framed instance property must reject as UnknownInstanceProperty, got {err:?}",
+        );
+    });
 }
