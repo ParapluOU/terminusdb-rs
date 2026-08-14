@@ -900,12 +900,35 @@ pub enum BgpPlanError {
     #[error("ReadDocument list property `{predicate}` is malformed: not exactly one head edge, or its ordered-walk sub-proof is missing/extra")]
     ReadDocumentMalformedListHead { predicate: String },
 
-    /// A property's range is (directly) a subdocument class. A subdocument value is INLINED by
-    /// `get_document` (the child's own triples are part of the parent); v1 renders only the edge, so it
-    /// reject-closes rather than silently dropping the inlined child. Subdocument inlining is
-    /// increment 3.
-    #[error("ReadDocument subdocument-range property is deferred to increment 3 (inline-closure); reject closed")]
+    /// The TOP-LEVEL document id's OWN class is a subdocument (`sys:subdocument`, inheritance-closed).
+    /// A subdocument is a child inlined INTO a parent document; it is not itself a top-level document,
+    /// so reading one directly by id is out of scope — reject closed. (Increment 3 INLINES subdocument
+    /// CHILDREN of a normal document, keyed off each child's authenticated type; only a subdocument as
+    /// the outermost `id` reject-closes here. Repurposed from the old subdocument-range reject, which
+    /// increment 3 removed: a subdocument RANGE is now inlined via the per-child recursion.)
+    #[error("ReadDocument top-level id class is a subdocument; a subdocument is inlined into a parent, not read directly by id; reject closed")]
     ReadDocumentSubdocumentDeferred,
+
+    /// A single-valued class LINK child whose authenticated type (or an ancestor) is `@unfoldable`
+    /// (`sys:unfoldable`), OR whose property is declared `@unfold` (`sys:unfold` on the frame range
+    /// node). `get_document(unfold(true))` UNFOLDS such a target inline; increment 3 only inlines true
+    /// SUBDOCUMENTS, so silently rendering an unfoldable/unfold target as a bare link would OMIT the
+    /// inlined content the reference includes. That is a SOUNDNESS gap (a smaller-than-reference
+    /// document), so we reject closed rather than under-deliver.
+    #[error("ReadDocument single-valued class LINK target is `@unfoldable`/`@unfold` (reference unfolds it inline); increment 3 inlines only true subdocuments, so reject closed rather than omit content")]
+    ReadDocumentUnfoldableDeferred,
+
+    /// A subdocument INLINE recursion reached a child IRI already on the inline path (a cycle). Genuine
+    /// subdocuments have parent-nested generated IRIs and cannot form a cycle in valid data; we
+    /// reject-close rather than loop.
+    #[error("ReadDocument subdocument inlining reached an already-inlined child IRI (cycle); reject closed rather than loop")]
+    ReadDocumentSubdocumentCycle,
+
+    /// A subdocument INLINE recursion exceeded the depth or node budget. Enforced IDENTICALLY in prove
+    /// and verify so a prover can never make verify accept a TRUNCATED subdocument tree; over-budget
+    /// reject-closes rather than truncate.
+    #[error("ReadDocument subdocument inlining exceeded the depth/node budget; reject closed rather than truncate")]
+    ReadDocumentSubdocumentBudgetExceeded,
 
     /// A property's range is a `sys:'Array'` descriptor. Arrays are ordered by an authenticated
     /// `sys:index` key (a different mechanism from the list cons-walk) and may be multi-dimensional /

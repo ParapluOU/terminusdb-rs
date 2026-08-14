@@ -102,6 +102,8 @@ const SYS_CARDINALITY: &str = "http://terminusdb.com/schema/sys#Cardinality";
 const SYS_OPTIONAL: &str = "http://terminusdb.com/schema/sys#Optional";
 const SYS_CLASS_PRED: &str = "http://terminusdb.com/schema/sys#class";
 const SYS_SUBDOCUMENT: &str = "http://terminusdb.com/schema/sys#subdocument";
+const SYS_UNFOLDABLE: &str = "http://terminusdb.com/schema/sys#unfoldable";
+const SYS_UNFOLD: &str = "http://terminusdb.com/schema/sys#unfold";
 const SYS_ONEOF: &str = "http://terminusdb.com/schema/sys#oneOf";
 const SYS_MIN_CARDINALITY: &str = "http://terminusdb.com/schema/sys#min_cardinality";
 const SYS_MAX_CARDINALITY: &str = "http://terminusdb.com/schema/sys#max_cardinality";
@@ -282,32 +284,88 @@ pub struct ProvedListProperty {
     pub walk: ProvedBgp,
 }
 
-/// A proven `ReadDocument` bundle. The verifier reconstructs every sub-plan from the query `id` +
-/// the authenticated frame and verifies each sub-proof against the trusted combined `database_root`,
-/// then runs the completeness / no-injection cross-checks.
+/// A single-valued class LINK child's SUBDOCUMENT-DECISION witness (increment 3): everything needed to
+/// authenticate the child's `rdf:type` and decide whether that class is a subdocument — WITHOUT
+/// classifying the child's own property frame. A STOP link (child is NOT a subdocument) carries ONLY
+/// this witness; the child's own (possibly unsupported-shape) properties are never read, so a plain
+/// link to a document with, say, an `Optional` field does not reject the parent.
+#[derive(Debug)]
+pub struct ProvedChildTypeWitness {
+    /// The child's instance bound-subject BGP → its `rdf:type` = `C_child` (+ its direct triples,
+    /// unused for a stop link). Reconstructed at verify from `child_id`.
+    pub subject_bgp: ProvedBgp,
+    /// `C_child`'s OWN schema frame read `Triple(C_child, ?p, ?r)`. `None` iff the child has NO
+    /// `rdf:type` row (a typeless / dangling link) — the reference renders such a target as a plain
+    /// link id, and so do we (a typeless target is trivially non-subdocument).
+    pub class_schema: Option<ProvedBgp>,
+    /// `C_child`'s reflexive `sys:inherits` closure over the SCHEMA graph (the authenticated
+    /// `{C_child} ∪ ancestors`). `None` iff there is no class, or `C_child` bears no `sys:inherits`
+    /// edge (then the set is exactly `{C_child}`).
+    pub ancestor_closure: Option<ProvedBgp>,
+    /// One schema read per STRICT ancestor class of `C_child` — the natures (`sys:subdocument` /
+    /// `sys:unfoldable`) that make subdocument-ness / unfoldable-ness inheritance-closed.
+    pub ancestor_reads: Vec<ProvedRangeClassification>,
+}
+
+/// One PRESENT single-valued class LINK property object (increment 3). Verify RE-DERIVES the child's
+/// subdocument-ness from root-authenticated data (never the prover's choice of `target` variant) and
+/// FORCES the render mode: a subdocument child MUST carry an `Inline` body (else omission reject); a
+/// non-subdocument child MUST carry only a `Stop` witness (else injection reject).
+#[derive(Debug)]
+pub struct ProvedLink {
+    /// The class-LINK predicate IRI.
+    pub predicate: Vec<u8>,
+    /// The child object IRI this edge points at.
+    pub child_id: Vec<u8>,
+    /// The child's proof — a stop witness or an inlined subdocument node.
+    pub target: ProvedLinkTarget,
+}
+
+/// A LINK child's proof: the child is either a plain link (stop) or an inlined subdocument.
+#[derive(Debug)]
+pub enum ProvedLinkTarget {
+    /// The child's class is NOT a subdocument → render the child id (today's link behavior). Carries
+    /// only the child-type witness (no body).
+    Stop(ProvedChildTypeWitness),
+    /// The child's class IS a subdocument → the fully inlined child node (recursion). Its OWN
+    /// authenticated frame re-proves the subdocument-ness the parent verifies against.
+    Inline(Box<ProvedReadDocument>),
+}
+
+/// A proven `ReadDocument` bundle — ONE document node (the root, or an inlined subdocument). The
+/// verifier reconstructs every sub-plan from the node's `id` + the authenticated frame and verifies
+/// each sub-proof against the trusted combined `database_root`, then runs the completeness /
+/// no-injection cross-checks (including the recursive per-link demand/reject of increment 3).
 #[derive(Debug)]
 pub struct ProvedReadDocument {
     /// The prover's `Triple(id, ?p, ?o)` plan (informational). Verify reconstructs its own copy from
-    /// the query `id` and never trusts this one.
+    /// the node `id` and never trusts this one.
     pub subject_compiled: CompiledBgp,
-    /// The instance bound-subject BGP proof — the COMPLETE direct triples of the document.
+    /// The instance bound-subject BGP proof — the COMPLETE direct triples of this node.
     pub subject_bgp: ProvedBgp,
     /// The authenticated class frame.
     pub frame: ProvedFrame,
     /// One walk per PRESENT list property.
     pub lists: Vec<ProvedListProperty>,
+    /// One entry per PRESENT single-valued class LINK property object (stop link or inlined subdoc).
+    pub links: Vec<ProvedLink>,
 }
 
 /// A rendered property value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedValue {
     /// A scalar / link / set property: the resolved objects the bound-subject BGP delivered for this
-    /// predicate (a scalar is one literal, a link is one node, a set is many — all root-authenticated,
-    /// unordered, correct-multiplicity).
+    /// predicate (a scalar is one literal, a STOP link is one node id, a set is many — all
+    /// root-authenticated, unordered, correct-multiplicity).
     Direct(Vec<CanonicalObject>),
     /// A list property: the ordered element sequence from the authenticated `OrderedListWalk` (order
     /// AND duplicate multiplicity preserved).
     List(Vec<CanonicalObject>),
+    /// A single-valued subdocument property: the INLINED child document (recursively resolved). The
+    /// child's class is a subdocument (`sys:subdocument`, inheritance-closed), authenticated from the
+    /// child's OWN root-verified `rdf:type` — so its full contents are part of THIS document, exactly
+    /// as `get_document(id, unfold(true))` materializes them.
+    Subdocument(Box<ResolvedDocument>),
 }
 
 /// The rendered, root-authenticated document.
@@ -611,12 +669,31 @@ enum RangeShape {
     List,
 }
 
+/// One classified frame property: its predicate, its range shape, and — for a `Link` — whether the
+/// frame RANGE node bears `sys:unfold` (making it an `@unfold` property, `schema_property_is_unfold`,
+/// schema.pl:716). The `unfold` flag is only consulted for a `Link` that turns out to be a STOP (a
+/// non-subdocument target): the reference would unfold it, so we reject-close.
+#[derive(Clone, Debug)]
+struct ClassifiedProperty {
+    predicate: Vec<u8>,
+    shape: RangeShape,
+    unfold: bool,
+}
+
 /// Summary of a schema node's direct triples used by classification.
 #[derive(Default)]
 struct NodeInfo {
     rdf_types: Vec<Vec<u8>>,
     sys_class: Option<CanonicalObject>,
     has_subdocument: bool,
+    /// `sys:unfoldable` (`schema_is_unfoldable`, schema.pl:674) — the class asks to be unfolded inline
+    /// even though it is NOT a subdocument. Increment 3 does not inline these; a single-valued LINK to
+    /// such a class reject-closes (see [`BgpPlanError::ReadDocumentUnfoldableDeferred`]).
+    has_unfoldable: bool,
+    /// `sys:unfold` on THIS node — when this node is a property's frame RANGE descriptor, its presence
+    /// makes the property an `@unfold` property (`schema_property_is_unfold`, schema.pl:716). Same
+    /// reject as `@unfoldable`.
+    has_unfold: bool,
     has_inherits: bool,
     has_min_cardinality: bool,
     has_max_cardinality: bool,
@@ -677,6 +754,10 @@ fn summarize(rows: &SubjectRows) -> NodeInfo {
             info.sys_class = Some(object.clone());
         } else if predicate == SYS_SUBDOCUMENT.as_bytes() {
             info.has_subdocument = true;
+        } else if predicate == SYS_UNFOLDABLE.as_bytes() {
+            info.has_unfoldable = true;
+        } else if predicate == SYS_UNFOLD.as_bytes() {
+            info.has_unfold = true;
         } else if predicate == SYS_INHERITS_IRI.as_bytes() {
             info.has_inherits = true;
         } else if predicate == SYS_MIN_CARDINALITY.as_bytes() {
@@ -727,9 +808,12 @@ fn classify_range(
     if info.bears_system_class_type() && info.bears_collection_descriptor_type() {
         return Err(shape_reject("conflicting-class-and-collection"));
     }
-    if info.has_subdocument {
-        return Err(BgpPlanError::ReadDocumentSubdocumentDeferred.into());
-    }
+    // INCREMENT 3: a SIMPLE-CLASS range is NO LONGER rejected for `sys:subdocument` or `sys:inherits`
+    // here. Whether a single-valued class LINK inlines is decided in the per-CHILD recursion from the
+    // CHILD's authenticated `rdf:type` (never the schema range — a subclass of the range can introduce
+    // subdocument-ness), so this classifier returns the shape-neutral `Link` for ANY simple class and
+    // lets [`render`] key the inline/stop decision off the child. The `Array` / cardinality / choice /
+    // enum / collection guards below still reject-close (those shapes are unrelated to inlining).
     if info.has_type(SYS_ARRAY) {
         return Err(BgpPlanError::ReadDocumentArrayDeferred.into());
     }
@@ -771,11 +855,10 @@ fn classify_range(
         return Err(shape_reject("unit"));
     }
     if info.is_simple_class() {
-        // A link to an inheriting class MIGHT inherit `sys:subdocument`; without the (deferred)
-        // inheritance closure we cannot rule that out, so reject-close conservatively.
-        if info.has_inherits {
-            return Err(shape_reject("inheriting-link-target"));
-        }
+        // ANY simple class (inheriting or not, subdocument or not) is a single-valued LINK here; the
+        // inline-vs-stop decision is deferred to the per-child recursion (keyed off the child's own
+        // authenticated type + closure), so an inheriting or subdocument link target is now ACCEPTED at
+        // this classification step.
         return Ok(RangeShape::Link);
     }
     Err(shape_reject("unknown-range"))
@@ -803,8 +886,12 @@ fn check_element_class(
     if info.rdf_types.is_empty() {
         return Err(shape_reject("undefined-element"));
     }
+    // A Set/List OF subdocument stays reject-closed in increment 3 (v1 only inlines single-valued
+    // `Link` subdocument properties; a subdocument COLLECTION element is a larger effort). The
+    // inheriting-element reject is likewise kept — an inheriting collection element could inherit
+    // subdocument-ness we do not resolve here.
     if info.has_subdocument {
-        return Err(BgpPlanError::ReadDocumentSubdocumentDeferred.into());
+        return Err(shape_reject("subdocument-element"));
     }
     if info.has_inherits {
         return Err(shape_reject("inheriting-element"));
@@ -842,6 +929,7 @@ fn check_element_class(
 fn collect_class_frame(
     rows: &SubjectRows,
     union: &mut BTreeMap<Vec<u8>, CanonicalObject>,
+    allow_subdocument: bool,
 ) -> Result<(), QueryProofError> {
     let info = summarize(rows);
     if !info.has_type(SYS_CLASS_TYPE) {
@@ -853,7 +941,12 @@ fn collect_class_frame(
     if info.has_oneof {
         return Err(shape_reject("tagged-union"));
     }
-    if info.has_subdocument {
+    // Subdocument nature (inheritance-closed). The ROOT node passes `allow_subdocument = false`: a
+    // document's OWN top-level class must not be a subdocument (a subdocument is inlined into a parent,
+    // not read directly by id) → the repurposed top-level reject. An INLINED child passes
+    // `allow_subdocument = true`: a subdocument child is EXPECTED to bear `sys:subdocument`, so we
+    // render its body rather than reject.
+    if info.has_subdocument && !allow_subdocument {
         return Err(BgpPlanError::ReadDocumentSubdocumentDeferred.into());
     }
     let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
@@ -898,7 +991,8 @@ fn classify_frame(
     class_rows: &SubjectRows,
     ancestor_set: &[Vec<u8>],
     reader: &mut dyn SchemaReader,
-) -> Result<Vec<(Vec<u8>, RangeShape)>, QueryProofError> {
+    allow_subdocument: bool,
+) -> Result<Vec<ClassifiedProperty>, QueryProofError> {
     // The reflexive closure MUST contain the seed `C` itself. A valid `build_subsumption_closure` proof
     // always does (`reflexive = true`); assert it defensively (fail-closed) so a degenerate set can
     // never silently drop `C`'s own frame.
@@ -910,31 +1004,399 @@ fn classify_frame(
     for k in ancestor_set {
         if k.as_slice() == class {
             // `C`'s own rows come from the already-proved `class_schema` BGP (never re-read here).
-            collect_class_frame(class_rows, &mut union)?;
+            collect_class_frame(class_rows, &mut union, allow_subdocument)?;
         } else {
             // Every STRICT ancestor is read through the reader (recorded at prove, root-verified at
             // verify). Both sides iterate the IDENTICAL authenticated `ancestor_set`.
             let rows = reader.read(k)?;
-            collect_class_frame(&rows, &mut union)?;
+            collect_class_frame(&rows, &mut union, allow_subdocument)?;
         }
     }
     // Classify each unioned range (reads any non-primitive range/element node through `reader`).
-    let mut properties: Vec<(Vec<u8>, RangeShape)> = Vec::with_capacity(union.len());
+    let mut properties: Vec<ClassifiedProperty> = Vec::with_capacity(union.len());
     for (predicate, range) in &union {
         let shape = classify_range(range, reader)?;
-        properties.push((predicate.clone(), shape));
+        // Detect the `@unfold` property annotation: the frame RANGE node bears `sys:unfold`. Only a
+        // `Link` can carry it meaningfully (base-type / collection ranges never unfold); the read is
+        // cached, so this costs no extra sub-proof.
+        let unfold = if shape == RangeShape::Link {
+            match range {
+                CanonicalObject::Node(r) if !is_base_type(r) => {
+                    summarize(&reader.read(r)?).has_unfold
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        properties.push(ClassifiedProperty {
+            predicate: predicate.clone(),
+            shape,
+            unfold,
+        });
     }
     Ok(properties)
 }
 
+/// The subdocument / unfoldable natures of a class, computed across its reflexive `sys:inherits`
+/// closure `{class} ∪ ancestors` (LENIENT — unlike [`collect_class_frame`] it does NOT reject a
+/// tagged-union / enum / oneOf class, because a STOP link to such a document is faithfully rendered as
+/// a bare id). `class_rows` are the class's OWN schema triples; each STRICT ancestor is read through
+/// `reader`. `has_subdocument` mirrors `schema_is_subdocument` (schema.pl:654); `has_unfoldable`
+/// mirrors `schema_is_unfoldable` (schema.pl:674) — both inheritance-closed.
+#[derive(Clone, Copy, Debug, Default)]
+struct ClosureNatures {
+    has_subdocument: bool,
+    has_unfoldable: bool,
+}
+
+fn closure_natures(
+    class: &[u8],
+    class_rows: &SubjectRows,
+    ancestor_set: &[Vec<u8>],
+    reader: &mut dyn SchemaReader,
+) -> Result<ClosureNatures, QueryProofError> {
+    let mut natures = ClosureNatures::default();
+    let seed = summarize(class_rows);
+    natures.has_subdocument |= seed.has_subdocument;
+    natures.has_unfoldable |= seed.has_unfoldable;
+    for k in ancestor_set {
+        if k.as_slice() == class {
+            continue;
+        }
+        let info = summarize(&reader.read(k)?);
+        natures.has_subdocument |= info.has_subdocument;
+        natures.has_unfoldable |= info.has_unfoldable;
+    }
+    Ok(natures)
+}
+
 // ---------------------------------------------------------------------------------------------------
-// Prove.
+// Subdocument recursion budget (increment 3). Enforced IDENTICALLY in prove and verify so a prover can
+// NEVER make verify accept a TRUNCATED subdocument tree: over the depth OR the total-node budget both
+// sides reject-close rather than stop early. Kept small — genuine subdocument nesting is shallow, and
+// every node is several BGP proofs plus a closure, so the budget also bounds proving cost.
 // ---------------------------------------------------------------------------------------------------
+
+/// Max INLINE depth (the root is depth 0; each inlined subdocument child is one deeper).
+const MAX_SUBDOC_DEPTH: usize = 3;
+/// Max total document nodes (root + every inlined subdocument).
+const MAX_SUBDOC_NODES: usize = 64;
+
+/// Like [`extract_class`] but returns `None` (not an error) when the node has NO `rdf:type` row — a
+/// typeless / dangling LINK target, which the reference renders as a plain link id (a typeless target
+/// is trivially non-subdocument). Still errors on a non-node type or MULTIPLE `rdf:type` rows.
+fn extract_class_opt(rows: &SubjectRows) -> Result<Option<Vec<u8>>, QueryProofError> {
+    let mut class: Option<Vec<u8>> = None;
+    for (predicate, object) in rows {
+        if predicate.as_slice() != RDF_TYPE_IRI.as_bytes() {
+            continue;
+        }
+        let node = match object {
+            CanonicalObject::Node(bytes) => bytes.clone(),
+            _ => return Err(invalid("node rdf:type object is not a node")),
+        };
+        if class.is_some() {
+            return Err(invalid("node has more than one rdf:type row"));
+        }
+        class = Some(node);
+    }
+    Ok(class)
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Prove (recursive per-node).
+// ---------------------------------------------------------------------------------------------------
+
+/// The proven per-node DECISION CORE: the instance subject BGP (→ class `C`), `C`'s own schema frame
+/// read, the reflexive `sys:inherits` closure, and the strict-ancestor nature reads — everything
+/// needed to decide whether `C` is a subdocument, WITHOUT classifying `C`'s property ranges. A STOP
+/// link keeps ONLY this (never the child's body); the root and an inlined subdocument EXTEND it into a
+/// full node, REUSING every proven piece (no re-proving).
+struct ProvenCore {
+    subject_compiled: CompiledBgp,
+    subject_bgp: ProvedBgp,
+    d_rows: SubjectRows,
+    /// `None` => the node has NO `rdf:type` row (typeless/dangling link → non-subdocument stop).
+    class: Option<Vec<u8>>,
+    class_schema: Option<ProvedBgp>,
+    class_rows: SubjectRows,
+    ancestor_closure: Option<ProvedBgp>,
+    ancestor_set: Vec<Vec<u8>>,
+    ancestor_reads: Vec<ProvedRangeClassification>,
+    ancestor_cache: BTreeMap<Vec<u8>, SubjectRows>,
+    natures: ClosureNatures,
+}
+
+/// Prove one node's decision core (see [`ProvenCore`]). Reads the instance subject BGP, binds the
+/// class, proves the reflexive `sys:inherits` closure (only when the class inherits), reads each strict
+/// ancestor's frame, and computes the inheritance-closed subdocument/unfoldable natures. NO property
+/// range classification happens here — so a plain link target's own (possibly unsupported-shape) frame
+/// is never touched.
+fn prove_core(
+    ctx: &StoreProverContext<'_>,
+    instance: &LayerCommitment,
+    schema: &LayerCommitment,
+    instance_root: ProofHash,
+    schema_root: ProofHash,
+    db_root: ProofHash,
+    id: &str,
+) -> Result<ProvenCore, QueryProofError> {
+    // (D) COMPLETE direct triples of this node (instance graph).
+    let subject_compiled = bound_subject_bgp(id)?;
+    let subject_bgp = subject_compiled.prove_with_context(ctx, instance)?;
+    let d_rows = resolve_subject_rows(&subject_bgp, &subject_compiled, instance, instance_root)?;
+
+    // (F0) Bind the class. A typeless target (dangling link) is a non-subdocument stop.
+    let Some(class) = extract_class_opt(&d_rows)? else {
+        return Ok(ProvenCore {
+            subject_compiled,
+            subject_bgp,
+            d_rows,
+            class: None,
+            class_schema: None,
+            class_rows: Vec::new(),
+            ancestor_closure: None,
+            ancestor_set: Vec::new(),
+            ancestor_reads: Vec::new(),
+            ancestor_cache: BTreeMap::new(),
+            natures: ClosureNatures::default(),
+        });
+    };
+    let class_iri =
+        std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
+
+    // (F1) C's OWN schema frame.
+    let class_compiled = bound_subject_bgp(class_iri)?;
+    let class_schema = class_compiled.prove_with_context(ctx, schema)?;
+    let class_rows = resolve_subject_rows(&class_schema, &class_compiled, schema, schema_root)?;
+
+    // (F1b) Reflexive `sys:inherits` closure — proven only when `C` actually inherits (otherwise the
+    // reflexive closure is exactly `{C}`, synthesized locally, at no proof cost).
+    let (ancestor_closure, ancestor_set) = if summarize(&class_rows).has_inherits {
+        let closure_compiled = ancestor_closure_bgp(class_iri)?;
+        let closure = closure_compiled.prove_with_context(ctx, schema)?;
+        let set = resolve_closure_set(&closure, &closure_compiled, instance, schema, db_root)?;
+        (Some(closure), set)
+    } else {
+        (None, vec![class.clone()])
+    };
+
+    // Read each STRICT ancestor's frame (recorded into `reader.ranges`) and compute the
+    // inheritance-closed subdocument / unfoldable natures.
+    let mut reader = ProveReader {
+        ctx,
+        schema,
+        schema_root,
+        cache: BTreeMap::new(),
+        ranges: Vec::new(),
+    };
+    let natures = closure_natures(&class, &class_rows, &ancestor_set, &mut reader)?;
+
+    Ok(ProvenCore {
+        subject_compiled,
+        subject_bgp,
+        d_rows,
+        class: Some(class),
+        class_schema: Some(class_schema),
+        class_rows,
+        ancestor_closure,
+        ancestor_set,
+        ancestor_reads: reader.ranges,
+        ancestor_cache: reader.cache,
+        natures,
+    })
+}
+
+/// Prove a RENDERED node (the root or an inlined subdocument) by EXTENDING an already-proven
+/// [`ProvenCore`]: classify the effective frame, prove one ordered-list walk per present list, and
+/// recurse into each present single-valued class LINK (inlining a subdocument child, stopping at a
+/// plain link). `allow_subdocument` is `false` for the root (its own class must not be a subdocument)
+/// and `true` for an inlined child (it is EXPECTED to be one). The `visited` set + `node_count` +
+/// `depth` bound the recursion IDENTICALLY to verify.
+#[allow(clippy::too_many_arguments)]
+fn prove_body(
+    ctx: &StoreProverContext<'_>,
+    instance: &LayerCommitment,
+    schema: &LayerCommitment,
+    instance_root: ProofHash,
+    schema_root: ProofHash,
+    db_root: ProofHash,
+    id: &str,
+    core: ProvenCore,
+    allow_subdocument: bool,
+    depth: usize,
+    visited: &mut BTreeSet<Vec<u8>>,
+    node_count: &mut usize,
+) -> Result<ProvedReadDocument, QueryProofError> {
+    let ProvenCore {
+        subject_compiled,
+        subject_bgp,
+        d_rows,
+        class,
+        class_schema,
+        class_rows,
+        ancestor_closure,
+        ancestor_set,
+        ancestor_reads,
+        ancestor_cache,
+        natures: _,
+    } = core;
+    let class = class.ok_or_else(|| invalid("rendered document node has no rdf:type"))?;
+    let class_schema =
+        class_schema.ok_or_else(|| invalid("rendered document node is missing its class schema"))?;
+
+    // (F2-F3) Classify the EFFECTIVE frame. The reader is SEEDED with the core's ancestor rows so
+    // classify_frame does NOT re-prove them; only NEW range/element reads accumulate here.
+    let mut reader = ProveReader {
+        ctx,
+        schema,
+        schema_root,
+        cache: ancestor_cache,
+        ranges: Vec::new(),
+    };
+    let properties =
+        classify_frame(&class, &class_rows, &ancestor_set, &mut reader, allow_subdocument)?;
+    // frame.ranges = ancestor reads (core) ++ range/element reads (body).
+    let mut ranges = ancestor_reads;
+    ranges.extend(reader.ranges);
+
+    // Group present objects by predicate (rdf:type excluded — it binds the class).
+    let mut by_predicate: BTreeMap<Vec<u8>, Vec<CanonicalObject>> = BTreeMap::new();
+    for (predicate, object) in &d_rows {
+        if predicate.as_slice() == RDF_TYPE_IRI.as_bytes() {
+            continue;
+        }
+        by_predicate
+            .entry(predicate.clone())
+            .or_default()
+            .push(object.clone());
+    }
+
+    let mut lists = Vec::new();
+    let mut links = Vec::new();
+    for prop in &properties {
+        match prop.shape {
+            RangeShape::List => {
+                match by_predicate.get(&prop.predicate).map(|o| o.len()).unwrap_or(0) {
+                    0 => continue,
+                    1 => {}
+                    _ => {
+                        return Err(BgpPlanError::ReadDocumentMalformedListHead {
+                            predicate: iri_string(&prop.predicate),
+                        }
+                        .into())
+                    }
+                }
+                let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), &prop.predicate);
+                let walk = walk_compiled.prove_with_context(ctx, instance)?;
+                lists.push(ProvedListProperty {
+                    predicate: prop.predicate.clone(),
+                    walk,
+                });
+            }
+            RangeShape::Link => {
+                let objects = match by_predicate.get(&prop.predicate) {
+                    Some(objects) => objects,
+                    None => continue,
+                };
+                for object in objects {
+                    let child_id = match object {
+                        CanonicalObject::Node(bytes) => bytes.clone(),
+                        _ => return Err(invalid("class-link object is not a node")),
+                    };
+                    let child_iri = std::str::from_utf8(&child_id)
+                        .map_err(|_| invalid("link child IRI is not valid UTF-8"))?
+                        .to_string();
+                    // Prove the child's decision core → the inline/stop decision is keyed off the
+                    // CHILD's authenticated type + closure, NEVER the schema range.
+                    let child_core = prove_core(
+                        ctx,
+                        instance,
+                        schema,
+                        instance_root,
+                        schema_root,
+                        db_root,
+                        &child_iri,
+                    )?;
+                    if child_core.natures.has_subdocument {
+                        // INLINE (single-valued only).
+                        if objects.len() != 1 {
+                            return Err(shape_reject("multi-valued-subdocument"));
+                        }
+                        if visited.contains(&child_id) {
+                            return Err(BgpPlanError::ReadDocumentSubdocumentCycle.into());
+                        }
+                        if depth + 1 > MAX_SUBDOC_DEPTH {
+                            return Err(BgpPlanError::ReadDocumentSubdocumentBudgetExceeded.into());
+                        }
+                        *node_count += 1;
+                        if *node_count > MAX_SUBDOC_NODES {
+                            return Err(BgpPlanError::ReadDocumentSubdocumentBudgetExceeded.into());
+                        }
+                        visited.insert(child_id.clone());
+                        let child_node = prove_body(
+                            ctx,
+                            instance,
+                            schema,
+                            instance_root,
+                            schema_root,
+                            db_root,
+                            &child_iri,
+                            child_core,
+                            /* allow_subdocument */ true,
+                            depth + 1,
+                            visited,
+                            node_count,
+                        )?;
+                        links.push(ProvedLink {
+                            predicate: prop.predicate.clone(),
+                            child_id,
+                            target: ProvedLinkTarget::Inline(Box::new(child_node)),
+                        });
+                    } else {
+                        // STOP (plain link). The reference UNFOLDS an `@unfoldable` class or an
+                        // `@unfold` property inline; increment 3 inlines only true subdocuments, so
+                        // rendering such a target as a bare link would OMIT content — reject closed.
+                        if child_core.natures.has_unfoldable || prop.unfold {
+                            return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+                        }
+                        links.push(ProvedLink {
+                            predicate: prop.predicate.clone(),
+                            child_id,
+                            target: ProvedLinkTarget::Stop(ProvedChildTypeWitness {
+                                subject_bgp: child_core.subject_bgp,
+                                class_schema: child_core.class_schema,
+                                ancestor_closure: child_core.ancestor_closure,
+                                ancestor_reads: child_core.ancestor_reads,
+                            }),
+                        });
+                    }
+                }
+            }
+            RangeShape::Scalar | RangeShape::Set => {}
+        }
+    }
+
+    Ok(ProvedReadDocument {
+        subject_compiled,
+        subject_bgp,
+        frame: ProvedFrame {
+            class,
+            class_schema,
+            ancestor_closure,
+            ranges,
+        },
+        lists,
+        links,
+    })
+}
 
 impl CompiledReadDocument {
     /// Prove the document over the two committed graphs (instance + schema). Reads the layers to
-    /// discover `C` / the properties / the list heads, proves each sub-proof by direct construction,
-    /// and assembles the bundle. Unsupported shapes reject-close here (fail-closed prover).
+    /// discover `C` / the properties / the list heads / the inlined subdocument tree, proves each
+    /// sub-proof by direct construction, and assembles the bundle. Unsupported shapes reject-close here
+    /// (fail-closed prover).
     pub fn prove_on_layers(
         &self,
         instance: &LayerCommitment,
@@ -952,89 +1414,33 @@ impl CompiledReadDocument {
     ) -> Result<ProvedReadDocument, QueryProofError> {
         let instance_root = instance.state.commitment_root;
         let schema_root = schema.state.commitment_root;
+        let db_root = database_root(&instance_root, &schema_root);
 
-        // (D) The COMPLETE direct triples of the document (instance graph).
-        let subject_compiled = bound_subject_bgp(&self.id)?;
-        let subject_bgp = subject_compiled.prove_with_context(ctx, instance)?;
-        let d_rows = resolve_subject_rows(&subject_bgp, &subject_compiled, instance, instance_root)?;
-
-        // (F0) Bind C.
-        let class = extract_class(&d_rows)?;
-        let class_iri =
-            std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
-
-        // (F1) C's OWN direct schema properties.
-        let class_compiled = bound_subject_bgp(class_iri)?;
-        let class_schema = class_compiled.prove_with_context(ctx, schema)?;
-        let class_rows =
-            resolve_subject_rows(&class_schema, &class_compiled, schema, schema_root)?;
-
-        // (F1b) The ancestor set. If `C`'s COMPLETE (root-authenticated) frame bears a `sys:inherits`
-        // edge, prove the reflexive forward closure over the schema graph → {C} ∪ ancestors(C).
-        // Otherwise `C` has NO ancestors and the reflexive closure is exactly {C} — nothing to walk, so
-        // skip the proof (which also keeps flat documents free of any closure cost).
-        let (ancestor_closure, ancestor_set) = if summarize(&class_rows).has_inherits {
-            let closure_compiled = ancestor_closure_bgp(class_iri)?;
-            let closure = closure_compiled.prove_with_context(ctx, schema)?;
-            let db_root = database_root(&instance_root, &schema_root);
-            let set = resolve_closure_set(&closure, &closure_compiled, instance, schema, db_root)?;
-            (Some(closure), set)
-        } else {
-            (None, vec![class.clone()])
-        };
-
-        // (F2-F3) Classify the EFFECTIVE (inherited-union) frame; this proves each strict-ancestor and
-        // range/element schema BGP as a side effect (recorded in `reader.ranges`).
-        let mut reader = ProveReader {
+        let core = prove_core(ctx, instance, schema, instance_root, schema_root, db_root, &self.id)?;
+        // The ROOT of a `ReadDocument` must be a real typed document.
+        if core.class.is_none() {
+            return Err(invalid("document has no rdf:type row"));
+        }
+        // `visited` seeds with the root id; `node_count` counts the root. The ROOT passes
+        // `allow_subdocument = false`, so a subdocument top-level class reject-closes in
+        // `collect_class_frame`.
+        let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
+        visited.insert(self.id.as_bytes().to_vec());
+        let mut node_count = 1usize;
+        prove_body(
             ctx,
+            instance,
             schema,
+            instance_root,
             schema_root,
-            cache: BTreeMap::new(),
-            ranges: Vec::new(),
-        };
-        let properties = classify_frame(&class, &class_rows, &ancestor_set, &mut reader)?;
-        let ranges = reader.ranges;
-
-        // One ordered-list walk per PRESENT list property (a list absent from the instance is simply
-        // not in the document — render nothing, prove no walk).
-        let mut head_counts: BTreeMap<Vec<u8>, usize> = BTreeMap::new();
-        for (predicate, _object) in &d_rows {
-            *head_counts.entry(predicate.clone()).or_default() += 1;
-        }
-        let mut lists = Vec::new();
-        for (predicate, shape) in &properties {
-            if *shape != RangeShape::List {
-                continue;
-            }
-            match head_counts.get(predicate).copied().unwrap_or(0) {
-                0 => continue,
-                1 => {}
-                _ => {
-                    return Err(BgpPlanError::ReadDocumentMalformedListHead {
-                        predicate: iri_string(predicate),
-                    }
-                    .into())
-                }
-            }
-            let walk_compiled = ordered_list_walk_bgp(self.id.as_bytes(), predicate);
-            let walk = walk_compiled.prove_with_context(ctx, instance)?;
-            lists.push(ProvedListProperty {
-                predicate: predicate.clone(),
-                walk,
-            });
-        }
-
-        Ok(ProvedReadDocument {
-            subject_compiled,
-            subject_bgp,
-            frame: ProvedFrame {
-                class,
-                class_schema,
-                ancestor_closure,
-                ranges,
-            },
-            lists,
-        })
+            db_root,
+            &self.id,
+            core,
+            /* allow_subdocument */ false,
+            0,
+            &mut visited,
+            &mut node_count,
+        )
     }
 }
 
@@ -1042,11 +1448,429 @@ impl CompiledReadDocument {
 // Verify + resolve.
 // ---------------------------------------------------------------------------------------------------
 
+/// Verify a STOP link's [`ProvedChildTypeWitness`] and return the child's authenticated class (or
+/// `None` if typeless) plus its inheritance-closed subdocument / unfoldable natures. This reads ONLY
+/// the child's type + closure + ancestor natures — never the child's property frame — and root-verifies
+/// every carried sub-proof, rejecting an injected one. The CALLER uses the returned natures to force
+/// the render mode (a stop witness whose child is actually a subdocument reject-closes as an omission).
+#[allow(clippy::too_many_arguments)]
+fn verify_child_witness<I: VerifierLayer, S: VerifierLayer>(
+    witness: &ProvedChildTypeWitness,
+    child_id: &[u8],
+    instance: &I,
+    schema: &S,
+    instance_root: ProofHash,
+    schema_root: ProofHash,
+    database_root: ProofHash,
+) -> Result<(Option<Vec<u8>>, ClosureNatures), QueryProofError> {
+    let child_iri =
+        std::str::from_utf8(child_id).map_err(|_| invalid("link child IRI is not valid UTF-8"))?;
+    // The child's type — reconstruct the plan from `child_id` (pure function), verify over the
+    // instance root.
+    let subject_compiled = bound_subject_bgp(child_iri)?;
+    let d_rows =
+        resolve_subject_rows(&witness.subject_bgp, &subject_compiled, instance, instance_root)?;
+    let Some(class) = extract_class_opt(&d_rows)? else {
+        // Typeless / dangling link target → non-subdocument stop. It must carry NO schema sub-proofs.
+        if witness.class_schema.is_some()
+            || witness.ancestor_closure.is_some()
+            || !witness.ancestor_reads.is_empty()
+        {
+            return Err(invalid("typeless link witness carries spurious schema sub-proofs"));
+        }
+        return Ok((None, ClosureNatures::default()));
+    };
+    let class_iri =
+        std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
+    let class_compiled = bound_subject_bgp(class_iri)?;
+    let class_schema = witness
+        .class_schema
+        .as_ref()
+        .ok_or_else(|| invalid("typed link witness is missing its class schema"))?;
+    let class_rows = resolve_subject_rows(class_schema, &class_compiled, schema, schema_root)?;
+
+    // Re-derive the ancestor set (RE-BUILD + RE-VERIFY the closure when the child's class inherits).
+    let ancestor_set = if summarize(&class_rows).has_inherits {
+        let closure_compiled = ancestor_closure_bgp(class_iri)?;
+        let closure = witness.ancestor_closure.as_ref().ok_or_else(|| {
+            invalid("inheriting link witness is missing its ancestor closure")
+        })?;
+        resolve_closure_set(closure, &closure_compiled, instance, schema, database_root)?
+    } else {
+        if witness.ancestor_closure.is_some() {
+            return Err(invalid("non-inheriting link witness carries an ancestor closure"));
+        }
+        vec![class.clone()]
+    };
+
+    // Root-verify each strict-ancestor nature read into a trusted map.
+    let mut map: BTreeMap<Vec<u8>, SubjectRows> = BTreeMap::new();
+    for classification in &witness.ancestor_reads {
+        let node_iri = std::str::from_utf8(&classification.node)
+            .map_err(|_| invalid("ancestor schema node IRI is not valid UTF-8"))?;
+        let node_compiled = bound_subject_bgp(node_iri)?;
+        let rows =
+            resolve_subject_rows(&classification.schema_bgp, &node_compiled, schema, schema_root)?;
+        if map.insert(classification.node.clone(), rows).is_some() {
+            return Err(invalid("link witness carries a duplicate ancestor read"));
+        }
+    }
+    // Compute the natures + DEMAND every strict ancestor read; then FORBID any injected one.
+    let mut reader = VerifyReader {
+        map: &map,
+        used: BTreeSet::new(),
+    };
+    let natures = closure_natures(&class, &class_rows, &ancestor_set, &mut reader)?;
+    let used = reader.used;
+    for node_key in map.keys() {
+        if !used.contains(node_key) {
+            return Err(invalid(format!(
+                "link witness carries an unused (injected) ancestor read for {}",
+                iri_string(node_key)
+            )));
+        }
+    }
+    Ok((Some(class), natures))
+}
+
+/// Verify + render ONE document node (the root or an inlined subdocument), recursively. Returns the
+/// rendered document PLUS the node's OWN inheritance-closed natures (which the parent uses to force the
+/// inline/stop render mode). Every sub-plan is reconstructed from the node `id` + the authenticated
+/// frame and verified against the trusted roots; the completeness / no-injection cross-checks (ranges,
+/// list walks, AND the recursive per-link demand/reject) run here. `allow_subdocument` is `false` for
+/// the root (its own class must not be a subdocument) and `true` for an inlined child.
+#[allow(clippy::too_many_arguments)]
+fn verify_node<I: VerifierLayer, S: VerifierLayer>(
+    node: &ProvedReadDocument,
+    id: &str,
+    instance: &I,
+    schema: &S,
+    instance_root: ProofHash,
+    schema_root: ProofHash,
+    database_root: ProofHash,
+    allow_subdocument: bool,
+    depth: usize,
+    visited: &mut BTreeSet<Vec<u8>>,
+    node_count: &mut usize,
+) -> Result<(ResolvedDocument, ClosureNatures), QueryProofError> {
+    // (2) COMPLETE direct triples — reconstruct the plan from `id`, verify over the instance root.
+    let subject_compiled = bound_subject_bgp(id)?;
+    let d_rows =
+        resolve_subject_rows(&node.subject_bgp, &subject_compiled, instance, instance_root)?;
+
+    // (F0) Derive C from the authenticated rdf:type row (the instance-C == schema-C tie).
+    let class = extract_class(&d_rows)?;
+    let class_iri =
+        std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
+
+    // (F1) C's OWN schema frame.
+    let class_compiled = bound_subject_bgp(class_iri)?;
+    let class_rows =
+        resolve_subject_rows(&node.frame.class_schema, &class_compiled, schema, schema_root)?;
+
+    // (F1b) Re-derive the ancestor set (RE-BUILD + RE-VERIFY the closure when C inherits). A prover can
+    // neither drop a genuine closure nor inject a spurious one, nor shorten the set (empty-delta
+    // fixpoint).
+    let ancestor_set = if summarize(&class_rows).has_inherits {
+        let closure_compiled = ancestor_closure_bgp(class_iri)?;
+        let closure = node.frame.ancestor_closure.as_ref().ok_or_else(|| {
+            invalid("class bears a sys:inherits edge but the bundle omits the ancestor closure")
+        })?;
+        resolve_closure_set(closure, &closure_compiled, instance, schema, database_root)?
+    } else {
+        if node.frame.ancestor_closure.is_some() {
+            return Err(invalid(
+                "class bears no sys:inherits edge but the bundle carries an ancestor closure",
+            ));
+        }
+        vec![class.clone()]
+    };
+
+    // (5) Root-verify every schema read (strict ancestors + property ranges/elements) into a trusted
+    //     node -> rows map.
+    let mut range_map: BTreeMap<Vec<u8>, SubjectRows> = BTreeMap::new();
+    for classification in &node.frame.ranges {
+        let node_iri = std::str::from_utf8(&classification.node)
+            .map_err(|_| invalid("range schema node IRI is not valid UTF-8"))?;
+        let node_compiled = bound_subject_bgp(node_iri)?;
+        let rows =
+            resolve_subject_rows(&classification.schema_bgp, &node_compiled, schema, schema_root)?;
+        if range_map.insert(classification.node.clone(), rows).is_some() {
+            return Err(invalid("bundle carries a duplicate range classification"));
+        }
+    }
+
+    // This node's OWN inheritance-closed natures (for the CALLER's inline/stop assertion).
+    let natures = {
+        let mut nat_reader = VerifyReader {
+            map: &range_map,
+            used: BTreeSet::new(),
+        };
+        closure_natures(&class, &class_rows, &ancestor_set, &mut nat_reader)?
+    };
+
+    // (6/F2-F3) RE-DERIVE the classification; FORBID any injected/unused schema read.
+    let mut reader = VerifyReader {
+        map: &range_map,
+        used: BTreeSet::new(),
+    };
+    let properties =
+        classify_frame(&class, &class_rows, &ancestor_set, &mut reader, allow_subdocument)?;
+    let used_nodes = reader.used;
+    for node_key in range_map.keys() {
+        if !used_nodes.contains(node_key) {
+            return Err(invalid(format!(
+                "bundle carries an unused (injected) range classification for {}",
+                iri_string(node_key)
+            )));
+        }
+    }
+
+    let shape_of: BTreeMap<Vec<u8>, RangeShape> =
+        properties.iter().map(|p| (p.predicate.clone(), p.shape)).collect();
+    let unfold_of: BTreeMap<Vec<u8>, bool> =
+        properties.iter().map(|p| (p.predicate.clone(), p.unfold)).collect();
+
+    // Group present objects by predicate (rdf:type excluded — it binds C).
+    let mut by_predicate: BTreeMap<Vec<u8>, Vec<CanonicalObject>> = BTreeMap::new();
+    for (predicate, object) in &d_rows {
+        if predicate.as_slice() == RDF_TYPE_IRI.as_bytes() {
+            continue;
+        }
+        by_predicate
+            .entry(predicate.clone())
+            .or_default()
+            .push(object.clone());
+    }
+
+    // (No-injection) Every instance predicate must be a frame property.
+    for predicate in by_predicate.keys() {
+        if !shape_of.contains_key(predicate) {
+            return Err(BgpPlanError::ReadDocumentUnknownInstanceProperty {
+                predicate: iri_string(predicate),
+            }
+            .into());
+        }
+    }
+
+    // Index the list-walk sub-proofs by predicate (reject a duplicate).
+    let mut walk_map: BTreeMap<Vec<u8>, &ProvedListProperty> = BTreeMap::new();
+    for list_property in &node.lists {
+        if walk_map
+            .insert(list_property.predicate.clone(), list_property)
+            .is_some()
+        {
+            return Err(invalid("bundle carries a duplicate list-walk sub-proof"));
+        }
+    }
+    let mut used_walks: BTreeSet<Vec<u8>> = BTreeSet::new();
+
+    // Index the link sub-proofs by (predicate, child_id) (reject a duplicate).
+    let mut link_map: BTreeMap<(Vec<u8>, Vec<u8>), &ProvedLink> = BTreeMap::new();
+    for link in &node.links {
+        if link_map
+            .insert((link.predicate.clone(), link.child_id.clone()), link)
+            .is_some()
+        {
+            return Err(invalid("bundle carries a duplicate link sub-proof"));
+        }
+    }
+    let mut used_links: BTreeSet<(Vec<u8>, Vec<u8>)> = BTreeSet::new();
+
+    // Render each present property.
+    let mut rendered: Vec<(Vec<u8>, ResolvedValue)> = Vec::new();
+    for (predicate, objects) in &by_predicate {
+        let shape = *shape_of
+            .get(predicate)
+            .expect("every instance predicate is frame-classified (checked above)");
+        match shape {
+            RangeShape::List => {
+                if objects.len() != 1 {
+                    return Err(BgpPlanError::ReadDocumentMalformedListHead {
+                        predicate: iri_string(predicate),
+                    }
+                    .into());
+                }
+                let list_property = walk_map.get(predicate).copied().ok_or_else(|| {
+                    BgpPlanError::ReadDocumentMalformedListHead {
+                        predicate: iri_string(predicate),
+                    }
+                })?;
+                used_walks.insert(predicate.clone());
+                let walk_compiled = ordered_list_walk_bgp(id.as_bytes(), predicate);
+                let columns =
+                    list_property.walk.verify_and_resolve(&walk_compiled, instance, instance_root)?;
+                let elements = columns.into_iter().next().unwrap_or_default();
+                rendered.push((predicate.clone(), ResolvedValue::List(elements)));
+            }
+            RangeShape::Link => {
+                let unfold = unfold_of.get(predicate).copied().unwrap_or(false);
+                let value = if objects.len() == 1 {
+                    let child_id = match &objects[0] {
+                        CanonicalObject::Node(bytes) => bytes.clone(),
+                        _ => return Err(invalid("class-link object is not a node")),
+                    };
+                    let key = (predicate.clone(), child_id.clone());
+                    let link = *link_map.get(&key).ok_or_else(|| {
+                        invalid(format!(
+                            "bundle is missing the link sub-proof for predicate {} child {}",
+                            iri_string(predicate),
+                            iri_string(&child_id)
+                        ))
+                    })?;
+                    used_links.insert(key);
+                    let child_iri = std::str::from_utf8(&child_id)
+                        .map_err(|_| invalid("link child IRI is not valid UTF-8"))?
+                        .to_string();
+                    match &link.target {
+                        ProvedLinkTarget::Inline(child_node) => {
+                            if visited.contains(&child_id) {
+                                return Err(BgpPlanError::ReadDocumentSubdocumentCycle.into());
+                            }
+                            if depth + 1 > MAX_SUBDOC_DEPTH {
+                                return Err(
+                                    BgpPlanError::ReadDocumentSubdocumentBudgetExceeded.into()
+                                );
+                            }
+                            *node_count += 1;
+                            if *node_count > MAX_SUBDOC_NODES {
+                                return Err(
+                                    BgpPlanError::ReadDocumentSubdocumentBudgetExceeded.into()
+                                );
+                            }
+                            visited.insert(child_id.clone());
+                            let (child_resolved, child_natures) = verify_node(
+                                child_node,
+                                &child_iri,
+                                instance,
+                                schema,
+                                instance_root,
+                                schema_root,
+                                database_root,
+                                /* allow_subdocument */ true,
+                                depth + 1,
+                                visited,
+                                node_count,
+                            )?;
+                            // The prover chose INLINE; force it to be a real subdocument (else it is an
+                            // INJECTED body — the reference would render a bare link id).
+                            if !child_natures.has_subdocument {
+                                return Err(invalid(
+                                    "bundle inlines a non-subdocument link target (injected body)",
+                                ));
+                            }
+                            ResolvedValue::Subdocument(Box::new(child_resolved))
+                        }
+                        ProvedLinkTarget::Stop(witness) => {
+                            let (_child_class, child_natures) = verify_child_witness(
+                                witness,
+                                &child_id,
+                                instance,
+                                schema,
+                                instance_root,
+                                schema_root,
+                                database_root,
+                            )?;
+                            // The prover chose STOP; force the child to NOT be a subdocument (else it is
+                            // an OMISSION — the reference would inline the child's contents).
+                            if child_natures.has_subdocument {
+                                return Err(invalid(
+                                    "bundle stops at a subdocument link target (missing inlined body)",
+                                ));
+                            }
+                            // An `@unfoldable` class or `@unfold` property would be unfolded by the
+                            // reference; we inline only true subdocuments, so reject rather than omit.
+                            if child_natures.has_unfoldable || unfold {
+                                return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+                            }
+                            ResolvedValue::Direct(vec![objects[0].clone()])
+                        }
+                    }
+                } else {
+                    // A single-valued class LINK with MULTIPLE stored objects: v1 inlines only
+                    // single-valued subdocuments, so every object must be a plain (non-subdocument)
+                    // link; render the ids.
+                    for object in objects {
+                        let child_id = match object {
+                            CanonicalObject::Node(bytes) => bytes.clone(),
+                            _ => return Err(invalid("class-link object is not a node")),
+                        };
+                        let key = (predicate.clone(), child_id.clone());
+                        let link = *link_map.get(&key).ok_or_else(|| {
+                            invalid(format!(
+                                "bundle is missing the link sub-proof for predicate {} child {}",
+                                iri_string(predicate),
+                                iri_string(&child_id)
+                            ))
+                        })?;
+                        used_links.insert(key);
+                        match &link.target {
+                            ProvedLinkTarget::Stop(witness) => {
+                                let (_child_class, child_natures) = verify_child_witness(
+                                    witness,
+                                    &child_id,
+                                    instance,
+                                    schema,
+                                    instance_root,
+                                    schema_root,
+                                    database_root,
+                                )?;
+                                if child_natures.has_subdocument {
+                                    return Err(shape_reject("multi-valued-subdocument"));
+                                }
+                                if child_natures.has_unfoldable || unfold {
+                                    return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
+                                }
+                            }
+                            ProvedLinkTarget::Inline(_) => {
+                                return Err(shape_reject("multi-valued-subdocument"));
+                            }
+                        }
+                    }
+                    ResolvedValue::Direct(objects.clone())
+                };
+                rendered.push((predicate.clone(), value));
+            }
+            RangeShape::Scalar | RangeShape::Set => {
+                rendered.push((predicate.clone(), ResolvedValue::Direct(objects.clone())));
+            }
+        }
+    }
+
+    // No injected list walk / link sub-proof (for an absent or wrong-shape predicate/child).
+    for predicate in walk_map.keys() {
+        if !used_walks.contains(predicate) {
+            return Err(BgpPlanError::ReadDocumentMalformedListHead {
+                predicate: iri_string(predicate),
+            }
+            .into());
+        }
+    }
+    for key in link_map.keys() {
+        if !used_links.contains(key) {
+            return Err(invalid(format!(
+                "bundle carries an unused (injected) link sub-proof for predicate {} child {}",
+                iri_string(&key.0),
+                iri_string(&key.1)
+            )));
+        }
+    }
+
+    Ok((
+        ResolvedDocument {
+            id: id.as_bytes().to_vec(),
+            class,
+            properties: rendered,
+        },
+        natures,
+    ))
+}
+
 impl ProvedReadDocument {
-    /// Verify every sub-proof against the trusted combined `database_root`, RE-DERIVE the frame, run
-    /// the completeness / no-injection cross-checks, and render the document. The verifier reconstructs
-    /// every sub-plan from the query `id` + the authenticated frame — it never trusts a
-    /// prover-supplied compiled plan or classification.
+    /// Verify every sub-proof against the trusted combined `database_root`, RE-DERIVE the frame + the
+    /// recursive subdocument tree, run the completeness / no-injection cross-checks, and render the
+    /// document. The verifier reconstructs every sub-plan from the query `id` + the authenticated frame
+    /// at EVERY node — it never trusts a prover-supplied compiled plan, classification, or tree shape.
     ///
     /// TRUST ANCHOR: `database_root` MUST come from a trusted OUT-OF-BAND pin (commit log / signature),
     /// never recomputed from the prover-supplied bundle. See [`ProvedBgp::verify_over_graphs`].
@@ -1063,168 +1887,26 @@ impl ProvedReadDocument {
         let instance_root = instance.verifier_view().state.commitment_root;
         let schema_root = schema.verifier_view().state.commitment_root;
 
-        // (2) The COMPLETE direct triples — reconstruct the plan from the query id (pure function),
-        //     verify over the instance root.
-        let subject_compiled = bound_subject_bgp(&compiled.id)?;
-        let d_rows =
-            resolve_subject_rows(&self.subject_bgp, &subject_compiled, instance, instance_root)?;
-
-        // (3/F0) Derive C from the authenticated rdf:type row (the instance-C == schema-C tie).
-        let class = extract_class(&d_rows)?;
-        let class_iri =
-            std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
-
-        // (4/F1) Reconstruct the frame plan from the DERIVED C; verify over the schema root. This is
-        //         C's OWN direct schema triples.
-        let class_compiled = bound_subject_bgp(class_iri)?;
-        let class_rows =
-            resolve_subject_rows(&self.frame.class_schema, &class_compiled, schema, schema_root)?;
-
-        // (4b/F1b) RE-DERIVE the ancestor set. Whether a closure is required is decided from C's
-        //          COMPLETE, root-authenticated frame — the IDENTICAL decision the prover made: a
-        //          `sys:inherits` edge ⇒ RE-BUILD the closure plan from the DERIVED C and RE-VERIFY it
-        //          against the schema root → the authenticated {C} ∪ ancestors(C); no edge ⇒ C has no
-        //          ancestors and the set is exactly {C}. A prover can neither DROP a genuine closure
-        //          (the authenticated frame demands it) nor INJECT a spurious one (rejected below), and
-        //          cannot shorten the ancestor set (the closure's empty-delta fixpoint proves it is
-        //          complete). This is the frame-completeness pillar.
-        let ancestor_set = if summarize(&class_rows).has_inherits {
-            let closure_compiled = ancestor_closure_bgp(class_iri)?;
-            let closure = self.frame.ancestor_closure.as_ref().ok_or_else(|| {
-                invalid("class bears a sys:inherits edge but the bundle omits the ancestor closure")
-            })?;
-            resolve_closure_set(closure, &closure_compiled, instance, schema, database_root)?
-        } else {
-            if self.frame.ancestor_closure.is_some() {
-                return Err(invalid(
-                    "class bears no sys:inherits edge but the bundle carries an ancestor closure",
-                ));
-            }
-            vec![class.clone()]
-        };
-
-        // (5) Root-verify every range/element AND strict-ancestor sub-proof (plan reconstructed from
-        //     its node IRI, a pure function) into a trusted node -> rows map.
-        let mut range_map: BTreeMap<Vec<u8>, SubjectRows> = BTreeMap::new();
-        for classification in &self.frame.ranges {
-            let node_iri = std::str::from_utf8(&classification.node)
-                .map_err(|_| invalid("range schema node IRI is not valid UTF-8"))?;
-            let node_compiled = bound_subject_bgp(node_iri)?;
-            let rows = resolve_subject_rows(
-                &classification.schema_bgp,
-                &node_compiled,
-                schema,
-                schema_root,
-            )?;
-            if range_map.insert(classification.node.clone(), rows).is_some() {
-                return Err(invalid("bundle carries a duplicate range classification"));
-            }
-        }
-
-        // (6/F2-F3) RE-DERIVE the classification from the authenticated frame + closure + range map.
-        let mut reader = VerifyReader {
-            map: &range_map,
-            used: BTreeSet::new(),
-        };
-        let properties = classify_frame(&class, &class_rows, &ancestor_set, &mut reader)?;
-        let used_nodes = reader.used;
-        // No injected/unused range sub-proof may ride along.
-        for node in range_map.keys() {
-            if !used_nodes.contains(node) {
-                return Err(invalid(format!(
-                    "bundle carries an unused (injected) range classification for {}",
-                    iri_string(node)
-                )));
-            }
-        }
-
-        let shape_of: BTreeMap<Vec<u8>, RangeShape> = properties.into_iter().collect();
-
-        // Group the document's direct objects by predicate (excluding rdf:type — that binds C).
-        let mut by_predicate: BTreeMap<Vec<u8>, Vec<CanonicalObject>> = BTreeMap::new();
-        for (predicate, object) in &d_rows {
-            if predicate.as_slice() == RDF_TYPE_IRI.as_bytes() {
-                continue;
-            }
-            by_predicate
-                .entry(predicate.clone())
-                .or_default()
-                .push(object.clone());
-        }
-
-        // (No-injection) Every instance predicate must be a frame property.
-        for predicate in by_predicate.keys() {
-            if !shape_of.contains_key(predicate) {
-                return Err(BgpPlanError::ReadDocumentUnknownInstanceProperty {
-                    predicate: iri_string(predicate),
-                }
-                .into());
-            }
-        }
-
-        // Index the list-walk sub-proofs by predicate (reject a duplicate).
-        let mut walk_map: BTreeMap<Vec<u8>, &ProvedListProperty> = BTreeMap::new();
-        for list_property in &self.lists {
-            if walk_map
-                .insert(list_property.predicate.clone(), list_property)
-                .is_some()
-            {
-                return Err(invalid("bundle carries a duplicate list-walk sub-proof"));
-            }
-        }
-        let mut used_walks: BTreeSet<Vec<u8>> = BTreeSet::new();
-
-        // Render each present property. LIST → the authenticated ordered walk (exactly one head edge);
-        // everything else → the root-authenticated direct objects.
-        let mut rendered: Vec<(Vec<u8>, ResolvedValue)> = Vec::new();
-        for (predicate, objects) in &by_predicate {
-            let shape = *shape_of
-                .get(predicate)
-                .expect("every instance predicate is frame-classified (checked above)");
-            match shape {
-                RangeShape::List => {
-                    if objects.len() != 1 {
-                        return Err(BgpPlanError::ReadDocumentMalformedListHead {
-                            predicate: iri_string(predicate),
-                        }
-                        .into());
-                    }
-                    let list_property = walk_map.get(predicate).copied().ok_or_else(|| {
-                        BgpPlanError::ReadDocumentMalformedListHead {
-                            predicate: iri_string(predicate),
-                        }
-                    })?;
-                    used_walks.insert(predicate.clone());
-                    let walk_compiled = ordered_list_walk_bgp(compiled.id.as_bytes(), predicate);
-                    let columns = list_property.walk.verify_and_resolve(
-                        &walk_compiled,
-                        instance,
-                        instance_root,
-                    )?;
-                    let elements = columns.into_iter().next().unwrap_or_default();
-                    rendered.push((predicate.clone(), ResolvedValue::List(elements)));
-                }
-                _ => {
-                    rendered.push((predicate.clone(), ResolvedValue::Direct(objects.clone())));
-                }
-            }
-        }
-
-        // No injected list walk (for an absent or non-list predicate).
-        for predicate in walk_map.keys() {
-            if !used_walks.contains(predicate) {
-                return Err(BgpPlanError::ReadDocumentMalformedListHead {
-                    predicate: iri_string(predicate),
-                }
-                .into());
-            }
-        }
-
-        Ok(ResolvedDocument {
-            id: compiled.id.clone().into_bytes(),
-            class,
-            properties: rendered,
-        })
+        // The ROOT node: `visited` seeds with the root id, `node_count` counts the root, and
+        // `allow_subdocument = false` so a subdocument top-level class reject-closes. The budget is the
+        // IDENTICAL one the prover enforced.
+        let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
+        visited.insert(compiled.id.as_bytes().to_vec());
+        let mut node_count = 1usize;
+        let (resolved, _natures) = verify_node(
+            self,
+            &compiled.id,
+            instance,
+            schema,
+            instance_root,
+            schema_root,
+            database_root,
+            /* allow_subdocument */ false,
+            0,
+            &mut visited,
+            &mut node_count,
+        )?;
+        Ok(resolved)
     }
 }
 

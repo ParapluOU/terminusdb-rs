@@ -23,7 +23,8 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::document::ReadDocument;
 use terminusdb_woql2::proof::{
-    plan_read_document, BgpPlanError, CompiledReadDocument, QueryProofError, ResolvedValue,
+    plan_read_document, BgpPlanError, CompiledReadDocument, ProvedLinkTarget, QueryProofError,
+    ResolvedValue,
 };
 use terminusdb_woql2::value::{NodeValue, Value};
 
@@ -41,6 +42,8 @@ const SYS_LIST: &str = "http://terminusdb.com/schema/sys#List";
 const SYS_ARRAY: &str = "http://terminusdb.com/schema/sys#Array";
 const SYS_CLASS_PRED: &str = "http://terminusdb.com/schema/sys#class";
 const SYS_SUBDOC: &str = "http://terminusdb.com/schema/sys#subdocument";
+const SYS_UNFOLDABLE: &str = "http://terminusdb.com/schema/sys#unfoldable";
+const SYS_UNFOLD: &str = "http://terminusdb.com/schema/sys#unfold";
 const SYS_INHERITS: &str = "http://terminusdb.com/schema/sys#inherits";
 const SYS_ONEOF: &str = "http://terminusdb.com/schema/sys#oneOf";
 const SYS_MIN_CARD: &str = "http://terminusdb.com/schema/sys#min_cardinality";
@@ -390,19 +393,21 @@ fn assert_inherited_prove_rejects(
     });
 }
 
+/// The TOP-LEVEL `id`'s OWN class is a subdocument. A subdocument is inlined INTO a parent (increment
+/// 3), never read directly by id, so it reject-closes (the repurposed `ReadDocumentSubdocumentDeferred`
+/// — the old subdocument-RANGE reject was removed because a subdocument range is now inlined per-child).
 #[test]
-fn read_document_rejects_subdocument_range() {
+fn read_document_rejects_top_level_subdocument() {
     assert_prove_rejects(
-        "rd-subdocument",
+        "rd-top-level-subdocument",
         vec![
-            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
-            Fact::Node(iri("C"), iri("child"), iri("Sub")),
-            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
-            Fact::Node(iri("Sub"), SYS_SUBDOC.into(), RDF_NIL.into()),
+            Fact::Node(iri("Meta"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Meta"), SYS_SUBDOC.into(), RDF_NIL.into()),
+            Fact::Node(iri("Meta"), iri("title"), XSD_STRING.into()),
         ],
         vec![
-            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
-            Fact::Node(iri("doc"), iri("child"), iri("kid1")),
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("Meta")),
+            Fact::Str(iri("doc"), iri("title"), "hi".into()),
         ],
         |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentSubdocumentDeferred)),
     );
@@ -810,4 +815,365 @@ fn read_document_inherited_injected_instance_property_fails_verify() {
             "an un-framed instance property must reject as UnknownInstanceProperty, got {err:?}",
         );
     });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Increment 3 — subdocument inlining (recursive).
+//
+// The inline-vs-stop decision is keyed off the CHILD's authenticated `rdf:type` + its `sys:inherits`
+// closure (any class bearing `sys:subdocument` ⇒ inline), never the schema range. Fixtures are kept
+// MINIMAL — every subdocument node is several BGP proofs + (for inheriting classes) a closure.
+// ---------------------------------------------------------------------------------------------------
+
+/// A `C` with a single-valued SUBDOCUMENT property `meta: Meta`. `Meta` (a subdocument) has a scalar
+/// (`title`), an ordered `List` of plain nodes (`points: [Point]`), and a NESTED subdocument
+/// (`inner: Inner`). `Inner` (a subdocument) has a scalar (`label`) — a 2-level nest.
+fn subdoc_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("C"), iri("meta"), iri("Meta")),
+        Fact::Node(iri("Meta"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Meta"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Meta"), iri("title"), XSD_STRING.into()),
+        Fact::Node(iri("Meta"), iri("points"), iri("PointsList")),
+        Fact::Node(iri("Meta"), iri("inner"), iri("Inner")),
+        Fact::Node(iri("PointsList"), RDF_TYPE.into(), SYS_LIST.into()),
+        Fact::Node(iri("PointsList"), SYS_CLASS_PRED.into(), iri("Point")),
+        Fact::Node(iri("Point"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Inner"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Inner"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Inner"), iri("label"), XSD_STRING.into()),
+    ])
+}
+
+fn subdoc_instance() -> Arc<LayerCommitment> {
+    let mut facts = vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Node(iri("doc"), iri("meta"), iri("m1")),
+        Fact::Node(iri("m1"), RDF_TYPE.into(), iri("Meta")),
+        Fact::Str(iri("m1"), iri("title"), "meta-title".into()),
+        Fact::Node(iri("m1"), iri("inner"), iri("in1")),
+        Fact::Node(iri("in1"), RDF_TYPE.into(), iri("Inner")),
+        Fact::Str(iri("in1"), iri("label"), "inner-label".into()),
+    ];
+    // The ONLY cons chain in this fixture (the helper hard-codes `cell0..` ids).
+    cons_chain(&iri("m1"), &iri("points"), &["pa", "pb", "pa"], &mut facts);
+    layer(facts)
+}
+
+/// Headline e2e: a single-valued subdocument `meta` INLINES recursively — a scalar, an ordered list
+/// (order + duplicate preserved), AND a nested subdocument — then two adversarial tampers on the SAME
+/// bundle each fail verify (a tampered NESTED list-walk, and a DROPPED inlined child).
+#[test]
+fn read_document_subdocument_inlining_end_to_end() {
+    on_big_stack("read-document-subdoc-e2e", 1024, || {
+        let instance = subdoc_instance();
+        let schema = subdoc_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        // ---- HAPPY PATH ----
+        let resolved = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+        assert_eq!(resolved.id, iri("doc").into_bytes());
+
+        // `meta` is INLINED (its class Meta bears sys:subdocument).
+        let meta = match resolved.get(&iri("meta")).unwrap() {
+            ResolvedValue::Subdocument(nested) => nested,
+            other => panic!("meta should be a Subdocument, got {other:?}"),
+        };
+        assert_eq!(meta.class, iri("Meta").into_bytes());
+
+        // Nested scalar `title` = Direct.
+        match meta.get(&iri("title")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_value_lexical(&objects[0]), b"meta-title".to_vec());
+            }
+            other => panic!("nested title should be Direct, got {other:?}"),
+        }
+
+        // Nested ordered `List` `points = [pa, pb, pa]` (order + duplicate preserved).
+        match meta.get(&iri("points")).unwrap() {
+            ResolvedValue::List(elements) => {
+                let nodes: Vec<Vec<u8>> = elements.iter().map(as_node).collect();
+                assert_eq!(
+                    nodes,
+                    vec![
+                        iri("pa").into_bytes(),
+                        iri("pb").into_bytes(),
+                        iri("pa").into_bytes()
+                    ],
+                );
+            }
+            other => panic!("nested points should be a List, got {other:?}"),
+        }
+
+        // Second-level nested subdocument `inner`.
+        let inner = match meta.get(&iri("inner")).unwrap() {
+            ResolvedValue::Subdocument(nested) => nested,
+            other => panic!("inner should be a Subdocument, got {other:?}"),
+        };
+        assert_eq!(inner.class, iri("Inner").into_bytes());
+        match inner.get(&iri("label")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_value_lexical(&objects[0]), b"inner-label".to_vec());
+            }
+            other => panic!("deeply-nested label should be Direct, got {other:?}"),
+        }
+
+        // ---- ADVERSARIAL: tamper the NESTED list-walk order → verify fails. ----
+        match &mut bundle.links[0].target {
+            ProvedLinkTarget::Inline(m1) => {
+                m1.lists[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+            }
+            _ => panic!("the meta link should be inlined"),
+        }
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered NESTED list-walk must fail verify",
+        );
+
+        // ---- ADVERSARIAL: DROP the inlined child sub-bundle → verify DEMANDS it, reject-closes. ----
+        bundle.links.clear();
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a dropped inlined child sub-bundle must fail verify",
+        );
+    });
+}
+
+/// A `C` with TWO subdocument links (`meta`, `note`) to `Meta`. Used to exercise the injected /
+/// duplicate link cross-check.
+fn two_subdoc_schema() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("C"), iri("meta"), iri("Meta")),
+        Fact::Node(iri("C"), iri("note"), iri("Meta")),
+        Fact::Node(iri("Meta"), RDF_TYPE.into(), SYS_CLASS.into()),
+        Fact::Node(iri("Meta"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        Fact::Node(iri("Meta"), iri("title"), XSD_STRING.into()),
+    ])
+}
+
+fn two_subdoc_instance() -> Arc<LayerCommitment> {
+    layer(vec![
+        Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+        Fact::Node(iri("doc"), iri("meta"), iri("m1")),
+        Fact::Node(iri("doc"), iri("note"), iri("n1")),
+        Fact::Node(iri("m1"), RDF_TYPE.into(), iri("Meta")),
+        Fact::Str(iri("m1"), iri("title"), "a".into()),
+        Fact::Node(iri("n1"), RDF_TYPE.into(), iri("Meta")),
+        Fact::Str(iri("n1"), iri("title"), "b".into()),
+    ])
+}
+
+/// Inject an un-demanded node sub-bundle: re-key the SECOND inlined child to duplicate the first. The
+/// verifier's per-link cross-check rejects the duplicate/injected sub-bundle (present ⇒ reject).
+#[test]
+fn read_document_subdocument_injected_child_fails_verify() {
+    on_big_stack("read-document-subdoc-injection", 1024, || {
+        let instance = two_subdoc_instance();
+        let schema = two_subdoc_schema();
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        // Sanity: the honest two-subdocument document verifies.
+        bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+        assert_eq!(bundle.links.len(), 2);
+
+        // Re-key the second link onto the first's (predicate, child) → an injected/duplicate sub-bundle.
+        let predicate = bundle.links[0].predicate.clone();
+        let child_id = bundle.links[0].child_id.clone();
+        bundle.links[1].predicate = predicate;
+        bundle.links[1].child_id = child_id;
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "an injected/duplicate link sub-bundle must fail verify",
+        );
+    });
+}
+
+/// A subdocument CYCLE: `m1` (a subdocument) links back to ITSELF via a subdocument-typed property. The
+/// prover reject-closes (`ReadDocumentSubdocumentCycle`) rather than looping.
+#[test]
+fn read_document_subdocument_cycle_rejects() {
+    on_big_stack("read-document-subdoc-cycle", 1024, || {
+        let schema = layer(vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("meta"), iri("Meta")),
+            Fact::Node(iri("Meta"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Meta"), SYS_SUBDOC.into(), RDF_NIL.into()),
+            Fact::Node(iri("Meta"), iri("title"), XSD_STRING.into()),
+            Fact::Node(iri("Meta"), iri("selfref"), iri("Meta")),
+        ]);
+        let instance = layer(vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("meta"), iri("m1")),
+            Fact::Node(iri("m1"), RDF_TYPE.into(), iri("Meta")),
+            Fact::Str(iri("m1"), iri("title"), "x".into()),
+            Fact::Node(iri("m1"), iri("selfref"), iri("m1")),
+        ]);
+        let compiled = compiled_read(&iri("doc"));
+        let err = compiled.prove_on_layers(&*instance, &*schema).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QueryProofError::Plan(BgpPlanError::ReadDocumentSubdocumentCycle)
+            ),
+            "a subdocument cycle must reject (not loop), got {err:?}",
+        );
+    });
+}
+
+/// An over-BUDGET subdocument chain `doc -> n1 -> n2 -> n3 -> n4` (depth 4 > `MAX_SUBDOC_DEPTH`). The
+/// prover reject-closes (`ReadDocumentSubdocumentBudgetExceeded`) rather than truncating the tree.
+#[test]
+fn read_document_subdocument_over_budget_rejects() {
+    on_big_stack("read-document-subdoc-budget", 1024, || {
+        let schema = layer(vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("first"), iri("Node")),
+            Fact::Node(iri("Node"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Node"), SYS_SUBDOC.into(), RDF_NIL.into()),
+            Fact::Node(iri("Node"), iri("next"), iri("Node")),
+        ]);
+        let instance = layer(vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("first"), iri("n1")),
+            Fact::Node(iri("n1"), RDF_TYPE.into(), iri("Node")),
+            Fact::Node(iri("n1"), iri("next"), iri("n2")),
+            Fact::Node(iri("n2"), RDF_TYPE.into(), iri("Node")),
+            Fact::Node(iri("n2"), iri("next"), iri("n3")),
+            Fact::Node(iri("n3"), RDF_TYPE.into(), iri("Node")),
+            Fact::Node(iri("n3"), iri("next"), iri("n4")),
+            Fact::Node(iri("n4"), RDF_TYPE.into(), iri("Node")),
+        ]);
+        let compiled = compiled_read(&iri("doc"));
+        let err = compiled.prove_on_layers(&*instance, &*schema).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QueryProofError::Plan(BgpPlanError::ReadDocumentSubdocumentBudgetExceeded)
+            ),
+            "an over-budget subdocument chain must reject (not truncate), got {err:?}",
+        );
+    });
+}
+
+/// An `@unfoldable` (non-subdocument) LINK target. `get_document(unfold(true))` unfolds it inline;
+/// increment 3 inlines only true subdocuments, so rendering it as a bare link would OMIT content — the
+/// new `ReadDocumentUnfoldableDeferred` reject.
+#[test]
+fn read_document_rejects_unfoldable_link_target() {
+    assert_prove_rejects(
+        "rd-unfoldable-target",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("ref"), iri("Target")),
+            Fact::Node(iri("Target"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Target"), SYS_UNFOLDABLE.into(), RDF_NIL.into()),
+            Fact::Node(iri("Target"), iri("name"), XSD_STRING.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("ref"), iri("t1")),
+            Fact::Node(iri("t1"), RDF_TYPE.into(), iri("Target")),
+        ],
+        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentUnfoldableDeferred)),
+    );
+}
+
+/// An `@unfold` PROPERTY (its frame range node bears `sys:unfold`) whose (non-subdocument) target the
+/// reference would unfold inline. Same `ReadDocumentUnfoldableDeferred` reject.
+#[test]
+fn read_document_rejects_unfold_property() {
+    assert_prove_rejects(
+        "rd-unfold-property",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("ref"), iri("Target")),
+            Fact::Node(iri("Target"), RDF_TYPE.into(), SYS_CLASS.into()),
+            // The property's frame RANGE node bears `sys:unfold` (schema_property_is_unfold).
+            Fact::Node(iri("Target"), SYS_UNFOLD.into(), RDF_NIL.into()),
+            Fact::Node(iri("Target"), iri("name"), XSD_STRING.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("ref"), iri("t1")),
+            Fact::Node(iri("t1"), RDF_TYPE.into(), iri("Target")),
+        ],
+        |err| matches!(err, QueryProofError::Plan(BgpPlanError::ReadDocumentUnfoldableDeferred)),
+    );
+}
+
+/// A `Set`-OF-subdocument element. v1 inlines only single-valued (`Link`) subdocuments; a subdocument
+/// collection element stays reject-closed (`check_element_class`).
+#[test]
+fn read_document_rejects_set_of_subdocument() {
+    assert_prove_rejects(
+        "rd-set-of-subdocument",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("tags"), iri("SubSet")),
+            Fact::Node(iri("SubSet"), RDF_TYPE.into(), SYS_SET.into()),
+            Fact::Node(iri("SubSet"), SYS_CLASS_PRED.into(), iri("Sub")),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("tags"), iri("s1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "subdocument-element"
+            })
+        ),
+    );
+}
+
+/// A `List`-OF-subdocument element — same reject as the `Set` case.
+#[test]
+fn read_document_rejects_list_of_subdocument() {
+    assert_prove_rejects(
+        "rd-list-of-subdocument",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("items"), iri("SubList")),
+            Fact::Node(iri("SubList"), RDF_TYPE.into(), SYS_LIST.into()),
+            Fact::Node(iri("SubList"), SYS_CLASS_PRED.into(), iri("Sub")),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("items"), iri("i1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "subdocument-element"
+            })
+        ),
+    );
 }
