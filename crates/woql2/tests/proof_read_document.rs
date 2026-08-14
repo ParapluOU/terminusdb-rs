@@ -17,9 +17,9 @@ use std::sync::Arc;
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
-use tdb_succinct::TdbDataType;
+use tdb_succinct::{LangString, TdbDataType};
 use terminus_store::proof::commitment::{database_root, LayerCommitment};
-use terminus_store::proof::CanonicalObject;
+use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::document::ReadDocument;
@@ -51,7 +51,12 @@ const SYS_UNFOLD: &str = "http://terminusdb.com/schema/sys#unfold";
 const SYS_INHERITS: &str = "http://terminusdb.com/schema/sys#inherits";
 const SYS_ONEOF: &str = "http://terminusdb.com/schema/sys#oneOf";
 const SYS_MIN_CARD: &str = "http://terminusdb.com/schema/sys#min_cardinality";
+const SYS_MAX_CARD: &str = "http://terminusdb.com/schema/sys#max_cardinality";
+const SYS_CARDINALITY: &str = "http://terminusdb.com/schema/sys#Cardinality";
+const SYS_OPTIONAL: &str = "http://terminusdb.com/schema/sys#Optional";
+const SYS_TAGGED_UNION: &str = "http://terminusdb.com/schema/sys#TaggedUnion";
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 
 // ---------------------------------------------------------------------------------------------------
 // Layer building.
@@ -64,6 +69,11 @@ enum Fact {
     Node(String, String, String),
     Str(String, String, String),
     Index(String, u64),
+    /// A language-tagged literal `t(subject, predicate, "text"@lang)`, seeded as a `LangString` value.
+    /// The third field is the store's GLUED lexical `"lang@text"` (see `make_entry_from_lang_term` in
+    /// store-prolog `value.rs`: `format!("{lang}@{text}")`), so the resolved `CanonicalObject::Value`
+    /// carries BOTH the tag and the text — the fidelity fact behind proving `rdf:langString` as a scalar.
+    Lang(String, String, String),
 }
 
 fn layer(facts: Vec<Fact>) -> Arc<LayerCommitment> {
@@ -79,6 +89,9 @@ fn layer(facts: Vec<Fact>) -> Arc<LayerCommitment> {
                 .unwrap(),
             Fact::Index(cell, index) => builder
                 .add_value_triple(ValueTriple::new_value(cell, SYS_INDEX, u64::make_entry(index)))
+                .unwrap(),
+            Fact::Lang(s, p, glued) => builder
+                .add_value_triple(ValueTriple::new_value(s, p, LangString::make_entry(glued)))
                 .unwrap(),
         }
     }
@@ -556,29 +569,75 @@ fn read_document_rejects_conflicting_inherited_range() {
     );
 }
 
+/// Increment 5: a cardinality-BOUNDED `sys:Set` AND a `sys:Cardinality` descriptor both render EXACTLY
+/// as a SET (json.pl `set(Class,N,M)` / `cardinality(Class,_,_)` both go through `set_list_` +
+/// `list_type_id_predicate_value_`; the bounds are insert-time validation, never rendered). Repurposed
+/// from the old `read_document_rejects_cardinality_bearing_set` reject: both are now PROVABLE as `Set`.
 #[test]
-fn read_document_rejects_cardinality_bearing_set() {
-    assert_prove_rejects(
-        "rd-cardinality-set",
-        vec![
+fn read_document_cardinality_end_to_end() {
+    on_big_stack("read-document-cardinality-e2e", 1024, || {
+        // `tags`: a `sys:Set` WITH a min-cardinality bound (the `set(Class,N,M)` descriptor).
+        // `roles`: a `sys:Cardinality(xsd:string, 1, 1)` — a max-cardinality-ONE choice, which STILL
+        // renders as a (1-element) set, never a bare scalar (`list_type_id_predicate_value_` never
+        // collapses a singleton).
+        let schema = layer(vec![
             Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
             Fact::Node(iri("C"), iri("tags"), iri("BoundedSet")),
             Fact::Node(iri("BoundedSet"), RDF_TYPE.into(), SYS_SET.into()),
             Fact::Node(iri("BoundedSet"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
-            // Presence of a cardinality bound is what distinguishes a `set(Class,N,M)` descriptor.
             Fact::Str(iri("BoundedSet"), SYS_MIN_CARD.into(), "1".into()),
-        ],
-        vec![
+            Fact::Node(iri("C"), iri("roles"), iri("RolesCard")),
+            Fact::Node(iri("RolesCard"), RDF_TYPE.into(), SYS_CARDINALITY.into()),
+            Fact::Node(iri("RolesCard"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            Fact::Str(iri("RolesCard"), SYS_MIN_CARD.into(), "1".into()),
+            Fact::Str(iri("RolesCard"), SYS_MAX_CARD.into(), "1".into()),
+        ]);
+        let instance = layer(vec![
             Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
             Fact::Str(iri("doc"), iri("tags"), "x".into()),
-        ],
-        |err| matches!(
-            err,
-            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
-                shape: "cardinality-set"
-            })
-        ),
-    );
+            Fact::Str(iri("doc"), iri("tags"), "y".into()),
+            Fact::Str(iri("doc"), iri("roles"), "admin".into()),
+        ]);
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        let resolved = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        // Bounded `Set` `tags` — the complete, unordered {"x","y"} multiset (rendered as a `Direct`
+        // set, exactly like an unbounded `Set`).
+        match resolved.get(&iri("tags")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                let mut lexicals: Vec<Vec<u8>> = objects.iter().map(as_value_lexical).collect();
+                lexicals.sort();
+                assert_eq!(lexicals, vec![b"x".to_vec(), b"y".to_vec()]);
+            }
+            other => panic!("tags (bounded set) should be Direct, got {other:?}"),
+        }
+
+        // `Cardinality` `roles` (max=1) — a ONE-element SET (`["admin"]`), NOT a collapsed scalar.
+        match resolved.get(&iri("roles")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                let lexicals: Vec<Vec<u8>> = objects.iter().map(as_value_lexical).collect();
+                assert_eq!(lexicals, vec![b"admin".to_vec()]);
+            }
+            other => panic!("roles (cardinality) should be Direct, got {other:?}"),
+        }
+
+        // ---- ADVERSARIAL: tamper the COMPLETE direct-triple set → verify fails. ----
+        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered cardinality/bounded-set document must fail verify",
+        );
+    });
 }
 
 #[test]
@@ -1608,4 +1667,191 @@ fn read_document_rejects_unfold_array_property() {
             "an @unfold array property must reject closed, got {err:?}",
         );
     });
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Increment 5 — frame edge cases: Optional / Cardinality PROVABLE, langString PROVABLE, oneOf narrowed.
+//
+// `Optional<T>` renders as its element T's descriptor (present ⇒ render, absent ⇒ omit); `sys:Cardinality`
+// and a cardinality-bounded `sys:Set` render exactly as a `Set` (see `read_document_cardinality_end_to_end`
+// above); `rdf:langString` renders as a scalar carrying the tag in its glued lexical; `sys:oneOf` /
+// tagged-union / enum reject-close (the choice properties live outside the direct frame BGP).
+// ---------------------------------------------------------------------------------------------------
+
+/// `sys:Optional<T>` renders as its element T's descriptor — PRESENT ⇒ render, ABSENT ⇒ omit
+/// (render-what's-stored, never `null`-filled). `nick: Optional<xsd:string>` (present) → a `Scalar`;
+/// `mgr: Optional<Person>` (present) → a single-valued plain LINK id; `note: Optional<xsd:string>`
+/// (DECLARED in the frame but absent in the instance) → omitted entirely.
+#[test]
+fn read_document_optional_end_to_end() {
+    on_big_stack("read-document-optional-e2e", 1024, || {
+        let schema = layer(vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("nick"), iri("OptNick")),
+            Fact::Node(iri("OptNick"), RDF_TYPE.into(), SYS_OPTIONAL.into()),
+            Fact::Node(iri("OptNick"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            Fact::Node(iri("C"), iri("mgr"), iri("OptMgr")),
+            Fact::Node(iri("OptMgr"), RDF_TYPE.into(), SYS_OPTIONAL.into()),
+            Fact::Node(iri("OptMgr"), SYS_CLASS_PRED.into(), iri("Person")),
+            Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
+            // Declared but absent below → must be omitted from the rendered document.
+            Fact::Node(iri("C"), iri("note"), iri("OptNote")),
+            Fact::Node(iri("OptNote"), RDF_TYPE.into(), SYS_OPTIONAL.into()),
+            Fact::Node(iri("OptNote"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+        ]);
+        let instance = layer(vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Str(iri("doc"), iri("nick"), "nick1".into()),
+            Fact::Node(iri("doc"), iri("mgr"), iri("person1")),
+            // `note` is ABSENT.
+        ]);
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        let resolved = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        // Present Optional<xsd:string> → Scalar (the single stored literal).
+        match resolved.get(&iri("nick")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_value_lexical(&objects[0]), b"nick1".to_vec());
+            }
+            other => panic!("nick (present optional scalar) should be Direct, got {other:?}"),
+        }
+        // Present Optional<Person> → single-valued plain LINK id (person1 is a typeless dangling target).
+        match resolved.get(&iri("mgr")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                assert_eq!(as_node(&objects[0]), iri("person1").into_bytes());
+            }
+            other => panic!("mgr (present optional link) should be Direct, got {other:?}"),
+        }
+        // Absent Optional → OMITTED (the faithful render-what's-stored semantics).
+        assert!(
+            resolved.get(&iri("note")).is_none(),
+            "an absent optional property must be omitted from the rendered document",
+        );
+
+        // ---- ADVERSARIAL: tamper the COMPLETE direct-triple set → verify fails. ----
+        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered optional document must fail verify",
+        );
+    });
+}
+
+/// `rdf:langString` renders as a SCALAR. A language-tagged literal is stored as a `LangString` value
+/// whose lexical is the store's GLUED `"lang@text"` (`make_entry_from_lang_term`), so the resolved
+/// `CanonicalObject::Value` carries datatype `LangString` + lexical `b"en@hello"` — BOTH the language tag
+/// AND the text are recoverable (faithful to json.pl's `{'@value': text, '@lang': lang}` base_class
+/// clause). This is the empirical confirmation of the fidelity assessment behind accepting langString.
+#[test]
+fn read_document_langstring_end_to_end() {
+    on_big_stack("read-document-langstring-e2e", 1024, || {
+        let schema = layer(vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("greeting"), RDF_LANGSTRING.into()),
+        ]);
+        let instance = layer(vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            // `"hello"@en` — the store glues it as "en@hello" (lang, '@', text).
+            Fact::Lang(iri("doc"), iri("greeting"), "en@hello".into()),
+        ]);
+        let db_root = database_root(
+            &instance.state.commitment_root,
+            &schema.state.commitment_root,
+        );
+        let compiled = compiled_read(&iri("doc"));
+        let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
+
+        let resolved = bundle
+            .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+            .unwrap();
+
+        match resolved.get(&iri("greeting")).unwrap() {
+            ResolvedValue::Direct(objects) => {
+                assert_eq!(objects.len(), 1);
+                match &objects[0] {
+                    CanonicalObject::Value { datatype, lexical } => {
+                        assert_eq!(*datatype, CanonicalDatatype::LangString);
+                        // The glued lexical carries the tag AND the text — both recoverable.
+                        assert_eq!(lexical, &b"en@hello".to_vec());
+                    }
+                    other => panic!("greeting should be a langString Value, got {other:?}"),
+                }
+            }
+            other => panic!("greeting (langString) should be Direct, got {other:?}"),
+        }
+
+        // ---- ADVERSARIAL: tamper the langString value → verify fails. ----
+        bundle.subject_bgp.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a tampered langString value must fail verify",
+        );
+    });
+}
+
+/// A top-level `sys:TaggedUnion` document CLASS. A tagged union holds its alternative "choice" properties
+/// as direct predicates but is NOT a `sys:Class`, and rendering a choice faithfully (the "exactly one
+/// present" semantics) is a separate effort — so v1 reject-closes with a precise `tagged-union-or-enum-class`
+/// error (checked BEFORE the generic `class-not-sys-class` guard).
+#[test]
+fn read_document_rejects_top_level_tagged_union() {
+    assert_prove_rejects(
+        "rd-top-level-tagged-union",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_TAGGED_UNION.into()),
+            Fact::Node(iri("C"), iri("a"), XSD_STRING.into()),
+            Fact::Node(iri("C"), iri("b"), XSD_STRING.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Str(iri("doc"), iri("a"), "hi".into()),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "tagged-union-or-enum-class"
+            })
+        ),
+    );
+}
+
+/// An `Optional`-OF-SUBDOCUMENT element reject-closes at classification (the same `check_element_class`
+/// gate the collection paths use) — v1 does not resolve a subdocument under an Optional wrapper.
+#[test]
+fn read_document_rejects_optional_of_subdocument() {
+    assert_prove_rejects(
+        "rd-optional-of-subdocument",
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("meta"), iri("OptMeta")),
+            Fact::Node(iri("OptMeta"), RDF_TYPE.into(), SYS_OPTIONAL.into()),
+            Fact::Node(iri("OptMeta"), SYS_CLASS_PRED.into(), iri("Sub")),
+            Fact::Node(iri("Sub"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Sub"), SYS_SUBDOC.into(), RDF_NIL.into()),
+        ],
+        vec![
+            Fact::Node(iri("doc"), RDF_TYPE.into(), iri("C")),
+            Fact::Node(iri("doc"), iri("meta"), iri("s1")),
+        ],
+        |err| matches!(
+            err,
+            QueryProofError::Plan(BgpPlanError::ReadDocumentUnsupportedPropertyShape {
+                shape: "subdocument-element"
+            })
+        ),
+    );
 }

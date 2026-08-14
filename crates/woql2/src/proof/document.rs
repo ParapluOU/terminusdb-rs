@@ -58,17 +58,25 @@
 //! ## Scope / reject boundary
 //!
 //! Accept a bound-node `id` whose class is a plain `sys:Class` — WITH OR WITHOUT single- or
-//! multi-level `sys:inherits` — and whose effective (inherited-union) properties are scalar, link
-//! (non-subdocument), `Set` (no cardinality), or `List` (non-subdocument element). Reject-close:
-//! variable id; subdocument / array / optional / cardinality / oneOf / enum / table range;
-//! `rdf:langString`; an instance property absent from the (inherited) frame; a list property with != 1
-//! head edge; a conflicting inherited range (the same predicate declared with two different ranges up
-//! the chain); ANY inheritance-closed subdocument nature or ANY tagged-union/`sys:oneOf`/enum nature
-//! anywhere in the ancestor chain (fail-closed: subdocument-ness IS inheritance-closed, and the
-//! oneOf-choice properties of a tagged-union ancestor are not enumerable by the direct frame BGP, so
-//! we refuse rather than risk omitting them). A LINK/ELEMENT target class that itself inherits still
-//! reject-closes (its inherited subdocument-ness is not ruled out — a separate, larger effort).
-//! Compiler-only; nothing under `terminusdb-store-paraplu` changes.
+//! multi-level `sys:inherits` — and whose effective (inherited-union) properties are scalar (INCLUDING
+//! `rdf:langString`), link (non-subdocument), `Set` (with OR without cardinality bounds), `Cardinality`,
+//! `Optional` (of a base type or plain simple class), `List` (non-subdocument element), or 1-D dense
+//! `Array`. Increment 5 made `Optional`, `Cardinality`/bounded-`Set`, and `rdf:langString` PROVABLE:
+//!   * `Optional<T>` renders as its element T's descriptor (Scalar for a base type, Link for a plain
+//!     class) — present ⇒ render, absent ⇒ omit (render-what's-stored);
+//!   * `sys:Cardinality` and a cardinality-bounded `sys:Set` render exactly as the existing `Set` (the
+//!     bounds are insert-time validation, never rendered);
+//!   * `rdf:langString` renders as a scalar — the language tag survives in the authenticated value's
+//!     glued `"lang@text"` lexical.
+//! Reject-close: variable id; subdocument / table range; `sys:oneOf` / tagged-union / enum (a choice
+//! class's alternative properties live outside the direct frame BGP — refuse rather than omit them);
+//! multi-dimensional or sparse array; an `Optional`/collection element that is subdocument / unfoldable /
+//! inheriting / a nested collection; an instance property absent from the (inherited) frame; a list
+//! property with != 1 head edge; a conflicting inherited range (the same predicate declared with two
+//! different ranges up the chain); ANY inheritance-closed subdocument nature or ANY
+//! tagged-union/`sys:oneOf`/enum nature anywhere in the ancestor chain (fail-closed). A LINK/ELEMENT
+//! target class that itself inherits still reject-closes (its inherited subdocument-ness is not ruled out
+//! — a separate, larger effort). Compiler-only; nothing under `terminusdb-store-paraplu` changes.
 
 use super::*;
 
@@ -110,8 +118,6 @@ const SYS_SUBDOCUMENT: &str = "http://terminusdb.com/schema/sys#subdocument";
 const SYS_UNFOLDABLE: &str = "http://terminusdb.com/schema/sys#unfoldable";
 const SYS_UNFOLD: &str = "http://terminusdb.com/schema/sys#unfold";
 const SYS_ONEOF: &str = "http://terminusdb.com/schema/sys#oneOf";
-const SYS_MIN_CARDINALITY: &str = "http://terminusdb.com/schema/sys#min_cardinality";
-const SYS_MAX_CARDINALITY: &str = "http://terminusdb.com/schema/sys#max_cardinality";
 
 /// The `is_built_in/1` predicate exclusion list (`schema.pl:611-631`). Properties with these
 /// predicates are schema plumbing, never document body fields; they are dropped from the frame's
@@ -196,8 +202,11 @@ const BASE_TYPES: &[&str] = &[
     "http://www.w3.org/2001/XMLSchema#ENTITY",
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral",
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#PlainLiteral",
-    // `rdf:langString` is a base type but v1 reject-closes it (a language-tagged literal needs a
-    // fidelity pass) — see `RDF_LANGSTRING` handling in `classify_range`.
+    // `rdf:langString` is a base type and (increment 5) IS accepted as a SCALAR: a language-tagged
+    // literal round-trips through the authenticated value dictionary as a single
+    // `CanonicalObject::Value { datatype: LangString, lexical }` whose lexical is the store's glued
+    // `"lang@text"` (`make_entry_from_lang_term`; `LangString` is a `stringy_type` storing raw bytes like
+    // `xsd:string`), so BOTH the text AND the language tag are recoverable — see `classify_range`.
     RDF_LANGSTRING,
     "http://www.w3.org/2000/01/rdf-schema#Literal",
     "http://terminusdb.com/schema/xdd#coordinate",
@@ -781,8 +790,6 @@ struct NodeInfo {
     /// reject as `@unfoldable`.
     has_unfold: bool,
     has_inherits: bool,
-    has_min_cardinality: bool,
-    has_max_cardinality: bool,
     has_oneof: bool,
 }
 
@@ -848,10 +855,6 @@ fn summarize(rows: &SubjectRows) -> NodeInfo {
             info.has_unfold = true;
         } else if predicate == SYS_INHERITS_IRI.as_bytes() {
             info.has_inherits = true;
-        } else if predicate == SYS_MIN_CARDINALITY.as_bytes() {
-            info.has_min_cardinality = true;
-        } else if predicate == SYS_MAX_CARDINALITY.as_bytes() {
-            info.has_max_cardinality = true;
         } else if predicate == SYS_ONEOF.as_bytes() {
             info.has_oneof = true;
         }
@@ -869,12 +872,14 @@ fn classify_range(
         CanonicalObject::Node(bytes) => bytes.as_slice(),
         _ => return Err(shape_reject("non-node-range")),
     };
-    // `rdf:langString` is a base type but v1 reject-closes it (language-tagged literals need a
-    // fidelity pass).
-    if range_iri == RDF_LANGSTRING.as_bytes() {
-        return Err(shape_reject("lang-string"));
-    }
-    // A base type is a primitive with no schema triples → SCALAR (no schema read needed).
+    // A base type is a primitive with no schema triples → SCALAR (no schema read needed). This now
+    // INCLUDES `rdf:langString` (increment 5): a language-tagged literal round-trips as a single
+    // `CanonicalObject::Value { datatype: LangString, lexical }` whose lexical is the store's glued
+    // `"lang@text"` (`make_entry_from_lang_term`, store-prolog value.rs; `LangString` is a `stringy_type`
+    // storing raw bytes exactly like `xsd:string`, which the flat-scalar path already proves round-trips
+    // intact). Both the text AND the language tag are recoverable from the authenticated lexical, so the
+    // scalar render is FAITHFUL to json.pl's `{'@value': text, '@lang': lang}` (base_class `Elt = X@L`
+    // clause, json.pl:2506) — the tag is carried in the value, not dropped.
     if is_base_type(range_iri) {
         return Ok(RangeShape::Scalar);
     }
@@ -928,9 +933,12 @@ fn classify_range(
         return Ok(RangeShape::Array);
     }
     if info.has_type(SYS_SET) {
-        if info.has_min_cardinality || info.has_max_cardinality {
-            return Err(shape_reject("cardinality-set"));
-        }
+        // INCREMENT 5: a `sys:Set` — WITH or WITHOUT cardinality bounds — renders as a SET. The server's
+        // `set(Class,N,M)` (bounded) and `set(Class)` (unbounded) descriptors render IDENTICALLY: both go
+        // through `set_list_` + `list_type_id_predicate_value_` (json.pl:2453-2460), one rendered value
+        // per stored element. The `min`/`max_cardinality` are INSERT-TIME validation and never reach the
+        // rendered document, so the existing `Set` render is faithful for a bounded set too. (The old
+        // `cardinality-set` reject is removed — under-covering it was safe, but the render IS faithful.)
         let element = info
             .sys_class
             .as_ref()
@@ -950,10 +958,51 @@ fn classify_range(
         return Err(shape_reject("table"));
     }
     if info.has_type(SYS_CARDINALITY) {
-        return Err(shape_reject("cardinality"));
+        // INCREMENT 5: `sys:Cardinality(T, min, max)` renders EXACTLY as a SET. The server's
+        // `type_id_predicate_iri_value_(cardinality(C,_,_),…)` (json.pl:2461) reads ALL objects via
+        // `set_list_` and renders them with `list_type_id_predicate_value_` (one value per element, with
+        // NO singleton collapse — a `max_cardinality == 1` still renders a 1-element array, not a scalar),
+        // identical to a plain `Set`. The min/max bounds are insert-time cardinality validation, NOT part
+        // of the rendered output. So a Cardinality of a `check_element_class`-clean element is the existing
+        // `Set` render — faithful. (We do NOT enforce min-cardinality presence: render-what's-stored, an
+        // absent property is omitted, never synthesised.)
+        let element = info
+            .sys_class
+            .as_ref()
+            .ok_or_else(|| shape_reject("cardinality-without-class"))?;
+        check_element_class(element, reader)?;
+        return Ok(RangeShape::Set);
     }
     if info.has_type(SYS_OPTIONAL) {
-        return Err(shape_reject("optional"));
+        // INCREMENT 5: `sys:Optional<T>` renders EXACTLY as its element T's descriptor. The server's
+        // `type_id_predicate_iri_value_(optional(C),…)` (json.pl:2489) UNWRAPS the Optional and renders
+        // the single stored value AS `schema_type_descriptor(C)` — the Optional adds NO container. PRESENT
+        // ⇒ the single value is rendered; ABSENT ⇒ there is no instance triple, so the property never
+        // enters the complete bound-subject rows and is omitted (render-what's-stored: an absent optional
+        // is dropped, never `null`-filled). v1 accepts a `check_element_class`-clean element:
+        //   * a BASE TYPE renders as a SCALAR (the single stored literal);
+        //   * a plain (non-subdocument, non-inheriting) SIMPLE CLASS renders as a single-valued LINK — the
+        //     existing per-child inline/stop path, so an Optional whose ACTUAL object is a subdocument
+        //     subclass still inlines faithfully, and a plain-link target renders its id.
+        // A subdocument / unfoldable / inheriting / collection element reject-closes in
+        // `check_element_class` (v1 does not resolve those under an Optional wrapper — under-covering,
+        // never an unfaithful accept).
+        let element = info
+            .sys_class
+            .as_ref()
+            .ok_or_else(|| shape_reject("optional-without-class"))?;
+        check_element_class(element, reader)?;
+        let element_iri = match element {
+            CanonicalObject::Node(bytes) => bytes.as_slice(),
+            // `check_element_class` already rejected a non-node element; fail-closed defensively.
+            _ => return Err(shape_reject("non-node-element")),
+        };
+        // Optional<base type> ⇒ SCALAR; Optional<simple class> ⇒ LINK (per-child inline/stop).
+        return Ok(if is_base_type(element_iri) {
+            RangeShape::Scalar
+        } else {
+            RangeShape::Link
+        });
     }
     if info.has_type(SYS_ENUM) {
         return Err(shape_reject("enum"));
@@ -985,9 +1034,9 @@ fn check_element_class(
         CanonicalObject::Node(bytes) => bytes.as_slice(),
         _ => return Err(shape_reject("non-node-element")),
     };
-    if element_iri == RDF_LANGSTRING.as_bytes() {
-        return Err(shape_reject("lang-string-element"));
-    }
+    // `rdf:langString` is a base type (increment 5 — see `classify_range`): a langString collection
+    // element round-trips as a faithful langString scalar (datatype + glued `"lang@text"` lexical), so
+    // there is no special element reject.
     if is_base_type(element_iri) {
         return Ok(());
     }
@@ -1053,11 +1102,23 @@ fn collect_class_frame(
     allow_subdocument: bool,
 ) -> Result<(), QueryProofError> {
     let info = summarize(rows);
-    if !info.has_type(SYS_CLASS_TYPE) {
-        return Err(shape_reject("class-not-sys-class"));
-    }
+    // ONEOF / TAGGED-UNION NARROWING (increment 5, fail-closed). A choice class carries its alternative
+    // "choice" properties in a place the direct `Triple(K, ?p, ?r)` frame BGP does NOT enumerate, so
+    // rendering `K` from its direct properties alone would silently OMIT the choice properties:
+    //   * a `sys:TaggedUnion` CLASS (`rdf:type sys:TaggedUnion`) holds the choice properties as its own
+    //     direct predicates, but is not a `sys:Class`, so `is_simple_class`/link/inheritance handling
+    //     would diverge — refuse it (checked BEFORE the sys:Class requirement so it gives a precise
+    //     error, not the generic `class-not-sys-class`);
+    //   * a plain `sys:Class` bearing a `sys:oneOf` GROUP node holds the choice properties on the SEPARATE
+    //     group node (`t(K, sys:oneOf, R)`, `t(R, choiceProp, Range)` — `schema_class_predicate_oneof`,
+    //     schema.pl:322-326) that the direct BGP never reads — refuse it too.
+    // Reading the choice group faithfully (multiple groups, per-choice ranges, the "exactly one present"
+    // semantics) is a larger, separately-audited effort; v1 reject-closes rather than risk an omission.
     if info.has_type(SYS_TAGGED_UNION) || info.has_type(SYS_ENUM) {
         return Err(shape_reject("tagged-union-or-enum-class"));
+    }
+    if !info.has_type(SYS_CLASS_TYPE) {
+        return Err(shape_reject("class-not-sys-class"));
     }
     if info.has_oneof {
         return Err(shape_reject("tagged-union"));
