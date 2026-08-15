@@ -9672,6 +9672,224 @@ fn path_times_two_two_soundness_negatives() {
     assert!(tampered.verify(&compiled, &layer, root).is_err());
 }
 
+// ============================================================================
+// MIXED-PREDICATE finite repeat (P5a): `(p/q)^n` unrolls to a chain p,q,p,q,...
+// whose hops are NOT all the same predicate. The partitioned `TupleDisequality`
+// constrains ONLY same-predicate hop-pairs (a different-predicate pair is always
+// a distinct stored edge), so a same-predicate edge reuse is dropped exactly as
+// in the single-predicate case, per shared predicate — faithful to `path.pl`'s
+// edge-simple `Open_Set` semantics.
+// ============================================================================
+
+/// Mixed-predicate fixture for `(p/q)^2`: a valid 4-distinct-edge walk
+/// a-p->b-q->c-p->d-q->e, PLUS a q-shortcut `b -q-> a` whose only continuations must REUSE the
+/// stored p-edge `(a, p, b)`. So the edge-simple result is exactly `{e}` while a plain bag over-counts.
+fn mixed_pq_layer() -> Arc<LayerCommitment> {
+    build_layer(&[
+        ("a", "p", "b"),
+        ("c", "p", "d"),
+        ("b", "q", "c"),
+        ("d", "q", "e"),
+        ("b", "q", "a"),
+    ])
+}
+
+/// `path(subject, (p/q)^{from..to}, object)` — a `Times` over the 2-hop DISTINCT-predicate
+/// sequence `p/q`, so each repetition contributes one `p` hop and one `q` hop (a mixed repeat).
+fn pq_times_path(subject: Value, from: u64, to: u64, object: Value) -> Query {
+    Query::Path(Path {
+        subject,
+        pattern: PathPattern::Times(PathTimes {
+            times: Box::new(PathPattern::Sequence(PathSequence {
+                sequence: vec![path_predicate("p"), path_predicate("q")],
+            })),
+            from,
+            to,
+        }),
+        object,
+        path: None,
+    })
+}
+
+#[test]
+fn path_mixed_predicate_two_fold_drops_same_predicate_edge_reuse() {
+    // `path(a, (p/q)^2, ?o)` over {p:(a,b),(c,d); q:(b,c),(d,e),(b,a)}. The chain p,q,p,q from a:
+    //   a-p->b-q->c-p->d-q->e   (all 4 edges distinct)          -> o=e  KEPT
+    //   a-p->b-q->a-p->b-q->c   (reuses stored p-edge (a,p,b))  -> o=c  DROPPED by the p-pair
+    //   a-p->b-q->a-p->b-q->a   (reuses (a,p,b) and (b,q,a))    -> o=a  DROPPED
+    // Both p-hops are FORWARD, so the stored-edge disequality is byte-for-byte path.pl's
+    // path-direction edge. Edge-simple (partitioned disequality) result = exactly {e}.
+    let layer = mixed_pq_layer();
+    let root = layer.state.commitment_root;
+
+    let compiled = plan_bgp(&pq_times_path(
+        Value::Node(iri("a")),
+        2,
+        2,
+        Value::Variable("o".into()),
+    ))
+    .unwrap();
+    assert_eq!(compiled.relation.schema, ["o"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(
+        proof.result_len, 1,
+        "the same-predicate p-edge reuse walks are dropped"
+    );
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(join_rows(&values), vec![vec![iri("e")]]);
+
+    // Envelope round-trips and re-verifies.
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+#[test]
+fn path_mixed_predicate_two_fold_soundness_negatives() {
+    let layer = mixed_pq_layer();
+    let root = layer.state.commitment_root;
+    let compiled = plan_bgp(&pq_times_path(
+        Value::Node(iri("a")),
+        2,
+        2,
+        Value::Variable("o".into()),
+    ))
+    .unwrap();
+    let proof = compiled.prove(&layer).unwrap();
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+
+    // (a) The PLAIN p,q,p,q bag-join (no edge-simple filter) OVER-COUNTS: 3 walks from a (including
+    // the two that reuse stored p-edge (a,p,b)) vs the path's 1 — the exact over-count the
+    // partitioned TupleDisequality removes.
+    let plain = plan_bgp(&and_of(vec![
+        tv_subj_const("a", "p", "m1"),
+        tv("m1", "q", "m2"),
+        tv("m2", "p", "m3"),
+        tv("m3", "q", "o"),
+    ]))
+    .unwrap();
+    let plain_proof = plain.prove(&layer).unwrap();
+    assert_eq!(plain_proof.result_len, 3);
+    assert!(plain_proof.result_len > proof.result_len);
+
+    // (b) The disequality envelope cannot be re-verified as the plain join (the filter is bound
+    // into the plan/digest and the result shape).
+    assert!(decode_and_verify_envelope(&envelope, &plain, &layer, root).is_err());
+
+    // (c) A tampered result (claiming a dropped same-predicate-reuse row survived) fails.
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_len += 1;
+    assert!(tampered.verify(&compiled, &layer, root).is_err());
+}
+
+// ============================================================================
+// MIXED-ORIENTATION same-predicate repeat (P5a): a chain that reuses ONE predicate `p` in BOTH a
+// forward `p` hop and an inverse `n(p)` hop. `path.pl`'s edge-simple `Open_Set` keys on the
+// WALK-directed step `make_edge(walk-from, p, walk-to)`, NOT the stored triple, so the edge-simple
+// disequality must fingerprint each hop by its WALK edge. A forward hop stores `(walk-from, p,
+// walk-to)` (walk == stored) while an inverse hop stores `(walk-to, p, walk-from)` (walk == stored
+// REVERSED). Fingerprinting by the stored orientation is UNSOUND (case 1: certifies a walk `path.pl`
+// rejects) and INCOMPLETE (case 2: drops a walk `path.pl` keeps). These two tests pin both directions
+// of the fix against `path.pl` ground truth.
+// ============================================================================
+
+/// `path(<a>, Sequence(hops), ?object)` — a bound `a` source, a variable object, and an explicit hop
+/// list (each hop a `Predicate`/`InversePredicate` `PathPattern`).
+fn seq_from_a(hops: Vec<PathPattern>, object: &str) -> Query {
+    Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Sequence(PathSequence { sequence: hops }),
+        object: Value::Variable(object.into()),
+        path: None,
+    })
+}
+
+#[test]
+fn path_forward_inverse_same_predicate_soundness_empty() {
+    // SOUNDNESS (the P5a hole). `path(a, (p / r / n(p)), ?o)` over {(a,p,b),(b,r,a),(b,p,a)}.
+    // The join threads a-p->b-r->a and then the inverse p-hop from a: stored (o, p, a) matches
+    // (b,p,a) -> o=b, a single join row {h0=b, h1=a, o=b}. But in WALK space the forward p-hop's edge
+    // is (a -> b) and the inverse p-hop's edge is ALSO (a -> b) (walk-from a, walk-to b), so the two
+    // p-hops reuse the SAME walk edge -> `path.pl`'s `in_open_set` fires -> {} (empty). The
+    // walk-oriented disequality drops the row (Δ=0); a STORED-orientation fingerprint would keep it
+    // (stored (a,b) vs (b,a) differ) and CERTIFY the non-solution {o=b}. Correct result: {}.
+    let layer = build_layer(&[("a", "p", "b"), ("b", "r", "a"), ("b", "p", "a")]);
+    let root = layer.state.commitment_root;
+
+    let compiled = plan_bgp(&seq_from_a(
+        vec![path_predicate("p"), path_predicate("r"), path_inverse("p")],
+        "o",
+    ))
+    .unwrap();
+    assert_eq!(compiled.relation.schema, ["o"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(
+        proof.result_len, 0,
+        "both p-hops share the walk edge (a,p,b), so path.pl fails -> empty"
+    );
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert!(
+        join_rows(&values).is_empty(),
+        "the spurious {{o=b}} row (kept only under stored-orientation fingerprints) is not certified"
+    );
+
+    // Envelope round-trips and re-verifies (as the empty result).
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+
+    // SOUNDNESS-NEGATIVES — a prover cannot certify the spurious {o=b} row.
+    // (a) The PLAIN join (no edge-simple filter) OVER-COUNTS: it returns the 1 spurious walk from a
+    // (the stored inverse hop is Triple(?o, p, ?m1)) vs the path's 0.
+    let plain = plan_bgp(&and_of(vec![
+        tv_subj_const("a", "p", "m0"),
+        tv("m0", "r", "m1"),
+        tv("o", "p", "m1"),
+    ]))
+    .unwrap();
+    let plain_proof = plain.prove(&layer).unwrap();
+    assert_eq!(plain_proof.result_len, 1, "the plain join keeps the walk-edge-reusing row");
+    assert!(plain_proof.result_len > proof.result_len);
+
+    // (b) The disequality envelope cannot be re-verified as the plain join (the filter is bound into
+    // the plan/digest and the result shape).
+    assert!(decode_and_verify_envelope(&envelope, &plain, &layer, root).is_err());
+
+    // (c) A tampered result (claiming the dropped spurious row survived) fails.
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_len += 1;
+    assert!(tampered.verify(&compiled, &layer, root).is_err());
+}
+
+#[test]
+fn path_forward_inverse_same_predicate_completeness_keeps_valid() {
+    // COMPLETENESS (a pre-existing bug the SAME fix closes). `path(a, (p / n(p)), ?o)` over
+    // {(a,p,b)}. The join a-p->b then the inverse p-hop from b: stored (o, p, b) matches (a,p,b) ->
+    // o=a, a single row {h0=b, o=a}. In WALK space the forward p-hop's edge is (a -> b) and the
+    // inverse p-hop's edge is (b -> a) — DIFFERENT walk edges — so `path.pl` KEEPS the solution
+    // {o=a}. A STORED-orientation fingerprint would see both hops' stored (a,p,b) as EQUAL and
+    // wrongly DROP the row. Correct result: {o=a}. (The `(c,q,d)` edge is disjoint — different
+    // predicate and nodes — so it never joins the p/n(p) chain; it only pads the layer to the
+    // proof system's >= 2-row minimum.)
+    let layer = build_layer(&[("a", "p", "b"), ("c", "q", "d")]);
+    let root = layer.state.commitment_root;
+
+    let compiled = plan_bgp(&seq_from_a(vec![path_predicate("p"), path_inverse("p")], "o")).unwrap();
+    assert_eq!(compiled.relation.schema, ["o"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(
+        proof.result_len, 1,
+        "walk edges (a,b) and (b,a) differ, so the o=a solution is KEPT"
+    );
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(join_rows(&values), vec![vec![iri("a")]]);
+
+    // Envelope round-trips and re-verifies.
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
 // ===================================================================================================
 // SCHEMA-GRAPH FOUNDATION — `Subsumption` proved+verified over a REAL committed schema layer, driven
 // end-to-end through the two-layer entry `CompiledBgp::prove_on_layers` and anchored to the combined

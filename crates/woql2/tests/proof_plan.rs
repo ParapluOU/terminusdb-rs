@@ -2993,10 +2993,27 @@ fn path_times_range_two_three_is_bag_union_of_filtered_chains() {
     }
 }
 
+/// The number of disequality pairs a correct per-predicate partition must emit for the join chain
+/// underlying a deferred repeated-predicate path: `Σ_p C(count_p, 2)`, where `count_p` is the
+/// number of hops (atoms) using predicate `p`. Derives the expectation from the ACTUAL compiled
+/// join (counting atoms by their predicate IRI bytes), so it is naming-independent and rejects both
+/// a full `C(n,2)` (cross-predicate) fold and a zero-constraint bug.
+fn expected_partitioned_pair_count(bgp_input: &CompiledRelation) -> usize {
+    let plan = bgp_input
+        .as_bgp()
+        .expect("a deferred repeated-predicate chain compiles to a leaf BGP");
+    let mut counts: std::collections::BTreeMap<Vec<u8>, usize> = std::collections::BTreeMap::new();
+    for atom in &plan.atoms {
+        *counts.entry(atom.predicate_term.clone()).or_insert(0) += 1;
+    }
+    counts.values().map(|c| c * (c - 1) / 2).sum()
+}
+
 #[test]
-fn rejects_path_mixed_predicate_repeat() {
-    // `knows, likes, knows` repeats `knows` but is MIXED-predicate: the predicate id must be
-    // folded into the edge fingerprint (a later sub-effort), so it rejects closed here.
+fn path_mixed_predicate_sequence_repeat_partitions_disequality() {
+    // `knows, likes, knows` repeats `knows` but is MIXED-predicate. It is now PROVABLE (no longer
+    // rejected): the hops partition by predicate and ONLY the two `knows` hops are constrained
+    // (C(2,2)=1). The single `likes` hop, and every knows-vs-likes cross pair, are unconstrained.
     let q = path_var_query(
         "s",
         PathPattern::Sequence(PathSequence {
@@ -3004,7 +3021,245 @@ fn rejects_path_mixed_predicate_repeat() {
         }),
         "o",
     );
-    reject(q, BgpPlanError::PathMixedPredicateRepeatUnsupported);
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    assert_eq!(pairs.len(), 1, "only the two knows-hops are constrained");
+    assert_eq!(pairs.len(), expected_partitioned_pair_count(input));
+}
+
+#[test]
+fn path_mixed_predicate_two_fold_sequence_partitions_disequality() {
+    // `(knows/likes)^2` = Times(seq[knows,likes], 2, 2) unrolls to the chain knows,likes,knows,likes.
+    // Partitioned: constrain the two knows-hops together AND the two likes-hops together
+    // (C(2,2)+C(2,2)=2), NOT the knows-vs-likes cross pairs (a full C(4,2) would be 6).
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(PathPattern::Sequence(PathSequence {
+                sequence: vec![path_pred("knows"), path_pred("likes")],
+            })),
+            from: 2,
+            to: 2,
+        }),
+        "o",
+    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    assert_eq!(pairs.len(), 2, "two same-predicate pairs, not the 6 of a full C(4,2)");
+    assert_eq!(pairs.len(), expected_partitioned_pair_count(input));
+}
+
+#[test]
+fn path_mixed_predicate_times_range_two_three_partitions_each_branch() {
+    // Times(seq[knows,likes], 2, 3): a bag union over exact lengths 2 and 3, each a mixed repeat
+    // with per-predicate-partitioned disequality.
+    //   len 2 -> knows,likes,knows,likes       -> C(2,2)+C(2,2) = 2 pairs
+    //   len 3 -> (knows,likes) x3               -> C(3,2)+C(3,2) = 6 pairs
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(PathPattern::Sequence(PathSequence {
+                sequence: vec![path_pred("knows"), path_pred("likes")],
+            })),
+            from: 2,
+            to: 3,
+        }),
+        "o",
+    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagUnion { branches, .. } = &compiled.relation.statement else {
+        panic!("expected BagUnion over the range, got {:?}", compiled.relation.statement);
+    };
+    assert_eq!(branches.len(), 2);
+    let mut pair_counts = Vec::new();
+    for branch in branches {
+        let CompiledRelationStatement::BagProjection { input, .. } = &branch.statement else {
+            panic!("expected per-length endpoint BagProjection");
+        };
+        let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+            panic!("expected per-length TupleDisequality filter");
+        };
+        assert_eq!(pairs.len(), expected_partitioned_pair_count(input));
+        pair_counts.push(pairs.len());
+    }
+    pair_counts.sort();
+    assert_eq!(pair_counts, vec![2, 6]);
+}
+
+#[test]
+fn path_forward_inverse_same_predicate_uses_walk_oriented_fingerprints() {
+    // `path(?s, (p / n(p)), ?o)` = Sequence([p, n(p)]): a same-predicate repeat that MIXES
+    // orientations (a forward `p` hop and an inverse `n(p)` hop). Both hops thread through the same
+    // fresh intermediate h; the lowered join is Triple(?s, p, h) AND Triple(?o, p, h) (the inverse hop
+    // is stored `(?o, p, h)`). The edge-simple disequality must fingerprint each hop by its WALK edge
+    // `make_edge(walk-from, p, walk-to)`, so:
+    //   hop0 (forward)  walk = (s, h)   -> (a0=col(s), a1=col(h))
+    //   hop1 (inverse)  walk = (h, o)   -> (b0=col(h), b1=col(o))    [stored (o, p, h), SWAPPED]
+    // The load-bearing invariant: the shared intermediate h is hop0's walk-TO (a1) AND hop1's
+    // walk-FROM (b0), so `a1 == b0`. Fingerprinting by the STORED orientation would instead put h at
+    // hop1's OBJECT (b1), giving `a1 == b1` and `a1 != b0` — the unsound/incomplete behavior this fix
+    // closes. Grouping is by the BARE predicate, so the forward and inverse hops stay in one partition.
+    let q = path_var_query(
+        "s",
+        PathPattern::Sequence(PathSequence {
+            sequence: vec![path_pred("p"), path_inverse("p")],
+        }),
+        "o",
+    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    // One same-predicate pair (both hops use `p`), and it is per-predicate partitioned.
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs.len(), expected_partitioned_pair_count(input));
+    let pair = &pairs[0];
+    // Walk alignment: the shared intermediate is hop0's walk-to AND hop1's walk-from.
+    assert_eq!(
+        pair.a1, pair.b0,
+        "the shared intermediate must align in walk space (hop0.walk-to == hop1.walk-from)"
+    );
+    // Each hop's walk edge runs between two DISTINCT columns, and the two endpoints s/o differ.
+    assert_ne!(pair.a0, pair.a1, "hop0 walk edge spans two distinct columns");
+    assert_ne!(pair.b0, pair.b1, "hop1 walk edge spans two distinct columns");
+    assert_ne!(pair.a0, pair.b1, "the free endpoints s and o are distinct columns");
+}
+
+#[test]
+fn path_all_inverse_same_predicate_uses_walk_oriented_fingerprints() {
+    // `path(?s, (n(p))^2, ?o)` = Times(InversePredicate(p), 2, 2): a same-predicate repeat where
+    // BOTH hops are INVERSE. Each inverse hop emits a Triple in STORED orientation `(walk-to, p,
+    // walk-from)` — SWAPPED relative to the walk — so the edge-simple disequality must fingerprint
+    // each hop by its WALK edge, not the stored triple. The chain threads ?s -> h -> ?o:
+    //   hop0 (inverse)  stored (h, p, ?s)   walk = (?s, h)  -> (a0=col(s), a1=col(h))   [SWAPPED]
+    //   hop1 (inverse)  stored (?o, p, h)   walk = (h, ?o)  -> (b0=col(h), b1=col(o))   [SWAPPED]
+    // Walk fingerprints place the shared intermediate h at hop0's walk-TO (a1) AND hop1's walk-FROM
+    // (b0), so `a1 == b0`. The STORED orientation would instead put h at hop0's SUBJECT (a0) and
+    // hop1's OBJECT (b1) — yielding `a0 == b1` and `a1 != b0`, the misalignment this fix closes.
+    // So `a1 == b0` (shared h in walk space) with `a0 != b1` (the free endpoints ?s/?o stay OUTER)
+    // certifies both inverse hops used the `(object, subject)` swap, not the stored `(subject, object)`.
+    let q = path_var_query(
+        "s",
+        PathPattern::Times(PathTimes {
+            times: Box::new(path_inverse("p")),
+            from: 2,
+            to: 2,
+        }),
+        "o",
+    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    // One same-predicate pair (both hops use `p`), and it is per-predicate partitioned.
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs.len(), expected_partitioned_pair_count(input));
+    let pair = &pairs[0];
+    // WALK alignment: the shared intermediate is hop0's walk-to AND hop1's walk-from.
+    assert_eq!(
+        pair.a1, pair.b0,
+        "both-inverse hops share the intermediate in WALK space (hop0.walk-to == hop1.walk-from); \
+         the stored orientation would instead misalign it as a0 == b1"
+    );
+    // The shared node is NOT at the STORED positions (a0/b1); this is exactly the swap the fix adds.
+    assert_ne!(
+        pair.a0, pair.b1,
+        "the free endpoints s and o are the OUTER walk positions and distinct; \
+         stored orientation would wrongly collapse a0 == b1"
+    );
+    // Each hop's walk edge runs between two distinct columns.
+    assert_ne!(pair.a0, pair.a1, "hop0 walk edge spans two distinct columns");
+    assert_ne!(pair.b0, pair.b1, "hop1 walk edge spans two distinct columns");
+}
+
+#[test]
+fn path_multi_inverse_mix_same_predicate_walk_oriented_pairs() {
+    // `path(?s, (n(p) / p / n(p)), ?o)` = Sequence([InversePredicate(p), Predicate(p),
+    // InversePredicate(p)]): THREE hops, all predicate `p`, orientations Inverse / Forward / Inverse.
+    // The chain threads ?s -> h0 -> h1 -> ?o; each hop's WALK edge is (walk-from, walk-to) regardless
+    // of stored orientation, so the walk-oriented fingerprints are:
+    //   hop0 (inverse)  stored (h0, p, ?s)  walk = (?s, h0)   [SWAPPED: (object, subject)]
+    //   hop1 (forward)  stored (h0, p, h1)  walk = (h0, h1)   [walk == stored: (subject, object)]
+    //   hop2 (inverse)  stored (?o, p, h1)  walk = (h1, ?o)   [SWAPPED: (object, subject)]
+    // All three hops share predicate `p`, so C(3,2) = 3 same-predicate pairs are emitted in the
+    // deterministic (e<f) order (0,1), (0,2), (1,2). CONSECUTIVE hops share their walk intermediate
+    // (hop0.walk-to == hop1.walk-from == h0; hop1.walk-to == hop2.walk-from == h1), so pairs (0,1) and
+    // (1,2) each satisfy `a1 == b0`. The stored orientation would misalign BOTH (it puts the shared
+    // node at a0==b0 for (0,1) and a1==b1 for (1,2), never a1==b0), so these assertions pin the swap
+    // on the inverse hops. The NON-consecutive pair (0,2) shares no walk node, so all four of its
+    // columns (s, h0, h1, o) are distinct.
+    let q = path_var_query(
+        "s",
+        PathPattern::Sequence(PathSequence {
+            sequence: vec![path_inverse("p"), path_pred("p"), path_inverse("p")],
+        }),
+        "o",
+    );
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    // All three hops use `p`: every same-predicate combination is constrained (C(3,2) = 3).
+    assert_eq!(pairs.len(), 3);
+    assert_eq!(pairs.len(), expected_partitioned_pair_count(input));
+
+    // pairs[0] = hops (0,1): inverse hop0 and forward hop1 share the walk intermediate h0.
+    let p01 = &pairs[0];
+    assert_eq!(
+        p01.a1, p01.b0,
+        "(0,1): hop0.walk-to == hop1.walk-from == h0 in WALK space; stored orientation misaligns"
+    );
+    assert_ne!(p01.a0, p01.a1, "(0,1) hop0 walk edge spans two distinct columns");
+    assert_ne!(p01.b0, p01.b1, "(0,1) hop1 walk edge spans two distinct columns");
+    assert_ne!(p01.a0, p01.b1, "(0,1) the outer endpoints (s and h1) are distinct");
+
+    // pairs[2] = hops (1,2): forward hop1 and inverse hop2 share the walk intermediate h1.
+    let p12 = &pairs[2];
+    assert_eq!(
+        p12.a1, p12.b0,
+        "(1,2): hop1.walk-to == hop2.walk-from == h1 in WALK space; stored orientation misaligns"
+    );
+    assert_ne!(p12.a0, p12.a1, "(1,2) hop1 walk edge spans two distinct columns");
+    assert_ne!(p12.b0, p12.b1, "(1,2) hop2 walk edge spans two distinct columns");
+    assert_ne!(p12.a0, p12.b1, "(1,2) the outer endpoints (h0 and o) are distinct");
+
+    // pairs[1] = hops (0,2): the two NON-consecutive inverse hops share no walk node, so all four
+    // columns (s, h0, h1, o) are pairwise distinct — no spurious disequality alignment.
+    let p02 = &pairs[1];
+    let cols = [&p02.a0, &p02.a1, &p02.b0, &p02.b1];
+    for i in 0..cols.len() {
+        for j in (i + 1)..cols.len() {
+            assert_ne!(
+                cols[i], cols[j],
+                "(0,2): non-consecutive hops share no walk node; columns {i} and {j} must differ"
+            );
+        }
+    }
 }
 
 #[test]

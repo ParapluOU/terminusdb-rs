@@ -357,14 +357,6 @@ pub enum BgpPlanError {
     #[error("multi-hop path reuses predicate `{predicate}`; edge-simple path semantics require a TupleDisequality filter (deferred lowering)")]
     PathRepeatedPredicateUnsupported { predicate: String },
 
-    /// A repeated-predicate path whose hops do NOT all use the SAME predicate (a
-    /// MIXED-predicate repeat, e.g. `(p;q)^2` or `Sequence([p, q, p])`). Edge-simple
-    /// exactness for a mixed repeat must fold the predicate id into the edge fingerprint,
-    /// which is a later sub-effort; only single-predicate repeats are provable here, so a
-    /// mixed-predicate repeat rejects closed.
-    #[error("mixed-predicate repeated path is unsupported: only single-predicate repeats have an edge-simple TupleDisequality lowering")]
-    PathMixedPredicateRepeatUnsupported,
-
     /// A conjunctive-chain hop is itself a union/range that cannot be a pure triple chain
     /// (an `Or`, or a bounded-range `Times`), so the enclosing `Sequence`/`Times` cannot be
     /// expressed as a left-deep triple chain.

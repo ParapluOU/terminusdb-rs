@@ -92,6 +92,22 @@ pub(crate) fn path_endpoint_term(value: &Value) -> Result<PathTerm, BgpPlanError
     }
 }
 
+/// The WALK orientation of a lowered elementary hop relative to its STORED `Triple`. A forward
+/// `Predicate(p)` hop stores `(walk-from, p, walk-to)`, so its walk edge EQUALS the stored triple; an
+/// inverse `InversePredicate(p)` hop stores `(walk-to, p, walk-from)` — the join reads the edge the
+/// other way — so its walk edge is the stored triple REVERSED. The edge-simple disequality
+/// ([`build_disequality_pairs`]) must fingerprint every hop by its WALK edge
+/// `make_edge(walk-from, p, walk-to)` (`path.pl:54-58`, the `Open_Set` key), NOT by the stored
+/// orientation, so a forward `p` hop and an inverse `n(p)` hop over the SAME predicate are compared in
+/// one common frame (they can reuse the same walk edge, so they MUST be constrainable together).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HopOrientation {
+    /// `Triple(walk-from, p, walk-to)` — walk == stored; fingerprint is `(subject, object)`.
+    Forward,
+    /// `Triple(walk-to, p, walk-from)` — walk == stored REVERSED; fingerprint is `(object, subject)`.
+    Inverse,
+}
+
 /// Allocates fresh intermediate variable names that never collide with a query
 /// variable (nor with each other), so a lowered sequence's hidden waypoints can
 /// never alias a real binding.
@@ -401,7 +417,18 @@ pub(crate) fn lower_top(
         _ => {
             let mut triples = Vec::new();
             let mut predicates = Vec::new();
-            lower_chain(pattern, source, target, alloc, &mut triples, &mut predicates)?;
+            // Orientation is only consumed by the deferred `TupleDisequality` path; a pairwise-distinct
+            // chain lowers to a plain bag-join, so it is collected but discarded here.
+            let mut orientations = Vec::new();
+            lower_chain(
+                pattern,
+                source,
+                target,
+                alloc,
+                &mut triples,
+                &mut predicates,
+                &mut orientations,
+            )?;
             ensure_edge_simple_exact(&predicates)?;
             build_chain_query(triples, source, target)
         }
@@ -429,7 +456,19 @@ pub(crate) fn lower_times_range_union(
     for length in times.from..=times.to {
         let mut triples = Vec::new();
         let mut predicates = Vec::new();
-        lower_n_fold(&times.times, length, source, target, alloc, &mut triples, &mut predicates)?;
+        // Each range branch that survives is a single hop (a plain bag-join); orientation is
+        // collected but unused here (only the deferred repeat path consumes it).
+        let mut orientations = Vec::new();
+        lower_n_fold(
+            &times.times,
+            length,
+            source,
+            target,
+            alloc,
+            &mut triples,
+            &mut predicates,
+            &mut orientations,
+        )?;
         ensure_edge_simple_exact(&predicates)?;
         if triples.len() != 1 {
             return Err(BgpPlanError::PathUnionBranchMultiHop);
@@ -467,7 +506,18 @@ pub(crate) fn lower_union_branches(
         _ => {
             let mut triples = Vec::new();
             let mut predicates = Vec::new();
-            lower_chain(pattern, source, target, alloc, &mut triples, &mut predicates)?;
+            // A union branch is a single hop (a plain bag-join); orientation is collected but unused
+            // here (only the deferred repeat path consumes it).
+            let mut orientations = Vec::new();
+            lower_chain(
+                pattern,
+                source,
+                target,
+                alloc,
+                &mut triples,
+                &mut predicates,
+                &mut orientations,
+            )?;
             ensure_edge_simple_exact(&predicates)?;
             if triples.len() != 1 {
                 return Err(BgpPlanError::PathUnionBranchMultiHop);
@@ -488,6 +538,7 @@ pub(crate) fn lower_chain(
     alloc: &mut FreshPathVars,
     triples: &mut Vec<Query>,
     predicates: &mut Vec<String>,
+    orientations: &mut Vec<HopOrientation>,
 ) -> Result<(), BgpPlanError> {
     use crate::path::PathPattern;
     match pattern {
@@ -503,6 +554,8 @@ pub(crate) fn lower_chain(
                 graph: None,
             }));
             predicates.push(predicate);
+            // Forward hop: the stored triple is `(walk-from = source, p, walk-to = target)`.
+            orientations.push(HopOrientation::Forward);
             Ok(())
         }
         PathPattern::InversePredicate(pred) => {
@@ -518,11 +571,22 @@ pub(crate) fn lower_chain(
                 graph: None,
             }));
             predicates.push(predicate);
+            // Inverse hop: the stored triple is `(walk-to = target, p, walk-from = source)`, so its
+            // walk edge is the stored orientation REVERSED (see `HopOrientation`).
+            orientations.push(HopOrientation::Inverse);
             Ok(())
         }
         PathPattern::Sequence(sequence) => match sequence.sequence.len() {
             0 => Err(BgpPlanError::PathEmptyPattern),
-            1 => lower_chain(&sequence.sequence[0], source, target, alloc, triples, predicates),
+            1 => lower_chain(
+                &sequence.sequence[0],
+                source,
+                target,
+                alloc,
+                triples,
+                predicates,
+                orientations,
+            ),
             hops => {
                 let mut previous = source.clone();
                 for (index, sub) in sequence.sequence.iter().enumerate() {
@@ -531,7 +595,7 @@ pub(crate) fn lower_chain(
                     } else {
                         PathTerm::Variable(alloc.next())
                     };
-                    lower_chain(sub, &previous, &next, alloc, triples, predicates)?;
+                    lower_chain(sub, &previous, &next, alloc, triples, predicates, orientations)?;
                     previous = next;
                 }
                 Ok(())
@@ -548,7 +612,16 @@ pub(crate) fn lower_chain(
             if times.from > PATH_TIMES_MAX_BOUND {
                 return Err(BgpPlanError::UnboundedPathUnsupported);
             }
-            lower_n_fold(&times.times, times.from, source, target, alloc, triples, predicates)
+            lower_n_fold(
+                &times.times,
+                times.from,
+                source,
+                target,
+                alloc,
+                triples,
+                predicates,
+                orientations,
+            )
         }
         PathPattern::Or(_) => Err(BgpPlanError::PathNonElementaryHopUnsupported),
         PathPattern::Plus(_) | PathPattern::Star(_) => Err(BgpPlanError::UnboundedPathUnsupported),
@@ -564,12 +637,13 @@ pub(crate) fn lower_n_fold(
     alloc: &mut FreshPathVars,
     triples: &mut Vec<Query>,
     predicates: &mut Vec<String>,
+    orientations: &mut Vec<HopOrientation>,
 ) -> Result<(), BgpPlanError> {
     if n == 0 {
         return Err(BgpPlanError::PathIdentityUnsupported);
     }
     if n == 1 {
-        return lower_chain(pattern, source, target, alloc, triples, predicates);
+        return lower_chain(pattern, source, target, alloc, triples, predicates, orientations);
     }
     let mut previous = source.clone();
     for index in 0..n {
@@ -578,7 +652,7 @@ pub(crate) fn lower_n_fold(
         } else {
             PathTerm::Variable(alloc.next())
         };
-        lower_chain(pattern, &previous, &next, alloc, triples, predicates)?;
+        lower_chain(pattern, &previous, &next, alloc, triples, predicates, orientations)?;
         previous = next;
     }
     Ok(())
@@ -633,16 +707,45 @@ pub(crate) fn build_chain_query(
     }))
 }
 
-/// Build the `C(n,2)` hop-pair disequality specs for a lowered single-predicate chain.
-/// Each triple is one stored edge `(subject, object)` (the fixed predicate cancels); a
-/// pair drops rows where two edges coincide. A variable position becomes a committed-column
-/// reference (variable name -> the join schema index); a bound node position becomes a
-/// constant node reference. The verifier reconstructs these EXACT pairs from the trusted
-/// compiled plan (folded into the query digest), so the selection is not prover-chosen.
+/// Build the hop-pair disequality specs for a lowered repeated-predicate chain, PARTITIONED by
+/// predicate. Each hop is one stored edge; its identity is its WALK edge `make_edge(walk-from, p,
+/// walk-to)` (`path.pl:54-58`, the `Open_Set` key), and the predicate is constant WITHIN a predicate
+/// group and so cancels out of the fingerprint. A pair drops the rows where two same-predicate hops
+/// reuse the same walk edge. Two hops can reuse the SAME edge only if they share the SAME predicate —
+/// hops with different predicates are always distinct edges (`path.pl`'s edge identity
+/// `make_edge(_, p, _)` includes the predicate), so we emit a disequality pair for a hop-pair
+/// `(e, f)` ONLY when their predicates coincide (`predicates[e] == predicates[f]`); a cross-predicate
+/// pair is left unconstrained. `predicates` and `orientations` are each aligned index-for-index with
+/// `triples` (`lower_chain` pushes the bare predicate IRI AND the hop orientation in lockstep with
+/// each hop's `Triple`, in BOTH the forward and inverse arms).
+///
+/// CRUCIAL — the fingerprint uses the WALK orientation, NOT the stored `Triple` orientation. A
+/// forward `Predicate(p)` hop stores `(walk-from, p, walk-to)`, so its walk edge is `(subject,
+/// object)` of the emitted `Triple`; an inverse `InversePredicate(p)` hop stores `(walk-to, p,
+/// walk-from)` (the join reads the edge the other way — see `lower_chain`), so its walk edge is
+/// `(object, subject)` of the emitted `Triple` — SWAPPED. This puts a forward `p` hop and an inverse
+/// `n(p)` hop over the same predicate into one common (walk) frame, matching `path.pl`'s `Open_Set`
+/// key exactly. Fingerprinting by the stored orientation instead is UNSOUND (it certifies walks
+/// `path.pl` rejects) and incomplete (it drops valid walks) whenever a same-predicate pair mixes
+/// orientations — the bug this fix closes. The join / BGP keeps the STORED orientation unchanged; only
+/// this fingerprint is walk-oriented.
+///
+/// A variable position becomes a committed-column reference (variable name -> the join schema index);
+/// a bound node position becomes a constant node reference. The verifier reconstructs these EXACT
+/// pairs from the trusted compiled plan (folded into the query digest), so the selection is not
+/// prover-chosen. A single-predicate all-forward chain constrains ALL `C(n,2)` pairs with walk ==
+/// stored — byte-identical to the prior behavior.
 pub(crate) fn build_disequality_pairs(
     triples: &[Query],
+    predicates: &[String],
+    orientations: &[HopOrientation],
     schema: &[String],
 ) -> Result<Vec<TupleDisequalityPairPlan>, BgpPlanError> {
+    if predicates.len() != triples.len() || orientations.len() != triples.len() {
+        // `lower_chain` pushes one predicate + one orientation per hop triple in lockstep; a mismatch
+        // is a compiler bug, not a query shape — fail closed rather than mis-partition / mis-orient.
+        return Err(BgpPlanError::PathNonElementaryHopUnsupported);
+    }
     fn column_of(name: &str, schema: &[String]) -> Result<TupleDisequalityNode, BgpPlanError> {
         schema
             .iter()
@@ -669,16 +772,32 @@ pub(crate) fn build_disequality_pairs(
             _ => Err(BgpPlanError::PathEndpointUnsupported),
         }
     };
+    // Each `edges[i]` is the hop's WALK edge `(walk-from, walk-to)`, so a pair compares two hops in
+    // the same frame regardless of their stored orientation.
     let mut edges = Vec::with_capacity(triples.len());
-    for triple in triples {
+    for (triple, orientation) in triples.iter().zip(orientations) {
         let Query::Triple(triple) = triple else {
             return Err(BgpPlanError::PathNonElementaryHopUnsupported);
         };
-        edges.push((subject_ref(&triple.subject)?, object_ref(&triple.object)?));
+        let subject = subject_ref(&triple.subject)?;
+        let object = object_ref(&triple.object)?;
+        let walk_edge = match orientation {
+            // Forward: stored `(walk-from = subject, p, walk-to = object)`.
+            HopOrientation::Forward => (subject, object),
+            // Inverse: stored `(walk-to = subject, p, walk-from = object)` -> swap to walk frame.
+            HopOrientation::Inverse => (object, subject),
+        };
+        edges.push(walk_edge);
     }
     let mut pairs = Vec::new();
     for e in 0..edges.len() {
         for f in (e + 1)..edges.len() {
+            // Only same-predicate hops can reuse a stored edge; a different-predicate hop-pair is
+            // genuinely distinct and needs no disequality (never falsely dropped, never falsely
+            // required).
+            if predicates[e] != predicates[f] {
+                continue;
+            }
             pairs.push(TupleDisequalityPairPlan {
                 a0: edges[e].0.clone(),
                 a1: edges[e].1.clone(),
@@ -729,11 +848,14 @@ pub(crate) fn project_path_endpoints(
     })
 }
 
-/// Compile a DEFERRED finite single-predicate repeated-predicate path (see [`lower_path`])
-/// to `BagProjection(TupleDisequality(join-chain))` — the edge-simple-exact plan a plain
-/// bag-join cannot express. A range `Times{a,b}` fans out to a bag union over each exact
-/// length. Reuses the audited BGP compiler for the join chains and the `plan_or_relation`
-/// union path; adds only the `TupleDisequality` selection and the endpoint projection.
+/// Compile a DEFERRED finite repeated-predicate path (single- OR mixed-predicate; see
+/// [`lower_path`]) to `BagProjection(TupleDisequality(join-chain))` — the edge-simple-exact plan a
+/// plain bag-join cannot express. The `TupleDisequality` constrains the hop-pairs PARTITIONED by
+/// predicate (see [`build_disequality_pairs`]): a mixed repeat drops only same-predicate edge
+/// reuse, since different-predicate hops are always distinct edges. A range `Times{a,b}` fans out
+/// to a bag union over each exact length. Reuses the audited BGP compiler for the join chains and
+/// the `plan_or_relation` union path; adds only the `TupleDisequality` selection and the endpoint
+/// projection.
 pub(crate) fn plan_deferred_repeated_predicate_path(
     path: &crate::query::Path,
     selections: &[(&[String], bool)],
@@ -792,6 +914,7 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
     let mut alloc = FreshPathVars::new(reserved);
     let mut triples = Vec::new();
     let mut predicates = Vec::new();
+    let mut orientations = Vec::new();
     lower_chain(
         &path.pattern,
         &source,
@@ -799,13 +922,15 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
         &mut alloc,
         &mut triples,
         &mut predicates,
+        &mut orientations,
     )?;
 
-    // Single predicate is the whole scope of this pass: a mixed-predicate repeat needs the
-    // predicate id folded into the fingerprint (a later sub-effort) and rejects closed.
-    let first = predicates.first().ok_or(BgpPlanError::PathEmptyPattern)?;
-    if predicates.iter().any(|predicate| predicate != first) {
-        return Err(BgpPlanError::PathMixedPredicateRepeatUnsupported);
+    // Both single- AND mixed-predicate repeats are in scope: `build_disequality_pairs` (below)
+    // partitions the hops by predicate and constrains ONLY same-predicate hop-pairs, so a
+    // different-predicate hop-pair (always a distinct stored edge) needs no fingerprint fold. A
+    // deferred path always has >= 2 hops; guard the degenerate empty case defensively.
+    if predicates.is_empty() {
+        return Err(BgpPlanError::PathEmptyPattern);
     }
 
     // Compile the join chain by reusing the audited BGP machinery on the raw `And`.
@@ -827,9 +952,10 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
         BgpPlanError::OrRoutingConflict,
     )?;
 
-    // Wrap the join in the edge-simple TupleDisequality filter (all C(n,2) hop-pairs). A
+    // Wrap the join in the edge-simple TupleDisequality filter (the same-predicate hop-pairs;
+    // a single-predicate chain is all C(n,2), a mixed chain only the within-predicate pairs). A
     // single hop yields no pair (nothing to filter) — but a deferred path always has >= 2.
-    let pairs = build_disequality_pairs(&triples, &relation.schema)?;
+    let pairs = build_disequality_pairs(&triples, &predicates, &orientations, &relation.schema)?;
     if !pairs.is_empty() {
         let schema = relation.schema.clone();
         let domains = relation.domains.clone();
