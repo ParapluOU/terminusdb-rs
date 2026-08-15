@@ -894,8 +894,11 @@ pub(crate) fn plan_transitive_closure_path(
         _ => return Err(BgpPlanError::UnboundedPathUnsupported),
     };
 
-    // The closure body must be a SINGLE concrete predicate; a compound body (sequence/union/nested
-    // repetition) needs the general BGP-in-the-loop lowering (deferred). A wildcard `.` rejects closed.
+    // A SINGLE concrete predicate takes the fast path below. A COMPOUND body — a flat alternation
+    // `(p|q|…)` or a 2-hop sequence `(p/q)` of single (possibly-inverse) predicates — routes to the
+    // compound-edge closure planner (P3), which derives the 2-column edge relation `E'` and closes over
+    // it by commitment (single-seed only; other endpoint shapes / unfaithful bodies reject closed
+    // there). A wildcard `.` rejects closed.
     let (predicate, inner_inverse) = match inner {
         PathPattern::Predicate(pred) => (
             pred.predicate
@@ -909,7 +912,17 @@ pub(crate) fn plan_transitive_closure_path(
                 .ok_or(BgpPlanError::PathWildcardUnsupported)?,
             true,
         ),
-        _ => return Err(BgpPlanError::ClosureCompoundSubpattern),
+        _ => {
+            return plan_compound_closure(
+                path,
+                reflexive,
+                inner,
+                selections,
+                collection,
+                count_variable,
+                distincts,
+            )
+        }
     };
 
     // Exactly one endpoint bound (the seed) and one free (the delivered reachable-set column). A bound
@@ -1241,5 +1254,236 @@ pub(crate) fn plan_both_bound_closure(
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
+}
+
+/// Compile a single-seed `Star`/`Plus` closure over a COMPOUND body (`(p|q)+`, `(p/q)+`; P3). The
+/// closure driver is source-agnostic over its edge relation `E`, so we DERIVE the compound edge `E'`
+/// (a deduped 2-column [start, end] relation — a bag-union of the branch edges, or the two-atom join
+/// projected to its endpoints) via the audited BGP machinery and close over it by commitment through
+/// the [`CompiledRelationStatement::TransitiveClosureCompound`] node. NO new crypto: only what `E` *is*
+/// changes versus the single-predicate closure.
+///
+/// SCOPE (fail-closed): exactly ONE bound endpoint (single-seed; both-free / both-bound compound
+/// closures reject closed), under the endpoint `Distinct` gate. Count-gated compound closures reject
+/// closed (do the `Distinct` form first). The compound body must be a flat alternation `(p|q|…)` or a
+/// 2-hop DISTINCT-predicate sequence `(p/q)` of single (possibly-inverse) predicates — every other
+/// shape (nested unbounded, `Times`, wildcard, non-elementary branch, same-predicate or longer
+/// sequence) rejects closed via [`build_compound_edge`]'s guards.
+///
+/// FIDELITY (`src/core/query/path.pl`, verified): `path.pl`'s `plus`/`star` are edge-simple over
+/// PRIMITIVE `(s,p,o)` edges (`Open_Set`). The compound-hop transitive closure of `E'` equals
+/// `path.pl`'s edge-simple compound-path reachability AT THE SET LEVEL (delivered by the required
+/// `Distinct`): any reachable pair has a NODE-simple `E'`-hop walk, which uses DISTINCT primitive edges
+/// for `(p|q)` always, and for `(p/q)` iff `p ≠ q` — so `path.pl` finds every reachable pair, and every
+/// `path.pl` solution is a real `E'`-walk. A bound TARGET walks `E'` BACKWARD (`inverted`), which at the
+/// SET level equals `path.pl`'s `invert_path` of the compound pattern; `star`'s reflexive `{a}` seed is
+/// concrete (a bound endpoint), so the all-pairs-`star` diagonal-injection concern does not arise here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_compound_closure(
+    path: &crate::query::Path,
+    reflexive: bool,
+    inner: &crate::path::PathPattern,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    // Count-gated compound closure is a follow-up (do the `Distinct` form first), exactly as the
+    // both-bound single-predicate closure defers its count gate.
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+
+    let source = path_endpoint_term(&path.subject)?;
+    let target = path_endpoint_term(&path.object)?;
+
+    // Endpoint shape: EXACTLY ONE bound endpoint (single-seed). A bound SOURCE walks `E'` forward from
+    // `a`; a bound TARGET walks `E'` backward from `b`. Both-free (a 2-column pairs closure over a
+    // compound edge) and both-bound (a membership gate over a compound edge) are separate increments,
+    // reject-closed here.
+    let (seed_iri, endpoint_var, bound_target) = match (&source, &target) {
+        (PathTerm::Node(a), PathTerm::Variable(y)) => (a.clone(), y.clone(), false),
+        (PathTerm::Variable(x), PathTerm::Node(b)) => (b.clone(), x.clone(), true),
+        (PathTerm::Variable(_), PathTerm::Variable(_)) => {
+            return Err(BgpPlanError::ClosureBothEndpointsFree)
+        }
+        (PathTerm::Node(_), PathTerm::Node(_)) => {
+            return Err(BgpPlanError::ClosureBothEndpointsBound)
+        }
+    };
+
+    // Derive the compound edge relation `E'` (deduped 2-column [start, end]). Its fidelity guards live
+    // in `build_compound_edge`.
+    let edge = build_compound_edge(inner, path)?;
+
+    let relation = CompiledRelation {
+        schema: vec![endpoint_var],
+        domains: vec![None],
+        statement: CompiledRelationStatement::TransitiveClosureCompound {
+            edge: Box::new(edge),
+            seed: CanonicalObject::Node(seed_iri.into_bytes()),
+            reflexive,
+            // Inner inverse orientation is baked into `E'`'s structure (an inverse hop swaps the triple's
+            // subject/object), so ONLY a bound TARGET flips the closure walk direction.
+            inverted: bound_target,
+            // A WOQL `Path` closure walks the INSTANCE graph (folds nothing into the digest).
+            graph: ProofGraph::Instance,
+        },
+    };
+
+    // ENFORCE the endpoint `Distinct` gate (SET semantics) — identical to the single-predicate closure:
+    // pass `None` so the `Distinct` is validated as the transparent full-row no-op over the closure's
+    // own strict-sorted dedup-free accumulator `A_K`. Anything else rejects closed.
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(relation, distincts, selections, None)?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+/// Lower ONE elementary hop `Predicate(p)` / `InversePredicate(p)` to its stored-edge `Triple` between
+/// `start` and `end`, returning the triple and the (bare) predicate IRI (used for the sequence
+/// distinct-predicate fidelity guard). A forward hop is `Triple(start, p, end)`; an inverse hop is
+/// `Triple(end, p, start)` (the edge points the other way). A wildcard predicate or a non-elementary
+/// (compound) sub-pattern rejects closed.
+fn single_hop_triple(
+    pattern: &crate::path::PathPattern,
+    start: &PathTerm,
+    end: &PathTerm,
+) -> Result<(Query, String), BgpPlanError> {
+    use crate::path::PathPattern;
+    match pattern {
+        PathPattern::Predicate(pred) => {
+            let predicate = pred
+                .predicate
+                .clone()
+                .ok_or(BgpPlanError::PathWildcardUnsupported)?;
+            Ok((
+                Query::Triple(Triple {
+                    subject: start.as_subject(),
+                    predicate: NodeValue::Node(predicate.clone()),
+                    object: end.as_object(),
+                    graph: None,
+                }),
+                predicate,
+            ))
+        }
+        PathPattern::InversePredicate(pred) => {
+            let predicate = pred
+                .predicate
+                .clone()
+                .ok_or(BgpPlanError::PathWildcardUnsupported)?;
+            // Inverse hop start -> end travels the stored edge `end -> start` (swap subject/object).
+            Ok((
+                Query::Triple(Triple {
+                    subject: end.as_subject(),
+                    predicate: NodeValue::Node(predicate.clone()),
+                    object: start.as_object(),
+                    graph: None,
+                }),
+                predicate,
+            ))
+        }
+        // A branch / hop that is itself a sequence, union, or (bounded / unbounded) repetition is NOT
+        // an elementary edge — this pass models only single-predicate hops inside a compound body.
+        _ => Err(BgpPlanError::ClosureCompoundSubpattern),
+    }
+}
+
+/// Derive the COMPOUND closure edge `E'` — a deduped 2-column [start, end] node/value relation — from a
+/// compound body, reusing the audited BGP / union / join / projection machinery (NO new crypto):
+///   * flat alternation `(p₁|…|pₙ)` → `Distinct(π_{start,end}(BagUnion(edge(pᵢ))))` — each hop is ONE
+///     primitive edge, so it is edge-simple-faithful for ANY predicates;
+///   * 2-hop sequence `(p/q)` → `Distinct(π_{start,end}(InnerJoin(edge(p)[start,mid], edge(q)[mid,end])))`
+///     — faithful IFF `p ≠ q` (else a primitive edge could repeat across hops; see the fidelity note on
+///     [`plan_compound_closure`] and [`BgpPlanError::ClosureCompoundSequenceUnfaithful`]).
+/// Every other shape (a sequence of length ≠ 2, a same-predicate 2-sequence, a nested unbounded / `Times`
+/// body, a wildcard, or a non-elementary alternation branch) rejects closed.
+fn build_compound_edge(
+    inner: &crate::path::PathPattern,
+    path: &crate::query::Path,
+) -> Result<CompiledRelation, BgpPlanError> {
+    use crate::path::PathPattern;
+    // Fresh, collision-free start / end / mid variables (the edge relation is self-contained: its
+    // columns are projected into the closure's single delivered column, so these names never alias a
+    // user binding).
+    let mut reserved = std::collections::BTreeSet::new();
+    collect_reserved_path_variables(&Query::Path(path.clone()), &mut reserved);
+    let mut alloc = FreshPathVars::new(reserved);
+    let start = PathTerm::Variable(alloc.next());
+    let end = PathTerm::Variable(alloc.next());
+
+    let edge_query = match inner {
+        PathPattern::Or(or) => {
+            if or.or.is_empty() {
+                return Err(BgpPlanError::PathEmptyPattern);
+            }
+            let mut branches = Vec::with_capacity(or.or.len());
+            for branch in &or.or {
+                branches.push(single_hop_triple(branch, &start, &end)?.0);
+            }
+            if branches.len() == 1 {
+                // A single-branch alternation is just that edge (still a valid — if degenerate —
+                // compound edge; the outer single-predicate fast path handles a bare predicate).
+                branches.pop().unwrap()
+            } else {
+                Query::Or(crate::query::Or { or: branches })
+            }
+        }
+        PathPattern::Sequence(seq) => {
+            // FIDELITY GATE: only a 2-hop DISTINCT-predicate sequence is edge-simple-faithful.
+            if seq.sequence.len() != 2 {
+                return Err(BgpPlanError::ClosureCompoundSequenceUnfaithful);
+            }
+            let mid = PathTerm::Variable(alloc.next());
+            let (t0, p0) = single_hop_triple(&seq.sequence[0], &start, &mid)?;
+            let (t1, p1) = single_hop_triple(&seq.sequence[1], &mid, &end)?;
+            if p0 == p1 {
+                return Err(BgpPlanError::ClosureCompoundSequenceUnfaithful);
+            }
+            Query::And(crate::query::And { and: vec![t0, t1] })
+        }
+        // Nested unbounded (`Star`/`Plus`) or finite `Times` body — a compound sub-pattern this pass
+        // does not faithfully model.
+        _ => return Err(BgpPlanError::ClosureCompoundSubpattern),
+    };
+
+    // Compile the edge query with the audited BGP machinery. A bare union / join carries no outer
+    // projection / count / distinct; a surprising shape rejects closed defensively.
+    let compiled = plan_bgp(&edge_query)?;
+    if compiled.projection.is_some()
+        || compiled.count_variable.is_some()
+        || compiled.full_row_distinct
+        || compiled.collection.is_some()
+    {
+        return Err(BgpPlanError::ClosureCompoundSubpattern);
+    }
+
+    // Project to exactly [start, end] (dropping the sequence's middle waypoint), then dedup on the full
+    // 2-tuple — `E'` is the SET of compound edges (path.pl's edge-simple SET semantics).
+    let projected = project_path_endpoints(compiled.relation, &start, &end)?;
+    if projected.schema.len() != 2 {
+        return Err(BgpPlanError::ClosureCompoundSubpattern);
+    }
+    let schema = projected.schema.clone();
+    let domains = projected.domains.clone();
+    Ok(CompiledRelation {
+        schema,
+        domains,
+        statement: CompiledRelationStatement::Distinct {
+            input: Box::new(projected),
+            key_columns: vec![0, 1],
+        },
+    })
 }
 

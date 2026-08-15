@@ -428,11 +428,28 @@ pub enum BgpPlanError {
     #[error("`Star`/`Plus` path with two bound endpoints is a boolean reachability check (defensive fallback — normally dispatched to `plan_both_bound_closure`); reject closed")]
     ClosureBothEndpointsBound,
 
-    /// A `Star`/`Plus` over a COMPOUND sub-pattern (a sequence, union, or nested repetition rather than
-    /// a single predicate). Multi-atom closure bodies need the general BGP-in-the-loop lowering, a
-    /// deferred follow-up (B2).
-    #[error("`Star`/`Plus` over a compound sub-pattern (only a single predicate is provable) is deferred; reject closed")]
+    /// A `Star`/`Plus` over a COMPOUND sub-pattern whose SHAPE this pass does not faithfully model:
+    /// a body that is itself unbounded (`(p*)+`, `(p+)+`) or a finite `Times` repeat, or an alternation
+    /// branch that is not a single (possibly-inverse) predicate hop, or a wildcard predicate. The
+    /// provable compound bodies are a flat alternation `(p|q|…)` and a 2-hop sequence `(p/q)` of single
+    /// (possibly-inverse) predicates, single-seed only (see
+    /// [`crate::proof::types::CompiledRelationStatement::TransitiveClosureCompound`]); everything else
+    /// rejects closed.
+    #[error("`Star`/`Plus` over this compound sub-pattern shape is not faithfully modeled (only flat `(p|q)` / 2-hop `(p/q)` of single predicates are provable); reject closed")]
     ClosureCompoundSubpattern,
+
+    /// A `Star`/`Plus` over a SEQUENCE sub-pattern that is not edge-simple-faithful: a sequence with a
+    /// length other than 2, or a 2-hop `(p/q)` whose two hops share the SAME underlying predicate.
+    /// `path.pl`'s `plus`/`star` are edge-simple over PRIMITIVE `(s,p,o)` edges; the compound-hop
+    /// closure equals that reachability at the SET level only when a node-simple `E'`-walk uses DISTINCT
+    /// primitive edges. For a 2-hop `(p/q)` this holds IFF `p ≠ q` (distinct hop-starts ⇒ distinct
+    /// p-edges, distinct hop-ends ⇒ distinct q-edges, and `p ≠ q` blocks a p-edge/q-edge collision). A
+    /// same-predicate 2-sequence CAN reuse a primitive edge across hops (concrete counterexample: the
+    /// 3-cycle `a→c→b→a` under `(p/p)+`, where the closure reaches `c` from `a` but `path.pl` cannot
+    /// edge-simply), and a sequence of 3+ hops can reuse an INTERIOR primitive edge even with distinct
+    /// predicates. Both are UNFAITHFUL over-approximations, so they reject closed (fail-closed).
+    #[error("`Star`/`Plus` over a sequence must be exactly two DISTINCT-predicate hops to stay edge-simple-faithful; reject closed")]
+    ClosureCompoundSequenceUnfaithful,
 
     /// A `Count`-gated `Star`/`Plus` closure. The reachable-set cardinality is provable, but the
     /// `Count` integration is a follow-up; do the `Distinct` form first.

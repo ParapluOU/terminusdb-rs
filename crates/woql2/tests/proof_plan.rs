@@ -2496,19 +2496,219 @@ fn bare_plus_without_distinct_rejects_requires_distinct() {
     reject(q, BgpPlanError::ClosureRequiresDistinct);
 }
 
+/// `(p|q)` alternation body.
+fn closure_alt(a: PathPattern, b: PathPattern) -> PathPattern {
+    PathPattern::Or(PathOr { or: vec![a, b] })
+}
+
+/// `(a/b)` two-hop sequence body.
+fn closure_seq(a: PathPattern, b: PathPattern) -> PathPattern {
+    PathPattern::Sequence(PathSequence {
+        sequence: vec![a, b],
+    })
+}
+
+fn closure_pred_inverse(predicate: &str) -> PathPattern {
+    PathPattern::InversePredicate(InversePathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+/// P3 — `plus((p|q))` from a bound source compiles to a COMPOUND closure whose derived edge is the
+/// deduped bag-union of the p-edge and q-edge relations.
 #[test]
-fn closure_over_compound_subpattern_rejects() {
-    // `star` of a two-hop sequence needs the general BGP-in-the-loop lowering (deferred).
+fn alternation_plus_under_distinct_compiles_to_compound_closure() {
     let q = distinct_closure(
         Value::Node(iri("a")),
-        PathPattern::Star(PathStar {
-            star: Box::new(PathPattern::Sequence(PathSequence {
-                sequence: vec![closure_pred("p"), closure_pred("q")],
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_alt(closure_pred("p"), closure_pred("q"))),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["y"]);
+    assert!(c.full_row_distinct, "endpoint Distinct is redundant over the already-set closure");
+    let CompiledRelationStatement::TransitiveClosureCompound {
+        edge,
+        seed,
+        reflexive,
+        inverted,
+        ..
+    } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosureCompound statement, got {:?}", c.relation.statement);
+    };
+    assert!(!reflexive, "plus is one-or-more (non-reflexive)");
+    assert!(!inverted, "a bound source is a forward walk");
+    assert_eq!(*seed, CanonicalObject::Node(iri("a").into_bytes()));
+    // The edge is `Distinct(BagProjection(BagUnion(edge(p), edge(q))))` — a deduped 2-column relation.
+    let CompiledRelationStatement::Distinct { input, key_columns } = &edge.statement else {
+        panic!("compound alternation edge must be deduped, got {:?}", edge.statement);
+    };
+    assert_eq!(key_columns, &[0, 1], "dedup on the full (start, end) tuple");
+    let CompiledRelationStatement::BagProjection { input, .. } = &input.statement else {
+        panic!("edge must be projected to (start, end), got {:?}", input.statement);
+    };
+    let CompiledRelationStatement::BagUnion { branches, .. } = &input.statement else {
+        panic!("alternation edge must be a bag-union, got {:?}", input.statement);
+    };
+    assert_eq!(branches.len(), 2, "(p|q) is a union of two branch edges");
+}
+
+/// P3 — `plus((p/q))` (distinct predicates) from a bound source compiles to a COMPOUND closure whose
+/// derived edge is the two-atom join projected to its (start, end) endpoints.
+#[test]
+fn sequence_plus_under_distinct_compiles_to_compound_closure() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_seq(closure_pred("p"), closure_pred("q"))),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["y"]);
+    assert!(c.full_row_distinct);
+    let CompiledRelationStatement::TransitiveClosureCompound { edge, reflexive, inverted, .. } =
+        &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosureCompound statement, got {:?}", c.relation.statement);
+    };
+    assert!(!reflexive);
+    assert!(!inverted);
+    // The edge is `Distinct(BagProjection(Bgp(<2-atom join>)))` — the projected sequence relation.
+    let CompiledRelationStatement::Distinct { input, .. } = &edge.statement else {
+        panic!("compound sequence edge must be deduped, got {:?}", edge.statement);
+    };
+    let CompiledRelationStatement::BagProjection { input, indices } = &input.statement else {
+        panic!("edge must be projected to (start, end), got {:?}", input.statement);
+    };
+    assert_eq!(indices.len(), 2, "projected to exactly the two endpoints");
+    let CompiledRelationStatement::Bgp(plan) = &input.statement else {
+        panic!("sequence edge must be a two-atom join BGP, got {:?}", input.statement);
+    };
+    assert_eq!(plan.atoms.len(), 2, "(p/q) is a two-atom join");
+    assert_eq!(plan.joins.len(), 1, "one join on the shared middle waypoint");
+}
+
+/// P3 — a bound TARGET compound closure walks the derived edge BACKWARD (`inverted`).
+#[test]
+fn alternation_plus_bound_target_sets_inverted() {
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable("x".into()),
+            pattern: PathPattern::Plus(PathPlus {
+                plus: Box::new(closure_alt(closure_pred("p"), closure_pred_inverse("q"))),
+            }),
+            object: Value::Node(iri("b")),
+            path: None,
+        })),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["x"]);
+    let CompiledRelationStatement::TransitiveClosureCompound { seed, inverted, .. } =
+        &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosureCompound statement, got {:?}", c.relation.statement);
+    };
+    assert!(inverted, "a bound target walks the compound edge backward");
+    assert_eq!(*seed, CanonicalObject::Node(iri("b").into_bytes()));
+}
+
+/// FIDELITY reject — a SAME-predicate 2-hop sequence `(p/p)+` can reuse a primitive edge across hops
+/// (path.pl is edge-simple over primitive edges), so the compound-hop closure over-approximates
+/// path.pl's reachability. Fail-closed.
+#[test]
+fn sequence_same_predicate_closure_rejects_unfaithful() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_seq(closure_pred("p"), closure_pred("p"))),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureCompoundSequenceUnfaithful);
+}
+
+/// FIDELITY reject — a sequence of 3+ hops can reuse an INTERIOR primitive edge even with distinct
+/// predicates, breaking edge-simplicity. Fail-closed.
+#[test]
+fn sequence_three_hops_closure_rejects_unfaithful() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(PathPattern::Sequence(PathSequence {
+                sequence: vec![closure_pred("p"), closure_pred("q"), closure_pred("r")],
+            })),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureCompoundSequenceUnfaithful);
+}
+
+/// SHAPE reject — a body that is itself unbounded (`(p+)+`) is not a compound EDGE this pass models.
+#[test]
+fn closure_over_nested_unbounded_body_rejects() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(PathPattern::Plus(PathPlus {
+                plus: Box::new(closure_pred("p")),
             })),
         }),
         "y",
     );
     reject(q, BgpPlanError::ClosureCompoundSubpattern);
+}
+
+/// SHAPE reject — an alternation branch that is itself a two-hop sequence is not an elementary edge.
+#[test]
+fn closure_over_alternation_with_multihop_branch_rejects() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_alt(
+                closure_pred("p"),
+                closure_seq(closure_pred("q"), closure_pred("r")),
+            )),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureCompoundSubpattern);
+}
+
+/// ENDPOINT-SHAPE reject — a compound closure with BOTH endpoints free (all-pairs over a compound
+/// edge) is a separate increment; single-seed only. Fail-closed.
+#[test]
+fn compound_closure_both_free_rejects() {
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into(), "y".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable("x".into()),
+            pattern: PathPattern::Plus(PathPlus {
+                plus: Box::new(closure_alt(closure_pred("p"), closure_pred("q"))),
+            }),
+            object: Value::Variable("y".into()),
+            path: None,
+        })),
+    });
+    reject(q, BgpPlanError::ClosureBothEndpointsFree);
+}
+
+/// ENDPOINT-SHAPE reject — a compound closure with BOTH endpoints bound (a boolean over a compound
+/// edge) is a separate increment; single-seed only. Fail-closed.
+#[test]
+fn compound_closure_both_bound_rejects() {
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_alt(closure_pred("p"), closure_pred("q"))),
+        }),
+        object: Value::Node(iri("b")),
+        path: None,
+    });
+    reject(q, BgpPlanError::ClosureBothEndpointsBound);
 }
 
 /// `path(source, pattern, object)` with both endpoints BOUND node constants (P4).

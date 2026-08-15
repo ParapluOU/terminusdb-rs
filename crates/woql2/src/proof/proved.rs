@@ -1708,6 +1708,35 @@ impl ProvedBgp {
                     ));
                 }
             }
+            (
+                ProvedQueryStatement::TransitiveClosureCompound { envelope },
+                CompiledRelationStatement::TransitiveClosureCompound { .. },
+            ) => {
+                // DELEGATE to the audited store verify. The compound closure carries the WHOLE store
+                // envelope (edge / seed / rounds / empty-delta fixpoint over the derived edge), so — like
+                // the all-pairs closure and the ordered walks — the woql2 layer carries it wholesale
+                // rather than decomposing it. Rebuild the plan from the TRUSTED compiled statement: its
+                // `query_digest` folds the compound EDGE structure, seed, reflexive and direction under a
+                // DISTINCT `/transitive-closure-compound` tag, and the store's own `verify` rejects any
+                // envelope whose root or query digest does not match — so a compound proof cannot be
+                // re-aimed at another edge/seed/direction, nor cross-replayed as a single-predicate or
+                // all-pairs closure.
+                let plan = relation_proof_plan(compiled, query_digest)?;
+                envelope.verify(layer, expected_root, &plan)?;
+                // BIND the wholesale envelope's delivered result to THIS proof node's delivered columns
+                // (identical to the all-pairs / ordered-walk arms): a mismatched outer copy cannot slip a
+                // different reachable set past verification.
+                if self.result_commitments != envelope.result_commitments
+                    || self.result_columns != envelope.result_columns
+                    || self.result_len != envelope.result_len
+                    || self.result_log_domain != envelope.result_log_domain
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL compound closure delivered result does not match the proven store envelope",
+                    ));
+                }
+            }
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -2278,6 +2307,17 @@ impl ProvedBgp {
         if let (
             ProvedQueryStatement::TransitiveClosurePairs { envelope },
             CompiledRelationStatement::TransitiveClosurePairs { .. },
+        ) = (&self.statement, &compiled.statement)
+        {
+            return Ok((**envelope).clone());
+        }
+        // The compound single-seed closure carries its whole store envelope WHOLESALE (its derived-edge
+        // round/fixpoint proof is carried opaquely, exactly like the all-pairs closure), so — after
+        // `verify_relation` has already checked it against the trusted root and statement digest —
+        // reconstruction just returns the carried envelope.
+        if let (
+            ProvedQueryStatement::TransitiveClosureCompound { envelope },
+            CompiledRelationStatement::TransitiveClosureCompound { .. },
         ) = (&self.statement, &compiled.statement)
         {
             return Ok((**envelope).clone());

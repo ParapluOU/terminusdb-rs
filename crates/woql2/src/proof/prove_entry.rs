@@ -719,6 +719,25 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
             statement: ProvedQueryStatement::TransitiveClosurePairs { envelope: Box::new(envelope) },
         };
     }
+    // A single-seed transitive closure whose EDGE is a COMPOUND derived relation (a bag-union /
+    // projected join, NOT a single `Bgp` leaf) is a P3 `(p|q)+` / `(p/q)+` closure. Its derived-edge
+    // envelope cannot be decomposed into the `ProvedQueryStatement::TransitiveClosure` edge/seed/rounds/
+    // fixpoint tree (whose `edge` is a single BGP), so — exactly like the all-pairs closure — it is
+    // carried WHOLESALE and later verified by re-running the store envelope verify. A single-PREDICATE
+    // closure (edge == `Bgp`) still decomposes below, keeping every existing closure proof byte-identical.
+    if let RecursiveRelationProof::TransitiveClosure { edge, .. } = &envelope.proof {
+        if !matches!(edge.proof, RecursiveRelationProof::Bgp(_)) {
+            return ProvedBgp {
+                result_commitments: envelope.result_commitments.clone(),
+                result_columns: envelope.result_columns.clone(),
+                result_log_domain: envelope.result_log_domain,
+                result_len: envelope.result_len,
+                statement: ProvedQueryStatement::TransitiveClosureCompound {
+                    envelope: Box::new(envelope),
+                },
+            };
+        }
+    }
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::GeneratedU64Filter { input } => {

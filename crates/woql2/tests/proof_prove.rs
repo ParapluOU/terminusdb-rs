@@ -5212,6 +5212,200 @@ fn both_bound_closure_reachability_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+// ---- P3: COMPOUND-body single-seed closures `(p|q)+` / `(p/q)+` ----
+
+fn closure_pred_e2e(predicate: &str) -> PathPattern {
+    PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    })
+}
+
+/// `Distinct([endpoint], Path(Node(source), star|plus(inner), ?endpoint))` — a single-seed closure
+/// over an arbitrary (compound) `inner` body.
+fn distinct_compound_closure(source: &str, inner: PathPattern, reflexive: bool, endpoint: &str) -> Query {
+    let pattern = if reflexive {
+        PathPattern::Star(PathStar { star: Box::new(inner) })
+    } else {
+        PathPattern::Plus(PathPlus { plus: Box::new(inner) })
+    };
+    Query::Distinct(Distinct {
+        variables: vec![endpoint.into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Node(iri(source)),
+            pattern,
+            object: Value::Variable(endpoint.into()),
+            path: None,
+        })),
+    })
+}
+
+/// `(p|q)` alternation body.
+fn alt_body() -> PathPattern {
+    PathPattern::Or(PathOr {
+        or: vec![closure_pred_e2e("p"), closure_pred_e2e("q")],
+    })
+}
+
+/// `(p/q)` two-hop sequence body (distinct predicates → edge-simple-faithful).
+fn seq_body() -> PathPattern {
+    PathPattern::Sequence(PathSequence {
+        sequence: vec![closure_pred_e2e("p"), closure_pred_e2e("q")],
+    })
+}
+
+fn assert_compound_alternation_closure_e2e() {
+    // Graph exercising BOTH predicates: a -p-> b -q-> c -p-> d, plus a -q-> e (a q-branch off a).
+    // The derived union edge E' = {(a,b), (b,c), (c,d), (a,e)}.
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("b", "q", "c"),
+        ("c", "p", "d"),
+        ("a", "q", "e"),
+    ]);
+    let root = lc.state.commitment_root;
+    let iri_set = |names: &[&str]| {
+        names.iter().map(|name| iri(name)).collect::<std::collections::BTreeSet<String>>()
+    };
+
+    // plus((p|q)) from a = {b, c, d, e} (a->b->c->d alternating, plus a->e).
+    let plus_q = distinct_compound_closure("a", alt_body(), false, "y");
+    let plus_c = plan_bgp(&plus_q).unwrap();
+    let plus_p = plus_c.prove(&lc).unwrap();
+    let plus_obj = plus_p.verify_and_resolve(&plus_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&plus_obj), iri_set(&["b", "c", "d", "e"]));
+
+    // Portable envelope round-trips through the store decode+verify path.
+    let plus_bytes = plus_p.encode_envelope(&plus_c, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_c, &lc, root).unwrap();
+
+    // star((p|q)) from a = {a, b, c, d, e} (adds the reflexive identity a).
+    let star_q = distinct_compound_closure("a", alt_body(), true, "y");
+    let star_c = plan_bgp(&star_q).unwrap();
+    let star_p = star_c.prove(&lc).unwrap();
+    let star_obj = star_p.verify_and_resolve(&star_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&star_obj), iri_set(&["a", "b", "c", "d", "e"]));
+
+    // Bound TARGET via inversion: nodes reaching d over (p|q)+ = {a, b, c} (a->b->c->d).
+    let inv_q = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable("x".into()),
+            pattern: PathPattern::Plus(PathPlus { plus: Box::new(alt_body()) }),
+            object: Value::Node(iri("d")),
+            path: None,
+        })),
+    });
+    let inv_c = plan_bgp(&inv_q).unwrap();
+    let inv_p = inv_c.prove(&lc).unwrap();
+    let inv_obj = inv_p.verify_and_resolve(&inv_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&inv_obj), iri_set(&["a", "b", "c"]));
+
+    // ---- Soundness / non-interchangeability ----
+    // (i) OPERATOR: a plus proof must NOT verify as the star query digest (and vice versa).
+    assert!(plus_p.verify(&star_c, &lc, root).is_err());
+    assert!(decode_and_verify_envelope(&plus_bytes, &star_c, &lc, root).is_err());
+    // (ii) EDGE STRUCTURE: the compound `(p|q)+` proof must NOT verify as the SEQUENCE `(p/q)+` query
+    // (different derived edge → different digest), nor as the single-predicate `p+` closure.
+    let seq_c = plan_bgp(&distinct_compound_closure("a", seq_body(), false, "y")).unwrap();
+    assert!(plus_p.verify(&seq_c, &lc, root).is_err(), "(p|q)+ must not verify as (p/q)+");
+    let single_p_c = plan_bgp(&distinct_closure_query("a", false, "p", "y")).unwrap();
+    assert!(plus_p.verify(&single_p_c, &lc, root).is_err(), "(p|q)+ must not verify as p+");
+    // (iii) TAMPERED RESULT: injecting a forged reachable node into the delivered column fails against
+    // the root-authenticated accumulator A_K.
+    let mut tampered = RecursiveRelationEnvelope::decode(&plus_bytes).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(9_999_999);
+    tampered.result_commitments[0] =
+        commit_column(&pad(&tampered.result_columns[0], 1usize << tampered.result_log_domain)).unwrap();
+    assert!(
+        decode_and_verify_envelope(&tampered.encode().unwrap(), &plus_c, &lc, root).is_err(),
+        "a forged reachable node must not verify against the authenticated A_K"
+    );
+}
+
+fn assert_compound_sequence_closure_e2e() {
+    // Chain of TWO compound hops: a =(p/q)=> b =(p/q)=> c, via intermediates x1, x2.
+    //   a -p-> x1 -q-> b  and  b -p-> x2 -q-> c.
+    // The derived sequence edge E' = p∘q = {(a,b), (b,c)} — NOT the intermediates x1/x2.
+    let lc = build_layer(&[
+        ("a", "p", "x1"),
+        ("x1", "q", "b"),
+        ("b", "p", "x2"),
+        ("x2", "q", "c"),
+    ]);
+    let root = lc.state.commitment_root;
+    let iri_set = |names: &[&str]| {
+        names.iter().map(|name| iri(name)).collect::<std::collections::BTreeSet<String>>()
+    };
+
+    // plus((p/q)) from a = {b, c}. Crucially EXCLUDES the single-hop intermediates x1, x2 (they are not
+    // reachable by a full (p/q) compound hop) — this is what proves the sequence edge requires BOTH hops.
+    let plus_q = distinct_compound_closure("a", seq_body(), false, "y");
+    let plus_c = plan_bgp(&plus_q).unwrap();
+    let plus_p = plus_c.prove(&lc).unwrap();
+    let plus_obj = plus_p.verify_and_resolve(&plus_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&plus_obj), iri_set(&["b", "c"]));
+
+    let plus_bytes = plus_p.encode_envelope(&plus_c, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_c, &lc, root).unwrap();
+
+    // star((p/q)) from a = {a, b, c} (reflexive identity a added).
+    let star_q = distinct_compound_closure("a", seq_body(), true, "y");
+    let star_c = plan_bgp(&star_q).unwrap();
+    let star_p = star_c.prove(&lc).unwrap();
+    let star_obj = star_p.verify_and_resolve(&star_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&star_obj), iri_set(&["a", "b", "c"]));
+
+    // ---- Soundness / non-interchangeability ----
+    // (i) OPERATOR: plus vs star.
+    assert!(plus_p.verify(&star_c, &lc, root).is_err());
+    // (ii) EDGE STRUCTURE: `(p/q)+` must NOT verify as the reversed `(q/p)+` query (different join
+    // order → different derived edge → different digest), nor as the alternation `(p|q)+`.
+    let rev_seq = PathPattern::Sequence(PathSequence {
+        sequence: vec![closure_pred_e2e("q"), closure_pred_e2e("p")],
+    });
+    let rev_c = plan_bgp(&distinct_compound_closure("a", rev_seq, false, "y")).unwrap();
+    assert!(plus_p.verify(&rev_c, &lc, root).is_err(), "(p/q)+ must not verify as (q/p)+");
+    let alt_c = plan_bgp(&distinct_compound_closure("a", alt_body(), false, "y")).unwrap();
+    assert!(plus_p.verify(&alt_c, &lc, root).is_err(), "(p/q)+ must not verify as (p|q)+");
+    // (iii) TAMPERED RESULT: injecting the excluded intermediate x1's id must fail against A_K.
+    let mut tampered = RecursiveRelationEnvelope::decode(&plus_bytes).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(7_777_777);
+    tampered.result_commitments[0] =
+        commit_column(&pad(&tampered.result_columns[0], 1usize << tampered.result_log_domain)).unwrap();
+    assert!(
+        decode_and_verify_envelope(&tampered.encode().unwrap(), &plus_c, &lc, root).is_err(),
+        "a forged reachable node must not verify against the authenticated A_K"
+    );
+    // (iv) WRONG ROOT: the proof must not verify against a different committed graph.
+    let other = build_layer(&[("a", "p", "x1"), ("x1", "q", "b")]);
+    assert!(
+        plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err(),
+        "the compound closure proof must not verify against a different committed graph"
+    );
+}
+
+#[test]
+fn compound_alternation_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-compound-alt-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_compound_alternation_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn compound_sequence_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-compound-seq-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_compound_sequence_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `Distinct([subject, object], Path(?subject, star|plus(p), ?object))` — the all-pairs closure gate.
 fn all_pairs_closure_query(subject: &str, reflexive: bool, predicate: &str, object: &str) -> Query {
     let inner = PathPattern::Predicate(PathPredicate {

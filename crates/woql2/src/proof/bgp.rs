@@ -1297,6 +1297,12 @@ pub(crate) fn validate_compiled_structure(relation: &CompiledRelation) -> Result
             | CompiledRelationStatement::OrderedListWalk { .. }
             // The ordered-array walk is a leaf too (a bound (subject, predicate), no child relation).
             | CompiledRelationStatement::OrderedArrayWalk { .. } => Ok(()),
+            // The COMPOUND closure carries a derived edge CompiledRelation child (the bag-union /
+            // projected join), so recurse into it — bounding the edge subtree by the same depth/node
+            // budget as any other child.
+            CompiledRelationStatement::TransitiveClosureCompound { edge, .. } => {
+                visit(edge, depth + 1, nodes)
+            }
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
             | CompiledRelationStatement::GeneratedI64Filter { input, .. } => {
                 visit(input, depth + 1, nodes)
@@ -1402,6 +1408,13 @@ pub(crate) fn relation_graph(relation: &CompiledRelation) -> std::io::Result<Pro
             // The all-pairs closure carries its own graph selector too (always `Instance` for a WOQL
             // path closure).
             CompiledRelationStatement::TransitiveClosurePairs { graph, .. } => combine(acc, *graph),
+            // The compound closure carries a graph selector (always `Instance`) AND a derived edge
+            // CHILD relation; combine both, so a schema-reading edge could never hide behind an
+            // `Instance` closure tag (defense-in-depth — the compiler only ever builds an instance edge).
+            CompiledRelationStatement::TransitiveClosureCompound { edge, graph, .. } => {
+                combine(acc, *graph)?;
+                walk(edge, acc)
+            }
             // The ordered-list walk carries its own graph selector too (always `Instance` in this
             // increment — a stored `rdf:List` lives in the instance graph).
             CompiledRelationStatement::OrderedListWalk { graph, .. } => combine(acc, *graph),
@@ -1676,6 +1689,9 @@ pub(crate) fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         // The all-pairs closure delivers the deduped reachable PAIRS relation (each round ends in a
         // 2-column Distinct on the full tuple), so it is unique by construction over [src, dst].
         CompiledRelationStatement::TransitiveClosurePairs { .. } => true,
+        // The compound closure delivers the SAME deduped reachable SET as the single-seed closure
+        // (only the edge differs), so it is unique by construction.
+        CompiledRelationStatement::TransitiveClosureCompound { .. } => true,
         // Distinct and the aggregations emit at most one row per key/group, hence unique.
         CompiledRelationStatement::Distinct { .. }
         | CompiledRelationStatement::GroupExtrema { .. }

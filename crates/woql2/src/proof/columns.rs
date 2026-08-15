@@ -47,6 +47,14 @@ pub(crate) fn relation_result_descriptors(
                 },
             ])
         }
+        CompiledRelationStatement::TransitiveClosureCompound { .. } => {
+            // Identical delivered shape to the single-seed closure: the reachable set is one
+            // nonnullable node column (only the compound EDGE differs, not the result).
+            Ok(vec![ResultColumnDescriptor {
+                namespace: ResultIdNamespace::NodeValue,
+                nullable: false,
+            }])
+        }
         CompiledRelationStatement::OrderedListWalk { .. }
         // The ordered array element sequence is likewise one nonnullable node/value column (the
         // value-in-index-order column — identical delivered shape to the list walk).
@@ -488,7 +496,32 @@ pub(crate) fn relation_proof_plan(
             // verifier picking the matching commitment + `commitment_root` from the trusted query.
             graph: _,
         } => RelationProofPlanKind::TransitiveClosure {
-            edge: edge.clone(),
+            // The store closure edge is now a general `RelationProofPlan`; a single-predicate edge is a
+            // `Bgp` leaf carrying the closure's OWN query digest as its identity tag — byte-identical to
+            // the previous store-side `closure_edge_plan(edge, closure_digest)` wrapping, so every
+            // existing single-predicate closure proof/digest is unchanged.
+            edge: Box::new(RelationProofPlan {
+                query_digest,
+                kind: RelationProofPlanKind::Bgp(edge.clone()),
+            }),
+            seed: seed.clone(),
+            reflexive: *reflexive,
+            inverted: *inverted,
+        },
+        CompiledRelationStatement::TransitiveClosureCompound {
+            edge,
+            seed,
+            reflexive,
+            inverted,
+            // The graph selector is NOT carried into the store plan kind (identical to the single-seed
+            // closure): the store recursion is graph-blind, and the selector's soundness is anchored by
+            // its digest fold (above) + the verifier picking the matching commitment root.
+            graph: _,
+        } => RelationProofPlanKind::TransitiveClosure {
+            // The compound edge is a general committed relation (deduped bag-union / projected join),
+            // lowered like any other child so it carries its own per-node digest. The store closure
+            // driver takes it BY COMMITMENT — the SAME `TransitiveClosure` node, only `E` differs.
+            edge: Box::new(child(edge)?),
             seed: seed.clone(),
             reflexive: *reflexive,
             inverted: *inverted,

@@ -231,6 +231,47 @@ pub enum CompiledRelationStatement {
         /// single-seed [`Self::TransitiveClosure`]. See [`ProofGraph`] and [`relation_graph`].
         graph: ProofGraph,
     },
+    /// Bounded single-seed transitive closure (`star`/`plus`) over a COMPOUND sub-pattern
+    /// (`(p|q)`, `(p/q)`) from ONE bound endpoint (P3). The ONLY difference from the single-predicate
+    /// [`Self::TransitiveClosure`] is the EDGE: here `E'` is a DERIVED 2-column [start, end] relation —
+    /// the deduped bag-union of the branch edges (`(p|q)` = `Distinct(BagUnion(edge(p), edge(q)))`), or
+    /// the two-atom join projected to its endpoints (`(p/q)` = `Distinct(BagProjection(InnerJoin(...)))`)
+    /// — built by ROUTING the body through the fixed-length path lowerer, exactly as the design doc
+    /// prescribes. Because the store closure driver is source-agnostic over `E` (takes it BY
+    /// COMMITMENT), it maps to the SAME store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::TransitiveClosure`] node — only `E`'s
+    /// structure changes — so the semi-naive round/fixpoint machinery is reused UNCHANGED (no new
+    /// crypto). The proof is carried WHOLESALE (like [`Self::TransitiveClosurePairs`]), not decomposed.
+    ///
+    /// FIDELITY (`src/core/query/path.pl`). `path.pl`'s `plus`/`star` are edge-simple over PRIMITIVE
+    /// edges (`Open_Set`), so a compound-hop closure equals path.pl's reachability at the SET level
+    /// (the required `Distinct` delivers the set) ONLY when a node-simple `E'`-walk uses DISTINCT
+    /// primitive edges. For `(p|q)` (each hop = one primitive edge) this ALWAYS holds. For `(p/q)`
+    /// (each hop = a p-edge then a q-edge) it holds IFF `p ≠ q` (distinct hop-starts ⇒ distinct
+    /// p-edges, distinct hop-ends ⇒ distinct q-edges, and `p ≠ q` prevents a p-edge/q-edge collision);
+    /// the compiler REJECT-CLOSES a same-predicate 2-sequence and any sequence longer than 2 hops
+    /// (middle primitive edges could then repeat, breaking edge-simplicity — unfaithful).
+    ///
+    /// Emitted ONLY under the endpoint `Distinct` gate and ONLY for ONE bound endpoint (a bound source
+    /// walks `E'` forward; a bound target walks it backward via `inverted`, which at the SET level
+    /// equals `path.pl`'s `invert_path` of the compound pattern). Both-free / both-bound compound
+    /// closures reject-closed (single-seed scope). See [`crate::proof::paths::plan_compound_closure`].
+    TransitiveClosureCompound {
+        /// The derived compound edge relation `E'`, a 2-column [start, end] node/value relation
+        /// (deduped). Proven ONCE as a leaf and reused by commitment across every round + the fixpoint.
+        edge: Box<CompiledRelation>,
+        /// The bound endpoint the traversal starts from (`a` for a bound SOURCE, `b` for a bound TARGET
+        /// walked backward).
+        seed: CanonicalObject,
+        /// `true` = `star` (reflexive: the bound seed is in the set); `false` = `plus`.
+        reflexive: bool,
+        /// `false` walks `E'` `start -> end` from a bound source; `true` walks it `end -> start`
+        /// (a bound target — the SET-level mirror of `path.pl`'s `invert_path` of the compound body).
+        inverted: bool,
+        /// SCHEMA-GRAPH FOUNDATION — always `Instance` for a WOQL path closure (folds NOTHING into the
+        /// digest, exactly like the single-seed / all-pairs closures). See [`ProofGraph`].
+        graph: ProofGraph,
+    },
     /// Authenticated ORDERED walk of one stored `rdf:List`: given a BOUND subject node `S` and a
     /// bound list-valued predicate `P`, deliver the list's elements IN ORDER as one nonnullable
     /// node/value column (ReadDocument increment 2a). This is the woql2 mirror of the store
@@ -1143,6 +1184,17 @@ pub enum ProvedQueryStatement {
     /// its order/length are authenticated). See
     /// [`CompiledRelationStatement::TransitiveClosurePairs`].
     TransitiveClosurePairs {
+        envelope: Box<RecursiveRelationEnvelope>,
+    },
+    /// A proved bounded single-seed transitive closure over a COMPOUND body (`(p|q)+`, `(p/q)+`; P3).
+    /// Unlike the single-predicate [`Self::TransitiveClosure`] (decomposed into edge/seed/rounds/
+    /// fixpoint, where the edge is a single `Bgp` leaf), the compound closure's edge is a DERIVED
+    /// relation (a deduped bag-union / projected join), so — exactly like [`Self::TransitiveClosurePairs`]
+    /// / [`Self::OrderedListWalk`] — the whole store [`RecursiveRelationEnvelope`] is carried WHOLESALE
+    /// and verified by re-running the store's own recursive verify (which binds it to the trusted root
+    /// AND the statement's query digest, so the reachable set, the compound edge structure, and the
+    /// seed/direction are all authenticated). See [`CompiledRelationStatement::TransitiveClosureCompound`].
+    TransitiveClosureCompound {
         envelope: Box<RecursiveRelationEnvelope>,
     },
     GroupSum {
