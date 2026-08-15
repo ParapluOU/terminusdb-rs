@@ -46,7 +46,8 @@ use terminusdb_woql2::proof::{
     ProofGraph, ProvedQueryStatement,
 };
 use terminusdb_woql2::triple::{
-    AddedTriple, Data, DeletedTriple, Link, TripleNext, TriplePrevious, TripleSlice, TripleSliceRev,
+    AddedTriple, Data, DeletedTriple, Link, Triple, TripleNext, TriplePrevious, TripleSlice,
+    TripleSliceRev,
 };
 use terminusdb_woql2::reconciled::{prove_reconciled_read, verify_and_resolve_reconciled_read};
 use terminusdb_woql2::{
@@ -10304,6 +10305,154 @@ fn path_forward_inverse_same_predicate_completeness_keeps_valid() {
     // Envelope round-trips and re-verifies.
     let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
     decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+// ============================================================================
+// W2 — FIXED-LENGTH multi-hop WILDCARD paths (`Sequence([.,.])`, `Times(., n, n)`, mixed
+// `Sequence([.,p])`). Two wildcard hops can traverse the SAME stored edge with no compile-time
+// same-predicate guarantee, so the edge-simple `TupleDisequality` folds the PREDICATE id into a
+// 3-column FULL-TRIPLE fingerprint: two hops are the same stored edge iff subject AND predicate AND
+// object coincide — exactly `path.pl`'s `make_edge(subject, predicate, object)` `Open_Set` key. A
+// pair whose (s,o) coincide but whose PREDICATE differs is KEPT (two distinct multi-predicate edges),
+// the P5b-style multiplicity a 2-column (predicate-blind) fold would wrongly drop.
+// ============================================================================
+
+/// `path(a, Sequence([., .]), ?y)` — a bound source `a`, a variable object, two wildcard hops.
+fn two_hop_wildcard_from_a(object: &str) -> Query {
+    Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Sequence(PathSequence {
+            sequence: vec![
+                PathPattern::Predicate(PathPredicate { predicate: None }),
+                PathPattern::Predicate(PathPredicate { predicate: None }),
+            ],
+        }),
+        object: Value::Variable(object.into()),
+        path: None,
+    })
+}
+
+/// `Triple(<iri(subj)>, ?pred, ?obj)` — a bound-subject, free-predicate, free-object atom (the plain
+/// wildcard first hop, for the over-count soundness comparison).
+fn triple_subj_const_pred_var(subj: &str, pred: &str, obj: &str) -> Query {
+    Query::Triple(Triple {
+        subject: NodeValue::Node(iri(subj)),
+        predicate: NodeValue::Variable(pred.into()),
+        object: Value::Variable(obj.into()),
+        graph: None,
+    })
+}
+
+#[test]
+fn two_hop_wildcard_drops_full_edge_reuse_and_keeps_predicate_difference() {
+    // KEY test. `path(a, (./.), ?y)` over a graph with TWO self-loops at `a` (distinct predicates p, q)
+    // plus a p-edge a->b. Edge-simple 2-hop wildcard walks from a (both hops DISTINCT stored edges):
+    //   a-(a,p,a)->a-(a,q,a)->a   distinct edges (p != q)          -> y=a  KEPT (SAME (s,o), diff pred!)
+    //   a-(a,p,a)->a-(a,p,b)->b   distinct edges                   -> y=b  KEPT
+    //   a-(a,q,a)->a-(a,p,a)->a   distinct edges                   -> y=a  KEPT (SAME (s,o), diff pred!)
+    //   a-(a,q,a)->a-(a,p,b)->b   distinct edges                   -> y=b  KEPT
+    // DROPPED (the same stored edge traversed twice): (a,p,a)+(a,p,a) and (a,q,a)+(a,q,a).
+    // Edge-simple bag = {a, a, b, b}; a plain bag-join returns 6 (the two self-reuse walks too).
+    let layer = build_layer(&[("a", "p", "a"), ("a", "q", "a"), ("a", "p", "b")]);
+    let root = layer.state.commitment_root;
+
+    let compiled = plan_bgp(&two_hop_wildcard_from_a("y")).unwrap();
+    assert_eq!(compiled.relation.schema, ["y"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(
+        proof.result_len, 4,
+        "the two same-edge (full-triple) reuse walks drop; the diff-predicate self-loop pairs are KEPT"
+    );
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(
+        join_rows(&values),
+        vec![vec![iri("a")], vec![iri("a")], vec![iri("b")], vec![iri("b")]],
+        "y = {{a (×2, differing-predicate self-loop pairs), b (×2)}}"
+    );
+
+    // Envelope round-trips and re-verifies.
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+}
+
+#[test]
+fn two_hop_wildcard_soundness_negatives() {
+    let layer = build_layer(&[("a", "p", "a"), ("a", "q", "a"), ("a", "p", "b")]);
+    let root = layer.state.commitment_root;
+    let compiled = plan_bgp(&two_hop_wildcard_from_a("y")).unwrap();
+    let proof = compiled.prove(&layer).unwrap();
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+
+    // (a) The PLAIN 2-hop wildcard bag-join (no edge-simple filter) OVER-COUNTS: it returns 6 walks
+    // from a (INCLUDING the two full-triple self-reuse walks) vs the path's 4 — the exact over-count
+    // the full-triple TupleDisequality removes.
+    let plain = plan_bgp(&and_of(vec![
+        triple_subj_const_pred_var("a", "p0", "m"),
+        tv_pred_var("m", "p1", "y"),
+    ]))
+    .unwrap();
+    let plain_proof = plain.prove(&layer).unwrap();
+    assert_eq!(plain_proof.result_len, 6);
+    assert!(plain_proof.result_len > proof.result_len);
+
+    // (b) The disequality envelope cannot be re-verified as the plain join (the full-triple filter is
+    // bound into the plan/digest and the result shape).
+    assert!(decode_and_verify_envelope(&envelope, &plain, &layer, root).is_err());
+
+    // (c) A tampered result (claiming a dropped full-triple-reuse row survived) fails.
+    let mut tampered = compiled.prove(&layer).unwrap();
+    tampered.result_len += 1;
+    assert!(tampered.verify(&compiled, &layer, root).is_err());
+}
+
+#[test]
+fn mixed_wildcard_concrete_sequence_folds_predicate_constant_end_to_end() {
+    // MIXED `path(a, (./p), ?y)`: hop0 wildcard, hop1 concrete `p`, over the two self-loops {(a,p,a),
+    // (a,q,a)}. hop0 reaches a via p OR q; hop1 (concrete p) then walks (a,p,a). The full-triple pair
+    // folds hop0's predicate COLUMN against hop1's predicate CONSTANT `p`, so a reuse fires ONLY when
+    // hop0's runtime predicate is ALSO `p`:
+    //   hop0=(a,p,a), hop1=(a,p,a)  same edge (a,p,a) twice           -> DROP
+    //   hop0=(a,q,a), hop1=(a,p,a)  distinct edges (q != p)           -> y=a  KEEP
+    // Edge-simple result = {a}; a plain bag-join returns 2.
+    let layer = build_layer(&[("a", "p", "a"), ("a", "q", "a")]);
+    let root = layer.state.commitment_root;
+
+    let compiled = plan_bgp(&Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Sequence(PathSequence {
+            sequence: vec![
+                PathPattern::Predicate(PathPredicate { predicate: None }),
+                PathPattern::Predicate(PathPredicate {
+                    predicate: Some(iri("p")),
+                }),
+            ],
+        }),
+        object: Value::Variable("y".into()),
+        path: None,
+    }))
+    .unwrap();
+    assert_eq!(compiled.relation.schema, ["y"]);
+
+    let proof = compiled.prove(&layer).unwrap();
+    assert_eq!(proof.result_len, 1, "the p-then-p self-reuse drops; the q-then-p walk is kept");
+    let values = proof.verify_and_resolve_values(&compiled, &layer, root).unwrap();
+    assert_eq!(join_rows(&values), vec![vec![iri("a")]]);
+
+    // SOUNDNESS — the plain `Triple(a, ?p0, ?m) AND Triple(?m, p, ?y)` OVER-COUNTS (2 vs 1): it keeps
+    // the p-then-p self-reuse the full-triple filter removes.
+    let plain = plan_bgp(&and_of(vec![
+        triple_subj_const_pred_var("a", "p0", "m"),
+        tv("m", "p", "y"),
+    ]))
+    .unwrap();
+    let plain_proof = plain.prove(&layer).unwrap();
+    assert_eq!(plain_proof.result_len, 2);
+    assert!(plain_proof.result_len > proof.result_len);
+
+    let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
+    assert!(decode_and_verify_envelope(&envelope, &plain, &layer, root).is_err());
 }
 
 // ===================================================================================================

@@ -350,20 +350,18 @@ pub enum BgpPlanError {
     #[error("wildcard path predicate (`.`) is unsupported in this position: only a bare single-hop wildcard with a free endpoint (or a single-seed `star`/`plus(.)` closure) is provable")]
     PathWildcardUnsupported,
 
-    /// A wildcard predicate `.` in a MULTI-HOP / nested fixed-length position (`Sequence([., .])`,
-    /// `Times(., n, n)` with `n >= 2`, or a wildcard buried in a `Sequence`/`Or`/`Times`). Two
-    /// wildcard hops can traverse the SAME stored edge WITHOUT a same-predicate guarantee, so
-    /// keeping it edge-simple would need a FULL-TRIPLE (predicate-in-fingerprint) disequality —
-    /// [`build_disequality_pairs`] fingerprints only the `(walk-from, walk-to)` node pair (the
-    /// predicate cancels WITHIN a predicate group), which once the predicate itself is free would
-    /// OVER-DROP valid multi-predicate solutions — two hops over DIFFERENT-predicate edges between
-    /// the same nodes fingerprint identically and get removed, so the result is incomplete (it can
-    /// only drop rows, never certify a pair `path.pl` rejects); certifying that truncated set as the
-    /// complete answer violates the completeness contract. No such full-triple disequality gadget
-    /// exists, so a multi-hop / nested wildcard
-    /// rejects closed. (A single wildcard hop cannot reuse an edge, so it needs no disequality and
-    /// is provable.)
-    #[error("multi-hop / nested wildcard path predicate (`.`) is unsupported: two free-predicate hops need a full-triple edge-simple disequality that does not exist; reject closed")]
+    /// A wildcard predicate `.` in a NON-CHAIN position — a wildcard buried in a union branch
+    /// (`(knows | .)`), a nested closure (`Sequence([., star(p)])`), or any other position that is
+    /// NOT a FIXED-LENGTH chain. A FIXED-LENGTH multi-hop wildcard CHAIN (`Sequence([., .])`,
+    /// `Times(., n, n)`, mixed `Sequence([., p])`) is NOW provable (W2): its hop-pairs get the
+    /// 3-column FULL-TRIPLE `(subject, predicate, object)` edge-simple disequality
+    /// ([`build_disequality_pairs`] folds the predicate id in for any wildcard-involving pair), so
+    /// two hops are the same stored edge iff subject AND predicate AND object coincide — faithful to
+    /// `path.pl`'s `make_edge`. This error survives for the shapes still out of scope: a wildcard in
+    /// a union alternative / non-chain position (routed here by [`is_fixed_length_wildcard_chain`]
+    /// returning `false`), and — via the closure planner's own guards — a CLOSURE over a
+    /// multi-hop-wildcard body (`star((.,.))`), which is a separate, unbounded construct.
+    #[error("wildcard path predicate (`.`) is unsupported in this position: only a FIXED-LENGTH multi-hop wildcard chain is provable; a wildcard in a union branch / nested closure / other non-chain position rejects closed")]
     PathWildcardMultiHopUnsupported,
 
     /// A multi-hop path reuses a predicate across two hops. Leading-Prolog path evaluation

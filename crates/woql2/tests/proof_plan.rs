@@ -36,6 +36,7 @@ use terminusdb_woql2::value::{DataValue, ListOrVariable, NodeValue, Value};
 
 use terminus_store::proof::envelope::{
     CollectionSumTemplate, EqualityValueDomain, GeneratedU64ComparisonOp, RelationEqualityPlan,
+    TupleDisequalityNode,
 };
 use terminus_store::proof::query::{AtomTerm, ColumnSource, ObjectKindFilter, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
@@ -3650,25 +3651,135 @@ fn rejects_both_bound_single_hop_wildcard() {
     reject(q, BgpPlanError::PathWildcardUnsupported);
 }
 
-#[test]
-fn rejects_multi_hop_wildcard_sequence() {
-    // `path(?s, (./.), ?o)` — two wildcard hops can reuse a stored edge WITHOUT a same-predicate
-    // guarantee, needing a full-triple edge-simple disequality that does not exist. Reject closed.
-    let pattern = PathPattern::Sequence(PathSequence {
-        sequence: vec![path_wildcard(), path_wildcard()],
-    });
-    reject(path_var_query("s", pattern, "o"), BgpPlanError::PathWildcardMultiHopUnsupported);
+/// Extract the single `TupleDisequality` pair-list under the endpoint `BagProjection` of a compiled
+/// multi-hop wildcard path (asserting the leaf is a BGP join), for the W2 full-triple assertions.
+#[track_caller]
+fn wildcard_disequality_pairs(
+    compiled: &CompiledBgp,
+) -> Vec<terminus_store::proof::envelope::TupleDisequalityPairPlan> {
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("expected endpoint BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::TupleDisequality { input, pairs } = &input.statement else {
+        panic!("expected TupleDisequality filter, got {:?}", input.statement);
+    };
+    assert!(
+        matches!(input.statement, CompiledRelationStatement::Bgp(_)),
+        "the wildcard join chain is a single leaf BGP, got {:?}",
+        input.statement
+    );
+    pairs.clone()
 }
 
 #[test]
-fn rejects_times_two_two_wildcard() {
-    // `path(?s, .{2,2}, ?o)` — a two-fold wildcard repeat is multi-hop; same full-triple-disequality gap.
+fn multi_hop_wildcard_sequence_uses_full_triple_disequality() {
+    // W2. `path(?s, (./.), ?o)` — two wildcard hops CAN reuse a stored edge with no same-predicate
+    // guarantee, so the edge-simple filter folds the PREDICATE id into a 3-column full-triple
+    // disequality: two hops are the same stored edge iff subject AND predicate AND object coincide.
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_wildcard(), path_wildcard()],
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let pairs = wildcard_disequality_pairs(&compiled);
+    assert_eq!(pairs.len(), 1, "one hop-pair for a 2-hop chain");
+    let pair = &pairs[0];
+    // FULL-TRIPLE: the pair carries a predicate position, and BOTH hops' predicates are wildcard
+    // COLUMNS (materialized `Predicate`-namespace columns), not constants.
+    let (pa, pb) = pair.predicate.as_ref().expect("wildcard hops fold the predicate id in");
+    assert!(matches!(pa, TupleDisequalityNode::Column(_)), "hop0 predicate is a wildcard column");
+    assert!(matches!(pb, TupleDisequalityNode::Column(_)), "hop1 predicate is a wildcard column");
+    // The predicate columns are DISTINCT (each wildcard hop gets its own fresh predicate variable),
+    // and distinct from the subject/object node positions.
+    assert_ne!(pa, pb, "each wildcard hop has its own predicate column");
+    // WALK alignment: the shared intermediate is hop0's walk-to AND hop1's walk-from (both forward).
+    assert_eq!(pair.a1, pair.b0, "shared intermediate aligns in walk space");
+    assert_ne!(pair.a0, pair.a1, "hop0 walk edge spans two distinct columns");
+    assert_ne!(pair.b0, pair.b1, "hop1 walk edge spans two distinct columns");
+    // The predicate columns are not the same slots as the node columns.
+    for node in [&pair.a0, &pair.a1, &pair.b1] {
+        assert_ne!(node, pa);
+        assert_ne!(node, pb);
+    }
+}
+
+#[test]
+fn times_two_two_wildcard_uses_full_triple_disequality() {
+    // W2. `path(?s, .{2,2}, ?o)` — a two-fold wildcard repeat is the same full-triple case.
     let pattern = PathPattern::Times(PathTimes {
         times: Box::new(path_wildcard()),
         from: 2,
         to: 2,
     });
-    reject(path_var_query("s", pattern, "o"), BgpPlanError::PathWildcardMultiHopUnsupported);
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let pairs = wildcard_disequality_pairs(&compiled);
+    assert_eq!(pairs.len(), 1);
+    let (pa, pb) = pairs[0].predicate.as_ref().expect("full-triple predicate fold");
+    assert!(matches!(pa, TupleDisequalityNode::Column(_)));
+    assert!(matches!(pb, TupleDisequalityNode::Column(_)));
+}
+
+#[test]
+fn times_three_three_wildcard_has_three_full_triple_pairs() {
+    // `.{3,3}` -> 3 wildcard hops -> C(3,2)=3 hop-pairs, EACH a full-triple (predicate-folded)
+    // disequality (unlike a concrete `p^3` where all hops share `p`, here every pair is wildcard).
+    let pattern = PathPattern::Times(PathTimes {
+        times: Box::new(path_wildcard()),
+        from: 3,
+        to: 3,
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    let pairs = wildcard_disequality_pairs(&compiled);
+    assert_eq!(pairs.len(), 3);
+    for pair in &pairs {
+        let (pa, pb) = pair.predicate.as_ref().expect("every wildcard pair is full-triple");
+        assert!(matches!(pa, TupleDisequalityNode::Column(_)));
+        assert!(matches!(pb, TupleDisequalityNode::Column(_)));
+    }
+}
+
+#[test]
+fn mixed_wildcard_concrete_sequence_folds_predicate_constant() {
+    // MIXED `path(?s, (./p), ?o)` = Sequence([., p]): hop0 wildcard, hop1 concrete `p`. The ONE
+    // hop-pair is full-triple, folding hop0's predicate COLUMN against hop1's predicate CONSTANT
+    // (`p`'s IRI). A same-predicate collapse thus requires the wildcard hop's runtime predicate to
+    // equal `p` (as well as subject/object) — exactly path.pl's edge identity.
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_wildcard(), path_pred("p")],
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let pairs = wildcard_disequality_pairs(&compiled);
+    assert_eq!(pairs.len(), 1);
+    let (pa, pb) = pairs[0].predicate.as_ref().expect("mixed pair is full-triple");
+    assert!(matches!(pa, TupleDisequalityNode::Column(_)), "hop0 (wildcard) predicate is a column");
+    assert!(
+        matches!(pb, TupleDisequalityNode::Constant(CanonicalObject::Node(_))),
+        "hop1 (concrete `p`) predicate is a node-IRI constant"
+    );
+}
+
+#[test]
+fn mixed_concrete_wildcard_inverse_sequence_folds_predicate() {
+    // `path(?s, (p / <.), ?o)` = Sequence([p, InverseWildcard]): hop0 concrete forward `p`, hop1 an
+    // INVERSE wildcard. The pair is full-triple; the inverse hop swaps subject/object but keeps its
+    // predicate column, so the walk-aligned shared intermediate still satisfies a1 == b0.
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_pred("p"), path_inverse_wildcard()],
+    });
+    let compiled = plan_bgp(&path_var_query("s", pattern, "o")).unwrap();
+    assert_eq!(projected_schema(&compiled), ["s", "o"]);
+    let pairs = wildcard_disequality_pairs(&compiled);
+    assert_eq!(pairs.len(), 1);
+    let pair = &pairs[0];
+    let (pa, pb) = pair.predicate.as_ref().expect("mixed pair is full-triple");
+    assert!(
+        matches!(pa, TupleDisequalityNode::Constant(CanonicalObject::Node(_))),
+        "hop0 (concrete `p`) predicate is a constant"
+    );
+    assert!(matches!(pb, TupleDisequalityNode::Column(_)), "hop1 (inverse wildcard) predicate is a column");
+    assert_eq!(pair.a1, pair.b0, "inverse hop is walk-oriented: shared intermediate aligns a1 == b0");
 }
 
 #[test]

@@ -848,6 +848,17 @@ pub(crate) fn digest_tuple_disequality_pairs(hasher: &mut Sha256, pairs: &[Tuple
         node(hasher, &pair.a1);
         node(hasher, &pair.b0);
         node(hasher, &pair.b1);
+        // Fold the full-triple predicate positions ONLY when present, so a 2-column (P5a) pair's
+        // digest is byte-identical to before this generalization; a 3-column pair folds a distinct
+        // statement (a wildcard proof can never be replayed under a concrete-partition query).
+        match &pair.predicate {
+            None => hasher.update([0]),
+            Some((pa, pb)) => {
+                hasher.update([1]);
+                node(hasher, pa);
+                node(hasher, pb);
+            }
+        }
     }
 }
 

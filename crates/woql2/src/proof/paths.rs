@@ -5,8 +5,11 @@
 //! and single-hop `Or` alternatives ([`plan_deferred_repeated_predicate_path`]), plus the
 //! transitive-closure form ([`plan_transitive_closure_path`]). It rewrites paths into
 //! `Triple` / `And` / `Or` / `Select` over fresh intermediate variables (edge-simple, bag
-//! multiplicity faithful to the reference path evaluator); `Star` / `Plus` / open closure,
-//! wildcard predicates, and repeated-predicate chains reject closed.
+//! multiplicity faithful to the reference path evaluator). Repeated-predicate chains and
+//! FIXED-LENGTH multi-hop WILDCARD chains are compiled at the plan level via the
+//! `TupleDisequality` edge-simple filter (the latter using the 3-column FULL-TRIPLE fingerprint —
+//! W2). `Star` / `Plus` / open closure route to [`plan_transitive_closure_path`]; a closure over a
+//! multi-hop-wildcard body, edge-list capture, and zero-length identity reject closed.
 
 use super::*;
 
@@ -45,9 +48,15 @@ use super::*;
 //                                  distinct-predicate guard)
 //   * `Times(pat, a, b)`        -> bag union over exact lengths a..=b (only single-hop
 //                                  lengths survive)
-// Rejected closed: `Star`/`Plus`/open `Times` (closure), wildcard `.` predicates,
-// repeated-predicate / multi-hop union alternatives, zero-length identity, and
-// edge-list capture.
+// Repeated-predicate chains and FIXED-LENGTH multi-hop WILDCARD chains (`Sequence([.,.])`,
+// `Times(., n, n)`, mixed `Sequence([.,p])`) are DEFERRED to the plan-level
+// `TupleDisequality` filter (`plan_deferred_repeated_predicate_path`): a plain bag-join
+// over-counts edge-simple solutions, so the join is wrapped in an edge-simple disequality
+// (2-column for concrete same-predicate hop-pairs, 3-column FULL-TRIPLE when a wildcard hop
+// is involved) before endpoint projection.
+// Rejected closed: `Star`/`Plus`/open `Times` (closure — incl. over a multi-hop-wildcard body),
+// a wildcard in a UNION branch or other non-chain position, multi-hop union alternatives,
+// zero-length identity, and edge-list capture.
 // ============================================================================
 
 /// The maximum `Times` repetition count / range width the lowering will expand,
@@ -94,10 +103,11 @@ pub(crate) fn path_endpoint_term(value: &Value) -> Result<PathTerm, BgpPlanError
 
 /// If `pattern` is a BARE wildcard predicate hop (`.` forward or inverse — a `Predicate`/
 /// `InversePredicate` with `predicate == None`), return its orientation (`false` = forward,
-/// `true` = inverse). This is the ONE fixed-length wildcard shape this pass provides: a single
-/// hop cannot reuse a stored edge, so it needs no edge-simple disequality (unlike a multi-hop
-/// wildcard, which would need a full-triple disequality that does not exist). Any compound
-/// pattern (even a single-element `Sequence([.])` or `Times(., 1, 1)`) returns `None`.
+/// `true` = inverse). A single hop cannot reuse a stored edge, so it needs no edge-simple
+/// disequality (unlike a multi-hop wildcard, which folds the predicate id into a 3-column
+/// full-triple disequality — see [`build_disequality_pairs`]) and is compiled by its own dedicated
+/// [`plan_single_hop_wildcard`] handler. Any compound pattern (even a single-element `Sequence([.])`
+/// or `Times(., 1, 1)`) returns `None`.
 pub(crate) fn single_hop_wildcard(pattern: &crate::path::PathPattern) -> Option<bool> {
     use crate::path::PathPattern;
     match pattern {
@@ -110,8 +120,9 @@ pub(crate) fn single_hop_wildcard(pattern: &crate::path::PathPattern) -> Option<
 /// True iff a wildcard predicate `.` (`Predicate`/`InversePredicate` with `predicate == None`)
 /// occurs ANYWHERE inside a fixed-length pattern. Used AFTER the bare single-hop wildcard is
 /// carved out, so a `true` here means the wildcard sits in a multi-hop / nested position
-/// (`Sequence([., .])`, `Times(., n, n)`, a wildcard union branch, …) — which needs a
-/// full-triple edge-simple disequality this pass does not provide, so it rejects closed.
+/// (`Sequence([., .])`, `Times(., n, n)`, a wildcard union branch, …). A FIXED-LENGTH multi-hop
+/// wildcard CHAIN (per [`is_fixed_length_wildcard_chain`]) is then routed to the deferred
+/// full-triple edge-simple disequality (W2); a wildcard in a non-chain position rejects closed.
 pub(crate) fn pattern_contains_wildcard(pattern: &crate::path::PathPattern) -> bool {
     use crate::path::PathPattern;
     match pattern {
@@ -122,6 +133,23 @@ pub(crate) fn pattern_contains_wildcard(pattern: &crate::path::PathPattern) -> b
         PathPattern::Times(times) => pattern_contains_wildcard(&times.times),
         PathPattern::Plus(plus) => pattern_contains_wildcard(&plus.plus),
         PathPattern::Star(star) => pattern_contains_wildcard(&star.star),
+    }
+}
+
+/// True iff `pattern` is a FIXED-LENGTH chain shape — built ONLY from elementary hops
+/// (`Predicate`/`InversePredicate`, concrete or wildcard), `Sequence`, and `Times` (exact or range;
+/// a range fans out to fixed lengths in the deferred handler). Any `Or` / `Star` / `Plus` anywhere
+/// makes it NOT a fixed-length chain (a union of single-hop alternatives, or an unbounded closure).
+/// Used AFTER a wildcard is known present to decide whether a multi-hop wildcard is the FIXED-LENGTH
+/// W2 case (route to the deferred full-triple disequality) or rejects closed. Predicate-blind: a
+/// concrete-only chain also returns `true`, but that path never reaches here (it is not a wildcard).
+pub(crate) fn is_fixed_length_wildcard_chain(pattern: &crate::path::PathPattern) -> bool {
+    use crate::path::PathPattern;
+    match pattern {
+        PathPattern::Predicate(_) | PathPattern::InversePredicate(_) => true,
+        PathPattern::Sequence(seq) => seq.sequence.iter().all(is_fixed_length_wildcard_chain),
+        PathPattern::Times(times) => is_fixed_length_wildcard_chain(&times.times),
+        PathPattern::Or(_) | PathPattern::Plus(_) | PathPattern::Star(_) => false,
     }
 }
 
@@ -139,6 +167,22 @@ pub(crate) enum HopOrientation {
     Forward,
     /// `Triple(walk-to, p, walk-from)` — walk == stored REVERSED; fingerprint is `(object, subject)`.
     Inverse,
+}
+
+/// The predicate of a lowered elementary hop, distinguishing a CONCRETE predicate IRI from a
+/// WILDCARD `.` (free predicate) so the edge-simple disequality can pick its fingerprint arity:
+///   * two CONCRETE hops are partitioned by predicate (a 2-column `(subject, object)` disequality
+///     for a same-predicate pair; nothing for a different-predicate pair — always distinct edges);
+///   * a hop-pair with ANY wildcard cannot be partitioned by a compile-time predicate, so it needs
+///     the 3-column FULL-TRIPLE `(subject, predicate, object)` disequality (the predicate id folded
+///     in). A wildcard carries the fresh predicate VARIABLE name (materialized as a root-bound
+///     `Predicate`-namespace column), so the fingerprint reads the authenticated predicate id.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum HopPredicate {
+    /// A bound predicate IRI.
+    Concrete(String),
+    /// A wildcard `.` hop's fresh predicate variable name.
+    Wildcard(String),
 }
 
 /// Allocates fresh intermediate variable names that never collide with a query
@@ -423,10 +467,19 @@ pub(crate) fn lower_path(
         }
         return Err(BgpPlanError::PathWildcardUnsupported);
     }
-    // Any wildcard `.` in a MULTI-HOP / nested fixed-length position needs a full-triple
-    // (predicate-in-fingerprint) edge-simple disequality that does not exist — reject closed precisely
-    // (BEFORE `lower_top`, which would otherwise raise the generic `PathWildcardUnsupported`).
+    // A FIXED-LENGTH multi-hop wildcard CHAIN (a `Sequence` / `Times` built only from elementary hops,
+    // carrying >= 1 wildcard `.`) is provable via the deferred FULL-TRIPLE (predicate-in-fingerprint)
+    // edge-simple disequality (W2): the predicate id column is folded into each hop-pair fingerprint so
+    // two hops are the SAME stored edge iff subject AND predicate AND object coincide — faithful to
+    // `path.pl`'s `make_edge` edge identity for wildcard hops. Leave the `Path` node in place so
+    // `plan_bgp` routes it to `plan_deferred_repeated_predicate_path`. A wildcard in a UNION branch, a
+    // nested closure, or any non-chain position is NOT a fixed-length chain and rejects closed here (the
+    // full-triple gadget covers finite chains only; a CLOSURE over a multi-hop-wildcard body is a
+    // separate, unbounded thing — `star((.,.))` — reject-closed via the closure planner's own guards).
     if pattern_contains_wildcard(&path.pattern) {
+        if is_fixed_length_wildcard_chain(&path.pattern) {
+            return Ok(Query::Path(path.clone()));
+        }
         return Err(BgpPlanError::PathWildcardMultiHopUnsupported);
     }
     let source = path_endpoint_term(&path.subject)?;
@@ -589,40 +642,48 @@ pub(crate) fn lower_chain(
     target: &PathTerm,
     alloc: &mut FreshPathVars,
     triples: &mut Vec<Query>,
-    predicates: &mut Vec<String>,
+    predicates: &mut Vec<HopPredicate>,
     orientations: &mut Vec<HopOrientation>,
 ) -> Result<(), BgpPlanError> {
     use crate::path::PathPattern;
+    // Resolve a hop's predicate to its emitted `NodeValue` term AND its `HopPredicate` classifier: a
+    // CONCRETE IRI stays a bound node; a WILDCARD `.` becomes a FRESH predicate variable (root-bound
+    // `Predicate`-namespace column) so the full-triple disequality reads the actual predicate id.
+    let resolve_hop_predicate =
+        |pred: &Option<String>, alloc: &mut FreshPathVars| -> (NodeValue, HopPredicate) {
+            match pred {
+                Some(iri) => (NodeValue::Node(iri.clone()), HopPredicate::Concrete(iri.clone())),
+                None => {
+                    let var = alloc.next();
+                    (NodeValue::Variable(var.clone()), HopPredicate::Wildcard(var))
+                }
+            }
+        };
     match pattern {
         PathPattern::Predicate(pred) => {
-            let predicate = pred
-                .predicate
-                .clone()
-                .ok_or(BgpPlanError::PathWildcardUnsupported)?;
+            let (predicate_term, hop_predicate) = resolve_hop_predicate(&pred.predicate, alloc);
             triples.push(Query::Triple(Triple {
                 subject: source.as_subject(),
-                predicate: NodeValue::Node(predicate.clone()),
+                predicate: predicate_term,
                 object: target.as_object(),
                 graph: None,
             }));
-            predicates.push(predicate);
+            predicates.push(hop_predicate);
             // Forward hop: the stored triple is `(walk-from = source, p, walk-to = target)`.
             orientations.push(HopOrientation::Forward);
             Ok(())
         }
         PathPattern::InversePredicate(pred) => {
-            let predicate = pred
-                .predicate
-                .clone()
-                .ok_or(BgpPlanError::PathWildcardUnsupported)?;
-            // Inverse: the edge points target -> source (swap subject/object).
+            let (predicate_term, hop_predicate) = resolve_hop_predicate(&pred.predicate, alloc);
+            // Inverse: the edge points target -> source (swap subject/object). The predicate is
+            // UNCHANGED by orientation (`path.pl`'s `make_edge` keys on `(walk-from, p, walk-to)`).
             triples.push(Query::Triple(Triple {
                 subject: target.as_subject(),
-                predicate: NodeValue::Node(predicate.clone()),
+                predicate: predicate_term,
                 object: source.as_object(),
                 graph: None,
             }));
-            predicates.push(predicate);
+            predicates.push(hop_predicate);
             // Inverse hop: the stored triple is `(walk-to = target, p, walk-from = source)`, so its
             // walk edge is the stored orientation REVERSED (see `HopOrientation`).
             orientations.push(HopOrientation::Inverse);
@@ -688,7 +749,7 @@ pub(crate) fn lower_n_fold(
     target: &PathTerm,
     alloc: &mut FreshPathVars,
     triples: &mut Vec<Query>,
-    predicates: &mut Vec<String>,
+    predicates: &mut Vec<HopPredicate>,
     orientations: &mut Vec<HopOrientation>,
 ) -> Result<(), BgpPlanError> {
     if n == 0 {
@@ -711,16 +772,29 @@ pub(crate) fn lower_n_fold(
 }
 
 /// Reject a chain whose hop predicates are not pairwise distinct — the guard that
-/// keeps a bag-join faithful to edge-simple Prolog path semantics (see the module
+/// keeps a plain bag-join faithful to edge-simple Prolog path semantics (see the module
 /// header). Distinct predicates make edge repetition impossible, so the join equals
 /// the Prolog result on ALL data; a repeat could over-count on self-loops.
-pub(crate) fn ensure_edge_simple_exact(predicates: &[String]) -> Result<(), BgpPlanError> {
+///
+/// A WILDCARD hop rejects closed here (`PathWildcardMultiHopUnsupported`): a free predicate is not a
+/// distinct compile-time predicate, so the plain-bag-join distinct-predicate guarantee does NOT hold.
+/// This is a defensive fail-closed guard — the plain-bag-join path never sees a wildcard (it is routed
+/// to the deferred full-triple disequality by `lower_path` before reaching here) — but it ensures a
+/// wildcard can never silently pass the distinct-predicate check and yield an unsound bag-join.
+pub(crate) fn ensure_edge_simple_exact(predicates: &[HopPredicate]) -> Result<(), BgpPlanError> {
     let mut seen = std::collections::BTreeSet::new();
     for predicate in predicates {
-        if !seen.insert(predicate.as_str()) {
-            return Err(BgpPlanError::PathRepeatedPredicateUnsupported {
-                predicate: predicate.clone(),
-            });
+        match predicate {
+            HopPredicate::Concrete(iri) => {
+                if !seen.insert(iri.as_str()) {
+                    return Err(BgpPlanError::PathRepeatedPredicateUnsupported {
+                        predicate: iri.clone(),
+                    });
+                }
+            }
+            HopPredicate::Wildcard(_) => {
+                return Err(BgpPlanError::PathWildcardMultiHopUnsupported);
+            }
         }
     }
     Ok(())
@@ -759,17 +833,24 @@ pub(crate) fn build_chain_query(
     }))
 }
 
-/// Build the hop-pair disequality specs for a lowered repeated-predicate chain, PARTITIONED by
-/// predicate. Each hop is one stored edge; its identity is its WALK edge `make_edge(walk-from, p,
-/// walk-to)` (`path.pl:54-58`, the `Open_Set` key), and the predicate is constant WITHIN a predicate
-/// group and so cancels out of the fingerprint. A pair drops the rows where two same-predicate hops
-/// reuse the same walk edge. Two hops can reuse the SAME edge only if they share the SAME predicate —
-/// hops with different predicates are always distinct edges (`path.pl`'s edge identity
-/// `make_edge(_, p, _)` includes the predicate), so we emit a disequality pair for a hop-pair
-/// `(e, f)` ONLY when their predicates coincide (`predicates[e] == predicates[f]`); a cross-predicate
-/// pair is left unconstrained. `predicates` and `orientations` are each aligned index-for-index with
-/// `triples` (`lower_chain` pushes the bare predicate IRI AND the hop orientation in lockstep with
-/// each hop's `Triple`, in BOTH the forward and inverse arms).
+/// Build the hop-pair disequality specs for a lowered repeated-predicate chain. Each hop is one stored
+/// edge; its identity is its WALK edge `make_edge(walk-from, p, walk-to)` (`path.pl:54-58`, the
+/// `Open_Set` key). The FINGERPRINT ARITY is chosen per hop-pair by the two hops' predicate classes:
+///   * TWO CONCRETE hops are PARTITIONED by predicate. A pair drops the rows where two same-predicate
+///     hops reuse the same walk edge: two concrete hops can reuse the SAME edge only if they share the
+///     SAME predicate (`path.pl`'s edge identity includes the predicate), so we emit a 2-column
+///     `(subject, object)` disequality (`predicate: None`) ONLY when their IRIs coincide; a
+///     cross-predicate pair is left unconstrained (always distinct edges). The predicate is constant
+///     within the group and cancels out of the fingerprint — this is the P5a case, byte-identical.
+///   * A HOP-PAIR WITH ANY WILDCARD `.` cannot be partitioned by a compile-time predicate (free
+///     predicates), so we emit the 3-column FULL-TRIPLE `(subject, predicate, object)` disequality
+///     (`predicate: Some((pe, pf))`): two hops are the SAME stored edge iff subject AND predicate AND
+///     object all coincide — exactly `path.pl`'s `make_edge` identity for wildcard hops. A concrete
+///     hop paired with a wildcard folds its predicate IRI as a CONSTANT; a wildcard folds its
+///     materialized `Predicate`-namespace COLUMN. This GENERALIZES the 2-column concrete case.
+/// `predicates` and `orientations` are each aligned index-for-index with `triples` (`lower_chain`
+/// pushes the `HopPredicate` classifier AND the hop orientation in lockstep with each hop's `Triple`,
+/// in BOTH the forward and inverse arms).
 ///
 /// CRUCIAL — the fingerprint uses the WALK orientation, NOT the stored `Triple` orientation. A
 /// forward `Predicate(p)` hop stores `(walk-from, p, walk-to)`, so its walk edge is `(subject,
@@ -789,7 +870,7 @@ pub(crate) fn build_chain_query(
 /// stored — byte-identical to the prior behavior.
 pub(crate) fn build_disequality_pairs(
     triples: &[Query],
-    predicates: &[String],
+    predicates: &[HopPredicate],
     orientations: &[HopOrientation],
     schema: &[String],
 ) -> Result<Vec<TupleDisequalityPairPlan>, BgpPlanError> {
@@ -841,20 +922,43 @@ pub(crate) fn build_disequality_pairs(
         };
         edges.push(walk_edge);
     }
+    // A hop's predicate reference for the FULL-TRIPLE fingerprint: a CONCRETE hop is a predicate-IRI
+    // CONSTANT (resolved through the predicate dictionary at prove/verify time); a WILDCARD hop is its
+    // materialized root-bound `Predicate`-namespace COLUMN. The predicate is walk-orientation-invariant
+    // (`path.pl` keys `make_edge(walk-from, p, walk-to)` on the same `p` for a forward or inverse hop).
+    let predicate_ref = |hp: &HopPredicate| -> Result<TupleDisequalityNode, BgpPlanError> {
+        match hp {
+            HopPredicate::Concrete(iri) => Ok(TupleDisequalityNode::Constant(CanonicalObject::Node(
+                iri.clone().into_bytes(),
+            ))),
+            HopPredicate::Wildcard(var) => column_of(var, schema),
+        }
+    };
     let mut pairs = Vec::new();
     for e in 0..edges.len() {
         for f in (e + 1)..edges.len() {
-            // Only same-predicate hops can reuse a stored edge; a different-predicate hop-pair is
-            // genuinely distinct and needs no disequality (never falsely dropped, never falsely
-            // required).
-            if predicates[e] != predicates[f] {
-                continue;
-            }
+            let predicate = match (&predicates[e], &predicates[f]) {
+                // Two CONCRETE hops partition by predicate: a SAME-predicate pair is a 2-column
+                // (subject, object) disequality (the predicate is an equal constant that cancels — P5a);
+                // a DIFFERENT-predicate pair is genuinely a distinct stored edge and needs NO constraint
+                // (never falsely dropped, never falsely required).
+                (HopPredicate::Concrete(a), HopPredicate::Concrete(b)) => {
+                    if a != b {
+                        continue;
+                    }
+                    None
+                }
+                // A hop-pair with ANY wildcard cannot be partitioned by a compile-time predicate: emit
+                // the 3-column FULL-TRIPLE disequality, so two hops are the SAME stored edge iff subject
+                // AND predicate AND object coincide (faithful to `path.pl`'s `make_edge` for wildcards).
+                (pe, pf) => Some((predicate_ref(pe)?, predicate_ref(pf)?)),
+            };
             pairs.push(TupleDisequalityPairPlan {
                 a0: edges[e].0.clone(),
                 a1: edges[e].1.clone(),
                 b0: edges[f].0.clone(),
                 b1: edges[f].1.clone(),
+                predicate,
             });
         }
     }
@@ -900,13 +1004,17 @@ pub(crate) fn project_path_endpoints(
     })
 }
 
-/// Compile a DEFERRED finite repeated-predicate path (single- OR mixed-predicate; see
-/// [`lower_path`]) to `BagProjection(TupleDisequality(join-chain))` — the edge-simple-exact plan a
-/// plain bag-join cannot express. The `TupleDisequality` constrains the hop-pairs PARTITIONED by
-/// predicate (see [`build_disequality_pairs`]): a mixed repeat drops only same-predicate edge
-/// reuse, since different-predicate hops are always distinct edges. A range `Times{a,b}` fans out
-/// to a bag union over each exact length. Reuses the audited BGP compiler for the join chains and
-/// the `plan_or_relation` union path; adds only the `TupleDisequality` selection and the endpoint
+/// Compile a DEFERRED finite path that a plain bag-join over-counts (a repeated-predicate chain —
+/// single- OR mixed-predicate — OR a FIXED-LENGTH multi-hop WILDCARD chain `Sequence([.,.])` /
+/// `Times(., n, n)` / mixed `Sequence([.,p])`; see [`lower_path`]) to
+/// `BagProjection(TupleDisequality(join-chain))` — the edge-simple-exact plan a plain bag-join
+/// cannot express. The `TupleDisequality` constrains the hop-pairs (see [`build_disequality_pairs`]):
+/// a CONCRETE repeat drops only same-predicate edge reuse via a 2-column disequality (different
+/// concrete predicates are always distinct edges); a WILDCARD-involving hop-pair uses the 3-column
+/// FULL-TRIPLE disequality (subject AND predicate AND object). A range `Times{a,b}` fans out to a bag
+/// union over each exact length. Reuses the audited BGP compiler for the join chains (the wildcard
+/// hops materialize root-bound `Predicate`-namespace columns via the `predicate_variable` atom mode)
+/// and the `plan_or_relation` union path; adds only the `TupleDisequality` selection and the endpoint
 /// projection.
 pub(crate) fn plan_deferred_repeated_predicate_path(
     path: &crate::query::Path,
@@ -977,10 +1085,11 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
         &mut orientations,
     )?;
 
-    // Both single- AND mixed-predicate repeats are in scope: `build_disequality_pairs` (below)
-    // partitions the hops by predicate and constrains ONLY same-predicate hop-pairs, so a
-    // different-predicate hop-pair (always a distinct stored edge) needs no fingerprint fold. A
-    // deferred path always has >= 2 hops; guard the degenerate empty case defensively.
+    // Single-, mixed-predicate, AND wildcard repeats are all in scope: `build_disequality_pairs`
+    // (below) partitions CONCRETE hops by predicate (2-column, same-predicate only) and emits the
+    // 3-column FULL-TRIPLE disequality for any hop-pair carrying a wildcard, so a different-concrete
+    // pair (always a distinct stored edge) needs no fold while wildcard pairs get the predicate id
+    // folded in. A deferred path always has >= 2 hops; guard the degenerate empty case defensively.
     if predicates.is_empty() {
         return Err(BgpPlanError::PathEmptyPattern);
     }
