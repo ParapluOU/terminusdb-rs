@@ -44,7 +44,7 @@ use terminusdb_woql2::document::ReadDocument;
 use terminusdb_woql2::proof::{
     plan_read_document, ArrayWalkProof, BgpPlanError, CompiledReadDocument, InstanceSubjectProof,
     ListWalkProof, ProvedChildTypeWitness, ProvedLink, ProvedLinkTarget, QueryProofError,
-    ResolvedValue,
+    ResolvedValue, SchemaSubjectProof,
 };
 use terminusdb_woql2::value::{NodeValue, Value};
 
@@ -1023,5 +1023,226 @@ fn read_document_reconciled_subdocument_cycle_rejects() {
     let layers = delta_stack(base, delta);
     assert_reconciled_prove_rejects("reconciled-subdoc-cycle", schema, layers, |e| {
         matches!(e, QueryProofError::Plan(BgpPlanError::ReadDocumentSubdocumentCycle))
+    });
+}
+
+// ===================================================================================================
+// Increment 6e: the FULLY-RECONCILED path — BOTH the instance AND the schema are delta heads.
+//
+// This closes the entire delta-path parity. `prove_on_layers_fully_reconciled` /
+// `verify_over_graphs_and_resolve_fully_reconciled` route EVERY instance bound-subject read over the
+// reconciled instance `present` AND every schema read (class frame, ranges, strict ancestors) over the
+// reconciled schema `present`, with the `sys:inherits` closure proven as the store's
+// `TransitiveClosure`-over-`present` on the SCHEMA chain. NO new store crypto — the reconciled schema
+// reads reuse the SAME single-atom present entry the instance side uses, and the closure reuses the
+// 6c-i FOUNDATION-B. The combined `database_root` pins BOTH delta heads; the instance-C == schema-C tie
+// stays a verify-time IRI equality over two root-authenticated RECONCILED values.
+// ===================================================================================================
+
+/// The PARITY schema content ([`parity_schema`]'s 13 facts) split into a DELTA STACK (base 7 + delta 6,
+/// each committed group >= 2 records). The reconciled schema `present` (base ⊎ delta) is byte-for-byte
+/// the materialized `parity_schema`, so it drives the SAME frame classification — now over the reconciled
+/// schema, exercising 6e: the class frame `Triple(C, ?p, ?r)`, the reflexive `sys:inherits` closure
+/// (`C -> Parent`), and each range/element classification read (`NickOpt` / `TagsSet` / `Person`).
+fn parity_schema_delta_stack() -> Vec<Arc<LayerCommitment>> {
+    delta_stack(
+        vec![
+            Fact::Node(iri("Parent"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("Parent"), iri("name"), XSD_STRING.into()),
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), SYS_INHERITS.into(), iri("Parent")),
+            Fact::Node(iri("C"), iri("title"), RDF_LANGSTRING.into()),
+            Fact::Node(iri("C"), iri("nick"), iri("NickOpt")),
+            Fact::Node(iri("C"), iri("tags"), iri("TagsSet")),
+        ],
+        vec![
+            Fact::Node(iri("NickOpt"), RDF_TYPE.into(), SYS_OPTIONAL.into()),
+            Fact::Node(iri("NickOpt"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            Fact::Node(iri("TagsSet"), RDF_TYPE.into(), SYS_SET.into()),
+            Fact::Node(iri("TagsSet"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+            Fact::Node(iri("C"), iri("author"), iri("Person")),
+            Fact::Node(iri("Person"), RDF_TYPE.into(), SYS_CLASS.into()),
+        ],
+    )
+}
+
+/// 6e FULL-DELTA PARITY: an INHERITING-class document (inherited scalar `name` from `Parent`, an own
+/// `Set<xsd:string>` `tags`, plus `title` langString / `nick` Optional / `author` link) proves through
+/// the FULLY-RECONCILED entry with BOTH graphs delta heads, and the resolved document (incl. the
+/// inherited frame proven via the RECONCILED `sys:inherits` closure) EQUALS the fully-materialized
+/// result. Plus soundness: a corrupted combined root, a route/entry mismatch, and a tampered reconciled
+/// SCHEMA column each fail verify.
+#[test]
+fn read_document_fully_reconciled_inheritance_parity() {
+    on_big_stack("read-document-fully-reconciled-parity", 1024, || {
+        let compiled = compiled_read(&iri("doc"));
+
+        // ---- Fully-MATERIALIZED reference (both graphs a single layer) for the SAME final state. ----
+        let mat_schema = parity_schema();
+        let mat_schema_root = mat_schema.state.commitment_root;
+        let mat_instance = parity_materialized_instance();
+        let mat_db_root = database_root(&mat_instance.state.commitment_root, &mat_schema_root);
+        let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*mat_schema).unwrap();
+        let mat_doc = mat_bundle
+            .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*mat_schema, mat_db_root)
+            .unwrap();
+
+        // ---- FULLY-DELTA (reconciled instance AND schema) over the SAME final state. ----
+        let instance_layers = delta_stack(parity_base(), parity_delta());
+        let schema_layers = parity_schema_delta_stack();
+        let iref = refs(&instance_layers);
+        let sref = refs(&schema_layers);
+        let instance_head_root = iref.last().unwrap().state.commitment_root;
+        let schema_head_root = sref.last().unwrap().state.commitment_root;
+        let db_root = database_root(&instance_head_root, &schema_head_root);
+
+        let mut bundle = compiled.prove_on_layers_fully_reconciled(&iref, &sref).unwrap();
+        let delta_doc = bundle
+            .verify_over_graphs_and_resolve_fully_reconciled(&compiled, &iref, &sref, db_root)
+            .unwrap();
+
+        // PARITY: the fully-delta document is byte-for-byte the fully-materialized document.
+        assert_eq!(
+            delta_doc, mat_doc,
+            "fully-delta document must equal the fully-materialized document",
+        );
+        assert_eq!(delta_doc.id, iri("doc").into_bytes());
+        assert_eq!(delta_doc.class, iri("C").into_bytes());
+
+        // The INHERITED scalar (`name`, declared on `Parent`) is present — proving the RECONCILED
+        // `sys:inherits` closure gathered `Parent` and its frame over the delta schema `present`.
+        match delta_doc.get(&iri("name")).unwrap() {
+            ResolvedValue::Direct(o) => assert_eq!(as_value_lexical(&o[0]), b"alice".to_vec()),
+            other => panic!("name (inherited) should be Direct, got {other:?}"),
+        }
+        match delta_doc.get(&iri("tags")).unwrap() {
+            ResolvedValue::Direct(o) => {
+                let mut ls: Vec<Vec<u8>> = o.iter().map(as_value_lexical).collect();
+                ls.sort();
+                assert_eq!(ls, vec![b"x".to_vec(), b"y".to_vec()]);
+            }
+            other => panic!("tags should be Direct set, got {other:?}"),
+        }
+        match delta_doc.get(&iri("author")).unwrap() {
+            ResolvedValue::Direct(o) => assert_eq!(as_node(&o[0]), iri("person1").into_bytes()),
+            other => panic!("author should be Direct link, got {other:?}"),
+        }
+
+        // ---- SOUNDNESS 1: corrupt the combined root (binds BOTH delta HEADS incl. the schema head). ----
+        let mut bad = db_root;
+        bad[0] ^= 0xFF;
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_fully_reconciled(&compiled, &iref, &sref, bad)
+                .is_err(),
+            "a corrupted combined root must fail verify",
+        );
+
+        // ---- SOUNDNESS 2: entry/source mismatch — the fully-delta bundle must NOT verify through the
+        //      6a materialized-schema entry: a delta-head schema reject-closes there (the schema route is
+        //      fixed by the ENTRY, never the carried leaf). ----
+        let schema_head = sref.last().unwrap();
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_reconciled(&compiled, &iref, &**schema_head, db_root)
+                .is_err(),
+            "a fully-delta bundle must not verify through the materialized-schema entry",
+        );
+
+        // ---- SOUNDNESS 3: tamper a reconciled SCHEMA read column (the root class frame) → the schema
+        //      single-atom filter re-verify, bound to the trusted SCHEMA-HEAD root, rejects. ----
+        match &mut bundle.frame.class_schema {
+            SchemaSubjectProof::Reconciled { columns, .. } => {
+                columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+            }
+            SchemaSubjectProof::Materialized(_) => {
+                panic!("the fully-delta root class frame read must be a Reconciled leaf")
+            }
+        }
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_fully_reconciled(&compiled, &iref, &sref, db_root)
+                .is_err(),
+            "a tampered reconciled schema column must fail verify",
+        );
+    });
+}
+
+/// The reject-fixture schema plus a `lst: List<xsd:string>`, split into a DELTA SCHEMA stack (base 4 +
+/// delta 3, each >= 2 records). The reconciled schema `present` == the materialized [`list_schema`].
+fn list_schema_delta_stack() -> Vec<Arc<LayerCommitment>> {
+    delta_stack(
+        vec![
+            Fact::Node(iri("C"), RDF_TYPE.into(), SYS_CLASS.into()),
+            Fact::Node(iri("C"), iri("fill"), iri("FillSet")),
+            Fact::Node(iri("FillSet"), RDF_TYPE.into(), SYS_SET.into()),
+            Fact::Node(iri("FillSet"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+        ],
+        vec![
+            Fact::Node(iri("C"), iri("lst"), iri("ListDesc")),
+            Fact::Node(iri("ListDesc"), RDF_TYPE.into(), SYS_LIST.into()),
+            Fact::Node(iri("ListDesc"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
+        ],
+    )
+}
+
+/// 6e FULL-DELTA + LIST: a document with a `List<xsd:string>` proves through the FULLY-RECONCILED entry
+/// with BOTH graphs delta heads — exercising a RECONCILED schema range-classification (the `sys:List`
+/// descriptor read over the schema `present`) AND a RECONCILED instance ordered-list walk together. The
+/// resolved list is the exact ordered `[a, b, a]` and the whole document EQUALS the fully-materialized
+/// reference.
+#[test]
+fn read_document_fully_reconciled_list_parity() {
+    on_big_stack("read-document-fully-reconciled-list", 1024, || {
+        let compiled = compiled_read(&iri("doc"));
+        let list_facts = cons_string_facts(&iri("doc"), &iri("lst"), &["a", "b", "a"]);
+
+        // ---- Fully-MATERIALIZED reference. ----
+        let mat_schema = list_schema();
+        let mat_schema_root = mat_schema.state.commitment_root;
+        let mat_instance = list_materialized_instance(list_facts.clone());
+        let mat_db_root = database_root(&mat_instance.state.commitment_root, &mat_schema_root);
+        let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*mat_schema).unwrap();
+        let mat_doc = mat_bundle
+            .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*mat_schema, mat_db_root)
+            .unwrap();
+
+        // ---- FULLY-DELTA over the SAME final state. ----
+        let instance_layers = list_stack(list_facts);
+        let schema_layers = list_schema_delta_stack();
+        let iref = refs(&instance_layers);
+        let sref = refs(&schema_layers);
+        let db_root = database_root(
+            &iref.last().unwrap().state.commitment_root,
+            &sref.last().unwrap().state.commitment_root,
+        );
+
+        let bundle = compiled.prove_on_layers_fully_reconciled(&iref, &sref).unwrap();
+        let delta_doc = bundle
+            .verify_over_graphs_and_resolve_fully_reconciled(&compiled, &iref, &sref, db_root)
+            .unwrap();
+
+        // PARITY + exact ordered list over the fully-delta path.
+        assert_eq!(
+            delta_doc, mat_doc,
+            "fully-delta list document must equal the fully-materialized document",
+        );
+        match delta_doc.get(&iri("lst")).unwrap() {
+            ResolvedValue::List(elements) => {
+                let ls: Vec<Vec<u8>> = elements.iter().map(as_value_lexical).collect();
+                assert_eq!(ls, vec![b"a".to_vec(), b"b".to_vec(), b"a".to_vec()]);
+            }
+            other => panic!("lst should be a List, got {other:?}"),
+        }
+
+        // ---- SOUNDNESS: a corrupted combined root fails. ----
+        let mut bad = db_root;
+        bad[0] ^= 0xFF;
+        assert!(
+            bundle
+                .verify_over_graphs_and_resolve_fully_reconciled(&compiled, &iref, &sref, bad)
+                .is_err(),
+            "a corrupted combined root must fail verify",
+        );
     });
 }

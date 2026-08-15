@@ -878,6 +878,7 @@ fn read_document_inherited_dropped_ancestor_fails_verify() {
             .ancestor_closure
             .as_mut()
             .expect("an inheriting class carries an ancestor closure")
+            .expect_materialized_mut()
             .result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle

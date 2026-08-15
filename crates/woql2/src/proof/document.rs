@@ -307,6 +307,85 @@ impl InstanceSubjectProof {
     }
 }
 
+/// A source-agnostic SCHEMA-graph bound-subject read (increment 6e) — the EXACT schema analogue of
+/// [`InstanceSubjectProof`]. EVERY schema-graph bound-subject read in a `ReadDocument` bundle — the
+/// class `C`'s own frame `Triple(C, ?p, ?r)`, each property range/element node `Triple(R, ?p, ?o)`,
+/// and each strict ancestor's frame — is one of these. Both variants deliver the SAME logical answer
+/// (the complete, deduplicated `(predicate, object)` rows of one bound schema subject), so the
+/// classification logic ([`classify_range`] / [`collect_class_frame`] / [`closure_natures`]) is
+/// source-agnostic and reused VERBATIM.
+///
+/// SOUNDNESS: the route (materialized vs reconciled) is chosen by the ENTRY POINT's [`SchemaSource`],
+/// never by this prover-supplied variant. [`SchemaSubjectProof::resolve`] pairs the leaf against the
+/// entry's source; a leaf whose variant disagrees reject-closes. On BOTH paths the delivered rows are
+/// re-verified against the trusted SCHEMA root (pinned to the combined `database_root`) before use — a
+/// materialized single-layer BGP, or a reconciled single-atom present filter that selects EXACTLY
+/// `node`'s rows over the delta schema head's complete duplicate-free `present`.
+#[derive(Debug)]
+pub enum SchemaSubjectProof {
+    /// A materialized bound-subject BGP `Triple(node, ?p, ?o)` over a single schema `LayerCommitment`
+    /// (the base path — byte-identical to increments 2b–6d).
+    Materialized(ProvedBgp),
+    /// A reconciled single-atom present filter over a base..head delta SCHEMA stack (the 6e delta
+    /// path): the reconcile proof, the `FilterPosition::Subject` present-filter proof, and the
+    /// prover's published result columns (re-committed + resolved against the trusted schema-head root
+    /// at verify). Uses the SAME store entry as the instance side (`prove_read_single_atom` /
+    /// `verify_and_resolve_single_atom`), just over the schema layers.
+    Reconciled {
+        reconcile: ReconcileProof,
+        filter: PresentFilterProof,
+        columns: Vec<Vec<ArkFr>>,
+    },
+}
+
+impl SchemaSubjectProof {
+    /// Test/inspection helper mirroring [`InstanceSubjectProof::expect_materialized_mut`]: the
+    /// materialized BGP (panics on a reconciled leaf), so the materialized suite's schema-read tamper
+    /// cases reach the committed result columns after the field-type change.
+    pub fn expect_materialized_mut(&mut self) -> &mut ProvedBgp {
+        match self {
+            SchemaSubjectProof::Materialized(bgp) => bgp,
+            SchemaSubjectProof::Reconciled { .. } => {
+                panic!("expected a materialized schema subject proof, found a reconciled one")
+            }
+        }
+    }
+}
+
+/// A source-agnostic SCHEMA-graph reflexive `sys:inherits` ancestor closure (increment 6e) — the
+/// schema analogue of [`InstanceSubjectProof`], for the ONE closure sub-proof (not a bound-subject
+/// read). The materialized arm is byte-identical to increments 2b–6d (the audited subsumption closure
+/// as a `CompiledBgp`/`ProvedBgp`); the reconciled arm carries the store's standalone
+/// `TransitiveClosure`-over-`present` proof (FOUNDATION-B, 6c-i) run on the SCHEMA chain.
+/// [`SchemaClosureProof`] pairs the carried variant against the entry's [`SchemaSource`]; a variant
+/// that disagrees reject-closes. On BOTH paths the reachable ancestor SET is the closure's proven
+/// output — COMPLETE (empty-delta fixpoint) and deduplicated — never trusted from a prover-supplied
+/// list, so no inherited property can be hidden by dropping an ancestor.
+#[derive(Debug)]
+pub enum SchemaClosureProof {
+    /// The materialized reflexive `sys:inherits` closure over a single schema layer (the base path).
+    Materialized(ProvedBgp),
+    /// The reconciled reflexive `sys:inherits` closure over the delta schema head's `present` (6e) —
+    /// carried WHOLESALE (a store-private composite), re-verified by the store's own
+    /// `verify_reconciled_transitive_closure`; its `Vec<u64>` reachable-id output is rendered to class
+    /// IRIs via the store's root-bound `resolve_reconciled_node_ids`.
+    Reconciled(Box<ReconciledClosureProof>),
+}
+
+impl SchemaClosureProof {
+    /// Test/inspection helper mirroring [`SchemaSubjectProof::expect_materialized_mut`]: the
+    /// materialized closure BGP (panics on a reconciled closure), so the materialized suite's
+    /// ancestor-closure tamper case reaches the committed result columns after the field-type change.
+    pub fn expect_materialized_mut(&mut self) -> &mut ProvedBgp {
+        match self {
+            SchemaClosureProof::Materialized(bgp) => bgp,
+            SchemaClosureProof::Reconciled(_) => {
+                panic!("expected a materialized schema closure proof, found a reconciled one")
+            }
+        }
+    }
+}
+
 /// One range/element schema node's classification sub-proof: a bound-subject BGP `Triple(node, ?p, ?o)`
 /// on the SCHEMA graph, delivering the node's direct schema triples. The verifier reconstructs the
 /// plan from `node` (a pure function of the node IRI) and verifies against the schema root, so the
@@ -315,8 +394,10 @@ impl InstanceSubjectProof {
 pub struct ProvedRangeClassification {
     /// The schema node IRI (a range descriptor node OR a class) whose direct triples this proves.
     pub node: Vec<u8>,
-    /// `Triple(node, ?p, ?o)` proved over the schema commitment.
-    pub schema_bgp: ProvedBgp,
+    /// `Triple(node, ?p, ?o)` proved over the schema graph — a MATERIALIZED bound-subject BGP (base
+    /// path) OR a RECONCILED single-atom present filter over a delta schema head (6e). Source-agnostic:
+    /// the route is fixed by the entry point's [`SchemaSource`].
+    pub schema_read: SchemaSubjectProof,
 }
 
 /// The authenticated class frame of the document: the class `C`, the schema BGP enumerating `C`'s
@@ -327,15 +408,18 @@ pub struct ProvedFrame {
     /// The prover's `C` (informational). The verifier DERIVES `C` from the root-authenticated instance
     /// `rdf:type` row and uses ITS derived `C` to reconstruct the frame plan — it never trusts this.
     pub class: Vec<u8>,
-    /// `Triple(C, ?p, ?r)` proved over the schema commitment — `C`'s OWN direct properties.
-    pub class_schema: ProvedBgp,
+    /// `Triple(C, ?p, ?r)` proved over the schema graph — `C`'s OWN direct properties. Source-agnostic
+    /// (materialized BGP or reconciled present filter over a delta schema head, 6e).
+    pub class_schema: SchemaSubjectProof,
     /// The reflexive forward `sys:inherits` closure from `C` over the schema graph — the authenticated
     /// ancestor SET `{C} ∪ ancestors(C)`, delivered as ONE node column. Present ONLY when `C`'s
     /// complete, root-authenticated frame bears a `sys:inherits` edge; a non-inheriting `C` has NO
     /// ancestors (so the set is exactly `{C}` and no closure is proved). The verifier RE-BUILDS this
-    /// `CompiledBgp` from the derived `C` and re-verifies it, so the set is the closure's proven output
+    /// closure plan from the derived `C` and re-verifies it, so the set is the closure's proven output
     /// (the empty-delta fixpoint proves it is COMPLETE — no ancestor omitted), never trusted from here.
-    pub ancestor_closure: Option<ProvedBgp>,
+    /// Source-agnostic (materialized subsumption BGP or reconciled `TransitiveClosure` over the delta
+    /// schema head's `present`, 6e).
+    pub ancestor_closure: Option<SchemaClosureProof>,
     /// One entry per distinct schema node the classification reads — property ranges + element classes
     /// (excluding primitives) AND every strict ancestor class of `C`.
     pub ranges: Vec<ProvedRangeClassification>,
@@ -460,12 +544,14 @@ pub struct ProvedChildTypeWitness {
     pub subject_bgp: InstanceSubjectProof,
     /// `C_child`'s OWN schema frame read `Triple(C_child, ?p, ?r)`. `None` iff the child has NO
     /// `rdf:type` row (a typeless / dangling link) — the reference renders such a target as a plain
-    /// link id, and so do we (a typeless target is trivially non-subdocument).
-    pub class_schema: Option<ProvedBgp>,
+    /// link id, and so do we (a typeless target is trivially non-subdocument). Source-agnostic
+    /// (materialized BGP or reconciled present filter over a delta schema head, 6e).
+    pub class_schema: Option<SchemaSubjectProof>,
     /// `C_child`'s reflexive `sys:inherits` closure over the SCHEMA graph (the authenticated
     /// `{C_child} ∪ ancestors`). `None` iff there is no class, or `C_child` bears no `sys:inherits`
-    /// edge (then the set is exactly `{C_child}`).
-    pub ancestor_closure: Option<ProvedBgp>,
+    /// edge (then the set is exactly `{C_child}`). Source-agnostic (materialized subsumption BGP or
+    /// reconciled `TransitiveClosure` over the delta schema head's `present`, 6e).
+    pub ancestor_closure: Option<SchemaClosureProof>,
     /// One schema read per STRICT ancestor class of `C_child` — the natures (`sys:subdocument` /
     /// `sys:unfoldable`) that make subdocument-ness / unfoldable-ness inheritance-closed.
     pub ancestor_reads: Vec<ProvedRangeClassification>,
@@ -953,6 +1039,240 @@ impl InstanceProver<'_> {
     }
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Schema-graph SOURCE / PROVER routing (increment 6e — the EXACT schema analogue of the 6a instance
+// routing above). The route — a single MATERIALIZED schema layer vs a RECONCILED delta schema stack —
+// is chosen by the ENTRY POINT and threaded through the whole node tree, so it is a PURE FUNCTION of
+// the query (never prover-supplied data). Every schema bound-subject read (`C`'s frame, each range /
+// element node, each strict ancestor) resolves through this one source; the `sys:inherits` closure is
+// likewise routed. A MATERIALIZED schema read stays exactly as increments 2b–6d (byte-identical); a
+// RECONCILED schema read routes to the SAME store entries the 6a instance side uses
+// (`prove_read_single_atom` / `verify_and_resolve_single_atom`) plus, for the closure, the 6c-i
+// FOUNDATION-B `TransitiveClosure`-over-`present` — all on the SCHEMA chain. NO new store crypto.
+// ---------------------------------------------------------------------------------------------------
+
+/// The schema-graph VERIFY source for a `ReadDocument` node tree.
+enum SchemaSource<'a> {
+    /// A single materialized schema layer (the base path).
+    Materialized(VerifierCommitmentRef<'a>),
+    /// A reconciled delta schema stack (base..head, head last) — the 6e delta path.
+    Reconciled(&'a [&'a LayerCommitment]),
+}
+
+impl SchemaSource<'_> {
+    /// The trusted schema-graph root: a materialized layer's own commitment root, or the delta stack's
+    /// HEAD root (== the trusted delta-head anchor the reconcile verifier pins to `trusted_head_root`).
+    /// Pinned into the combined `database_root` by the entry's `validate_database_root`, so every
+    /// reconciled schema read/closure bound to this root is transitively bound to `database_root`.
+    fn schema_root(&self) -> ProofHash {
+        match self {
+            SchemaSource::Materialized(view) => view.state.commitment_root,
+            SchemaSource::Reconciled(layers) => layers
+                .last()
+                .expect("delta schema stack is non-empty")
+                .state
+                .commitment_root,
+        }
+    }
+}
+
+impl SchemaSubjectProof {
+    /// Verify + resolve this schema bound-subject read against the entry-chosen [`SchemaSource`],
+    /// returning the `(predicate, object)` rows. The route is fixed by `source` (the ENTRY POINT), NOT
+    /// by this proof's own variant: a leaf whose variant disagrees with `source` reject-closes (the
+    /// pure-function-of-the-query invariant). On both arms the rows are re-verified against the trusted
+    /// schema root before return — the schema mirror of [`InstanceSubjectProof::resolve`].
+    fn resolve(
+        &self,
+        node_iri: &str,
+        source: &SchemaSource<'_>,
+        schema_root: ProofHash,
+    ) -> Result<SubjectRows, QueryProofError> {
+        match (self, source) {
+            (SchemaSubjectProof::Materialized(bgp), SchemaSource::Materialized(view)) => {
+                let compiled = bound_subject_bgp(node_iri)?;
+                resolve_subject_rows(bgp, &compiled, view, schema_root)
+            }
+            (
+                SchemaSubjectProof::Reconciled { reconcile, filter, columns },
+                SchemaSource::Reconciled(layers),
+            ) => {
+                // The single-atom present filter over the SCHEMA chain re-verifies `present` against
+                // the trusted schema-head root, pins the selection to EXACTLY `node`'s rows (constant
+                // `hash_object(Node(node))` in the Subject position), and resolves the two output
+                // columns [predicate, object] against the chain catalogs — the reconciled analogue of a
+                // materialized bound-subject schema BGP.
+                let resolved = verify_and_resolve_single_atom(
+                    layers,
+                    schema_root,
+                    FilterPosition::Subject,
+                    subject_filter_constant(node_iri),
+                    reconcile,
+                    filter,
+                    columns,
+                )?;
+                reshape_present_subject_rows(resolved)
+            }
+            // The leaf variant (prover data) disagrees with the entry-chosen route → reject.
+            _ => Err(invalid(
+                "schema subject proof route does not match the entry point's schema source",
+            )),
+        }
+    }
+}
+
+/// Verify + resolve the ancestor-closure sub-proof against the entry-chosen sources, returning the
+/// authenticated class SET as node-IRI byte vectors. Routed by the entry's [`SchemaSource`] (never the
+/// carried variant): a MATERIALIZED closure re-verifies the audited subsumption BGP through
+/// `verify_over_graphs_and_resolve` (anchored to the SCHEMA root under the trusted combined
+/// `database_root`); a RECONCILED closure re-verifies the store's `TransitiveClosure`-over-`present`
+/// against the trusted schema-HEAD root (pinned to `database_root` by the entry's
+/// `validate_database_root`) and renders its `Vec<u64>` reachable-id output to class IRIs via the
+/// root-bound `resolve_reconciled_node_ids`. In BOTH cases the set is the closure's proven output:
+/// complete (empty-delta fixpoint) and de-duplicated. A variant / source mismatch reject-closes.
+fn resolve_ancestor_closure(
+    closure: &SchemaClosureProof,
+    class_iri: &str,
+    instance: &InstanceSource<'_>,
+    schema: &SchemaSource<'_>,
+    database_root: ProofHash,
+) -> Result<Vec<Vec<u8>>, QueryProofError> {
+    match (closure, schema) {
+        (SchemaClosureProof::Materialized(proved), SchemaSource::Materialized(schema_view)) => {
+            let compiled = ancestor_closure_bgp(class_iri)?;
+            resolve_closure_set(
+                proved,
+                &compiled,
+                &instance.root_binding_view(),
+                schema_view,
+                database_root,
+            )
+        }
+        (SchemaClosureProof::Reconciled(proof), SchemaSource::Reconciled(layers)) => {
+            let ids = verify_reconciled_transitive_closure(
+                layers,
+                schema.schema_root(),
+                SYS_INHERITS_IRI.as_bytes(),
+                class_iri.as_bytes(),
+                /* reflexive */ true,
+                proof,
+            )?;
+            let objects = resolve_reconciled_node_ids(layers, &ids)?;
+            objects
+                .into_iter()
+                .map(|object| match object {
+                    CanonicalObject::Node(bytes) => Ok(bytes),
+                    _ => Err(invalid("reconciled ancestor closure produced a non-node class")),
+                })
+                .collect()
+        }
+        // The closure variant (prover data) disagrees with the entry-chosen schema route → reject.
+        _ => Err(invalid(
+            "ancestor closure route does not match the entry point's schema source",
+        )),
+    }
+}
+
+/// The schema-graph PROVE routing — the prove-side twin of [`SchemaSource`], likewise chosen by the
+/// prove ENTRY POINT. It produces a source-agnostic [`SchemaSubjectProof`] / [`SchemaClosureProof`]
+/// plus the resolved rows / ancestor set for any bound schema node.
+enum SchemaProver<'a> {
+    /// Prove schema reads over a single materialized schema layer (the base path).
+    Materialized { layer: &'a LayerCommitment, root: ProofHash },
+    /// Prove schema reads over a delta schema stack (base..head, head last) — the 6e delta path.
+    Reconciled { layers: &'a [&'a LayerCommitment], head_root: ProofHash },
+}
+
+impl SchemaProver<'_> {
+    fn schema_root(&self) -> ProofHash {
+        match self {
+            SchemaProver::Materialized { root, .. } => *root,
+            SchemaProver::Reconciled { head_root, .. } => *head_root,
+        }
+    }
+
+    /// Prove ONE bound-subject schema read and resolve its rows. Materialized → a bound-subject BGP;
+    /// delta → a reconciled single-atom present filter (`FilterPosition::Subject`) over the schema
+    /// chain. The reconciled arm proves AND re-verifies (to recover the resolved rows the prover needs
+    /// to discover the frame), exactly as the instance-side twin.
+    fn read_node(
+        &self,
+        ctx: &StoreProverContext<'_>,
+        node_iri: &str,
+    ) -> Result<(SchemaSubjectProof, SubjectRows), QueryProofError> {
+        match self {
+            SchemaProver::Materialized { layer, root } => {
+                let compiled = bound_subject_bgp(node_iri)?;
+                let proved = compiled.prove_with_context(ctx, layer)?;
+                let rows = resolve_subject_rows(&proved, &compiled, *layer, *root)?;
+                Ok((SchemaSubjectProof::Materialized(proved), rows))
+            }
+            SchemaProver::Reconciled { layers, head_root } => {
+                let constant = subject_filter_constant(node_iri);
+                let (reconcile, filter, read) =
+                    prove_read_single_atom(layers, FilterPosition::Subject, constant)?;
+                let columns = read.columns;
+                let resolved = verify_and_resolve_single_atom(
+                    layers,
+                    *head_root,
+                    FilterPosition::Subject,
+                    constant,
+                    &reconcile,
+                    &filter,
+                    &columns,
+                )?;
+                let rows = reshape_present_subject_rows(resolved)?;
+                Ok((SchemaSubjectProof::Reconciled { reconcile, filter, columns }, rows))
+            }
+        }
+    }
+
+    /// Prove the reflexive `sys:inherits` ancestor closure of `class_iri` and resolve its class SET.
+    /// Materialized → the audited subsumption BGP anchored into the combined `database_root` (needs the
+    /// instance anchor from `instance`); delta → the store's `TransitiveClosure`-over-`present` on the
+    /// schema chain (FOUNDATION-B) whose `Vec<u64>` output is rendered to IRIs via
+    /// `resolve_reconciled_node_ids`.
+    fn prove_ancestor_closure(
+        &self,
+        ctx: &StoreProverContext<'_>,
+        class_iri: &str,
+        instance: &InstanceProver<'_>,
+        db_root: ProofHash,
+    ) -> Result<(SchemaClosureProof, Vec<Vec<u8>>), QueryProofError> {
+        match self {
+            SchemaProver::Materialized { layer, .. } => {
+                let compiled = ancestor_closure_bgp(class_iri)?;
+                let closure = compiled.prove_with_context(ctx, layer)?;
+                let set = resolve_closure_set(
+                    &closure,
+                    &compiled,
+                    instance.root_binding_layer(),
+                    *layer,
+                    db_root,
+                )?;
+                Ok((SchemaClosureProof::Materialized(closure), set))
+            }
+            SchemaProver::Reconciled { layers, .. } => {
+                let (proof, ids) = prove_reconciled_transitive_closure(
+                    layers,
+                    SYS_INHERITS_IRI.as_bytes(),
+                    class_iri.as_bytes(),
+                    /* reflexive */ true,
+                )?;
+                let objects = resolve_reconciled_node_ids(layers, &ids)?;
+                let set = objects
+                    .into_iter()
+                    .map(|object| match object {
+                        CanonicalObject::Node(bytes) => Ok(bytes),
+                        _ => Err(invalid("reconciled ancestor closure produced a non-node class")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((SchemaClosureProof::Reconciled(Box::new(proof)), set))
+            }
+        }
+    }
+}
+
 /// Verify + resolve the ancestor-closure sub-proof and return its authenticated class SET as node-IRI
 /// byte vectors. The closure carries `graph: ProofGraph::Schema` in its plan, so — UNLIKE the
 /// graph-blind bound-subject frame reads — it must be routed through `verify_over_graphs_and_resolve`
@@ -1015,12 +1335,12 @@ trait SchemaReader {
     fn read(&mut self, node: &[u8]) -> Result<SubjectRows, QueryProofError>;
 }
 
-/// Prover-side reader: proves + resolves each requested schema node once, recording a
+/// Prover-side reader: proves + resolves each requested schema node once through the entry-chosen
+/// [`SchemaProver`] (materialized BGP or reconciled present filter), recording a source-agnostic
 /// [`ProvedRangeClassification`].
 struct ProveReader<'a> {
     ctx: &'a StoreProverContext<'a>,
-    schema: &'a LayerCommitment,
-    schema_root: ProofHash,
+    schema: &'a SchemaProver<'a>,
     cache: BTreeMap<Vec<u8>, SubjectRows>,
     ranges: Vec<ProvedRangeClassification>,
 }
@@ -1032,12 +1352,10 @@ impl SchemaReader for ProveReader<'_> {
         }
         let node_iri = std::str::from_utf8(node)
             .map_err(|_| invalid("schema node IRI is not valid UTF-8"))?;
-        let compiled = bound_subject_bgp(node_iri)?;
-        let proved = compiled.prove_with_context(self.ctx, self.schema)?;
-        let rows = resolve_subject_rows(&proved, &compiled, self.schema, self.schema_root)?;
+        let (schema_read, rows) = self.schema.read_node(self.ctx, node_iri)?;
         self.ranges.push(ProvedRangeClassification {
             node: node.to_vec(),
-            schema_bgp: proved,
+            schema_read,
         });
         self.cache.insert(node.to_vec(), rows.clone());
         Ok(rows)
@@ -1621,9 +1939,9 @@ struct ProvenCore {
     d_rows: SubjectRows,
     /// `None` => the node has NO `rdf:type` row (typeless/dangling link → non-subdocument stop).
     class: Option<Vec<u8>>,
-    class_schema: Option<ProvedBgp>,
+    class_schema: Option<SchemaSubjectProof>,
     class_rows: SubjectRows,
-    ancestor_closure: Option<ProvedBgp>,
+    ancestor_closure: Option<SchemaClosureProof>,
     ancestor_set: Vec<Vec<u8>>,
     ancestor_reads: Vec<ProvedRangeClassification>,
     ancestor_cache: BTreeMap<Vec<u8>, SubjectRows>,
@@ -1638,8 +1956,7 @@ struct ProvenCore {
 fn prove_core(
     ctx: &StoreProverContext<'_>,
     instance: &InstanceProver<'_>,
-    schema: &LayerCommitment,
-    schema_root: ProofHash,
+    schema: &SchemaProver<'_>,
     db_root: ProofHash,
     id: &str,
 ) -> Result<ProvenCore, QueryProofError> {
@@ -1665,26 +1982,16 @@ fn prove_core(
     let class_iri =
         std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
 
-    // (F1) C's OWN schema frame.
-    let class_compiled = bound_subject_bgp(class_iri)?;
-    let class_schema = class_compiled.prove_with_context(ctx, schema)?;
-    let class_rows = resolve_subject_rows(&class_schema, &class_compiled, schema, schema_root)?;
+    // (F1) C's OWN schema frame — a source-agnostic bound-subject read (materialized BGP or reconciled
+    // present filter over the delta schema head, 6e).
+    let (class_schema, class_rows) = schema.read_node(ctx, class_iri)?;
 
     // (F1b) Reflexive `sys:inherits` closure — proven only when `C` actually inherits (otherwise the
-    // reflexive closure is exactly `{C}`, synthesized locally, at no proof cost).
+    // reflexive closure is exactly `{C}`, synthesized locally, at no proof cost). Source-agnostic: a
+    // materialized subsumption BGP anchored into `database_root`, OR the store's reconciled
+    // `TransitiveClosure`-over-`present` on the delta schema chain (6e).
     let (ancestor_closure, ancestor_set) = if summarize(&class_rows).has_inherits {
-        let closure_compiled = ancestor_closure_bgp(class_iri)?;
-        let closure = closure_compiled.prove_with_context(ctx, schema)?;
-        // The closure is a SCHEMA-graph read; `root_binding_layer()` supplies the instance layer used
-        // ONLY to anchor it into the combined `database_root` (the materialized layer, or the delta
-        // stack's head whose commitment root is the trusted head anchor).
-        let set = resolve_closure_set(
-            &closure,
-            &closure_compiled,
-            instance.root_binding_layer(),
-            schema,
-            db_root,
-        )?;
+        let (closure, set) = schema.prove_ancestor_closure(ctx, class_iri, instance, db_root)?;
         (Some(closure), set)
     } else {
         (None, vec![class.clone()])
@@ -1695,7 +2002,6 @@ fn prove_core(
     let mut reader = ProveReader {
         ctx,
         schema,
-        schema_root,
         cache: BTreeMap::new(),
         ranges: Vec::new(),
     };
@@ -1732,8 +2038,7 @@ fn prove_core(
 fn prove_collection_elements(
     ctx: &StoreProverContext<'_>,
     instance: &InstanceProver<'_>,
-    schema: &LayerCommitment,
-    schema_root: ProofHash,
+    schema: &SchemaProver<'_>,
     db_root: ProofHash,
     predicate: &[u8],
     elements: &[CanonicalObject],
@@ -1762,7 +2067,7 @@ fn prove_collection_elements(
         // Read the element's ACTUAL type + closure (never the schema's DECLARED element class). A
         // typeless/dangling element yields clean natures (the reference renders it as a bare id too).
         // On the delta path this is itself a reconciled bound-subject read over `present`.
-        let child_core = prove_core(ctx, instance, schema, schema_root, db_root, &child_iri)?;
+        let child_core = prove_core(ctx, instance, schema, db_root, &child_iri)?;
         if child_core.natures.has_subdocument || child_core.natures.has_unfoldable {
             return Err(BgpPlanError::ReadDocumentUnfoldableDeferred.into());
         }
@@ -1792,8 +2097,7 @@ fn prove_collection_elements(
 fn prove_body(
     ctx: &StoreProverContext<'_>,
     instance: &InstanceProver<'_>,
-    schema: &LayerCommitment,
-    schema_root: ProofHash,
+    schema: &SchemaProver<'_>,
     db_root: ProofHash,
     id: &str,
     core: ProvenCore,
@@ -1823,7 +2127,6 @@ fn prove_body(
     let mut reader = ProveReader {
         ctx,
         schema,
-        schema_root,
         cache: ancestor_cache,
         ranges: Vec::new(),
     };
@@ -1889,7 +2192,6 @@ fn prove_body(
                     ctx,
                     instance,
                     schema,
-                    schema_root,
                     db_root,
                     &prop.predicate,
                     &elements,
@@ -1942,7 +2244,6 @@ fn prove_body(
                     ctx,
                     instance,
                     schema,
-                    schema_root,
                     db_root,
                     &prop.predicate,
                     &elements,
@@ -1970,8 +2271,7 @@ fn prove_body(
                     // CHILD's authenticated type + closure, NEVER the schema range. On the delta path
                     // this reads the child's `rdf:type` over `present` (a reconciled bound-subject read),
                     // so the child's subdocument nature is re-derived from ROOT-AUTHENTICATED data.
-                    let child_core =
-                        prove_core(ctx, instance, schema, schema_root, db_root, &child_iri)?;
+                    let child_core = prove_core(ctx, instance, schema, db_root, &child_iri)?;
                     if child_core.natures.has_subdocument {
                         // INCREMENT 6b: a subdocument child is INLINED — the inc-3 recursion, now threaded
                         // over the reconciled instance source. `prove_body` recurses with the SAME
@@ -2002,7 +2302,6 @@ fn prove_body(
                             ctx,
                             instance,
                             schema,
-                            schema_root,
                             db_root,
                             &child_iri,
                             child_core,
@@ -2046,7 +2345,6 @@ fn prove_body(
                         ctx,
                         instance,
                         schema,
-                        schema_root,
                         db_root,
                         &prop.predicate,
                         objects,
@@ -2096,11 +2394,13 @@ impl CompiledReadDocument {
         let instance_root = instance.state.commitment_root;
         let schema_root = schema.state.commitment_root;
         let db_root = database_root(&instance_root, &schema_root);
-        // MATERIALIZED route: the entry FIXES the source (never prover data), so every instance
-        // bound-subject read in the tree is a `InstanceSubjectProof::Materialized` bound-subject BGP.
+        // MATERIALIZED route (BOTH graphs): the entry FIXES the sources (never prover data), so every
+        // instance bound-subject read is a `InstanceSubjectProof::Materialized` BGP and every schema read
+        // is a `SchemaSubjectProof::Materialized` BGP.
         let instance = InstanceProver::Materialized { layer: instance, root: instance_root };
+        let schema = SchemaProver::Materialized { layer: schema, root: schema_root };
 
-        let core = prove_core(ctx, &instance, schema, schema_root, db_root, &self.id)?;
+        let core = prove_core(ctx, &instance, &schema, db_root, &self.id)?;
         // The ROOT of a `ReadDocument` must be a real typed document.
         if core.class.is_none() {
             return Err(invalid("document has no rdf:type row"));
@@ -2114,8 +2414,7 @@ impl CompiledReadDocument {
         prove_body(
             ctx,
             &instance,
-            schema,
-            schema_root,
+            &schema,
             db_root,
             &self.id,
             core,
@@ -2155,12 +2454,14 @@ impl CompiledReadDocument {
         let schema_root = schema.state.commitment_root;
         let db_root = database_root(&instance_head_root, &schema_root);
         let ctx = StoreProverContext::cpu();
-        // RECONCILED route: the entry FIXES the source, so every instance read is a
-        // `InstanceSubjectProof::Reconciled` single-atom present filter over the delta stack.
+        // RECONCILED INSTANCE + MATERIALIZED SCHEMA route: the entry FIXES the sources, so every instance
+        // read is a `InstanceSubjectProof::Reconciled` single-atom present filter over the delta stack,
+        // and every schema read stays a `SchemaSubjectProof::Materialized` BGP (6a–6d unaffected).
         let instance =
             InstanceProver::Reconciled { layers: instance_layers, head_root: instance_head_root };
+        let schema = SchemaProver::Materialized { layer: schema, root: schema_root };
 
-        let core = prove_core(&ctx, &instance, schema, schema_root, db_root, &self.id)?;
+        let core = prove_core(&ctx, &instance, &schema, db_root, &self.id)?;
         // The ROOT of a `ReadDocument` must be a real typed document.
         if core.class.is_none() {
             return Err(invalid("document has no rdf:type row"));
@@ -2171,8 +2472,63 @@ impl CompiledReadDocument {
         prove_body(
             &ctx,
             &instance,
-            schema,
-            schema_root,
+            &schema,
+            db_root,
+            &self.id,
+            core,
+            /* allow_subdocument */ false,
+            0,
+            &mut visited,
+            &mut node_count,
+        )
+    }
+
+    /// Prove a `ReadDocument` over a delta INSTANCE stack (`instance_layers`) AND a delta SCHEMA stack
+    /// (`schema_layers`) — BOTH base..head, head last (increment 6e — the FINAL delta-stack increment,
+    /// closing the entire delta-path parity). Every instance bound-subject read routes over the reconciled
+    /// instance `present`; every SCHEMA read (the class frame BGP, each range/element classification BGP,
+    /// each strict-ancestor frame BGP) routes over the reconciled schema `present`; and the reflexive
+    /// `sys:inherits` closure routes to the store's `TransitiveClosure`-over-`present` (FOUNDATION-B, 6c-i)
+    /// on the SCHEMA chain. NO new store crypto — a reconciled schema read is a bound-subject / closure
+    /// read over a schema-chain reconciliation, exactly what the instance side and FOUNDATION-A/B already
+    /// do. The delta-head schema reject ([`prove_on_layers_reconciled`]'s guard) is LIFTED here; the route
+    /// (materialized vs reconciled) per graph is a PURE FUNCTION of this entry, never prover data. The
+    /// per-graph reconcile ≥2-records-per-group floor applies to BOTH chains. Every base reject +
+    /// every 6a–6d shape (flat / inheritance / subdocument / list / array) is supported.
+    pub fn prove_on_layers_fully_reconciled(
+        &self,
+        instance_layers: &[&LayerCommitment],
+        schema_layers: &[&LayerCommitment],
+    ) -> Result<ProvedReadDocument, QueryProofError> {
+        let instance_head = instance_layers
+            .last()
+            .ok_or_else(|| invalid("delta instance stack is empty"))?;
+        let schema_head = schema_layers
+            .last()
+            .ok_or_else(|| invalid("delta schema stack is empty"))?;
+        let instance_head_root = instance_head.state.commitment_root;
+        let schema_head_root = schema_head.state.commitment_root;
+        // BOTH per-graph roots are the delta HEADS now — the combined root pins both trusted head anchors.
+        let db_root = database_root(&instance_head_root, &schema_head_root);
+        let ctx = StoreProverContext::cpu();
+        // FULLY-RECONCILED route: the entry FIXES BOTH sources to their delta stacks.
+        let instance =
+            InstanceProver::Reconciled { layers: instance_layers, head_root: instance_head_root };
+        let schema =
+            SchemaProver::Reconciled { layers: schema_layers, head_root: schema_head_root };
+
+        let core = prove_core(&ctx, &instance, &schema, db_root, &self.id)?;
+        // The ROOT of a `ReadDocument` must be a real typed document.
+        if core.class.is_none() {
+            return Err(invalid("document has no rdf:type row"));
+        }
+        let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
+        visited.insert(self.id.as_bytes().to_vec());
+        let mut node_count = 1usize;
+        prove_body(
+            &ctx,
+            &instance,
+            &schema,
             db_root,
             &self.id,
             core,
@@ -2193,15 +2549,14 @@ impl CompiledReadDocument {
 /// the child's type + closure + ancestor natures — never the child's property frame — and root-verifies
 /// every carried sub-proof, rejecting an injected one. The CALLER uses the returned natures to force
 /// the render mode (a stop witness whose child is actually a subdocument reject-closes as an omission).
-#[allow(clippy::too_many_arguments)]
-fn verify_child_witness<S: VerifierLayer>(
+fn verify_child_witness(
     witness: &ProvedChildTypeWitness,
     child_id: &[u8],
     instance: &InstanceSource<'_>,
-    schema: &S,
-    schema_root: ProofHash,
+    schema: &SchemaSource<'_>,
     database_root: ProofHash,
 ) -> Result<(Option<Vec<u8>>, ClosureNatures), QueryProofError> {
+    let schema_root = schema.schema_root();
     let child_iri =
         std::str::from_utf8(child_id).map_err(|_| invalid("link child IRI is not valid UTF-8"))?;
     // The child's type — a source-agnostic bound-subject read (materialized BGP or reconciled present
@@ -2219,26 +2574,20 @@ fn verify_child_witness<S: VerifierLayer>(
     };
     let class_iri =
         std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
-    let class_compiled = bound_subject_bgp(class_iri)?;
+    // C_child's OWN schema frame — a source-agnostic schema read (materialized BGP or reconciled
+    // present filter over the delta schema head).
     let class_schema = witness
         .class_schema
         .as_ref()
         .ok_or_else(|| invalid("typed link witness is missing its class schema"))?;
-    let class_rows = resolve_subject_rows(class_schema, &class_compiled, schema, schema_root)?;
+    let class_rows = class_schema.resolve(class_iri, schema, schema_root)?;
 
     // Re-derive the ancestor set (RE-BUILD + RE-VERIFY the closure when the child's class inherits).
     let ancestor_set = if summarize(&class_rows).has_inherits {
-        let closure_compiled = ancestor_closure_bgp(class_iri)?;
         let closure = witness.ancestor_closure.as_ref().ok_or_else(|| {
             invalid("inheriting link witness is missing its ancestor closure")
         })?;
-        resolve_closure_set(
-            closure,
-            &closure_compiled,
-            &instance.root_binding_view(),
-            schema,
-            database_root,
-        )?
+        resolve_ancestor_closure(closure, class_iri, instance, schema, database_root)?
     } else {
         if witness.ancestor_closure.is_some() {
             return Err(invalid("non-inheriting link witness carries an ancestor closure"));
@@ -2251,9 +2600,7 @@ fn verify_child_witness<S: VerifierLayer>(
     for classification in &witness.ancestor_reads {
         let node_iri = std::str::from_utf8(&classification.node)
             .map_err(|_| invalid("ancestor schema node IRI is not valid UTF-8"))?;
-        let node_compiled = bound_subject_bgp(node_iri)?;
-        let rows =
-            resolve_subject_rows(&classification.schema_bgp, &node_compiled, schema, schema_root)?;
+        let rows = classification.schema_read.resolve(node_iri, schema, schema_root)?;
         if map.insert(classification.node.clone(), rows).is_some() {
             return Err(invalid("link witness carries a duplicate ancestor read"));
         }
@@ -2286,15 +2633,14 @@ fn verify_child_witness<S: VerifierLayer>(
 /// rejects outright. Marks `predicate` used in `used_collections` (the caller separately rejects any
 /// UNUSED — i.e. injected — collection entry).
 #[allow(clippy::too_many_arguments)]
-fn verify_collection_elements<S: VerifierLayer>(
+fn verify_collection_elements(
     predicate: &[u8],
     elements: &[CanonicalObject],
     unfold: bool,
     collection_map: &BTreeMap<Vec<u8>, &ProvedCollectionProperty>,
     used_collections: &mut BTreeSet<Vec<u8>>,
     instance: &InstanceSource<'_>,
-    schema: &S,
-    schema_root: ProofHash,
+    schema: &SchemaSource<'_>,
     database_root: ProofHash,
 ) -> Result<(), QueryProofError> {
     // (1) An `@unfold` collection property: the reference unfolds every element inline → reject.
@@ -2339,14 +2685,8 @@ fn verify_collection_elements<S: VerifierLayer>(
                 iri_string(&child_id)
             ))
         })?;
-        let (_child_class, child_natures) = verify_child_witness(
-            witness,
-            &child_id,
-            instance,
-            schema,
-            schema_root,
-            database_root,
-        )?;
+        let (_child_class, child_natures) =
+            verify_child_witness(witness, &child_id, instance, schema, database_root)?;
         // A subdocument / unfoldable ACTUAL element type would be unfolded by the reference; v1 renders
         // bare ids, so reject rather than omit the unfolded body.
         if child_natures.has_subdocument || child_natures.has_unfoldable {
@@ -2373,12 +2713,11 @@ fn verify_collection_elements<S: VerifierLayer>(
 /// list walks, AND the recursive per-link demand/reject) run here. `allow_subdocument` is `false` for
 /// the root (its own class must not be a subdocument) and `true` for an inlined child.
 #[allow(clippy::too_many_arguments)]
-fn verify_node<S: VerifierLayer>(
+fn verify_node(
     node: &ProvedReadDocument,
     id: &str,
     instance: &InstanceSource<'_>,
-    schema: &S,
-    schema_root: ProofHash,
+    schema: &SchemaSource<'_>,
     database_root: ProofHash,
     allow_subdocument: bool,
     depth: usize,
@@ -2386,37 +2725,33 @@ fn verify_node<S: VerifierLayer>(
     node_count: &mut usize,
 ) -> Result<(ResolvedDocument, ClosureNatures), QueryProofError> {
     let instance_root = instance.instance_root();
+    let schema_root = schema.schema_root();
     // (2) COMPLETE direct triples — a source-agnostic bound-subject read (materialized BGP or reconciled
     // present filter), reconstructed from `id` and re-verified against the trusted instance root.
     let d_rows = node.subject_bgp.resolve(id, instance, instance_root)?;
 
-    // (F0) Derive C from the authenticated rdf:type row (the instance-C == schema-C tie).
+    // (F0) Derive C from the authenticated rdf:type row (the instance-C == schema-C tie — now over TWO
+    // root-authenticated RECONCILED values when both graphs are delta heads: the instance `C` under the
+    // trusted instance-head root and the schema `C` under the trusted schema-head root, both pinned to
+    // the combined `database_root`, a single subject → the IRI equality stays sound with no in-circuit
+    // cross-root join).
     let class = extract_class(&d_rows)?;
     let class_iri =
         std::str::from_utf8(&class).map_err(|_| invalid("class IRI is not valid UTF-8"))?;
 
-    // (F1) C's OWN schema frame.
-    let class_compiled = bound_subject_bgp(class_iri)?;
-    let class_rows =
-        resolve_subject_rows(&node.frame.class_schema, &class_compiled, schema, schema_root)?;
+    // (F1) C's OWN schema frame — a source-agnostic schema read (materialized BGP or reconciled present
+    // filter over the delta schema head).
+    let class_rows = node.frame.class_schema.resolve(class_iri, schema, schema_root)?;
 
     // (F1b) Re-derive the ancestor set (RE-BUILD + RE-VERIFY the closure when C inherits). A prover can
     // neither drop a genuine closure nor inject a spurious one, nor shorten the set (empty-delta
-    // fixpoint).
+    // fixpoint) — source-agnostic (materialized subsumption BGP or reconciled `TransitiveClosure` over
+    // the delta schema head's `present`).
     let ancestor_set = if summarize(&class_rows).has_inherits {
-        let closure_compiled = ancestor_closure_bgp(class_iri)?;
         let closure = node.frame.ancestor_closure.as_ref().ok_or_else(|| {
             invalid("class bears a sys:inherits edge but the bundle omits the ancestor closure")
         })?;
-        // The closure is a SCHEMA read; `root_binding_view()` supplies the instance anchor for the
-        // combined `database_root` (the materialized layer view, or the delta stack's head view).
-        resolve_closure_set(
-            closure,
-            &closure_compiled,
-            &instance.root_binding_view(),
-            schema,
-            database_root,
-        )?
+        resolve_ancestor_closure(closure, class_iri, instance, schema, database_root)?
     } else {
         if node.frame.ancestor_closure.is_some() {
             return Err(invalid(
@@ -2427,14 +2762,12 @@ fn verify_node<S: VerifierLayer>(
     };
 
     // (5) Root-verify every schema read (strict ancestors + property ranges/elements) into a trusted
-    //     node -> rows map.
+    //     node -> rows map — each a source-agnostic schema read.
     let mut range_map: BTreeMap<Vec<u8>, SubjectRows> = BTreeMap::new();
     for classification in &node.frame.ranges {
         let node_iri = std::str::from_utf8(&classification.node)
             .map_err(|_| invalid("range schema node IRI is not valid UTF-8"))?;
-        let node_compiled = bound_subject_bgp(node_iri)?;
-        let rows =
-            resolve_subject_rows(&classification.schema_bgp, &node_compiled, schema, schema_root)?;
+        let rows = classification.schema_read.resolve(node_iri, schema, schema_root)?;
         if range_map.insert(classification.node.clone(), rows).is_some() {
             return Err(invalid("bundle carries a duplicate range classification"));
         }
@@ -2600,7 +2933,6 @@ fn verify_node<S: VerifierLayer>(
                     &mut used_collections,
                     instance,
                     schema,
-                    schema_root,
                     database_root,
                 )?;
                 rendered.push((predicate.clone(), ResolvedValue::List(elements)));
@@ -2654,7 +2986,6 @@ fn verify_node<S: VerifierLayer>(
                     &mut used_collections,
                     instance,
                     schema,
-                    schema_root,
                     database_root,
                 )?;
                 rendered.push((predicate.clone(), ResolvedValue::Array(elements)));
@@ -2708,7 +3039,6 @@ fn verify_node<S: VerifierLayer>(
                                 &child_iri,
                                 instance,
                                 schema,
-                                schema_root,
                                 database_root,
                                 /* allow_subdocument */ true,
                                 depth + 1,
@@ -2730,7 +3060,6 @@ fn verify_node<S: VerifierLayer>(
                                 &child_id,
                                 instance,
                                 schema,
-                                schema_root,
                                 database_root,
                             )?;
                             // The prover chose STOP; force the child to NOT be a subdocument (else it is
@@ -2779,7 +3108,6 @@ fn verify_node<S: VerifierLayer>(
                                     &child_id,
                                     instance,
                                     schema,
-                                    schema_root,
                                     database_root,
                                 )?;
                                 if child_natures.has_subdocument {
@@ -2810,7 +3138,6 @@ fn verify_node<S: VerifierLayer>(
                     &mut used_collections,
                     instance,
                     schema,
-                    schema_root,
                     database_root,
                 )?;
                 rendered.push((predicate.clone(), ResolvedValue::Direct(objects.clone())));
@@ -2887,10 +3214,11 @@ impl ProvedReadDocument {
         // (1) Bind BOTH per-graph commitments to the trusted combined root. From here every per-graph
         //     root the verifier reads is trusted (neither can be forged/swapped).
         validate_database_root(instance, schema, &database_root)?;
-        let schema_root = schema.verifier_view().state.commitment_root;
-        // MATERIALIZED route: the ENTRY fixes the instance source, so every bound-subject read in the
-        // tree resolves the `Materialized` leaf against this single layer view (byte-identical to before).
+        // MATERIALIZED route (BOTH graphs): the ENTRY fixes both sources, so every instance/schema
+        // bound-subject read resolves the `Materialized` leaf against its single layer view
+        // (byte-identical to before).
         let source = InstanceSource::Materialized(instance.verifier_view());
+        let schema_source = SchemaSource::Materialized(schema.verifier_view());
 
         // The ROOT node: `visited` seeds with the root id, `node_count` counts the root, and
         // `allow_subdocument = false` so a subdocument top-level class reject-closes. The budget is the
@@ -2902,8 +3230,7 @@ impl ProvedReadDocument {
             self,
             &compiled.id,
             &source,
-            schema,
-            schema_root,
+            &schema_source,
             database_root,
             /* allow_subdocument */ false,
             0,
@@ -2947,10 +3274,11 @@ impl ProvedReadDocument {
         //     root. The head layer's commitment root is the trusted delta-head anchor the reconcile
         //     verifier pins, so this ties every instance present-read to the SAME anchor.
         validate_database_root(*head, schema, &database_root)?;
-        let schema_root = schema_view.state.commitment_root;
-        // RECONCILED route: the ENTRY fixes the instance source to the delta stack; a leaf whose variant
-        // disagrees (a materialized BGP) reject-closes in `InstanceSubjectProof::resolve`.
+        // RECONCILED INSTANCE + MATERIALIZED SCHEMA route: the ENTRY fixes the instance source to the
+        // delta stack and the schema source to the single materialized layer view; a leaf whose variant
+        // disagrees reject-closes in `InstanceSubjectProof::resolve` / `SchemaSubjectProof::resolve`.
         let source = InstanceSource::Reconciled(instance_layers);
+        let schema_source = SchemaSource::Materialized(schema_view);
 
         let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
         visited.insert(compiled.id.as_bytes().to_vec());
@@ -2959,8 +3287,64 @@ impl ProvedReadDocument {
             self,
             &compiled.id,
             &source,
-            schema,
-            schema_root,
+            &schema_source,
+            database_root,
+            /* allow_subdocument */ false,
+            0,
+            &mut visited,
+            &mut node_count,
+        )?;
+        Ok(resolved)
+    }
+
+    /// Verify + resolve a `ReadDocument` proven over a delta INSTANCE stack (`instance_layers`) AND a
+    /// delta SCHEMA stack (`schema_layers`) — BOTH base..head, head last (increment 6e — the FINAL
+    /// delta-stack increment, closing the entire delta-path parity). The fully-reconciled twin of
+    /// [`Self::verify_over_graphs_and_resolve`] / [`Self::verify_over_graphs_and_resolve_reconciled`]:
+    /// every instance bound-subject sub-proof re-verifies as a reconciled single-atom present filter
+    /// bound to the trusted instance-HEAD anchor; every SCHEMA read (class frame, ranges, strict
+    /// ancestors) re-verifies as a reconciled single-atom present filter bound to the trusted
+    /// schema-HEAD anchor; and the `sys:inherits` closure re-verifies as the store's
+    /// `TransitiveClosure`-over-`present` on the schema chain. BOTH head roots are pinned to the
+    /// combined `database_root = database_root(instance_head_root, schema_head_root)` by
+    /// `validate_database_root` (which accepts delta-head views — each recomputes its OWN commitment
+    /// root from its committed parts). The instance-`C` == schema-`C` tie stays a verify-time IRI
+    /// equality, now over two root-authenticated RECONCILED values (both under the trusted combined
+    /// root, single subject → sound). The delta-head schema reject is LIFTED; the route per graph is
+    /// fixed by THIS entry, so a leaf whose variant disagrees reject-closes.
+    ///
+    /// TRUST ANCHOR: `database_root` MUST come from a trusted OUT-OF-BAND pin (commit log / signature),
+    /// never recomputed from the prover-supplied bundle.
+    pub fn verify_over_graphs_and_resolve_fully_reconciled(
+        &self,
+        compiled: &CompiledReadDocument,
+        instance_layers: &[&LayerCommitment],
+        schema_layers: &[&LayerCommitment],
+        database_root: ProofHash,
+    ) -> Result<ResolvedDocument, QueryProofError> {
+        let instance_head = instance_layers
+            .last()
+            .ok_or_else(|| invalid("delta instance stack is empty"))?;
+        let schema_head = schema_layers
+            .last()
+            .ok_or_else(|| invalid("delta schema stack is empty"))?;
+        // (1) Bind BOTH delta-HEAD roots to the trusted combined root. Each head layer's commitment root
+        //     is the trusted delta-head anchor its reconciliation pins, so this ties every instance AND
+        //     schema present-read (and the schema closure) to the SAME two anchors. `validate_database_root`
+        //     accepts a delta-head view — its own `validate()` recomputes the head's commitment root.
+        validate_database_root(*instance_head, *schema_head, &database_root)?;
+        // FULLY-RECONCILED route: the ENTRY fixes BOTH sources to their delta stacks.
+        let source = InstanceSource::Reconciled(instance_layers);
+        let schema_source = SchemaSource::Reconciled(schema_layers);
+
+        let mut visited: BTreeSet<Vec<u8>> = BTreeSet::new();
+        visited.insert(compiled.id.as_bytes().to_vec());
+        let mut node_count = 1usize;
+        let (resolved, _natures) = verify_node(
+            self,
+            &compiled.id,
+            &source,
+            &schema_source,
             database_root,
             /* allow_subdocument */ false,
             0,

@@ -43,11 +43,13 @@ use terminus_store::proof::commitment::{
 };
 use terminus_store::proof::envelope::{
     plan_digest, prove_ordered_array_walk_reconciled, prove_ordered_list_walk_reconciled,
+    prove_reconciled_transitive_closure, resolve_reconciled_node_ids,
     resolve_relation_equality_constraint, resolve_tuple_disequality_pairs,
-    verify_ordered_array_walk_reconciled, verify_ordered_list_walk_reconciled, CollectionSumTemplate,
+    verify_ordered_array_walk_reconciled, verify_ordered_list_walk_reconciled,
+    verify_reconciled_transitive_closure, CollectionSumTemplate,
     EqualityValueDomain,
     GeneratedU64ComparisonOp, LayerBgpEnvelope, OrderedArrayWalkReconciledProof,
-    OrderedListWalkReconciledProof,
+    OrderedListWalkReconciledProof, ReconciledClosureProof,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
     RelationProofPlanKind, TransitiveClosureFixpoint, TransitiveClosureRound, TransitiveClosureSeed,
     TupleDisequalityNode, TupleDisequalityPairPlan,
