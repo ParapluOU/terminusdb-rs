@@ -916,6 +916,25 @@ pub(crate) fn plan_transitive_closure_path(
     // TARGET mirrors the traversal to the inverse edge (path.pl:129-134 `run_pattern`, `invert_path`).
     let source = path_endpoint_term(&path.subject)?;
     let target = path_endpoint_term(&path.object)?;
+
+    // ALL-PAIRS (P2): both endpoints FREE (`path(?x, star|plus(p), ?y)`). This is a different plan
+    // shape (a 2-column pairs closure, no bound seed), so it is handled separately from the single-seed
+    // path below. `plus` is provable; `star` reject-closes (its reflexive diagonal is not faithfully
+    // reconstructible — see [`plan_all_pairs_closure`]).
+    if let (PathTerm::Variable(x), PathTerm::Variable(y)) = (&source, &target) {
+        return plan_all_pairs_closure(
+            x.clone(),
+            y.clone(),
+            reflexive,
+            predicate,
+            inner_inverse,
+            selections,
+            collection,
+            count_variable,
+            distincts,
+        );
+    }
+
     let (seed_iri, endpoint_var, bound_target) = match (&source, &target) {
         (PathTerm::Node(a), PathTerm::Variable(y)) => (a.clone(), y.clone(), false),
         (PathTerm::Variable(x), PathTerm::Node(b)) => (b.clone(), x.clone(), true),
@@ -966,6 +985,93 @@ pub(crate) fn plan_transitive_closure_path(
     // below), exactly as Count-over-BGP does: the delivered count is `A_K`'s proven row length, so
     // it binds the closure's own final accumulator commitment (soundness: commitment continuity;
     // the deduped set — with Star's reflexive seed counted once — is what is measured).
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(relation, distincts, selections, None)?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+/// Compile an ALL-PAIRS `Star`/`Plus` closure (`path(?x, star|plus(p), ?y)`, BOTH endpoints free) to
+/// the store's `TransitiveClosurePairs` composite node — the 2-column reachability relation `[x, y]` —
+/// ONLY under a `Distinct([x,y])` gate (so the reference's edge-simple BAG of endpoint pairs equals the
+/// pairs SET). Reused verbatim from the single-seed path: the store InnerJoin/BagUnion/Distinct/LeftAnti
+/// cores, the round-by-commitment threading, the fixpoint completeness certificate, the 64-round budget
+/// — only the accumulator arity (2) and the seed (E itself, no bound node) differ. NO new crypto.
+///
+/// PLUS is provable. STAR reject-closes (`ClosureStarBothFreeDomainDeferred`) via the FIDELITY GATE:
+/// `path.pl`'s both-free identity branch (`X = Y`, path.pl:183) unifies two UNBOUND variables — it
+/// yields a single unbound row, NOT the domain diagonal `{(x,x) : x ∈ nodes(E)}` (nor all instance
+/// subjects, nor all dictionary nodes). Emitting an E-derived diagonal would INJECT `(n,n)` pairs the
+/// reference never returns, so we fail closed pending a domain-authentication design. All-pairs `plus`
+/// has no reflexive rows: it is exactly the ≥1-hop transitive-reachability pairs (a shortest walk
+/// repeats no edge, so edge-simple ≥1-hop reachability = transitive reachability), so it is faithful.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_all_pairs_closure(
+    source_var: String,
+    target_var: String,
+    reflexive: bool,
+    predicate: String,
+    inner_inverse: bool,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    // FIDELITY GATE — all-pairs `star`'s reflexive diagonal is not faithfully reconstructible (see the
+    // fn-doc); fail closed. All-pairs `plus` proceeds (no reflexive rows).
+    if reflexive {
+        return Err(BgpPlanError::ClosureStarBothFreeDomainDeferred);
+    }
+
+    // Count-over-all-pairs (`n = |{(x,y)}|`) is a follow-up (P5): keep it deferred, exactly as the
+    // single-seed count gate was before P1.
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+
+    // `path(?x, plus(p), ?x)` (the SAME variable at both endpoints) is not a two-column pairs relation —
+    // it is a self-reachability filter this pass does not model. Reject closed (mirrors the prior
+    // both-free reject).
+    if source_var == target_var {
+        return Err(BgpPlanError::ClosureBothEndpointsFree);
+    }
+
+    // The edge relation E = Triple(?s, p, ?o): a single-atom 2-column [subject, object] node BGP.
+    let edge = LayerBgpPlan {
+        source: ColumnSource::Materialized,
+        atoms: vec![LayerBgpAtom::all_variables(predicate.into_bytes())],
+        joins: Vec::new(),
+    };
+    // The delivered pairs relation is [source_var, target_var] = [x, y]. The seed A_0 = π(E) and every
+    // round preserve this schema; the store node commits both columns.
+    let relation = CompiledRelation {
+        schema: vec![source_var, target_var],
+        domains: vec![None, None],
+        statement: CompiledRelationStatement::TransitiveClosurePairs {
+            edge,
+            // Both endpoints free, so the ONLY direction source is an inverse inner predicate.
+            inverted: inner_inverse,
+            // A WOQL path closure walks the INSTANCE graph (folds nothing into the digest).
+            graph: ProofGraph::Instance,
+        },
+    };
+
+    // ENFORCE the gate: the pairs closure delivers a 2-column SET, so the surrounding `Distinct` must
+    // name its FULL schema `[x, y]`. `compile_distinct_relation` returns `full_row_distinct == true`
+    // exactly when a bare `Distinct` covers the whole schema over a duplicate-free child (the pairs
+    // closure is duplicate-free by construction — see `is_provably_duplicate_free`). Anything else
+    // (no `Distinct`, a partial `Distinct([x])`, or a projected/count form) rejects closed.
     let (relation, full_row_distinct) =
         compile_distinct_relation(relation, distincts, selections, None)?;
     if !full_row_distinct {

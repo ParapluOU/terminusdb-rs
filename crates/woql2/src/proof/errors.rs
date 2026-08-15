@@ -401,8 +401,23 @@ pub enum BgpPlanError {
 
     /// A `Star`/`Plus` path with BOTH endpoints free (`path(?x, star(p), ?y)`). This is the identity
     /// over the active domain, needing a domain-authenticated diagonal that this pass does not model.
+    ///
+    /// NOTE: `plus` with both endpoints free is now PROVABLE as the 2-column pairs closure
+    /// ([`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairs`]); this variant now
+    /// fires only for cases still deferred (e.g. all-pairs `plus` NOT under a `Distinct([x,y])` gate).
     #[error("`Star`/`Plus` path with two free endpoints requires a domain-authenticated diagonal (deferred); reject closed")]
     ClosureBothEndpointsFree,
+
+    /// An all-pairs `star` path (`Distinct([x,y], path(?x, star(p), ?y))`). Unlike all-pairs `plus`
+    /// (which is the provable 2-column pairs closure), all-pairs `star` adds a REFLEXIVE diagonal whose
+    /// domain is NOT reconstructible from the committed edge columns: TerminusDB's `path.pl` both-free
+    /// identity branch (`X = Y`, path.pl:183) unifies two UNBOUND variables — it yields a single
+    /// unbound row, NOT `{(x,x) : x ∈ nodes(E)}` nor any enumerable domain diagonal. Emitting an
+    /// E-derived diagonal would INJECT `(n,n)` pairs the reference never returns, so all-pairs `star`
+    /// reject-closes (fail-closed) pending a domain-authentication design. All-pairs `plus` is
+    /// unaffected — it has no reflexive rows.
+    #[error("all-pairs `star` (both endpoints free) needs a domain-authenticated reflexive diagonal that `path.pl`'s unbound-identity semantics do not reconstruct (deferred); reject closed — use `plus`")]
+    ClosureStarBothFreeDomainDeferred,
 
     /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`). This is a boolean
     /// reachability check, not a set query; it is a deferred follow-up.

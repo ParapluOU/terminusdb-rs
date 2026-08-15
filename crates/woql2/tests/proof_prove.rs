@@ -5080,6 +5080,118 @@ fn transitive_closure_star_plus_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+/// `Distinct([subject, object], Path(?subject, star|plus(p), ?object))` — the all-pairs closure gate.
+fn all_pairs_closure_query(subject: &str, reflexive: bool, predicate: &str, object: &str) -> Query {
+    let inner = PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    });
+    let pattern = if reflexive {
+        PathPattern::Star(PathStar {
+            star: Box::new(inner),
+        })
+    } else {
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(inner),
+        })
+    };
+    Query::Distinct(Distinct {
+        variables: vec![subject.into(), object.into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable(subject.into()),
+            pattern,
+            object: Value::Variable(object.into()),
+            path: None,
+        })),
+    })
+}
+
+fn closure_resolved_pairs(
+    objects: &[Vec<CanonicalObject>],
+) -> std::collections::BTreeSet<(String, String)> {
+    let node = |o: &CanonicalObject| match o {
+        CanonicalObject::Node(bytes) => String::from_utf8(bytes.clone()).unwrap(),
+        other => panic!("unexpected closure result object {other:?}"),
+    };
+    objects[0]
+        .iter()
+        .zip(&objects[1])
+        .map(|(x, y)| (node(x), node(y)))
+        .collect()
+}
+
+/// P2: all-pairs `plus` (`Distinct([x,y], path(?x, plus(p), ?y))`) proves the exact 2-column
+/// reachability relation over a graph WITH A CYCLE, and rejects every result tamper; all-pairs `star`
+/// reject-closes at compile (its reflexive diagonal is not faithfully reconstructible).
+fn assert_all_pairs_closure_e2e() {
+    // 3-cycle a -> b -> c -> a plus a feeder d -> a (d lies on no cycle). The closure TERMINATES.
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("b", "p", "c"),
+        ("c", "p", "a"),
+        ("d", "p", "a"),
+    ]);
+    let root = lc.state.commitment_root;
+
+    let plus_query = all_pairs_closure_query("x", false, "p", "y");
+    let plus_compiled = plan_bgp(&plus_query).unwrap();
+    let plus_proved = plus_compiled.prove(&lc).unwrap();
+    let plus_objects = plus_proved.verify_and_resolve(&plus_compiled, &lc, root).unwrap();
+    // a, b, c each reach every cycle node incl. themselves; d reaches {a, b, c} but not itself. 12 pairs.
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("a", "a"), ("a", "b"), ("a", "c"),
+        ("b", "a"), ("b", "b"), ("b", "c"),
+        ("c", "a"), ("c", "b"), ("c", "c"),
+        ("d", "a"), ("d", "b"), ("d", "c"),
+    ]
+    .iter()
+    .map(|(x, y)| (iri(x), iri(y)))
+    .collect();
+    assert_eq!(closure_resolved_pairs(&plus_objects), expected);
+
+    // Portable envelope round-trips through the store decode+verify path.
+    let plus_bytes = plus_proved.encode_envelope(&plus_compiled, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_compiled, &lc, root).unwrap();
+
+    // All-pairs STAR reject-closes at COMPILE time (the reflexive diagonal is not faithfully
+    // reconstructible — path.pl's both-free identity is a single unbound row, not a domain diagonal).
+    let star_query = all_pairs_closure_query("x", true, "p", "y");
+    assert!(plan_bgp(&star_query).is_err());
+
+    // ---- Result-binding soundness negatives (both columns authenticated) ----
+
+    // (i) A forged result_len fails verify (the closure binds A_K's AUTHENTICATED pair count).
+    let mut forged_len = plus_compiled.prove(&lc).unwrap();
+    forged_len.result_len += 1;
+    assert!(forged_len.verify(&plus_compiled, &lc, root).is_err());
+
+    // (ii) DROP a reachable pair from the delivered result -> no longer equals the proven pairs set.
+    let mut dropped = plus_compiled.prove(&lc).unwrap();
+    dropped.result_columns[0].pop();
+    dropped.result_columns[1].pop();
+    dropped.result_len -= 1;
+    assert!(dropped.verify(&plus_compiled, &lc, root).is_err());
+
+    // (iii) INJECT a spurious pair (duplicate the first row over BOTH columns) -> reject.
+    let mut injected = plus_compiled.prove(&lc).unwrap();
+    let s0 = injected.result_columns[0][0];
+    let o0 = injected.result_columns[1][0];
+    injected.result_columns[0].push(s0);
+    injected.result_columns[1].push(o0);
+    injected.result_len += 1;
+    assert!(injected.verify(&plus_compiled, &lc, root).is_err());
+}
+
+#[test]
+fn all_pairs_transitive_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-all-pairs-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_all_pairs_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `Count(n, Distinct([endpoint], Path(<bound source>, star/plus(p), ?endpoint)))`.
 fn count_closure_query(
     source: &str,

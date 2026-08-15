@@ -209,6 +209,28 @@ pub enum CompiledRelationStatement {
         /// wrong graph. See [`ProofGraph`] and [`relation_graph`].
         graph: ProofGraph,
     },
+    /// Bounded ALL-PAIRS transitive closure (`Distinct([x,y], path(?x, plus(p), ?y))`, both endpoints
+    /// free), delivering the exact 2-column reachability relation `[x, y]` (every pair connected by ≥1
+    /// `p`-edge). This is the woql2 mirror of the store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::TransitiveClosurePairs`] composite node.
+    ///
+    /// PLUS-ONLY: all-pairs `star` reject-closes with
+    /// [`crate::proof::errors::BgpPlanError::ClosureStarBothFreeDomainDeferred`], because `path.pl`'s
+    /// both-free identity branch (`X = Y`) is a single UNBOUND row, not a domain diagonal, so the
+    /// reflexive rows are not faithfully reconstructible from the committed edge columns. Emitted ONLY
+    /// under a `Distinct([x,y])` gate (the reference's edge-simple BAG of endpoint pairs equals the pairs
+    /// SET only once the surrounding `Distinct` collapses the bag). See [`plan_transitive_closure_path`].
+    TransitiveClosurePairs {
+        /// The edge relation `E = Triple(?s, p, ?o)` (a single-atom 2-column node/value BGP).
+        edge: LayerBgpPlan,
+        /// `false` walks `subject -> object` (the pair `(s, o)`); `true` walks the inverse edge (the
+        /// pair `(o, s)`) — an inverse-predicate closure. There is no bound endpoint to mirror here.
+        inverted: bool,
+        /// SCHEMA-GRAPH FOUNDATION — which committed graph the edge/dictionary read against. `Instance`
+        /// (the universal default for a WOQL path closure) folds NOTHING into the digest, exactly as the
+        /// single-seed [`Self::TransitiveClosure`]. See [`ProofGraph`] and [`relation_graph`].
+        graph: ProofGraph,
+    },
     /// Authenticated ORDERED walk of one stored `rdf:List`: given a BOUND subject node `S` and a
     /// bound list-valued predicate `P`, deliver the list's elements IN ORDER as one nonnullable
     /// node/value column (ReadDocument increment 2a). This is the woql2 mirror of the store
@@ -1111,6 +1133,16 @@ pub enum ProvedQueryStatement {
     /// store's own recursive verify (which binds it to the trusted root AND the statement's query digest).
     /// See [`CompiledRelationStatement::OrderedArrayWalk`].
     OrderedArrayWalk {
+        envelope: Box<RecursiveRelationEnvelope>,
+    },
+    /// A proved bounded ALL-PAIRS transitive closure. Unlike the single-seed [`Self::TransitiveClosure`]
+    /// (decomposed into edge/seed/rounds/fixpoint), the 2-column pairs closure is carried WHOLESALE —
+    /// exactly like [`Self::OrderedListWalk`]/[`Self::CrossRootHashJoin`]: the whole store
+    /// [`RecursiveRelationEnvelope`] is kept and verified by re-running the store's own recursive verify
+    /// (which binds it to the trusted root AND the statement's query digest, so the 2-column result and
+    /// its order/length are authenticated). See
+    /// [`CompiledRelationStatement::TransitiveClosurePairs`].
+    TransitiveClosurePairs {
         envelope: Box<RecursiveRelationEnvelope>,
     },
     GroupSum {

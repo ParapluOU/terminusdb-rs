@@ -707,6 +707,18 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
             statement: ProvedQueryStatement::OrderedArrayWalk { envelope: Box::new(envelope) },
         };
     }
+    // The all-pairs (2-column) transitive closure is carried WHOLESALE (like the ordered walks): the
+    // woql2 layer re-verifies it by re-running the store's own recursive verify against the
+    // reconstructed plan, rather than decomposing its 2-column round/fixpoint pieces into this tree.
+    if matches!(envelope.proof, RecursiveRelationProof::TransitiveClosurePairs { .. }) {
+        return ProvedBgp {
+            result_commitments: envelope.result_commitments.clone(),
+            result_columns: envelope.result_columns.clone(),
+            result_log_domain: envelope.result_log_domain,
+            result_len: envelope.result_len,
+            statement: ProvedQueryStatement::TransitiveClosurePairs { envelope: Box::new(envelope) },
+        };
+    }
     let statement = match envelope.proof {
         RecursiveRelationProof::LayerTripleCount => ProvedQueryStatement::LayerTripleCount,
         RecursiveRelationProof::GeneratedU64Filter { input } => {
@@ -827,6 +839,11 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
         // never reaches this decomposition match.
         RecursiveRelationProof::OrderedArrayWalk(_) => unreachable!(
             "ordered-array-walk envelopes are wrapped wholesale by the early return, not decomposed here"
+        ),
+        // Wrapped wholesale by the early return above (its 2-column round/fixpoint proof is carried
+        // opaquely), so it never reaches this decomposition match.
+        RecursiveRelationProof::TransitiveClosurePairs { .. } => unreachable!(
+            "all-pairs closure envelopes are wrapped wholesale by the early return, not decomposed here"
         ),
     };
     ProvedBgp {

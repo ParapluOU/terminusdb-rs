@@ -2039,9 +2039,11 @@ fn bounded_when_composes_in_or_optional_not_and_preserves_fail_closed_nullable_s
 
 #[test]
 fn rejects_path_star() {
-    // `Star` is now handled by the transitive-closure planner, but only under an endpoint `Distinct`
-    // and with exactly one bound endpoint. With BOTH endpoints free it needs a domain-authenticated
-    // diagonal (deferred), so it rejects closed with the specific closure error.
+    // All-pairs `plus` is now provable (the 2-column pairs closure), but all-pairs `star` is NOT:
+    // `path.pl`'s both-free identity branch (`X = Y`, path.pl:183) unifies two UNBOUND variables — it
+    // returns a single unbound row, not the domain diagonal `{(x,x)}` — so its reflexive rows are not
+    // faithfully reconstructible from the committed edge columns. It fail-closes with the precise
+    // star-deferred error (never the generic both-free error, and never an unfaithful diagonal).
     let q = Query::Path(Path {
         subject: Value::Variable("x".into()),
         pattern: PathPattern::Star(PathStar {
@@ -2052,7 +2054,7 @@ fn rejects_path_star() {
         object: Value::Variable("y".into()),
         path: None,
     });
-    reject(q, BgpPlanError::ClosureBothEndpointsFree);
+    reject(q, BgpPlanError::ClosureStarBothFreeDomainDeferred);
 }
 
 // ---------------------------------------------------------------------------
@@ -2157,10 +2159,64 @@ fn path_exact_times_one_is_a_single_hop() {
     assert!(compiled.projection.is_none());
 }
 
+/// `Distinct([s, o], path(?s, pattern, ?o))` — the all-pairs closure gate.
+fn distinct_pairs_closure(subject: &str, pattern: PathPattern, object: &str) -> Query {
+    Query::Distinct(Distinct {
+        variables: vec![subject.into(), object.into()],
+        query: Box::new(path_var_query(subject, pattern, object)),
+    })
+}
+
 #[test]
-fn rejects_path_plus() {
-    // `Plus` with two free endpoints is a domain diagonal (deferred): the transitive-closure planner
-    // rejects it closed with the specific closure error rather than the generic unbounded-path error.
+fn all_pairs_plus_under_distinct_compiles_to_pairs_closure() {
+    // FORMERLY `rejects_path_plus`. All-pairs `plus` under a `Distinct([s,o])` gate now compiles to the
+    // 2-column pairs closure (every pair connected by >=1 `knows`-edge), delivering `[s, o]`.
+    let q = distinct_pairs_closure(
+        "s",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(path_pred("knows")),
+        }),
+        "o",
+    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["s", "o"]);
+    assert!(
+        c.full_row_distinct,
+        "the [s,o] Distinct is redundant over the already-set pairs closure"
+    );
+    let CompiledRelationStatement::TransitiveClosurePairs { inverted, .. } = &c.relation.statement
+    else {
+        panic!(
+            "expected a TransitiveClosurePairs statement, got {:?}",
+            c.relation.statement
+        );
+    };
+    assert!(!inverted, "a forward predicate closure is not inverted");
+}
+
+#[test]
+fn all_pairs_plus_inverse_predicate_sets_inverted() {
+    // `plus(inv(p))` over both-free endpoints walks the INVERSE edge: the pairs closure marks it
+    // `inverted = true` (the sole direction source when neither endpoint is bound).
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(path_inverse("knows")),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::TransitiveClosurePairs { inverted, .. } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosurePairs statement");
+    };
+    assert!(inverted, "an inverse-predicate all-pairs closure is inverted");
+}
+
+#[test]
+fn all_pairs_plus_without_distinct_rejects() {
+    // Bare all-pairs `plus` (no `Distinct` gate) ships the reference's edge-simple BAG of endpoint
+    // pairs as a set — reject closed until the collapsing `Distinct([x,y])` is present.
     let q = path_var_query(
         "s",
         PathPattern::Plus(PathPlus {
@@ -2168,7 +2224,38 @@ fn rejects_path_plus() {
         }),
         "o",
     );
-    reject(q, BgpPlanError::ClosureBothEndpointsFree);
+    reject(q, BgpPlanError::ClosureRequiresDistinct);
+}
+
+#[test]
+fn all_pairs_plus_partial_distinct_rejects() {
+    // A partial `Distinct([s])` over the 2-column pairs closure does not cover the [s,o] schema — it
+    // is a projected distinct this pass does not model over a closure; reject closed.
+    let q = Query::Distinct(Distinct {
+        variables: vec!["s".into()],
+        query: Box::new(path_var_query(
+            "s",
+            PathPattern::Plus(PathPlus {
+                plus: Box::new(path_pred("knows")),
+            }),
+            "o",
+        )),
+    });
+    reject(q, BgpPlanError::DistinctNotFullSchema);
+}
+
+#[test]
+fn all_pairs_star_under_distinct_rejects_star_deferred() {
+    // Even under a `Distinct([x,y])` gate, all-pairs `star` reject-closes: the reflexive diagonal is
+    // not faithfully reconstructible (see `rejects_path_star`). The gate never masks the fidelity gap.
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Star(PathStar {
+            star: Box::new(path_pred("knows")),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureStarBothFreeDomainDeferred);
 }
 
 // ---------------------------------------------------------------------------

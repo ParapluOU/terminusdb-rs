@@ -286,6 +286,25 @@ pub(crate) fn relation_query_digest(relation: &CompiledRelation) -> std::io::Res
                 hasher.update(b"/graph-schema");
             }
         }
+        CompiledRelationStatement::TransitiveClosurePairs {
+            edge,
+            inverted,
+            graph,
+        } => {
+            // K-INDEPENDENT digest, bound under a DISTINCT `/transitive-closure-pairs` tag so an
+            // all-pairs proof can NEVER be cross-replayed as a single-seed closure (different tag) nor
+            // as a star (this variant is plus-only — no `reflexive` byte). The number of rounds K is a
+            // prover choice carried in the proof; the verifier reconstructs this identity from its own
+            // trusted AST without knowing K.
+            hasher.update(b"/transitive-closure-pairs");
+            hasher.update(plan_digest(edge)?);
+            hasher.update([*inverted as u8]);
+            // SCHEMA-GRAPH FOUNDATION — bind the graph selector ADDITIVELY, exactly like the single-seed
+            // closure arm: `Instance` (every WOQL path closure) folds NOTHING, only `Schema` a domain tag.
+            if let ProofGraph::Schema = graph {
+                hasher.update(b"/graph-schema");
+            }
+        }
         CompiledRelationStatement::OrderedListWalk {
             subject,
             predicate,

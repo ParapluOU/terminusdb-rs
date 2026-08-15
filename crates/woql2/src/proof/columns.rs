@@ -34,6 +34,19 @@ pub(crate) fn relation_result_descriptors(
                 nullable: false,
             }])
         }
+        CompiledRelationStatement::TransitiveClosurePairs { .. } => {
+            // The all-pairs reachability relation is two nonnullable node columns [src, dst].
+            Ok(vec![
+                ResultColumnDescriptor {
+                    namespace: ResultIdNamespace::NodeValue,
+                    nullable: false,
+                },
+                ResultColumnDescriptor {
+                    namespace: ResultIdNamespace::NodeValue,
+                    nullable: false,
+                },
+            ])
+        }
         CompiledRelationStatement::OrderedListWalk { .. }
         // The ordered array element sequence is likewise one nonnullable node/value column (the
         // value-in-index-order column — identical delivered shape to the list walk).
@@ -478,6 +491,19 @@ pub(crate) fn relation_proof_plan(
             edge: edge.clone(),
             seed: seed.clone(),
             reflexive: *reflexive,
+            inverted: *inverted,
+        },
+        CompiledRelationStatement::TransitiveClosurePairs {
+            edge,
+            inverted,
+            // The graph selector is NOT carried into the store plan kind (identical to the single-seed
+            // closure above): the store recursion is graph-blind and reads whichever single
+            // `LayerCommitment` the prove/verify ENTRY selects (see [`relation_graph`]). Its soundness
+            // is anchored by (a) the digest fold in `relation_query_digest` and (b) the verifier picking
+            // the matching commitment + `commitment_root` from the trusted query.
+            graph: _,
+        } => RelationProofPlanKind::TransitiveClosurePairs {
+            edge: edge.clone(),
             inverted: *inverted,
         },
         CompiledRelationStatement::OrderedListWalk {

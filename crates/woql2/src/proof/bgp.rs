@@ -1290,6 +1290,8 @@ pub(crate) fn validate_compiled_structure(relation: &CompiledRelation) -> Result
             // The transitive closure is a leaf composite: it carries a raw edge BGP plan, not a
             // CompiledRelation child, so there is nothing further to recurse into here.
             | CompiledRelationStatement::TransitiveClosure { .. }
+            // The all-pairs closure is likewise a leaf composite (a raw edge BGP plan, no child).
+            | CompiledRelationStatement::TransitiveClosurePairs { .. }
             // The ordered-list walk is likewise a leaf: it carries a bound (subject, predicate), not
             // a CompiledRelation child, so there is nothing to recurse into.
             | CompiledRelationStatement::OrderedListWalk { .. }
@@ -1397,6 +1399,9 @@ pub(crate) fn relation_graph(relation: &CompiledRelation) -> std::io::Result<Pro
             }
             // The closure is the ONE graph-parameterized leaf.
             CompiledRelationStatement::TransitiveClosure { graph, .. } => combine(acc, *graph),
+            // The all-pairs closure carries its own graph selector too (always `Instance` for a WOQL
+            // path closure).
+            CompiledRelationStatement::TransitiveClosurePairs { graph, .. } => combine(acc, *graph),
             // The ordered-list walk carries its own graph selector too (always `Instance` in this
             // increment — a stored `rdf:List` lives in the instance graph).
             CompiledRelationStatement::OrderedListWalk { graph, .. } => combine(acc, *graph),
@@ -1668,6 +1673,9 @@ pub(crate) fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         }
         // The transitive closure delivers the deduped reachable SET, so it is unique by construction.
         CompiledRelationStatement::TransitiveClosure { .. } => true,
+        // The all-pairs closure delivers the deduped reachable PAIRS relation (each round ends in a
+        // 2-column Distinct on the full tuple), so it is unique by construction over [src, dst].
+        CompiledRelationStatement::TransitiveClosurePairs { .. } => true,
         // Distinct and the aggregations emit at most one row per key/group, hence unique.
         CompiledRelationStatement::Distinct { .. }
         | CompiledRelationStatement::GroupExtrema { .. }

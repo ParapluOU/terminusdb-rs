@@ -1681,6 +1681,33 @@ impl ProvedBgp {
                     ));
                 }
             }
+            (
+                ProvedQueryStatement::TransitiveClosurePairs { envelope },
+                CompiledRelationStatement::TransitiveClosurePairs { .. },
+            ) => {
+                // DELEGATE to the audited store verify. The store envelope carries the WHOLE 2-column
+                // closure proof (edge / seed / rounds / empty-delta fixpoint), so — like the ordered
+                // walks — the woql2 layer carries it wholesale rather than decomposing it. Rebuild the
+                // plan from the TRUSTED compiled statement: its `query_digest` folds the edge, direction
+                // and the DISTINCT `/transitive-closure-pairs` tag, and the store's own `verify` rejects
+                // any envelope whose root or query digest does not match — so an all-pairs proof cannot
+                // be re-aimed at another edge/direction, nor cross-replayed as a single-seed closure.
+                let plan = relation_proof_plan(compiled, query_digest)?;
+                envelope.verify(layer, expected_root, &plan)?;
+                // BIND the wholesale envelope's delivered result to THIS proof node's delivered columns
+                // (identical to the ordered-walk arms): a mismatched outer copy of EITHER column cannot
+                // slip a different pairs answer past verification.
+                if self.result_commitments != envelope.result_commitments
+                    || self.result_columns != envelope.result_columns
+                    || self.result_len != envelope.result_len
+                    || self.result_log_domain != envelope.result_log_domain
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "WOQL all-pairs closure delivered result does not match the proven store envelope",
+                    ));
+                }
+            }
             _ => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -2240,6 +2267,17 @@ impl ProvedBgp {
         if let (
             ProvedQueryStatement::OrderedArrayWalk { envelope },
             CompiledRelationStatement::OrderedArrayWalk { .. },
+        ) = (&self.statement, &compiled.statement)
+        {
+            return Ok((**envelope).clone());
+        }
+        // The all-pairs closure carries its whole store envelope WHOLESALE (its 2-column round/fixpoint
+        // proof is carried opaquely, exactly like the ordered walks), so — after `verify_relation` has
+        // already checked it against the trusted root and statement digest — reconstruction just returns
+        // the carried envelope.
+        if let (
+            ProvedQueryStatement::TransitiveClosurePairs { envelope },
+            CompiledRelationStatement::TransitiveClosurePairs { .. },
         ) = (&self.statement, &compiled.statement)
         {
             return Ok((**envelope).clone());
