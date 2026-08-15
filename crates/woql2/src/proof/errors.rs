@@ -415,33 +415,39 @@ pub enum BgpPlanError {
     /// A `Star`/`Plus` path with BOTH endpoints free (`path(?x, star(p), ?y)`). This is the identity
     /// over the active domain, needing a domain-authenticated diagonal that this pass does not model.
     ///
-    /// NOTE: `plus` with both endpoints free is now PROVABLE as the 2-column pairs closure
-    /// ([`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairs`]); this variant now
-    /// fires only for cases still deferred (e.g. all-pairs `plus` NOT under a `Distinct([x,y])` gate).
+    /// NOTE: `plus` with both endpoints free is now PROVABLE as the 2-column pairs closure — over a single
+    /// predicate ([`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairs`]) AND, via W1,
+    /// over a DERIVED wildcard / compound edge
+    /// ([`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairsCompound`]). This variant
+    /// now fires only for the residual both-free shapes this pass does not model: a same-variable
+    /// self-reachability `path(?x, plus(body), ?x)`, and as a defensive fail-closed fallback.
     #[error("`Star`/`Plus` path with two free endpoints requires a domain-authenticated diagonal (deferred); reject closed")]
     ClosureBothEndpointsFree,
 
-    /// An all-pairs `star` path (`Distinct([x,y], path(?x, star(p), ?y))`). Unlike all-pairs `plus`
-    /// (which is the provable 2-column pairs closure), all-pairs `star` adds a REFLEXIVE diagonal whose
-    /// domain is NOT reconstructible from the committed edge columns: TerminusDB's `path.pl` both-free
-    /// identity branch (`X = Y`, path.pl:183) unifies two UNBOUND variables — it yields a single
-    /// unbound row, NOT `{(x,x) : x ∈ nodes(E)}` nor any enumerable domain diagonal. Emitting an
-    /// E-derived diagonal would INJECT `(n,n)` pairs the reference never returns, so all-pairs `star`
-    /// reject-closes (fail-closed) pending a domain-authentication design. All-pairs `plus` is
-    /// unaffected — it has no reflexive rows.
-    #[error("all-pairs `star` (both endpoints free) needs a domain-authenticated reflexive diagonal that `path.pl`'s unbound-identity semantics do not reconstruct (deferred); reject closed — use `plus`")]
+    /// An all-pairs `star` path (`Distinct([x,y], path(?x, star(p), ?y))`). This is a **PERMANENT
+    /// fidelity reject**, not a deferral — empirically confirmed against a live TerminusDB. Unlike
+    /// all-pairs `plus` (the provable 2-column pairs closure), all-pairs `star`'s reflexive part is a
+    /// single degenerate `{x:null, y:null}` row: `path.pl`'s both-free identity branch (`X = Y`,
+    /// path.pl:183) unifies two UNBOUND variables, which marshal to `null`/`null` (`query_response.pl`
+    /// `var -> null`), and that row even SURVIVES `Distinct([x,y])`. There is NO faithful committable
+    /// node-pair relation: an E-derived diagonal `{(x,x)}` would INJECT `(n,n)` pairs the reference
+    /// never returns AND still not reproduce the `null`/`null` row (unrepresentable as a 2-column node
+    /// relation). No domain-authentication design could ever make it faithful; fail-closed is the only
+    /// faithful option. (Single-seed `star` works because one bound endpoint makes `X = Y` a concrete
+    /// singleton `{a}`.) All-pairs `plus` is unaffected — it has no reflexive rows.
+    #[error("all-pairs `star` (both endpoints free) is a permanent fidelity reject: `path.pl` returns a degenerate {{null,null}} reflexive row, not a domain diagonal, so no faithful node-pair relation exists; reject closed — use `plus`")]
     ClosureStarBothFreeDomainDeferred,
 
-    /// An ALL-PAIRS wildcard closure (`path(?x, plus(.), ?y)`, both endpoints free). A concrete-predicate
-    /// all-pairs `plus` IS provable (the 2-column pairs closure), but the store
-    /// [`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairs`] node takes a RAW 2-column
-    /// [`terminus_store::proof::query::LayerBgpPlan`] edge (`Triple(?s, p, ?o)` with a concrete predicate),
-    /// NOT a projected/derived edge relation. The wildcard edge `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` is a
-    /// DERIVED [`crate::proof::types::CompiledRelation`] (the single-seed wildcard closure feeds it to the
-    /// COMPOUND driver), so all-pairs would need an edge-projection variant of the pairs node that does not
-    /// exist yet. Reject closed (single-seed wildcard closures are provable). Both-free wildcard `star`
-    /// rejects earlier as [`Self::ClosureStarBothFreeDomainDeferred`].
-    #[error("all-pairs wildcard `plus(.)` (both endpoints free) needs an edge-projection variant of the pairs closure node that does not exist yet (deferred); reject closed — single-seed wildcard closures are provable")]
+    /// FORMERLY the all-pairs wildcard-`plus` deferral. All-pairs wildcard `plus(.)` is now PROVABLE (W1):
+    /// the pairs closure driver was generalized to take a DERIVED edge BY COMMITMENT
+    /// ([`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairsCompound`]), so
+    /// [`crate::proof::paths::plan_all_pairs_compound_closure`] derives the wildcard edge
+    /// `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` and closes over it — exactly like the single-seed wildcard
+    /// closure feeds its edge to the compound driver. This variant is RETAINED (public API) but is no
+    /// longer constructed. Related rejects still fire: all-pairs wildcard `star` as
+    /// [`Self::ClosureStarBothFreeDomainDeferred`]; a wildcard hop INSIDE a compound body (`(.|p)+`,
+    /// `(./q)+`, a separate increment) as [`Self::PathWildcardUnsupported`].
+    #[error("all-pairs wildcard `plus(.)` is provable (W1); this deferral no longer fires")]
     ClosureWildcardAllPairsDeferred,
 
     /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`) — a GROUND boolean

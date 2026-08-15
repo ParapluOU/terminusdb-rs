@@ -231,6 +231,46 @@ pub enum CompiledRelationStatement {
         /// single-seed [`Self::TransitiveClosure`]. See [`ProofGraph`] and [`relation_graph`].
         graph: ProofGraph,
     },
+    /// Bounded ALL-PAIRS transitive closure (`Distinct([x,y], path(?x, plus(pattern), ?y))`, both
+    /// endpoints free) over a DERIVED edge (W1). The ONLY difference from the single-predicate
+    /// [`Self::TransitiveClosurePairs`] is the EDGE: here `E'` is a DERIVED 2-column [start, end]
+    /// relation — the full-triple projection `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` for an all-pairs
+    /// WILDCARD `.` closure, or the deduped bag-union / projected join for a COMPOUND `(p|q)+` / `(p/q)+`
+    /// body (exactly the [`build_compound_edge`](crate::proof::paths) output that
+    /// [`Self::TransitiveClosureCompound`] uses). Because the store pairs closure driver is
+    /// source-agnostic over `E` (takes it BY COMMITMENT), it maps to the SAME store
+    /// [`terminus_store::proof::envelope::RelationProofPlanKind::TransitiveClosurePairs`] node — only `E`'s
+    /// structure changes — so the 2-column semi-naive seed/round/fixpoint machinery is reused UNCHANGED
+    /// (no new crypto). The proof is carried WHOLESALE (like [`Self::TransitiveClosurePairs`]), not
+    /// decomposed.
+    ///
+    /// PLUS-ONLY, exactly like the single-predicate all-pairs closure: all-pairs `star` (over ANY body)
+    /// reject-closes with [`crate::proof::errors::BgpPlanError::ClosureStarBothFreeDomainDeferred`] (its
+    /// both-free reflexive diagonal is not reconstructible from the committed edge columns). Emitted ONLY
+    /// under a `Distinct([x,y])` gate.
+    ///
+    /// FIDELITY (`src/core/query/path.pl`, verified — same node-simple argument as
+    /// [`Self::TransitiveClosureCompound`]). `path.pl`'s `plus` is edge-simple over PRIMITIVE `(s,p,o)`
+    /// edges, so the transitive closure of `E'` equals path.pl's edge-simple reachability at the SET level
+    /// (the required `Distinct([x,y])` delivers the set) whenever a node-simple `E'`-walk uses DISTINCT
+    /// primitive edges: automatic for the WILDCARD edge (each `E'`-hop is ONE primitive edge across any
+    /// predicate) and for the ALTERNATION `(p|q…)` (each hop one primitive edge), and for the 2-hop
+    /// sequence `(p/q)` iff `p ≠ q`. Same-predicate / 3+-hop sequences and any wildcard-in-sequence body
+    /// reject-close via `build_compound_edge`'s guards. The DERIVED edge bakes its inner
+    /// forward/inverse orientation into its own structure, so this node carries `inverted = false`.
+    TransitiveClosurePairsCompound {
+        /// The derived all-pairs edge relation `E'`, a 2-column [start, end] node/value relation
+        /// (deduped). Proven ONCE as a leaf and reused by commitment across the seed, every round + the
+        /// fixpoint.
+        edge: Box<CompiledRelation>,
+        /// The traversal direction over `E'`. Always `false` here: the derived edge already bakes any
+        /// inner inverse orientation into its own structure (an inverse hop swaps the triple's
+        /// subject/object), and there is no bound endpoint to mirror.
+        inverted: bool,
+        /// SCHEMA-GRAPH FOUNDATION — always `Instance` for a WOQL path closure (folds NOTHING into the
+        /// digest, exactly like the single-predicate all-pairs / compound closures). See [`ProofGraph`].
+        graph: ProofGraph,
+    },
     /// Bounded single-seed transitive closure (`star`/`plus`) over a COMPOUND sub-pattern
     /// (`(p|q)`, `(p/q)`) from ONE bound endpoint (P3). The ONLY difference from the single-predicate
     /// [`Self::TransitiveClosure`] is the EDGE: here `E'` is a DERIVED 2-column [start, end] relation —

@@ -1168,7 +1168,8 @@ pub(crate) fn plan_transitive_closure_path(
 
     // A wildcard `.` body (`star|plus(.)`) is a compound-style closure over the full-triple projected edge
     // `E' = {(s,o) : ∃p (s,p,o)}`. Route it to the wildcard endpoint-shape dispatch: single-seed compiles
-    // via the compound driver with the wildcard edge; all-pairs / both-free-star reject closed precisely.
+    // via the compound driver with the wildcard edge; all-pairs `plus` compiles via the all-pairs derived
+    // closure (W1); both-free `star` reject-closes precisely.
     if single_hop_wildcard(inner).is_some() {
         return plan_wildcard_closure(
             path,
@@ -1423,6 +1424,118 @@ pub(crate) fn plan_all_pairs_closure(
     Ok(compiled)
 }
 
+/// Compile an ALL-PAIRS `Star`/`Plus` closure over a DERIVED edge (`path(?x, plus(.), ?y)`,
+/// `path(?x, plus((p|q…)), ?y)`, `path(?x, plus((p/q)), ?y)`; BOTH endpoints free; W1) to the store's
+/// `TransitiveClosurePairs` composite node — the 2-column reachability relation `[x, y]` — ONLY under a
+/// `Distinct([x,y])` gate. The store pairs closure driver is source-agnostic over its edge, so we DERIVE
+/// the all-pairs edge `E'` (the full-triple projection `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` for a
+/// WILDCARD, or the deduped bag-union / projected join for a COMPOUND body — exactly the
+/// [`build_compound_edge`] output the single-seed compound closure uses) and close over it BY COMMITMENT
+/// via the [`CompiledRelationStatement::TransitiveClosurePairsCompound`] node. The seed
+/// `A_0 = Distinct(π(E'))`, rounds, and 2-column fixpoint are UNCHANGED versus the raw single-predicate
+/// all-pairs closure — only what `E'` *is* changes. NO new crypto.
+///
+/// PLUS is provable. STAR reject-closes ([`BgpPlanError::ClosureStarBothFreeDomainDeferred`]) via the
+/// SAME fidelity gate as the single-predicate all-pairs `star`: `path.pl`'s both-free identity branch
+/// (`X = Y`) yields a single UNBOUND row, not a domain diagonal, so an `E'`-derived reflexive diagonal
+/// would INJECT `(n,n)` pairs the reference never returns. Count-gated reject-closes
+/// ([`BgpPlanError::ClosureCountGateDeferred`]; do the `Distinct` form first — unlike the single-predicate
+/// all-pairs closure, which DOES support the P2c count). `path(?x, plus(body), ?x)` (the SAME variable at
+/// both endpoints) is a self-reachability filter this pass does not model
+/// ([`BgpPlanError::ClosureBothEndpointsFree`]).
+///
+/// FIDELITY (`src/core/query/path.pl`, verified — the SAME node-simple argument as
+/// [`plan_compound_closure`] and the single-predicate all-pairs closure). `path.pl`'s `plus` is
+/// edge-simple over PRIMITIVE `(s,p,o)` edges, so the transitive closure of `E'` equals `path.pl`'s
+/// edge-simple reachability AT THE SET LEVEL (delivered by the required `Distinct([x,y])`) whenever a
+/// node-simple `E'`-walk uses DISTINCT primitive edges: automatic for the WILDCARD edge (each hop is ONE
+/// primitive edge across ANY predicate) and for the ALTERNATION `(p|q…)` (each hop one primitive edge),
+/// and for the 2-hop sequence `(p/q)` iff `p ≠ q`. Unfaithful shapes (same-predicate `(p/p)`, 3+-hop
+/// sequences, wildcard-in-sequence) all reject-close in [`build_compound_edge`]. No reachable pair
+/// dropped or added.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_all_pairs_compound_closure(
+    path: &crate::query::Path,
+    reflexive: bool,
+    inner: &crate::path::PathPattern,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    // FIDELITY GATE — all-pairs `star` (over ANY body) needs a domain-authenticated reflexive diagonal
+    // that `path.pl`'s unbound-identity semantics do not reconstruct; fail closed. All-pairs `plus`
+    // proceeds (it has no reflexive rows).
+    if reflexive {
+        return Err(BgpPlanError::ClosureStarBothFreeDomainDeferred);
+    }
+    // Count-gated all-pairs derived closure is a follow-up (do the `Distinct` form first), exactly as the
+    // single-seed compound closure defers its count gate.
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+
+    let source = path_endpoint_term(&path.subject)?;
+    let target = path_endpoint_term(&path.object)?;
+    // BOTH endpoints must be free variables to be an all-pairs pairs relation (the caller only routes here
+    // for both-free); the other shapes are DEFENSIVE fail-closed fallbacks — never fired in the normal
+    // dispatch order, but they fail CLOSED if it ever changes.
+    let (x, y) = match (&source, &target) {
+        (PathTerm::Variable(x), PathTerm::Variable(y)) => (x.clone(), y.clone()),
+        (PathTerm::Node(_), PathTerm::Node(_)) => {
+            return Err(BgpPlanError::ClosureBothEndpointsBound)
+        }
+        _ => return Err(BgpPlanError::ClosureBothEndpointsFree),
+    };
+    // `path(?x, plus(body), ?x)` (SAME variable at both endpoints) is a self-reachability filter, not a
+    // two-column pairs relation — this pass does not model it (mirrors the single-predicate all-pairs
+    // reject).
+    if x == y {
+        return Err(BgpPlanError::ClosureBothEndpointsFree);
+    }
+
+    // Derive the all-pairs edge relation `E'` (deduped 2-column [start, end]) — the wildcard full-triple
+    // projection or the compound bag-union / projected join. Its fidelity guards (2-hop distinct-predicate
+    // sequences only; no same-predicate / 3+-hop / wildcard-in-sequence) live in `build_compound_edge`.
+    let edge = build_compound_edge(inner, path)?;
+
+    // The delivered pairs relation is [x, y]. The seed A_0 = Distinct(π(E')) and every round preserve this
+    // schema; the store node commits both columns.
+    let relation = CompiledRelation {
+        schema: vec![x, y],
+        domains: vec![None, None],
+        statement: CompiledRelationStatement::TransitiveClosurePairsCompound {
+            edge: Box::new(edge),
+            // The derived edge bakes any inner forward/inverse orientation into its OWN structure, and
+            // there is no bound endpoint to mirror, so the pairs walk is always forward over `E'`.
+            inverted: false,
+            // A WOQL path closure walks the INSTANCE graph (folds nothing into the digest).
+            graph: ProofGraph::Instance,
+        },
+    };
+
+    // ENFORCE the gate: the pairs closure delivers a 2-column SET, so the surrounding `Distinct` must name
+    // its FULL schema `[x, y]`. Identical to the single-predicate all-pairs closure — pass `None` so the
+    // `Distinct` is validated as the transparent full-row no-op over the pairs closure's already
+    // strict-sorted, dedup-free accumulator `A_K`. Anything else (no `Distinct`, a partial `Distinct([x])`)
+    // rejects closed.
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(relation, distincts, selections, None)?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
 /// Compile a BOTH-endpoints-BOUND `Star`/`Plus` closure (`path(a, star|plus(p), b)`, both endpoints
 /// node CONSTANTS) to a GROUND boolean reachability existence: "is `b` reachable from `a` over the
 /// closure?". The delivered result is a zero-free-variable relation — `≥1` row iff reachable, `0` rows
@@ -1558,12 +1671,13 @@ pub(crate) fn plan_both_bound_closure(
 /// dropped or added. `star`'s reflexive `{a}` seed is the concrete bound endpoint, so the all-pairs-`star`
 /// diagonal-injection concern does not arise for the single-seed case.
 ///
-/// ENDPOINT-SHAPE dispatch (fail-closed). BOTH-FREE wildcard is an ALL-PAIRS closure that this pass does
-/// NOT provide (the store pairs node takes a raw 2-column edge, not the DERIVED wildcard edge): `plus(.)`
-/// reject-closes as [`BgpPlanError::ClosureWildcardAllPairsDeferred`], `star(.)` as
-/// [`BgpPlanError::ClosureStarBothFreeDomainDeferred`] (its unbound-identity diagonal is unreconstructible).
-/// SINGLE-SEED (one bound endpoint) and BOTH-BOUND route to [`plan_compound_closure`] — which compiles the
-/// single-seed case (a bound TARGET walks `E'` backward via `inverted`) and reject-closes both-bound
+/// ENDPOINT-SHAPE dispatch (fail-closed). BOTH-FREE wildcard is an ALL-PAIRS closure: `plus(.)` now PROVES
+/// (W1) over the DERIVED wildcard edge via [`plan_all_pairs_compound_closure`] (the pairs closure driver
+/// takes the derived edge BY COMMITMENT), while `star(.)` reject-closes as
+/// [`BgpPlanError::ClosureStarBothFreeDomainDeferred`] (its unbound-identity diagonal is unreconstructible)
+/// and a count gate as [`BgpPlanError::ClosureCountGateDeferred`]. SINGLE-SEED (one bound endpoint) and
+/// BOTH-BOUND route to [`plan_compound_closure`] — which compiles the single-seed case (a bound TARGET
+/// walks `E'` backward via `inverted`) and reject-closes both-bound
 /// ([`BgpPlanError::ClosureBothEndpointsBound`]) and count-gated ([`BgpPlanError::ClosureCountGateDeferred`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_wildcard_closure(
@@ -1578,16 +1692,21 @@ pub(crate) fn plan_wildcard_closure(
     let source = path_endpoint_term(&path.subject)?;
     let target = path_endpoint_term(&path.object)?;
 
-    // BOTH-FREE all-pairs wildcard: reject closed. `star` additionally carries the domain-diagonal
-    // deferral (its `path.pl` both-free identity is a single UNBOUND row, not a reconstructible diagonal),
-    // so it fails with the SAME star-deferred error the concrete all-pairs `star` uses; `plus` fails with
-    // the wildcard all-pairs (edge-projection-variant) reason. Intercept HERE so `plan_compound_closure`'s
-    // generic both-free error does not mask these precise reasons.
+    // BOTH-FREE all-pairs wildcard: `plus(.)` now proves over the DERIVED wildcard edge (W1) — the
+    // 2-column reachability relation over `E' = Distinct(π_{s,o}(Triple(?s, ?p, ?o)))`. `star(.)` still
+    // reject-closes there (its both-free reflexive diagonal is unreconstructible), as does a count gate.
+    // Route to the all-pairs derived closure HERE so `plan_compound_closure`'s single-seed-only shape does
+    // not mask these cases.
     if let (PathTerm::Variable(_), PathTerm::Variable(_)) = (&source, &target) {
-        if reflexive {
-            return Err(BgpPlanError::ClosureStarBothFreeDomainDeferred);
-        }
-        return Err(BgpPlanError::ClosureWildcardAllPairsDeferred);
+        return plan_all_pairs_compound_closure(
+            path,
+            reflexive,
+            inner,
+            selections,
+            collection,
+            count_variable,
+            distincts,
+        );
     }
 
     // SINGLE-SEED (one bound endpoint) or BOTH-BOUND: the compound-closure driver builds the wildcard
@@ -1653,7 +1772,18 @@ pub(crate) fn plan_compound_closure(
         (PathTerm::Node(a), PathTerm::Variable(y)) => (a.clone(), y.clone(), false),
         (PathTerm::Variable(x), PathTerm::Node(b)) => (b.clone(), x.clone(), true),
         (PathTerm::Variable(_), PathTerm::Variable(_)) => {
-            return Err(BgpPlanError::ClosureBothEndpointsFree)
+            // BOTH-FREE compound closure = an ALL-PAIRS closure over the derived compound edge (W1):
+            // `plus` proves as the 2-column pairs closure, `star` reject-closes there (a count gate was
+            // already rejected above). Route to the all-pairs derived closure.
+            return plan_all_pairs_compound_closure(
+                path,
+                reflexive,
+                inner,
+                selections,
+                collection,
+                count_variable,
+                distincts,
+            );
         }
         (PathTerm::Node(_), PathTerm::Node(_)) => {
             return Err(BgpPlanError::ClosureBothEndpointsBound)

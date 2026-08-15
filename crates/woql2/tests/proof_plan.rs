@@ -2678,22 +2678,149 @@ fn closure_over_alternation_with_multihop_branch_rejects() {
     reject(q, BgpPlanError::ClosureCompoundSubpattern);
 }
 
-/// ENDPOINT-SHAPE reject — a compound closure with BOTH endpoints free (all-pairs over a compound
-/// edge) is a separate increment; single-seed only. Fail-closed.
+/// W1 — a compound closure with BOTH endpoints free is now the ALL-PAIRS closure over the derived
+/// compound edge. `(p|q)+` compiles to `TransitiveClosurePairsCompound` whose edge is the deduped
+/// bag-union of the branch edges (FORMERLY `compound_closure_both_free_rejects`).
 #[test]
-fn compound_closure_both_free_rejects() {
-    let q = Query::Distinct(Distinct {
-        variables: vec!["x".into(), "y".into()],
-        query: Box::new(Query::Path(Path {
-            subject: Value::Variable("x".into()),
-            pattern: PathPattern::Plus(PathPlus {
-                plus: Box::new(closure_alt(closure_pred("p"), closure_pred("q"))),
-            }),
-            object: Value::Variable("y".into()),
-            path: None,
-        })),
+fn all_pairs_alternation_plus_compiles_to_pairs_compound_closure() {
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_alt(closure_pred("p"), closure_pred("q"))),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["x", "y"]);
+    assert!(c.full_row_distinct, "the [x,y] Distinct is redundant over the already-set pairs closure");
+    let CompiledRelationStatement::TransitiveClosurePairsCompound { edge, inverted, .. } =
+        &c.relation.statement
+    else {
+        panic!(
+            "expected a TransitiveClosurePairsCompound statement, got {:?}",
+            c.relation.statement
+        );
+    };
+    assert!(!inverted, "the derived edge bakes any orientation into its own structure");
+    let CompiledRelationStatement::Distinct { input, key_columns } = &edge.statement else {
+        panic!("compound alternation pairs edge must be deduped, got {:?}", edge.statement);
+    };
+    assert_eq!(key_columns, &[0, 1], "dedup on the full (start, end) tuple");
+    let CompiledRelationStatement::BagProjection { input, .. } = &input.statement else {
+        panic!("edge must be projected to (start, end), got {:?}", input.statement);
+    };
+    let CompiledRelationStatement::BagUnion { branches, .. } = &input.statement else {
+        panic!("alternation edge must be a bag-union, got {:?}", input.statement);
+    };
+    assert_eq!(branches.len(), 2, "(p|q) is a union of two branch edges");
+}
+
+/// W1 — all-pairs `(p/q)+` (distinct predicates) compiles to the pairs closure whose derived edge is
+/// the two-atom join projected to its (start, end) endpoints.
+#[test]
+fn all_pairs_sequence_plus_compiles_to_pairs_compound_closure() {
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_seq(closure_pred("p"), closure_pred("q"))),
+        }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["x", "y"]);
+    let CompiledRelationStatement::TransitiveClosurePairsCompound { edge, .. } = &c.relation.statement
+    else {
+        panic!(
+            "expected a TransitiveClosurePairsCompound statement, got {:?}",
+            c.relation.statement
+        );
+    };
+    let CompiledRelationStatement::Distinct { input, .. } = &edge.statement else {
+        panic!("compound sequence pairs edge must be deduped, got {:?}", edge.statement);
+    };
+    let CompiledRelationStatement::BagProjection { input, indices } = &input.statement else {
+        panic!("edge must be projected to (start, end), got {:?}", input.statement);
+    };
+    assert_eq!(indices.len(), 2, "projected to exactly the two endpoints");
+    let CompiledRelationStatement::Bgp(plan) = &input.statement else {
+        panic!("sequence edge must be a two-atom join BGP, got {:?}", input.statement);
+    };
+    assert_eq!(plan.atoms.len(), 2, "(p/q) is a two-atom join");
+    assert_eq!(plan.joins.len(), 1, "one join on the shared middle waypoint");
+}
+
+/// W1 FIDELITY reject — all-pairs `star` over a COMPOUND body still needs a domain-authenticated
+/// reflexive diagonal `path.pl`'s unbound-identity semantics do not reconstruct (the SAME gate as the
+/// single-predicate all-pairs star). Fail-closed.
+#[test]
+fn all_pairs_alternation_star_rejects_star_deferred() {
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Star(PathStar {
+            star: Box::new(closure_alt(closure_pred("p"), closure_pred("q"))),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureStarBothFreeDomainDeferred);
+}
+
+/// W1 FIDELITY reject — all-pairs same-predicate 2-hop `(p/p)+` is edge-simple-UNFAITHFUL (a primitive
+/// edge can repeat across hops), exactly as the single-seed compound sequence. Fail-closed.
+#[test]
+fn all_pairs_sequence_same_predicate_rejects_unfaithful() {
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_seq(closure_pred("p"), closure_pred("p"))),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureCompoundSequenceUnfaithful);
+}
+
+/// W1 FIDELITY reject — an all-pairs 3-hop sequence `(p/q/r)+` can reuse an INTERIOR primitive edge, so
+/// it over-approximates path.pl's edge-simple reachability. Fail-closed.
+#[test]
+fn all_pairs_sequence_three_hops_rejects_unfaithful() {
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(PathPattern::Sequence(PathSequence {
+                sequence: vec![closure_pred("p"), closure_pred("q"), closure_pred("r")],
+            })),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureCompoundSequenceUnfaithful);
+}
+
+/// W1 — a COUNT gate over an all-pairs DERIVED closure is a follow-up (the raw single-predicate all-pairs
+/// count is P2c; the derived-edge form defers, so `star` needn't even enter). Fail-closed.
+#[test]
+fn all_pairs_wildcard_plus_count_rejects_count_gate_deferred() {
+    let q = Query::Count(Count {
+        query: Box::new(distinct_pairs_closure(
+            "x",
+            PathPattern::Plus(PathPlus { plus: Box::new(closure_wildcard()) }),
+            "y",
+        )),
+        count: dvar("count"),
     });
-    reject(q, BgpPlanError::ClosureBothEndpointsFree);
+    reject(q, BgpPlanError::ClosureCountGateDeferred);
+}
+
+/// W1 — a wildcard hop INSIDE a compound body (`(.|p)+`) is a separate increment; the elementary-hop
+/// lowering rejects a wildcard branch. Fail-closed.
+#[test]
+fn all_pairs_wildcard_in_alternation_rejects() {
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(closure_alt(closure_wildcard(), closure_pred("p"))),
+        }),
+        "y",
+    );
+    reject(q, BgpPlanError::PathWildcardUnsupported);
 }
 
 /// ENDPOINT-SHAPE reject — a compound closure with BOTH endpoints bound (a boolean over a compound
@@ -2922,15 +3049,46 @@ fn single_seed_wildcard_closure_bound_target_is_inverted() {
 }
 
 #[test]
-fn all_pairs_wildcard_plus_rejects_edge_projection_deferred() {
-    // `Distinct([x,y], path(?x, plus(.), ?y))` (both free) — the pairs closure node takes a raw 2-column
-    // edge, not the DERIVED wildcard edge, so all-pairs wildcard is deferred with its precise reason.
+fn all_pairs_wildcard_plus_compiles_to_pairs_compound_closure() {
+    // FORMERLY `all_pairs_wildcard_plus_rejects_edge_projection_deferred`. W1: `Distinct([x,y],
+    // path(?x, plus(.), ?y))` (both free) now compiles to the 2-column pairs closure over the DERIVED
+    // wildcard edge `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` — the ANY-predicate reachability relation.
     let q = distinct_pairs_closure(
         "x",
         PathPattern::Plus(PathPlus { plus: Box::new(closure_wildcard()) }),
         "y",
     );
-    reject(q, BgpPlanError::ClosureWildcardAllPairsDeferred);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["x", "y"]);
+    assert!(
+        c.full_row_distinct,
+        "the [x,y] Distinct is redundant over the already-set pairs closure"
+    );
+    let CompiledRelationStatement::TransitiveClosurePairsCompound { edge, inverted, .. } =
+        &c.relation.statement
+    else {
+        panic!(
+            "expected a TransitiveClosurePairsCompound statement, got {:?}",
+            c.relation.statement
+        );
+    };
+    assert!(!inverted, "the derived edge bakes any orientation into its own structure");
+    // The wildcard edge is `Distinct(BagProjection(Bgp(<predicate-variable triple>)))`.
+    let CompiledRelationStatement::Distinct { input, key_columns } = &edge.statement else {
+        panic!("wildcard pairs edge must be deduped, got {:?}", edge.statement);
+    };
+    assert_eq!(key_columns, &[0, 1], "dedup on the full (start, end) tuple");
+    let CompiledRelationStatement::BagProjection { input, .. } = &input.statement else {
+        panic!("wildcard pairs edge must be projected to (start, end), got {:?}", input.statement);
+    };
+    let CompiledRelationStatement::Bgp(plan) = &input.statement else {
+        panic!("wildcard pairs edge must be a single-atom BGP, got {:?}", input.statement);
+    };
+    assert_eq!(plan.atoms.len(), 1);
+    assert!(
+        plan.atoms[0].predicate_variable,
+        "the wildcard pairs edge retains the root-bound materialized predicate column"
+    );
 }
 
 #[test]

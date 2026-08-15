@@ -305,6 +305,27 @@ pub(crate) fn relation_query_digest(relation: &CompiledRelation) -> std::io::Res
                 hasher.update(b"/graph-schema");
             }
         }
+        CompiledRelationStatement::TransitiveClosurePairsCompound {
+            edge,
+            inverted,
+            graph,
+        } => {
+            // K-INDEPENDENT digest under a DISTINCT `/transitive-closure-pairs-compound` tag, so an
+            // all-pairs closure over a DERIVED edge can NEVER be cross-replayed as a single-predicate
+            // all-pairs closure (different tag) nor as a single-seed compound closure. The DERIVED EDGE
+            // structure is folded via `relation_query_digest(edge)` — this is what makes all-pairs-`.` ≠
+            // all-pairs-`(p|q)` ≠ all-pairs-`(p/q)`: the derived edge relation's digest captures its full
+            // shape (a wildcard full-triple projection vs a bag-union of branches vs a projected two-atom
+            // join). The number of rounds K is a prover choice carried in the proof, never in this identity.
+            hasher.update(b"/transitive-closure-pairs-compound");
+            hasher.update(relation_query_digest(edge)?);
+            hasher.update([*inverted as u8]);
+            // SCHEMA-GRAPH FOUNDATION — bind the graph selector ADDITIVELY (always `Instance` here, so it
+            // folds NOTHING), exactly like the single-seed / all-pairs closure arms.
+            if let ProofGraph::Schema = graph {
+                hasher.update(b"/graph-schema");
+            }
+        }
         CompiledRelationStatement::TransitiveClosureCompound {
             edge,
             seed,

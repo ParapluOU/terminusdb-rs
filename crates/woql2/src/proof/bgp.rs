@@ -1311,10 +1311,11 @@ pub(crate) fn validate_compiled_structure(relation: &CompiledRelation) -> Result
             | CompiledRelationStatement::OrderedListWalk { .. }
             // The ordered-array walk is a leaf too (a bound (subject, predicate), no child relation).
             | CompiledRelationStatement::OrderedArrayWalk { .. } => Ok(()),
-            // The COMPOUND closure carries a derived edge CompiledRelation child (the bag-union /
-            // projected join), so recurse into it — bounding the edge subtree by the same depth/node
-            // budget as any other child.
-            CompiledRelationStatement::TransitiveClosureCompound { edge, .. } => {
+            // The COMPOUND closure and the all-pairs DERIVED-edge closure each carry a derived edge
+            // CompiledRelation child (a wildcard projection / bag-union / projected join), so recurse into
+            // it — bounding the edge subtree by the same depth/node budget as any other child.
+            CompiledRelationStatement::TransitiveClosureCompound { edge, .. }
+            | CompiledRelationStatement::TransitiveClosurePairsCompound { edge, .. } => {
                 visit(edge, depth + 1, nodes)
             }
             CompiledRelationStatement::GeneratedU64Filter { input, .. }
@@ -1422,10 +1423,12 @@ pub(crate) fn relation_graph(relation: &CompiledRelation) -> std::io::Result<Pro
             // The all-pairs closure carries its own graph selector too (always `Instance` for a WOQL
             // path closure).
             CompiledRelationStatement::TransitiveClosurePairs { graph, .. } => combine(acc, *graph),
-            // The compound closure carries a graph selector (always `Instance`) AND a derived edge
-            // CHILD relation; combine both, so a schema-reading edge could never hide behind an
-            // `Instance` closure tag (defense-in-depth — the compiler only ever builds an instance edge).
-            CompiledRelationStatement::TransitiveClosureCompound { edge, graph, .. } => {
+            // The compound single-seed closure and the all-pairs DERIVED-edge closure each carry a graph
+            // selector (always `Instance`) AND a derived edge CHILD relation; combine both, so a
+            // schema-reading edge could never hide behind an `Instance` closure tag (defense-in-depth —
+            // the compiler only ever builds an instance edge).
+            CompiledRelationStatement::TransitiveClosureCompound { edge, graph, .. }
+            | CompiledRelationStatement::TransitiveClosurePairsCompound { edge, graph, .. } => {
                 combine(acc, *graph)?;
                 walk(edge, acc)
             }
@@ -1701,8 +1704,10 @@ pub(crate) fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
         // The transitive closure delivers the deduped reachable SET, so it is unique by construction.
         CompiledRelationStatement::TransitiveClosure { .. } => true,
         // The all-pairs closure delivers the deduped reachable PAIRS relation (each round ends in a
-        // 2-column Distinct on the full tuple), so it is unique by construction over [src, dst].
-        CompiledRelationStatement::TransitiveClosurePairs { .. } => true,
+        // 2-column Distinct on the full tuple), so it is unique by construction over [src, dst] — whether
+        // the edge is a single predicate or a DERIVED wildcard/compound edge.
+        CompiledRelationStatement::TransitiveClosurePairs { .. }
+        | CompiledRelationStatement::TransitiveClosurePairsCompound { .. } => true,
         // The compound closure delivers the SAME deduped reachable SET as the single-seed closure
         // (only the edge differs), so it is unique by construction.
         CompiledRelationStatement::TransitiveClosureCompound { .. } => true,

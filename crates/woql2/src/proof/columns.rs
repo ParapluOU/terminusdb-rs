@@ -34,8 +34,11 @@ pub(crate) fn relation_result_descriptors(
                 nullable: false,
             }])
         }
-        CompiledRelationStatement::TransitiveClosurePairs { .. } => {
-            // The all-pairs reachability relation is two nonnullable node columns [src, dst].
+        // The all-pairs reachability relation is two nonnullable node columns [src, dst] — identical
+        // delivered shape whether the edge is a single predicate or a DERIVED wildcard/compound edge
+        // (only the edge differs, not the result).
+        CompiledRelationStatement::TransitiveClosurePairs { .. }
+        | CompiledRelationStatement::TransitiveClosurePairsCompound { .. } => {
             Ok(vec![
                 ResultColumnDescriptor {
                     namespace: ResultIdNamespace::NodeValue,
@@ -536,7 +539,29 @@ pub(crate) fn relation_proof_plan(
             // the matching commitment + `commitment_root` from the trusted query.
             graph: _,
         } => RelationProofPlanKind::TransitiveClosurePairs {
-            edge: edge.clone(),
+            // The store pairs edge is now a general `RelationProofPlan`; a single-predicate edge is a
+            // `Bgp` leaf carrying the closure's OWN query digest as its identity tag — byte-identical to
+            // the previous store-side `closure_edge_plan(edge, closure_digest)` wrapping, so every
+            // existing all-pairs single-predicate closure proof/digest is unchanged.
+            edge: Box::new(RelationProofPlan {
+                query_digest,
+                kind: RelationProofPlanKind::Bgp(edge.clone()),
+            }),
+            inverted: *inverted,
+        },
+        CompiledRelationStatement::TransitiveClosurePairsCompound {
+            edge,
+            inverted,
+            // The graph selector is NOT carried into the store plan kind (identical to the compound
+            // single-seed closure): the store recursion is graph-blind, and the selector's soundness is
+            // anchored by its digest fold (above) + the verifier picking the matching commitment root.
+            graph: _,
+        } => RelationProofPlanKind::TransitiveClosurePairs {
+            // The DERIVED all-pairs edge is a general committed relation (a wildcard full-triple
+            // projection / a deduped bag-union / a projected join), lowered like any other child so it
+            // carries its own per-node digest. The store pairs driver takes it BY COMMITMENT — the SAME
+            // `TransitiveClosurePairs` node, only `E` differs.
+            edge: Box::new(child(edge)?),
             inverted: *inverted,
         },
         CompiledRelationStatement::OrderedListWalk {

@@ -1683,15 +1683,21 @@ impl ProvedBgp {
             }
             (
                 ProvedQueryStatement::TransitiveClosurePairs { envelope },
-                CompiledRelationStatement::TransitiveClosurePairs { .. },
+                CompiledRelationStatement::TransitiveClosurePairs { .. }
+                | CompiledRelationStatement::TransitiveClosurePairsCompound { .. },
             ) => {
                 // DELEGATE to the audited store verify. The store envelope carries the WHOLE 2-column
                 // closure proof (edge / seed / rounds / empty-delta fixpoint), so — like the ordered
-                // walks — the woql2 layer carries it wholesale rather than decomposing it. Rebuild the
-                // plan from the TRUSTED compiled statement: its `query_digest` folds the edge, direction
-                // and the DISTINCT `/transitive-closure-pairs` tag, and the store's own `verify` rejects
-                // any envelope whose root or query digest does not match — so an all-pairs proof cannot
-                // be re-aimed at another edge/direction, nor cross-replayed as a single-seed closure.
+                // walks — the woql2 layer carries it wholesale rather than decomposing it. This ONE arm
+                // covers BOTH the single-predicate raw-edge all-pairs closure and the DERIVED-edge
+                // (all-pairs wildcard / compound; W1) closure — they share the store
+                // `RecursiveRelationProof::TransitiveClosurePairs` envelope, so the wholesale carry is
+                // identical; only the reconstructed plan's edge differs. Rebuild the plan from the TRUSTED
+                // compiled statement: its `query_digest` folds the edge structure, direction and the
+                // DISTINCT `/transitive-closure-pairs`(`-compound`) tag, and the store's own `verify`
+                // rejects any envelope whose root or query digest does not match — so an all-pairs proof
+                // cannot be re-aimed at another edge/direction, nor cross-replayed as a single-seed
+                // closure, nor a derived-edge proof replayed as a single-predicate one.
                 let plan = relation_proof_plan(compiled, query_digest)?;
                 envelope.verify(layer, expected_root, &plan)?;
                 // BIND the wholesale envelope's delivered result to THIS proof node's delivered columns
@@ -2306,7 +2312,8 @@ impl ProvedBgp {
         // the carried envelope.
         if let (
             ProvedQueryStatement::TransitiveClosurePairs { envelope },
-            CompiledRelationStatement::TransitiveClosurePairs { .. },
+            CompiledRelationStatement::TransitiveClosurePairs { .. }
+            | CompiledRelationStatement::TransitiveClosurePairsCompound { .. },
         ) = (&self.statement, &compiled.statement)
         {
             return Ok((**envelope).clone());

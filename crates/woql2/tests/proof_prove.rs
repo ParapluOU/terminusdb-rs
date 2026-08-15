@@ -5776,6 +5776,241 @@ fn all_pairs_transitive_closure_count_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+// ---- W1: all-pairs closure over a DERIVED edge (wildcard `.` / compound `(p|q)+`, `(p/q)+`) ----
+
+/// `Distinct([x,y], Path(?x, star|plus(inner), ?y))` — the all-pairs closure gate over an arbitrary body.
+fn all_pairs_compound_query(x: &str, reflexive: bool, inner: PathPattern, y: &str) -> Query {
+    let pattern = if reflexive {
+        PathPattern::Star(PathStar { star: Box::new(inner) })
+    } else {
+        PathPattern::Plus(PathPlus { plus: Box::new(inner) })
+    };
+    Query::Distinct(Distinct {
+        variables: vec![x.into(), y.into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable(x.into()),
+            pattern,
+            object: Value::Variable(y.into()),
+            path: None,
+        })),
+    })
+}
+
+/// W1: all-pairs wildcard `plus(.)` (`Distinct([x,y], path(?x, plus(.), ?y))`) proves the EXACT 2-column
+/// reachability relation over a graph WITH A CYCLE across DIFFERENT predicates (the wildcard edge crosses
+/// every predicate), and rejects every result tamper + a predicate-range restriction. All-pairs wildcard
+/// `star` reject-closes at compile.
+fn assert_all_pairs_wildcard_closure_e2e() {
+    // 3-cycle across MIXED predicates a -p-> b -q-> c -r-> a, plus a feeder d -s-> a (d lies on no cycle).
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("b", "q", "c"),
+        ("c", "r", "a"),
+        ("d", "s", "a"),
+    ]);
+    let root = lc.state.commitment_root;
+
+    let plus_compiled = plan_bgp(&all_pairs_compound_query("x", false, wildcard_pred(), "y")).unwrap();
+    let plus_proved = plus_compiled.prove(&lc).unwrap();
+    let plus_objects = plus_proved.verify_and_resolve(&plus_compiled, &lc, root).unwrap();
+    // Same reachability topology as the single-predicate all-pairs test, but reached ACROSS predicates:
+    // a,b,c each reach every cycle node incl. themselves; d reaches {a,b,c} but not itself. 12 pairs.
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("a", "a"), ("a", "b"), ("a", "c"),
+        ("b", "a"), ("b", "b"), ("b", "c"),
+        ("c", "a"), ("c", "b"), ("c", "c"),
+        ("d", "a"), ("d", "b"), ("d", "c"),
+    ]
+    .iter()
+    .map(|(x, y)| (iri(x), iri(y)))
+    .collect();
+    assert_eq!(closure_resolved_pairs(&plus_objects), expected);
+
+    // Portable envelope round-trips through the store decode+verify path.
+    let plus_bytes = plus_proved.encode_envelope(&plus_compiled, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_compiled, &lc, root).unwrap();
+
+    // All-pairs wildcard STAR reject-closes at COMPILE (the reflexive diagonal is not reconstructible).
+    assert!(plan_bgp(&all_pairs_compound_query("x", true, wildcard_pred(), "y")).is_err());
+
+    // ---- Result-binding soundness negatives (both columns authenticated) ----
+    // (i) A forged result_len fails (the closure binds A_K's AUTHENTICATED pair count).
+    let mut forged_len = plus_compiled.prove(&lc).unwrap();
+    forged_len.result_len += 1;
+    assert!(forged_len.verify(&plus_compiled, &lc, root).is_err());
+    // (ii) DROP a reachable pair from the delivered result.
+    let mut dropped = plus_compiled.prove(&lc).unwrap();
+    dropped.result_columns[0].pop();
+    dropped.result_columns[1].pop();
+    dropped.result_len -= 1;
+    assert!(dropped.verify(&plus_compiled, &lc, root).is_err());
+    // (iii) INJECT a spurious pair (duplicate the first row over BOTH columns).
+    let mut injected = plus_compiled.prove(&lc).unwrap();
+    let s0 = injected.result_columns[0][0];
+    let o0 = injected.result_columns[1][0];
+    injected.result_columns[0].push(s0);
+    injected.result_columns[1].push(o0);
+    injected.result_len += 1;
+    assert!(injected.verify(&plus_compiled, &lc, root).is_err());
+    // (iv) PREDICATE-RANGE RESTRICTION: the wildcard proof must NOT verify as a CONCRETE single-predicate
+    // all-pairs closure (`plus(p)` — a raw `TransitiveClosurePairs` with a DIFFERENT digest tag). A prover
+    // cannot restrict the wildcard's any-predicate edge to one predicate.
+    let concrete_c = plan_bgp(&all_pairs_closure_query("x", false, "p", "y")).unwrap();
+    assert!(
+        plus_proved.verify(&concrete_c, &lc, root).is_err(),
+        "a wildcard all-pairs proof must not verify as the concrete `plus(p)` all-pairs closure"
+    );
+    // (v) WRONG ROOT.
+    let other = build_layer(&[("a", "p", "b")]);
+    assert!(plus_proved
+        .verify(&plus_compiled, &other, other.state.commitment_root)
+        .is_err());
+}
+
+#[test]
+fn all_pairs_wildcard_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-all-pairs-wildcard-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_all_pairs_wildcard_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// W1: all-pairs `(p|q)+` proves the EXACT 2-column reachability relation over a cyclic graph exercising
+/// BOTH predicates, and is non-interchangeable with the sequence / single-predicate / wildcard closures.
+fn assert_all_pairs_alternation_closure_e2e() {
+    // 3-cycle alternating predicates a -p-> b -q-> c -p-> a, plus a feeder d -q-> a.
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("b", "q", "c"),
+        ("c", "p", "a"),
+        ("d", "q", "a"),
+    ]);
+    let root = lc.state.commitment_root;
+
+    let plus_c = plan_bgp(&all_pairs_compound_query("x", false, alt_body(), "y")).unwrap();
+    let plus_p = plus_c.prove(&lc).unwrap();
+    let plus_obj = plus_p.verify_and_resolve(&plus_c, &lc, root).unwrap();
+    // E' = union of p-edges {(a,b),(c,a)} and q-edges {(b,c),(d,a)} — the same topology as the raw
+    // all-pairs test, so 12 reachable pairs.
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("a", "a"), ("a", "b"), ("a", "c"),
+        ("b", "a"), ("b", "b"), ("b", "c"),
+        ("c", "a"), ("c", "b"), ("c", "c"),
+        ("d", "a"), ("d", "b"), ("d", "c"),
+    ]
+    .iter()
+    .map(|(x, y)| (iri(x), iri(y)))
+    .collect();
+    assert_eq!(closure_resolved_pairs(&plus_obj), expected);
+
+    let plus_bytes = plus_p.encode_envelope(&plus_c, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_c, &lc, root).unwrap();
+
+    // All-pairs alternation STAR reject-closes at compile.
+    assert!(plan_bgp(&all_pairs_compound_query("x", true, alt_body(), "y")).is_err());
+
+    // NON-INTERCHANGEABILITY: `(p|q)+` all-pairs must NOT verify as `(p/q)+`, the wildcard, nor single-pred
+    // `p+` (each is a different derived edge / tag → different query digest). Note the wildcard edge over
+    // THIS graph yields the SAME pair set, yet the digest binding still rejects it.
+    let seq_c = plan_bgp(&all_pairs_compound_query("x", false, seq_body(), "y")).unwrap();
+    assert!(plus_p.verify(&seq_c, &lc, root).is_err(), "(p|q)+ must not verify as (p/q)+");
+    let wild_c = plan_bgp(&all_pairs_compound_query("x", false, wildcard_pred(), "y")).unwrap();
+    assert!(plus_p.verify(&wild_c, &lc, root).is_err(), "(p|q)+ must not verify as wildcard");
+    let single_c = plan_bgp(&all_pairs_closure_query("x", false, "p", "y")).unwrap();
+    assert!(plus_p.verify(&single_c, &lc, root).is_err(), "(p|q)+ must not verify as p+");
+
+    // TAMPERED RESULT: a forged reachable node fails against the root-authenticated accumulator A_K.
+    let mut tampered = RecursiveRelationEnvelope::decode(&plus_bytes).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(9_999_999);
+    tampered.result_commitments[0] =
+        commit_column(&pad(&tampered.result_columns[0], 1usize << tampered.result_log_domain)).unwrap();
+    assert!(decode_and_verify_envelope(&tampered.encode().unwrap(), &plus_c, &lc, root).is_err());
+
+    // WRONG ROOT.
+    let other = build_layer(&[("a", "p", "b")]);
+    assert!(plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err());
+}
+
+#[test]
+fn all_pairs_alternation_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-all-pairs-alt-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_all_pairs_alternation_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// W1: all-pairs `(p/q)+` proves the EXACT 2-column reachability relation over a graph of 2-hop compound
+/// edges, EXCLUDING the single-hop intermediates, and is non-interchangeable with the reversed sequence /
+/// alternation.
+fn assert_all_pairs_sequence_closure_e2e() {
+    // 3-cycle of compound (p/q) hops: a =(p/q)=> b =(p/q)=> c =(p/q)=> a, via intermediates m1, m2, m3.
+    let lc = build_layer(&[
+        ("a", "p", "m1"), ("m1", "q", "b"),
+        ("b", "p", "m2"), ("m2", "q", "c"),
+        ("c", "p", "m3"), ("m3", "q", "a"),
+    ]);
+    let root = lc.state.commitment_root;
+
+    let plus_c = plan_bgp(&all_pairs_compound_query("x", false, seq_body(), "y")).unwrap();
+    let plus_p = plus_c.prove(&lc).unwrap();
+    let plus_obj = plus_p.verify_and_resolve(&plus_c, &lc, root).unwrap();
+    // E' = p∘q = {(a,b),(b,c),(c,a)} — a 3-cycle over {a,b,c}. Closure = {a,b,c}×{a,b,c} = 9 pairs.
+    // Crucially EXCLUDES the single-hop intermediates m1/m2/m3 (unreachable by a full (p/q) compound hop).
+    let expected: std::collections::BTreeSet<(String, String)> = [
+        ("a", "a"), ("a", "b"), ("a", "c"),
+        ("b", "a"), ("b", "b"), ("b", "c"),
+        ("c", "a"), ("c", "b"), ("c", "c"),
+    ]
+    .iter()
+    .map(|(x, y)| (iri(x), iri(y)))
+    .collect();
+    assert_eq!(closure_resolved_pairs(&plus_obj), expected);
+
+    let plus_bytes = plus_p.encode_envelope(&plus_c, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_c, &lc, root).unwrap();
+
+    // All-pairs sequence STAR reject-closes at compile.
+    assert!(plan_bgp(&all_pairs_compound_query("x", true, seq_body(), "y")).is_err());
+
+    // NON-INTERCHANGEABILITY: `(p/q)+` must NOT verify as the reversed `(q/p)+` (different join order →
+    // different derived edge) nor the alternation `(p|q)+`.
+    let rev_seq = PathPattern::Sequence(PathSequence {
+        sequence: vec![closure_pred_e2e("q"), closure_pred_e2e("p")],
+    });
+    let rev_c = plan_bgp(&all_pairs_compound_query("x", false, rev_seq, "y")).unwrap();
+    assert!(plus_p.verify(&rev_c, &lc, root).is_err(), "(p/q)+ must not verify as (q/p)+");
+    let alt_c = plan_bgp(&all_pairs_compound_query("x", false, alt_body(), "y")).unwrap();
+    assert!(plus_p.verify(&alt_c, &lc, root).is_err(), "(p/q)+ must not verify as (p|q)+");
+
+    // TAMPERED RESULT: injecting the EXCLUDED intermediate's id must fail against A_K.
+    let mut tampered = RecursiveRelationEnvelope::decode(&plus_bytes).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(7_777_777);
+    tampered.result_commitments[0] =
+        commit_column(&pad(&tampered.result_columns[0], 1usize << tampered.result_log_domain)).unwrap();
+    assert!(decode_and_verify_envelope(&tampered.encode().unwrap(), &plus_c, &lc, root).is_err());
+
+    // WRONG ROOT.
+    let other = build_layer(&[("a", "p", "m1"), ("m1", "q", "b")]);
+    assert!(plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err());
+}
+
+#[test]
+fn all_pairs_sequence_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-all-pairs-seq-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_all_pairs_sequence_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `Count(n, Distinct([endpoint], Path(<bound source>, star/plus(p), ?endpoint)))`.
 fn count_closure_query(
     source: &str,
