@@ -1498,7 +1498,7 @@ fn read_document_array_end_to_end() {
         // ---- ADVERSARIAL: tamper the delivered array value column. ----
         // Corrupt one committed element id in an array-walk sub-proof: the store walk re-verify (bound
         // to the trusted instance root and the (subject, predicate) digest) rejects the swap.
-        bundle.arrays[0].walk.result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
+        bundle.arrays[0].walk.expect_materialized_mut().result_columns[0][0] = ArkFr::from_u64(0xDEAD_BEEF);
         assert!(
             bundle
                 .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)

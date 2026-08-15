@@ -379,16 +379,45 @@ pub struct ProvedListProperty {
     pub walk: ListWalkProof,
 }
 
+/// The ordered-array-walk proof carried for one PRESENT array property, ROUTED by the entry point —
+/// the exact `sys:Array` analogue of [`ListWalkProof`] (added for increment 6d). The materialized arm
+/// is byte-identical to increments 4–5; the reconciled arm carries the store's standalone
+/// `OrderedArrayWalk`-over-`present` proof. A variant that disagrees with the entry's [`InstanceSource`]
+/// reject-closes.
+#[derive(Debug)]
+pub enum ArrayWalkProof {
+    /// The materialized `OrderedArrayWalk` envelope over a single instance layer (the base path).
+    Materialized(ProvedBgp),
+    /// The reconciled ordered-array walk over the delta stack's `present` (the 6d delta path) — carried
+    /// WHOLESALE (a store-private composite), re-verified by the store's own verify entry.
+    Reconciled(Box<OrderedArrayWalkReconciledProof>),
+}
+
+impl ArrayWalkProof {
+    /// Test/inspection helper mirroring [`ListWalkProof::expect_materialized_mut`]: the materialized
+    /// envelope (panics on a reconciled walk), so the materialized suite's tamper cases reach the
+    /// committed walk result columns after the field-type change.
+    pub fn expect_materialized_mut(&mut self) -> &mut ProvedBgp {
+        match self {
+            ArrayWalkProof::Materialized(bgp) => bgp,
+            ArrayWalkProof::Reconciled(_) => {
+                panic!("expected a materialized array walk proof, found a reconciled one")
+            }
+        }
+    }
+}
+
 /// One PRESENT 1-D dense array property's ordered-walk sub-proof (increment 4). The exact analogue of
 /// [`ProvedListProperty`] for `sys:Array`: the store's `OrderedArrayWalk` proof for `(id, predicate)`
-/// delivers the `sys:index`-ordered `sys:value` column.
+/// delivers the `sys:index`-ordered `sys:value` column, over the materialized layer OR the reconciled
+/// `present` (6d), routed by the entry point.
 #[derive(Debug)]
 pub struct ProvedArrayProperty {
     /// The array-valued predicate IRI.
     pub predicate: Vec<u8>,
     /// The store's `OrderedArrayWalk` proof for `(id, predicate)` — the exact `sys:index`-ordered
     /// element sequence.
-    pub walk: ProvedBgp,
+    pub walk: ArrayWalkProof,
 }
 
 /// One PRESENT `Set`/`List` collection property's per-element ACTUAL-TYPE witnesses (increment-3 audit
@@ -1883,27 +1912,32 @@ fn prove_body(
                 if !present {
                     continue;
                 }
-                // DELTA-PATH REJECT (6a). A PRESENT array reject-closes: the `OrderedArrayWalk`
-                // composite reads a single MATERIALIZED layer and is not reconciled over `present` yet
-                // (6d). Rendering the raw cell ids would drop the index order — refuse.
-                if instance.is_reconciled() {
-                    return Err(
-                        BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "array" }.into()
-                    );
-                }
-                let layer = instance.root_binding_layer();
-                let instance_root = instance.instance_root();
-                let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), &prop.predicate);
-                let walk = walk_compiled.prove_with_context(ctx, layer)?;
                 // The array's ORDERED elements come from the authenticated walk (the `sys:index`-ordered
                 // `sys:value` column, NOT the raw cell ids); re-resolve them to run the per-element
                 // ACTUAL-TYPE / `@unfold` reject over the real element sequence, identically to verify.
-                // This is the one genuinely-new soundness point of inc 4: an array of actually-unfoldable
-                // (subdocument / `@unfoldable`) elements must reject, EXACTLY as `Set`/`List` do — the
-                // store composite delivers element ids, so the compiler must refuse the ones the
-                // reference would inline.
-                let columns = walk.verify_and_resolve(&walk_compiled, layer, instance_root)?;
-                let elements = columns.into_iter().next().unwrap_or_default();
+                // The walk is routed by the ENTRY POINT: a materialized layer proves the
+                // `OrderedArrayWalk` composite; a delta head proves the reconciled ordered-array walk
+                // over `present` (6d) — NO new crypto, the reconciled walk reuses the 6c-i foundation +
+                // the audited array gluing gadgets + the combined-range-dict index authentication. The
+                // per-element unfold reject (an array of actually-unfoldable/subdocument elements must
+                // reject, EXACTLY as `Set`/`List` do) runs UNCHANGED over the resolved elements.
+                let (walk, elements) = match instance {
+                    InstanceProver::Materialized { layer, root } => {
+                        let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), &prop.predicate);
+                        let walk = walk_compiled.prove_with_context(ctx, layer)?;
+                        let columns = walk.verify_and_resolve(&walk_compiled, *layer, *root)?;
+                        let elements = columns.into_iter().next().unwrap_or_default();
+                        (ArrayWalkProof::Materialized(walk), elements)
+                    }
+                    InstanceProver::Reconciled { layers, .. } => {
+                        let (walk, elements) = prove_ordered_array_walk_reconciled(
+                            layers,
+                            &CanonicalObject::Node(id.as_bytes().to_vec()),
+                            &prop.predicate,
+                        )?;
+                        (ArrayWalkProof::Reconciled(Box::new(walk)), elements)
+                    }
+                };
                 collections.push(prove_collection_elements(
                     ctx,
                     instance,
@@ -2576,14 +2610,6 @@ fn verify_node<S: VerifierLayer>(
                 // arm — there is NO `objects.len() != 1` reject. A PRESENT array property (it is present
                 // here because `by_predicate` has ≥1 row for it) MUST carry exactly one authenticated
                 // walk; a missing walk reject-closes (a prover cannot render the raw cell ids).
-                // DELTA-PATH REJECT (6a): the ordered `OrderedArrayWalk` is not reconciled over `present`
-                // yet; a present array reject-closes rather than render the raw cell ids.
-                if instance.is_reconciled() {
-                    return Err(
-                        BgpPlanError::ReadDocumentDeltaWalkDeferred { shape: "array" }.into()
-                    );
-                }
-                let instance_layer = instance.root_binding_view();
                 let array_property = array_map.get(predicate).copied().ok_or_else(|| {
                     invalid(format!(
                         "bundle is missing the array-walk sub-proof for present array property {}",
@@ -2591,13 +2617,31 @@ fn verify_node<S: VerifierLayer>(
                     ))
                 })?;
                 used_arrays.insert(predicate.clone());
-                let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), predicate);
-                let columns = array_property.walk.verify_and_resolve(
-                    &walk_compiled,
-                    &instance_layer,
-                    instance_root,
-                )?;
-                let elements = columns.into_iter().next().unwrap_or_default();
+                // Route the ordered element resolution by the ENTRY POINT (never the carried variant):
+                // a materialized layer re-verifies the `OrderedArrayWalk` envelope; a delta head
+                // re-verifies the reconciled ordered-array walk over `present` (6d). A walk whose variant
+                // disagrees with the entry's `InstanceSource` reject-closes.
+                let elements = match (instance, &array_property.walk) {
+                    (InstanceSource::Materialized(view), ArrayWalkProof::Materialized(bgp)) => {
+                        let walk_compiled = ordered_array_walk_bgp(id.as_bytes(), predicate);
+                        let columns = bgp.verify_and_resolve(&walk_compiled, view, instance_root)?;
+                        columns.into_iter().next().unwrap_or_default()
+                    }
+                    (InstanceSource::Reconciled(layers), ArrayWalkProof::Reconciled(walk)) => {
+                        verify_ordered_array_walk_reconciled(
+                            layers,
+                            instance_root,
+                            &CanonicalObject::Node(id.as_bytes().to_vec()),
+                            predicate,
+                            walk,
+                        )?
+                    }
+                    _ => {
+                        return Err(invalid(
+                            "array walk proof route does not match the entry point's instance source",
+                        ))
+                    }
+                };
                 // Per-element ACTUAL-TYPE / `@unfold` reject over the authenticated ordered elements
                 // (v1 renders bare ids; refuse any element the reference would unfold), reusing the
                 // inc-3 collection machinery IDENTICALLY to prove — the array analogue of the list check.
