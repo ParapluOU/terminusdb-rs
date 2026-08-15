@@ -35,7 +35,7 @@ use terminusdb_woql2::triple::{
 use terminusdb_woql2::value::{DataValue, ListOrVariable, NodeValue, Value};
 
 use terminus_store::proof::envelope::{
-    CollectionSumTemplate, GeneratedU64ComparisonOp, RelationEqualityPlan,
+    CollectionSumTemplate, EqualityValueDomain, GeneratedU64ComparisonOp, RelationEqualityPlan,
 };
 use terminus_store::proof::query::{AtomTerm, ColumnSource, ObjectKindFilter, ObjectRangeSpec};
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
@@ -2511,18 +2511,129 @@ fn closure_over_compound_subpattern_rejects() {
     reject(q, BgpPlanError::ClosureCompoundSubpattern);
 }
 
+/// `path(source, pattern, object)` with both endpoints BOUND node constants (P4).
+fn both_bound_path(source: &str, pattern: PathPattern, object: &str) -> Query {
+    Query::Path(Path {
+        subject: Value::Node(iri(source)),
+        pattern,
+        object: Value::Node(iri(object)),
+        path: None,
+    })
+}
+
 #[test]
-fn closure_with_two_bound_endpoints_rejects() {
-    // `path(a, plus(p), b)` is a boolean reachability check, not a set query (deferred).
-    let q = Query::Path(Path {
-        subject: Value::Node(iri("a")),
-        pattern: PathPattern::Plus(PathPlus {
+fn both_bound_plus_compiles_to_membership_gate() {
+    // P4: `path(a, plus(p), b)` is a GROUND boolean reachability check. It lowers to the forward
+    // single-seed closure from `a`, gated to the constant `b` via a `ColumnConstant` equality — the
+    // ground existence (0 rows = unreachable, ≥1 row = reachable). Mirrors the both-bound Subsumption
+    // membership gate, only over the INSTANCE graph and an arbitrary predicate.
+    let q = both_bound_path(
+        "a",
+        PathPattern::Plus(PathPlus {
             plus: Box::new(closure_pred("p")),
         }),
-        object: Value::Node(iri("b")),
-        path: None,
+        "b",
+    );
+    let c = plan_bgp(&q).unwrap();
+    // Both endpoints are constants → NO free variables to select, so no explicit projection is added;
+    // the boolean is delivered as the ground existence (result row count), exactly as the both-bound
+    // Subsumption gate does.
+    assert_eq!(c.projection, None);
+    assert!(
+        c.full_row_distinct,
+        "the intrinsic set gate is redundant over the already-set closure"
+    );
+    // The membership gate is a ColumnConstant Node equality against `b`, over the closure relation.
+    let CompiledRelationStatement::Equality { input, constraint } = &c.relation.statement else {
+        panic!("expected an Equality (membership gate), got {:?}", c.relation.statement);
+    };
+    assert!(matches!(
+        constraint,
+        RelationEqualityPlan::ColumnConstant {
+            column: 0,
+            domain: EqualityValueDomain::Node,
+            constant_on_left: false,
+            value,
+        } if *value == terminus_store::proof::CanonicalObject::Node(iri("b").into_bytes())
+    ));
+    // The gated relation IS the single-seed forward closure from `a` — commitment continuity: the
+    // membership is decided against the SAME committed accumulator the closure proves.
+    let CompiledRelationStatement::TransitiveClosure {
+        seed,
+        reflexive,
+        inverted,
+        graph,
+        edge,
+    } = &input.statement
+    else {
+        panic!("expected the gate to wrap a TransitiveClosure, got {:?}", input.statement);
+    };
+    assert!(!reflexive, "plus is one-or-more (non-reflexive)");
+    assert!(!inverted, "a forward predicate from the bound source is a forward walk");
+    assert_eq!(*graph, ProofGraph::Instance, "a WOQL path closure walks the instance graph");
+    assert_eq!(
+        *seed,
+        terminus_store::proof::CanonicalObject::Node(iri("a").into_bytes())
+    );
+    assert_eq!(edge.atoms.len(), 1);
+    assert_eq!(edge.atoms[0].predicate_term, iri("p").into_bytes());
+}
+
+#[test]
+fn both_bound_star_is_reflexive_membership_gate() {
+    // `star` seeds the reflexive set `{a} ∪ reachable≥1(a)`, so `path(a, star(p), a)` succeeds even
+    // with no edge (a == b hits the closure's reflexive seed).
+    let q = both_bound_path(
+        "a",
+        PathPattern::Star(PathStar {
+            star: Box::new(closure_pred("p")),
+        }),
+        "b",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::Equality { input, .. } = &c.relation.statement else {
+        panic!("expected an Equality (membership gate), got {:?}", c.relation.statement);
+    };
+    let CompiledRelationStatement::TransitiveClosure { reflexive, .. } = &input.statement else {
+        panic!("expected the gate to wrap a TransitiveClosure");
+    };
+    assert!(reflexive, "star is zero-or-more (reflexive identity)");
+}
+
+#[test]
+fn both_bound_inverse_predicate_sets_inverted() {
+    // A both-bound closure over an INVERSE predicate walks the mirrored edge (object -> subject).
+    let q = both_bound_path(
+        "a",
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(path_inverse("p")),
+        }),
+        "b",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::Equality { input, .. } = &c.relation.statement else {
+        panic!("expected an Equality (membership gate)");
+    };
+    let CompiledRelationStatement::TransitiveClosure { inverted, .. } = &input.statement else {
+        panic!("expected the gate to wrap a TransitiveClosure");
+    };
+    assert!(inverted, "an inverse-predicate both-bound closure mirrors the edge");
+}
+
+#[test]
+fn both_bound_count_gated_rejects_closed() {
+    // Counting a boolean existence is a deferred follow-up (mirrors the both-bound Subsumption gate).
+    let q = Query::Count(Count {
+        query: Box::new(both_bound_path(
+            "a",
+            PathPattern::Plus(PathPlus {
+                plus: Box::new(closure_pred("p")),
+            }),
+            "b",
+        )),
+        count: dvar("n"),
     });
-    reject(q, BgpPlanError::ClosureBothEndpointsBound);
+    reject(q, BgpPlanError::ClosureCountGateDeferred);
 }
 
 #[test]

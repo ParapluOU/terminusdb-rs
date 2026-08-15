@@ -5080,6 +5080,138 @@ fn transitive_closure_star_plus_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+/// `path(source, star|plus(p), object)` with BOTH endpoints bound node constants (P4) — a ground
+/// boolean reachability query.
+fn both_bound_closure_query(source: &str, reflexive: bool, predicate: &str, object: &str) -> Query {
+    let inner = PathPattern::Predicate(PathPredicate {
+        predicate: Some(iri(predicate)),
+    });
+    let pattern = if reflexive {
+        PathPattern::Star(PathStar {
+            star: Box::new(inner),
+        })
+    } else {
+        PathPattern::Plus(PathPlus {
+            plus: Box::new(inner),
+        })
+    };
+    Query::Path(Path {
+        subject: Value::Node(iri(source)),
+        pattern,
+        object: Value::Node(iri(object)),
+        path: None,
+    })
+}
+
+fn assert_both_bound_closure_e2e() {
+    // Acyclic chain a -> b -> c and a cyclic variant a -> b -> c -> a.
+    let acyclic = build_layer(&[("a", "p", "b"), ("b", "p", "c")]);
+    let acyclic_root = acyclic.state.commitment_root;
+    let cyclic = build_layer(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
+    let cyclic_root = cyclic.state.commitment_root;
+
+    // Prove + verify a both-bound reachability query, returning its ground-existence row count
+    // (≥1 = reachable outcome, 0 = unreachable outcome).
+    let reach_len = |lc: &Arc<LayerCommitment>, source: &str, reflexive: bool, object: &str| -> usize {
+        let q = both_bound_closure_query(source, reflexive, "p", object);
+        let compiled = plan_bgp(&q).unwrap();
+        let proved = compiled.prove(lc).unwrap();
+        proved
+            .verify(&compiled, lc, lc.state.commitment_root)
+            .unwrap();
+        proved.result_len
+    };
+
+    // REACHABLE (`plus`): b and c are ≥1-hop reachable from a → one solution each.
+    assert_eq!(reach_len(&acyclic, "a", false, "c"), 1, "c is reachable from a (a->b->c)");
+    assert_eq!(reach_len(&acyclic, "a", false, "b"), 1, "b is reachable from a (a->b)");
+    // NOT REACHABLE (`plus`): nothing points back to a in the acyclic chain → zero solutions.
+    assert_eq!(reach_len(&acyclic, "c", false, "a"), 0, "a is NOT reachable from c");
+    // STAR REFLEXIVE: `path(a, star(p), a)` succeeds via the identity branch even with NO self-loop.
+    assert_eq!(reach_len(&acyclic, "a", true, "a"), 1, "a reaches itself reflexively under star");
+    // PLUS is NOT reflexive without a cycle: `path(a, plus(p), a)` needs a ≥1-hop walk back to a,
+    // which the acyclic chain has not → zero solutions (distinguishes plus from star reflexivity).
+    assert_eq!(reach_len(&acyclic, "a", false, "a"), 0, "a is not on a cycle → plus(a,a) fails");
+
+    // On the CYCLIC graph, a IS on a cycle (a->b->c->a), so `path(a, plus(p), a)` now succeeds, and
+    // star still succeeds reflexively.
+    assert_eq!(reach_len(&cyclic, "a", false, "a"), 1, "a is on a cycle → plus(a,a) holds");
+    assert_eq!(reach_len(&cyclic, "a", true, "a"), 1, "star(a,a) holds on the cyclic graph too");
+
+    // ---- Soundness: the delivered outcome cannot be cross-replayed or forged ----
+    let reachable_q = both_bound_closure_query("a", false, "p", "c");
+    let reachable_compiled = plan_bgp(&reachable_q).unwrap();
+    let reachable_proved = reachable_compiled.prove(&acyclic).unwrap();
+    reachable_proved
+        .verify(&reachable_compiled, &acyclic, acyclic_root)
+        .unwrap();
+    assert_eq!(reachable_proved.result_len, 1);
+
+    // (i) OPERATOR binding: a `plus` reachability proof must NOT verify as the `star` query digest.
+    let star_compiled = plan_bgp(&both_bound_closure_query("a", true, "p", "c")).unwrap();
+    assert!(
+        reachable_proved.verify(&star_compiled, &acyclic, acyclic_root).is_err(),
+        "a plus both-bound proof must not verify under the star query digest"
+    );
+    // (ii) TARGET-CONSTANT binding: the reachable-to-`c` proof must NOT verify as the reachable-to-`b`
+    // query — the membership constant `b` is folded into the digest, so a prover cannot relabel the
+    // target (this is what forbids claiming reachability of a DIFFERENT node).
+    let other_target = plan_bgp(&both_bound_closure_query("a", false, "p", "b")).unwrap();
+    assert!(
+        reachable_proved.verify(&other_target, &acyclic, acyclic_root).is_err(),
+        "a reachable-to-c proof must not verify as the reachable-to-b query"
+    );
+    // (iii) VARIANT binding: the both-bound boolean must NOT verify as the single-seed SET closure
+    // `Distinct([y], path(a, plus(p), ?y))` (the membership gate + empty projection change the digest).
+    let set_closure = plan_bgp(&distinct_closure_query("a", false, "p", "y")).unwrap();
+    assert!(
+        reachable_proved.verify(&set_closure, &acyclic, acyclic_root).is_err(),
+        "the both-bound boolean must not verify as the single-seed set closure"
+    );
+
+    // (iv) TAMPERED RESULT: re-committing a forged reachable row does not bypass the root-authenticated
+    // membership. The delivered result is bound to the Equality-over-A_K output; a spurious id fails.
+    let envelope = reachable_proved
+        .encode_envelope(&reachable_compiled, &acyclic, acyclic_root)
+        .unwrap();
+    decode_and_verify_envelope(&envelope, &reachable_compiled, &acyclic, acyclic_root).unwrap();
+    let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(9_999_999);
+    tampered.result_commitments[0] = commit_column(&pad(
+        &tampered.result_columns[0],
+        1usize << tampered.result_log_domain,
+    ))
+    .unwrap();
+    assert!(
+        decode_and_verify_envelope(
+            &tampered.encode().unwrap(),
+            &reachable_compiled,
+            &acyclic,
+            acyclic_root,
+        )
+        .is_err(),
+        "a forged reachable row must not verify against the authenticated A_K membership"
+    );
+
+    // (v) WRONG ROOT: the reachable proof must not verify against a different layer's root (the cyclic
+    // graph), binding the whole existence to the committed instance graph.
+    assert!(
+        reachable_proved.verify(&reachable_compiled, &cyclic, cyclic_root).is_err(),
+        "the reachable proof must not verify against a different committed graph"
+    );
+}
+
+#[test]
+fn both_bound_closure_reachability_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-both-bound-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_both_bound_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `Distinct([subject, object], Path(?subject, star|plus(p), ?object))` — the all-pairs closure gate.
 fn all_pairs_closure_query(subject: &str, reflexive: bool, predicate: &str, object: &str) -> Query {
     let inner = PathPattern::Predicate(PathPredicate {

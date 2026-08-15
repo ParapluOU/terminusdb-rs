@@ -935,6 +935,31 @@ pub(crate) fn plan_transitive_closure_path(
         );
     }
 
+    // BOTH-BOUND (P4): both endpoints are node CONSTANTS (`path(a, star|plus(p), b)`). This is a GROUND
+    // boolean reachability check — "is `b` reachable from `a`?" — not a set query. `path.pl`'s
+    // `run_pattern` (both `X`, `Y` ground) walks FORWARD from the subject `a` to the object `b` (the
+    // `ground(Y), var(X)` inversion clause at path.pl:129-134 does NOT fire), succeeding AT MOST ONCE.
+    // We lower it to the single-seed closure from `a` (seed = `a`, forward direction) plus an
+    // AUTHENTICATED membership gate that keeps only the reachable rows equal to the constant `b`; the
+    // ground existence (0 rows = unreachable, ≥1 row = reachable) is the boolean. See
+    // [`plan_both_bound_closure`].
+    if let (PathTerm::Node(a), PathTerm::Node(b)) = (&source, &target) {
+        return plan_both_bound_closure(
+            a.clone(),
+            b.clone(),
+            reflexive,
+            predicate,
+            inner_inverse,
+            selections,
+            collection,
+            count_variable,
+            distincts,
+        );
+    }
+
+    // Only the two ONE-bound cases reach here: both-free (all-pairs) and both-bound (P4) are dispatched
+    // by the early returns above. The two error arms are defensive fallbacks — never fired in this order,
+    // but they fail CLOSED (never mis-plan) if the dispatch above is ever changed.
     let (seed_iri, endpoint_var, bound_target) = match (&source, &target) {
         (PathTerm::Node(a), PathTerm::Variable(y)) => (a.clone(), y.clone(), false),
         (PathTerm::Variable(x), PathTerm::Node(b)) => (b.clone(), x.clone(), true),
@@ -1084,6 +1109,125 @@ pub(crate) fn plan_all_pairs_closure(
     // commitment — identical soundness to P1's |A_K|, only over a 2-column relation.
     let (relation, full_row_distinct) =
         compile_distinct_relation(relation, distincts, selections, None)?;
+    if !full_row_distinct {
+        return Err(BgpPlanError::ClosureRequiresDistinct);
+    }
+    let projection = compile_projection(selections, count_variable.as_deref(), &relation.schema)?;
+    let compiled = CompiledBgp {
+        relation,
+        projection,
+        collection,
+        count_variable,
+        full_row_distinct,
+    };
+    validate_compiled_structure(&compiled.relation)?;
+    Ok(compiled)
+}
+
+/// Compile a BOTH-endpoints-BOUND `Star`/`Plus` closure (`path(a, star|plus(p), b)`, both endpoints
+/// node CONSTANTS) to a GROUND boolean reachability existence: "is `b` reachable from `a` over the
+/// closure?". The delivered result is a zero-free-variable relation — `≥1` row iff reachable, `0` rows
+/// iff not — exactly how a fully-ground query (e.g. a constant `Triple(a, p, b)`, or the both-bound
+/// `Subsumption` existence in [`build_subsumption_membership_gate`]) is represented in this proof
+/// system.
+///
+/// FIDELITY (`src/core/query/path.pl`). With both `X = a` and `Y = b` ground, `run_pattern` walks
+/// FORWARD from the subject `a` to the object `b` (the `ground(Y), var(X)` inversion clause,
+/// path.pl:129-134, does NOT fire) and succeeds AT MOST ONCE — a boolean, producing NO bindings.
+///   * `plus` (path.pl:186) succeeds iff `b` is reachable from `a` via `≥1` `p`-edge — INCLUDING
+///     `a == b` only when `a` lies on a cycle back to itself (`b ∈` the `≥1`-hop reachable set).
+///   * `star` (path.pl:182-185) is `(X = Y ; plus)`: with both ends ground `X = Y` is a CONCRETE
+///     equality `a == b`, so `path(a, star(p), a)` succeeds REFLEXIVELY (zero edges needed) and
+///     `path(a, star(p), b)` (`a ≠ b`) succeeds iff `b` is plus-reachable. This is exactly
+///     `b ∈ ({a} ∪ reachable≥1(a))` — the reflexive single-seed closure's accumulator `A_K`.
+/// Edge-simple `≥1`-hop reachability equals transitive reachability (a shortest walk repeats no edge),
+/// so the single-seed closure's least-fixpoint `A_K` is the faithful reachable set — the SAME
+/// edge-simple faithfulness the single-seed and all-pairs closures already rely on.
+///
+/// DESIGN. Build the from-`a` single-seed [`CompiledRelationStatement::TransitiveClosure`] (seed = `a`,
+/// reflexive per star/plus, forward direction modulo the inner predicate's own inversion), then an
+/// AUTHENTICATED membership gate — the audited [`RelationEqualityPlan::ColumnConstant`] over the `Node`
+/// domain — keeping only the reachable rows equal to the constant `b`. The gate's `input` IS the
+/// committed closure relation, so the membership is decided against the SAME authenticated `A_K` the
+/// closure proved (commitment continuity), and the query digest folds the closure (seed `a` / reflexive
+/// / inverted / graph) AND the equality constant `b`, so a both-bound proof cannot be replayed as the
+/// single-seed set closure nor under different constants/operator. An absent-from-dictionary `b`
+/// resolves to a fresh sentinel id (`resolve_relation_equality_constraint`, plan.rs) that no committed
+/// `A_K` row can equal → `0` rows → faithfully "unreachable", with prover and verifier computing the
+/// sentinel identically (sound). Reuses the exact composite the both-bound `Subsumption` gate ships —
+/// only the edge (arbitrary predicate `p` vs `sys:inherits`) and the graph (`Instance` vs `Schema`)
+/// differ — so NO store change is needed (the store recursion is graph-blind).
+///
+/// A `Count` gate rejects closed (`ClosureCountGateDeferred`): counting a boolean existence is a
+/// separate follow-up, exactly as the both-bound `Subsumption` gate defers it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_both_bound_closure(
+    seed_iri: String,
+    target_iri: String,
+    reflexive: bool,
+    predicate: String,
+    inner_inverse: bool,
+    selections: &[(&[String], bool)],
+    collection: Option<String>,
+    count_variable: Option<String>,
+    distincts: &[&[String]],
+) -> Result<CompiledBgp, BgpPlanError> {
+    if count_variable.is_some() {
+        return Err(BgpPlanError::ClosureCountGateDeferred);
+    }
+
+    // A fresh internal endpoint variable: both user endpoints are constants, so this column is never
+    // user-visible; it exists only to carry the reachable set into the membership gate.
+    let endpoint_var = "__closure_reachable".to_string();
+
+    // The edge relation E = Triple(?s, p, ?o): a single-atom 2-column [subject, object] node BGP.
+    let edge = LayerBgpPlan {
+        source: ColumnSource::Materialized,
+        atoms: vec![LayerBgpAtom::all_variables(predicate.into_bytes())],
+        joins: Vec::new(),
+    };
+    let closure = CompiledRelation {
+        schema: vec![endpoint_var.clone()],
+        // Pin the delivered column to the Node equality domain so the `ColumnConstant` gate below can
+        // compare it against the `b` node constant (an unpinned column has no equality domain).
+        domains: vec![Some(EqualityValueDomain::Node)],
+        statement: CompiledRelationStatement::TransitiveClosure {
+            edge,
+            seed: CanonicalObject::Node(seed_iri.into_bytes()),
+            reflexive,
+            // Both endpoints are bound, so the seed is ALWAYS the subject `a` and the walk is forward;
+            // the only direction source is the inner predicate's own inversion.
+            inverted: inner_inverse,
+            // A WOQL `Path` closure walks the INSTANCE graph (folds nothing into the digest).
+            graph: ProofGraph::Instance,
+        },
+    };
+
+    // Membership gate: keep only the reachable rows whose node == the constant `b`. Reuses the audited
+    // `RelationEqualityPlan::ColumnConstant` gadget over the Node domain; its `input` is the committed
+    // closure relation, so the membership is bound to the closure's OWN authenticated `A_K`.
+    let gated = CompiledRelation {
+        schema: closure.schema.clone(),
+        domains: closure.domains.clone(),
+        statement: CompiledRelationStatement::Equality {
+            input: Box::new(closure),
+            constraint: RelationEqualityPlan::ColumnConstant {
+                column: 0,
+                domain: EqualityValueDomain::Node,
+                value: CanonicalObject::Node(target_iri.into_bytes()),
+                constant_on_left: false,
+            },
+        },
+    };
+
+    // Collapse to the set (intrinsic `distinct`, in addition to any user-supplied one), then project.
+    // With both endpoints constant the query has NO free variables, so the projection is empty and the
+    // result is a ground existence (0 rows = `b` NOT reachable from `a`; ≥1 row = reachable).
+    let intrinsic = [endpoint_var.clone()];
+    let mut gated_distincts: Vec<&[String]> = distincts.to_vec();
+    gated_distincts.push(&intrinsic);
+    let (relation, full_row_distinct) =
+        compile_distinct_relation(gated, &gated_distincts, selections, count_variable.as_deref())?;
     if !full_row_distinct {
         return Err(BgpPlanError::ClosureRequiresDistinct);
     }

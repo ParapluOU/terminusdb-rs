@@ -419,9 +419,13 @@ pub enum BgpPlanError {
     #[error("all-pairs `star` (both endpoints free) needs a domain-authenticated reflexive diagonal that `path.pl`'s unbound-identity semantics do not reconstruct (deferred); reject closed — use `plus`")]
     ClosureStarBothFreeDomainDeferred,
 
-    /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`). This is a boolean
-    /// reachability check, not a set query; it is a deferred follow-up.
-    #[error("`Star`/`Plus` path with two bound endpoints is a boolean reachability check (deferred); reject closed")]
+    /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`) — a GROUND boolean
+    /// reachability check. This is now IMPLEMENTED (P4): [`crate::proof::paths::plan_both_bound_closure`]
+    /// lowers it to the single-seed closure from `a` plus an authenticated `ColumnConstant` membership
+    /// gate on `b` (a ground existence: 0 rows = unreachable, ≥1 row = reachable). This variant survives
+    /// only as a DEFENSIVE fail-closed fallback in the single-seed endpoint match (both-bound is
+    /// dispatched by an earlier early-return); it is never produced in the normal dispatch order.
+    #[error("`Star`/`Plus` path with two bound endpoints is a boolean reachability check (defensive fallback — normally dispatched to `plan_both_bound_closure`); reject closed")]
     ClosureBothEndpointsBound,
 
     /// A `Star`/`Plus` over a COMPOUND sub-pattern (a sequence, union, or nested repetition rather than
