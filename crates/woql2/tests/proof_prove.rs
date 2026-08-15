@@ -5192,6 +5192,83 @@ fn all_pairs_transitive_closure_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+/// `Count(n, Distinct([x,y], path(?x, plus(p), ?y)))` — count over the all-pairs closure.
+fn count_all_pairs_query(
+    subject: &str,
+    reflexive: bool,
+    predicate: &str,
+    object: &str,
+    count: &str,
+) -> Query {
+    Query::Count(Count {
+        query: Box::new(all_pairs_closure_query(subject, reflexive, predicate, object)),
+        count: DataValue::Variable(count.into()),
+    })
+}
+
+/// P2c: count-over-all-pairs (`Count(n, Distinct([x,y], path(?x, plus(p), ?y)))`) proves
+/// `n = |pairs relation|` (the number of distinct connected pairs) over the SAME 12-pair cyclic graph
+/// as [`assert_all_pairs_closure_e2e`]. The count is delivered over the pairs closure's OWN
+/// authenticated `result_len` — the number of ROWS (pairs), NOT columns — exactly as P1 delivers |A_K|
+/// for the single-seed set; the count "just works" over a 2-column relation because it counts rows.
+fn assert_all_pairs_closure_count_e2e() {
+    // 3-cycle a -> b -> c -> a plus a feeder d -> a (d lies on no cycle). The closure TERMINATES;
+    // the reachability relation has exactly 12 pairs (see `assert_all_pairs_closure_e2e`).
+    let lc = build_layer(&[
+        ("a", "p", "b"),
+        ("b", "p", "c"),
+        ("c", "p", "a"),
+        ("d", "p", "a"),
+    ]);
+    let root = lc.state.commitment_root;
+
+    // plus over both-free endpoints = the 12-pair reachability relation => n = 12. The pairs SET is
+    // hidden; the single delivered binding is the count.
+    let query = count_all_pairs_query("x", false, "p", "y", "n");
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&lc).unwrap();
+    assert_eq!(proved.count_binding(&compiled), Some(("n", 12)));
+    proved
+        .verify_executed_rows(&compiled, &lc, root, &["n".into()], &[vec![12]])
+        .unwrap();
+    // An off-by-one / tampered count value fails to verify (mirrors CountProof rejecting m_J +/- 1).
+    assert!(proved
+        .verify_executed_rows(&compiled, &lc, root, &["n".into()], &[vec![11]])
+        .is_err());
+    assert!(proved
+        .verify_executed_rows(&compiled, &lc, root, &["n".into()], &[vec![13]])
+        .is_err());
+
+    // The portable envelope round-trips (the count is bound by the pairs closure proof + query digest).
+    let bytes = proved.encode_envelope(&compiled, &lc, root).unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, root).unwrap();
+
+    // A prover-side forged `result_len` fails verify: the count binds the pairs closure's AUTHENTICATED
+    // accumulator length (the accumulate-and-dedupe rounds + the empty-delta fixpoint), not a free
+    // scalar — a forged pair count / off-by-one `n` cannot pass.
+    let mut forged = compiled.prove(&lc).unwrap();
+    forged.result_len += 1;
+    assert!(forged.verify(&compiled, &lc, root).is_err());
+
+    // NON-INTERCHANGEABILITY: a count-over-all-pairs proof must NOT verify under the plain (un-counted)
+    // all-pairs closure plan — the count binding + the zero-column projection are folded into the query
+    // digest — in either the direct or the decoded-envelope path.
+    let uncounted = plan_bgp(&all_pairs_closure_query("x", false, "p", "y")).unwrap();
+    assert!(proved.verify(&uncounted, &lc, root).is_err());
+    assert!(decode_and_verify_envelope(&bytes, &uncounted, &lc, root).is_err());
+}
+
+#[test]
+fn all_pairs_transitive_closure_count_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-all-pairs-closure-count-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_all_pairs_closure_count_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `Count(n, Distinct([endpoint], Path(<bound source>, star/plus(p), ?endpoint)))`.
 fn count_closure_query(
     source: &str,

@@ -2258,6 +2258,84 @@ fn all_pairs_star_under_distinct_rejects_star_deferred() {
     reject(q, BgpPlanError::ClosureStarBothFreeDomainDeferred);
 }
 
+#[test]
+fn all_pairs_plus_count_compiles_with_count_wrapper() {
+    // P2c: `Count(Distinct([s,o], path(?s, plus(p), ?o)))` counts the pairs SET — `n = |{(s,o)}|`.
+    // FORMERLY reject-closed `ClosureCountGateDeferred`. The plan carries the `TransitiveClosurePairs`
+    // leaf UNCHANGED (commitment continuity — the count is measured over the pairs closure's OWN
+    // authenticated accumulator `result_len`, the number of ROWS/pairs, not a re-deduped column), the
+    // full-row Distinct proven redundant (`full_row_distinct`), plus the count wrapper — a zero-column
+    // projection bound to `count`, exactly as the single-seed count gate (P1) delivers |A_K|.
+    let q = Query::Count(Count {
+        query: Box::new(distinct_pairs_closure(
+            "s",
+            PathPattern::Plus(PathPlus {
+                plus: Box::new(path_pred("knows")),
+            }),
+            "o",
+        )),
+        count: dvar("count"),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.count_variable.as_deref(), Some("count"));
+    // The count binding is delivered as the zero-column projection (the pairs set is hidden).
+    assert_eq!(c.projection, Some(Vec::new()));
+    // The full-row [s,o] Distinct is proven redundant over the already-set pairs closure.
+    assert!(
+        c.full_row_distinct,
+        "the [s,o] Distinct is redundant over the already-set pairs closure"
+    );
+    // The counted relation is the 2-column pairs closure leaf itself, unchanged.
+    assert_eq!(c.relation.schema, ["s", "o"]);
+    let CompiledRelationStatement::TransitiveClosurePairs { inverted, .. } = &c.relation.statement
+    else {
+        panic!(
+            "expected a TransitiveClosurePairs statement, got {:?}",
+            c.relation.statement
+        );
+    };
+    assert!(!inverted, "a forward-predicate all-pairs count closure is not inverted");
+}
+
+#[test]
+fn all_pairs_plus_count_partial_distinct_rejects() {
+    // Soundness: a PARTIAL `Distinct([s])` under the count does NOT cover the [s,o] pairs schema —
+    // the count-over-all-pairs gate still requires the FULL-row Distinct (each pair counted once).
+    // Reject closed (identical error to the un-counted partial-distinct all-pairs reject).
+    let q = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["s".into()],
+            query: Box::new(path_var_query(
+                "s",
+                PathPattern::Plus(PathPlus {
+                    plus: Box::new(path_pred("knows")),
+                }),
+                "o",
+            )),
+        })),
+        count: dvar("count"),
+    });
+    reject(q, BgpPlanError::DistinctNotFullSchema);
+}
+
+#[test]
+fn all_pairs_plus_count_without_distinct_rejects() {
+    // Soundness: a `Count` over the BARE all-pairs `plus` (no `Distinct` gate) would count the
+    // reference's edge-simple BAG of endpoint pairs, not the pairs SET — reject closed until the
+    // collapsing `Distinct([s,o])` is present.
+    let q = Query::Count(Count {
+        query: Box::new(path_var_query(
+            "s",
+            PathPattern::Plus(PathPlus {
+                plus: Box::new(path_pred("knows")),
+            }),
+            "o",
+        )),
+        count: dvar("count"),
+    });
+    reject(q, BgpPlanError::ClosureRequiresDistinct);
+}
+
 // ---------------------------------------------------------------------------
 // Transitive closure (`Star`/`Plus`) under an endpoint `Distinct`.
 // ---------------------------------------------------------------------------

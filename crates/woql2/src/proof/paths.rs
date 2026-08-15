@@ -1009,6 +1009,11 @@ pub(crate) fn plan_transitive_closure_path(
 /// cores, the round-by-commitment threading, the fixpoint completeness certificate, the 64-round budget
 /// — only the accumulator arity (2) and the seed (E itself, no bound node) differ. NO new crypto.
 ///
+/// OPTIONALLY wrapped in a `Count` of the pairs relation (P2c): `Count(n, Distinct([x,y], ...))` proves
+/// `n = |pairs relation|` (the number of distinct connected pairs). The count is delivered over the
+/// pairs closure's OWN authenticated accumulator `result_len`, exactly as the single-seed count gate
+/// (P1) delivers `|A_K|` — see the count-composition note at the `compile_distinct_relation` call below.
+///
 /// PLUS is provable. STAR reject-closes (`ClosureStarBothFreeDomainDeferred`) via the FIDELITY GATE:
 /// `path.pl`'s both-free identity branch (`X = Y`, path.pl:183) unifies two UNBOUND variables — it
 /// yields a single unbound row, NOT the domain diagonal `{(x,x) : x ∈ nodes(E)}` (nor all instance
@@ -1032,12 +1037,6 @@ pub(crate) fn plan_all_pairs_closure(
     // fn-doc); fail closed. All-pairs `plus` proceeds (no reflexive rows).
     if reflexive {
         return Err(BgpPlanError::ClosureStarBothFreeDomainDeferred);
-    }
-
-    // Count-over-all-pairs (`n = |{(x,y)}|`) is a follow-up (P5): keep it deferred, exactly as the
-    // single-seed count gate was before P1.
-    if count_variable.is_some() {
-        return Err(BgpPlanError::ClosureCountGateDeferred);
     }
 
     // `path(?x, plus(p), ?x)` (the SAME variable at both endpoints) is not a two-column pairs relation —
@@ -1072,6 +1071,17 @@ pub(crate) fn plan_all_pairs_closure(
     // exactly when a bare `Distinct` covers the whole schema over a duplicate-free child (the pairs
     // closure is duplicate-free by construction — see `is_provably_duplicate_free`). Anything else
     // (no `Distinct`, a partial `Distinct([x])`, or a projected/count form) rejects closed.
+    //
+    // COUNT COMPOSITION (P2c): `Count(n, Distinct([x,y], path(?x, plus(p), ?y)))` counts the pairs SET
+    // — `n = |pairs relation|`. Exactly as the single-seed count gate (P1), we pass `None` (never
+    // `count_variable`) here so the `Distinct([x,y])` is always validated as the SAME transparent
+    // full-row no-op over the pairs closure's already strict-sorted, dedup-free accumulator `A_K` —
+    // NOT re-routed through the store `Distinct` dedup gadget (which would re-key fresh columns and
+    // break commitment continuity). The count is then attached purely as read-side metadata (the
+    // zero-column projection + `count_variable` below): the delivered count is the pairs relation's
+    // proven ROW length `result_len` (the number of distinct pairs — the count reads rows, not
+    // columns), so it binds the `TransitiveClosurePairs` node's OWN authenticated accumulator
+    // commitment — identical soundness to P1's |A_K|, only over a 2-column relation.
     let (relation, full_row_distinct) =
         compile_distinct_relation(relation, distincts, selections, None)?;
     if !full_row_distinct {
