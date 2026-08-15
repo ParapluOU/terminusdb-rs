@@ -871,8 +871,9 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
 ///
 /// SCOPE (this pass): a SINGLE concrete predicate (forward or inverse), exactly one BOUND endpoint
 /// (bound source, or bound target reached by traversing the inverse edge), under a `Distinct` naming
-/// the free endpoint. Deferred (reject closed): compound sub-patterns, two free / two bound endpoints,
-/// wildcards, edge-list capture, and `Count`-gated closures.
+/// the free endpoint — OPTIONALLY wrapped in a `Count` of that reachable set (the count is delivered
+/// over the closure's OWN deduped accumulator `A_K`; see the count-composition note below). Deferred
+/// (reject closed): compound sub-patterns, two free / two bound endpoints, wildcards, edge-list capture.
 pub(crate) fn plan_transitive_closure_path(
     path: &crate::query::Path,
     selections: &[(&[String], bool)],
@@ -930,11 +931,6 @@ pub(crate) fn plan_transitive_closure_path(
     // two mirrorings cancel (`invert_path(plus(n(P))) = plus(p(P))`, path.pl:114-134).
     let inverted = bound_target ^ inner_inverse;
 
-    // `Count`-gated closures are a deferred follow-up; do the `Distinct` form first.
-    if count_variable.is_some() {
-        return Err(BgpPlanError::ClosureCountGateDeferred);
-    }
-
     // The edge relation E = Triple(?s, p, ?o): a single-atom 2-column [subject, object] node BGP.
     let edge = LayerBgpPlan {
         source: ColumnSource::Materialized,
@@ -960,8 +956,18 @@ pub(crate) fn plan_transitive_closure_path(
     // when the `Distinct` covers the schema over a duplicate-free child (the closure is duplicate-free
     // by construction — see `is_provably_duplicate_free`). Anything else (no `Distinct`, or a
     // `Distinct` on a different variable) fails the gate and rejects closed.
+    //
+    // COUNT COMPOSITION (P1): a `Count(n, Distinct([y], path(a, star|plus(p), ?y)))` counts the
+    // reachable SET. We pass `None` (never `count_variable`) here so the endpoint `Distinct` is
+    // always validated as the SAME transparent full-row no-op over the closure's already
+    // strict-sorted, dedup-free accumulator `A_K` — NOT re-routed through the store `Distinct`
+    // dedup gadget (which would re-key a fresh column and break commitment continuity). The count
+    // is then attached purely as read-side metadata (zero-column projection + `count_variable`
+    // below), exactly as Count-over-BGP does: the delivered count is `A_K`'s proven row length, so
+    // it binds the closure's own final accumulator commitment (soundness: commitment continuity;
+    // the deduped set — with Star's reflexive seed counted once — is what is measured).
     let (relation, full_row_distinct) =
-        compile_distinct_relation(relation, distincts, selections, count_variable.as_deref())?;
+        compile_distinct_relation(relation, distincts, selections, None)?;
     if !full_row_distinct {
         return Err(BgpPlanError::ClosureRequiresDistinct);
     }

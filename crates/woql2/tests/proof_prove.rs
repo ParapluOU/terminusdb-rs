@@ -5080,6 +5080,114 @@ fn transitive_closure_star_plus_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+/// `Count(n, Distinct([endpoint], Path(<bound source>, star/plus(p), ?endpoint)))`.
+fn count_closure_query(
+    source: &str,
+    reflexive: bool,
+    predicate: &str,
+    endpoint: &str,
+    count: &str,
+) -> Query {
+    Query::Count(Count {
+        query: Box::new(distinct_closure_query(source, reflexive, predicate, endpoint)),
+        count: DataValue::Variable(count.into()),
+    })
+}
+
+/// P1: `Count(n, Distinct([y], Path(a, star|plus(p), ?y)))` proves `n = |reachable set|` over the
+/// SAME graph as [`assert_transitive_closure_e2e`]. The count is delivered over the closure's OWN
+/// deduped accumulator `A_K` (commitment continuity), for star and plus, forward and inverse.
+fn assert_transitive_closure_count_e2e() {
+    let lc = build_layer(&[("a", "p", "b"), ("b", "p", "c")]);
+    let root = lc.state.commitment_root;
+
+    // plus from a over a -> b -> c = {b, c} => n = 2. The endpoint set is hidden; the single
+    // delivered binding is the count.
+    let plus_query = count_closure_query("a", false, "p", "y", "n");
+    let plus_compiled = plan_bgp(&plus_query).unwrap();
+    let plus_proved = plus_compiled.prove(&lc).unwrap();
+    assert_eq!(plus_proved.count_binding(&plus_compiled), Some(("n", 2)));
+    plus_proved
+        .verify_executed_rows(&plus_compiled, &lc, root, &["n".into()], &[vec![2]])
+        .unwrap();
+    // An off-by-one / tampered count value fails to verify (mirrors CountProof rejecting m_J +/- 1).
+    assert!(plus_proved
+        .verify_executed_rows(&plus_compiled, &lc, root, &["n".into()], &[vec![1]])
+        .is_err());
+    assert!(plus_proved
+        .verify_executed_rows(&plus_compiled, &lc, root, &["n".into()], &[vec![3]])
+        .is_err());
+
+    // The portable envelope round-trips (the count is bound by the closure proof + query digest).
+    let plus_bytes = plus_proved.encode_envelope(&plus_compiled, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_compiled, &lc, root).unwrap();
+
+    // star from a = {a, b, c} (the reflexive seed a is counted EXACTLY once) => n = 3.
+    let star_query = count_closure_query("a", true, "p", "y", "n");
+    let star_compiled = plan_bgp(&star_query).unwrap();
+    let star_proved = star_compiled.prove(&lc).unwrap();
+    assert_eq!(star_proved.count_binding(&star_compiled), Some(("n", 3)));
+    star_proved
+        .verify_executed_rows(&star_compiled, &lc, root, &["n".into()], &[vec![3]])
+        .unwrap();
+    assert!(star_proved
+        .verify_executed_rows(&star_compiled, &lc, root, &["n".into()], &[vec![2]])
+        .is_err());
+
+    // OPERATOR NON-INTERCHANGEABILITY: a count-of-plus proof must not verify under the count-of-star
+    // plan (n differs, and the K-independent digest binds star vs plus), in either the direct or the
+    // decoded-envelope path; nor under the plain (un-counted) closure plan (the count binding + the
+    // zero-column projection are folded into the query digest).
+    assert!(plus_proved.verify(&star_compiled, &lc, root).is_err());
+    assert!(decode_and_verify_envelope(&plus_bytes, &star_compiled, &lc, root).is_err());
+    let plus_uncounted = plan_bgp(&distinct_closure_query("a", false, "p", "y")).unwrap();
+    assert!(plus_proved.verify(&plus_uncounted, &lc, root).is_err());
+
+    // A prover-side forged `result_len` fails verify: the count binds the closure's AUTHENTICATED
+    // A_K length (the accumulate-and-dedupe rounds + the empty-delta fixpoint), not a free scalar.
+    let mut forged = plus_compiled.prove(&lc).unwrap();
+    forged.result_len += 1;
+    assert!(forged.verify(&plus_compiled, &lc, root).is_err());
+
+    // INVERSE (bound target): `Count(n, Distinct([x], Path(?x, plus(p), c)))` counts the nodes that
+    // reach c over the inverse edge = {a, b} => n = 2. Same edge relation, mirrored traversal.
+    let inverse_query = Query::Count(Count {
+        query: Box::new(Query::Distinct(Distinct {
+            variables: vec!["x".into()],
+            query: Box::new(Query::Path(Path {
+                subject: Value::Variable("x".into()),
+                pattern: PathPattern::Plus(PathPlus {
+                    plus: Box::new(PathPattern::Predicate(PathPredicate {
+                        predicate: Some(iri("p")),
+                    })),
+                }),
+                object: Value::Node(iri("c")),
+                path: None,
+            })),
+        })),
+        count: DataValue::Variable("n".into()),
+    });
+    let inverse_compiled = plan_bgp(&inverse_query).unwrap();
+    let inverse_proved = inverse_compiled.prove(&lc).unwrap();
+    assert_eq!(inverse_proved.count_binding(&inverse_compiled), Some(("n", 2)));
+    inverse_proved
+        .verify_executed_rows(&inverse_compiled, &lc, root, &["n".into()], &[vec![2]])
+        .unwrap();
+    // The forward count (into ?y from a) and the inverse count (into c from ?x) are distinct queries.
+    assert!(inverse_proved.verify(&plus_compiled, &lc, root).is_err());
+}
+
+#[test]
+fn transitive_closure_count_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-transitive-closure-count-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_transitive_closure_count_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn path_predicate_proves_endpoint_pairs() {
     let lc = build_layer(&[("a", "knows", "b"), ("b", "knows", "c"), ("x", "likes", "y")]);

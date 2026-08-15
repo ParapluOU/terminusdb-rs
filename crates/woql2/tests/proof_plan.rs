@@ -2373,8 +2373,12 @@ fn closure_with_wildcard_predicate_rejects() {
 }
 
 #[test]
-fn closure_count_gate_is_deferred() {
-    // `Count(Distinct([y], Path(a, plus(p), ?y)))` is a follow-up; do the Distinct form first.
+fn count_gated_closure_compiles_with_count_wrapper() {
+    // P1: `Count(Distinct([y], Path(a, plus(p), ?y)))` counts the reachable SET. The plan carries the
+    // TransitiveClosure leaf UNCHANGED (commitment continuity — the count is measured over the
+    // closure's OWN deduped accumulator `A_K`, not a re-deduped column), the endpoint Distinct proven
+    // redundant (`full_row_distinct`), plus the count wrapper — a zero-column projection bound to
+    // `count`, exactly as Count-over-BGP delivers its count.
     let q = Query::Count(Count {
         query: Box::new(distinct_closure(
             Value::Node(iri("a")),
@@ -2385,7 +2389,28 @@ fn closure_count_gate_is_deferred() {
         )),
         count: dvar("count"),
     });
-    reject(q, BgpPlanError::ClosureCountGateDeferred);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.count_variable.as_deref(), Some("count"));
+    // The count binding is delivered as the zero-column projection (the endpoint set is hidden).
+    assert_eq!(c.projection, Some(Vec::new()));
+    // The endpoint Distinct is proven redundant over the already-set closure.
+    assert!(c.full_row_distinct, "endpoint Distinct is redundant over the already-set closure");
+    // The counted relation is the closure leaf itself, unchanged.
+    let CompiledRelationStatement::TransitiveClosure {
+        reflexive,
+        inverted,
+        seed,
+        ..
+    } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosure statement, got {:?}", c.relation.statement);
+    };
+    assert!(!reflexive, "plus is one-or-more (non-reflexive)");
+    assert!(!inverted, "a bound source with a forward predicate is a forward walk");
+    assert_eq!(
+        *seed,
+        terminus_store::proof::CanonicalObject::Node(iri("a").into_bytes())
+    );
 }
 
 #[test]
