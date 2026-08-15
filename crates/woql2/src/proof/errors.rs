@@ -341,9 +341,30 @@ pub enum BgpPlanError {
     PathEndpointUnsupported,
 
     /// A `PathPredicate`/`InversePathPredicate` with no predicate (the `.` any-predicate
-    /// wildcard). The proof authenticates a concrete predicate IRI; a wildcard is rejected.
-    #[error("wildcard path predicate (`.`) is unsupported: a concrete predicate IRI is required")]
+    /// wildcard) in a position this pass does not provide. A BARE single-hop wildcard with at
+    /// least one free endpoint (`path(a, ., ?y)`, `path(?x, ., ?y)`, `path(?x, ., b)`) IS now
+    /// provable (the full-triple `(s,o)` projection over the root-bound predicate column — see
+    /// [`plan_single_hop_wildcard`]); this error survives for the shapes still out of scope: a
+    /// both-bound single-hop wildcard boolean (`path(a, ., b)`), and the internal
+    /// concrete-predicate-required signal a defensive fallback raises.
+    #[error("wildcard path predicate (`.`) is unsupported in this position: only a bare single-hop wildcard with a free endpoint (or a single-seed `star`/`plus(.)` closure) is provable")]
     PathWildcardUnsupported,
+
+    /// A wildcard predicate `.` in a MULTI-HOP / nested fixed-length position (`Sequence([., .])`,
+    /// `Times(., n, n)` with `n >= 2`, or a wildcard buried in a `Sequence`/`Or`/`Times`). Two
+    /// wildcard hops can traverse the SAME stored edge WITHOUT a same-predicate guarantee, so
+    /// keeping it edge-simple would need a FULL-TRIPLE (predicate-in-fingerprint) disequality —
+    /// [`build_disequality_pairs`] fingerprints only the `(walk-from, walk-to)` node pair (the
+    /// predicate cancels WITHIN a predicate group), which once the predicate itself is free would
+    /// OVER-DROP valid multi-predicate solutions — two hops over DIFFERENT-predicate edges between
+    /// the same nodes fingerprint identically and get removed, so the result is incomplete (it can
+    /// only drop rows, never certify a pair `path.pl` rejects); certifying that truncated set as the
+    /// complete answer violates the completeness contract. No such full-triple disequality gadget
+    /// exists, so a multi-hop / nested wildcard
+    /// rejects closed. (A single wildcard hop cannot reuse an edge, so it needs no disequality and
+    /// is provable.)
+    #[error("multi-hop / nested wildcard path predicate (`.`) is unsupported: two free-predicate hops need a full-triple edge-simple disequality that does not exist; reject closed")]
+    PathWildcardMultiHopUnsupported,
 
     /// A multi-hop path reuses a predicate across two hops. Leading-Prolog path evaluation
     /// is edge-SIMPLE (`Open_Set` forbids re-traversing an identical edge within one path),
@@ -410,6 +431,18 @@ pub enum BgpPlanError {
     /// unaffected — it has no reflexive rows.
     #[error("all-pairs `star` (both endpoints free) needs a domain-authenticated reflexive diagonal that `path.pl`'s unbound-identity semantics do not reconstruct (deferred); reject closed — use `plus`")]
     ClosureStarBothFreeDomainDeferred,
+
+    /// An ALL-PAIRS wildcard closure (`path(?x, plus(.), ?y)`, both endpoints free). A concrete-predicate
+    /// all-pairs `plus` IS provable (the 2-column pairs closure), but the store
+    /// [`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairs`] node takes a RAW 2-column
+    /// [`terminus_store::proof::query::LayerBgpPlan`] edge (`Triple(?s, p, ?o)` with a concrete predicate),
+    /// NOT a projected/derived edge relation. The wildcard edge `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` is a
+    /// DERIVED [`crate::proof::types::CompiledRelation`] (the single-seed wildcard closure feeds it to the
+    /// COMPOUND driver), so all-pairs would need an edge-projection variant of the pairs node that does not
+    /// exist yet. Reject closed (single-seed wildcard closures are provable). Both-free wildcard `star`
+    /// rejects earlier as [`Self::ClosureStarBothFreeDomainDeferred`].
+    #[error("all-pairs wildcard `plus(.)` (both endpoints free) needs an edge-projection variant of the pairs closure node that does not exist yet (deferred); reject closed — single-seed wildcard closures are provable")]
+    ClosureWildcardAllPairsDeferred,
 
     /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`) — a GROUND boolean
     /// reachability check. This is now IMPLEMENTED (P4): [`crate::proof::paths::plan_both_bound_closure`]

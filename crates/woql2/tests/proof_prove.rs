@@ -5406,6 +5406,187 @@ fn compound_sequence_closure_prove_and_verify_end_to_end() {
         .unwrap();
 }
 
+// ---- P5b: single-hop wildcard `.` and single-seed wildcard `star|plus(.)` closure ----
+
+/// A bare single-hop wildcard `.` (any predicate) predicate pattern.
+fn wildcard_pred() -> PathPattern {
+    PathPattern::Predicate(PathPredicate { predicate: None })
+}
+
+/// P5b single-hop: `path(a, ., ?y)` = the direct objects of `a` regardless of predicate, delivered as a
+/// BAG (one row per stored triple). Proves the full-triple projection over the root-bound predicate
+/// column, and that a prover cannot RESTRICT the predicate range to drop (or a different one to inject) a
+/// real edge.
+#[test]
+fn single_hop_wildcard_proves_all_direct_objects_regardless_of_predicate() {
+    // MIXED predicates: a reaches b via TWO predicates (knows, likes) and c via a third (owns); the
+    // unrelated `x -knows-> z` edge is not a direct object of a.
+    let lc = build_layer(&[
+        ("a", "knows", "b"),
+        ("a", "likes", "b"),
+        ("a", "owns", "c"),
+        ("x", "knows", "z"),
+    ]);
+    let id = |name: &str| node_object_id(&lc, name);
+    let root = lc.state.commitment_root;
+
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: wildcard_pred(),
+        object: Value::Variable("y".into()),
+        path: None,
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert_eq!(compiled.relation.schema, ["y"]);
+    let proved = compiled.prove(&lc).unwrap();
+
+    // The exact BAG of direct objects: b appears TWICE (knows + likes), c once. This is path.pl's bag
+    // multiplicity for a single wildcard hop (one solution per stored triple).
+    proved
+        .verify_executed_rows(&compiled, &lc, root, &["y".into()], &[vec![id("b")], vec![id("b")], vec![id("c")]])
+        .unwrap();
+
+    // SOUNDNESS — a prover cannot RESTRICT the predicate range to drop a real edge: claiming only the
+    // `knows`/`owns` objects (dropping the `likes` copy of b) fails; the full-triple relation is
+    // root-bound, so every predicate's edge is delivered with its bag multiplicity.
+    assert!(proved
+        .verify_executed_rows(&compiled, &lc, root, &["y".into()], &[vec![id("b")], vec![id("c")]])
+        .is_err());
+    // SOUNDNESS — a prover cannot INJECT an object of a DIFFERENT subject (`z` is a direct object of x,
+    // not a): a forged extra row fails.
+    assert!(proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            root,
+            &["y".into()],
+            &[vec![id("b")], vec![id("b")], vec![id("c")], vec![id("z")]],
+        )
+        .is_err());
+
+    // NON-INTERCHANGEABILITY — the wildcard single hop must NOT verify as a CONCRETE single-predicate path
+    // (`path(a, knows, ?y)` = {b}): the free predicate column vs a resolved `knows` id gives a different
+    // query digest, so a wildcard proof cannot be replayed as a concrete-predicate one.
+    let concrete = plan_bgp(&Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: path_predicate("knows"),
+        object: Value::Variable("y".into()),
+        path: None,
+    }))
+    .unwrap();
+    assert!(
+        proved
+            .verify_executed_rows(&concrete, &lc, root, &["y".into()], &[vec![id("b")], vec![id("b")], vec![id("c")]])
+            .is_err(),
+        "a wildcard single-hop proof must not verify under the concrete `knows` path query"
+    );
+}
+
+/// P5b single-hop, both-free: `path(?x, ., ?y)` = the exact BAG `{(s,o) : ∃p (s,p,o)}` over ALL stored
+/// triples regardless of predicate — the full instance edge relation projected to its endpoints.
+#[test]
+fn single_hop_wildcard_both_free_proves_full_edge_relation() {
+    let lc = build_layer(&[
+        ("a", "knows", "b"),
+        ("a", "likes", "b"),
+        ("c", "owns", "d"),
+    ]);
+    let id = |name: &str| node_object_id(&lc, name);
+    let root = lc.state.commitment_root;
+
+    let compiled = plan_bgp(&path_query("s", wildcard_pred(), "o")).unwrap();
+    assert_eq!(compiled.relation.schema, ["s", "o"]);
+    let proved = compiled.prove(&lc).unwrap();
+    // (a,b) appears twice (two predicates), (c,d) once — the full instance triple bag, projected.
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &lc,
+            root,
+            &["s".into(), "o".into()],
+            &[vec![id("a"), id("b")], vec![id("a"), id("b")], vec![id("c"), id("d")]],
+        )
+        .unwrap();
+}
+
+/// P5b single-seed closure: `Distinct([y], path(a, plus|star(.), ?y))` reaches ACROSS DIFFERENT
+/// predicates and delivers the EXACT reachable set. Proves the wildcard-edge compound closure end to end
+/// + the result-binding soundness negatives (tampered A_K row; a prover cannot RESTRICT the predicate
+/// range to a concrete-predicate closure; plus ≠ star; wrong root). Kept lean (2 proves over a 2-hop
+/// graph) because debug-mode closure proving is expensive; bound-TARGET inversion is covered by the
+/// plan test `single_seed_wildcard_closure_bound_target_is_inverted` + the compound-closure e2e.
+fn assert_single_seed_wildcard_closure_e2e() {
+    // Predicate changes at each hop: a -p1-> b -p2-> c, plus a q-branch a -q-> d. The wildcard closure
+    // crosses ALL predicates; a concrete `p1+` closure would stop at b.
+    let lc = build_layer(&[
+        ("a", "p1", "b"),
+        ("b", "p2", "c"),
+        ("a", "q", "d"),
+    ]);
+    let root = lc.state.commitment_root;
+    let iri_set = |names: &[&str]| {
+        names.iter().map(|name| iri(name)).collect::<std::collections::BTreeSet<String>>()
+    };
+
+    // plus(.) from a = {b, c, d} — reached across p1 THEN p2 (crossing predicates), plus the q-branch.
+    let plus_q = distinct_compound_closure("a", wildcard_pred(), false, "y");
+    let plus_c = plan_bgp(&plus_q).unwrap();
+    let plus_p = plus_c.prove(&lc).unwrap();
+    let plus_obj = plus_p.verify_and_resolve(&plus_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&plus_obj), iri_set(&["b", "c", "d"]));
+
+    // Portable envelope round-trips through the store decode+verify path.
+    let plus_bytes = plus_p.encode_envelope(&plus_c, &lc, root).unwrap();
+    decode_and_verify_envelope(&plus_bytes, &plus_c, &lc, root).unwrap();
+
+    // star(.) from a = {a, b, c, d} (adds the reflexive identity a).
+    let star_q = distinct_compound_closure("a", wildcard_pred(), true, "y");
+    let star_c = plan_bgp(&star_q).unwrap();
+    let star_p = star_c.prove(&lc).unwrap();
+    let star_obj = star_p.verify_and_resolve(&star_c, &lc, root).unwrap();
+    assert_eq!(closure_resolved_set(&star_obj), iri_set(&["a", "b", "c", "d"]));
+
+    // ---- Soundness / non-interchangeability ----
+    // (i) OPERATOR: a plus proof must NOT verify as the star query digest.
+    assert!(plus_p.verify(&star_c, &lc, root).is_err());
+    assert!(decode_and_verify_envelope(&plus_bytes, &star_c, &lc, root).is_err());
+    // (ii) EDGE STRUCTURE: the wildcard closure must NOT verify as a CONCRETE `p1+` closure (the digest
+    // binds the wildcard edge — a predicate-variable atom vs a resolved `p1` id). This is what forbids a
+    // prover RESTRICTING the predicate range to a single predicate.
+    let concrete_c = plan_bgp(&distinct_closure_query("a", false, "p1", "y")).unwrap();
+    assert!(
+        plus_p.verify(&concrete_c, &lc, root).is_err(),
+        "a wildcard `plus(.)` proof must not verify as the concrete `plus(p1)` closure"
+    );
+    // (iii) TAMPERED RESULT: injecting a forged reachable node into the delivered column fails against the
+    // root-authenticated accumulator A_K (a prover cannot add a node not reachable over any predicate).
+    let mut tampered = RecursiveRelationEnvelope::decode(&plus_bytes).unwrap();
+    tampered.result_columns[0][0] = ArkFr::from_u64(9_999_999);
+    tampered.result_commitments[0] =
+        commit_column(&pad(&tampered.result_columns[0], 1usize << tampered.result_log_domain)).unwrap();
+    assert!(
+        decode_and_verify_envelope(&tampered.encode().unwrap(), &plus_c, &lc, root).is_err(),
+        "a forged reachable node must not verify against the authenticated A_K"
+    );
+    // (iv) WRONG ROOT: the proof must not verify against a different committed graph.
+    let other = build_layer(&[("a", "p1", "b")]);
+    assert!(
+        plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err(),
+        "the wildcard closure proof must not verify against a different committed graph"
+    );
+}
+
+#[test]
+fn single_seed_wildcard_closure_prove_and_verify_end_to_end() {
+    std::thread::Builder::new()
+        .name("woql-wildcard-closure-proof".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(assert_single_seed_wildcard_closure_e2e)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `Distinct([subject, object], Path(?subject, star|plus(p), ?object))` — the all-pairs closure gate.
 fn all_pairs_closure_query(subject: &str, reflexive: bool, predicate: &str, object: &str) -> Query {
     let inner = PathPattern::Predicate(PathPredicate {

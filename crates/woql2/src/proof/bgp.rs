@@ -136,6 +136,20 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
                 &distincts,
             );
         }
+        // A bare single-hop wildcard `.` (deferred by `lower_path` with >= 1 free endpoint) is the
+        // full-triple `(subject, object)` projection — routed to its own plan-level handler (a plain
+        // bag-join over-count is not the concern here; the fresh predicate column just needs projecting
+        // out). Every other deferred path (single-predicate repeat / `Times`) routes to the edge-simple
+        // TupleDisequality planner.
+        if single_hop_wildcard(&path.pattern).is_some() {
+            return plan_single_hop_wildcard(
+                path,
+                &selections,
+                collection,
+                count_variable,
+                &distincts,
+            );
+        }
         return plan_deferred_repeated_predicate_path(
             path,
             &selections,

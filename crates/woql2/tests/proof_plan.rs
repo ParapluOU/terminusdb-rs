@@ -2836,16 +2836,126 @@ fn both_bound_count_gated_rejects_closed() {
     reject(q, BgpPlanError::ClosureCountGateDeferred);
 }
 
+/// The wildcard `.` inner of a `star`/`plus(.)` closure.
+fn closure_wildcard() -> PathPattern {
+    PathPattern::Predicate(PathPredicate { predicate: None })
+}
+
 #[test]
-fn closure_with_wildcard_predicate_rejects() {
+fn single_seed_wildcard_closure_compiles_to_compound_closure() {
+    // FORMERLY `closure_with_wildcard_predicate_rejects`. A single-seed `plus(.)` closure from a bound
+    // source now compiles to a COMPOUND closure whose derived edge is the full-triple projection
+    // `Distinct(π_{start,end}(Triple(?s, ?p, ?o)))` — the ANY-predicate transitive reachable set.
     let q = distinct_closure(
         Value::Node(iri("a")),
         PathPattern::Plus(PathPlus {
-            plus: Box::new(PathPattern::Predicate(PathPredicate { predicate: None })),
+            plus: Box::new(closure_wildcard()),
         }),
         "y",
     );
-    reject(q, BgpPlanError::PathWildcardUnsupported);
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["y"]);
+    assert!(c.full_row_distinct, "endpoint Distinct is redundant over the already-set closure");
+    let CompiledRelationStatement::TransitiveClosureCompound { edge, reflexive, inverted, seed, .. } =
+        &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosureCompound statement, got {:?}", c.relation.statement);
+    };
+    assert!(!reflexive, "plus is one-or-more (non-reflexive)");
+    assert!(!inverted, "a bound source is a forward walk");
+    assert_eq!(*seed, CanonicalObject::Node(iri("a").into_bytes()));
+    // The wildcard edge is `Distinct(BagProjection(Bgp(<predicate-variable triple>)))`.
+    let CompiledRelationStatement::Distinct { input, key_columns } = &edge.statement else {
+        panic!("wildcard closure edge must be deduped, got {:?}", edge.statement);
+    };
+    assert_eq!(key_columns, &[0, 1], "dedup on the full (start, end) tuple");
+    let CompiledRelationStatement::BagProjection { input, .. } = &input.statement else {
+        panic!("wildcard edge must be projected to (start, end), got {:?}", input.statement);
+    };
+    let CompiledRelationStatement::Bgp(plan) = &input.statement else {
+        panic!("wildcard edge must be a single-atom BGP, got {:?}", input.statement);
+    };
+    assert_eq!(plan.atoms.len(), 1);
+    assert!(
+        plan.atoms[0].predicate_variable,
+        "the wildcard closure edge retains the root-bound materialized predicate column"
+    );
+}
+
+#[test]
+fn single_seed_wildcard_closure_star_is_reflexive() {
+    let q = distinct_closure(
+        Value::Node(iri("a")),
+        PathPattern::Star(PathStar { star: Box::new(closure_wildcard()) }),
+        "y",
+    );
+    let c = plan_bgp(&q).unwrap();
+    let CompiledRelationStatement::TransitiveClosureCompound { reflexive, .. } = &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosureCompound statement, got {:?}", c.relation.statement);
+    };
+    assert!(reflexive, "star is zero-or-more (reflexive identity)");
+}
+
+#[test]
+fn single_seed_wildcard_closure_bound_target_is_inverted() {
+    // `Distinct([x], Path(?x, plus(.), b))` — the ANY-predicate set reaching `b`. The bound target walks
+    // the wildcard edge BACKWARD (`inverted`), seeded at `b`.
+    let q = Query::Distinct(Distinct {
+        variables: vec!["x".into()],
+        query: Box::new(Query::Path(Path {
+            subject: Value::Variable("x".into()),
+            pattern: PathPattern::Plus(PathPlus { plus: Box::new(closure_wildcard()) }),
+            object: Value::Node(iri("b")),
+            path: None,
+        })),
+    });
+    let c = plan_bgp(&q).unwrap();
+    assert_eq!(c.relation.schema, ["x"]);
+    let CompiledRelationStatement::TransitiveClosureCompound { seed, inverted, .. } =
+        &c.relation.statement
+    else {
+        panic!("expected a TransitiveClosureCompound statement, got {:?}", c.relation.statement);
+    };
+    assert!(inverted, "a bound target walks the wildcard edge backward");
+    assert_eq!(*seed, CanonicalObject::Node(iri("b").into_bytes()));
+}
+
+#[test]
+fn all_pairs_wildcard_plus_rejects_edge_projection_deferred() {
+    // `Distinct([x,y], path(?x, plus(.), ?y))` (both free) — the pairs closure node takes a raw 2-column
+    // edge, not the DERIVED wildcard edge, so all-pairs wildcard is deferred with its precise reason.
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Plus(PathPlus { plus: Box::new(closure_wildcard()) }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureWildcardAllPairsDeferred);
+}
+
+#[test]
+fn all_pairs_wildcard_star_rejects_star_deferred() {
+    // Both-free `star(.)` additionally needs a domain-authenticated reflexive diagonal `path.pl`'s
+    // unbound-identity semantics do not reconstruct — the SAME star-deferred error as concrete all-pairs.
+    let q = distinct_pairs_closure(
+        "x",
+        PathPattern::Star(PathStar { star: Box::new(closure_wildcard()) }),
+        "y",
+    );
+    reject(q, BgpPlanError::ClosureStarBothFreeDomainDeferred);
+}
+
+#[test]
+fn both_bound_wildcard_closure_rejects() {
+    // `path(a, plus(.), b)` (both endpoints bound) — a boolean over a derived wildcard edge is a separate
+    // increment; single-seed only. Reject closed.
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: PathPattern::Plus(PathPlus { plus: Box::new(closure_wildcard()) }),
+        object: Value::Node(iri("b")),
+        path: None,
+    });
+    reject(q, BgpPlanError::ClosureBothEndpointsBound);
 }
 
 #[test]
@@ -3290,14 +3400,126 @@ fn rejects_path_times_range_too_large() {
     reject(q, BgpPlanError::UnboundedPathUnsupported);
 }
 
-#[test]
-fn rejects_path_wildcard_predicate() {
-    let q = path_var_query(
-        "s",
-        PathPattern::Predicate(PathPredicate { predicate: None }),
-        "o",
+/// A bare single-hop wildcard `.` predicate.
+fn path_wildcard() -> PathPattern {
+    PathPattern::Predicate(PathPredicate { predicate: None })
+}
+
+/// A bare single-hop inverse wildcard `<.` predicate.
+fn path_inverse_wildcard() -> PathPattern {
+    PathPattern::InversePredicate(InversePathPredicate { predicate: None })
+}
+
+/// The `Bgp` plan reached under a single-hop wildcard's `BagProjection` (asserts the predicate column is
+/// retained by the root-bound `predicate_variable` atom mode, then projected out to the endpoints).
+#[track_caller]
+fn assert_wildcard_bag_projection(compiled: &CompiledBgp, expected_schema: &[&str]) {
+    assert_eq!(compiled.relation.schema, expected_schema);
+    assert!(compiled.projection.is_none());
+    let CompiledRelationStatement::BagProjection { input, .. } = &compiled.relation.statement else {
+        panic!("single-hop wildcard must be a BagProjection, got {:?}", compiled.relation.statement);
+    };
+    let CompiledRelationStatement::Bgp(plan) = &input.statement else {
+        panic!("wildcard projection input must be a single-atom BGP, got {:?}", input.statement);
+    };
+    assert_eq!(plan.atoms.len(), 1, "a single wildcard hop is one atom");
+    assert!(
+        plan.atoms[0].predicate_variable,
+        "the wildcard atom retains the root-bound materialized predicate column"
     );
+    assert!(
+        plan.atoms[0].predicate_term.is_empty(),
+        "a predicate-variable atom carries no concrete predicate IRI"
+    );
+}
+
+#[test]
+fn single_hop_wildcard_both_free_projects_full_triple() {
+    // FORMERLY `rejects_path_wildcard_predicate`. `path(?s, ., ?o)` = `{(s,o) : ∃p (s,p,o)}`, delivered as
+    // a BAG (one row per stored triple) — the full-triple projection over the root-bound predicate column.
+    let compiled = plan_bgp(&path_var_query("s", path_wildcard(), "o")).unwrap();
+    assert_wildcard_bag_projection(&compiled, &["s", "o"]);
+    // The Bgp schema is [s, p, o] (S,P,O order) and the projection drops the middle predicate column.
+    let CompiledRelationStatement::BagProjection { indices, .. } = &compiled.relation.statement else {
+        unreachable!()
+    };
+    assert_eq!(indices, &[0, 2], "projection keeps subject/object, drops the predicate column");
+}
+
+#[test]
+fn single_hop_wildcard_bound_source_projects_objects() {
+    // `path(a, ., ?y)` = the direct objects of `a` regardless of predicate (bound source dropped).
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: path_wildcard(),
+        object: Value::Variable("y".into()),
+        path: None,
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert_wildcard_bag_projection(&compiled, &["y"]);
+}
+
+#[test]
+fn single_hop_wildcard_bound_target_projects_subjects() {
+    // `path(?x, ., b)` = the direct subjects that point at `b` regardless of predicate.
+    let q = Query::Path(Path {
+        subject: Value::Variable("x".into()),
+        pattern: path_wildcard(),
+        object: Value::Node(iri("b")),
+        path: None,
+    });
+    let compiled = plan_bgp(&q).unwrap();
+    assert_wildcard_bag_projection(&compiled, &["x"]);
+}
+
+#[test]
+fn single_hop_inverse_wildcard_swaps_endpoints() {
+    // `path(?x, <., ?y)` = `{(x,y) : ∃p (y,p,x)}` — the stored triple is `(y, p, x)`, so the underlying
+    // BGP schema is [y, p, x] and the endpoint projection re-orders to [x, y] (source, target).
+    let compiled = plan_bgp(&path_var_query("x", path_inverse_wildcard(), "y")).unwrap();
+    assert_wildcard_bag_projection(&compiled, &["x", "y"]);
+}
+
+#[test]
+fn rejects_both_bound_single_hop_wildcard() {
+    // `path(a, ., b)` (both endpoints bound) is a boolean edge-existence out of scope; reject generically.
+    let q = Query::Path(Path {
+        subject: Value::Node(iri("a")),
+        pattern: path_wildcard(),
+        object: Value::Node(iri("b")),
+        path: None,
+    });
     reject(q, BgpPlanError::PathWildcardUnsupported);
+}
+
+#[test]
+fn rejects_multi_hop_wildcard_sequence() {
+    // `path(?s, (./.), ?o)` — two wildcard hops can reuse a stored edge WITHOUT a same-predicate
+    // guarantee, needing a full-triple edge-simple disequality that does not exist. Reject closed.
+    let pattern = PathPattern::Sequence(PathSequence {
+        sequence: vec![path_wildcard(), path_wildcard()],
+    });
+    reject(path_var_query("s", pattern, "o"), BgpPlanError::PathWildcardMultiHopUnsupported);
+}
+
+#[test]
+fn rejects_times_two_two_wildcard() {
+    // `path(?s, .{2,2}, ?o)` — a two-fold wildcard repeat is multi-hop; same full-triple-disequality gap.
+    let pattern = PathPattern::Times(PathTimes {
+        times: Box::new(path_wildcard()),
+        from: 2,
+        to: 2,
+    });
+    reject(path_var_query("s", pattern, "o"), BgpPlanError::PathWildcardMultiHopUnsupported);
+}
+
+#[test]
+fn rejects_wildcard_union_branch() {
+    // A wildcard buried in a union branch (`(knows | .)`) is a nested wildcard — same multi-hop reject.
+    let pattern = PathPattern::Or(PathOr {
+        or: vec![path_pred("knows"), path_wildcard()],
+    });
+    reject(path_var_query("s", pattern, "o"), BgpPlanError::PathWildcardMultiHopUnsupported);
 }
 
 #[test]
