@@ -1034,12 +1034,14 @@ fn immediate_group_sum_rejects_list_leak_order_wrong_type_and_non_node_key() {
         BgpPlanError::GroupSumUnsupportedShape,
     );
 
+    // A non-integral grouped value is unsupported for summing. (Previously this used a
+    // `Float(0.0)` range to type `score` as `Float64`, but float ranges now reject-close for
+    // fidelity — see `rejects_range_float_datatype` — so a variable can no longer acquire a
+    // float domain at all. `Boolean` is still an order-preserving range type but is likewise
+    // non-summable, so it exercises the SAME `GroupSumUnsupportedValue` guard.)
     let unsupported_child = and_of(vec![
         tv("category", "score", "score"),
-        gte(
-            dvar("score"),
-            DataValue::Data(XSDAnySimpleType::Float(0.0)),
-        ),
+        gte(dvar("score"), dbool(false)),
     ]);
     let unsupported_group = Query::GroupBy(GroupBy {
         template: Value::Variable("score".into()),
@@ -4673,14 +4675,66 @@ fn accepts_range_boolean_datatype() {
 }
 
 #[test]
-fn accepts_range_float_datatype() {
-    // xsd:float/double range -> store Float64 IEEE total-order constant.
-    let c = age_name_range(greater(dvar("a"), dfloat(1.5)));
-    assert_range(
-        range_of(&c, "age").unwrap(),
-        RangeOp::Gt,
-        CanonicalDatatype::Float64,
-        store_op_value(f64::make_entry(&1.5f64)),
+fn rejects_range_float_datatype() {
+    // xsd:float/double range REJECT-CLOSES (fidelity). The store keys floats by IEEE TOTAL
+    // order (tdb-succinct `f64::to_lexical`): `-0.0` sorts strictly BELOW `+0.0` and `NaN`
+    // lands above `+inf`, diverging from WOQL's numeric `<` (`-0.0 == +0.0`, `NaN` unordered).
+    // `-0.0` is REACHABLE in committed data via the document/JSON-LD ingest path (empirically:
+    // SWI-Prolog `float(-0.0)` preserves the sign and a JSON `-0.0` field round-trips to a
+    // stored `-0.0`), while `NaN`/`Inf` are rejected at ingest (`atom_number`/`number_string`
+    // fail, JSON overflow errors). Data is invisible to the compiler, so ALL float ranges
+    // reject — including a NON-zero boundary (a stored `-0.0`/`NaN` could still diverge).
+    reject_range(
+        greater(dvar("a"), dfloat(1.5)),
+        BgpPlanError::UnsupportedRangeDatatype { datatype: "float" },
+    );
+    reject_range(
+        lte(dvar("a"), dfloat(0.0)),
+        BgpPlanError::UnsupportedRangeDatatype { datatype: "float" },
+    );
+    reject_range(
+        gte(dvar("a"), dfloat(-0.0)),
+        BgpPlanError::UnsupportedRangeDatatype { datatype: "float" },
+    );
+}
+
+#[test]
+fn rejects_float_special_value_equality_constants() {
+    // A `±0.0`/`NaN` float EQUALITY constant reject-closes: the store gives `-0.0`, `+0.0`,
+    // and each `NaN` bit-pattern DISTINCT dictionary ids, so id-based matching diverges from
+    // WOQL numeric `=:=` (`-0.0 == +0.0`; `NaN =:= NaN` false). `-0.0` is reachable in data.
+    let ground = |cmp: Query| and_of(vec![tv("x", "age", "age"), greater(dvar("age"), duint(0)), cmp]);
+    for special in [0.0f64, -0.0f64, f64::NAN] {
+        reject(
+            ground(equals(
+                value_var("age"),
+                Value::Data(XSDAnySimpleType::Float(special)),
+            )),
+            BgpPlanError::FloatSpecialValue,
+        );
+        // Constant on the LEFT rejects identically (operand order is symmetric).
+        reject(
+            ground(equals(
+                Value::Data(XSDAnySimpleType::Float(special)),
+                value_var("age"),
+            )),
+            BgpPlanError::FloatSpecialValue,
+        );
+    }
+    // Constant=constant `Equals(0.0, -0.0)` (numerically TRUE, but distinct ids) reject-closes.
+    reject(
+        ground(equals(
+            Value::Data(XSDAnySimpleType::Float(0.0)),
+            Value::Data(XSDAnySimpleType::Float(-0.0)),
+        )),
+        BgpPlanError::FloatSpecialValue,
+    );
+    // Specificity control: a NON-zero, non-NaN float constant is NOT caught by the float guard
+    // — it flows to normal domain handling (here `age` is UInt32, so it domain-mismatches, NOT
+    // `FloatSpecialValue`). Its unique bit-pattern makes id-equality == numeric equality.
+    reject(
+        ground(equals(value_var("age"), Value::Data(XSDAnySimpleType::Float(1.5)))),
+        BgpPlanError::EqualsDomainMismatch,
     );
 }
 

@@ -883,6 +883,19 @@ pub(crate) fn equality_operand(value: &crate::value::WoqlValue) -> Result<Equali
             iri.clone().into_bytes(),
         ))),
         crate::value::WoqlValue::Data(value) => {
+            // Reject-close a `±0.0`/`NaN` float equality constant. The store gives `-0.0`,
+            // `+0.0`, and each `NaN` bit-pattern DISTINCT dictionary ids, so the gadget's
+            // id-based equality diverges from WOQL numeric `=:=` for exactly these values
+            // (`-0.0 == +0.0`; `NaN =:= NaN` is false). `-0.0` is reachable in committed data
+            // via document ingest, so e.g. `Equals(0.0, -0.0)` (numeric TRUE) would prove
+            // FALSE. Non-zero, non-NaN float constants stay proven: their bit-pattern is
+            // unique, so id-equality coincides with numeric equality. (`f == 0.0` in Rust is
+            // true for BOTH `+0.0` and `-0.0`.)
+            if let XSDAnySimpleType::Float(f) = value {
+                if *f == 0.0 || f.is_nan() {
+                    return Err(BgpPlanError::FloatSpecialValue);
+                }
+            }
             let term = value_constant_term(value)?;
             match term {
                 AtomTerm::ValueConstant(datatype, lexical) => {
@@ -969,6 +982,20 @@ pub(crate) fn compile_equality_constraint(
             let (right_column, right_domain) = bound_equality_column(relation, &right)?;
             if left_domain != right_domain {
                 return Err(BgpPlanError::EqualsDomainMismatch);
+            }
+            // Defensive: a float column=column equality compares by dictionary id, which
+            // diverges from WOQL numeric `=:=` on the `-0.0`/`+0.0` pair (distinct ids, but
+            // numerically equal). Currently UNREACHABLE — a variable only acquires a
+            // `Float32`/`Float64` domain from a float range, and float ranges now reject-close
+            // in `encode_range_constant` — but guard it so a future domain source cannot
+            // silently admit an unfaithful float join.
+            if matches!(
+                left_domain,
+                EqualityValueDomain::Datatype(
+                    CanonicalDatatype::Float32 | CanonicalDatatype::Float64
+                )
+            ) {
+                return Err(BgpPlanError::FloatSpecialValue);
             }
             Ok(RelationEqualityPlan::Columns {
                 left: left_column,
@@ -2403,12 +2430,23 @@ pub(crate) fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry,
 ///
 /// Supported (round-trip-verified, all order-preserving fixed-width): `xsd:boolean`
 /// (`Boolean`), all explicit fixed-width XSD integer types (`UInt8`/`Int8` through
-/// `UInt64`/`Int64`), `xsd:integer` (`Int64`), and `xsd:float`/`double` (`Float64`).
+/// `UInt64`/`Int64`), and `xsd:integer` (`Int64`).
 /// Every other `XSDAnySimpleType` rejects closed: a range over a
 /// non-order-preserving or variable-width datatype (string/decimal/…) would compare a
 /// `0` sentinel in the store, which is unsound at the query level. Adding a datatype
 /// requires a store-routed construction in [`xsd_scalar_entry`], an
 /// [`op_preserving_width`] entry, PLUS a round-trip alignment test.
+///
+/// `xsd:float`/`double` REJECT-CLOSE despite being fixed-width order-preserving in the
+/// store. The store keys floats by IEEE TOTAL order (tdb-succinct `f64::to_lexical`), which
+/// sorts `-0.0` STRICTLY BELOW `+0.0` and places `NaN` ABOVE `+∞` — diverging from WOQL's
+/// numeric compare (`woql_less_normalized` → SWI `X < Y`), which treats `-0.0 == +0.0` and
+/// `NaN` as unordered. `-0.0` is REACHABLE in committed data via the normal document/JSON-LD
+/// ingest path (SWI-Prolog `float(-0.0)` preserves the sign; a JSON `-0.0` field round-trips
+/// to a committed `-0.0`), so a stored `-0.0` under a zero-boundary range (`?x >= 0.0`) would
+/// UNDER-report. The data is invisible to the compiler and `NaN` cannot be excluded across
+/// every write path, so no float range is provable faithful → fail closed (see the
+/// `Numeric range` row of `doc/parture/spec/query-proving.md`).
 pub(crate) fn encode_range_constant(
     xsd: &XSDAnySimpleType,
 ) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
@@ -2424,8 +2462,14 @@ pub(crate) fn encode_range_constant(
         | XSDAnySimpleType::Int(_)
         | XSDAnySimpleType::UnsignedLong(_)
         | XSDAnySimpleType::Long(_)
-        | XSDAnySimpleType::Integer(_)
-        | XSDAnySimpleType::Float(_) => {}
+        | XSDAnySimpleType::Integer(_) => {}
+        // xsd:float/double: REJECT-CLOSE. The store's IEEE total-order `to_lexical` splits
+        // `-0.0` (< `+0.0`) and orders `NaN` above `+∞`, so a zero-boundary range over a
+        // stored `-0.0` (reachable via document ingest) diverges from WOQL's numeric `<`.
+        // Data is invisible here, so fail closed (see the doc comment above).
+        XSDAnySimpleType::Float(_) => {
+            return Err(BgpPlanError::UnsupportedRangeDatatype { datatype: "float" });
+        }
         // date/dateTime: order-preserving via the store's DECODED i64-nanoseconds key
         // (`node_value_op_value` decodes the native lexical). REJECT-CLOSE a constant at or
         // outside the representable i64-nanoseconds window here, BEFORE building it, so the

@@ -7775,45 +7775,31 @@ fn object_range_int8_ge_zero_authenticates_signed_width_and_dictionary_tag() {
     );
 }
 
-/// scores as Float64, including negatives: alice=1.5, bob=-2.5, carol=0.0, dave=3.0.
-fn float64_fixture() -> Arc<LayerCommitment> {
-    build_val_name_layer(
-        "score",
-        vec![
-            ("alice", f64::make_entry(&1.5f64)),
-            ("bob", f64::make_entry(&-2.5f64)),
-            ("carol", f64::make_entry(&0.0f64)),
-            ("dave", f64::make_entry(&3.0f64)),
-        ],
-    )
-}
-
 #[test]
-fn object_range_float64_gt_zero_excludes_negatives_and_zero() {
-    // ?a > 0.0 -> {alice(1.5), dave(3.0)} = 2.
-    check_range_generic(
-        &float64_fixture(),
-        "score",
-        greater(dvar("a"), dfloat(0.0)),
-        RangeOp::Gt,
-        CanonicalDatatype::Float64,
-        store_op_value(f64::make_entry(&0.0f64)),
-        2,
-    );
-}
-
-#[test]
-fn object_range_float64_le_boundary_includes_equal() {
-    // ?a <= 1.5 -> {alice(1.5), bob(-2.5), carol(0.0)} = 3 (boundary 1.5 INCLUDED).
-    check_range_generic(
-        &float64_fixture(),
-        "score",
-        lte(dvar("a"), dfloat(1.5)),
-        RangeOp::Le,
-        CanonicalDatatype::Float64,
-        store_op_value(f64::make_entry(&1.5f64)),
-        3,
-    );
+fn object_range_float64_reject_closes_at_compile() {
+    // Float object-value ranges REJECT-CLOSE for fidelity — there is no e2e prove because the
+    // reject happens at COMPILE time, before any committed layer is touched. The store keys
+    // floats by IEEE TOTAL order (tdb-succinct `f64::to_lexical`): `-0.0` sorts strictly BELOW
+    // `+0.0` and `NaN` above `+inf`, diverging from WOQL's numeric `<` (`-0.0 == +0.0`, `NaN`
+    // unordered). `-0.0` is REACHABLE in committed data via the document/JSON-LD ingest path
+    // (empirically: SWI-Prolog `float(-0.0)` preserves the sign, a JSON `-0.0` field round-trips
+    // to a stored `-0.0`), so no float range — zero-boundary OR non-zero — is provable faithful.
+    use terminusdb_woql2::control::Select;
+    use terminusdb_woql2::query::Query;
+    for cmp in [greater(dvar("a"), dfloat(0.0)), lte(dvar("a"), dfloat(1.5))] {
+        let bgp = and_of(vec![tv("x", "score", "a"), tv("x", "name", "n"), cmp]);
+        let q = Query::Select(Select {
+            variables: vec!["x".into(), "n".into()],
+            query: Box::new(bgp),
+        });
+        assert!(
+            matches!(
+                plan_bgp(&q),
+                Err(BgpPlanError::UnsupportedRangeDatatype { datatype: "float" })
+            ),
+            "float object-value range must reject-close at compile time",
+        );
+    }
 }
 
 // -------------------------------------------------------------------------------------------

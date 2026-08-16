@@ -194,6 +194,18 @@ pub enum BgpPlanError {
     #[error("cross-datatype numeric Equals uses coercive executor semantics")]
     EqualsCoerciveNumeric,
 
+    /// A float (`xsd:float`/`double`) constant equal to `±0.0` or `NaN` appeared in an
+    /// `Equals`/comparison operand. The store keys floats by their IEEE TOTAL-order
+    /// `to_lexical` bytes, which give `-0.0` and `+0.0` DISTINCT dictionary ids (and each
+    /// `NaN` bit-pattern its own id), whereas WOQL numeric equality (`=:=`) treats
+    /// `-0.0 == +0.0` and every `NaN` as unequal to itself. Id-based matching therefore
+    /// diverges from WOQL for exactly these values (`-0.0` is REACHABLE in committed data via
+    /// the document/JSON-LD ingest path), so a `±0.0`/`NaN` equality constant reject-closes.
+    /// Non-zero, non-NaN float equality constants stay proven (their bit-pattern is unique,
+    /// so id-equality coincides with numeric equality).
+    #[error("float equality constant `±0.0`/`NaN` diverges from WOQL numeric semantics (IEEE total-order id split)")]
+    FloatSpecialValue,
+
     #[error("GroupBy extrema requires zero to two unique node keys and an immediately consuming RangeMin/RangeMax over the hidden grouped list")]
     GroupExtremaUnsupportedShape,
 

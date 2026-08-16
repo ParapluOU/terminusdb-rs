@@ -64,6 +64,10 @@ pub(crate) fn plan_exact_scalar_order(
     if descriptor.iter().any(|descriptor| descriptor.namespace != ResultIdNamespace::NodeValue || descriptor.nullable) {
         return Err(BgpPlanError::OrderByUnsupportedValue);
     }
+    // Float32/Float64 are DELIBERATELY excluded. Ordering by the store's IEEE total-order
+    // float key splits `-0.0` (sorts below `+0.0`) and orders `NaN` above `+∞`, diverging
+    // from WOQL's numeric order (which ties `-0.0`/`+0.0` and leaves `NaN` unordered); `-0.0`
+    // is reachable in committed data, so a float sort key reject-closes.
     let datatypes = child.relation.domains.iter().map(|domain| match domain {
         Some(EqualityValueDomain::Datatype(datatype)) if matches!(datatype,
                 CanonicalDatatype::Boolean
@@ -73,10 +77,8 @@ pub(crate) fn plan_exact_scalar_order(
                     | CanonicalDatatype::Int16
                     | CanonicalDatatype::UInt32
                     | CanonicalDatatype::Int32
-                    | CanonicalDatatype::Float32
                     | CanonicalDatatype::UInt64
                     | CanonicalDatatype::Int64
-                    | CanonicalDatatype::Float64
             ) => Ok(*datatype),
         _ => return Err(BgpPlanError::OrderByUnsupportedValue),
     }).collect::<Result<Vec<_>, _>>()?;
@@ -146,6 +148,10 @@ pub(crate) fn encoded_ordered_triple_value(
     let Value::Data(value) = value else {
         return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
     };
+    // `encode_range_constant` already reject-closes float (and every non-order-preserving
+    // datatype), so `Float32`/`Float64` are intentionally absent from the allow-list below:
+    // ordering by the store's IEEE total-order float key diverges from WOQL numeric order
+    // on `-0.0`/`+0.0` and `NaN`.
     let encoded = encode_range_constant(value)
         .map_err(|_| BgpPlanError::TripleValueOrderUnsupportedValue)?;
     if !matches!(
@@ -156,10 +162,8 @@ pub(crate) fn encoded_ordered_triple_value(
             | CanonicalDatatype::Int16
             | CanonicalDatatype::UInt32
             | CanonicalDatatype::Int32
-            | CanonicalDatatype::Float32
             | CanonicalDatatype::UInt64
             | CanonicalDatatype::Int64
-            | CanonicalDatatype::Float64
     ) {
         return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
     }
