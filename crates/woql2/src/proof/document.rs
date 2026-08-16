@@ -3214,6 +3214,14 @@ impl ProvedReadDocument {
         // (1) Bind BOTH per-graph commitments to the trusted combined root. From here every per-graph
         //     root the verifier reads is trusted (neither can be forged/swapped).
         validate_database_root(instance, schema, &database_root)?;
+        // PARITY GUARD (defense-in-depth): this fully-materialized entry resolves every instance read
+        // against a SINGLE materialized layer view, so the instance commitment must be a base layer
+        // (`parent_state_root == None`). A delta-head instance belongs on the reconciled entry; it is
+        // already fail-closed downstream (each leaf read requires a base layer), but reject it
+        // explicitly here to mirror the delta-path schema-head reject and the per-leaf base-layer gate.
+        if instance.verifier_view().state.parent_state_root.is_some() {
+            return Err(BgpPlanError::ReadDocumentMaterializedInstanceHead.into());
+        }
         // MATERIALIZED route (BOTH graphs): the ENTRY fixes both sources, so every instance/schema
         // bound-subject read resolves the `Materialized` leaf against its single layer view
         // (byte-identical to before).

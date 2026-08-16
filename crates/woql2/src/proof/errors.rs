@@ -1035,6 +1035,15 @@ pub enum BgpPlanError {
     /// (6e). A schema commitment that is itself a delta head reject-closes.
     #[error("ReadDocument delta-stack path requires a materialized schema; the supplied schema commitment is itself a delta head; reject closed")]
     ReadDocumentDeltaSchemaHead,
+
+    /// PARITY GUARD (defense-in-depth): the fully-MATERIALIZED `ReadDocument` entry resolves every
+    /// instance read against a SINGLE materialized layer view, so the instance commitment must itself
+    /// be a base layer (`parent_state_root == None`). A delta-head instance belongs on the reconciled
+    /// entry (`verify_over_graphs_and_resolve_reconciled`). It is already fail-closed downstream (every
+    /// leaf read requires a base layer), but this explicit reject mirrors the schema-side
+    /// [`Self::ReadDocumentDeltaSchemaHead`] and the per-leaf base-layer gate.
+    #[error("ReadDocument materialized path requires a base-layer instance; the supplied instance commitment is itself a delta head; use the reconciled delta-stack entry; reject closed")]
+    ReadDocumentMaterializedInstanceHead,
 }
 
 /// The name of a `Query` variant, for descriptive rejection messages. Kept tiny and
