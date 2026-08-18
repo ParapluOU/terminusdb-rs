@@ -64,14 +64,16 @@ use terminus_store::proof::group::GroupExtremaKind;
 use terminus_store::proof::order::{verify_exact_scalar_order, ExactScalarOrderProof, OrderDirection};
 use terminus_store::proof::multiorder::{verify_exact_multi_order, ExactMultiOrderProof};
 use terminus_store::proof::query::{
-    resolve_result_values, resolve_typed_result_objects, result_id_namespaces, verify_layer_bgp,
-    verify_layer_bgp_result_log_domain,
+    build_termless_bgp_openings, resolve_result_values, resolve_result_values_with_openings,
+    resolve_typed_result_objects, resolve_typed_result_objects_with_openings, result_id_namespaces,
+    verify_layer_bgp, verify_layer_bgp_result_log_domain,
     verify_result_columns, generated_decimal_i64_field, generated_decimal_i64_value,
     generated_decimal_u64_value, AtomTerm, CanonicalResultValue, ColumnSource, LayerBgpAtom,
     LayerBgpPlan,
     LayerBgpProof, ObjectKindFilter, ObjectRangeBound, ObjectRangeSpec,
     ResultColumnDescriptor, ResultIdNamespace,
 };
+use terminus_store::proof::ResolutionOpenings;
 use terminus_store::proof::range::{RangeOp, OBJECT_RANGE_B_BITS};
 use terminus_store::proof::union::{verify_bag_union, BagUnionProof};
 use terminus_store::proof::{node_value_op_value, CanonicalDatatype, CanonicalObject, ProofHash};

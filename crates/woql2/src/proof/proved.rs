@@ -40,6 +40,16 @@ impl ProvedBgp {
         }
     }
 
+    /// Merkle-dict I2b S5: the TERM-LESS resolution witness shipped inside a single-BGP proof
+    /// (`Single.proof.openings`), or `None` for a term-bearing proof / a non-`Single` statement
+    /// (which is out of the term-less base/rollup scope and resolves via the rebuilt tree). The
+    /// verify+resolve entries pass this to the store's `resolve_*_with_openings`, so a term-less
+    /// base/rollup BGP (and the materialized ReadDocument subject read, which is a `Single` BGP)
+    /// resolves against the shipped openings; a term-less proof WITHOUT them fails closed.
+    pub fn single_openings(&self) -> Option<&ResolutionOpenings> {
+        self.as_single().and_then(|(proof, _)| proof.openings.as_ref())
+    }
+
     pub fn as_bag_union(&self) -> Option<(&[ProvedBgp], &BagUnionProof)> {
         match &self.statement {
             ProvedQueryStatement::BagUnion { branches, proof } => Some((branches, proof)),
@@ -1787,6 +1797,36 @@ impl ProvedBgp {
         )
     }
 
+    /// Merkle-dict I2b S5 (PRODUCER): mint + attach the TERM-LESS resolution witness to a freshly
+    /// proven single-BGP `ProvedBgp`, so the proof can ship alongside a term-less artifact
+    /// (`verifier_commitment_termless`) and still verify + resolve. `layer` is the TERM-BEARING
+    /// prover layer (it still holds the catalog to open against). The openings are UNCOMMITTED (the
+    /// verifier re-checks each against the trusted root). No-op for a non-single-BGP statement
+    /// (outside the term-less base/rollup scope). Base/rollup only — the store builder rejects a
+    /// delta layer. This is the woql2/ReadDocument analogue of the store's
+    /// `attach_termless_bgp_openings`.
+    pub fn attach_termless_openings(
+        &mut self,
+        compiled: &CompiledBgp,
+        layer: &impl VerifierLayer,
+    ) -> std::io::Result<()> {
+        let plan = match &compiled.relation.statement {
+            CompiledRelationStatement::Bgp(plan) => plan.clone(),
+            _ => return Ok(()),
+        };
+        let columns = self.result_columns.clone();
+        if let ProvedQueryStatement::Single {
+            proof,
+            predicate_ids,
+        } = &mut self.statement
+        {
+            let openings =
+                build_termless_bgp_openings(layer, &plan, proof, predicate_ids, &columns)?;
+            proof.openings = Some(openings);
+        }
+        Ok(())
+    }
+
     /// Verify the query proof and resolve every proven Store ID to the exact canonical
     /// node IRI or typed literal in the root-authenticated node/value dictionary.
     ///
@@ -1845,7 +1885,16 @@ impl ProvedBgp {
                 .into_iter()
                 .map(|descriptor| descriptor.namespace)
                 .collect::<Vec<_>>();
-            resolve_typed_result_objects(layer, layer.resolution_root(), &self.result_columns, &namespaces)
+            // Merkle-dict I2b S5: consume the single-BGP proof's term-less openings (`None` on a
+            // term-bearing proof — resolution rebuilds the tree). This is the resolution primitive
+            // the materialized ReadDocument subject read also flows through (`resolve_subject_rows`).
+            resolve_typed_result_objects_with_openings(
+                layer,
+                layer.resolution_root(),
+                &self.result_columns,
+                &namespaces,
+                self.single_openings(),
+            )
         }
     }
 
@@ -1871,11 +1920,13 @@ impl ProvedBgp {
         if compiled.relation.schema.is_empty() {
             Ok(Vec::new())
         } else {
-            resolve_result_values(
+            // Merkle-dict I2b S5: route term-less resolution through the single-BGP openings.
+            resolve_result_values_with_openings(
                 layer,
                 layer.resolution_root(),
                 &self.result_columns,
                 &compiled_result_descriptors(compiled)?,
+                self.single_openings(),
             )
         }
     }
