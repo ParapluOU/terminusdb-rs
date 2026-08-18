@@ -103,8 +103,8 @@ fn schema_layer_commits_and_database_root_combines_and_validates() {
     // The schema graph is committed as its OWN LayerCommitment (reused machinery) with its own root.
     let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
     let instance = build_instance_layer();
-    let root_i = instance.state.commitment_root;
-    let root_s = schema.state.commitment_root;
+    let root_i = instance.resolution_root();
+    let root_s = schema.resolution_root();
 
     // The two sub-roots are distinct and the schema layer round-trips through its own validation.
     assert_ne!(root_i, root_s, "instance and schema commitments must differ");
@@ -145,7 +145,7 @@ fn instance_only_proof_is_byte_identical_regression() {
     // root unchanged. (`plan_bgp`/`prove`/`verify` for an instance query touch no schema machinery.)
     on_big_stack("subsumption-instance-regression", || {
         let instance = build_instance_layer();
-        let root = instance.state.commitment_root;
+        let root = instance.resolution_root();
 
         // `t(?s, <p>, ?o)` — a bare instance BGP, the canonical pre-existing query shape.
         let query = Query::Triple(terminusdb_woql2::triple::Triple {
@@ -166,7 +166,7 @@ fn instance_only_proof_is_byte_identical_regression() {
         // And the combined-graph entry, with a schema layer added, still anchors an INSTANCE query to
         // the instance root — the schema commitment is purely additive.
         let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
-        let db_root = database_root(&root, &schema.state.commitment_root);
+        let db_root = database_root(&root, &schema.resolution_root());
         proved_a
             .verify_over_graphs(&compiled, &*instance, &*schema, db_root)
             .unwrap();
@@ -186,8 +186,8 @@ fn subsumption_hierarchy_diamond_and_directions_e2e() {
         let schema =
             build_schema_layer(&[("A", "B"), ("B", "C"), ("A", "Cc"), ("Cc", "D"), ("C", "D")]);
         let instance = build_instance_layer();
-        let root_s = schema.state.commitment_root;
-        let db_root = database_root(&instance.state.commitment_root, &root_s);
+        let root_s = schema.resolution_root();
+        let db_root = database_root(&instance.resolution_root(), &root_s);
 
         // Helper: prove a Subsumption query over the SCHEMA commitment, verify through the combined
         // database_root path, and return the delivered class set.
@@ -232,7 +232,7 @@ fn subsumption_both_bound_membership_gate_e2e() {
     on_big_stack("subsumption-both-bound", || {
         let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
         let instance = build_instance_layer();
-        let db_root = database_root(&instance.state.commitment_root, &schema.state.commitment_root);
+        let db_root = database_root(&instance.resolution_root(), &schema.resolution_root());
 
         let holds = |child: &str, parent: &str| -> bool {
             let q = subsumption(class(child), class(parent));
@@ -263,8 +263,8 @@ fn subsumption_wrong_graph_and_tamper_reject() {
     on_big_stack("subsumption-soundness", || {
         let schema = build_schema_layer(&[("A", "B"), ("B", "C")]);
         let instance = build_instance_layer();
-        let root_s = schema.state.commitment_root;
-        let db_root = database_root(&instance.state.commitment_root, &root_s);
+        let root_s = schema.resolution_root();
+        let db_root = database_root(&instance.resolution_root(), &root_s);
 
         let query = subsumption(class("A"), var("y"));
         let compiled = plan_bgp(&query).unwrap();
@@ -293,7 +293,7 @@ fn subsumption_wrong_graph_and_tamper_reject() {
         // must reject an honest schema proof (its columns are anchored to the schema root).
         assert!(
             proved
-                .verify(&compiled, &*instance, instance.state.commitment_root)
+                .verify(&compiled, &*instance, instance.resolution_root())
                 .is_err(),
             "a schema proof must not verify against the instance commitment"
         );
@@ -314,7 +314,7 @@ fn subsumption_wrong_graph_and_tamper_reject() {
         // against its own, untrusted root.)
         let spurious = build_schema_layer(&[("A", "B"), ("B", "C"), ("A", "Evil")]);
         assert_ne!(
-            spurious.state.commitment_root, root_s,
+            spurious.resolution_root(), root_s,
             "injecting a spurious super changes the schema commitment root"
         );
         assert!(
@@ -349,7 +349,7 @@ fn low_level_verify_entries_reject_schema_query() {
     on_big_stack("subsumption-low-level-guard", || {
         // FABRICATED schema: the real hierarchy PLUS a forged `A << Evil` superclass edge.
         let fabricated = build_schema_layer(&[("A", "B"), ("B", "C"), ("A", "Evil")]);
-        let fab_root = fabricated.state.commitment_root;
+        let fab_root = fabricated.resolution_root();
 
         // `A << ?y` — supers of A; over the fabricated schema this closure INCLUDES the forged `Evil`.
         let query = subsumption(class("A"), var("y"));
@@ -392,7 +392,7 @@ fn low_level_verify_entries_reject_schema_query() {
         // mismatch) — the whole point is that no single caller-supplied root can gate a schema query.
         let honest = build_schema_layer(&[("A", "B"), ("B", "C")]);
         let e = proved
-            .verify(&compiled, &*fabricated, honest.state.commitment_root)
+            .verify(&compiled, &*fabricated, honest.resolution_root())
             .expect_err("guard must reject regardless of which single root is supplied");
         is_schema_guard(&e);
     });
@@ -501,7 +501,7 @@ fn isa_node_regime_cross_root_e2e() {
         let schema = build_schema_layer(&[("A", "B"), ("C", "D")]);
         // Instance: x1:A, x2:B, x3:Other (a class OUTSIDE B's closure).
         let instance = build_typed_instance_layer(&[("x1", "A"), ("x2", "B"), ("x3", "Other")]);
-        let db_root = database_root(&instance.state.commitment_root, &schema.state.commitment_root);
+        let db_root = database_root(&instance.resolution_root(), &schema.resolution_root());
 
         let run = |q: &Query| -> BTreeSet<String> {
             let compiled = plan_bgp(q).unwrap();
@@ -533,7 +533,7 @@ fn isa_cross_root_rejects_wrong_root_and_swapped_graphs() {
     on_big_stack("isa-cross-root-negatives", || {
         let schema = build_schema_layer(&[("A", "B"), ("C", "D")]);
         let instance = build_typed_instance_layer(&[("x1", "A"), ("x2", "B")]);
-        let db_root = database_root(&instance.state.commitment_root, &schema.state.commitment_root);
+        let db_root = database_root(&instance.resolution_root(), &schema.resolution_root());
         let compiled = plan_bgp(&isa("x", "B")).unwrap();
         let proved = compiled.prove_cross_root_layers(&*instance, &*schema).unwrap();
 

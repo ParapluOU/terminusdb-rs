@@ -10,6 +10,25 @@
 
 use super::*;
 
+/// β re-anchor gate: confirm the layer's `resolution_root` equals the externally-trusted
+/// anchor — which binds `commitment_root` AND both id-indexed dictionary Merkle roots
+/// DIRECTLY (a fabricated Merkle root that would resolve ids to arbitrary terms cannot hash
+/// to the trusted anchor) — and return the now-authenticated `commitment_root` to thread into
+/// the transcript-bound recursion unchanged.
+fn expect_resolution_root(
+    layer: &impl VerifierLayer,
+    trusted_resolution_root: ProofHash,
+) -> std::io::Result<ProofHash> {
+    let view = layer.verifier_view();
+    if view.resolution_root() != trusted_resolution_root {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "layer resolution_root does not match the externally-trusted resolution root",
+        ));
+    }
+    Ok(view.state.commitment_root)
+}
+
 impl ProvedBgp {
     pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
         match &self.statement {
@@ -153,7 +172,7 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
     ) -> std::io::Result<()> {
         // SCHEMA-GRAPH GUARD (mirror of `prove_on_layer`): reject a schema-reading query on this
         // single-root path — it must be verified through `verify_over_graphs` (combined database_root),
@@ -164,10 +183,14 @@ impl ProvedBgp {
                 "query reads the schema graph; verify with `verify_over_graphs` (instance + schema commitments under the trusted database_root)",
             ));
         }
+        // β re-anchor: the EXTERNAL trust anchor is the layer's `resolution_root` (binds
+        // `commitment_root` AND the two dictionary Merkle roots directly). Gate on it, then thread
+        // the now-authenticated `commitment_root` into the transcript-bound recursion unchanged.
+        let commitment_root = expect_resolution_root(layer, trusted_resolution_root)?;
         self.verify_relation(
             &compiled.relation,
             layer,
-            expected_root,
+            commitment_root,
             compiled_query_digest(compiled)?,
         )
     }
@@ -268,7 +291,7 @@ impl ProvedBgp {
                 .map(|descriptor| descriptor.namespace)
                 .collect::<Vec<_>>();
             return resolve_typed_result_objects(
-                instance, instance_root, &self.result_columns, &namespaces,
+                instance, instance.resolution_root(), &self.result_columns, &namespaces,
             );
         }
         terminus_store::proof::commitment::validate_database_root(instance, schema, &database_root)?;
@@ -425,7 +448,7 @@ impl ProvedBgp {
             ) => {
                 verify_layer_bgp(
                     layer,
-                    expected_root,
+                    layer.resolution_root(),
                     plan,
                     predicate_ids,
                     &self.result_commitments,
@@ -1774,7 +1797,7 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalObject>>> {
         // SCHEMA-GRAPH GUARD (mirror of `prove_on_layer`): a schema-reading query must NOT resolve
         // against a single caller-supplied root — route it through `verify_over_graphs_and_resolve`.
@@ -1784,7 +1807,10 @@ impl ProvedBgp {
                 "query reads the schema graph; verify with `verify_over_graphs` (instance + schema commitments under the trusted database_root)",
             ));
         }
-        self.verify_and_resolve_inner(compiled, layer, expected_root)
+        // β re-anchor gate: bind the trusted `resolution_root`, then thread the authenticated
+        // `commitment_root` into the transcript-bound recursion.
+        let commitment_root = expect_resolution_root(layer, trusted_resolution_root)?;
+        self.verify_and_resolve_inner(compiled, layer, commitment_root)
     }
 
     /// UNGUARDED core of [`verify_and_resolve`]: verify + resolve against the caller-supplied per-graph
@@ -1819,7 +1845,7 @@ impl ProvedBgp {
                 .into_iter()
                 .map(|descriptor| descriptor.namespace)
                 .collect::<Vec<_>>();
-            resolve_typed_result_objects(layer, expected_root, &self.result_columns, &namespaces)
+            resolve_typed_result_objects(layer, layer.resolution_root(), &self.result_columns, &namespaces)
         }
     }
 
@@ -1829,7 +1855,7 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
     ) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
         // SCHEMA-GRAPH GUARD (mirror of `prove_on_layer`): schema-reading queries must not resolve
         // against a single caller-supplied root. Instance queries are unaffected (byte-identical).
@@ -1839,13 +1865,15 @@ impl ProvedBgp {
                 "query reads the schema graph; verify with `verify_over_graphs` (instance + schema commitments under the trusted database_root)",
             ));
         }
-        self.verify(compiled, layer, expected_root)?;
+        // β re-anchor: `verify` gates on the trusted `resolution_root`; the resolve below opens
+        // against the same authenticated layer.
+        self.verify(compiled, layer, trusted_resolution_root)?;
         if compiled.relation.schema.is_empty() {
             Ok(Vec::new())
         } else {
             resolve_result_values(
                 layer,
-                expected_root,
+                layer.resolution_root(),
                 &self.result_columns,
                 &compiled_result_descriptors(compiled)?,
             )
@@ -1858,10 +1886,10 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
         objects: &[Vec<CanonicalObject>],
     ) -> std::io::Result<()> {
-        self.verify(compiled, layer, expected_root)?;
+        self.verify(compiled, layer, trusted_resolution_root)?;
         if compiled.relation.schema.is_empty() {
             if objects.is_empty() {
                 Ok(())
@@ -1874,7 +1902,7 @@ impl ProvedBgp {
         } else {
             let resolved = resolve_typed_result_objects(
                 layer,
-                expected_root,
+                layer.resolution_root(),
                 &self.result_columns,
                 &compiled_result_descriptors(compiled)?
                     .into_iter()
@@ -1900,12 +1928,12 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
         variables: &[String],
         rows: &[Vec<u64>],
     ) -> std::io::Result<()> {
         if let Some(count_variable) = compiled.count_variable.as_deref() {
-            self.verify(compiled, layer, expected_root)?;
+            self.verify(compiled, layer, trusted_resolution_root)?;
             if variables != [count_variable] {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -1936,7 +1964,7 @@ impl ProvedBgp {
             ));
         }
         if compiled.relation.schema.is_empty() {
-            self.verify(compiled, layer, expected_root)?;
+            self.verify(compiled, layer, trusted_resolution_root)?;
             if !variables.is_empty()
                 || rows.len() != self.result_len
                 || rows.iter().any(|row| !row.is_empty())
@@ -1969,7 +1997,7 @@ impl ProvedBgp {
             ));
         }
 
-        let proven_objects = self.verify_and_resolve(compiled, layer, expected_root)?;
+        let proven_objects = self.verify_and_resolve(compiled, layer, trusted_resolution_root)?;
         let mut expected_rows: Vec<Vec<CanonicalObject>> = (0..self.result_len)
             .map(|row| {
                 projection
@@ -1993,7 +2021,7 @@ impl ProvedBgp {
             projection.iter().map(|index| namespaces[*index]).collect();
         let delivered_objects = resolve_typed_result_objects(
             layer,
-            expected_root,
+            layer.resolution_root(),
             &delivered_columns,
             &projected_namespaces,
         )?;
@@ -2020,7 +2048,7 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &impl VerifierLayer,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
         variables: &[String],
         rows: &[Vec<ExecutedResultValue>],
     ) -> std::io::Result<()> {
@@ -2046,7 +2074,7 @@ impl ProvedBgp {
                 "executed nullable result shape does not match compiled projection",
             ));
         }
-        let proven = self.verify_and_resolve_values(compiled, layer, expected_root)?;
+        let proven = self.verify_and_resolve_values(compiled, layer, trusted_resolution_root)?;
         let mut expected_rows: Vec<Vec<CanonicalResultValue>> = (0..self.result_len)
             .map(|row| {
                 projection
@@ -2101,7 +2129,7 @@ impl ProvedBgp {
         }
         let delivered = resolve_result_values(
             layer,
-            expected_root,
+            layer.resolution_root(),
             &delivered_columns,
             &projected_descriptors,
         )?;
@@ -2129,18 +2157,22 @@ impl ProvedBgp {
         &self,
         compiled: &CompiledBgp,
         layer: &LayerCommitment,
-        expected_root: ProofHash,
+        trusted_resolution_root: ProofHash,
     ) -> std::io::Result<Vec<u8>> {
         let digest = compiled_query_digest(compiled)?;
+        // β re-anchor: gate on the trusted `resolution_root`, then materialize the envelope against
+        // the now-authenticated `commitment_root` (the store envelope's transcript/identity anchor,
+        // unchanged) so encode and decode share one external anchor.
+        let commitment_root = expect_resolution_root(layer, trusted_resolution_root)?;
         // `verify_relation` recursively checks the complete proof tree.  Keep that single
         // public trust boundary, then only materialize the already-checked tree below;
         // verifying every child again (and the finished envelope once more) made checked
         // encoding quadratic in the depth/number of recursive operators.
-        self.verify_relation(&compiled.relation, layer, expected_root, digest)?;
+        self.verify_relation(&compiled.relation, layer, commitment_root, digest)?;
         let envelope = self.recursive_envelope_after_verification(
             &compiled.relation,
             layer,
-            expected_root,
+            commitment_root,
             digest,
         )?;
         envelope.encode()
@@ -2182,13 +2214,13 @@ impl ProvedBgp {
             terminus_store::proof::query::result_column_descriptors(edge_plan)?;
         let edge_result_objects = resolve_typed_result_objects(
             layer,
-            expected_root,
+            layer.resolution_root(),
             &edge.result_columns,
             &result_id_namespaces(edge_plan)?,
         )?;
         let edge_result_values = resolve_result_values(
             layer,
-            expected_root,
+            layer.resolution_root(),
             &edge.result_columns,
             &edge_descriptors,
         )?;
@@ -2222,7 +2254,7 @@ impl ProvedBgp {
         }];
         let result_values = resolve_result_values(
             layer,
-            expected_root,
+            layer.resolution_root(),
             &self.result_columns,
             &descriptors,
         )?;
@@ -2372,7 +2404,7 @@ impl ProvedBgp {
                 } else {
                     resolve_typed_result_objects(
                         layer,
-                        expected_root,
+                        layer.resolution_root(),
                         &self.result_columns,
                         &result_id_namespaces(plan)?,
                     )?
@@ -2783,7 +2815,7 @@ impl ProvedBgp {
         } else {
             resolve_result_values(
                 layer,
-                expected_root,
+                layer.resolution_root(),
                 &self.result_columns,
                 &result_descriptors,
             )?

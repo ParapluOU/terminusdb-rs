@@ -235,8 +235,8 @@ fn read_document_flat_and_list_end_to_end() {
         let instance = full_instance();
         let schema = full_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -333,8 +333,8 @@ fn read_document_tampered_direct_triples_fail_verify() {
         let instance = flat_instance();
         let schema = flat_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -370,8 +370,8 @@ fn read_document_injected_instance_property_fails_verify() {
         ]);
         let schema = flat_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -599,8 +599,8 @@ fn read_document_cardinality_end_to_end() {
             Fact::Str(iri("doc"), iri("roles"), "admin".into()),
         ]);
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
         let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
@@ -768,8 +768,8 @@ fn read_document_inherited_frame_end_to_end() {
         let instance = inherited_instance();
         let schema = inherited_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -860,8 +860,8 @@ fn read_document_inherited_dropped_ancestor_fails_verify() {
         let instance = flat_inherited_instance();
         let schema = flat_inherited_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -904,8 +904,8 @@ fn read_document_inherited_injected_instance_property_fails_verify() {
         ]);
         let schema = flat_inherited_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -976,8 +976,8 @@ fn read_document_subdocument_inlining_end_to_end() {
         let instance = subdoc_instance();
         let schema = subdoc_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
         let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
@@ -1092,8 +1092,8 @@ fn read_document_subdocument_injected_child_fails_verify() {
         let instance = two_subdoc_instance();
         let schema = two_subdoc_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
         let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
@@ -1459,8 +1459,8 @@ fn read_document_array_end_to_end() {
         let instance = array_instance();
         let schema = array_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
 
@@ -1519,8 +1519,8 @@ fn read_document_array_anti_substitution_rejects() {
         let instance = array_instance();
         let schema = array_schema();
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
         let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
@@ -1707,8 +1707,8 @@ fn read_document_optional_end_to_end() {
             // `note` is ABSENT.
         ]);
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
         let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();
@@ -1768,8 +1768,8 @@ fn read_document_langstring_end_to_end() {
             Fact::Lang(iri("doc"), iri("greeting"), "en@hello".into()),
         ]);
         let db_root = database_root(
-            &instance.state.commitment_root,
-            &schema.state.commitment_root,
+            &instance.resolution_root(),
+            &schema.resolution_root(),
         );
         let compiled = compiled_read(&iri("doc"));
         let mut bundle = compiled.prove_on_layers(&*instance, &*schema).unwrap();

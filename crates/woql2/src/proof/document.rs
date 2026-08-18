@@ -285,12 +285,20 @@ pub enum InstanceSubjectProof {
     /// (the base path — byte-identical to increments 2b–5).
     Materialized(ProvedBgp),
     /// A reconciled single-atom present filter over a base..head delta stack (the 6a delta path): the
-    /// reconcile proof, the `FilterPosition::Subject` present-filter proof, and the prover's published
-    /// result columns (re-committed + resolved against the trusted head root at verify).
+    /// reconcile proof, the `FilterPosition::Subject` present-filter proof, the prover's published
+    /// result columns (re-committed + resolved against the trusted head root at verify), and the
+    /// prover's UNTRUSTED per-column dictionary id-hints (I2a — see `id_hints`).
     Reconciled {
         reconcile: ReconcileProof,
         filter: PresentFilterProof,
         columns: Vec<Vec<ArkFr>>,
+        /// I2a: the prover's UNTRUSTED per-column dictionary id-hints (one hint column per output
+        /// `columns` entry, aligned row-for-row). `verify_and_resolve_single_atom` resolves the two
+        /// output columns via the `NodeValueHash`/`PredicateHash` (filter hash→term) path, whose
+        /// MANDATORY resolution belt-hash binds each hint to the authenticated result hash
+        /// (`hash_object`/`hash_term(opened_term) == value`). NOT committed and NOT part of
+        /// `commitment_root` — the belt-hash is the sole binding, so a forged/absent hint fails closed.
+        id_hints: Vec<Vec<u64>>,
     },
 }
 
@@ -327,14 +335,19 @@ pub enum SchemaSubjectProof {
     /// (the base path — byte-identical to increments 2b–6d).
     Materialized(ProvedBgp),
     /// A reconciled single-atom present filter over a base..head delta SCHEMA stack (the 6e delta
-    /// path): the reconcile proof, the `FilterPosition::Subject` present-filter proof, and the
+    /// path): the reconcile proof, the `FilterPosition::Subject` present-filter proof, the
     /// prover's published result columns (re-committed + resolved against the trusted schema-head root
-    /// at verify). Uses the SAME store entry as the instance side (`prove_read_single_atom` /
+    /// at verify), and the prover's UNTRUSTED per-column dictionary id-hints (I2a — see `id_hints`).
+    /// Uses the SAME store entry as the instance side (`prove_read_single_atom` /
     /// `verify_and_resolve_single_atom`), just over the schema layers.
     Reconciled {
         reconcile: ReconcileProof,
         filter: PresentFilterProof,
         columns: Vec<Vec<ArkFr>>,
+        /// I2a: the prover's UNTRUSTED per-column dictionary id-hints, bound to the authenticated
+        /// result hashes by `verify_and_resolve_single_atom`'s MANDATORY resolution belt-hash — the
+        /// schema-side twin of [`InstanceSubjectProof::Reconciled::id_hints`]. NOT committed.
+        id_hints: Vec<Vec<u64>>,
     },
 }
 
@@ -890,17 +903,18 @@ enum InstanceSource<'a> {
 }
 
 impl InstanceSource<'_> {
-    /// The trusted instance-graph root: a materialized layer's own commitment root, or the delta
-    /// stack's head root (== the trusted delta-head anchor — the head layer's commitment root, which
-    /// the reconcile verifier pins to `trusted_head_root`).
+    /// The trusted instance-graph root: a materialized layer's own `resolution_root`, or the delta
+    /// stack's head `resolution_root` (== the trusted delta-head anchor the reconcile verifier pins to
+    /// `trusted_head_root`). β re-anchor: the external trust anchor is `resolution_root` (binds
+    /// `commitment_root` AND both dictionary Merkle roots), consistent with the store's
+    /// `verify_and_resolve_single_atom` / `verify_and_resolve`, which now gate on `resolution_root`.
     fn instance_root(&self) -> ProofHash {
         match self {
-            InstanceSource::Materialized(view) => view.state.commitment_root,
+            InstanceSource::Materialized(view) => view.resolution_root(),
             InstanceSource::Reconciled(layers) => layers
                 .last()
                 .expect("delta instance stack is non-empty")
-                .state
-                .commitment_root,
+                .resolution_root(),
         }
     }
 
@@ -941,13 +955,14 @@ impl InstanceSubjectProof {
                 resolve_subject_rows(bgp, &compiled, view, instance_root)
             }
             (
-                InstanceSubjectProof::Reconciled { reconcile, filter, columns },
+                InstanceSubjectProof::Reconciled { reconcile, filter, columns, id_hints },
                 InstanceSource::Reconciled(layers),
             ) => {
                 // The single-atom present filter re-verifies `present` against the trusted head root,
                 // pins the selection to EXACTLY `id`'s rows (constant `hash_object(Node(id))` in the
                 // Subject position), and resolves the two output columns [predicate, object] against the
-                // chain catalogs — the reconciled analogue of `resolve_subject_rows`.
+                // chain catalogs by an id-routed Merkle opening under the MANDATORY belt-hash bound to
+                // the carried `id_hints` (I2a) — the reconciled analogue of `resolve_subject_rows`.
                 let resolved = verify_and_resolve_single_atom(
                     layers,
                     instance_root,
@@ -956,6 +971,7 @@ impl InstanceSubjectProof {
                     reconcile,
                     filter,
                     columns,
+                    id_hints,
                 )?;
                 reshape_present_subject_rows(resolved)
             }
@@ -1023,6 +1039,9 @@ impl InstanceProver<'_> {
                 let (reconcile, filter, read) =
                     prove_read_single_atom(layers, FilterPosition::Subject, constant)?;
                 let columns = read.columns;
+                // I2a: carry the prover's per-column id-hints; the belt-hash inside
+                // `verify_and_resolve_single_atom` binds them to the authenticated result hashes.
+                let id_hints = read.id_hints;
                 let resolved = verify_and_resolve_single_atom(
                     layers,
                     *head_root,
@@ -1031,9 +1050,10 @@ impl InstanceProver<'_> {
                     &reconcile,
                     &filter,
                     &columns,
+                    &id_hints,
                 )?;
                 let rows = reshape_present_subject_rows(resolved)?;
-                Ok((InstanceSubjectProof::Reconciled { reconcile, filter, columns }, rows))
+                Ok((InstanceSubjectProof::Reconciled { reconcile, filter, columns, id_hints }, rows))
             }
         }
     }
@@ -1060,18 +1080,19 @@ enum SchemaSource<'a> {
 }
 
 impl SchemaSource<'_> {
-    /// The trusted schema-graph root: a materialized layer's own commitment root, or the delta stack's
-    /// HEAD root (== the trusted delta-head anchor the reconcile verifier pins to `trusted_head_root`).
-    /// Pinned into the combined `database_root` by the entry's `validate_database_root`, so every
-    /// reconciled schema read/closure bound to this root is transitively bound to `database_root`.
+    /// The trusted schema-graph root: a materialized layer's own `resolution_root`, or the delta
+    /// stack's HEAD `resolution_root` (== the trusted delta-head anchor the reconcile verifier pins to
+    /// `trusted_head_root`). β re-anchor: the external trust anchor is `resolution_root` (binds
+    /// `commitment_root` AND both dictionary Merkle roots). Pinned into the combined `database_root` by
+    /// the entry's `validate_database_root` (which itself composes the two per-graph `resolution_root`s),
+    /// so every reconciled schema read/closure bound to this root is transitively bound to `database_root`.
     fn schema_root(&self) -> ProofHash {
         match self {
-            SchemaSource::Materialized(view) => view.state.commitment_root,
+            SchemaSource::Materialized(view) => view.resolution_root(),
             SchemaSource::Reconciled(layers) => layers
                 .last()
                 .expect("delta schema stack is non-empty")
-                .state
-                .commitment_root,
+                .resolution_root(),
         }
     }
 }
@@ -1094,14 +1115,15 @@ impl SchemaSubjectProof {
                 resolve_subject_rows(bgp, &compiled, view, schema_root)
             }
             (
-                SchemaSubjectProof::Reconciled { reconcile, filter, columns },
+                SchemaSubjectProof::Reconciled { reconcile, filter, columns, id_hints },
                 SchemaSource::Reconciled(layers),
             ) => {
                 // The single-atom present filter over the SCHEMA chain re-verifies `present` against
                 // the trusted schema-head root, pins the selection to EXACTLY `node`'s rows (constant
                 // `hash_object(Node(node))` in the Subject position), and resolves the two output
-                // columns [predicate, object] against the chain catalogs — the reconciled analogue of a
-                // materialized bound-subject schema BGP.
+                // columns [predicate, object] against the chain catalogs by an id-routed Merkle opening
+                // under the MANDATORY belt-hash bound to the carried `id_hints` (I2a) — the reconciled
+                // analogue of a materialized bound-subject schema BGP.
                 let resolved = verify_and_resolve_single_atom(
                     layers,
                     schema_root,
@@ -1110,6 +1132,7 @@ impl SchemaSubjectProof {
                     reconcile,
                     filter,
                     columns,
+                    id_hints,
                 )?;
                 reshape_present_subject_rows(resolved)
             }
@@ -1212,6 +1235,9 @@ impl SchemaProver<'_> {
                 let (reconcile, filter, read) =
                     prove_read_single_atom(layers, FilterPosition::Subject, constant)?;
                 let columns = read.columns;
+                // I2a: carry the prover's per-column id-hints; the belt-hash inside
+                // `verify_and_resolve_single_atom` binds them to the authenticated result hashes.
+                let id_hints = read.id_hints;
                 let resolved = verify_and_resolve_single_atom(
                     layers,
                     *head_root,
@@ -1220,9 +1246,10 @@ impl SchemaProver<'_> {
                     &reconcile,
                     &filter,
                     &columns,
+                    &id_hints,
                 )?;
                 let rows = reshape_present_subject_rows(resolved)?;
-                Ok((SchemaSubjectProof::Reconciled { reconcile, filter, columns }, rows))
+                Ok((SchemaSubjectProof::Reconciled { reconcile, filter, columns, id_hints }, rows))
             }
         }
     }
@@ -2391,8 +2418,11 @@ impl CompiledReadDocument {
         instance: &LayerCommitment,
         schema: &LayerCommitment,
     ) -> Result<ProvedReadDocument, QueryProofError> {
-        let instance_root = instance.state.commitment_root;
-        let schema_root = schema.state.commitment_root;
+        // β re-anchor: the per-graph trust anchor is `resolution_root` (binds `commitment_root` AND
+        // both dictionary Merkle roots); `database_root` composes the two, matching the store's
+        // `validate_database_root`, and every materialized read re-verifies against `resolution_root`.
+        let instance_root = instance.resolution_root();
+        let schema_root = schema.resolution_root();
         let db_root = database_root(&instance_root, &schema_root);
         // MATERIALIZED route (BOTH graphs): the entry FIXES the sources (never prover data), so every
         // instance bound-subject read is a `InstanceSubjectProof::Materialized` BGP and every schema read
@@ -2450,8 +2480,10 @@ impl CompiledReadDocument {
         let head = instance_layers
             .last()
             .ok_or_else(|| invalid("delta instance stack is empty"))?;
-        let instance_head_root = head.state.commitment_root;
-        let schema_root = schema.state.commitment_root;
+        // β re-anchor: `resolution_root` per graph (delta-head instance, materialized schema); the
+        // store's reconcile verifier now gates on the head `resolution_root`.
+        let instance_head_root = head.resolution_root();
+        let schema_root = schema.resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let ctx = StoreProverContext::cpu();
         // RECONCILED INSTANCE + MATERIALIZED SCHEMA route: the entry FIXES the sources, so every instance
@@ -2506,8 +2538,10 @@ impl CompiledReadDocument {
         let schema_head = schema_layers
             .last()
             .ok_or_else(|| invalid("delta schema stack is empty"))?;
-        let instance_head_root = instance_head.state.commitment_root;
-        let schema_head_root = schema_head.state.commitment_root;
+        // β re-anchor: both per-graph anchors are the delta-HEAD `resolution_root`s; the combined
+        // `database_root` pins both, matching the store's `validate_database_root` / reconcile verifier.
+        let instance_head_root = instance_head.resolution_root();
+        let schema_head_root = schema_head.resolution_root();
         // BOTH per-graph roots are the delta HEADS now — the combined root pins both trusted head anchors.
         let db_root = database_root(&instance_head_root, &schema_head_root);
         let ctx = StoreProverContext::cpu();

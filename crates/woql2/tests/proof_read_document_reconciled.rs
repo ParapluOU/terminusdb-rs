@@ -221,12 +221,12 @@ fn parity_materialized_instance() -> Arc<LayerCommitment> {
 fn read_document_reconciled_flat_and_inheritance_parity() {
     on_big_stack("read-document-reconciled-parity", 1024, || {
         let schema = parity_schema();
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
 
         // ---- Materialized path (the reference answer for the SAME final state). ----
         let mat_instance = parity_materialized_instance();
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
@@ -235,7 +235,7 @@ fn read_document_reconciled_flat_and_inheritance_parity() {
         // ---- Delta-stack (reconciled) path over the SAME final state. ----
         let layers = delta_stack(parity_base(), parity_delta());
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
 
         let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
@@ -437,13 +437,13 @@ fn list_materialized_instance(list_facts: Vec<Fact>) -> Arc<LayerCommitment> {
 fn read_document_reconciled_list_parity() {
     on_big_stack("read-document-reconciled-list-parity", 1024, || {
         let schema = list_schema();
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
 
         // ---- Materialized path (the reference answer for the SAME final state). ----
         let mat_instance =
             list_materialized_instance(cons_string_facts(&iri("doc"), &iri("lst"), &["a", "b", "a"]));
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
@@ -452,7 +452,7 @@ fn read_document_reconciled_list_parity() {
         // ---- Delta-stack (reconciled) path over the SAME final state. ----
         let layers = list_stack(cons_string_facts(&iri("doc"), &iri("lst"), &["a", "b", "a"]));
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
         let delta_doc = bundle
@@ -558,7 +558,7 @@ fn array_materialized_instance(array_facts: Vec<Fact>) -> Arc<LayerCommitment> {
 fn read_document_reconciled_array_parity() {
     on_big_stack("read-document-reconciled-array-parity", 1024, || {
         let schema = array_schema();
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
         // Physical storage order != index order, so the ordering is genuinely exercised: stored
         // [idx2->a, idx0->b, idx1->c] => the ordered array is [b, c, a].
@@ -567,7 +567,7 @@ fn read_document_reconciled_array_parity() {
         // ---- Materialized path (the reference answer for the SAME final state). ----
         let mat_instance =
             array_materialized_instance(array_string_facts(&iri("doc"), &iri("arr"), &cells));
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
@@ -576,7 +576,7 @@ fn read_document_reconciled_array_parity() {
         // ---- Delta-stack (reconciled) path over the SAME final state. ----
         let layers = array_stack(array_string_facts(&iri("doc"), &iri("arr"), &cells));
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
         let delta_doc = bundle
@@ -641,7 +641,7 @@ fn read_document_reconciled_subdocument_with_array_parity() {
             Fact::Node(iri("ItemsArray"), RDF_TYPE.into(), SYS_ARRAY.into()),
             Fact::Node(iri("ItemsArray"), SYS_CLASS_PRED.into(), XSD_STRING.into()),
         ]);
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
 
         // The child `addr1` bears a well-formed 2-element array (physical `[idx1->q, idx0->p]`) => the
@@ -663,7 +663,7 @@ fn read_document_reconciled_subdocument_with_array_parity() {
         let mut mat_facts = base.clone();
         mat_facts.extend(delta.clone());
         let mat_instance = layer(mat_facts);
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
@@ -672,7 +672,7 @@ fn read_document_reconciled_subdocument_with_array_parity() {
         // ---- Delta-stack (reconciled) path — the nested array proves recursively. ----
         let layers = delta_stack(base, delta);
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
         let delta_doc = bundle
@@ -796,12 +796,12 @@ fn subdoc_materialized_instance() -> Arc<LayerCommitment> {
 fn read_document_reconciled_subdocument_parity() {
     on_big_stack("read-document-reconciled-subdoc-parity", 1024, || {
         let schema = subdoc_schema();
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
 
         // ---- Materialized path (the reference answer for the SAME final state). ----
         let mat_instance = subdoc_materialized_instance();
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*schema, mat_db_root)
@@ -810,7 +810,7 @@ fn read_document_reconciled_subdocument_parity() {
         // ---- Delta-stack (reconciled) path over the SAME final state. ----
         let layers = delta_stack(subdoc_base(), subdoc_delta());
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
         let delta_doc = bundle
@@ -885,11 +885,11 @@ fn read_document_reconciled_subdocument_parity() {
 fn read_document_reconciled_stop_over_subdocument_rejects() {
     on_big_stack("read-document-reconciled-stop-over-subdoc", 1024, || {
         let schema = subdoc_schema();
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
         let layers = delta_stack(subdoc_base(), subdoc_delta());
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
 
@@ -968,11 +968,11 @@ fn two_subdoc_stack() -> Vec<Arc<LayerCommitment>> {
 fn read_document_reconciled_injected_child_rejects() {
     on_big_stack("read-document-reconciled-subdoc-injection", 1024, || {
         let schema = two_subdoc_schema();
-        let schema_root = schema.state.commitment_root;
+        let schema_root = schema.resolution_root();
         let compiled = compiled_read(&iri("doc"));
         let layers = two_subdoc_stack();
         let lref = refs(&layers);
-        let instance_head_root = lref.last().unwrap().state.commitment_root;
+        let instance_head_root = lref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
         let mut bundle = compiled.prove_on_layers_reconciled(&lref, &*schema).unwrap();
 
@@ -1079,9 +1079,9 @@ fn read_document_fully_reconciled_inheritance_parity() {
 
         // ---- Fully-MATERIALIZED reference (both graphs a single layer) for the SAME final state. ----
         let mat_schema = parity_schema();
-        let mat_schema_root = mat_schema.state.commitment_root;
+        let mat_schema_root = mat_schema.resolution_root();
         let mat_instance = parity_materialized_instance();
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &mat_schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &mat_schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*mat_schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*mat_schema, mat_db_root)
@@ -1092,8 +1092,8 @@ fn read_document_fully_reconciled_inheritance_parity() {
         let schema_layers = parity_schema_delta_stack();
         let iref = refs(&instance_layers);
         let sref = refs(&schema_layers);
-        let instance_head_root = iref.last().unwrap().state.commitment_root;
-        let schema_head_root = sref.last().unwrap().state.commitment_root;
+        let instance_head_root = iref.last().unwrap().resolution_root();
+        let schema_head_root = sref.last().unwrap().resolution_root();
         let db_root = database_root(&instance_head_root, &schema_head_root);
 
         let mut bundle = compiled.prove_on_layers_fully_reconciled(&iref, &sref).unwrap();
@@ -1199,9 +1199,9 @@ fn read_document_fully_reconciled_list_parity() {
 
         // ---- Fully-MATERIALIZED reference. ----
         let mat_schema = list_schema();
-        let mat_schema_root = mat_schema.state.commitment_root;
+        let mat_schema_root = mat_schema.resolution_root();
         let mat_instance = list_materialized_instance(list_facts.clone());
-        let mat_db_root = database_root(&mat_instance.state.commitment_root, &mat_schema_root);
+        let mat_db_root = database_root(&mat_instance.resolution_root(), &mat_schema_root);
         let mat_bundle = compiled.prove_on_layers(&*mat_instance, &*mat_schema).unwrap();
         let mat_doc = mat_bundle
             .verify_over_graphs_and_resolve(&compiled, &*mat_instance, &*mat_schema, mat_db_root)
@@ -1213,8 +1213,8 @@ fn read_document_fully_reconciled_list_parity() {
         let iref = refs(&instance_layers);
         let sref = refs(&schema_layers);
         let db_root = database_root(
-            &iref.last().unwrap().state.commitment_root,
-            &sref.last().unwrap().state.commitment_root,
+            &iref.last().unwrap().resolution_root(),
+            &sref.last().unwrap().resolution_root(),
         );
 
         let bundle = compiled.prove_on_layers_fully_reconciled(&iref, &sref).unwrap();

@@ -16,12 +16,22 @@ pub fn decode_and_verify_envelope(
     bytes: &[u8],
     compiled: &CompiledBgp,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    trusted_resolution_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let envelope = RecursiveRelationEnvelope::decode(bytes)?;
     let digest = compiled_query_digest(compiled)?;
     let plan = relation_proof_plan(&compiled.relation, digest)?;
-    envelope.verify(layer, expected_root, &plan)?;
+    // β re-anchor: the EXTERNAL trust anchor is the layer's `resolution_root` (binds
+    // `commitment_root` AND both dictionary Merkle roots directly). Gate on it, then verify the
+    // envelope against the now-authenticated `commitment_root` (the envelope's identity anchor).
+    let view = layer.verifier_view();
+    if view.resolution_root() != trusted_resolution_root {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "layer resolution_root does not match the externally-trusted resolution root",
+        ));
+    }
+    envelope.verify(layer, view.state.commitment_root, &plan)?;
     let nullable = envelope
         .result_descriptors
         .iter()
@@ -80,10 +90,10 @@ pub fn decode_verifier_commitment_and_verify_envelope(
     envelope_bytes: &[u8],
     compiled: &CompiledBgp,
     verifier_commitment_bytes: &[u8],
-    expected_root: ProofHash,
+    trusted_resolution_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
-    decode_and_verify_envelope(envelope_bytes, compiled, &commitment, expected_root)
+    decode_and_verify_envelope(envelope_bytes, compiled, &commitment, trusted_resolution_root)
 }
 
 /// Prove a top-level WOQL `Eval`: prove the operand-binding child through the Store, then
@@ -1225,8 +1235,8 @@ impl CompiledBgp {
         instance: &SyncStoreLayer,
         schema: &SyncStoreLayer,
     ) -> Result<ProofHash, QueryProofError> {
-        let instance_root = instance.proof_commitment()?.state.commitment_root;
-        let schema_root = schema.proof_commitment()?.state.commitment_root;
+        let instance_root = instance.proof_commitment()?.resolution_root();
+        let schema_root = schema.proof_commitment()?.resolution_root();
         Ok(terminus_store::proof::commitment::database_root(
             &instance_root,
             &schema_root,

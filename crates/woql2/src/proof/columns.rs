@@ -1012,7 +1012,7 @@ pub(crate) fn expected_group_sum_columns(
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
         layer,
-        expected_root,
+        layer.resolution_root(),
         &input.result_columns,
         &descriptors,
     )?;
@@ -1100,7 +1100,7 @@ pub(crate) fn expected_group_extrema_columns(
     expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
-    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    let values = resolve_result_values(layer, layer.resolution_root(), &input.result_columns, &descriptors)?;
     let numbers = values.get(value_column).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "group-extrema value out of range")
     })?;
@@ -1197,7 +1197,7 @@ pub(crate) fn expected_group_count_columns(
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
         layer,
-        expected_root,
+        layer.resolution_root(),
         &input.result_columns,
         &descriptors,
     )?;
@@ -1415,7 +1415,7 @@ pub(crate) fn expected_eval_columns(
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     // Authenticate EVERY child column against the trusted root (ties operands to the root).
-    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    let values = resolve_result_values(layer, layer.resolution_root(), &input.result_columns, &descriptors)?;
     if input.result_columns.iter().any(|column| column.len() != input.result_len) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -2475,7 +2475,7 @@ pub(crate) fn expected_typecast_column(
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     // Authenticate EVERY child column against the trusted root (ties the source to the root).
-    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    let values = resolve_result_values(layer, layer.resolution_root(), &input.result_columns, &descriptors)?;
     if input.result_columns.iter().any(|column| column.len() != input.result_len) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -2543,7 +2543,7 @@ pub(crate) fn resolve_authenticated_child_values(
     expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
-    let values = resolve_result_values(layer, expected_root, &input.result_columns, &descriptors)?;
+    let values = resolve_result_values(layer, layer.resolution_root(), &input.result_columns, &descriptors)?;
     if input
         .result_columns
         .iter()
@@ -2969,7 +2969,7 @@ pub(crate) fn expected_collection_sum_column(
             let descriptors = relation_result_descriptors(input_plan)?;
             let values = resolve_result_values(
                 layer,
-                expected_root,
+                layer.resolution_root(),
                 &input.result_columns,
                 &descriptors,
             )?;
@@ -3015,7 +3015,7 @@ pub(crate) fn expected_collection_extrema_column(
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
         layer,
-        expected_root,
+        layer.resolution_root(),
         &input.result_columns,
         &descriptors,
     )?;

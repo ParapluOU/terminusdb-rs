@@ -226,12 +226,12 @@ fn prove_resolve_expect(
     let lref = refs(layers);
     assert!(is_reconciled_read(query), "query must route to the reconciled path");
     let proof = prove_reconciled_read(query, &lref).unwrap();
-    let head_root = lref.last().unwrap().state.commitment_root;
+    let head_root = lref.last().unwrap().resolution_root();
     let resolved = verify_and_resolve_reconciled_read(query, &lref, head_root, &proof).unwrap();
     assert!(bag_eq(rows_of(&resolved), expected), "resolved must equal materialized");
 
     // Soundness: a wrong chain anchor (the base root, not the head) rejects.
-    let base_root = lref[0].state.commitment_root;
+    let base_root = lref[0].resolution_root();
     assert!(verify_and_resolve_reconciled_read(query, &lref, base_root, &proof).is_err());
     resolved
 }
@@ -400,7 +400,7 @@ fn woql_added_triple_inherited_predicate_is_empty() {
     let query = added_triple("s", "p2", "o");
     assert!(is_reconciled_read(&query));
     let proof = prove_reconciled_read(&query, &lref).unwrap();
-    let head_root = lref.last().unwrap().state.commitment_root;
+    let head_root = lref.last().unwrap().resolution_root();
     let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
     assert!(rows_of(&resolved).is_empty(), "an inherited row is not provable as an AddedTriple");
 }
@@ -411,7 +411,7 @@ fn woql_delta_read_source_substitution_rejects() {
     // as a DeletedTriple or a materialized Triple query — the source is part of the binding.
     let layers = delta_read_stack();
     let lref = refs(&layers);
-    let head_root = lref.last().unwrap().state.commitment_root;
+    let head_root = lref.last().unwrap().resolution_root();
     let added = added_triple("s", "p1", "o");
     let proof = prove_reconciled_read(&added, &lref).unwrap();
     let deleted = deleted_triple("s", "p1", "o");
@@ -445,7 +445,7 @@ fn woql_tampered_result_rejects() {
     let lref = refs(&layers);
     let query = tv("s", "p1", "o");
     let mut proof = prove_reconciled_read(&query, &lref).unwrap();
-    let head_root = lref.last().unwrap().state.commitment_root;
+    let head_root = lref.last().unwrap().resolution_root();
     // A fabricated result binding fails the re-commitment bind to the authenticated result.
     proof.result.columns[0][0] = ArkFr::from_u64(123_456_789);
     assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
@@ -486,7 +486,7 @@ fn woql_unsupported_shape_reject_closes() {
 fn woql_verify_rejects_proof_for_a_different_query() {
     let layers = filter_stack();
     let lref = refs(&layers);
-    let head_root = lref.last().unwrap().state.commitment_root;
+    let head_root = lref.last().unwrap().resolution_root();
 
     // A valid proof for Triple(?s, p1, ?o) ...
     let proved_query = tv("s", "p1", "o");
@@ -503,7 +503,7 @@ fn woql_verify_rejects_proof_for_a_different_query() {
     let jref = refs(&join_layers);
     let join_query = and_of(vec![tv("x", "p1", "y"), tv("y", "p2", "z")]);
     let join_proof = prove_reconciled_read(&join_query, &jref).unwrap();
-    let jhead = jref.last().unwrap().state.commitment_root;
+    let jhead = jref.last().unwrap().resolution_root();
     assert!(
         verify_and_resolve_reconciled_read(&proved_query, &jref, jhead, &join_proof).is_err(),
         "a 2-atom join proof must not verify as the answer to a single-atom query"

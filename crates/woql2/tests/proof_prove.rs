@@ -227,7 +227,7 @@ fn cross_source_additions_join_materialized_proves_end_to_end() {
             .unwrap();
     }
     let layer = child.commit().unwrap().proof_commitment().unwrap();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     assert_eq!(layer.state.addition_count, 2);
     assert_eq!(layer.state.materialized_count, 4);
 
@@ -273,7 +273,7 @@ fn added_and_deleted_triples_prove_exact_delta_rows_end_to_end() {
     let layers = delta_stack();
     let lref: Vec<&LayerCommitment> = layers.iter().map(|a| a.as_ref()).collect();
     let head = *lref.last().unwrap();
-    let head_root = head.state.commitment_root;
+    let head_root = head.resolution_root();
     assert!(head.state.parent_state_root.is_some());
     assert_eq!(head.state.addition_count, 2);
     assert_eq!(head.state.removal_count, 2);
@@ -341,7 +341,7 @@ fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() 
     assert_eq!(proved.result_len, 1);
     assert_eq!(
         proved
-            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
             .unwrap(),
         vec![vec![CanonicalResultValue::GeneratedDecimalU64(3)]]
     );
@@ -349,7 +349,7 @@ fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() 
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["Count".into()],
             &[vec![ExecutedResultValue::GeneratedDecimalU64(3)]],
         )
@@ -363,7 +363,7 @@ fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() 
             .verify_executed_values(
                 &compiled,
                 &layer,
-                layer.state.commitment_root,
+                layer.resolution_root(),
                 &["Count".into()],
                 &[vec![wrong]],
             )
@@ -371,13 +371,13 @@ fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() 
     }
 
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let decoded = decode_and_verify_envelope(
         &envelope,
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
     assert!(decoded.result_objects.is_empty());
@@ -395,14 +395,14 @@ fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() 
         &envelope,
         &other_resource,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     assert!(decode_and_verify_envelope(
         &envelope,
         &compiled,
         &base_commitment,
-        base_commitment.state.commitment_root,
+        base_commitment.resolution_root(),
     )
     .is_err());
 
@@ -418,7 +418,7 @@ fn explicit_instance_triple_count_proves_generated_decimal_across_layer_stack() 
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -440,7 +440,7 @@ fn explicit_instance_triple_count_proves_zero_as_a_value_not_null() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(
         proved
-            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
             .unwrap(),
         vec![vec![CanonicalResultValue::GeneratedDecimalU64(0)]]
     );
@@ -448,7 +448,7 @@ fn explicit_instance_triple_count_proves_zero_as_a_value_not_null() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["Count".into()],
             &[vec![ExecutedResultValue::GeneratedDecimalU64(0)]],
         )
@@ -479,7 +479,7 @@ fn generated_triple_count_comparisons_prove_exact_true_and_false_relations() {
         let proved = compiled.prove(&layer).unwrap();
         assert_eq!(proved.result_len, expected_len);
         let values = proved
-            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
             .unwrap();
         assert_eq!(
             values,
@@ -499,9 +499,9 @@ fn generated_triple_count_comparison_envelope_binds_operator_operand_and_constan
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
 
     for substituted in [
@@ -514,7 +514,7 @@ fn generated_triple_count_comparison_envelope_binds_operator_operand_and_constan
             &envelope,
             &substituted,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .is_err());
     }
@@ -533,7 +533,7 @@ fn generated_triple_count_comparison_envelope_binds_operator_operand_and_constan
         .verify_executed_rows(
             &counted,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["Rows".into()],
             &[vec![0]],
         )
@@ -559,25 +559,25 @@ fn triple_slice_forward_and_reverse_prove_exact_order_and_reject_direction_subst
     let forward = plan_bgp(&triple_slice_query(false)).unwrap();
     let forward_proof = forward.prove(&layer).unwrap();
     let forward_values = forward_proof
-        .verify_and_resolve_values(&forward, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&forward, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(resolved_u32_column(&forward_values), [20, 30]);
 
     let reverse = plan_bgp(&triple_slice_query(true)).unwrap();
     let reverse_proof = reverse.prove(&layer).unwrap();
     let reverse_values = reverse_proof
-        .verify_and_resolve_values(&reverse, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&reverse, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(resolved_u32_column(&reverse_values), [30, 20]);
 
     let envelope = forward_proof
-        .encode_envelope(&forward, &layer, layer.state.commitment_root)
+        .encode_envelope(&forward, &layer, layer.resolution_root())
         .unwrap();
     assert!(decode_and_verify_envelope(
         &envelope,
         &reverse,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -608,7 +608,7 @@ fn triple_next_previous_and_end_cursor_prove_nearest_strict_value() {
         let compiled = plan_bgp(&query).unwrap();
         let proved = compiled.prove(&layer).unwrap();
         let values = proved
-            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
             .unwrap();
         assert_eq!(resolved_u32_column(&values), expected);
     }
@@ -636,7 +636,7 @@ fn assert_ground_navigation_result(
     assert!(compiled.relation.schema.is_empty());
     let proved = compiled.prove(layer).unwrap();
     proved
-        .verify(&compiled, layer, layer.state.commitment_root)
+        .verify(&compiled, layer, layer.resolution_root())
         .unwrap();
     assert_eq!(proved.result_len, expected_len);
     assert_eq!(proved.result_columns.len(), 1);
@@ -675,10 +675,10 @@ fn ground_triple_slice_proves_membership_boundaries_absence_and_direction_identi
 
     let reverse = plan_bgp(&ground_triple_slice_query(20, true)).unwrap();
     let envelope = proof
-        .encode_envelope(&forward, &layer, layer.state.commitment_root)
+        .encode_envelope(&forward, &layer, layer.resolution_root())
         .unwrap();
     assert!(decode_and_verify_envelope(
-        &envelope, &reverse, &layer, layer.state.commitment_root,
+        &envelope, &reverse, &layer, layer.resolution_root(),
     )
     .is_err());
 }
@@ -716,10 +716,10 @@ fn fully_ground_cursor_proves_immediate_adjacency_and_rejects_non_nearest() {
     }))
     .unwrap();
     let envelope = proof
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert!(decode_and_verify_envelope(
-        &envelope, &previous, &layer, layer.state.commitment_root,
+        &envelope, &previous, &layer, layer.resolution_root(),
     )
     .is_err());
 }
@@ -779,7 +779,7 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let scores = values[0]
         .iter()
@@ -794,9 +794,9 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
     assert_eq!(scores, [10, 20, 30]);
 
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
 
     let mut wrong_type = compiled.clone();
     match &mut wrong_type.relation.statement {
@@ -809,7 +809,7 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
         &envelope,
         &wrong_type,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -822,7 +822,7 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
         &envelope,
         &different_range,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -837,7 +837,7 @@ fn exact_scalar_order_proves_nested_routing_envelope_and_rejects_substitution() 
         &reordered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -865,7 +865,7 @@ fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let scores = values[0]
         .iter()
@@ -879,9 +879,9 @@ fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
         .collect::<Vec<_>>();
     assert_eq!(scores, [20, 10]);
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
 
     let ascending = plan_bgp(&Query::Limit(Limit {
         limit: 2,
@@ -892,7 +892,7 @@ fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
     }))
     .unwrap();
     assert!(decode_and_verify_envelope(
-        &envelope, &ascending, &layer, layer.state.commitment_root,
+        &envelope, &ascending, &layer, layer.resolution_root(),
     ).is_err());
 
     // The outer Limit(0) has the same already-authenticated Start child and must verify
@@ -916,7 +916,7 @@ fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
         &zero.encode().unwrap(),
         &zero_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
 
@@ -932,7 +932,7 @@ fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
         &envelope,
         &substituted,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -947,7 +947,7 @@ fn assert_desc_ordered_start_limit_slice_proves_and_rejects_tamper() {
         &reordered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -978,19 +978,19 @@ fn assert_multikey_order_nested_limit_e2e() {
     });
     let query = Query::Limit(Limit { limit: 2, query: Box::new(ordered(Order::Desc)) });
     let compiled = plan_bgp(&query).unwrap(); let proved = compiled.prove(&layer).unwrap();
-    let values = proved.verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root).unwrap();
+    let values = proved.verify_and_resolve_values(&compiled, &layer, layer.resolution_root()).unwrap();
     let number = |value: &CanonicalResultValue| match value { CanonicalResultValue::Object(CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, lexical }) => u32::from_be_bytes(lexical.as_slice().try_into().unwrap()), other => panic!("unexpected {other:?}") };
     assert_eq!((number(&values[0][0]),number(&values[1][0])), (1,4));
     assert_eq!((number(&values[0][1]),number(&values[1][1])), (1,4));
-    let envelope = proved.encode_envelope(&compiled, &layer, layer.state.commitment_root).unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    let envelope = proved.encode_envelope(&compiled, &layer, layer.resolution_root()).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
     let ascending = plan_bgp(&Query::Limit(Limit { limit: 2, query: Box::new(ordered(Order::Asc)) })).unwrap();
-    assert!(decode_and_verify_envelope(&envelope, &ascending, &layer, layer.state.commitment_root).is_err());
+    assert!(decode_and_verify_envelope(&envelope, &ascending, &layer, layer.resolution_root()).is_err());
     let schema_order = plan_bgp(&Query::Limit(Limit { limit: 2, query: Box::new(Query::OrderBy(OrderBy {
         ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }, OrderTemplate { variable: "y".into(), order: Order::Desc }],
         query: Box::new(duplicate_child()),
     })) })).unwrap();
-    assert!(decode_and_verify_envelope(&envelope, &schema_order, &layer, layer.state.commitment_root).is_err());
+    assert!(decode_and_verify_envelope(&envelope, &schema_order, &layer, layer.resolution_root()).is_err());
     let mut changed = RecursiveRelationEnvelope::decode(&envelope).unwrap();
     let replacement = layer.node_value_catalog.iter()
         .find(|record| matches!(record.triple.object, CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, .. })
@@ -998,7 +998,7 @@ fn assert_multikey_order_nested_limit_e2e() {
         .map(|record| ArkFr::from_u64(record.object_id)).unwrap();
     changed.result_columns[0][1] = replacement;
     for (commitment,column) in changed.result_commitments.iter_mut().zip(&changed.result_columns) { *commitment = commit_column(&pad(column, 1usize << changed.result_log_domain)).unwrap(); }
-    assert!(decode_and_verify_envelope(&changed.encode().unwrap(), &compiled, &layer, layer.state.commitment_root).is_err());
+    assert!(decode_and_verify_envelope(&changed.encode().unwrap(), &compiled, &layer, layer.resolution_root()).is_err());
 }
 
 #[test]
@@ -1019,7 +1019,7 @@ fn assert_subset_order_tiebreak_e2e() {
         builder.add_value_triple(ValueTriple::new_value(&iri("right"), &iri("y"), u32::make_entry(&value))).unwrap();
     }
     let layer = builder.commit().unwrap().proof_commitment().unwrap();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     // The template names ONLY x; y is appended as an ascending total-order tie-break. Both x values
     // repeat (each pairs with y in {3,4}), so the tie-break is load-bearing: it fixes the order
@@ -1130,17 +1130,17 @@ fn assert_bounded_when_success_plus_true_e2e() {
     ]);
     let compiled = plan_bgp(&query("r")).unwrap();
     let proved = compiled.prove(&layer).unwrap();
-    let values = proved.verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root).unwrap();
+    let values = proved.verify_and_resolve_values(&compiled, &layer, layer.resolution_root()).unwrap();
     let node = |value: &CanonicalResultValue| match value {
         CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => String::from_utf8(bytes.clone()).unwrap(),
         other => panic!("unexpected {other:?}"),
     };
     let rows = (0..proved.result_len).map(|row| (node(&values[0][row]), node(&values[1][row]))).collect::<Vec<_>>();
     assert_eq!(rows, vec![(iri("a"), iri("b")), (iri("a"), iri("b")), (iri("c"), iri("d"))]);
-    let envelope = proved.encode_envelope(&compiled, &layer, layer.state.commitment_root).unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    let envelope = proved.encode_envelope(&compiled, &layer, layer.resolution_root()).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
     let substituted = plan_bgp(&query("s")).unwrap();
-    assert!(decode_and_verify_envelope(&envelope, &substituted, &layer, layer.state.commitment_root).is_err());
+    assert!(decode_and_verify_envelope(&envelope, &substituted, &layer, layer.resolution_root()).is_err());
 }
 
 #[test]
@@ -1183,7 +1183,7 @@ fn assert_when_existential_local_projection_preserves_success_multiplicity() {
     assert_eq!(compiled.relation.schema, ["x", "y"]);
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let node = |value: &CanonicalResultValue| match value {
         CanonicalResultValue::Object(CanonicalObject::Node(bytes)) => {
@@ -1204,13 +1204,13 @@ fn assert_when_existential_local_projection_preserves_success_multiplicity() {
         ]
     );
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     decode_and_verify_envelope(
         &envelope,
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
     let substituted = plan_bgp(&query("s")).unwrap();
@@ -1218,7 +1218,7 @@ fn assert_when_existential_local_projection_preserves_success_multiplicity() {
         &envelope,
         &substituted,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -1253,10 +1253,10 @@ fn explicit_cpu_context_preserves_recursive_envelope_bytes() {
         .unwrap();
     assert_eq!(
         convenience
-            .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+            .encode_envelope(&compiled, &layer, layer.resolution_root())
             .unwrap(),
         explicit
-            .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+            .encode_envelope(&compiled, &layer, layer.resolution_root())
             .unwrap(),
     );
 }
@@ -1555,7 +1555,7 @@ fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(proved.result_len, 1);
     assert_eq!(
@@ -1563,9 +1563,9 @@ fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
         vec![vec![CanonicalResultValue::GeneratedDecimalI64(0)]]
     );
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let Query::And(collect_parts) = collect_signed_sum_for_predicate("score", true) else {
@@ -1589,7 +1589,7 @@ fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
         &envelope,
         &group,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let Query::Collect(collect) = collect_parts.and[0].clone() else {
@@ -1607,7 +1607,7 @@ fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
         &envelope,
         &length,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -1620,7 +1620,7 @@ fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -1631,7 +1631,7 @@ fn assert_collect_sum_proves_cancellation_empty_and_substitution() {
         .verify_and_resolve_values(
             &empty_compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .unwrap();
     assert_eq!(empty.result_len, 1);
@@ -1669,7 +1669,7 @@ fn assert_collect_extrema_preserves_store_id_empty_and_query_identity() {
     let compiled = plan_bgp(&min_query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let expected = CanonicalResultValue::Object(CanonicalObject::from_store_object(
         &ValueTriple::new_value("", "", i64::make_entry(&i64::MIN)).object,
@@ -1677,9 +1677,9 @@ fn assert_collect_extrema_preserves_store_id_empty_and_query_identity() {
     assert_eq!(proved.result_len, 1);
     assert_eq!(values, vec![vec![expected]]);
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let max = plan_bgp(&collect_signed_extrema_for_predicate("score", true)).unwrap();
@@ -1687,7 +1687,7 @@ fn assert_collect_extrema_preserves_store_id_empty_and_query_identity() {
         &envelope,
         &max,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let other_predicate =
@@ -1696,7 +1696,7 @@ fn assert_collect_extrema_preserves_store_id_empty_and_query_identity() {
         &envelope,
         &other_predicate,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -1709,7 +1709,7 @@ fn assert_collect_extrema_preserves_store_id_empty_and_query_identity() {
             .verify_and_resolve_values(
                 &empty_compiled,
                 &layer,
-                layer.state.commitment_root,
+                layer.resolution_root(),
             )
             .unwrap(),
         vec![Vec::new()]
@@ -1744,7 +1744,7 @@ fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(proved.result_len, 1);
     assert_eq!(
@@ -1752,9 +1752,9 @@ fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
         vec![vec![CanonicalResultValue::GeneratedDecimalU64(3)]]
     );
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let group_query = and_of(vec![
@@ -1783,7 +1783,7 @@ fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
         &envelope,
         &group,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -1796,7 +1796,7 @@ fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -1807,7 +1807,7 @@ fn assert_collect_length_proves_duplicates_empty_policy_and_substitution() {
         .verify_and_resolve_values(
             &empty_compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .unwrap();
     assert_eq!(empty.result_len, 1);
@@ -1868,7 +1868,7 @@ fn assert_two_key_group_count_proves_duplicate_cardinality_and_comparison() {
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let node = |name: &str| {
         CanonicalResultValue::Object(CanonicalObject::Node(iri(name).into_bytes()))
@@ -1884,9 +1884,9 @@ fn assert_two_key_group_count_proves_duplicate_cardinality_and_comparison() {
         ]
     );
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let Query::And(mut swapped) = query else {
@@ -1901,7 +1901,7 @@ fn assert_two_key_group_count_proves_duplicate_cardinality_and_comparison() {
         &envelope,
         &swapped,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -1917,7 +1917,7 @@ fn assert_two_key_group_count_proves_duplicate_cardinality_and_comparison() {
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -1975,7 +1975,7 @@ fn assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison() {
     assert_eq!(compiled.relation.schema, ["right", "left", "total"]);
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let node = |name: &str| {
         CanonicalResultValue::Object(CanonicalObject::Node(iri(name).into_bytes()))
@@ -1991,9 +1991,9 @@ fn assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison() {
         ]
     );
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let Query::And(mut swapped) = query else {
@@ -2008,7 +2008,7 @@ fn assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison() {
         &envelope,
         &swapped,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2024,7 +2024,7 @@ fn assert_two_key_signed_sum_proves_declared_tuple_order_and_comparison() {
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -2070,7 +2070,7 @@ fn assert_global_u32_sum_proves_one_generated_decimal_row() {
     assert_eq!(proved.result_len, 1);
     assert_eq!(
         proved
-            .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+            .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
             .unwrap(),
         vec![vec![CanonicalResultValue::GeneratedDecimalU64(5)]]
     );
@@ -2078,22 +2078,22 @@ fn assert_global_u32_sum_proves_one_generated_decimal_row() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["total".into()],
             &[vec![ExecutedResultValue::GeneratedDecimalU64(5)]],
         )
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
     let keyed = plan_bgp(&grouped_u32_sum_query()).unwrap();
     assert!(decode_and_verify_envelope(
         &envelope,
         &keyed,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
@@ -2104,7 +2104,7 @@ fn assert_global_u32_sum_proves_one_generated_decimal_row() {
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -2149,7 +2149,7 @@ fn assert_global_u64_sum_accepts_exact_max_and_rejects_actual_overflow() {
     let proved = compiled.prove(&exact).unwrap();
     assert_eq!(
         proved
-            .verify_and_resolve_values(&compiled, &exact, exact.state.commitment_root)
+            .verify_and_resolve_values(&compiled, &exact, exact.resolution_root())
             .unwrap(),
         vec![vec![CanonicalResultValue::GeneratedDecimalU64(u64::MAX)]]
     );
@@ -2157,15 +2157,15 @@ fn assert_global_u64_sum_accepts_exact_max_and_rejects_actual_overflow() {
         .verify_executed_values(
             &compiled,
             &exact,
-            exact.state.commitment_root,
+            exact.resolution_root(),
             &["total".into()],
             &[vec![ExecutedResultValue::GeneratedDecimalU64(u64::MAX)]],
         )
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &exact, exact.state.commitment_root)
+        .encode_envelope(&compiled, &exact, exact.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &exact, exact.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &exact, exact.resolution_root())
         .unwrap();
 
     let overflow = layer_with(&[("p", u64::MAX), ("q", 1)]);
@@ -2230,7 +2230,7 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
         .verify_and_resolve_values(
             &filtered_compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .unwrap();
     assert_eq!(filtered.result_len, 1);
@@ -2254,7 +2254,7 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
         .verify_executed_values(
             &filtered_compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["category".into(), "total".into()],
             &[vec![
                 ExecutedResultValue::Id(key_id),
@@ -2266,14 +2266,14 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
         .encode_envelope(
             &filtered_compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .unwrap();
     decode_and_verify_envelope(
         &filtered_envelope,
         &filtered_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
 
@@ -2287,7 +2287,7 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
         &filtered_envelope,
         &reversed,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let mut filtered_tamper = RecursiveRelationEnvelope::decode(&filtered_envelope).unwrap();
@@ -2302,7 +2302,7 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
         &filtered_tamper.encode().unwrap(),
         &filtered_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let mut wrong_domain = RecursiveRelationEnvelope::decode(&filtered_envelope).unwrap();
@@ -2311,7 +2311,7 @@ fn assert_grouped_i64_sum_proves_signed_values_and_rejects_overflow() {
         &wrong_domain.encode().unwrap(),
         &filtered_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2370,7 +2370,7 @@ fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_k
     let compiled = plan_bgp(&grouped_u32_sum_query()).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(proved.result_len, 2);
     assert_eq!(
@@ -2409,16 +2409,16 @@ fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_k
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["category".into(), "total".into()],
             &executed,
         )
         .unwrap();
 
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
         .unwrap();
     let mut tampered = RecursiveRelationEnvelope::decode(&envelope).unwrap();
     tampered.result_columns[1][0] = ArkFr::from_u64(5);
@@ -2431,7 +2431,7 @@ fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_k
         &tampered.encode().unwrap(),
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2453,7 +2453,7 @@ fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_k
         &envelope,
         &substituted,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -2491,7 +2491,7 @@ fn assert_grouped_u32_sum_empty_and_outer_count_are_exact() {
         .verify_executed_rows(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["groups".into()],
             &[vec![0]],
         )
@@ -2515,7 +2515,7 @@ fn resolved_group_extrema(
     layer: &LayerCommitment,
 ) -> Vec<(String, u32)> {
     let columns = proved
-        .verify_and_resolve_values(compiled, layer, layer.state.commitment_root)
+        .verify_and_resolve_values(compiled, layer, layer.resolution_root())
         .unwrap();
     let mut rows = (0..proved.result_len)
         .map(|row| {
@@ -2551,10 +2551,10 @@ fn assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() 
         let proved = compiled.prove(&layer).unwrap();
         assert_eq!(resolved_group_extrema(&proved, &compiled, &layer), expected);
         let envelope = proved
-            .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+            .encode_envelope(&compiled, &layer, layer.resolution_root())
             .unwrap();
         let decoded =
-            decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+            decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
                 .unwrap();
         assert_eq!(decoded.proved.result_len, 2);
         let compact = layer.verifier_commitment().unwrap().encode().unwrap();
@@ -2562,7 +2562,7 @@ fn assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() 
             &envelope,
             &compiled,
             &compact,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .unwrap();
         if kind == RangeOp::Ge {
@@ -2578,7 +2578,7 @@ fn assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() 
         &envelope,
         &max_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2595,7 +2595,7 @@ fn assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() 
         &wrong_extremum,
         &min_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let mut reassigned = RecursiveRelationEnvelope::decode(&envelope).unwrap();
@@ -2610,7 +2610,7 @@ fn assert_grouped_min_and_max_prove_recursive_envelopes_and_compact_artifacts() 
         &reassigned,
         &min_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -2652,7 +2652,7 @@ fn assert_two_key_grouped_extrema_preserves_visible_declared_tuple_order() {
     assert_eq!(compiled.relation.schema, ["category", "owner", "extremum"]);
     let proved = compiled.prove(&layer).unwrap();
     let values = proved.verify_and_resolve_values(
-        &compiled, &layer, layer.state.commitment_root,
+        &compiled, &layer, layer.resolution_root(),
     ).unwrap();
     let node = |column: usize, row: usize| match &values[column][row] {
         CanonicalResultValue::Object(CanonicalObject::Node(bytes)) =>
@@ -2672,22 +2672,22 @@ fn assert_two_key_grouped_extrema_preserves_visible_declared_tuple_order() {
         vec![(iri("a"), iri("z"), 10), (iri("z"), iri("a"), 5)],
     );
     let envelope = proved.encode_envelope(
-        &compiled, &layer, layer.state.commitment_root,
+        &compiled, &layer, layer.resolution_root(),
     ).unwrap();
     decode_and_verify_envelope(
-        &envelope, &compiled, &layer, layer.state.commitment_root,
+        &envelope, &compiled, &layer, layer.resolution_root(),
     ).unwrap();
 
     let max = plan_bgp(&two_key_grouped_score_extrema(true)).unwrap();
     assert!(decode_and_verify_envelope(
-        &envelope, &max, &layer, layer.state.commitment_root,
+        &envelope, &max, &layer, layer.resolution_root(),
     ).is_err());
     let mut reordered = compiled.clone();
     let CompiledRelationStatement::GroupExtrema { key_columns, .. } =
         &mut reordered.relation.statement else { unreachable!() };
     key_columns.swap(0, 1);
     assert!(decode_and_verify_envelope(
-        &envelope, &reordered, &layer, layer.state.commitment_root,
+        &envelope, &reordered, &layer, layer.resolution_root(),
     ).is_err());
 }
 
@@ -2717,7 +2717,7 @@ fn grouped_extrema_count_wrapper_binds_group_cardinality() {
         .verify_executed_rows(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["count".into()],
             &[vec![2]],
         )
@@ -2726,7 +2726,7 @@ fn grouped_extrema_count_wrapper_binds_group_cardinality() {
         .verify_executed_rows(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["count".into()],
             &[vec![1]],
         )
@@ -2753,17 +2753,17 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     assert_eq!(proved.result_len, 3);
     assert_eq!(proved.result_columns[2][2], ArkFr::zero());
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(values[2][2], CanonicalResultValue::Null);
     assert!(values[2][..2]
         .iter()
         .all(|value| matches!(value, CanonicalResultValue::Object(_))));
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(
         verified.result_values.as_ref().unwrap()[2][2],
@@ -2774,7 +2774,7 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
         &envelope,
         &non_optional,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2804,7 +2804,7 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["x".into(), "y".into(), "z".into()],
             &rows,
         )
@@ -2815,7 +2815,7 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &["x".into(), "y".into(), "z".into()],
             &null_in_shared,
         )
@@ -2824,7 +2824,7 @@ fn correlated_optional_proves_all_matches_and_one_null_extended_row() {
     let mut fake_null = proved;
     fake_null.result_columns[2][0] = ArkFr::zero();
     assert!(fake_null
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -2864,14 +2864,14 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
         .encode_envelope(
             &constant_compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
         )
         .unwrap();
     decode_and_verify_envelope(
         &constant_envelope,
         &constant_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
 
@@ -2884,7 +2884,7 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
         &constant_envelope,
         &wrong_constant,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let reversed_operands = plan_bgp(&and_of(vec![
@@ -2896,7 +2896,7 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
         &constant_envelope,
         &reversed_operands,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2917,7 +2917,7 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
         &constant_envelope,
         &constant_compiled,
         &other_layer,
-        other_layer.state.commitment_root,
+        other_layer.resolution_root(),
     )
     .is_err());
 
@@ -2930,13 +2930,13 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
     let columns_proved = columns_compiled.prove(&layer).unwrap();
     assert_eq!(columns_proved.result_len, 2);
     let columns_envelope = columns_proved
-        .encode_envelope(&columns_compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&columns_compiled, &layer, layer.resolution_root())
         .unwrap();
     decode_and_verify_envelope(
         &columns_envelope,
         &columns_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
     let reversed_alias = plan_bgp(&and_of(vec![
@@ -2949,7 +2949,7 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
         &columns_envelope,
         &reversed_alias,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
     let mut reordered_schema = columns_compiled.clone();
@@ -2959,7 +2959,7 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
         &columns_envelope,
         &reordered_schema,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -2971,13 +2971,13 @@ fn exact_equals_filters_authenticated_relations_and_binds_operands() {
     let false_proved = false_gate.prove(&layer).unwrap();
     assert_eq!(false_proved.result_len, 0);
     let false_envelope = false_proved
-        .encode_envelope(&false_gate, &layer, layer.state.commitment_root)
+        .encode_envelope(&false_gate, &layer, layer.resolution_root())
         .unwrap();
     decode_and_verify_envelope(
         &false_envelope,
         &false_gate,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
 }
@@ -3002,10 +3002,10 @@ fn exact_typed_equals_composes_with_select_and_count() {
     assert_eq!(proved.result_len, 2);
     assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(verified.proved.result_len, 2);
 }
@@ -3034,13 +3034,13 @@ fn exact_equals_filters_after_recursive_optional_and_not() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 1);
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(values[2], [CanonicalResultValue::Null]);
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
 
     // Simulate archive/reopen, derive the compact public view, then perform remote-style
     // decode + verification without retaining any native/materialized witness records.
@@ -3050,7 +3050,7 @@ fn exact_equals_filters_after_recursive_optional_and_not() {
         &envelope,
         &compiled,
         &compact,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
     assert_eq!(verified.proved.result_len, 1);
@@ -3100,13 +3100,13 @@ fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
         2
     );
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(verified.proved.result_len, 5);
     assert_eq!(
@@ -3130,7 +3130,7 @@ fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
         &envelope,
         &compiled,
         &compact,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
     assert_eq!(compact_verified.proved.result_len, 5);
@@ -3142,7 +3142,7 @@ fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
         &wrong_nullability,
         &compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -3157,7 +3157,7 @@ fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
         &envelope,
         &reordered,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
@@ -3172,7 +3172,7 @@ fn or_of_optional_with_optional_right_or_preserves_bag_and_nulls() {
         &envelope,
         &substituted,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -3201,14 +3201,14 @@ fn sequential_optional_then_not_filters_on_nonnullable_key() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 1);
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert_eq!(values[2], [CanonicalResultValue::Null]);
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(
         verified.result_values.as_ref().unwrap()[2],
@@ -3241,16 +3241,16 @@ fn dictionary_absence_composes_through_sequential_not_and_optional() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 2);
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert!(values[2]
         .iter()
         .all(|value| *value == CanonicalResultValue::Null));
 
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
 
     // The absence claim is part of the recursive query statement. Replacing one absent
     // subject with a dictionary-present subject changes both semantics and the digest.
@@ -3259,7 +3259,7 @@ fn dictionary_absence_composes_through_sequential_not_and_optional() {
         &envelope,
         &substituted,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -3274,12 +3274,12 @@ fn dictionary_absence_is_an_exact_empty_or_branch() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 2);
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
 }
 
 #[test]
@@ -3318,13 +3318,13 @@ fn composite_key_optional_requires_both_keys_and_preserves_right_duplicates() {
         1
     );
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let mut swapped = compiled.clone();
     swapped.relation.as_left_outer_mut().unwrap().swap(0, 1);
     assert!(proved
-        .verify(&swapped, &layer, layer.state.commitment_root)
+        .verify(&swapped, &layer, layer.resolution_root())
         .is_err());
     let mut fake_null = proved;
     let matched = fake_null.result_columns[2]
@@ -3333,7 +3333,7 @@ fn composite_key_optional_requires_both_keys_and_preserves_right_duplicates() {
         .unwrap();
     fake_null.result_columns[2][matched] = ArkFr::zero();
     assert!(fake_null
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -3358,16 +3358,16 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
         .iter()
         .all(|column| column[..proved.result_len].iter().all(Field::is_zero)));
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert!(values[2..]
         .iter()
         .all(|column| column.iter().all(|value| *value == CanonicalResultValue::Null)));
 
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root()).unwrap();
 
     let rows: Vec<Vec<ExecutedResultValue>> = (0..proved.result_len)
         .map(|row| {
@@ -3396,7 +3396,7 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &variables,
             &rows,
         )
@@ -3407,7 +3407,7 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &variables,
             &missing,
         )
@@ -3418,7 +3418,7 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &variables,
             &extra,
         )
@@ -3435,7 +3435,7 @@ fn global_optional_empty_right_nulls_every_right_namespace_exactly_once() {
         .verify_executed_values(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &variables,
             &forged_predicate,
         )
@@ -3455,7 +3455,7 @@ fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 3);
     let objects = proved
-        .verify_and_resolve(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let predicates: Vec<_> = objects[1]
         .iter()
@@ -3473,16 +3473,16 @@ fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
         .verify_objects(
             &compiled,
             &layer,
-            layer.state.commitment_root,
+            layer.resolution_root(),
             &forged_objects,
         )
         .is_err());
 
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(verified.result_objects, objects);
     let mut reordered_schema = compiled.clone();
@@ -3491,14 +3491,14 @@ fn predicate_variable_proves_and_resolves_only_through_predicate_catalog() {
         &envelope,
         &reordered_schema,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 
     let mut forged = proved;
     forged.result_columns[1][0] = ArkFr::from_u64(999_999);
     assert!(forged
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -3515,7 +3515,7 @@ fn predicate_variable_composite_join_preserves_predicate_namespace() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 2);
     let objects = proved
-        .verify_and_resolve(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve(&compiled, &layer, layer.resolution_root())
         .unwrap();
     assert!(objects[1].iter().all(|predicate| matches!(
         predicate,
@@ -3551,7 +3551,7 @@ fn predicate_variable_resolves_inherited_and_new_predicates_at_child_root() {
         .verify_and_resolve(
             &compiled,
             &child_commitment,
-            child_commitment.state.commitment_root,
+            child_commitment.resolution_root(),
         )
         .unwrap();
     assert_eq!(proved.result_len, 2);
@@ -3561,7 +3561,7 @@ fn predicate_variable_resolves_inherited_and_new_predicates_at_child_root() {
         .verify(
             &compiled,
             &child_commitment,
-            base_commitment.state.commitment_root
+            base_commitment.resolution_root()
         )
         .is_err());
 }
@@ -3586,20 +3586,20 @@ fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
     assert_eq!(compiled.relation.schema, vec!["x", "y"]);
     assert_eq!(proved.result_len, 1, "only c-p-d has no correlated q match");
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(verified.proved.result_len, 1);
     let mut corrupt = envelope;
     let last = corrupt.len() - 1;
     corrupt[last] ^= 1;
     assert!(
-        decode_and_verify_envelope(&corrupt, &compiled, &layer, layer.state.commitment_root,)
+        decode_and_verify_envelope(&corrupt, &compiled, &layer, layer.resolution_root(),)
             .is_err()
     );
 
@@ -3607,12 +3607,12 @@ fn correlated_not_proves_exact_left_anti_join_with_duplicate_matches() {
     let mut forged = proved;
     forged.result_len = 0;
     assert!(forged
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
     forged.result_len = original_len;
     forged.result_columns[0][0] = ArkFr::from_u64(999_999);
     assert!(forged
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -3637,13 +3637,13 @@ fn not_over_or_proves_and_roundtrips_recursive_statement_tree() {
     let proved = compiled.prove(&layer).unwrap();
     assert_eq!(proved.result_len, 1);
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let verified =
-        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.state.commitment_root)
+        decode_and_verify_envelope(&envelope, &compiled, &layer, layer.resolution_root())
             .unwrap();
     assert_eq!(verified.proved.result_len, 1);
 
@@ -3661,7 +3661,7 @@ fn not_over_or_proves_and_roundtrips_recursive_statement_tree() {
         &envelope,
         &reordered,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -3694,15 +3694,15 @@ fn composite_not_binds_swapped_shared_schema_and_requires_both_keys() {
         "a-p-c only partially matches the right keys"
     );
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let mut reordered = compiled.clone();
     reordered.relation.as_left_anti_mut().unwrap().swap(0, 1);
     assert!(
-        decode_and_verify_envelope(&envelope, &reordered, &layer, layer.state.commitment_root,)
+        decode_and_verify_envelope(&envelope, &reordered, &layer, layer.resolution_root(),)
             .is_err()
     );
 }
@@ -3731,7 +3731,7 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
         1
     );
     retained_proved
-        .verify(&retained_compiled, &layer, layer.state.commitment_root)
+        .verify(&retained_compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let suppressed = Query::Count(Count {
@@ -3750,19 +3750,19 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
         Some(("count", 0))
     );
     suppressed_proved
-        .verify(&suppressed_compiled, &layer, layer.state.commitment_root)
+        .verify(&suppressed_compiled, &layer, layer.resolution_root())
         .unwrap();
     assert!(suppressed_proved
         .verify_columns(&retained_proved.result_columns)
         .is_err());
     let envelope = suppressed_proved
-        .encode_envelope(&suppressed_compiled, &layer, layer.state.commitment_root)
+        .encode_envelope(&suppressed_compiled, &layer, layer.resolution_root())
         .unwrap();
     decode_and_verify_envelope(
         &envelope,
         &suppressed_compiled,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .unwrap();
     let correlated_variant = plan_bgp(&and_of(vec![
@@ -3776,7 +3776,7 @@ fn global_not_gates_complete_outer_relation_under_select_and_count() {
         &envelope,
         &correlated_variant,
         &layer,
-        layer.state.commitment_root,
+        layer.resolution_root(),
     )
     .is_err());
 }
@@ -3814,7 +3814,7 @@ fn global_not_tracks_authenticated_nonemptiness_across_layers() {
         .verify(
             &compiled,
             &base_commitment,
-            base_commitment.state.commitment_root,
+            base_commitment.resolution_root(),
         )
         .unwrap();
     let child_proved = compiled.prove(&child_commitment).unwrap();
@@ -3823,14 +3823,14 @@ fn global_not_tracks_authenticated_nonemptiness_across_layers() {
         .verify(
             &compiled,
             &child_commitment,
-            child_commitment.state.commitment_root,
+            child_commitment.resolution_root(),
         )
         .unwrap();
     assert!(child_proved
         .verify(
             &compiled,
             &child_commitment,
-            base_commitment.state.commitment_root,
+            base_commitment.resolution_root(),
         )
         .is_err());
 }
@@ -3932,7 +3932,7 @@ fn assert_true_join_end_to_end(lc: &LayerCommitment, q: &terminusdb_woql2::query
     // commitments + the external root — never reruns the BGP.
     verify_layer_bgp(
         lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &result_coms,
@@ -4011,12 +4011,12 @@ fn count_projected_distinct_proves_duplicate_classes_and_rejects_tamper() {
     let proved = compiled.prove(&lc).unwrap();
     assert_eq!(proved.result_len, 2);
     assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
-    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+    proved.verify(&compiled, &lc, lc.resolution_root()).unwrap();
 
     let bytes = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.resolution_root()).unwrap();
 
     let mut duplicate = RecursiveRelationEnvelope::decode(&bytes).unwrap();
     duplicate.result_columns[0][1] = duplicate.result_columns[0][0];
@@ -4027,7 +4027,7 @@ fn count_projected_distinct_proves_duplicate_classes_and_rejects_tamper() {
         &duplicate_bytes,
         &compiled,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 
@@ -4043,7 +4043,7 @@ fn count_projected_distinct_proves_duplicate_classes_and_rejects_tamper() {
         &bytes,
         &substituted,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 }
@@ -4062,7 +4062,7 @@ fn count_projected_distinct_empty_input_proves_zero() {
     let proved = compiled.prove(&lc).unwrap();
     assert_eq!(proved.result_len, 0);
     assert_eq!(proved.count_binding(&compiled), Some(("count", 0)));
-    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+    proved.verify(&compiled, &lc, lc.resolution_root()).unwrap();
 }
 
 #[test]
@@ -4101,12 +4101,12 @@ fn visible_projected_distinct_proves_the_exact_set_and_rejects_tamper() {
     let proved = compiled.prove(&lc).unwrap();
     // The exact distinct set is {a, b}: two output tuples collapsing the five input rows.
     assert_eq!(proved.result_len, 2);
-    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+    proved.verify(&compiled, &lc, lc.resolution_root()).unwrap();
 
     let bytes = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.resolution_root()).unwrap();
 
     // NEGATIVE 1 — a DUPLICATED output tuple: re-present {a, a}. Re-commit so the tamper is not
     // caught merely by a commitment mismatch; the distinct gadget's own uniqueness check rejects.
@@ -4118,7 +4118,7 @@ fn visible_projected_distinct_proves_the_exact_set_and_rejects_tamper() {
         &duplicated.encode().unwrap(),
         &compiled,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 
@@ -4145,7 +4145,7 @@ fn visible_projected_distinct_proves_the_exact_set_and_rejects_tamper() {
         &dropped.encode().unwrap(),
         &compiled,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 
@@ -4167,7 +4167,7 @@ fn visible_projected_distinct_proves_the_exact_set_and_rejects_tamper() {
     }))
     .unwrap();
     assert!(
-        decode_and_verify_envelope(&bytes, &other, &lc, lc.state.commitment_root).is_err()
+        decode_and_verify_envelope(&bytes, &other, &lc, lc.resolution_root()).is_err()
     );
 }
 
@@ -4216,11 +4216,11 @@ fn visible_projected_distinct_over_bag_union_proves_the_exact_set_and_rejects_ta
     let proved = compiled.prove(&lc).unwrap();
     // The exact distinct set is {a, b, c, d}: four output tuples collapsing the seven input rows.
     assert_eq!(proved.result_len, 4);
-    proved.verify(&compiled, &lc, lc.state.commitment_root).unwrap();
+    proved.verify(&compiled, &lc, lc.resolution_root()).unwrap();
 
     // The resolved distinct subjects are exactly {a, b, c, d} (order-agnostic).
     let resolved = proved
-        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .verify_and_resolve(&compiled, &lc, lc.resolution_root())
         .unwrap();
     let got: std::collections::BTreeSet<CanonicalObject> = resolved[0].iter().cloned().collect();
     let want: std::collections::BTreeSet<CanonicalObject> = ["a", "b", "c", "d"]
@@ -4230,9 +4230,9 @@ fn visible_projected_distinct_over_bag_union_proves_the_exact_set_and_rejects_ta
     assert_eq!(got, want);
 
     let bytes = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&bytes, &compiled, &lc, lc.resolution_root()).unwrap();
 
     // NEGATIVE 1 — a DUPLICATED output tuple: re-present {a, a, ...}. Re-commit so the tamper is not
     // caught merely by a commitment mismatch; the distinct gadget's own uniqueness check rejects.
@@ -4244,7 +4244,7 @@ fn visible_projected_distinct_over_bag_union_proves_the_exact_set_and_rejects_ta
         &duplicated.encode().unwrap(),
         &compiled,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 
@@ -4271,7 +4271,7 @@ fn visible_projected_distinct_over_bag_union_proves_the_exact_set_and_rejects_ta
         &dropped.encode().unwrap(),
         &compiled,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 
@@ -4292,7 +4292,7 @@ fn visible_projected_distinct_over_bag_union_proves_the_exact_set_and_rejects_ta
         CompiledRelationStatement::Distinct { .. }
     ));
     assert!(
-        decode_and_verify_envelope(&bytes, &other, &lc, lc.state.commitment_root).is_err()
+        decode_and_verify_envelope(&bytes, &other, &lc, lc.resolution_root()).is_err()
     );
 }
 
@@ -4311,7 +4311,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
     let proved = compiled.prove(&lc).unwrap();
     assert_eq!(proved.result_len, 2);
     proved
-        .verify(&compiled, &lc, lc.state.commitment_root)
+        .verify(&compiled, &lc, lc.resolution_root())
         .unwrap();
 
     let predicate_id = proved.as_single().unwrap().1[0];
@@ -4333,7 +4333,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
     assert!(proved.verify_columns(&tampered).is_err());
 
     let objects = proved
-        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .verify_and_resolve(&compiled, &lc, lc.resolution_root())
         .unwrap();
     assert_eq!(
         objects,
@@ -4345,21 +4345,21 @@ fn repeated_variable_atom_proves_same_row_equality() {
     let mut tampered_objects = objects.clone();
     tampered_objects[0][0] = CanonicalObject::Node(iri("b").into_bytes());
     assert!(proved
-        .verify_objects(&compiled, &lc, lc.state.commitment_root, &tampered_objects,)
+        .verify_objects(&compiled, &lc, lc.resolution_root(), &tampered_objects,)
         .is_err());
 
     let encoded = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
     let decoded =
-        decode_and_verify_envelope(&encoded, &compiled, &lc, lc.state.commitment_root).unwrap();
+        decode_and_verify_envelope(&encoded, &compiled, &lc, lc.resolution_root()).unwrap();
     assert_eq!(decoded.proved.result_len, proved.result_len);
     assert_eq!(decoded.result_objects, objects);
 
     let mut corrupt = encoded.clone();
     corrupt[20] ^= 1;
     assert!(
-        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root,).is_err()
+        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.resolution_root(),).is_err()
     );
 
     let id = |name: &str| {
@@ -4374,7 +4374,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["x".into()],
             &[vec![id("c")], vec![id("a")]],
         )
@@ -4384,7 +4384,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["x".into()],
             &[vec![id("a")], vec![id("a")]],
         )
@@ -4393,7 +4393,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["x".into()],
             &[vec![id("a")], vec![id("b")]],
         )
@@ -4402,7 +4402,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["wrong".into()],
             &[vec![id("a")], vec![id("c")]],
         )
@@ -4411,7 +4411,7 @@ fn repeated_variable_atom_proves_same_row_equality() {
     let mut renamed_schema = compiled.clone();
     renamed_schema.relation.schema[0] = "not_x".into();
     assert!(
-        decode_and_verify_envelope(&encoded, &renamed_schema, &lc, lc.state.commitment_root,)
+        decode_and_verify_envelope(&encoded, &renamed_schema, &lc, lc.resolution_root(),)
             .is_err()
     );
 }
@@ -4440,7 +4440,7 @@ fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
     let compiled = plan_bgp(&q).unwrap();
     let proved = compiled.prove(&lc).unwrap();
     let objects = proved
-        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .verify_and_resolve(&compiled, &lc, lc.resolution_root())
         .unwrap();
 
     assert_eq!(objects.len(), 2);
@@ -4458,7 +4458,7 @@ fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
         lexical: b"42".to_vec(),
     };
     assert!(proved
-        .verify_objects(&compiled, &lc, lc.state.commitment_root, &tampered)
+        .verify_objects(&compiled, &lc, lc.resolution_root(), &tampered)
         .is_err());
 }
 
@@ -4490,7 +4490,7 @@ fn data_variable_proves_mixed_literals_excludes_nodes_and_composes_with_join() {
 
     let proved = compiled.prove(&lc).unwrap();
     let objects = proved
-        .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+        .verify_and_resolve(&compiled, &lc, lc.resolution_root())
         .unwrap();
     assert_eq!(objects[0].len(), 2);
     assert!(objects[0]
@@ -4511,7 +4511,7 @@ fn data_variable_proves_mixed_literals_excludes_nodes_and_composes_with_join() {
     };
     plan.atoms[0].object_kind = ObjectKindFilter::Node;
     assert!(proved
-        .verify(&wrong_kind, &lc, lc.state.commitment_root)
+        .verify(&wrong_kind, &lc, lc.resolution_root())
         .is_err());
 }
 
@@ -4529,7 +4529,7 @@ fn count_binds_the_proven_relation_cardinality() {
     let compiled = plan_bgp(&q).unwrap();
     let proved = compiled.prove(&lc).unwrap();
     proved
-        .verify(&compiled, &lc, lc.state.commitment_root)
+        .verify(&compiled, &lc, lc.resolution_root())
         .unwrap();
     assert_eq!(proved.count_binding(&compiled), Some(("count", 2)));
     assert_eq!(proved.projected_commitments(&compiled).count(), 0);
@@ -4537,7 +4537,7 @@ fn count_binds_the_proven_relation_cardinality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["count".into()],
             &[vec![2]],
         )
@@ -4546,7 +4546,7 @@ fn count_binds_the_proven_relation_cardinality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["wrong".into()],
             &[vec![2]],
         )
@@ -4555,7 +4555,7 @@ fn count_binds_the_proven_relation_cardinality() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["count".into()],
             &[vec![1]],
         )
@@ -4576,30 +4576,30 @@ fn ground_triple_authenticates_presence_absence_and_zero_arity_rows() {
         let compiled = plan_bgp(&query).unwrap();
         let proved = compiled.prove(&lc).unwrap();
         proved
-            .verify(&compiled, &lc, lc.state.commitment_root)
+            .verify(&compiled, &lc, lc.resolution_root())
             .unwrap();
         assert_eq!(proved.result_len, expected_len);
         assert_eq!(proved.result_commitments.len(), 1); // hidden UNIT
         assert_eq!(proved.projected_commitments(&compiled).count(), 0);
         assert!(proved
-            .verify_and_resolve(&compiled, &lc, lc.state.commitment_root)
+            .verify_and_resolve(&compiled, &lc, lc.resolution_root())
             .unwrap()
             .is_empty());
 
         let rows = vec![Vec::new(); expected_len];
         proved
-            .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &rows)
+            .verify_executed_rows(&compiled, &lc, lc.resolution_root(), &[], &rows)
             .unwrap();
         let wrong_rows = vec![Vec::new(); 1 - expected_len];
         assert!(proved
-            .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &wrong_rows)
+            .verify_executed_rows(&compiled, &lc, lc.resolution_root(), &[], &wrong_rows)
             .is_err());
 
         let encoded = proved
-            .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+            .encode_envelope(&compiled, &lc, lc.resolution_root())
             .unwrap();
         let decoded =
-            decode_and_verify_envelope(&encoded, &compiled, &lc, lc.state.commitment_root).unwrap();
+            decode_and_verify_envelope(&encoded, &compiled, &lc, lc.resolution_root()).unwrap();
         assert!(decoded.result_objects.is_empty());
 
         let count_query = Query::Count(Count {
@@ -4611,7 +4611,7 @@ fn ground_triple_authenticates_presence_absence_and_zero_arity_rows() {
             .verify_executed_rows(
                 &count_compiled,
                 &lc,
-                lc.state.commitment_root,
+                lc.resolution_root(),
                 &["count".into()],
                 &[vec![expected_len as u64]],
             )
@@ -4643,12 +4643,12 @@ fn all_ground_conjunction_authenticates_boolean_product() {
         assert_eq!(proved.result_len, expected_len);
         let rows = vec![Vec::new(); expected_len];
         proved
-            .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &rows)
+            .verify_executed_rows(&compiled, &lc, lc.resolution_root(), &[], &rows)
             .unwrap();
         let envelope = proved
-            .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+            .encode_envelope(&compiled, &lc, lc.resolution_root())
             .unwrap();
-        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.resolution_root()).unwrap();
     }
 }
 
@@ -4673,7 +4673,7 @@ fn ground_atoms_authentically_gate_variable_results() {
             .verify_executed_rows(
                 &compiled,
                 &lc,
-                lc.state.commitment_root,
+                lc.resolution_root(),
                 &["s".into(), "o".into()],
                 &expected_rows,
             )
@@ -4687,18 +4687,18 @@ fn ground_atoms_authentically_gate_variable_results() {
             .verify_executed_rows(
                 &compiled,
                 &lc,
-                lc.state.commitment_root,
+                lc.resolution_root(),
                 &["s".into(), "o".into()],
                 &swapped_rows,
             )
             .is_err());
         let envelope = proved
-            .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+            .encode_envelope(&compiled, &lc, lc.resolution_root())
             .unwrap();
-        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.resolution_root()).unwrap();
         proved.result_log_domain += 1;
         assert!(proved
-            .verify(&compiled, &lc, lc.state.commitment_root)
+            .verify(&compiled, &lc, lc.resolution_root())
             .is_err());
     }
 }
@@ -4739,7 +4739,7 @@ fn disconnected_components_prove_complete_cartesian_results() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &variables,
             &expected,
         )
@@ -4750,7 +4750,7 @@ fn disconnected_components_prove_complete_cartesian_results() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &variables,
             &dropped,
         )
@@ -4761,19 +4761,19 @@ fn disconnected_components_prove_complete_cartesian_results() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &variables,
             &duplicated,
         )
         .is_err());
 
     let envelope = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
     let reordered = and_of(vec![tv("a", "q", "b"), tv("x", "p", "y")]);
     let reordered = plan_bgp(&reordered).unwrap();
     assert!(
-        decode_and_verify_envelope(&envelope, &reordered, &lc, lc.state.commitment_root,).is_err()
+        decode_and_verify_envelope(&envelope, &reordered, &lc, lc.resolution_root(),).is_err()
     );
 
     // A false authenticated ground gate suppresses the complete product without
@@ -4783,7 +4783,7 @@ fn disconnected_components_prove_complete_cartesian_results() {
     let compiled = plan_bgp(&absent).unwrap();
     let proved = compiled.prove(&lc).unwrap();
     proved
-        .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &variables, &[])
+        .verify_executed_rows(&compiled, &lc, lc.resolution_root(), &variables, &[])
         .unwrap();
 
     let empty_component = and_of(vec![tv("x", "p", "y"), tv_subj_const("i", "p", "w")]);
@@ -4793,7 +4793,7 @@ fn disconnected_components_prove_complete_cartesian_results() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["x".into(), "y".into(), "w".into()],
             &[],
         )
@@ -4828,7 +4828,7 @@ fn or_proves_exact_bag_union_with_overlap() {
         vec![id("e"), id("f")],
     ];
     proved
-        .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &variables, &rows)
+        .verify_executed_rows(&compiled, &lc, lc.resolution_root(), &variables, &rows)
         .unwrap();
     let mut duplicated = rows.clone();
     duplicated.push(rows[0].clone());
@@ -4846,7 +4846,7 @@ fn or_proves_exact_bag_union_with_overlap() {
             .verify_executed_rows(
                 &compiled,
                 &lc,
-                lc.state.commitment_root,
+                lc.resolution_root(),
                 &variables,
                 &forged,
             )
@@ -4854,16 +4854,16 @@ fn or_proves_exact_bag_union_with_overlap() {
     }
 
     let envelope = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
     let decoded =
-        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+        decode_and_verify_envelope(&envelope, &compiled, &lc, lc.resolution_root()).unwrap();
     assert!(decoded.proved.as_bag_union().is_some());
     assert!(decoded.proved.as_single().is_none());
     let mut corrupt = envelope.clone();
     corrupt[20] ^= 1;
     assert!(
-        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.state.commitment_root).is_err()
+        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.resolution_root()).is_err()
     );
 
     let single = plan_bgp(&tv("s", "p", "o")).unwrap();
@@ -4871,11 +4871,11 @@ fn or_proves_exact_bag_union_with_overlap() {
     assert!(single_proved.as_single().is_some());
     assert!(single_proved.as_bag_union().is_none());
     let single_envelope = single_proved
-        .encode_envelope(&single, &lc, lc.state.commitment_root)
+        .encode_envelope(&single, &lc, lc.resolution_root())
         .unwrap();
-    assert!(decode_and_verify_envelope(&envelope, &single, &lc, lc.state.commitment_root).is_err());
+    assert!(decode_and_verify_envelope(&envelope, &single, &lc, lc.resolution_root()).is_err());
     assert!(
-        decode_and_verify_envelope(&single_envelope, &compiled, &lc, lc.state.commitment_root,)
+        decode_and_verify_envelope(&single_envelope, &compiled, &lc, lc.resolution_root(),)
             .is_err()
     );
     let reordered = plan_bgp(&Query::Or(Or {
@@ -4883,7 +4883,7 @@ fn or_proves_exact_bag_union_with_overlap() {
     }))
     .unwrap();
     assert!(
-        decode_and_verify_envelope(&envelope, &reordered, &lc, lc.state.commitment_root,).is_err()
+        decode_and_verify_envelope(&envelope, &reordered, &lc, lc.resolution_root(),).is_err()
     );
 }
 
@@ -4907,7 +4907,7 @@ fn or_supports_empty_and_ground_branches() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["x".into()],
             &[vec![a]],
         )
@@ -4926,7 +4926,7 @@ fn or_supports_empty_and_ground_branches() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["count".into()],
             &[vec![1]],
         )
@@ -4938,7 +4938,7 @@ fn or_supports_empty_and_ground_branches() {
     let compiled = plan_bgp(&ground).unwrap();
     let proved = compiled.prove(&lc).unwrap();
     proved
-        .verify_executed_rows(&compiled, &lc, lc.state.commitment_root, &[], &[vec![]])
+        .verify_executed_rows(&compiled, &lc, lc.resolution_root(), &[], &[vec![]])
         .unwrap();
 }
 
@@ -5014,7 +5014,7 @@ fn closure_resolved_set(objects: &[Vec<CanonicalObject>]) -> std::collections::B
 
 fn assert_transitive_closure_e2e() {
     let lc = build_layer(&[("a", "p", "b"), ("b", "p", "c")]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
     let iri_set = |names: &[&str]| {
         names
             .iter()
@@ -5107,9 +5107,9 @@ fn both_bound_closure_query(source: &str, reflexive: bool, predicate: &str, obje
 fn assert_both_bound_closure_e2e() {
     // Acyclic chain a -> b -> c and a cyclic variant a -> b -> c -> a.
     let acyclic = build_layer(&[("a", "p", "b"), ("b", "p", "c")]);
-    let acyclic_root = acyclic.state.commitment_root;
+    let acyclic_root = acyclic.resolution_root();
     let cyclic = build_layer(&[("a", "p", "b"), ("b", "p", "c"), ("c", "p", "a")]);
-    let cyclic_root = cyclic.state.commitment_root;
+    let cyclic_root = cyclic.resolution_root();
 
     // Prove + verify a both-bound reachability query, returning its ground-existence row count
     // (≥1 = reachable outcome, 0 = unreachable outcome).
@@ -5118,7 +5118,7 @@ fn assert_both_bound_closure_e2e() {
         let compiled = plan_bgp(&q).unwrap();
         let proved = compiled.prove(lc).unwrap();
         proved
-            .verify(&compiled, lc, lc.state.commitment_root)
+            .verify(&compiled, lc, lc.resolution_root())
             .unwrap();
         proved.result_len
     };
@@ -5263,7 +5263,7 @@ fn assert_compound_alternation_closure_e2e() {
         ("c", "p", "d"),
         ("a", "q", "e"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
     let iri_set = |names: &[&str]| {
         names.iter().map(|name| iri(name)).collect::<std::collections::BTreeSet<String>>()
     };
@@ -5333,7 +5333,7 @@ fn assert_compound_sequence_closure_e2e() {
         ("b", "p", "x2"),
         ("x2", "q", "c"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
     let iri_set = |names: &[&str]| {
         names.iter().map(|name| iri(name)).collect::<std::collections::BTreeSet<String>>()
     };
@@ -5380,7 +5380,7 @@ fn assert_compound_sequence_closure_e2e() {
     // (iv) WRONG ROOT: the proof must not verify against a different committed graph.
     let other = build_layer(&[("a", "p", "x1"), ("x1", "q", "b")]);
     assert!(
-        plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err(),
+        plus_p.verify(&plus_c, &other, other.resolution_root()).is_err(),
         "the compound closure proof must not verify against a different committed graph"
     );
 }
@@ -5429,7 +5429,7 @@ fn single_hop_wildcard_proves_all_direct_objects_regardless_of_predicate() {
         ("x", "knows", "z"),
     ]);
     let id = |name: &str| node_object_id(&lc, name);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let q = Query::Path(Path {
         subject: Value::Node(iri("a")),
@@ -5493,7 +5493,7 @@ fn single_hop_wildcard_both_free_proves_full_edge_relation() {
         ("c", "owns", "d"),
     ]);
     let id = |name: &str| node_object_id(&lc, name);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let compiled = plan_bgp(&path_query("s", wildcard_pred(), "o")).unwrap();
     assert_eq!(compiled.relation.schema, ["s", "o"]);
@@ -5524,7 +5524,7 @@ fn assert_single_seed_wildcard_closure_e2e() {
         ("b", "p2", "c"),
         ("a", "q", "d"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
     let iri_set = |names: &[&str]| {
         names.iter().map(|name| iri(name)).collect::<std::collections::BTreeSet<String>>()
     };
@@ -5572,7 +5572,7 @@ fn assert_single_seed_wildcard_closure_e2e() {
     // (iv) WRONG ROOT: the proof must not verify against a different committed graph.
     let other = build_layer(&[("a", "p1", "b")]);
     assert!(
-        plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err(),
+        plus_p.verify(&plus_c, &other, other.resolution_root()).is_err(),
         "the wildcard closure proof must not verify against a different committed graph"
     );
 }
@@ -5638,7 +5638,7 @@ fn assert_all_pairs_closure_e2e() {
         ("c", "p", "a"),
         ("d", "p", "a"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let plus_query = all_pairs_closure_query("x", false, "p", "y");
     let plus_compiled = plan_bgp(&plus_query).unwrap();
@@ -5728,7 +5728,7 @@ fn assert_all_pairs_closure_count_e2e() {
         ("c", "p", "a"),
         ("d", "p", "a"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     // plus over both-free endpoints = the 12-pair reachability relation => n = 12. The pairs SET is
     // hidden; the single delivered binding is the count.
@@ -5809,7 +5809,7 @@ fn assert_all_pairs_wildcard_closure_e2e() {
         ("c", "r", "a"),
         ("d", "s", "a"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let plus_compiled = plan_bgp(&all_pairs_compound_query("x", false, wildcard_pred(), "y")).unwrap();
     let plus_proved = plus_compiled.prove(&lc).unwrap();
@@ -5864,7 +5864,7 @@ fn assert_all_pairs_wildcard_closure_e2e() {
     // (v) WRONG ROOT.
     let other = build_layer(&[("a", "p", "b")]);
     assert!(plus_proved
-        .verify(&plus_compiled, &other, other.state.commitment_root)
+        .verify(&plus_compiled, &other, other.resolution_root())
         .is_err());
 }
 
@@ -5889,7 +5889,7 @@ fn assert_all_pairs_alternation_closure_e2e() {
         ("c", "p", "a"),
         ("d", "q", "a"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let plus_c = plan_bgp(&all_pairs_compound_query("x", false, alt_body(), "y")).unwrap();
     let plus_p = plus_c.prove(&lc).unwrap();
@@ -5932,7 +5932,7 @@ fn assert_all_pairs_alternation_closure_e2e() {
 
     // WRONG ROOT.
     let other = build_layer(&[("a", "p", "b")]);
-    assert!(plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err());
+    assert!(plus_p.verify(&plus_c, &other, other.resolution_root()).is_err());
 }
 
 #[test]
@@ -5956,7 +5956,7 @@ fn assert_all_pairs_sequence_closure_e2e() {
         ("b", "p", "m2"), ("m2", "q", "c"),
         ("c", "p", "m3"), ("m3", "q", "a"),
     ]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let plus_c = plan_bgp(&all_pairs_compound_query("x", false, seq_body(), "y")).unwrap();
     let plus_p = plus_c.prove(&lc).unwrap();
@@ -5998,7 +5998,7 @@ fn assert_all_pairs_sequence_closure_e2e() {
 
     // WRONG ROOT.
     let other = build_layer(&[("a", "p", "m1"), ("m1", "q", "b")]);
-    assert!(plus_p.verify(&plus_c, &other, other.state.commitment_root).is_err());
+    assert!(plus_p.verify(&plus_c, &other, other.resolution_root()).is_err());
 }
 
 #[test]
@@ -6031,7 +6031,7 @@ fn count_closure_query(
 /// deduped accumulator `A_K` (commitment continuity), for star and plus, forward and inverse.
 fn assert_transitive_closure_count_e2e() {
     let lc = build_layer(&[("a", "p", "b"), ("b", "p", "c")]);
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     // plus from a over a -> b -> c = {b, c} => n = 2. The endpoint set is hidden; the single
     // delivered binding is the count.
@@ -6132,7 +6132,7 @@ fn path_predicate_proves_endpoint_pairs() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[vec![id("a"), id("b")], vec![id("b"), id("c")]],
         )
@@ -6142,7 +6142,7 @@ fn path_predicate_proves_endpoint_pairs() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[vec![id("a"), id("b")], vec![id("x"), id("y")]],
         )
@@ -6163,7 +6163,7 @@ fn path_inverse_predicate_proves_reversed_pairs() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["o".into(), "s".into()],
             &[vec![id("a"), id("b")], vec![id("c"), id("b")]],
         )
@@ -6197,7 +6197,7 @@ fn path_two_hop_sequence_proves_projected_bag_of_endpoint_pairs() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[
                 vec![id("a"), id("g")],
@@ -6211,7 +6211,7 @@ fn path_two_hop_sequence_proves_projected_bag_of_endpoint_pairs() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[vec![id("a"), id("g")], vec![id("e"), id("h")]],
         )
@@ -6238,7 +6238,7 @@ fn path_or_of_two_predicates_proves_exact_bag_union() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[
                 vec![id("a"), id("b")],
@@ -6272,7 +6272,7 @@ fn path_exact_times_two_two_proves_via_sequence_on_distinct_predicates() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[
                 vec![id("kid"), id("MumName")],
@@ -6298,7 +6298,7 @@ fn path_times_one_one_proves_single_hop() {
         .verify_executed_rows(
             &compiled,
             &lc,
-            lc.state.commitment_root,
+            lc.resolution_root(),
             &["s".into(), "o".into()],
             &[vec![id("a"), id("b")], vec![id("b"), id("c")]],
         )
@@ -6418,7 +6418,7 @@ fn select_projection_reads_true_columns() {
     let (proof, result_coms, m, ids) = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &result_coms,
@@ -6491,7 +6491,7 @@ fn composite_key_compiler_proves_exact_result_not_single_key_superset() {
     // It VERIFIES — the crypto is faithful to the (wrong) plan.
     verify_layer_bgp(
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         &bogus,
         &ids,
         &result_coms,
@@ -6518,7 +6518,7 @@ fn composite_key_compiler_proves_exact_result_not_single_key_superset() {
         prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &exact_ids,
         &exact_coms,
@@ -6570,7 +6570,7 @@ fn cycle_triangle_proves_authenticated_closing_edge() {
     let (proof, commitments, result_len, ids) = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &commitments,
@@ -6712,7 +6712,7 @@ fn assert_const_join_end_to_end(
     let (proof, coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &coms,
@@ -6833,12 +6833,12 @@ fn absent_node_constant_authenticates_empty_join_and_envelope() {
     assert_eq!(proved.result_len, 0);
     assert_eq!(proved.result_commitments.len(), 2);
     proved
-        .verify(&compiled, &lc, lc.state.commitment_root)
+        .verify(&compiled, &lc, lc.resolution_root())
         .unwrap();
     let envelope = proved
-        .encode_envelope(&compiled, &lc, lc.state.commitment_root)
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
         .unwrap();
-    decode_and_verify_envelope(&envelope, &compiled, &lc, lc.state.commitment_root).unwrap();
+    decode_and_verify_envelope(&envelope, &compiled, &lc, lc.resolution_root()).unwrap();
 
     let present_variant = plan_bgp(&and_of(vec![
         tv("x", "knows", "y"),
@@ -6849,7 +6849,7 @@ fn absent_node_constant_authenticates_empty_join_and_envelope() {
         &envelope,
         &present_variant,
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
     )
     .is_err());
 }
@@ -6944,7 +6944,7 @@ fn absent_string_literal_authenticates_empty_join() {
     let proved = compiled.prove(&lc).unwrap();
     assert_eq!(proved.result_len, 0);
     proved
-        .verify(&compiled, &lc, lc.state.commitment_root)
+        .verify(&compiled, &lc, lc.resolution_root())
         .unwrap();
 }
 
@@ -7326,7 +7326,7 @@ fn check_range_end_to_end(lc: &LayerCommitment, op: RangeOp, k: usize, expected_
     let (proof, coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &coms,
@@ -7431,7 +7431,7 @@ fn woql_in_range_proves_half_open_filtered_join() {
     let proved = compiled.prove(&lc).unwrap();
     assert_eq!(proved.result_len, 3);
     proved
-        .verify(&compiled, &lc, lc.state.commitment_root)
+        .verify(&compiled, &lc, lc.resolution_root())
         .unwrap();
 }
 
@@ -7610,7 +7610,7 @@ fn check_range_generic(
     let (proof, coms, m, ids) = prove_layer_bgp(lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &coms,
@@ -7942,7 +7942,7 @@ fn woql_in_range_date_proves_half_open_filtered_join() {
     let (proof, coms, m, ids) = prove_layer_bgp(&lc, compiled.bgp_plan()).unwrap();
     verify_layer_bgp(
         &lc,
-        lc.state.commitment_root,
+        lc.resolution_root(),
         compiled.bgp_plan(),
         &ids,
         &coms,
@@ -8074,7 +8074,7 @@ fn eval_ab_rows(
     let compiled = plan_bgp(&eval_ab_query(expr, "r")).unwrap();
     let proved = compiled.prove(layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, layer, layer.resolution_root())
         .unwrap();
     let index = |name: &str| {
         compiled
@@ -8162,7 +8162,7 @@ fn eval_wrong_result_column_fails_verification() {
     wrong_value.result_commitments[ri] =
         commit_column(&pad(&wrong_value.result_columns[ri], domain)).unwrap();
     assert!(wrong_value
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 
     // (b) A corrupted derived-column COMMITMENT with the correct column values: the recompute
@@ -8172,7 +8172,7 @@ fn eval_wrong_result_column_fails_verification() {
     wrong_commit.result_commitments[ri] =
         commit_column(&pad(&[generated_decimal_i64_field(1)], domain_b)).unwrap();
     assert!(wrong_commit
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8197,7 +8197,7 @@ fn eval_tampered_operand_passthrough_fails_verification() {
     tampered.result_commitments[ai] =
         commit_column(&pad(&tampered.result_columns[ai], domain)).unwrap();
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8296,7 +8296,7 @@ fn eval_div_wrong_result_fails_verification() {
     let domain = 1usize << wrong.result_log_domain;
     wrong.result_commitments[ri] = commit_column(&pad(&wrong.result_columns[ri], domain)).unwrap();
     assert!(wrong
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8384,7 +8384,7 @@ fn typecast_rows(layer: &LayerCommitment, target: NodeValue) -> (CompiledBgp, Ve
     let compiled = plan_bgp(&typecast_query_e2e(target, "r")).unwrap();
     let proved = compiled.prove(layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, layer, layer.resolution_root())
         .unwrap();
     let index = |name: &str| {
         compiled
@@ -8465,7 +8465,7 @@ fn typecast_wrong_result_column_fails_verification() {
     let domain = 1usize << wrong.result_log_domain;
     wrong.result_commitments[ri] = commit_column(&pad(&wrong.result_columns[ri], domain)).unwrap();
     assert!(wrong
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8532,7 +8532,7 @@ fn cast_to_string_outputs(layer: &LayerCommitment, query: &Query) -> Vec<String>
     let compiled = plan_bgp(query).unwrap();
     let proved = compiled.prove(layer).unwrap();
     proved
-        .verify(&compiled, layer, layer.state.commitment_root)
+        .verify(&compiled, layer, layer.resolution_root())
         .unwrap();
     let mut got: Vec<String> = proved
         .typecast_to_string_result_objects()
@@ -8552,7 +8552,7 @@ fn cast_from_string_outputs(
     let compiled = plan_bgp(query).unwrap();
     let proved = compiled.prove(layer).unwrap();
     proved
-        .verify(&compiled, layer, layer.state.commitment_root)
+        .verify(&compiled, layer, layer.resolution_root())
         .unwrap();
     let mut got: Vec<(CanonicalDatatype, String)> = proved
         .typecast_from_string_result_objects()
@@ -8609,7 +8609,7 @@ fn typecast_number_to_string_wrong_result_fails_verification() {
         panic!("expected a TypecastNumberToString proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8665,7 +8665,7 @@ fn typecast_string_to_number_wrong_result_fails_verification() {
         panic!("expected a TypecastStringToNumber proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8759,7 +8759,7 @@ fn concat_proves_per_row_concatenation_with_literal_separator() {
     let compiled = plan_bgp(&concat_name_greet_query()).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     // The synthesized strings are the terminal, revealed, verifier-re-derived output. Reading
@@ -8796,7 +8796,7 @@ fn concat_tampered_result_string_fails_verification() {
         panic!("expected a Concat proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8818,7 +8818,7 @@ fn concat_tampered_operand_column_fails_verification() {
     tampered.result_commitments[ai] =
         commit_column(&pad(&tampered.result_columns[ai], domain)).unwrap();
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8857,7 +8857,7 @@ fn join_proves_per_row_separator_interposition() {
     let compiled = plan_bgp(&join_name_greet_query()).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let mut got: Vec<String> = proved
@@ -8892,7 +8892,7 @@ fn join_single_element_list_emits_no_separator() {
     let compiled = plan_bgp(&query).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let mut got: Vec<String> = proved
         .join_result_objects()
@@ -8919,7 +8919,7 @@ fn join_tampered_result_string_fails_verification() {
         panic!("expected a Join proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8939,7 +8939,7 @@ fn join_tampered_operand_column_fails_verification() {
     tampered.result_commitments[ai] =
         commit_column(&pad(&tampered.result_columns[ai], domain)).unwrap();
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -8987,7 +8987,7 @@ fn substring_proves_per_row_character_indexed_slice() {
     let compiled = plan_bgp(&substring_word_query(1, 3)).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let mut got: Vec<String> = proved
@@ -9016,7 +9016,7 @@ fn substring_tampered_result_fails_verification() {
         panic!("expected a Substring proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9058,7 +9058,7 @@ fn pad_proves_per_row_left_pad_to_target_character_length() {
     let compiled = plan_bgp(&pad_word_query("→", 4)).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let mut got: Vec<String> = proved
@@ -9091,7 +9091,7 @@ fn pad_tampered_result_fails_verification() {
         panic!("expected a Pad proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9154,7 +9154,7 @@ fn hashkey_proves_per_row_idgen_hash_matching_reference() {
     let compiled = plan_bgp(&hashkey_word_query("P/")).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let mut got: Vec<String> = proved
@@ -9182,7 +9182,7 @@ fn hashkey_proves_idgen_encoding_of_special_chars_matching_reference() {
     let compiled = plan_bgp(&hashkey_name_greet_query("Doc/")).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     proved
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .unwrap();
 
     let mut got: Vec<String> = proved
@@ -9212,7 +9212,7 @@ fn hashkey_tampered_result_fails_verification() {
         panic!("expected a HashKey proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9234,7 +9234,7 @@ fn hashkey_tampered_operand_column_fails_verification() {
     tampered.result_commitments[si] =
         commit_column(&pad(&tampered.result_columns[si], domain)).unwrap();
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9304,7 +9304,7 @@ fn rational_arith_strings(layer: &LayerCommitment, query: &Query) -> (CompiledBg
     let compiled = plan_bgp(query).unwrap();
     let proved = compiled.prove(layer).unwrap();
     proved
-        .verify(&compiled, layer, layer.state.commitment_root)
+        .verify(&compiled, layer, layer.resolution_root())
         .unwrap();
     let mut got: Vec<String> = proved
         .rational_arith_result_objects()
@@ -9341,7 +9341,7 @@ fn floor_of_decimal_column_floors_toward_negative_infinity() {
     let compiled = plan_bgp(&eval_d_query(ea_floor(ea_var("dd")), "r")).unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let ri = compiled
         .relation
@@ -9376,7 +9376,7 @@ fn floor_wrong_result_fails_verification() {
     let domain = 1usize << wrong.result_log_domain;
     wrong.result_commitments[ri] = commit_column(&pad(&wrong.result_columns[ri], domain)).unwrap();
     assert!(wrong
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9422,7 +9422,7 @@ fn divide_tampered_result_fails_verification() {
         panic!("expected a RationalArith proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9475,7 +9475,7 @@ fn decimal_operand_tampered_result_fails_verification() {
         panic!("expected a RationalArith proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9540,7 +9540,7 @@ fn cal_int_rows(
     let compiled = plan_bgp(&and_of(vec![tv("x", "d", "date"), calendar])).unwrap();
     let proved = compiled.prove(layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, layer, layer.resolution_root())
         .unwrap();
     let index = |name: &str| {
         compiled
@@ -9561,7 +9561,7 @@ fn cal_date_out_sorted(layer: &LayerCommitment, pred: &str, calendar: Query) -> 
     let compiled = plan_bgp(&and_of(vec![tv("x", pred, "date"), calendar])).unwrap();
     let proved = compiled.prove(layer).unwrap();
     proved
-        .verify(&compiled, layer, layer.state.commitment_root)
+        .verify(&compiled, layer, layer.resolution_root())
         .unwrap();
     let mut got: Vec<String> = proved
         .calendar_date_result_objects()
@@ -9645,7 +9645,7 @@ fn weekday_wrong_result_column_fails_verification() {
     let domain = 1usize << wrong.result_log_domain;
     wrong.result_commitments[wi] = commit_column(&pad(&wrong.result_columns[wi], domain)).unwrap();
     assert!(wrong
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9669,7 +9669,7 @@ fn iso_week_proves_year_and_week_across_boundaries() {
     .unwrap();
     let proved = compiled.prove(&layer).unwrap();
     let values = proved
-        .verify_and_resolve_values(&compiled, &layer, layer.state.commitment_root)
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
         .unwrap();
     let index = |name: &str| {
         compiled
@@ -9776,7 +9776,7 @@ fn day_after_wrong_result_fails_verification() {
         panic!("expected a CalendarDate proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9861,7 +9861,7 @@ fn month_end_date_wrong_result_fails_verification() {
         panic!("expected a CalendarDate proof");
     }
     assert!(tampered
-        .verify(&compiled, &layer, layer.state.commitment_root)
+        .verify(&compiled, &layer, layer.resolution_root())
         .is_err());
 }
 
@@ -9913,7 +9913,7 @@ fn path_times_two_two_constant_source_drops_self_loop_twice() {
     // EXCLUDED: a->a->a via the SAME edge (a,p,a) twice. A plain bag-join returns 4 rows
     // (t = a,a,b,c); the TupleDisequality drops exactly the self-loop-twice t=a.
     let layer = self_loop_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     let compiled = plan_bgp(&times_path(
         Value::Node(iri("a")),
@@ -9944,7 +9944,7 @@ fn path_times_two_two_variable_source_edge_simple_bag() {
     //   a->a->b (a,b) | a->b->a (a,a) | a->b->c (a,c) | b->a->a (b,a) | b->a->b (b,b)
     // (a->a->a via edge (a,p,a) twice is EXCLUDED.)
     let layer = self_loop_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     let compiled = plan_bgp(&times_path(
         Value::Variable("s".into()),
         2,
@@ -9988,7 +9988,7 @@ fn path_times_three_three_edge_simple_bag() {
     //   a->a->b->c  (edges a->a, a->b, b->c all distinct)  -> t=c.
     // The reuse walks a->a->a->{a,b} (edge a->a twice) are dropped by the C(3,2)=3 filters.
     let layer = loop_tail_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     let compiled = plan_bgp(&times_path(
         Value::Node(iri("a")),
         3,
@@ -10011,7 +10011,7 @@ fn path_times_range_two_three_is_bag_union() {
     //   p^3 from a (edge-simple): a->a->b->c (t=c)
     // Bag union -> {b, c, c}.
     let layer = loop_tail_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     let compiled = plan_bgp(&times_path(
         Value::Node(iri("a")),
         2,
@@ -10033,7 +10033,7 @@ fn path_times_range_two_three_is_bag_union() {
 #[test]
 fn path_times_two_two_soundness_negatives() {
     let layer = self_loop_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     let compiled = plan_bgp(&times_path(
         Value::Node(iri("a")),
         2,
@@ -10123,7 +10123,7 @@ fn path_mixed_predicate_two_fold_drops_same_predicate_edge_reuse() {
     // Both p-hops are FORWARD, so the stored-edge disequality is byte-for-byte path.pl's
     // path-direction edge. Edge-simple (partitioned disequality) result = exactly {e}.
     let layer = mixed_pq_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     let compiled = plan_bgp(&pq_times_path(
         Value::Node(iri("a")),
@@ -10150,7 +10150,7 @@ fn path_mixed_predicate_two_fold_drops_same_predicate_edge_reuse() {
 #[test]
 fn path_mixed_predicate_two_fold_soundness_negatives() {
     let layer = mixed_pq_layer();
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     let compiled = plan_bgp(&pq_times_path(
         Value::Node(iri("a")),
         2,
@@ -10217,7 +10217,7 @@ fn path_forward_inverse_same_predicate_soundness_empty() {
     // walk-oriented disequality drops the row (Δ=0); a STORED-orientation fingerprint would keep it
     // (stored (a,b) vs (b,a) differ) and CERTIFY the non-solution {o=b}. Correct result: {}.
     let layer = build_layer(&[("a", "p", "b"), ("b", "r", "a"), ("b", "p", "a")]);
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     let compiled = plan_bgp(&seq_from_a(
         vec![path_predicate("p"), path_predicate("r"), path_inverse("p")],
@@ -10275,7 +10275,7 @@ fn path_forward_inverse_same_predicate_completeness_keeps_valid() {
     // predicate and nodes — so it never joins the p/n(p) chain; it only pads the layer to the
     // proof system's >= 2-row minimum.)
     let layer = build_layer(&[("a", "p", "b"), ("c", "q", "d")]);
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     let compiled = plan_bgp(&seq_from_a(vec![path_predicate("p"), path_inverse("p")], "o")).unwrap();
     assert_eq!(compiled.relation.schema, ["o"]);
@@ -10340,7 +10340,7 @@ fn two_hop_wildcard_drops_full_edge_reuse_and_keeps_predicate_difference() {
     // DROPPED (the same stored edge traversed twice): (a,p,a)+(a,p,a) and (a,q,a)+(a,q,a).
     // Edge-simple bag = {a, a, b, b}; a plain bag-join returns 6 (the two self-reuse walks too).
     let layer = build_layer(&[("a", "p", "a"), ("a", "q", "a"), ("a", "p", "b")]);
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     let compiled = plan_bgp(&two_hop_wildcard_from_a("y")).unwrap();
     assert_eq!(compiled.relation.schema, ["y"]);
@@ -10365,7 +10365,7 @@ fn two_hop_wildcard_drops_full_edge_reuse_and_keeps_predicate_difference() {
 #[test]
 fn two_hop_wildcard_soundness_negatives() {
     let layer = build_layer(&[("a", "p", "a"), ("a", "q", "a"), ("a", "p", "b")]);
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
     let compiled = plan_bgp(&two_hop_wildcard_from_a("y")).unwrap();
     let proof = compiled.prove(&layer).unwrap();
     let envelope = proof.encode_envelope(&compiled, &layer, root).unwrap();
@@ -10402,7 +10402,7 @@ fn mixed_wildcard_concrete_sequence_folds_predicate_constant_end_to_end() {
     //   hop0=(a,q,a), hop1=(a,p,a)  distinct edges (q != p)           -> y=a  KEEP
     // Edge-simple result = {a}; a plain bag-join returns 2.
     let layer = build_layer(&[("a", "p", "a"), ("a", "q", "a")]);
-    let root = layer.state.commitment_root;
+    let root = layer.resolution_root();
 
     let compiled = plan_bgp(&Query::Path(Path {
         subject: Value::Node(iri("a")),
@@ -10559,8 +10559,8 @@ fn assert_subsumption_soundness_negatives() {
     let db_root = CompiledBgp::prove_on_layers_root(&instance, &schema).unwrap();
     let instance_view = instance.proof_commitment().unwrap();
     let schema_view = schema.proof_commitment().unwrap();
-    let schema_root = schema_view.state.commitment_root;
-    let instance_root = instance_view.state.commitment_root;
+    let schema_root = schema_view.resolution_root();
+    let instance_root = instance_view.resolution_root();
 
     let query = subsumption_query(NodeValue::Node(iri("A")), NodeValue::Variable("y".into()));
     let compiled = plan_bgp(&query).unwrap();
@@ -10625,7 +10625,7 @@ fn assert_subsumption_soundness_negatives() {
     // schema commitment root, so it can no longer combine into the trusted database_root.
     let spurious = sync_schema_layer(&[("A", "B"), ("A", "C"), ("B", "D"), ("C", "D"), ("A", "Evil")]);
     let spurious_view = spurious.proof_commitment().unwrap();
-    assert_ne!(spurious_view.state.commitment_root, schema_root);
+    assert_ne!(spurious_view.resolution_root(), schema_root);
     assert!(
         proved
             .verify_over_graphs(&compiled, &*instance_view, &*spurious_view, db_root)
@@ -10650,7 +10650,7 @@ fn assert_instance_only_backward_compat_via_prove_on_layer() {
     // entry must prove+verify, byte-identically across runs — the schema-graph foundation is additive.
     let instance = sync_node_layer(&[("a", "p", "b"), ("b", "p", "c")]);
     let commitment = instance.proof_commitment().unwrap();
-    let root = commitment.state.commitment_root;
+    let root = commitment.resolution_root();
 
     let query = Query::Triple(terminusdb_woql2::triple::Triple {
         subject: NodeValue::Variable("s".into()),
@@ -10778,7 +10778,7 @@ fn assert_ordered_list_walk_e2e() {
     // A list with a REPEATED element: both order and multiplicity are non-trivial (`a` at positions
     // 0 and 2). A silent dedup or reorder in the mirror would be caught here.
     let lc = list_layer(chain_triples(&iri("doc"), &iri("tracks"), &["a", "b", "a"]));
-    let root = lc.state.commitment_root;
+    let root = lc.resolution_root();
 
     let compiled = ordered_list_walk_compiled("doc", "tracks");
     let proved = compiled.prove(&lc).unwrap();
@@ -10806,7 +10806,7 @@ fn assert_ordered_list_walk_e2e() {
 
     // Single-element list: the smallest non-empty chain still walks correctly.
     let solo = list_layer(chain_triples(&iri("solo"), &iri("tracks"), &["z"]));
-    let solo_root = solo.state.commitment_root;
+    let solo_root = solo.resolution_root();
     let solo_compiled = ordered_list_walk_compiled("solo", "tracks");
     let solo_proved = solo_compiled.prove(&solo).unwrap();
     let solo_objects = solo_proved
