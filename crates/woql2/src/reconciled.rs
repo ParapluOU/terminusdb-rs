@@ -45,9 +45,9 @@ use terminus_store::proof::query::{
     AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
 };
 use terminus_store::proof::reconcile::{
-    prove_delta_read, prove_read_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
-    DeltaReadProof, DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult, PresentTerm,
-    ReconcileProof,
+    decode_and_verify_delta_read, prove_delta_read, prove_read_bgp, verify_and_resolve_bgp,
+    verify_and_resolve_delta_read, DeltaReadProof, DeltaSource, PresentBgpAtom, PresentBgpProof,
+    PresentReadResult, PresentTerm, ReconcileProof,
 };
 use terminus_store::proof::{CanonicalObject, ProofHash};
 
@@ -341,6 +341,42 @@ pub fn verify_and_resolve_reconciled_read(
         // The proof's stored route disagrees with the verifier's re-compiled query's route.
         _ => Err(ReconciledReadError::QueryShapeMismatch),
     }
+}
+
+/// C4 byte-in DB-free FFI: verify a delta-read plain-BGP proof shipped as BYTES against the trusted
+/// head root, driven by the VERIFIER's OWN WOQL `query`. Re-lowers the query to `(atoms, joins,
+/// source)` — the spec comes from the verifier's query, NEVER from the proof bytes
+/// (anti-substitution) — maps the route to a [`DeltaSource`] (a materialized route is not a delta
+/// read and is rejected as a shape mismatch), then hands the encoded proof + the encoded term-less
+/// `VerifierCommitment` chain to the store's byte-in [`decode_and_verify_delta_read`]. Mirrors
+/// [`crate::proof::prove_entry::decode_verifier_commitment_and_verify_envelope`]. Returns the
+/// authenticated result row count.
+pub fn decode_and_verify_reconciled_delta_read(
+    query: &Query,
+    delta_proof_bytes: &[u8],
+    verifier_commitment_bytes: &[&[u8]],
+    trusted_head_root: ProofHash,
+) -> Result<usize, ReconciledReadError> {
+    let LoweredBgp { atoms, joins, source } = lower_query(query)?;
+    let delta_source = match source {
+        ReadSource::Additions => DeltaSource::Additions,
+        ReadSource::Removals => DeltaSource::Removals,
+        // A materialized (reconciled-present) read is NOT a delta read; refuse rather than guess.
+        ReadSource::Materialized => {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "delta-read byte-in path requires an AddedTriple/DeletedTriple query (a materialized read is not a delta read)",
+            ));
+        }
+    };
+    decode_and_verify_delta_read(
+        delta_proof_bytes,
+        verifier_commitment_bytes,
+        trusted_head_root,
+        delta_source,
+        &atoms,
+        &joins,
+    )
+    .map_err(|e| ReconciledReadError::Store(e.to_string()))
 }
 
 // --- Anti-substitution spec equality (field-wise; the store atom/join types are not `PartialEq`) ---
