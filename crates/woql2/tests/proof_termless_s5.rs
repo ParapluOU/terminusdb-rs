@@ -10,7 +10,7 @@
 mod proof_common;
 use proof_common::*;
 
-use terminus_store::proof::commitment::LayerCommitment;
+use terminus_store::proof::commitment::{LayerCommitment, VerifierCommitment};
 use terminus_store::{open_sync_memory_store, ValueTriple};
 use terminusdb_woql2::proof::plan_bgp;
 
@@ -122,5 +122,63 @@ fn s5_termless_range_query_fails_closed_through_woql2() {
             .verify_and_resolve_values(&compiled, &termless, termless.resolution_root())
             .is_err(),
         "a range query on a term-less artifact must fail closed"
+    );
+}
+
+/// A base + one delta layer; returns the (base, delta) `LayerCommitment`s.
+fn base_and_delta_node_layers() -> (LayerCommitment, LayerCommitment) {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("a"), &iri("knows"), &iri("b")))
+        .unwrap();
+    // A second row so `compiled.prove(&base_lc)` succeeds (the BGP prover needs >= 2 rows);
+    // the E1 guard under test fires on the delta VIEW regardless of the base proof's shape.
+    builder
+        .add_value_triple(ValueTriple::new_node(&iri("e"), &iri("knows"), &iri("f")))
+        .unwrap();
+    let base = builder.commit().unwrap();
+    let base_lc = (*base.proof_commitment().unwrap()).clone();
+    let child = base.open_write().unwrap();
+    child
+        .add_value_triple(ValueTriple::new_node(&iri("c"), &iri("knows"), &iri("d")))
+        .unwrap();
+    let head = child.commit().unwrap();
+    let delta_lc = (*head.proof_commitment().unwrap()).clone();
+    (base_lc, delta_lc)
+}
+
+/// E1 CROSS-PATH GUARD (the soundness requirement of E1): a TERM-LESS DELTA artifact is now
+/// constructible / decodable / validatable (previously rejected at construction), but it MUST NOT
+/// verify on the single-layer base envelope path — a delta is an INCREMENT, not the full resolved
+/// state. A real (base-layer) instance BGP proof, fed the term-less delta view with the delta's own
+/// `resolution_root` (so the resolution gate passes and control reaches the guard), is rejected by
+/// the E1 guard at the top of `verify_relation`, before any envelope/proof-vs-root work. The base
+/// e2e above proves a term-less BASE artifact still verifies, so the guard is scoped to delta only.
+#[test]
+fn e1_termless_delta_constructible_but_rejected_on_single_layer_base_verify() {
+    let (base_lc, delta_lc) = base_and_delta_node_layers();
+    assert!(base_lc.state.parent_state_root.is_none());
+    assert!(delta_lc.state.parent_state_root.is_some(), "constructed a delta layer");
+
+    // E1: the term-less delta artifact BUILDS, validates, and round-trips through encode/decode.
+    let delta_termless = delta_lc.verifier_commitment_termless().unwrap();
+    assert!(!delta_termless.terms_present);
+    delta_termless.validate().unwrap();
+    let decoded = VerifierCommitment::decode(&delta_termless.encode().unwrap()).unwrap();
+    assert!(!decoded.terms_present && decoded.state.parent_state_root.is_some());
+    decoded.validate().unwrap();
+
+    // Verifying a real instance BGP proof against the term-less DELTA view is rejected by the E1
+    // cross-path guard on the single-layer envelope path.
+    let compiled = plan_bgp(&tv("s", "knows", "o")).unwrap();
+    let proved = compiled.prove(&base_lc).unwrap();
+    let err = proved
+        .verify(&compiled, &delta_termless, delta_termless.resolution_root())
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("term-less delta layer cannot be verified on the single-layer"),
+        "expected the E1 cross-path guard error, got: {err}"
     );
 }

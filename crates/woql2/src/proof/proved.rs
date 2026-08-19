@@ -349,6 +349,23 @@ impl ProvedBgp {
         expected_root: ProofHash,
         query_digest: ProofHash,
     ) -> std::io::Result<()> {
+        // CROSS-PATH GUARD (E1): a TERM-LESS DELTA view (`parent_state_root == Some` and no
+        // clear catalogs) is now constructible/decodable, but a delta is an INCREMENT — not the
+        // full resolved state — so it must never verify on this single-layer envelope path (which
+        // reads/authenticates ONE layer's own `commitment_root`). This is the woql2-side choke that
+        // every single-layer `ProvedBgp` verify entry funnels through (verify / verify_over_graphs'
+        // single-graph branch / verify_and_resolve* / verify_objects / verify_executed_*), including
+        // the woql2-level-only reads (e.g. `LayerTripleCount` reads the view directly, never touching
+        // the store's `require_base_layer_for_query`). A term-BEARING delta is out of scope here and
+        // keeps its existing behavior. Delta querying is opened by the reconciled/delta-read path (E2).
+        let view = layer.verifier_view();
+        if view.state.parent_state_root.is_some() && !view.terms_present {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "term-less delta layer cannot be verified on the single-layer base/rollup envelope path \
+                 (a delta is an increment, not the full state); verify it through the reconciled/delta-read path",
+            ));
+        }
         if let CompiledRelationStatement::When { expanded } = &compiled.statement {
             return self.verify_relation(expanded, layer, expected_root, query_digest);
         }

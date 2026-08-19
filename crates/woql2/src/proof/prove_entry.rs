@@ -25,6 +25,18 @@ pub fn decode_and_verify_envelope(
     // `commitment_root` AND both dictionary Merkle roots directly). Gate on it, then verify the
     // envelope against the now-authenticated `commitment_root` (the envelope's identity anchor).
     let view = layer.verifier_view();
+    // CROSS-PATH GUARD (E1): reject a TERM-LESS DELTA view on this single-layer envelope path. A
+    // delta is an increment, not the full resolved state; the store's `RecursiveRelationEnvelope::
+    // verify` also fail-closes any delta here via `require_base_layer_for_query`, but rejecting up
+    // front gives the precise reason. Term-BEARING deltas are out of scope (unchanged). Delta
+    // querying is opened by the reconciled/delta-read path (E2).
+    if view.state.parent_state_root.is_some() && !view.terms_present {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "term-less delta layer cannot be verified on the single-layer base/rollup envelope path \
+             (a delta is an increment, not the full state); verify it through the reconciled/delta-read path",
+        ));
+    }
     if view.resolution_root() != trusted_resolution_root {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
