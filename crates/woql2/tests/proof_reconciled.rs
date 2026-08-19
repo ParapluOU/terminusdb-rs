@@ -512,3 +512,35 @@ fn woql_verify_rejects_proof_for_a_different_query() {
     assert!(verify_and_resolve_reconciled_read(&proved_query, &lref, head_root, &proof).is_ok());
     assert!(verify_and_resolve_reconciled_read(&join_query, &jref, jhead, &join_proof).is_ok());
 }
+
+/// C4-slice-2: the reconciled MATERIALIZED-present byte-in wrapper
+/// (`decode_and_verify_reconciled_read_bgp`) must REJECT a delta-source (`AddedTriple` /
+/// `DeletedTriple`) query as a shape mismatch — a delta read ships a `DeltaReadProof` and goes
+/// through `decode_and_verify_reconciled_delta_read` instead. The guard fires on the re-lowered
+/// route BEFORE the proof bytes are touched, so no real proof is needed here (the store test
+/// `c4_reconcile_read_byte_in_matches_in_memory_and_rejects_substitution` covers the positive E2E).
+#[test]
+fn woql_reconciled_read_bgp_byte_in_rejects_delta_source_query() {
+    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_read_bgp, ReconciledReadError};
+    let layers = filter_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+
+    let delta_query = added_triple("s", "p1", "o");
+    let err = decode_and_verify_reconciled_read_bgp(&delta_query, &[], &[], head_root)
+        .expect_err("a delta-source query must be rejected by the materialized-present byte-in path");
+    assert!(
+        matches!(err, ReconciledReadError::UnsupportedShape(_)),
+        "delta-source rejection must be an UnsupportedShape shape mismatch, got {err:?}"
+    );
+
+    // A materialized (`Triple`) query passes the route guard — it fails LATER (empty commitment
+    // chain), NOT with the shape-mismatch UnsupportedShape, confirming the guard is route-specific.
+    let mat_query = tv("s", "p1", "o");
+    let err2 = decode_and_verify_reconciled_read_bgp(&mat_query, &[], &[], head_root)
+        .expect_err("an empty commitment chain must still error");
+    assert!(
+        !matches!(err2, ReconciledReadError::UnsupportedShape(_)),
+        "a materialized query must pass the route guard (fail later, not as a shape mismatch), got {err2:?}"
+    );
+}
