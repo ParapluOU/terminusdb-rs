@@ -51,24 +51,36 @@ fn expect_resolution_root(
 fn relation_attests_order(statement: &CompiledRelationStatement) -> bool {
     use CompiledRelationStatement::*;
     match statement {
-        // Direct order attestation.
-        ExactScalarOrder { .. } | ExactMultiOrder { .. } | ExactOrderedSlice { .. } => true,
-        // POSITION-PRESERVING unary wrappers: output row order == input row order. Recurse.
-        // Per-row value maps (append/replace a column row-for-row, never reorder/filter/dedup):
+        // Direct order attestation. The exact-order gadgets bind the output to a proven sorted
+        // order; the ordered WALKS bind an exact list/array index order in the proof itself
+        // (`verify_ordered_list_walk`; `verify_density_order` with output index column [0..n)).
+        ExactScalarOrder { .. } | ExactMultiOrder { .. } | ExactOrderedSlice { .. }
+        | OrderedListWalk { .. } | OrderedArrayWalk { .. } => true,
+        // POSITION-PRESERVING unary wrappers whose PROOF (not merely the honest prover) binds each
+        // output row to the child row in the child's order — the verifier RECOMPUTES/pins every
+        // output column positionally against the child, so an order beneath is faithfully preserved.
+        // Per-row value maps (verifier recomputes the exact columns, inheriting result_len/order):
         Eval { input, .. } | FloorEval { input, .. } | RationalArith { input, .. }
         | Typecast { input, .. } | TypecastNumberToString { input, .. }
         | TypecastStringToNumber { input, .. } | Concat { input, .. } | Join { input, .. }
         | Substring { input, .. } | Pad { input, .. } | HashKey { input, .. }
         | CalendarInt { input, .. } | CalendarDate { input, .. }
-        // Order-preserving filters (keep a subsequence in the child's relative order):
-        | Equality { input, .. } | TupleDisequality { input, .. }
+        // Generated-column filters (verifier reconstructs the exact kept columns at increasing
+        // indices) and column projection (verifier index-selects whole child columns, same length):
         | GeneratedU64Filter { input, .. } | GeneratedI64Filter { input, .. }
-        // Column projection without dedup/reorder:
         | BagProjection { input, .. } => relation_attests_order(&input.statement),
-        // Everything else is order-DESTROYING or a leaf/scalar: false.
-        // (Bgp, LayerTripleCount, BagUnion, Distinct, When, LeftAnti, InnerJoin, CrossRootHashJoin,
-        //  LeftOuter, GroupExtrema, GroupSum, GroupCount, CollectionCount, CollectionSum,
-        //  CollectionExtrema, TransitiveClosure*, OrderedListWalk, OrderedArrayWalk.)
+        // `When` has no store proof node — planning and verification delegate transparently to
+        // `expanded`, preserving that relation's order — so recurse into it. (Ordinary lowering puts
+        // a `BagUnion` under `When`, which bottoms out at false; this covers direct/manual plans.)
+        When { expanded, .. } => relation_attests_order(&expanded.statement),
+        // Everything else is order-DESTROYING (relational joins, BagUnion, Distinct, aggregates,
+        // closures) or an unordered leaf: false — the executor may deliver any permutation.
+        //
+        // `Equality` / `TupleDisequality` are DELIBERATELY excluded even though the honest prover
+        // compacts survivors stably: their store proof (`filter::compact_columns` link) authenticates
+        // only the surviving-row MULTISET, not stable survivor POSITIONS (a valid proof can present
+        // survivors in any order). So an order beneath a filter is NOT cryptographically attested and
+        // MUST compare as a multiset — we never claim a row order the proof does not bind.
         _ => false,
     }
 }
