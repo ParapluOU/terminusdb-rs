@@ -679,6 +679,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         collection,
         count_variable,
         full_row_distinct,
+        order_invented_tiebreak: false,
     })
 }
 
@@ -821,6 +822,7 @@ pub(crate) fn plan_or_relation(
         collection: effective_collection,
         count_variable,
         full_row_distinct,
+        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1310,6 +1312,7 @@ pub(crate) fn plan_sequential_read_operators(
         collection: effective_collection,
         count_variable,
         full_row_distinct,
+        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)

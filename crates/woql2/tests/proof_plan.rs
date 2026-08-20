@@ -5396,6 +5396,133 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
             if key_indices == &[2, 0, 1]));
 }
 
+/// A bare two-column `[x, y]` relation (both columns bound, non-negative ints), the leaf
+/// underneath the subset-key OrderBy fidelity tests.
+fn two_column_xy_bgp() -> Query {
+    and_of(vec![
+        tv_subj_const("left", "x", "x"),
+        gte(dvar("x"), duint(0)),
+        tv_subj_const("right", "y", "y"),
+        gte(dvar("y"), duint(0)),
+    ])
+}
+
+// FIDELITY (F4): a SUBSET-key `OrderBy` (fewer named keys than columns) appends the unnamed
+// columns as an INVENTED ascending tie-break to satisfy the store gadget's total-order contract.
+// SWI `order_by/2` instead leaves rows tying on the named keys in `findall` enumeration order, so
+// the invented tie-break diverges from WOQL the moment it becomes OBSERVABLE — nested under another
+// order, or sliced by `Start`/`Limit`/`Once`. Those two shapes reject-close; a bare subset-key
+// order (tie order unobservable) stays supported. See `plan_exact_scalar_order` /
+// `plan_exact_ordered_slice`.
+
+#[test]
+fn order_by_subset_key_under_limit_reject_closes() {
+    // Codex repro: `Limit(1, OrderBy(x ASC, OrderBy(y DESC, BGP[x, y])))`. The inner order's
+    // (bindable) tie order is what a faithful outer order would observe; the outer subset key `x`
+    // instead overrides ties with an invented ascending `y`, and the `Limit` then picks a specific
+    // row depending on that invented order. Rejected (Rule 1 fires on the inner subset-over-order).
+    let inner = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "y".into(), order: Order::Desc }],
+        query: Box::new(two_column_xy_bgp()),
+    });
+    let outer = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        query: Box::new(inner),
+    });
+    let limited = Query::Limit(Limit { limit: 1, query: Box::new(outer) });
+    reject(limited, BgpPlanError::OrderBySubsetKeyUnderObservation);
+}
+
+#[test]
+fn order_by_subset_key_slice_reject_closes() {
+    // A `Limit` over a BARE subset-key order observes the invented ascending tie-break the order
+    // planner appended, so the sliced row set depends on it. Rejected by Rule 2 in the slice planner.
+    let ordered = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        query: Box::new(two_column_xy_bgp()),
+    });
+    let limited = Query::Limit(Limit { limit: 1, query: Box::new(ordered) });
+    reject(limited, BgpPlanError::OrderBySubsetKeyUnderObservation);
+}
+
+#[test]
+fn order_by_subset_key_nested_reject_closes() {
+    // An outer subset-key order over an inner order: the inner order IS the bindable tie order that
+    // the outer's invented ascending key would silently override. Rejected by Rule 1.
+    let inner = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "y".into(), order: Order::Asc }],
+        query: Box::new(two_column_xy_bgp()),
+    });
+    let outer = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        query: Box::new(inner),
+    });
+    reject(outer, BgpPlanError::OrderBySubsetKeyUnderObservation);
+}
+
+#[test]
+fn order_by_subset_key_over_slice_reject_closes() {
+    // A subset-key order OVER a (full-key) SLICE: `OrderBy(x, Limit(2, OrderBy(x ASC, y DESC, BGP)))`.
+    // The slice emits its top-k rows in the faithful full-key order (asc x, desc y); the outer
+    // subset key `x` re-sorts them and, on `x`-ties, invents an ascending `y` tie-break that
+    // OVERRIDES the slice's `desc y` order — exactly the nested order-over-order divergence, but the
+    // observed child is an `ExactOrderedSlice`. Rejected by Rule 1 (now matches sliced children too).
+    let inner_full = Query::OrderBy(OrderBy {
+        ordering: vec![
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+            OrderTemplate { variable: "y".into(), order: Order::Desc },
+        ],
+        query: Box::new(two_column_xy_bgp()),
+    });
+    let sliced = Query::Limit(Limit { limit: 2, query: Box::new(inner_full) });
+    let outer = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        query: Box::new(sliced),
+    });
+    reject(outer, BgpPlanError::OrderBySubsetKeyUnderObservation);
+}
+
+#[test]
+fn observable_supported_order_shapes_still_compile() {
+    // POSITIVE / no-regression. A BARE subset-key order (unsliced, unnested) compiles: WOQL leaves
+    // the tie order unspecified, so the compiler picking one valid total order is faithful.
+    let bare_subset = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Asc }],
+        query: Box::new(two_column_xy_bgp()),
+    }))
+    .unwrap();
+    assert!(bare_subset.order_invented_tiebreak); // subset -> invented tie-break recorded
+    assert!(matches!(
+        bare_subset.relation.statement,
+        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { .. }
+    ));
+
+    // A FULL-key order (every column named) compiles and records NO invented tie-break.
+    let full_key = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+            OrderTemplate { variable: "y".into(), order: Order::Desc },
+        ],
+        query: Box::new(two_column_xy_bgp()),
+    }))
+    .unwrap();
+    assert!(!full_key.order_invented_tiebreak);
+
+    // A FULL-key order UNDER a slice compiles — no invented tie-break, so nothing observable diverges.
+    let full_key_sliced = plan_bgp(&Query::Limit(Limit {
+        limit: 1,
+        query: Box::new(Query::OrderBy(OrderBy {
+            ordering: vec![
+                OrderTemplate { variable: "x".into(), order: Order::Asc },
+                OrderTemplate { variable: "y".into(), order: Order::Desc },
+            ],
+            query: Box::new(two_column_xy_bgp()),
+        })),
+    }))
+    .unwrap();
+    assert!(full_key_sliced.relation.as_exact_ordered_slice().is_some());
+}
+
 fn exact_order_query_for_slice() -> Query {
     Query::OrderBy(OrderBy {
         ordering: vec![OrderTemplate {
@@ -7244,6 +7371,7 @@ fn ordered_list_walk_bgp(subject: &str, predicate: &str) -> CompiledBgp {
         collection: None,
         count_variable: None,
         full_row_distinct: false,
+        order_invented_tiebreak: false,
     }
 }
 

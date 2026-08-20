@@ -107,6 +107,7 @@ pub(crate) fn plan_eval_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPl
             collection,
             count_variable: None,
             full_row_distinct: false,
+            order_invented_tiebreak: false,
         }));
     }
 
@@ -147,6 +148,7 @@ pub(crate) fn plan_eval_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPl
         collection,
         count_variable: None,
         full_row_distinct: false,
+        order_invented_tiebreak: false,
     }))
 }
 
@@ -603,6 +605,7 @@ pub(crate) fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, B
             collection,
             count_variable: None,
             full_row_distinct: false,
+            order_invented_tiebreak: false,
         }));
     }
 
@@ -656,6 +659,7 @@ pub(crate) fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, B
         collection,
         count_variable: None,
         full_row_distinct: false,
+        order_invented_tiebreak: false,
     }))
 }
 

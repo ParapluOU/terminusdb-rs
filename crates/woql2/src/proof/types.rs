@@ -36,6 +36,16 @@ pub struct CompiledBgp {
     /// BGP schema. Full natural-join assignments over set-valued triple relations are
     /// already unique; subset/projection distinctness still requires a dedup argument.
     pub full_row_distinct: bool,
+    /// True when an `OrderBy` lowering named FEWER keys than the relation's columns and the
+    /// planner appended the remaining columns as an INVENTED ascending tie-break to satisfy
+    /// the store gadget's total-order contract (see `plan_exact_scalar_order`). SWI
+    /// `order_by/2` leaves rows tying on the named keys in `findall` enumeration order, so the
+    /// invented tie-break only stays FAITHFUL while it is unobservable (a bare, unsliced,
+    /// unnested order). This flag lets the slice planner reject-close the observable-divergent
+    /// cases (a `Start`/`Limit`/`Once` over such an order). Purely compiler-internal planning
+    /// metadata: it does NOT alter the emitted relation statement and is deliberately NOT
+    /// folded into the query digest, so accepted queries keep byte-identical digests.
+    pub order_invented_tiebreak: bool,
 }
 
 #[derive(Clone, Debug)]

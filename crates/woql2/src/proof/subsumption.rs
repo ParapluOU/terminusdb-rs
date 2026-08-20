@@ -212,6 +212,7 @@ pub(crate) fn plan_isa(
         collection,
         count_variable,
         full_row_distinct: false,
+        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -262,6 +263,7 @@ pub(crate) fn build_subsumption_closure(
         collection,
         count_variable,
         full_row_distinct,
+        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -332,6 +334,7 @@ pub(crate) fn build_subsumption_membership_gate(
         collection,
         count_variable,
         full_row_distinct,
+        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)

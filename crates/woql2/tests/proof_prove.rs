@@ -10776,6 +10776,7 @@ fn ordered_list_walk_compiled(subject: &str, predicate: &str) -> CompiledBgp {
         collection: None,
         count_variable: None,
         full_row_distinct: false,
+        order_invented_tiebreak: false,
     }
 }
 
