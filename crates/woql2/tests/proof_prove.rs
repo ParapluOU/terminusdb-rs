@@ -1190,6 +1190,86 @@ fn ordered_executor_delivery_is_positional() {
         .spawn(assert_ordered_executor_delivery_is_positional).unwrap().join().unwrap();
 }
 
+// SOUNDNESS: an order-attesting relation wrapped by a POSITION-PRESERVING unary wrapper (here an
+// `Eval` per-row map over an `OrderBy`) still fixes the exact row order, so the executor must deliver
+// rows POSITIONALLY. Before the recursive `relation_attests_order` fix the top statement (`Eval`) was
+// not an exact-order variant, so both sides were sorted (multiset), and a PERMUTED delivery of the
+// ordered result verified — a soundness hole. This test pins that the correct order is accepted and
+// the reversed delivery is rejected. Uses the EVAL wrapper (Eval adds a generated value column, so
+// `verify_executed_values` is the right boundary).
+fn assert_ordered_under_position_preserving_wrapper_is_positional() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for value in [5u32, 3] {
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri("m"), &iri("score"), u32::make_entry(&value)))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let root = layer.resolution_root();
+    // Dictionary id of a committed UInt32 value object.
+    let vid = |v: u32| {
+        layer
+            .node_value_catalog
+            .iter()
+            .find(|record| matches!(&record.triple.object,
+                CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, lexical }
+                    if u32::from_be_bytes(lexical.as_slice().try_into().unwrap()) == v))
+            .map(|record| record.object_id)
+            .unwrap()
+    };
+    let bgp = || and_of(vec![tv_subj_const("m", "score", "score"), gte(dvar("score"), duint(0))]);
+
+    // `And(OrderBy([score ASC], BGP[score]), Eval(score + 0, r))`. `plan_eval_form` extracts the Eval
+    // and compiles the remaining `OrderBy` as the operand-binding child, so the compiled top statement
+    // is `Eval` wrapping an `ExactScalarOrder` — a position-preserving map over an exact order.
+    let query = and_of(vec![
+        Query::OrderBy(OrderBy {
+            ordering: vec![OrderTemplate { variable: "score".into(), order: Order::Asc }],
+            query: Box::new(bgp()),
+        }),
+        Query::Eval(Eval {
+            expression: ea_plus(ea_var("score"), ea_lit(XSDAnySimpleType::Int(0))),
+            result_value: ArithmeticValue::Variable("r".into()),
+        }),
+    ]);
+    let compiled = plan_bgp(&query).unwrap();
+    // Top statement is `Eval` over `ExactScalarOrder`.
+    match &compiled.relation.statement {
+        CompiledRelationStatement::Eval { input, .. } => assert!(matches!(
+            input.statement,
+            CompiledRelationStatement::ExactScalarOrder { .. }
+        )),
+        other => panic!("expected Eval over ExactScalarOrder, got {other:?}"),
+    }
+
+    let proved = compiled.prove(&layer).unwrap();
+    // Proven schema is [score, r]; ordered ascending by score the rows are (3, 3) then (5, 5), where
+    // r = score + 0 is the generated integer column.
+    let ordered_delivery = &[
+        vec![ExecutedResultValue::Id(vid(3)), ExecutedResultValue::GeneratedDecimalI64(3)],
+        vec![ExecutedResultValue::Id(vid(5)), ExecutedResultValue::GeneratedDecimalI64(5)],
+    ];
+    proved
+        .verify_executed_values(&compiled, &layer, root, &["score".into(), "r".into()], ordered_delivery)
+        .unwrap();
+    // PART B: the PERMUTED (reversed) delivery is REJECTED now that the wrapper-over-order is
+    // classified as order-attesting (was accepted pre-fix via multiset comparison).
+    let reversed_delivery = &[
+        vec![ExecutedResultValue::Id(vid(5)), ExecutedResultValue::GeneratedDecimalI64(5)],
+        vec![ExecutedResultValue::Id(vid(3)), ExecutedResultValue::GeneratedDecimalI64(3)],
+    ];
+    assert!(proved
+        .verify_executed_values(&compiled, &layer, root, &["score".into(), "r".into()], reversed_delivery)
+        .is_err());
+}
+
+#[test]
+fn ordered_under_position_preserving_wrapper_is_positional() {
+    std::thread::Builder::new().name("woql-ordered-wrapper-positional".into()).stack_size(256 * 1024 * 1024)
+        .spawn(assert_ordered_under_position_preserving_wrapper_is_positional).unwrap().join().unwrap();
+}
+
 fn assert_bounded_when_success_plus_true_e2e() {
     let store = open_sync_memory_store();
     let builder = store.create_base_layer().unwrap();

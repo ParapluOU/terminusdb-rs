@@ -18,7 +18,8 @@ pub(crate) fn plan_exact_scalar_order(
     let child = plan_bgp(&order_by.query)?;
     // The audited Store order gadgets (`ExactScalarOrder`/`ExactMultiOrder`) prove a full-row
     // permutation over one-to-three columns, so the inner BGP must expose a bare, non-projected,
-    // non-aggregated relation of arity 1..=3. The template may name only a SUBSET of those columns.
+    // non-aggregated relation of arity 1..=3. The template must name EVERY column (a FULL-key order);
+    // a subset template is reject-closed below (its invented tie order would not be attestable).
     if child.projection.is_some()
         || child.count_variable.is_some()
         || child.full_row_distinct
@@ -50,14 +51,12 @@ pub(crate) fn plan_exact_scalar_order(
     if named_indices.len() < child.relation.schema.len() {
         return Err(BgpPlanError::OrderBySubsetKeyUnsupported);
     }
-    // TOTAL-ORDER TIE-BREAK. SWI `order_by/2` leaves rows that agree on every named key in
-    // `findall/3` enumeration order — an implementation artefact, not a bindable property of the
-    // answer set. We canonicalise it: append EVERY column the template did not name as an ascending
-    // secondary key, in canonical schema order. The result is a deterministic lexicographic total
-    // order over the complete row, so a wrong tie-break (swapping two rows equal on all named keys
-    // but differing elsewhere) breaks the proven nondecreasing chain and the proof is rejected.
-    // `key_indices` is thus an exact permutation of `0..schema.len()` by construction, which is
-    // exactly the contract the Store `ExactMultiOrder` gadget requires.
+    // FULL-key order. The subset guard above guarantees the template names every column, so
+    // `named_indices` is already a permutation of `0..schema.len()` and the append loop below is a
+    // defensive no-op (there are no unnamed columns to fold in). It is kept so `key_indices` is
+    // provably a full permutation over the complete row — exactly the contract the Store
+    // `ExactMultiOrder` gadget requires — and stays correct if the guard is ever relaxed. The
+    // resulting deterministic lexicographic total order matches TerminusDB's `order_by/2` exactly.
     let mut key_indices = named_indices.clone();
     let mut directions = order_by.ordering.iter().map(|ordering| match ordering.order {
         crate::order::Order::Asc => OrderDirection::Ascending,

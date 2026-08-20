@@ -29,15 +29,48 @@ fn expect_resolution_root(
     Ok(view.state.commitment_root)
 }
 
-/// True when the compiled relation attests a specific row ORDER (OrderBy / ordered slice), so the
-/// executor's rows must match the proven order positionally, not merely as a multiset.
+/// True iff the relation attests a specific row ORDER — an exact OrderBy/ordered-slice, possibly
+/// beneath a spine of POSITION-PRESERVING wrappers (per-row maps and order-preserving filters, which
+/// emit their child's rows in the child's order). The executor must then deliver rows positionally.
+/// Order-DESTROYING nodes (joins, bag-union, distinct, aggregates, closures, walks) and plain leaves
+/// return false, so genuine bags keep multiset comparison. Recursing bottoms out at `false` for a
+/// leaf, so a filtered/mapped BAG (no order at the spine bottom) is still classified unordered — this
+/// only newly RECOGNIZES orders hidden under wrappers, it never over-rejects a bag.
+///
+/// Position-preservation of every recursed wrapper was verified against its prover:
+///   - the per-row value maps (`Eval`/`FloorEval`/`RationalArith`/`Typecast`/the two
+///     number/string casts/`Concat`/`Join`/`Substring`/`Pad`/`HashKey`/`CalendarInt`/`CalendarDate`)
+///     each reuse the child's result columns verbatim (or append exactly one derived column) with
+///     `result_len = child.result_len` (see the `prove_*_relation` helpers in `prove_entry.rs`), so
+///     the output row order IS the child's;
+///   - the filters (`Equality`/`TupleDisequality`, and the generated-column
+///     `GeneratedU64Filter`/`GeneratedI64Filter`) keep a SUBSEQUENCE in the child's relative order —
+///     the store's `filter::compact_columns` copies surviving rows into a dense prefix in ASCENDING
+///     input-row order, and the woql2 generated-column filters push kept rows in ascending row order;
+///   - `BagProjection` index-selects columns, keeping every row in the child's order.
 fn relation_attests_order(statement: &CompiledRelationStatement) -> bool {
-    matches!(
-        statement,
-        CompiledRelationStatement::ExactScalarOrder { .. }
-            | CompiledRelationStatement::ExactMultiOrder { .. }
-            | CompiledRelationStatement::ExactOrderedSlice { .. }
-    )
+    use CompiledRelationStatement::*;
+    match statement {
+        // Direct order attestation.
+        ExactScalarOrder { .. } | ExactMultiOrder { .. } | ExactOrderedSlice { .. } => true,
+        // POSITION-PRESERVING unary wrappers: output row order == input row order. Recurse.
+        // Per-row value maps (append/replace a column row-for-row, never reorder/filter/dedup):
+        Eval { input, .. } | FloorEval { input, .. } | RationalArith { input, .. }
+        | Typecast { input, .. } | TypecastNumberToString { input, .. }
+        | TypecastStringToNumber { input, .. } | Concat { input, .. } | Join { input, .. }
+        | Substring { input, .. } | Pad { input, .. } | HashKey { input, .. }
+        | CalendarInt { input, .. } | CalendarDate { input, .. }
+        // Order-preserving filters (keep a subsequence in the child's relative order):
+        | Equality { input, .. } | TupleDisequality { input, .. }
+        | GeneratedU64Filter { input, .. } | GeneratedI64Filter { input, .. }
+        // Column projection without dedup/reorder:
+        | BagProjection { input, .. } => relation_attests_order(&input.statement),
+        // Everything else is order-DESTROYING or a leaf/scalar: false.
+        // (Bgp, LayerTripleCount, BagUnion, Distinct, When, LeftAnti, InnerJoin, CrossRootHashJoin,
+        //  LeftOuter, GroupExtrema, GroupSum, GroupCount, CollectionCount, CollectionSum,
+        //  CollectionExtrema, TransitiveClosure*, OrderedListWalk, OrderedArrayWalk.)
+        _ => false,
+    }
 }
 
 impl ProvedBgp {
