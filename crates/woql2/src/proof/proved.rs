@@ -29,6 +29,17 @@ fn expect_resolution_root(
     Ok(view.state.commitment_root)
 }
 
+/// True when the compiled relation attests a specific row ORDER (OrderBy / ordered slice), so the
+/// executor's rows must match the proven order positionally, not merely as a multiset.
+fn relation_attests_order(statement: &CompiledRelationStatement) -> bool {
+    matches!(
+        statement,
+        CompiledRelationStatement::ExactScalarOrder { .. }
+            | CompiledRelationStatement::ExactMultiOrder { .. }
+            | CompiledRelationStatement::ExactOrderedSlice { .. }
+    )
+}
+
 impl ProvedBgp {
     pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
         match &self.statement {
@@ -2018,9 +2029,11 @@ impl ProvedBgp {
     }
 
     /// Verify rows produced by the ordinary WOQL executor against this proof. The
-    /// executor supplies Store dictionary IDs in its public variable order. WOQL BGP
-    /// results are unordered, so comparison is an exact row-multiset comparison after
-    /// both sides resolve through the authenticated dictionary.
+    /// executor supplies Store dictionary IDs in its public variable order, resolved
+    /// through the authenticated dictionary. For an UNORDERED (bag/set) relation the
+    /// comparison is an exact row-multiset comparison. For an EXACT-ORDER relation
+    /// (`OrderBy` / ordered-slice) the proof fixes the exact row order, so the executor's
+    /// rows are compared POSITIONALLY (in the proven order, no sort).
     pub fn verify_executed_rows(
         &self,
         compiled: &CompiledBgp,
@@ -2130,13 +2143,25 @@ impl ProvedBgp {
             })
             .collect();
 
-        expected_rows.sort();
-        delivered_rows.sort();
-        if expected_rows != delivered_rows {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "ordinary WOQL result rows do not match the proven result multiset",
-            ));
+        if relation_attests_order(&compiled.relation.statement) {
+            // ORDER-ATTESTING: the proof fixes the exact row order; the executor must deliver it in
+            // that order. Compare positionally (lengths already constrained above by result_len/rows.len()).
+            if expected_rows != delivered_rows {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary WOQL ordered result rows do not match the proven result order",
+                ));
+            }
+        } else {
+            // UNORDERED (bag/set) relation: order is not attested, so compare as a multiset.
+            expected_rows.sort();
+            delivered_rows.sort();
+            if expected_rows != delivered_rows {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary WOQL result rows do not match the proven result multiset",
+                ));
+            }
         }
         Ok(())
     }
@@ -2237,13 +2262,32 @@ impl ProvedBgp {
                     .collect()
             })
             .collect();
-        expected_rows.sort();
-        delivered_rows.sort();
-        if expected_rows != delivered_rows {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "ordinary WOQL nullable rows do not match the proven result multiset",
-            ));
+        if relation_attests_order(&compiled.relation.statement) {
+            // ORDER-ATTESTING: the proof fixes the exact row order; the executor must deliver it in
+            // that order. Compare positionally (no sort). There is no explicit equal-length check on
+            // this nullable path, so guard the row count before the positional element comparison.
+            if expected_rows.len() != delivered_rows.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary WOQL ordered nullable rows do not match the proven result row count",
+                ));
+            }
+            if expected_rows != delivered_rows {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary WOQL ordered nullable rows do not match the proven result order",
+                ));
+            }
+        } else {
+            // UNORDERED (bag/set) relation: order is not attested, so compare as a multiset.
+            expected_rows.sort();
+            delivered_rows.sort();
+            if expected_rows != delivered_rows {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ordinary WOQL nullable rows do not match the proven result multiset",
+                ));
+            }
         }
         Ok(())
     }

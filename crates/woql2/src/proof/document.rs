@@ -767,7 +767,6 @@ fn ordered_list_walk_bgp(subject_iri: &[u8], predicate_iri: &[u8]) -> CompiledBg
         collection: None,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }
 }
 
@@ -791,7 +790,6 @@ fn ordered_array_walk_bgp(subject_iri: &[u8], predicate_iri: &[u8]) -> CompiledB
         collection: None,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }
 }
 

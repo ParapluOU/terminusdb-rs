@@ -1144,7 +1144,6 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
         collection: path_collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1239,7 +1238,6 @@ pub(crate) fn plan_single_hop_wildcard(
         collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1433,7 +1431,6 @@ pub(crate) fn plan_transitive_closure_path(
         collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1531,7 +1528,6 @@ pub(crate) fn plan_all_pairs_closure(
         collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1644,7 +1640,6 @@ pub(crate) fn plan_all_pairs_compound_closure(
         collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1764,7 +1759,6 @@ pub(crate) fn plan_both_bound_closure(
         collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)
@@ -1939,7 +1933,6 @@ pub(crate) fn plan_compound_closure(
         collection,
         count_variable,
         full_row_distinct,
-        order_invented_tiebreak: false,
     };
     validate_compiled_structure(&compiled.relation)?;
     Ok(compiled)

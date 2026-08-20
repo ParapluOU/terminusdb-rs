@@ -114,7 +114,6 @@ pub(crate) fn plan_concat_form(query: &Query) -> Result<Option<CompiledBgp>, Bgp
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -284,7 +283,6 @@ pub(crate) fn plan_join_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPl
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -454,7 +452,6 @@ pub(crate) fn plan_substring_form(query: &Query) -> Result<Option<CompiledBgp>, 
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -621,7 +618,6 @@ pub(crate) fn plan_pad_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPla
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -712,7 +708,6 @@ pub(crate) fn plan_hashkey_form(query: &Query) -> Result<Option<CompiledBgp>, Bg
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 

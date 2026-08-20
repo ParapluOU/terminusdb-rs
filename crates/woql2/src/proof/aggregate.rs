@@ -122,7 +122,6 @@ pub(crate) fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBg
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -225,7 +224,6 @@ pub(crate) fn plan_collection_extrema_form(query: &Query) -> Result<Option<Compi
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -490,7 +488,6 @@ pub(crate) fn plan_collection_sum_form(query: &Query) -> Result<Option<CompiledB
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -582,7 +579,6 @@ pub(crate) fn plan_collection_count_form(query: &Query) -> Result<Option<Compile
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -719,7 +715,6 @@ pub(crate) fn plan_group_count_form(query: &Query) -> Result<Option<CompiledBgp>
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 
@@ -892,7 +887,6 @@ pub(crate) fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, 
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }))
 }
 

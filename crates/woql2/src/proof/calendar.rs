@@ -111,7 +111,6 @@ pub(crate) fn build_calendar_int(
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     })
 }
 
@@ -149,7 +148,6 @@ pub(crate) fn build_calendar_date(
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     })
 }
 

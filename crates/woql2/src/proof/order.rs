@@ -40,32 +40,15 @@ pub(crate) fn plan_exact_scalar_order(
     if distinct.len() != named_indices.len() {
         return Err(BgpPlanError::OrderByUnsupportedShape);
     }
-    // A SUBSET template (fewer named keys than columns) forces the invented ascending tie-break
-    // below. That tie-break DIVERGES from SWI `order_by/2` (which leaves rows tying on the named
-    // keys in `findall` enumeration order) the moment the tie order becomes OBSERVABLE. We
-    // reject-close the two observable shapes: (1) NESTED — an order over an order, where the inner
-    // order IS the bindable tie order that the invented ascending key would silently override
-    // (rejected here); (2) SLICED — a `Start`/`Limit`/`Once` over such an order, which selects a
-    // specific row set depending on the invented tie order (rejected in `plan_exact_ordered_slice`
-    // via the `order_invented_tiebreak` flag threaded onto the result). A BARE, unsliced, unnested
-    // subset-key order stays SOUND (WOQL leaves the tie order unspecified, so picking one valid
-    // total order is faithful). The long-term full-support path is a stable-sort proof that carries
-    // the authenticated input ordinal as the final tie-break key (out of scope here).
-    let invented_tiebreak = named_indices.len() < child.relation.schema.len();
-    if invented_tiebreak
-        && matches!(
-            child.relation.statement,
-            CompiledRelationStatement::ExactScalarOrder { .. }
-                | CompiledRelationStatement::ExactMultiOrder { .. }
-                // A SLICED child (`ExactOrderedSlice`) carries a bindable full-key order too — the
-                // slice planner (Rule 2) only lets a slice through over a NON-invented (full-key)
-                // order, so its output row order is a faithful, Prolog-matching total order. An
-                // outer SUBSET-key order over it invents an ascending tie-break that overrides that
-                // order on ties, exactly as the nested order-over-order case does. Reject-close it.
-                | CompiledRelationStatement::ExactOrderedSlice { .. }
-        )
-    {
-        return Err(BgpPlanError::OrderBySubsetKeyUnderObservation);
+    // MAXIMUM ORDER ATTESTATION: a SUBSET-key OrderBy (fewer named keys than columns) would force
+    // an INVENTED ascending tie-break over the unnamed columns. That invented tie order cannot be
+    // attested against TerminusDB (SWI order_by/2 leaves rows tying on the named keys in findall
+    // enumeration order, an implementation artefact our committed triple store does not expose).
+    // Rather than attest a tie order we cannot prove, we reject-close EVERY subset-key order. Only
+    // a FULL-key order (every column named) — a deterministic total order that matches TerminusDB
+    // exactly — is attested. Long-term lift: a stable-sort proof carrying an authenticated input ordinal.
+    if named_indices.len() < child.relation.schema.len() {
+        return Err(BgpPlanError::OrderBySubsetKeyUnsupported);
     }
     // TOTAL-ORDER TIE-BREAK. SWI `order_by/2` leaves rows that agree on every named key in
     // `findall/3` enumeration order — an implementation artefact, not a bindable property of the
@@ -127,7 +110,6 @@ pub(crate) fn plan_exact_scalar_order(
         collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: invented_tiebreak,
     })
 }
 
@@ -151,13 +133,6 @@ pub(crate) fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, Bgp
     {
         return Err(BgpPlanError::OrderedSliceUnsupportedShape);
     }
-    // A slice over a SUBSET-key order OBSERVES the invented ascending tie-break the order planner
-    // appended (a `Start`/`Limit`/`Once` picks a specific row set that depends on the tie order),
-    // which diverges from SWI `order_by/2`'s `findall`-order tie-break. Reject-close it; the
-    // stable-sort-proof path (authenticated input ordinal as the final key) would lift this.
-    if child.order_invented_tiebreak {
-        return Err(BgpPlanError::OrderBySubsetKeyUnderObservation);
-    }
     let collection = child.collection;
     Ok(CompiledBgp {
         relation: CompiledRelation {
@@ -174,9 +149,6 @@ pub(crate) fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, Bgp
         collection,
         count_variable: None,
         full_row_distinct: false,
-        // Propagate: an accepted slice sits over a non-invented-tiebreak order (Rule 2 above
-        // rejected otherwise), so this is `false` — kept explicit for nested `Start`/`Limit`.
-        order_invented_tiebreak: child.order_invented_tiebreak,
     })
 }
 
@@ -281,7 +253,6 @@ pub(crate) fn compile_ordered_triple_value_scan(
         collection: None,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     })
 }
 
@@ -358,7 +329,6 @@ pub(crate) fn constrain_ordered_triple_value_to_ground(
         collection: compiled.collection,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     })
 }
 
@@ -509,7 +479,6 @@ pub(crate) fn plan_layer_triple_count(
         collection: Some(collection.to_owned()),
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     })
 }
 

@@ -1007,7 +1007,7 @@ fn multikey_order_nested_limit_e2e() {
         .spawn(assert_multikey_order_nested_limit_e2e).unwrap().join().unwrap();
 }
 
-fn assert_subset_order_tiebreak_e2e() {
+fn assert_order_gadget_tamper_negatives_and_subset_reject_e2e() {
     use terminus_store::proof::order::OrderDirection;
     // Base layer: cross product of {x=1, x=2} and {y=3, y=4} — inner BGP schema [x, y], four rows.
     let store = open_sync_memory_store();
@@ -1021,9 +1021,9 @@ fn assert_subset_order_tiebreak_e2e() {
     let layer = builder.commit().unwrap().proof_commitment().unwrap();
     let root = layer.resolution_root();
 
-    // The template names ONLY x; y is appended as an ascending total-order tie-break. Both x values
-    // repeat (each pairs with y in {3,4}), so the tie-break is load-bearing: it fixes the order
-    // WITHIN each x group. This is the case the pre-existing complete-row path rejected closed.
+    // Inner BGP schema [x, y], four rows (cross product). Both x values repeat, so within each x
+    // group the y order is load-bearing — which is exactly why a SUBSET-key order (naming only x)
+    // is reject-closed, and a FULL-key order (naming x AND y) is required to attest the row order.
     let child = || and_of(vec![
         tv_subj_const("left", "x", "x"), gte(dvar("x"), duint(0)),
         tv_subj_const("right", "y", "y"), gte(dvar("y"), duint(0)),
@@ -1032,11 +1032,29 @@ fn assert_subset_order_tiebreak_e2e() {
         ordering: vec![OrderTemplate { variable: var.into(), order: Order::Asc }],
         query: Box::new(child()),
     });
-    let compiled = plan_bgp(&ascending("x")).unwrap();
+    // MAXIMUM ORDER ATTESTATION: a SUBSET-key order (names only x over the two-column [x, y] row)
+    // reject-closes — its ascending tie-break on y is invented and cannot be attested against
+    // TerminusDB's stable order. Only the FULL-key order below is provable.
+    assert!(matches!(
+        plan_bgp(&ascending("x")),
+        Err(BgpPlanError::OrderBySubsetKeyUnsupported)
+    ));
+
+    // FULL-key order over [x, y]: both columns named, a deterministic total order. It proves and
+    // exercises the full-row order gadget's tamper negatives below. `[x ASC, y ASC]` yields exactly
+    // the same rows the folded subset order used to, so every negative below is unchanged.
+    let full_key = |y_dir: Order| Query::OrderBy(OrderBy {
+        ordering: vec![
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+            OrderTemplate { variable: "y".into(), order: y_dir },
+        ],
+        query: Box::new(child()),
+    });
+    let compiled = plan_bgp(&full_key(Order::Asc)).unwrap();
     assert!(matches!(compiled.relation.statement,
         CompiledRelationStatement::ExactMultiOrder { ref key_indices, ref directions, .. }
             if key_indices == &[0, 1] && directions == &[OrderDirection::Ascending; 2]),
-        "subset template must fold y in as an ascending tie-break: full-row order over [x, y]");
+        "full-key [x ASC, y ASC] compiles to a complete-row order over [x, y]");
 
     let proved = compiled.prove(&layer).unwrap();
     let values = proved.verify_and_resolve_values(&compiled, &layer, root).unwrap();
@@ -1054,12 +1072,10 @@ fn assert_subset_order_tiebreak_e2e() {
     let envelope = proved.encode_envelope(&compiled, &layer, root).unwrap();
     decode_and_verify_envelope(&envelope, &compiled, &layer, root).unwrap();
 
-    // ANTI-SUBSTITUTION: the same envelope must not verify under a descending template — the key
-    // direction is folded into both the query digest and the bound sort key.
-    let descending = plan_bgp(&Query::OrderBy(OrderBy {
-        ordering: vec![OrderTemplate { variable: "x".into(), order: Order::Desc }],
-        query: Box::new(child()),
-    })).unwrap();
+    // ANTI-SUBSTITUTION: the same envelope must not verify under a different FULL-key template — the
+    // key direction is folded into both the query digest and the bound sort key. `[x ASC, y DESC]`
+    // differs from the proven `[x ASC, y ASC]` only in the tie-break direction.
+    let descending = plan_bgp(&full_key(Order::Desc)).unwrap();
     assert!(decode_and_verify_envelope(&envelope, &descending, &layer, root).is_err());
 
     // NEGATIVE — TIE-BREAK SWAP: exchange the two x=1 rows (indices 0 and 1). The output stays a
@@ -1106,9 +1122,72 @@ fn assert_subset_order_tiebreak_e2e() {
 }
 
 #[test]
-fn subset_order_tiebreak_e2e() {
-    std::thread::Builder::new().name("woql-subset-order-tiebreak".into()).stack_size(256 * 1024 * 1024)
-        .spawn(assert_subset_order_tiebreak_e2e).unwrap().join().unwrap();
+fn order_gadget_tamper_negatives_and_subset_reject_e2e() {
+    std::thread::Builder::new().name("woql-order-gadget-tamper".into()).stack_size(256 * 1024 * 1024)
+        .spawn(assert_order_gadget_tamper_negatives_and_subset_reject_e2e).unwrap().join().unwrap();
+}
+
+// PART B — MAXIMUM ORDER ATTESTATION at the ordinary-executor boundary. For an ORDER-attesting
+// relation the executor must deliver rows in the PROVEN order: `verify_executed_rows` compares
+// positionally, so a permutation is rejected. For an UNORDERED (bag) relation the SAME permutation
+// is accepted (multiset comparison). Previously both sides sorted before comparing, so a permuted
+// delivery of an ordered result was wrongly accepted.
+fn assert_ordered_executor_delivery_is_positional() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for value in [5u32, 3] {
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri("m"), &iri("score"), u32::make_entry(&value)))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let root = layer.resolution_root();
+    // Dictionary id of a committed UInt32 value object.
+    let vid = |v: u32| {
+        layer
+            .node_value_catalog
+            .iter()
+            .find(|record| matches!(&record.triple.object,
+                CanonicalObject::Value { datatype: CanonicalDatatype::UInt32, lexical }
+                    if u32::from_be_bytes(lexical.as_slice().try_into().unwrap()) == v))
+            .map(|record| record.object_id)
+            .unwrap()
+    };
+    let bgp = || and_of(vec![tv_subj_const("m", "score", "score"), gte(dvar("score"), duint(0))]);
+
+    // ORDERED: OrderBy([score ASC]) over the single-column [score] relation is a FULL-key order, so
+    // it attests the exact ascending order [3, 5].
+    let ordered = plan_bgp(&Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "score".into(), order: Order::Asc }],
+        query: Box::new(bgp()),
+    }))
+    .unwrap();
+    let proved = ordered.prove(&layer).unwrap();
+    // The correct ascending delivery is accepted.
+    proved
+        .verify_executed_rows(&ordered, &layer, root, &["score".into()], &[vec![vid(3)], vec![vid(5)]])
+        .unwrap();
+    // PART B: a permuted delivery of the ordered relation is now REJECTED (was accepted pre-fix).
+    assert!(proved
+        .verify_executed_rows(&ordered, &layer, root, &["score".into()], &[vec![vid(5)], vec![vid(3)]])
+        .is_err());
+
+    // UNORDERED: the same BGP without an OrderBy is a bag — the executor may deliver either order,
+    // so BOTH permutations are accepted (multiset comparison).
+    let bag = plan_bgp(&bgp()).unwrap();
+    let bag_proved = bag.prove(&layer).unwrap();
+    bag_proved
+        .verify_executed_rows(&bag, &layer, root, &["score".into()], &[vec![vid(3)], vec![vid(5)]])
+        .unwrap();
+    bag_proved
+        .verify_executed_rows(&bag, &layer, root, &["score".into()], &[vec![vid(5)], vec![vid(3)]])
+        .unwrap();
+}
+
+#[test]
+fn ordered_executor_delivery_is_positional() {
+    std::thread::Builder::new().name("woql-ordered-executor-positional".into()).stack_size(256 * 1024 * 1024)
+        .spawn(assert_ordered_executor_delivery_is_positional).unwrap().join().unwrap();
 }
 
 fn assert_bounded_when_success_plus_true_e2e() {
@@ -10776,7 +10855,6 @@ fn ordered_list_walk_compiled(subject: &str, predicate: &str) -> CompiledBgp {
         collection: None,
         count_variable: None,
         full_row_distinct: false,
-        order_invented_tiebreak: false,
     }
 }
 

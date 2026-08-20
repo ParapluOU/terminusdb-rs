@@ -248,8 +248,8 @@ pub enum BgpPlanError {
     #[error("OrderBy proof coverage requires one ascending key naming the complete one-column result of a leaf BGP")]
     OrderByUnsupportedShape,
 
-    #[error("a subset-key OrderBy (fewer keys than columns) whose invented ascending tie-break becomes observable — nested under another order, or sliced by Start/Limit/Once — diverges from WOQL's findall-order tie-break and is reject-closed; a bare unsliced subset-key OrderBy is supported")]
-    OrderBySubsetKeyUnderObservation,
+    #[error("a subset-key OrderBy (fewer sort keys than columns) has an invented tie-break that cannot be attested against TerminusDB's stable order; it is reject-closed. Only a full-key OrderBy (every column named) is supported.")]
+    OrderBySubsetKeyUnsupported,
 
     #[error("OrderBy proof coverage currently supports ascending order only")]
     OrderByUnsupportedDirection,
