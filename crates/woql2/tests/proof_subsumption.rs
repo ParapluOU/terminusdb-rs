@@ -560,3 +560,54 @@ fn isa_cross_root_rejects_wrong_root_and_swapped_graphs() {
         );
     });
 }
+
+#[test]
+fn isa_cross_root_rejects_substituted_result_column() {
+    on_big_stack("isa-cross-root-substitution", || {
+        // F1 SOUNDNESS REGRESSION (woql2 layer): `verify_over_graphs_and_resolve` resolves the OUTER
+        // `ProvedBgp::result_columns`, so those MUST be bound to the now-authenticated store
+        // envelope's `result_columns`. A prover that keeps a genuine cross-root envelope but
+        // substitutes a DIFFERENT-but-authenticated id into the OUTER delivered column must now be
+        // REJECTED. Before the fix the woql2 layer resolved the substituted id and returned the WRONG
+        // instance set (the envelope's own `result_columns` were also unauthenticated — the store
+        // half of F1 — but here we tamper only the outer copy to exercise the woql2 binding).
+        let schema = build_schema_layer(&[("A", "B"), ("C", "D")]);
+        let instance = build_typed_instance_layer(&[("x1", "A"), ("x2", "B"), ("x3", "Other")]);
+        let db_root = database_root(&instance.resolution_root(), &schema.resolution_root());
+        let compiled = plan_bgp(&isa("x", "B")).unwrap();
+        let mut proved = compiled.prove_cross_root_layers(&*instance, &*schema).unwrap();
+
+        // The genuine proof verifies and delivers {x1, x2} (no over-rejection).
+        assert_eq!(
+            resolved_instances(
+                &proved
+                    .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                    .unwrap()
+            ),
+            names(&["x1", "x2"]),
+            "genuine ?x isa B still delivers {{x1, x2}}"
+        );
+
+        // Substitute a DIFFERENT-but-authenticated id into row 0 of the delivered `?x` column (reuse
+        // the second row's genuine, dictionary-authenticated id). The store envelope is left intact.
+        assert_eq!(proved.result_len, 2, "?x isa B delivers two rows");
+        assert_ne!(
+            proved.result_columns[0][0], proved.result_columns[0][1],
+            "the two delivered ids differ, so the substitution is a real change"
+        );
+        proved.result_columns[0][0] = proved.result_columns[0][1];
+        assert!(
+            proved
+                .verify_over_graphs_and_resolve(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "a substituted-but-authenticated OUTER result column must now be rejected (F1 woql2 fix)"
+        );
+        // The boolean-verify entry is bound identically.
+        assert!(
+            proved
+                .verify_over_graphs(&compiled, &*instance, &*schema, db_root)
+                .is_err(),
+            "verify_over_graphs must also reject the substituted outer result column"
+        );
+    });
+}

@@ -240,7 +240,22 @@ impl ProvedBgp {
             let plan = relation_proof_plan(&compiled.relation, digest)?;
             return match &self.statement {
                 ProvedQueryStatement::CrossRootHashJoin { envelope } => {
-                    envelope.verify_cross_root(instance, schema, database_root, &plan)
+                    envelope.verify_cross_root(instance, schema, database_root, &plan)?;
+                    // BIND the outer proof node's delivered result to the now-authenticated store
+                    // envelope (mirrors the wholesale-envelope arm at proved.rs ~1785). Without this
+                    // the OUTER `self.result_columns` the WOQL layer trusts are unbound to the proven
+                    // semi-join output, so a prover could substitute authenticated ids after the fact.
+                    if self.result_commitments != envelope.result_commitments
+                        || self.result_columns != envelope.result_columns
+                        || self.result_len != envelope.result_len
+                        || self.result_log_domain != envelope.result_log_domain
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "WOQL cross-root delivered result does not match the proven store envelope",
+                        ));
+                    }
+                    Ok(())
                 }
                 _ => Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -284,6 +299,20 @@ impl ProvedBgp {
             match &self.statement {
                 ProvedQueryStatement::CrossRootHashJoin { envelope } => {
                     envelope.verify_cross_root(instance, schema, database_root, &plan)?;
+                    // BIND the outer `self.result_columns` (resolved below via
+                    // `resolve_typed_result_objects`) to the now-authenticated store envelope
+                    // (mirrors the wholesale-envelope arm at proved.rs ~1785). Otherwise a prover
+                    // could keep a genuine envelope yet deliver substituted authenticated ids.
+                    if self.result_commitments != envelope.result_commitments
+                        || self.result_columns != envelope.result_columns
+                        || self.result_len != envelope.result_len
+                        || self.result_log_domain != envelope.result_log_domain
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "WOQL cross-root delivered result does not match the proven store envelope",
+                        ));
+                    }
                 }
                 _ => {
                     return Err(std::io::Error::new(
