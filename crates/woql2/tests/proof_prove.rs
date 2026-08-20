@@ -8413,6 +8413,22 @@ fn typecast_widening_unsigned_int_to_long_proves_identity() {
 }
 
 #[test]
+fn typecast_xsd_prefixed_long_proves_identity() {
+    // No-regression: the standard `xsd:long` PREFIXED target (not the full IRI) compiles and proves
+    // the same widening identity — the namespace-aware acceptance covers both spellings.
+    let layer = typecast_single_predicate_layer(&[("n1", 100), ("n2", u32::MAX)]);
+    let (compiled, rows) = typecast_rows(&layer, NodeValue::Node("xsd:long".into()));
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Typecast { .. }
+    ));
+    assert_eq!(rows.len(), 2);
+    for (a, r) in rows {
+        assert_eq!(r, i128::from(a));
+    }
+}
+
+#[test]
 fn typecast_unsigned_target_uses_unsigned_namespace_and_proves_identity() {
     // An UNSIGNED target (unsignedLong) delivers the cast column in the U64 namespace.
     // >= 2 rows: a query proof pads to a power of two and requires at least 2 real rows.

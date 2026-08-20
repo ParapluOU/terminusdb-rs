@@ -659,10 +659,11 @@ pub(crate) fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, B
     }))
 }
 
-/// Which NUMBER↔STRING cast a `Typecast` target IRI selects, by XSD local name (the segment after
-/// the last `#`/`:`, covering full-URI, prefixed, and bare-local forms — exactly like
-/// [`canonical_integer_datatype_from_iri`]). Disjoint from the fixed-width integer set that function
-/// recognizes: `integer`/`decimal`/`string` are never fixed-width integers.
+/// Which NUMBER↔STRING cast a `Typecast` target IRI selects, recognized ONLY in the XSD namespace
+/// (the full `http://www.w3.org/2001/XMLSchema#<local>` IRI or the standard `xsd:<local>` prefix
+/// form — see [`xsd_local_name`]), exactly like [`canonical_integer_datatype_from_iri`]. Disjoint
+/// from the fixed-width integer set that function recognizes: `integer`/`decimal`/`string` are never
+/// fixed-width integers.
 pub(crate) enum CastStringTarget {
     /// target `xsd:string` — a NUMBER→STRING cast.
     ToString,
@@ -672,8 +673,31 @@ pub(crate) enum CastStringTarget {
     FromStringDecimal,
 }
 
+/// The XSD namespace and its standard `xsd:` prefix — the ONLY forms a `Typecast` target datatype
+/// is accepted in.
+const XSD_NAMESPACE: &str = "http://www.w3.org/2001/XMLSchema#";
+const XSD_PREFIX: &str = "xsd:";
+
+/// Return the XSD *local name* IFF `iri` names a datatype in the XSD namespace — the full
+/// `http://www.w3.org/2001/XMLSchema#<local>` IRI or the standard `xsd:<local>` prefix form — else
+/// `None`.
+///
+/// This mirrors the reference `casting.pl` `typecast/4`, which prefix-expands the target through the
+/// default prefix env — where ONLY `xsd` maps to this namespace (`global_prefixes(xsd,
+/// 'http://www.w3.org/2001/XMLSchema#')`; `xdd` and everything else map elsewhere) — and then
+/// requires an EXACT `base_type/1` match, raising `unknown_type_casting_error` otherwise. A bare
+/// local name (no namespace) and ANY foreign namespace never expand into XSD, so they reject.
+///
+/// It replaces the previous namespace-blind `rsplit(['#', ':'])` local-name extraction, which
+/// wrongly accepted an arbitrary-namespace IRI such as `https://attacker.example/types#long` as
+/// `xsd:long` (F3).
+fn xsd_local_name(iri: &str) -> Option<&str> {
+    iri.strip_prefix(XSD_NAMESPACE)
+        .or_else(|| iri.strip_prefix(XSD_PREFIX))
+}
+
 pub(crate) fn cast_string_target_from_iri(iri: &str) -> Option<CastStringTarget> {
-    let local = iri.rsplit(['#', ':']).next().unwrap_or(iri);
+    let local = xsd_local_name(iri)?;
     Some(match local {
         "string" => CastStringTarget::ToString,
         "integer" => CastStringTarget::FromStringInteger,
@@ -804,14 +828,16 @@ pub(crate) fn resolve_typecast_source(
     Ok((index, datatype))
 }
 
-/// Map a target type IRI (full `http://www.w3.org/2001/XMLSchema#long`, prefixed `xsd:long`, or a
-/// bare local name) to its fixed-width integer [`CanonicalDatatype`], or `None` for any
-/// non-fixed-width-integer type (string/float/decimal, `xsd:integer` arbitrary precision, the
-/// `positiveInteger`/`nonNegativeInteger`/… derived unbounded types, or an unknown IRI). Reject
-/// closed on `None`: only the eight order-preserving fixed-width integer widths are provable.
+/// Map a target type IRI IN THE XSD NAMESPACE (the full `http://www.w3.org/2001/XMLSchema#long` IRI
+/// or the standard prefixed `xsd:long` form — see [`xsd_local_name`]) to its fixed-width integer
+/// [`CanonicalDatatype`], or `None` for any non-fixed-width-integer type (string/float/decimal,
+/// `xsd:integer` arbitrary precision, the `positiveInteger`/`nonNegativeInteger`/… derived unbounded
+/// types), a bare local name, a foreign namespace, or an unknown IRI. Reject closed on `None`: only
+/// the eight order-preserving fixed-width integer widths in the XSD namespace are provable.
 pub(crate) fn canonical_integer_datatype_from_iri(iri: &str) -> Option<CanonicalDatatype> {
-    // The local name is the segment after the last '#' or ':' separator (covers all three forms).
-    let local = iri.rsplit(['#', ':']).next().unwrap_or(iri);
+    // Only a datatype in the XSD namespace (full IRI or `xsd:` prefix) is a candidate; a bare local
+    // name or foreign namespace rejects, matching casting.pl's prefix-expand + `base_type/1` match.
+    let local = xsd_local_name(iri)?;
     Some(match local {
         "byte" => CanonicalDatatype::Int8,
         "short" => CanonicalDatatype::Int16,

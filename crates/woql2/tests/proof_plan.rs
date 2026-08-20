@@ -6075,6 +6075,79 @@ fn typecast_string_to_float_target_rejects_closed() {
     );
 }
 
+/// An arbitrary-namespace (non-XSD) type IRI with the given local name.
+fn foreign_type(name: &str) -> NodeValue {
+    NodeValue::Node(format!("https://attacker.example/types#{name}"))
+}
+
+/// The standard `xsd:<local>` PREFIXED form (the well-known `xsd` prefix, not the full IRI).
+fn xsd_prefixed_type(name: &str) -> NodeValue {
+    NodeValue::Node(format!("xsd:{name}"))
+}
+
+#[test]
+fn typecast_foreign_namespace_datatype_reject_closes() {
+    // F3: an arbitrary-namespace IRI whose LOCAL NAME happens to be a known XSD type must NOT be
+    // accepted as that XSD type. casting.pl prefix-expands the target (only `xsd` maps to the XSD
+    // namespace) then requires an EXACT `base_type/1` match, raising `unknown_type_casting_error`
+    // otherwise — so a foreign namespace must reject-close here (was wrongly accepted by the
+    // namespace-blind `rsplit(['#', ':'])`). Integer path: `#long`.
+    reject(
+        typecast_query(foreign_type("long"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "https://attacker.example/types#long".into(),
+        },
+    );
+    // Number↔string path: `#string`.
+    reject(
+        typecast_unpinned_query(foreign_type("string"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "https://attacker.example/types#string".into(),
+        },
+    );
+    // Number↔string path: `#integer`.
+    reject(
+        typecast_unpinned_query(foreign_type("integer"), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "https://attacker.example/types#integer".into(),
+        },
+    );
+}
+
+#[test]
+fn typecast_bare_local_name_datatype_reject_closes() {
+    // A bare local name (no namespace) does not expand into the XSD namespace under casting.pl's
+    // prefix env, so it is NOT a `base_type` — reject-close. (The old namespace-blind rsplit wrongly
+    // accepted it.)
+    reject(
+        typecast_query(NodeValue::Node("long".into()), "r"),
+        BgpPlanError::TypecastUnsupportedTarget { iri: "long".into() },
+    );
+    reject(
+        typecast_unpinned_query(NodeValue::Node("string".into()), "r"),
+        BgpPlanError::TypecastUnsupportedTarget {
+            iri: "string".into(),
+        },
+    );
+}
+
+#[test]
+fn typecast_xsd_prefixed_target_compiles() {
+    // The standard `xsd:<local>` prefix form is accepted exactly like the full XSD IRI (casting.pl
+    // expands `xsd` to the XSD namespace). Integer path: `xsd:long`.
+    let compiled = plan_bgp(&typecast_query(xsd_prefixed_type("long"), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::Typecast { .. }
+    ));
+    // Number↔string path: `xsd:string`.
+    let compiled = plan_bgp(&typecast_query(xsd_prefixed_type("string"), "r")).unwrap();
+    assert!(matches!(
+        compiled.relation.statement,
+        CompiledRelationStatement::TypecastNumberToString { .. }
+    ));
+}
+
 #[test]
 fn typecast_numeric_source_to_integer_rejects_closed() {
     // A source PINNED to a fixed-width integer (UInt32) cast to xsd:integer would be a string→number
