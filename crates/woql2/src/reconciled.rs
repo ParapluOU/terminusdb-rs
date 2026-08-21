@@ -48,10 +48,11 @@ use terminus_store::proof::query::{
 };
 use terminus_store::proof::reconcile::{
     decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read,
-    prove_read_group_count_bgp, prove_read_bgp, prove_read_order_bgp, verify_and_resolve_bgp,
-    verify_and_resolve_delta_read, verify_and_resolve_group_count_bgp, verify_and_resolve_order_bgp,
-    verify_read_bgp, DeltaReadProof, DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult,
-    PresentScalarOrderProof, PresentTerm, ReconcileProof,
+    prove_read_group_count_bgp, prove_read_group_sum_bgp, prove_read_bgp, prove_read_order_bgp,
+    verify_and_resolve_bgp, verify_and_resolve_delta_read, verify_and_resolve_group_count_bgp,
+    verify_and_resolve_group_sum_bgp, verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof,
+    DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult, PresentScalarOrderProof,
+    PresentTerm, ReconcileProof,
 };
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
@@ -103,13 +104,21 @@ struct OrderSpec {
 /// left-deep join plan, the route (uniform column source), and an optional single-column full-key
 /// numeric `OrderBy` over the materialized present. Re-derivable from a `&Query` by both prover and
 /// verifier, so it is the anti-substitution binding.
-/// Which per-group aggregate a reconciled `GroupBy` computes over the materialized present. This
-/// slice ships `Count` (per-group cardinality, no value-authentication); `Sum`/`Min`/`Max` extend
-/// it with a numeric value column.
+/// Which per-group aggregate a reconciled `GroupBy` computes over the materialized present. `Count`
+/// is cardinality-based (no value-authentication); `Sum` sums the C2a value↔term-authenticated
+/// numeric value column per group under the base path's fixed-width bounded accumulator. `Min`/`Max`
+/// extend `Sum`'s value discipline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GroupAgg {
     /// `GroupBy(keys, ..) + Length` — the per-group solution count.
     Count,
+    /// `GroupBy(keys, ..) + Sum(value)` — the per-group numeric sum over the authenticated value
+    /// column (`value_column` indexes the child schema; `datatype` is the pinned fixed-width
+    /// integral datatype, float excluded).
+    Sum {
+        value_column: usize,
+        datatype: CanonicalDatatype,
+    },
 }
 
 /// A single-/multi-key `GroupBy` aggregate over the reconciled materialized present, recomputed by
@@ -150,11 +159,12 @@ enum ReadProofInner {
     /// present-BGP proof's chain-authenticated `result_len` (delivered via [`verify_read_bgp`]),
     /// so no additional aggregate gadget is carried.
     Count { reconcile: ReconcileProof, bgp: PresentBgpProof },
-    /// `GroupCount(BGP)` over the reconciled materialized present. The store bundle is the SAME
-    /// reconcile + present-BGP pair as [`ReadProofInner::Present`] (the child rows are delivered in
-    /// `result` for authentication); the per-group counts are recomputed by the verifier over the
-    /// root-authenticated resolved child rows, so no additional aggregate gadget is carried.
-    GroupCount { reconcile: ReconcileProof, bgp: PresentBgpProof },
+    /// A `GroupBy` aggregate (`Count`/`Sum`/…) over the reconciled materialized present. The store
+    /// bundle is the SAME reconcile + present-BGP pair as [`ReadProofInner::Present`] (the child
+    /// rows are delivered in `result` for authentication); the per-group aggregate is recomputed by
+    /// the verifier over the root-authenticated resolved child rows, so no additional aggregate
+    /// gadget is carried.
+    Group { reconcile: ReconcileProof, bgp: PresentBgpProof },
     /// Single-column full-key numeric `OrderBy` over the reconciled materialized present.
     PresentOrder {
         reconcile: ReconcileProof,
@@ -416,6 +426,39 @@ fn lower_query(query: &Query) -> Result<LoweredBgp, ReconciledReadError> {
         lowered.group = Some(GroupSpec { key_columns: key_columns.clone(), agg: GroupAgg::Count });
         return Ok(lowered);
     }
+    // GROUP-SUM — `GroupBy(keys) + Sum(value)` over the reconciled materialized present. Same
+    // verifier-recompute as GroupCount, but the per-group sum runs over the C2a value↔term-
+    // authenticated numeric VALUE column (never the raw id): `verify_and_resolve_bgp` binds each
+    // resolved value to the head root, and the child BGP's numeric RANGE atom (which pins the value
+    // datatype) enforces datatype-homogeneity — a mixed / non-numeric value column reject-closes
+    // there. The base `plan_group_sum_form` restricts the value datatype to the fixed-width integral
+    // subset (float excluded) and the keys to the Node domain, so a float value / value-keyed
+    // grouping never reaches here. Only the bare GroupSum over a plain leaf BGP over the materialized
+    // present is accepted; a comparison-filtered sum, a composite child, or a delta source
+    // reject-close (fail-closed over coverage).
+    if let CompiledRelationStatement::GroupSum { input, key_columns, value_column, datatype } =
+        &compiled.relation.statement
+    {
+        let plan = input.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
+            "reconciled GroupSum requires a plain leaf BGP child (no distinct/group/order/join composite)",
+        ))?;
+        let mut lowered = lower_plan(plan)?;
+        if lowered.source != ReadSource::Materialized {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled GroupSum is supported only over the materialized present (not delta additions/removals)",
+            ));
+        }
+        if key_columns.is_empty() {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled GroupSum requires at least one group key",
+            ));
+        }
+        lowered.group = Some(GroupSpec {
+            key_columns: key_columns.clone(),
+            agg: GroupAgg::Sum { value_column: *value_column, datatype: *datatype },
+        });
+        return Ok(lowered);
+    }
     // Only a plain leaf BGP maps to the store BGP; every OTHER composite relation
     // (Distinct/GroupBy/join/multi-key-order/…) is out of scope for this path.
     let plan = compiled.relation.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
@@ -469,22 +512,21 @@ pub fn prove_reconciled_read(
     // reconcile + present-BGP pair a plain read produces; the CHILD rows are delivered in `result`
     // for authentication, and the per-group aggregate is recomputed by the verifier.
     if let Some(agg) = group.as_ref().map(|spec| spec.agg) {
-        match agg {
-            GroupAgg::Count => {
-                let (reconcile, bgp, result) = prove_read_group_count_bgp(layers, &atoms, &joins)
-                    .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
-                return Ok(ReconciledReadProof {
-                    inner: ReadProofInner::GroupCount { reconcile, bgp },
-                    result,
-                    atoms,
-                    joins,
-                    source,
-                    order,
-                    count,
-                    group,
-                });
-            }
+        let (reconcile, bgp, result) = match agg {
+            GroupAgg::Count => prove_read_group_count_bgp(layers, &atoms, &joins),
+            GroupAgg::Sum { .. } => prove_read_group_sum_bgp(layers, &atoms, &joins),
         }
+        .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+        return Ok(ReconciledReadProof {
+            inner: ReadProofInner::Group { reconcile, bgp },
+            result,
+            atoms,
+            joins,
+            source,
+            order,
+            count,
+            group,
+        });
     }
     let (inner, result) = match (source, order) {
         // Single-column full-key numeric OrderBy over the reconciled materialized present.
@@ -568,40 +610,56 @@ pub fn verify_and_resolve_reconciled_read(
     // then groups by the authenticated key IRIs). The result is returned COLUMN-major (keys...,
     // aggregate), matching the plain-read resolver convention.
     if let Some(spec) = expected.group.as_ref() {
-        match spec.agg {
-            GroupAgg::Count => {
-                let ReadProofInner::GroupCount { reconcile, bgp } = &proof.inner else {
-                    return Err(ReconciledReadError::QueryShapeMismatch);
-                };
-                let groups = verify_and_resolve_group_count_bgp(
-                    layers,
-                    trusted_head_root,
-                    &expected.atoms,
-                    &expected.joins,
-                    &spec.key_columns,
-                    reconcile,
-                    bgp,
-                    &proof.result.columns,
-                )
-                .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
-                // Column-major output: one key column per group key, plus the per-group count as a
-                // trailing UInt64 cell (the same rendering `Count` uses).
-                let ncols = spec.key_columns.len() + 1;
-                let mut columns: Vec<Vec<CanonicalObject>> = vec![Vec::with_capacity(groups.len()); ncols];
-                for (keys, group_count) in groups {
-                    if keys.len() != spec.key_columns.len() {
-                        return Err(ReconciledReadError::Store(
-                            "reconciled group-count: recomputed group key arity mismatch".to_string(),
-                        ));
-                    }
-                    for (column, key) in columns.iter_mut().zip(keys) {
-                        column.push(key);
-                    }
-                    columns[ncols - 1].push(count_object(group_count as usize));
-                }
-                return Ok(columns);
+        let ReadProofInner::Group { reconcile, bgp } = &proof.inner else {
+            return Err(ReconciledReadError::QueryShapeMismatch);
+        };
+        // Recompute the per-group aggregate over the root-authenticated resolved child rows. Each
+        // group is (resolved key objects, trailing aggregate cell): a `UInt64` count, or the
+        // group-sum's rendered integer value.
+        let groups: Vec<(Vec<CanonicalObject>, CanonicalObject)> = match spec.agg {
+            GroupAgg::Count => verify_and_resolve_group_count_bgp(
+                layers,
+                trusted_head_root,
+                &expected.atoms,
+                &expected.joins,
+                &spec.key_columns,
+                reconcile,
+                bgp,
+                &proof.result.columns,
+            )
+            .map_err(|e| ReconciledReadError::Store(e.to_string()))?
+            .into_iter()
+            .map(|(keys, group_count)| (keys, count_object(group_count as usize)))
+            .collect(),
+            GroupAgg::Sum { value_column, datatype } => verify_and_resolve_group_sum_bgp(
+                layers,
+                trusted_head_root,
+                &expected.atoms,
+                &expected.joins,
+                &spec.key_columns,
+                value_column,
+                datatype,
+                reconcile,
+                bgp,
+                &proof.result.columns,
+            )
+            .map_err(|e| ReconciledReadError::Store(e.to_string()))?,
+        };
+        // Column-major output: one key column per group key, plus the trailing aggregate cell.
+        let ncols = spec.key_columns.len() + 1;
+        let mut columns: Vec<Vec<CanonicalObject>> = vec![Vec::with_capacity(groups.len()); ncols];
+        for (keys, aggregate) in groups {
+            if keys.len() != spec.key_columns.len() {
+                return Err(ReconciledReadError::Store(
+                    "reconciled group: recomputed group key arity mismatch".to_string(),
+                ));
             }
+            for (column, key) in columns.iter_mut().zip(keys) {
+                column.push(key);
+            }
+            columns[ncols - 1].push(aggregate);
         }
+        return Ok(columns);
     }
     match (expected.source, expected.order, &proof.inner) {
         (ReadSource::Materialized, None, ReadProofInner::Present { reconcile, bgp }) => {

@@ -984,3 +984,156 @@ fn woql_group_count_value_key_reject_closes() {
     assert!(!is_reconciled_read(&value_keyed), "value-keyed grouping must reject-close");
     assert!(prove_reconciled_read(&value_keyed, &lref).is_err());
 }
+
+// ============================================================================================
+// GROUP-SUM — `GroupBy(keys) + Sum(value)` over the reconciled materialized present via
+// VERIFIER-RECOMPUTE over the C2a value↔term-authenticated numeric VALUE column. The per-group sum
+// uses the base path's fixed-width bounded accumulator (u64 unsigned) with overflow reject; the
+// value datatype is pinned + homogeneity-guarded by the child BGP's `?sal >= 0` range atom. The
+// aggregate (Sum vs Count) is part of the anti-substitution binding.
+// ============================================================================================
+
+use terminusdb_woql2::collection::Sum;
+
+/// present `salary` (UInt32) = {d1->[100,200,50], d2->[300,400,50]} (base d3->999,d3->888 removed;
+/// delta adds d1->50, d2->50). Group by ?dept (subject) => sum d1:350, d2:750; count d1:3, d2:3.
+fn group_sum_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (dept, sal) in [("d1", 100u32), ("d1", 200), ("d2", 300), ("d2", 400), ("d3", 999), ("d3", 888)] {
+        b.add_value_triple(ValueTriple::new_value(&iri(dept), &iri("salary"), u32::make_entry(&sal))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("d3"), &iri("salary"), u32::make_entry(&999u32))).unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("d3"), &iri("salary"), u32::make_entry(&888u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("d1"), &iri("salary"), u32::make_entry(&50u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("d2"), &iri("salary"), u32::make_entry(&50u32))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// Child BGP `Triple(?dept, salary, ?sal) & ?sal >= 0` — the `>= 0` pins ?sal to UInt32 and its
+/// store range-path enforces datatype-homogeneity over the salary column.
+fn group_child_salary() -> Query {
+    and_of(vec![tv("dept", "salary", "sal"), gte(dvar("sal"), duint(0))])
+}
+/// `GroupBy([dept], Sum(sal))`.
+fn group_sum_by_dept() -> Query {
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("sal".into()),
+            group_by: vec!["dept".into()],
+            grouped_value: Value::Variable("sals".into()),
+            query: Box::new(group_child_salary()),
+        }),
+        Query::Sum(Sum {
+            list: DataValue::Variable("sals".into()),
+            result: DataValue::Variable("total".into()),
+        }),
+    ])
+}
+/// `GroupBy([dept], Length(sal))` over the SAME child BGP — same lowered atoms/joins/keys, different
+/// aggregate (Count vs Sum) for the anti-substitution cross test.
+fn group_count_by_dept_salary() -> Query {
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("sal".into()),
+            group_by: vec!["dept".into()],
+            grouped_value: Value::Variable("sals".into()),
+            query: Box::new(group_child_salary()),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("sals".into()),
+            length: DataValue::Variable("count".into()),
+        }),
+    ])
+}
+
+#[test]
+fn woql_group_sum_over_delta_stack() {
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let query = group_sum_by_dept();
+    assert!(is_reconciled_read(&query), "GroupSum must route to the reconciled path");
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    // Each group row is [dept, sum]; the sum is rendered as a UInt64 value (same as the count cell).
+    assert!(
+        bag_eq(
+            rows_of(&resolved),
+            vec![vec![node("d1"), ucount(350)], vec![node("d2"), ucount(750)]],
+        ),
+        "group-sum must be d1:350, d2:750, got {:?}",
+        rows_of(&resolved)
+    );
+    let base_root = lref[0].resolution_root();
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+}
+
+#[test]
+fn woql_group_sum_tampered_result_rejects() {
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let query = group_sum_by_dept();
+    let mut proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    // Tamper a delivered child VALUE cell — the sum is over the authenticated value column, so this
+    // fails the resolution re-commitment.
+    proof.result.columns[1][0] = ArkFr::from_u64(987_654_321);
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
+}
+
+#[test]
+fn woql_group_sum_anti_substitution_rejects_cross_aggregate() {
+    // The AGGREGATE (Sum vs Count) is part of the anti-substitution binding: over the SAME child
+    // BGP, a group-sum proof must NOT verify as a group-count query (and vice versa).
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let sum_q = group_sum_by_dept();
+    let count_q = group_count_by_dept_salary();
+    let sum_proof = prove_reconciled_read(&sum_q, &lref).unwrap();
+    let count_proof = prove_reconciled_read(&count_q, &lref).unwrap();
+    assert!(verify_and_resolve_reconciled_read(&count_q, &lref, head_root, &sum_proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&sum_q, &lref, head_root, &count_proof).is_err());
+    // Each verifies in its OWN name: sum d1:350,d2:750 ; count d1:3,d2:3.
+    let sum_res = verify_and_resolve_reconciled_read(&sum_q, &lref, head_root, &sum_proof).unwrap();
+    assert!(bag_eq(rows_of(&sum_res), vec![vec![node("d1"), ucount(350)], vec![node("d2"), ucount(750)]]));
+    let count_res = verify_and_resolve_reconciled_read(&count_q, &lref, head_root, &count_proof).unwrap();
+    assert!(bag_eq(rows_of(&count_res), vec![vec![node("d1"), ucount(3)], vec![node("d2"), ucount(3)]]));
+}
+
+#[test]
+fn woql_group_sum_mixed_datatype_reject_closes() {
+    // A MIXED value column (d1 has an Int32 salary alongside UInt32) reject-closes end to end: the
+    // child BGP's `?sal >= 0` range-path datatype-homogeneity guard fails at prove time (never
+    // under-reports the sum).
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("d1"), &iri("salary"), u32::make_entry(&100u32))).unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("d1"), &iri("salary"), i32::make_entry(&50i32))).unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("z1"), &iri("salary"), u32::make_entry(&9u32))).unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("z2"), &iri("salary"), u32::make_entry(&8u32))).unwrap();
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("z1"), &iri("salary"), u32::make_entry(&9u32))).unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("z2"), &iri("salary"), u32::make_entry(&8u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("d2"), &iri("salary"), u32::make_entry(&300u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("d2"), &iri("salary"), u32::make_entry(&400u32))).unwrap();
+    let layers = vec![base_lc, child.commit().unwrap().proof_commitment().unwrap()];
+    let lref = refs(&layers);
+    let query = group_sum_by_dept();
+    assert!(is_reconciled_read(&query), "GroupSum must route to the reconciled path");
+    let err = match prove_reconciled_read(&query, &lref) {
+        Ok(_) => panic!("expected a datatype-homogeneity reject-close, but prove succeeded"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous") || err.to_string().contains("datatype"),
+        "expected a datatype-homogeneity reject-close over the mixed salary column, got: {err}"
+    );
+}
