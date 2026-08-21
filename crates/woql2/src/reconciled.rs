@@ -47,14 +47,15 @@ use terminus_store::proof::query::{
     AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
 };
 use terminus_store::proof::reconcile::{
-    decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read, prove_read_bgp,
-    prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
-    verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof, DeltaSource, PresentBgpAtom,
-    PresentBgpProof, PresentReadResult, PresentScalarOrderProof, PresentTerm, ReconcileProof,
+    decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read,
+    prove_read_group_count_bgp, prove_read_bgp, prove_read_order_bgp, verify_and_resolve_bgp,
+    verify_and_resolve_delta_read, verify_and_resolve_group_count_bgp, verify_and_resolve_order_bgp,
+    verify_read_bgp, DeltaReadProof, DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult,
+    PresentScalarOrderProof, PresentTerm, ReconcileProof,
 };
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
-use crate::proof::plan_bgp;
+use crate::proof::{plan_bgp, CompiledRelationStatement};
 use crate::query::Query;
 
 /// Every reason the reconciled read path refuses a query.
@@ -102,6 +103,25 @@ struct OrderSpec {
 /// left-deep join plan, the route (uniform column source), and an optional single-column full-key
 /// numeric `OrderBy` over the materialized present. Re-derivable from a `&Query` by both prover and
 /// verifier, so it is the anti-substitution binding.
+/// Which per-group aggregate a reconciled `GroupBy` computes over the materialized present. This
+/// slice ships `Count` (per-group cardinality, no value-authentication); `Sum`/`Min`/`Max` extend
+/// it with a numeric value column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroupAgg {
+    /// `GroupBy(keys, ..) + Length` — the per-group solution count.
+    Count,
+}
+
+/// A single-/multi-key `GroupBy` aggregate over the reconciled materialized present, recomputed by
+/// the verifier over the root-authenticated child rows. `key_columns` index the child BGP schema
+/// (== the store result column order). Bound into the anti-substitution spec so a proof for a
+/// different grouping (or a different aggregate) cannot be accepted in this query's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GroupSpec {
+    key_columns: Vec<usize>,
+    agg: GroupAgg,
+}
+
 #[derive(Clone, Debug)]
 struct LoweredBgp {
     atoms: Vec<PresentBgpAtom>,
@@ -115,6 +135,10 @@ struct LoweredBgp {
     /// present-BGP proof — no value-authentication, no new gadget. Mutually exclusive with `order`
     /// (a `Count` reject-closes an ordered/grouped/distinct/delta child; see `lower_query`).
     count: bool,
+    /// `Some` iff a `GroupBy` aggregate over a plain leaf BGP over the materialized present. The
+    /// per-group answer is a deterministic verifier-recompute over the root-authenticated child
+    /// rows. Mutually exclusive with `order`/`count`.
+    group: Option<GroupSpec>,
 }
 
 /// The store proof bundle for whichever read path the plan routed to.
@@ -126,6 +150,11 @@ enum ReadProofInner {
     /// present-BGP proof's chain-authenticated `result_len` (delivered via [`verify_read_bgp`]),
     /// so no additional aggregate gadget is carried.
     Count { reconcile: ReconcileProof, bgp: PresentBgpProof },
+    /// `GroupCount(BGP)` over the reconciled materialized present. The store bundle is the SAME
+    /// reconcile + present-BGP pair as [`ReadProofInner::Present`] (the child rows are delivered in
+    /// `result` for authentication); the per-group counts are recomputed by the verifier over the
+    /// root-authenticated resolved child rows, so no additional aggregate gadget is carried.
+    GroupCount { reconcile: ReconcileProof, bgp: PresentBgpProof },
     /// Single-column full-key numeric `OrderBy` over the reconciled materialized present.
     PresentOrder {
         reconcile: ReconcileProof,
@@ -154,6 +183,10 @@ pub struct ReconciledReadProof {
     /// query for anti-substitution): a count proof must not be accepted in a plain read's name and
     /// vice versa.
     count: bool,
+    /// The `GroupBy` aggregate spec this proof was produced for (bound to the verifier's re-compiled
+    /// query for anti-substitution): a proof for a different grouping/aggregate cannot be accepted
+    /// in this query's name.
+    group: Option<GroupSpec>,
 }
 
 impl ReconciledReadProof {
@@ -275,7 +308,14 @@ fn uniform_source(plan: &LayerBgpPlan) -> Result<ReadSource, ReconciledReadError
 fn lower_plan(plan: &LayerBgpPlan) -> Result<LoweredBgp, ReconciledReadError> {
     let source = uniform_source(plan)?;
     let atoms = plan.atoms.iter().map(map_atom).collect::<Result<Vec<_>, _>>()?;
-    Ok(LoweredBgp { atoms, joins: plan.joins.clone(), source, order: None, count: false })
+    Ok(LoweredBgp {
+        atoms,
+        joins: plan.joins.clone(),
+        source,
+        order: None,
+        count: false,
+        group: None,
+    })
 }
 
 /// Compile `query` with the base [`plan_bgp`] (reusing its full BGP classification: constants /
@@ -348,6 +388,34 @@ fn lower_query(query: &Query) -> Result<LoweredBgp, ReconciledReadError> {
         lowered.order = Some(OrderSpec { datatype, direction });
         return Ok(lowered);
     }
+    // GROUP-COUNT — `GroupBy(keys, ..) + Length` over the reconciled materialized present. The
+    // per-group solution count is a DETERMINISTIC recompute over the root-authenticated child rows
+    // (verifier-recompute; the child rows are authenticated + resolved by the store, then grouped by
+    // the authenticated key IRIs and counted). No value-authentication (a count is cardinality-based;
+    // the group KEYS are authenticated node ids). Only the BARE GroupCount over a plain leaf BGP over
+    // the materialized present is accepted; a comparison-filtered group count (a `GeneratedU64Filter`
+    // wrapper), a grouped value aggregate (sum/extrema), a composite child, or a delta source
+    // reject-close (fail-closed over coverage). The base `plan_group_count_form` already restricts
+    // the group keys to the Node domain, so a value-keyed grouping never reaches here.
+    if let CompiledRelationStatement::GroupCount { input, key_columns } = &compiled.relation.statement {
+        let plan = input.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
+            "reconciled GroupCount requires a plain leaf BGP child (no distinct/group/order/join composite)",
+        ))?;
+        let mut lowered = lower_plan(plan)?;
+        // A group aggregate is proven ONLY over the reconciled materialized present.
+        if lowered.source != ReadSource::Materialized {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled GroupCount is supported only over the materialized present (not delta additions/removals)",
+            ));
+        }
+        if key_columns.is_empty() {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled GroupCount requires at least one group key",
+            ));
+        }
+        lowered.group = Some(GroupSpec { key_columns: key_columns.clone(), agg: GroupAgg::Count });
+        return Ok(lowered);
+    }
     // Only a plain leaf BGP maps to the store BGP; every OTHER composite relation
     // (Distinct/GroupBy/join/multi-key-order/…) is out of scope for this path.
     let plan = compiled.relation.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
@@ -371,7 +439,7 @@ pub fn prove_reconciled_read(
     query: &Query,
     layers: &[&LayerCommitment],
 ) -> Result<ReconciledReadProof, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source, order, count } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order, count, group } = lower_query(query)?;
     if count {
         // COUNT over the reconciled materialized present. `lower_query` guarantees
         // `source == Materialized` and `order == None`. The store bundle is the SAME reconcile +
@@ -393,7 +461,30 @@ pub fn prove_reconciled_read(
             source,
             order,
             count,
+            group,
         });
+    }
+    // GROUP aggregate over the reconciled materialized present. `lower_query` guarantees
+    // `source == Materialized`, `order == None`, `count == false`. The store bundle is the SAME
+    // reconcile + present-BGP pair a plain read produces; the CHILD rows are delivered in `result`
+    // for authentication, and the per-group aggregate is recomputed by the verifier.
+    if let Some(agg) = group.as_ref().map(|spec| spec.agg) {
+        match agg {
+            GroupAgg::Count => {
+                let (reconcile, bgp, result) = prove_read_group_count_bgp(layers, &atoms, &joins)
+                    .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+                return Ok(ReconciledReadProof {
+                    inner: ReadProofInner::GroupCount { reconcile, bgp },
+                    result,
+                    atoms,
+                    joins,
+                    source,
+                    order,
+                    count,
+                    group,
+                });
+            }
+        }
     }
     let (inner, result) = match (source, order) {
         // Single-column full-key numeric OrderBy over the reconciled materialized present.
@@ -425,7 +516,7 @@ pub fn prove_reconciled_read(
             ));
         }
     };
-    Ok(ReconciledReadProof { inner, result, atoms, joins, source, order, count })
+    Ok(ReconciledReadProof { inner, result, atoms, joins, source, order, count, group })
 }
 
 /// Verify a reconciled read proof against the trusted head root AND resolve its bindings to
@@ -471,6 +562,46 @@ pub fn verify_and_resolve_reconciled_read(
             ));
         }
         return Ok(vec![vec![count_object(cardinality)]]);
+    }
+    // GROUP aggregate — the per-group answer is a deterministic verifier-recompute over the
+    // root-authenticated resolved child rows (the store authenticates + resolves the child relation,
+    // then groups by the authenticated key IRIs). The result is returned COLUMN-major (keys...,
+    // aggregate), matching the plain-read resolver convention.
+    if let Some(spec) = expected.group.as_ref() {
+        match spec.agg {
+            GroupAgg::Count => {
+                let ReadProofInner::GroupCount { reconcile, bgp } = &proof.inner else {
+                    return Err(ReconciledReadError::QueryShapeMismatch);
+                };
+                let groups = verify_and_resolve_group_count_bgp(
+                    layers,
+                    trusted_head_root,
+                    &expected.atoms,
+                    &expected.joins,
+                    &spec.key_columns,
+                    reconcile,
+                    bgp,
+                    &proof.result.columns,
+                )
+                .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+                // Column-major output: one key column per group key, plus the per-group count as a
+                // trailing UInt64 cell (the same rendering `Count` uses).
+                let ncols = spec.key_columns.len() + 1;
+                let mut columns: Vec<Vec<CanonicalObject>> = vec![Vec::with_capacity(groups.len()); ncols];
+                for (keys, group_count) in groups {
+                    if keys.len() != spec.key_columns.len() {
+                        return Err(ReconciledReadError::Store(
+                            "reconciled group-count: recomputed group key arity mismatch".to_string(),
+                        ));
+                    }
+                    for (column, key) in columns.iter_mut().zip(keys) {
+                        column.push(key);
+                    }
+                    columns[ncols - 1].push(count_object(group_count as usize));
+                }
+                return Ok(columns);
+            }
+        }
     }
     match (expected.source, expected.order, &proof.inner) {
         (ReadSource::Materialized, None, ReadProofInner::Present { reconcile, bgp }) => {
@@ -540,7 +671,7 @@ pub fn decode_and_verify_reconciled_delta_read(
 ) -> Result<usize, ReconciledReadError> {
     // A materialized OrderBy also lowers to `source == Materialized`, so it is refused by the
     // `Materialized` arm below (this byte-in path ships a `DeltaReadProof`, never an order proof).
-    let LoweredBgp { atoms, joins, source, order: _, count: _ } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order: _, count: _, group: _ } = lower_query(query)?;
     let delta_source = match source {
         ReadSource::Additions => DeltaSource::Additions,
         ReadSource::Removals => DeltaSource::Removals,
@@ -576,7 +707,7 @@ pub fn decode_and_verify_reconciled_read_bgp(
     verifier_commitment_bytes: &[&[u8]],
     trusted_head_root: ProofHash,
 ) -> Result<usize, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source, order, count } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order, count, group } = lower_query(query)?;
     // This is the MATERIALIZED-present read; a delta-source query is a different proof shape.
     if source != ReadSource::Materialized {
         return Err(ReconciledReadError::UnsupportedShape(
@@ -595,6 +726,13 @@ pub fn decode_and_verify_reconciled_read_bgp(
     if count {
         return Err(ReconciledReadError::UnsupportedShape(
             "reconciled-present byte-in path does not support Count (a count delivers a cardinality, not rows)",
+        ));
+    }
+    // A GroupBy aggregate delivers recomputed group rows, not the plain BGP relation; the byte-in
+    // group path is out of scope for this slice.
+    if group.is_some() {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled-present byte-in path does not support GroupBy (a group aggregate delivers recomputed group rows)",
         ));
     }
     decode_and_verify_read_bgp(
@@ -648,6 +786,10 @@ fn bgp_spec_eq(expected: &LoweredBgp, proof: &ReconciledReadProof) -> bool {
         // The Count flag is part of the anti-substitution binding: a count proof cannot be
         // accepted in a plain read's name (or vice versa).
         && expected.count == proof.count
+        // The GroupBy spec (key columns + aggregate kind) is part of the anti-substitution binding:
+        // a proof for a different grouping/aggregate cannot be accepted in this query's name, nor a
+        // grouped proof for an ungrouped query (or vice versa).
+        && expected.group == proof.group
         && expected.atoms.len() == proof.atoms.len()
         && expected.joins.len() == proof.joins.len()
         && expected

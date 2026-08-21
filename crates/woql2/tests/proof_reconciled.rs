@@ -859,3 +859,128 @@ fn woql_count_over_delta_source_reject_closes() {
     assert!(!is_reconciled_read(&query), "Count over a delta source must reject-close");
     assert!(prove_reconciled_read(&query, &lref).is_err());
 }
+
+// ============================================================================================
+// GROUP-COUNT — `GroupBy(keys, ..) + Length` over the reconciled materialized present via
+// VERIFIER-RECOMPUTE. The child rows are authenticated + resolved by the store, then grouped by
+// the authenticated key IRIs and counted per group. The grouping is bound to the authenticated
+// key column, so a tampered/fabricated child row rejects at resolution; the aggregate itself is
+// recomputed (unforgeable). Group keys must be Node IRIs (the base `plan_group_count_form`
+// restricts keys to the Node domain — a subject variable).
+// ============================================================================================
+
+use terminusdb_woql2::collection::Length;
+use terminusdb_woql2::order::GroupBy;
+
+/// present `member` = {d1->a1, d1->a2, d1->a6, d2->a3, d2->a4, d2->a7} (base d3->a5, d3->a8 removed;
+/// delta adds d1->a6, d2->a7). Group by the SUBJECT ?dept (Node domain) => d1:3, d2:3. Each committed
+/// delta group has >= 2 records (the reconcile pass requires it).
+fn group_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (dept, person) in [("d1", "a1"), ("d1", "a2"), ("d2", "a3"), ("d2", "a4"), ("d3", "a5"), ("d3", "a8")] {
+        b.add_value_triple(ValueTriple::new_node(&iri(dept), &iri("member"), &iri(person))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("d3"), &iri("member"), &iri("a5"))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("d3"), &iri("member"), &iri("a8"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("d1"), &iri("member"), &iri("a6"))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("d2"), &iri("member"), &iri("a7"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// `GroupBy([dept], count members) over Triple(?dept, member, ?person)` — group by the subject.
+fn group_count_by_dept() -> Query {
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("person".into()),
+            group_by: vec!["dept".into()],
+            grouped_value: Value::Variable("people".into()),
+            query: Box::new(tv("dept", "member", "person")),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("people".into()),
+            length: DataValue::Variable("count".into()),
+        }),
+    ])
+}
+
+#[test]
+fn woql_group_count_over_delta_stack() {
+    let layers = group_stack();
+    let lref = refs(&layers);
+    let query = group_count_by_dept();
+    assert!(is_reconciled_read(&query), "GroupCount must route to the reconciled path");
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    // Each group row is [dept, count]; d1 and d2 each have 3 present members.
+    assert!(
+        bag_eq(
+            rows_of(&resolved),
+            vec![vec![node("d1"), ucount(3)], vec![node("d2"), ucount(3)]],
+        ),
+        "group-count must be d1:3, d2:3, got {:?}",
+        rows_of(&resolved)
+    );
+    // Soundness: a wrong chain anchor (the base root, not the head) rejects.
+    let base_root = lref[0].resolution_root();
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+}
+
+#[test]
+fn woql_group_count_tampered_result_rejects() {
+    // Tampering a delivered child row fails the resolution re-commitment inside the store
+    // recompute — a mis-grouped/forged count is not producible.
+    let layers = group_stack();
+    let lref = refs(&layers);
+    let query = group_count_by_dept();
+    let mut proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    proof.result.columns[1][0] = ArkFr::from_u64(987_654_321);
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
+}
+
+#[test]
+fn woql_group_count_anti_substitution_rejects_cross_proof() {
+    // The GroupBy spec is part of the anti-substitution binding: a GroupCount proof must NOT verify
+    // in a plain read's name, and a plain read proof must NOT verify in the GroupCount's name.
+    let layers = group_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let plain = tv("dept", "member", "person");
+    let grouped = group_count_by_dept();
+    let plain_proof = prove_reconciled_read(&plain, &lref).unwrap();
+    let group_proof = prove_reconciled_read(&grouped, &lref).unwrap();
+    assert!(verify_and_resolve_reconciled_read(&grouped, &lref, head_root, &plain_proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&plain, &lref, head_root, &group_proof).is_err());
+    // Each verifies in its OWN name.
+    assert!(verify_and_resolve_reconciled_read(&plain, &lref, head_root, &plain_proof).is_ok());
+    assert!(verify_and_resolve_reconciled_read(&grouped, &lref, head_root, &group_proof).is_ok());
+}
+
+#[test]
+fn woql_group_count_value_key_reject_closes() {
+    // Grouping by a VALUE key (a non-node object variable) reject-closes: the base
+    // `plan_group_count_form` restricts group keys to the Node domain, so a value-keyed grouping
+    // never compiles to a reconciled read.
+    let layers = age_stack();
+    let lref = refs(&layers);
+    let value_keyed = and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("x".into()),
+            group_by: vec!["v".into()], // ?v is a value object (age), not a node
+            grouped_value: Value::Variable("xs".into()),
+            query: Box::new(tv("x", "age", "v")),
+        }),
+        Query::Length(Length {
+            list: DataValue::Variable("xs".into()),
+            length: DataValue::Variable("count".into()),
+        }),
+    ]);
+    assert!(!is_reconciled_read(&value_keyed), "value-keyed grouping must reject-close");
+    assert!(prove_reconciled_read(&value_keyed, &lref).is_err());
+}
