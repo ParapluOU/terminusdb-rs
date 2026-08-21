@@ -953,6 +953,19 @@ impl CompiledRelation {
         }
     }
 
+    /// As [`Self::as_exact_scalar_order`], additionally returning the sort direction (needed by the
+    /// reconciled delta-stack order lowering, which binds direction into its anti-substitution spec).
+    pub fn as_exact_scalar_order_with_direction(
+        &self,
+    ) -> Option<(&CompiledRelation, CanonicalDatatype, OrderDirection)> {
+        match &self.statement {
+            CompiledRelationStatement::ExactScalarOrder { input, datatype, direction } => {
+                Some((input, *datatype, *direction))
+            }
+            _ => None,
+        }
+    }
+
     pub fn as_exact_ordered_slice(&self) -> Option<(&CompiledRelation, u64, Option<u64>)> {
         match &self.statement {
             CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {

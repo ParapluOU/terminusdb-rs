@@ -544,3 +544,132 @@ fn woql_reconciled_read_bgp_byte_in_rejects_delta_source_query() {
         "a materialized query must pass the route guard (fail later, not as a shape mismatch), got {err2:?}"
     );
 }
+
+// ============================================================================================
+// ORDER — single-column, full-key, numeric OrderBy over the reconciled materialized present.
+// ============================================================================================
+
+use terminusdb_woql2::order::{Order, OrderBy, OrderTemplate};
+
+/// A base+delta stack where subject `item` has many `score` (UInt32) values, so
+/// `Triple(<item>, score, ?score)` binds ONE numeric object column with several rows.
+/// present item scores = {30, 10, 20, 25, 40}  (base 5, 50 removed; 25, 40 added).
+fn order_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for score in [30u32, 10, 20, 50, 5] {
+        b.add_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&score)))
+            .unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&5u32))).unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&50u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&25u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&40u32))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// `OrderBy([score <order>], Triple(<item>, score, ?score) & ?score >= 0)` — the `>= 0` range pins
+/// `?score`'s datatype to UInt32 (a full-key single-column numeric order the reconciled path proves).
+fn order_by_item_score(order: Order) -> Query {
+    Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "score".into(), order }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("item", "score", "score"),
+            gte(dvar("score"), duint(0)),
+        ])),
+    })
+}
+
+#[test]
+fn woql_order_by_ascending_over_delta_stack() {
+    let layers = order_stack();
+    let lref = refs(&layers);
+    let query = order_by_item_score(Order::Asc);
+    assert!(is_reconciled_read(&query), "single-column numeric OrderBy must route to the reconciled path");
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    // The ordered answer is ONE column, ASCENDING by numeric value (NOT raw dictionary-id order).
+    assert_eq!(
+        rows_of(&resolved),
+        vec![vec![uint(10)], vec![uint(20)], vec![uint(25)], vec![uint(30)], vec![uint(40)]],
+        "resolved scores must come back in ascending numeric order"
+    );
+    // Soundness: a wrong chain anchor (the base root, not the head) rejects.
+    let base_root = lref[0].resolution_root();
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+}
+
+#[test]
+fn woql_order_by_descending_over_delta_stack() {
+    let layers = order_stack();
+    let lref = refs(&layers);
+    let query = order_by_item_score(Order::Desc);
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert_eq!(
+        rows_of(&resolved),
+        vec![vec![uint(40)], vec![uint(30)], vec![uint(25)], vec![uint(20)], vec![uint(10)]],
+        "resolved scores must come back in descending numeric order"
+    );
+    // Anti-substitution: the descending proof must NOT verify in the ascending query's name.
+    let ascending = order_by_item_score(Order::Asc);
+    assert!(
+        verify_and_resolve_reconciled_read(&ascending, &lref, head_root, &proof).is_err(),
+        "a descending order proof must not verify as an ascending order"
+    );
+}
+
+#[test]
+fn woql_order_by_tampered_result_rejects() {
+    // A REORDERED claimed result (swap two rows) fails the resolution re-commitment bind to the
+    // authenticated ordered output — a permuted/wrong-order answer is rejected.
+    let layers = order_stack();
+    let lref = refs(&layers);
+    let query = order_by_item_score(Order::Asc);
+    let mut proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    proof.result.columns[0].swap(0, 1);
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
+}
+
+#[test]
+fn woql_order_by_unsupported_shapes_reject_close() {
+    let layers = age_stack();
+    let lref = refs(&layers);
+
+    // SUBSET-key: a free-subject two-column BGP `[x, v]` sorted by `v` alone has an unprovable
+    // invented tie-break over the unnamed `x` column, so it reject-closes (still UnsupportedShape).
+    let subset = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "v".into(), order: Order::Asc }],
+        query: Box::new(and_of(vec![tv("x", "age", "v"), gte(dvar("v"), duint(0))])),
+    });
+    assert!(!is_reconciled_read(&subset), "subset-key order must reject-close");
+    assert!(prove_reconciled_read(&subset, &lref).is_err());
+
+    // NON-NUMERIC: ordering by a NODE column (`name`, no order-preserving numeric datatype)
+    // reject-closes.
+    let non_numeric = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "n".into(), order: Order::Asc }],
+        query: Box::new(tv_subj_const("alice", "name", "n")),
+    });
+    assert!(!is_reconciled_read(&non_numeric), "non-numeric order must reject-close");
+    assert!(prove_reconciled_read(&non_numeric, &lref).is_err());
+
+    // MULTI-KEY: a two-key order over the two-column `[x, v]` BGP is out of this single-column
+    // slice (a multi-key `ExactMultiOrder`, or here rejected earlier because `x` is a non-numeric
+    // node key) — either way the reconciled path does not accept it.
+    let multi_key = Query::OrderBy(OrderBy {
+        ordering: vec![
+            OrderTemplate { variable: "v".into(), order: Order::Asc },
+            OrderTemplate { variable: "x".into(), order: Order::Asc },
+        ],
+        query: Box::new(and_of(vec![tv("x", "age", "v"), gte(dvar("v"), duint(0))])),
+    });
+    assert!(!is_reconciled_read(&multi_key), "multi-key order is out of the single-column slice");
+}

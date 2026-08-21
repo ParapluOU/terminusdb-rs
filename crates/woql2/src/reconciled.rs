@@ -41,15 +41,17 @@ use dory_pcs::backends::arkworks::ArkFr;
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::dict::{hash_object, hash_term};
+use terminus_store::proof::order::OrderDirection;
 use terminus_store::proof::query::{
     AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
 };
 use terminus_store::proof::reconcile::{
     decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read, prove_read_bgp,
-    verify_and_resolve_bgp, verify_and_resolve_delta_read, DeltaReadProof, DeltaSource,
-    PresentBgpAtom, PresentBgpProof, PresentReadResult, PresentTerm, ReconcileProof,
+    prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
+    verify_and_resolve_order_bgp, DeltaReadProof, DeltaSource, PresentBgpAtom, PresentBgpProof,
+    PresentReadResult, PresentScalarOrderProof, PresentTerm, ReconcileProof,
 };
-use terminus_store::proof::{CanonicalObject, ProofHash};
+use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
 use crate::proof::plan_bgp;
 use crate::query::Query;
@@ -86,20 +88,39 @@ enum ReadSource {
     Removals,
 }
 
+/// A single-column, full-key, numeric `OrderBy` wrapping the reconciled materialized present BGP.
+/// The datatype + direction are bound into the anti-substitution spec so a proof for an ascending
+/// order (or a different numeric datatype) cannot be accepted in a descending order's name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OrderSpec {
+    datatype: CanonicalDatatype,
+    direction: OrderDirection,
+}
+
 /// The lowered store-facing statement for a supported reconciled read: the mapped BGP atoms, the
-/// left-deep join plan, and the route (uniform column source). Re-derivable from a `&Query` by
-/// both prover and verifier, so it is the anti-substitution binding.
+/// left-deep join plan, the route (uniform column source), and an optional single-column full-key
+/// numeric `OrderBy` over the materialized present. Re-derivable from a `&Query` by both prover and
+/// verifier, so it is the anti-substitution binding.
 #[derive(Clone, Debug)]
 struct LoweredBgp {
     atoms: Vec<PresentBgpAtom>,
     joins: Vec<JoinStep>,
     source: ReadSource,
+    /// `Some` iff an outer `OrderBy([v ASC|DESC], BGP)` wraps a single-column numeric materialized
+    /// present BGP. `None` for a plain (unordered) read.
+    order: Option<OrderSpec>,
 }
 
 /// The store proof bundle for whichever read path the plan routed to.
 enum ReadProofInner {
     /// Materialized present BGP over the reconciled head.
     Present { reconcile: ReconcileProof, bgp: PresentBgpProof },
+    /// Single-column full-key numeric `OrderBy` over the reconciled materialized present.
+    PresentOrder {
+        reconcile: ReconcileProof,
+        bgp: PresentBgpProof,
+        order: PresentScalarOrderProof,
+    },
     /// Delta read over the head commit's additions/removals file.
     Delta { proof: DeltaReadProof },
 }
@@ -115,6 +136,9 @@ pub struct ReconciledReadProof {
     pub atoms: Vec<PresentBgpAtom>,
     pub joins: Vec<JoinStep>,
     source: ReadSource,
+    /// The lowered `OrderBy` spec the proof was produced for (bound to the verifier's re-compiled
+    /// query for anti-substitution), or `None` for a plain unordered read.
+    order: Option<OrderSpec>,
 }
 
 impl ReconciledReadProof {
@@ -225,7 +249,7 @@ fn uniform_source(plan: &LayerBgpPlan) -> Result<ReadSource, ReconciledReadError
 fn lower_plan(plan: &LayerBgpPlan) -> Result<LoweredBgp, ReconciledReadError> {
     let source = uniform_source(plan)?;
     let atoms = plan.atoms.iter().map(map_atom).collect::<Result<Vec<_>, _>>()?;
-    Ok(LoweredBgp { atoms, joins: plan.joins.clone(), source })
+    Ok(LoweredBgp { atoms, joins: plan.joins.clone(), source, order: None })
 }
 
 /// Compile `query` with the base [`plan_bgp`] (reusing its full BGP classification: constants /
@@ -246,10 +270,36 @@ fn lower_query(query: &Query) -> Result<LoweredBgp, ReconciledReadError> {
             "Count is unsupported on the reconciled path (it delivers rows, not a cardinality)",
         ));
     }
-    // Only a plain leaf BGP maps to the store BGP; every composite relation
-    // (Distinct/GroupBy/join/order/…) is out of scope for this path.
+    // A single-column, full-key, numeric `OrderBy` over a plain leaf BGP is supported over the
+    // reconciled MATERIALIZED present: the compiler's `plan_exact_scalar_order` already reject-closes
+    // subset-key / multi-key / non-numeric / float / `-0.0` orders (F4-max), so an `ExactScalarOrder`
+    // reaching here is guaranteed full-key numeric. Multi-key (`ExactMultiOrder`), ordered slices,
+    // group-by, and every other composite stay reject-closed below. The ordered input must itself be
+    // a plain leaf BGP with a single column (the store gadget sorts one authenticated value column).
+    if let Some((input, datatype, direction)) = compiled.relation.as_exact_scalar_order_with_direction() {
+        if input.schema.len() != 1 {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled OrderBy supports only a single-column (full-key) numeric order",
+            ));
+        }
+        let plan = input.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
+            "reconciled OrderBy requires a plain leaf BGP input (no distinct/group/join/order/etc.)",
+        ))?;
+        let mut lowered = lower_plan(plan)?;
+        // Order is proven ONLY over the reconciled materialized present; a delta-source ordered read
+        // (OrderBy over AddedTriple/DeletedTriple) is out of scope.
+        if lowered.source != ReadSource::Materialized {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled OrderBy is supported only over the materialized present (not delta additions/removals)",
+            ));
+        }
+        lowered.order = Some(OrderSpec { datatype, direction });
+        return Ok(lowered);
+    }
+    // Only a plain leaf BGP maps to the store BGP; every OTHER composite relation
+    // (Distinct/GroupBy/join/multi-key-order/…) is out of scope for this path.
     let plan = compiled.relation.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
-        "only a plain conjunctive BGP is supported on the reconciled path (no distinct/group/join/order/etc.)",
+        "only a plain conjunctive BGP (optionally wrapped by a single-column numeric OrderBy) is supported on the reconciled path (no distinct/group/join/multi-key-order/etc.)",
     ))?;
     lower_plan(plan)
 }
@@ -269,14 +319,21 @@ pub fn prove_reconciled_read(
     query: &Query,
     layers: &[&LayerCommitment],
 ) -> Result<ReconciledReadProof, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source } = lower_query(query)?;
-    let (inner, result) = match source {
-        ReadSource::Materialized => {
+    let LoweredBgp { atoms, joins, source, order } = lower_query(query)?;
+    let (inner, result) = match (source, order) {
+        // Single-column full-key numeric OrderBy over the reconciled materialized present.
+        (ReadSource::Materialized, Some(spec)) => {
+            let (reconcile, bgp, order_proof, result) =
+                prove_read_order_bgp(layers, &atoms, &joins, spec.datatype, spec.direction)
+                    .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+            (ReadProofInner::PresentOrder { reconcile, bgp, order: order_proof }, result)
+        }
+        (ReadSource::Materialized, None) => {
             let (reconcile, bgp, result) = prove_read_bgp(layers, &atoms, &joins)
                 .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
             (ReadProofInner::Present { reconcile, bgp }, result)
         }
-        ReadSource::Additions | ReadSource::Removals => {
+        (ReadSource::Additions | ReadSource::Removals, None) => {
             let delta_source = match source {
                 ReadSource::Additions => DeltaSource::Additions,
                 ReadSource::Removals => DeltaSource::Removals,
@@ -286,8 +343,14 @@ pub fn prove_reconciled_read(
                 .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
             (ReadProofInner::Delta { proof }, result)
         }
+        // OrderBy over a delta source is reject-closed by `lower_query`; unreachable here.
+        (ReadSource::Additions | ReadSource::Removals, Some(_)) => {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled OrderBy is supported only over the materialized present (not delta additions/removals)",
+            ));
+        }
     };
-    Ok(ReconciledReadProof { inner, result, atoms, joins, source })
+    Ok(ReconciledReadProof { inner, result, atoms, joins, source, order })
 }
 
 /// Verify a reconciled read proof against the trusted head root AND resolve its bindings to
@@ -308,8 +371,8 @@ pub fn verify_and_resolve_reconciled_read(
     if !bgp_spec_eq(&expected, proof) {
         return Err(ReconciledReadError::QueryShapeMismatch);
     }
-    match (expected.source, &proof.inner) {
-        (ReadSource::Materialized, ReadProofInner::Present { reconcile, bgp }) => {
+    match (expected.source, expected.order, &proof.inner) {
+        (ReadSource::Materialized, None, ReadProofInner::Present { reconcile, bgp }) => {
             verify_and_resolve_bgp(
                 layers,
                 trusted_head_root,
@@ -321,7 +384,24 @@ pub fn verify_and_resolve_reconciled_read(
             )
             .map_err(|e| ReconciledReadError::Store(e.to_string()))
         }
-        (ReadSource::Additions | ReadSource::Removals, ReadProofInner::Delta { proof: delta }) => {
+        (
+            ReadSource::Materialized,
+            Some(spec),
+            ReadProofInner::PresentOrder { reconcile, bgp, order },
+        ) => verify_and_resolve_order_bgp(
+            layers,
+            trusted_head_root,
+            &expected.atoms,
+            &expected.joins,
+            spec.datatype,
+            spec.direction,
+            reconcile,
+            bgp,
+            order,
+            &proof.result.columns,
+        )
+        .map_err(|e| ReconciledReadError::Store(e.to_string())),
+        (ReadSource::Additions | ReadSource::Removals, None, ReadProofInner::Delta { proof: delta }) => {
             let delta_source = match expected.source {
                 ReadSource::Additions => DeltaSource::Additions,
                 ReadSource::Removals => DeltaSource::Removals,
@@ -357,7 +437,9 @@ pub fn decode_and_verify_reconciled_delta_read(
     verifier_commitment_bytes: &[&[u8]],
     trusted_head_root: ProofHash,
 ) -> Result<usize, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source } = lower_query(query)?;
+    // A materialized OrderBy also lowers to `source == Materialized`, so it is refused by the
+    // `Materialized` arm below (this byte-in path ships a `DeltaReadProof`, never an order proof).
+    let LoweredBgp { atoms, joins, source, order: _ } = lower_query(query)?;
     let delta_source = match source {
         ReadSource::Additions => DeltaSource::Additions,
         ReadSource::Removals => DeltaSource::Removals,
@@ -393,11 +475,18 @@ pub fn decode_and_verify_reconciled_read_bgp(
     verifier_commitment_bytes: &[&[u8]],
     trusted_head_root: ProofHash,
 ) -> Result<usize, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order } = lower_query(query)?;
     // This is the MATERIALIZED-present read; a delta-source query is a different proof shape.
     if source != ReadSource::Materialized {
         return Err(ReconciledReadError::UnsupportedShape(
             "reconciled-present byte-in path requires a materialized Triple/Link/Data query (an AddedTriple/DeletedTriple read is a delta read: use decode_and_verify_reconciled_delta_read)",
+        ));
+    }
+    // An OrderBy ships a distinct (reconcile + BGP + order) proof bundle, not a plain present read;
+    // the ordered byte-in path is out of scope for this slice, so reject rather than mis-decode.
+    if order.is_some() {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled-present byte-in path does not support OrderBy (an ordered read ships a distinct proof bundle)",
         ));
     }
     decode_and_verify_read_bgp(
@@ -444,6 +533,10 @@ fn join_eq(a: &JoinStep, b: &JoinStep) -> bool {
 
 fn bgp_spec_eq(expected: &LoweredBgp, proof: &ReconciledReadProof) -> bool {
     expected.source == proof.source
+        // The OrderBy spec (datatype + direction) is part of the anti-substitution binding: an
+        // ascending proof (or a different numeric datatype) cannot be accepted in a descending
+        // order's name, nor an ordered proof for an unordered query (or vice versa).
+        && expected.order == proof.order
         && expected.atoms.len() == proof.atoms.len()
         && expected.joins.len() == proof.joins.len()
         && expected
