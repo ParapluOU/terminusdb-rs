@@ -1530,3 +1530,109 @@ fn woql_group_extrema_byte_in_matches_in_memory_and_rejects_cross_kind() {
     let max_in = decode_and_verify_reconciled_group(&max_q, &max_bytes, &commit_refs, head_root).unwrap();
     assert!(bag_eq(rows_of(&max_in), vec![vec![node("d1"), uint(200)], vec![node("d2"), uint(400)]]));
 }
+
+// ============================================================================================
+// C4 ORDER byte-in — DB-free: prove a reconciled single-column numeric OrderBy, ship it as BYTES
+// (the framed `ReconciledOrderReadProof` = reconcile + present-BGP + order proofs + the delivered
+// ordered column + the OrderSpec witness, plus one TERM-LESS `VerifierCommitment` per layer), and
+// verify + RESOLVE the ordered rows DB-free through `decode_and_verify_reconciled_order` against the
+// trusted head root. Ordered answer must equal the in-memory rows. Negatives: a DIFFERENT direction
+// (anti-substitution — both the OrderSpec witness AND the crypto transcript reject), a plain-read
+// query, and a truncated / tampered blob all reject. (Subset-key / non-numeric orders still
+// reject-close at LOWERING — covered by `woql_order_by_unsupported_shapes_reject_close`.)
+//
+// The ordered resolve is HEAD-minted-only over an all-term-less chain (D5-FIX), so the positive
+// round-trip uses a stack whose entire present score column is HEAD-minted.
+// ============================================================================================
+
+/// A base+delta stack whose entire `present` score relation is HEAD-minted: the base holds two score
+/// values the HEAD REMOVES (so no base-minted value survives into `present` — the order range atom
+/// opens the whole present object column), and the HEAD adds the real scores.
+/// present item scores = {30, 10, 20, 25, 40}; asc = 10,20,25,30,40 ; desc = 40,30,25,20,10.
+fn order_head_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for score in [1u32, 2] {
+        b.add_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&score))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    for score in [1u32, 2] {
+        child.remove_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&score))).unwrap();
+    }
+    for score in [30u32, 10, 20, 25, 40] {
+        child.add_value_triple(ValueTriple::new_value(&iri("item"), &iri("score"), u32::make_entry(&score))).unwrap();
+    }
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+#[test]
+fn woql_order_byte_in_matches_in_memory_and_rejects_substitution() {
+    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_order, ReconciledReadError};
+
+    let layers = order_head_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+
+    let commit_bytes = termless_commit_bytes(&lref);
+    let commit_refs: Vec<&[u8]> = commit_bytes.iter().map(|b| b.as_slice()).collect();
+
+    // ASCENDING round-trip.
+    let asc_q = order_by_item_score(Order::Asc);
+    let asc_proof = prove_reconciled_read(&asc_q, &lref).unwrap();
+    let asc_mem = verify_and_resolve_reconciled_read(&asc_q, &lref, head_root, &asc_proof).unwrap();
+    assert_eq!(
+        rows_of(&asc_mem),
+        vec![vec![uint(10)], vec![uint(20)], vec![uint(25)], vec![uint(30)], vec![uint(40)]]
+    );
+    let asc_bytes = asc_proof.encode().unwrap();
+    let asc_in =
+        decode_and_verify_reconciled_order(&asc_q, &asc_bytes, &commit_refs, head_root).unwrap();
+    assert_eq!(rows_of(&asc_in), rows_of(&asc_mem), "byte-in ascending order must match in-memory");
+
+    // DESCENDING round-trip.
+    let desc_q = order_by_item_score(Order::Desc);
+    let desc_proof = prove_reconciled_read(&desc_q, &lref).unwrap();
+    let desc_bytes = desc_proof.encode().unwrap();
+    let desc_in =
+        decode_and_verify_reconciled_order(&desc_q, &desc_bytes, &commit_refs, head_root).unwrap();
+    assert_eq!(
+        rows_of(&desc_in),
+        vec![vec![uint(40)], vec![uint(30)], vec![uint(25)], vec![uint(20)], vec![uint(10)]],
+        "byte-in descending order must come back in descending numeric order"
+    );
+
+    // NEGATIVE — wrong direction (anti-substitution): the descending proof must NOT verify under an
+    // ascending query, nor the ascending proof under a descending query.
+    assert!(
+        decode_and_verify_reconciled_order(&asc_q, &desc_bytes, &commit_refs, head_root).is_err(),
+        "a descending order proof must NOT verify under an ascending query"
+    );
+    assert!(
+        decode_and_verify_reconciled_order(&desc_q, &asc_bytes, &commit_refs, head_root).is_err(),
+        "an ascending order proof must NOT verify under a descending query"
+    );
+
+    // NEGATIVE — non-order query: a plain read re-lowers to `order == None` and reject-closes.
+    let plain = tv_subj_const("item", "score", "score");
+    let err = decode_and_verify_reconciled_order(&plain, &asc_bytes, &commit_refs, head_root)
+        .expect_err("a non-order query must be rejected by the order byte-in path");
+    assert!(matches!(err, ReconciledReadError::UnsupportedShape(_)), "got {err:?}");
+
+    // NEGATIVE — truncated blob: framing size/checksum guard fails.
+    let truncated = &asc_bytes[..asc_bytes.len() - 1];
+    assert!(
+        decode_and_verify_reconciled_order(&asc_q, truncated, &commit_refs, head_root).is_err(),
+        "a truncated order proof must fail closed"
+    );
+    // NEGATIVE — tampered body byte: SHA-256 checksum fails.
+    let mut tampered = asc_bytes.clone();
+    let mid = tampered.len() / 2;
+    tampered[mid] ^= 0xff;
+    assert!(
+        decode_and_verify_reconciled_order(&asc_q, &tampered, &commit_refs, head_root).is_err(),
+        "a tampered order proof must fail the checksum"
+    );
+}

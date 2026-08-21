@@ -48,16 +48,17 @@ use terminus_store::proof::query::{
     AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
 };
 use terminus_store::proof::reconcile::{
-    attach_termless_group_openings, decode_and_verify_delta_read, decode_and_verify_group_count,
-    decode_and_verify_group_extrema, decode_and_verify_group_sum, decode_and_verify_read_bgp,
+    attach_termless_group_openings, attach_termless_order_openings, decode_and_verify_delta_read,
+    decode_and_verify_group_count, decode_and_verify_group_extrema, decode_and_verify_group_sum,
+    decode_and_verify_order, decode_and_verify_read_bgp,
     prove_delta_read,
     prove_read_group_count_bgp, prove_read_group_extrema_bgp, prove_read_group_sum_bgp,
     prove_read_bgp, prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
     verify_and_resolve_group_count_bgp, verify_and_resolve_group_extrema_bgp,
     verify_and_resolve_group_sum_bgp, verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof,
-    DeltaSource, GroupReadAgg, GroupReadSpec, PresentBgpAtom, PresentBgpProof, PresentReadResult,
-    PresentScalarOrderProof, PresentTerm, ReconcileProof, ReconciledGroupReadProof,
-    ReconciledReadBgpProof,
+    DeltaSource, GroupReadAgg, GroupReadSpec, OrderReadSpec, PresentBgpAtom, PresentBgpProof,
+    PresentReadResult, PresentScalarOrderProof, PresentTerm, ReconcileProof,
+    ReconciledGroupReadProof, ReconciledOrderReadProof, ReconciledReadBgpProof,
 };
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
@@ -280,10 +281,25 @@ impl ReconciledReadProof {
                 .encode()
                 .map_err(|e| ReconciledReadError::Store(e.to_string()))
             }
-            // Ordered byte-in is delivered by the next C4 increment.
-            ReadProofInner::PresentOrder { .. } => Err(ReconciledReadError::UnsupportedShape(
-                "OrderBy byte-in is not yet wire-exposed (use the in-memory verify_and_resolve_reconciled_read)",
-            )),
+            // An OrderBy is a verifier-verified sort over the C2a-authenticated value column, so its
+            // bytes carry the reconcile + present-BGP + order proofs PLUS the delivered ORDERED result
+            // column (root-authenticated + resolved at verify) PLUS the OrderSpec witness. The
+            // direction/datatype are re-derived by the verifier (and transcript-bound); the witness is
+            // an early anti-substitution belt.
+            ReadProofInner::PresentOrder { reconcile, bgp, order } => {
+                let spec = self.order.ok_or(ReconciledReadError::UnsupportedShape(
+                    "order proof is missing its OrderSpec",
+                ))?;
+                ReconciledOrderReadProof {
+                    reconcile: reconcile.clone(),
+                    bgp: bgp.clone(),
+                    order: order.clone(),
+                    ordered_columns: self.result.columns.clone(),
+                    spec: OrderReadSpec { datatype: spec.datatype, direction: spec.direction },
+                }
+                .encode()
+                .map_err(|e| ReconciledReadError::Store(e.to_string()))
+            }
         }
     }
 }
@@ -656,9 +672,15 @@ pub fn prove_reconciled_read(
     let (inner, result) = match (source, order) {
         // Single-column full-key numeric OrderBy over the reconciled materialized present.
         (ReadSource::Materialized, Some(spec)) => {
-            let (reconcile, bgp, order_proof, result) =
+            let (reconcile, mut bgp, mut order_proof, result) =
                 prove_read_order_bgp(layers, &atoms, &joins, spec.datatype, spec.direction)
                     .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+            // Mint the term-less resolution witnesses (the child range atom's value↔term openings on
+            // the BGP proof + the ordered output ids' openings on the order proof) so the SAME proof
+            // also verifies + RESOLVES the ordered rows DB-free (byte-in) over a term-less chain. A
+            // term-bearing verifier ignores them.
+            attach_termless_order_openings(&mut bgp, &mut order_proof, layers, &atoms, &result.columns[0])
+                .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
             (ReadProofInner::PresentOrder { reconcile, bgp, order: order_proof }, result)
         }
         (ReadSource::Materialized, None) => {
@@ -1080,6 +1102,54 @@ pub fn decode_and_verify_reconciled_group(
         columns[ncols - 1].push(aggregate);
     }
     Ok(columns)
+}
+
+/// C4 byte-in DB-free FFI: verify + resolve a reconciled single-column numeric `OrderBy` shipped as
+/// BYTES against the trusted head root, driven by the VERIFIER's OWN WOQL `query`. Re-lowers the
+/// query to its [`OrderSpec`] (sort datatype + direction) AND the atom/join spec — ALL from the
+/// verifier's query, NEVER from the proof bytes (anti-substitution) — and requires a supported
+/// single-column full-key numeric `OrderBy` over the materialized present (a plain / count / grouped /
+/// delta-source, or the already-reject-closed subset-key / multi-key / non-numeric / float order, is
+/// a different answer shape and reject-closes at lowering). Hands the encoded
+/// [`ReconciledOrderReadProof`] + the term-less `VerifierCommitment` chain to the store's byte-in
+/// [`decode_and_verify_order`], which compares the wire OrderSpec witness to the verifier's spec and
+/// re-verifies + resolves the ordered rows via the audited `verify_and_resolve_order_bgp_from_views`
+/// (the crypto transcript ALSO binds direction/datatype). Returns the ordered rows (one column,
+/// ascending/descending by numeric value), matching the in-memory resolver.
+pub fn decode_and_verify_reconciled_order(
+    query: &Query,
+    order_proof_bytes: &[u8],
+    verifier_commitment_bytes: &[&[u8]],
+    trusted_head_root: ProofHash,
+) -> Result<Vec<Vec<CanonicalObject>>, ReconciledReadError> {
+    let LoweredBgp { atoms, joins, source, order, count, group } = lower_query(query)?;
+    // The OrderSpec is the verifier's OWN re-lowering: a non-ordered query (plain / count / group)
+    // must NOT be answered in an order's name. Anti-substitution binding for the order-ness, exactly
+    // as `bgp_spec_eq` binds it on the in-memory path.
+    let spec = order.ok_or(ReconciledReadError::UnsupportedShape(
+        "reconciled order byte-in path requires a single-column numeric OrderBy query (a plain/count/grouped read is a different answer shape)",
+    ))?;
+    // `lower_query` only sets `order` for a single-column numeric OrderBy over the MATERIALIZED present
+    // with no count/group wrapper; assert those invariants defensively so a future lowering change
+    // cannot silently mis-route an order over a delta source or a composite child.
+    if source != ReadSource::Materialized || count || group.is_some() {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled order byte-in path requires a materialized-present OrderBy (no delta source, count, or group)",
+        ));
+    }
+    // The store byte-in verifier compares the wire OrderSpec witness to `(datatype, direction)` and
+    // re-verifies + resolves the ordered rows against the trusted head root over the VERIFIER's
+    // re-lowered atoms/joins/direction/datatype (a wrong direction/datatype/BGP rejects).
+    decode_and_verify_order(
+        order_proof_bytes,
+        verifier_commitment_bytes,
+        trusted_head_root,
+        &atoms,
+        &joins,
+        spec.datatype,
+        spec.direction,
+    )
+    .map_err(|e| ReconciledReadError::Store(e.to_string()))
 }
 
 // --- Anti-substitution spec equality (field-wise; the store atom/join types are not `PartialEq`) ---
