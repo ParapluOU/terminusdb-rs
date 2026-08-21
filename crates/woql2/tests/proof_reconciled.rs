@@ -770,3 +770,92 @@ fn woql_mixed_rational_order_over_delta_stack_reject_closes() {
         "expected an order datatype reject-close over the delta stack, got: {err}"
     );
 }
+
+// ============================================================================================
+// COUNT — `Count(BGP)` over the reconciled materialized present. The cardinality is the present-BGP
+// result-relation row count (`result_len`), already chain-authenticated (the join-count identity
+// inside the BGP chain, resp. the single-atom filter count); no value-authentication and no new
+// gadget is required. The delivered answer is a single `UInt64` count cell.
+// ============================================================================================
+
+use terminusdb_woql2::misc::Count;
+use terminusdb_woql2::value::DataValue;
+
+/// The reconciled `Count`'s single delivered answer cell: a `UInt64` rendering of the cardinality.
+fn ucount(v: u64) -> CanonicalObject {
+    CanonicalObject::Value { datatype: CanonicalDatatype::UInt64, lexical: v.to_be_bytes().to_vec() }
+}
+
+/// `Count(inner, ?n)`.
+fn count_of(inner: Query) -> Query {
+    Query::Count(Count { query: Box::new(inner), count: DataValue::Variable("n".into()) })
+}
+
+#[test]
+fn woql_count_over_delta_stack() {
+    // present age triples = {alice30, bob15, carol18, dave40, erin18, grace25} (frank removed) => 6.
+    let layers = age_stack();
+    let lref = refs(&layers);
+    let query = count_of(tv("x", "age", "v"));
+    assert!(is_reconciled_read(&query), "Count(BGP) must route to the reconciled path");
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert_eq!(rows_of(&resolved), vec![vec![ucount(6)]], "Count over the present age relation is 6");
+    // Soundness: a wrong chain anchor (the base root, not the head) rejects.
+    let base_root = lref[0].resolution_root();
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+}
+
+#[test]
+fn woql_count_with_range_filter_over_delta_stack() {
+    // Count(Triple(?x, age, ?v) & ?v >= 18) => {alice30, carol18, dave40, erin18, grace25} = 5.
+    let layers = age_stack();
+    let lref = refs(&layers);
+    let query = count_of(and_of(vec![tv("x", "age", "v"), gte(dvar("v"), duint(18))]));
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert_eq!(rows_of(&resolved), vec![vec![ucount(5)]], "Count with >= 18 filter is 5");
+}
+
+#[test]
+fn woql_count_tampered_result_rejects() {
+    // A tampered delivered count cell (claim 7 vs the authenticated 6) fails the bind to the
+    // chain-authenticated cardinality.
+    let layers = age_stack();
+    let lref = refs(&layers);
+    let query = count_of(tv("x", "age", "v"));
+    let mut proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    proof.result.columns[0][0] = ArkFr::from_u64(7);
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
+}
+
+#[test]
+fn woql_count_anti_substitution_rejects_cross_proof() {
+    // The Count flag is part of the anti-substitution binding: a plain read proof must NOT verify
+    // in a Count query's name, and a Count proof must NOT verify in a plain read's name.
+    let layers = age_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let plain = tv("x", "age", "v");
+    let counted = count_of(tv("x", "age", "v"));
+    let plain_proof = prove_reconciled_read(&plain, &lref).unwrap();
+    let count_proof = prove_reconciled_read(&counted, &lref).unwrap();
+    assert!(verify_and_resolve_reconciled_read(&counted, &lref, head_root, &plain_proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&plain, &lref, head_root, &count_proof).is_err());
+    // Each verifies in its OWN name.
+    assert!(verify_and_resolve_reconciled_read(&plain, &lref, head_root, &plain_proof).is_ok());
+    assert!(verify_and_resolve_reconciled_read(&counted, &lref, head_root, &count_proof).is_ok());
+}
+
+#[test]
+fn woql_count_over_delta_source_reject_closes() {
+    // Count over a delta source (AddedTriple/DeletedTriple) is out of scope this slice: reject-close.
+    let layers = delta_read_stack();
+    let lref = refs(&layers);
+    let query = count_of(added_triple("s", "p1", "o"));
+    assert!(!is_reconciled_read(&query), "Count over a delta source must reject-close");
+    assert!(prove_reconciled_read(&query, &lref).is_err());
+}

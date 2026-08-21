@@ -38,6 +38,7 @@
 //!   * a fully-ground atom — the store BGP keeps at least one variable per atom.
 
 use dory_pcs::backends::arkworks::ArkFr;
+use dory_pcs::primitives::arithmetic::Field;
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::dict::{hash_object, hash_term};
@@ -48,8 +49,8 @@ use terminus_store::proof::query::{
 use terminus_store::proof::reconcile::{
     decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read, prove_read_bgp,
     prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
-    verify_and_resolve_order_bgp, DeltaReadProof, DeltaSource, PresentBgpAtom, PresentBgpProof,
-    PresentReadResult, PresentScalarOrderProof, PresentTerm, ReconcileProof,
+    verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof, DeltaSource, PresentBgpAtom,
+    PresentBgpProof, PresentReadResult, PresentScalarOrderProof, PresentTerm, ReconcileProof,
 };
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
@@ -109,12 +110,22 @@ struct LoweredBgp {
     /// `Some` iff an outer `OrderBy([v ASC|DESC], BGP)` wraps a single-column numeric materialized
     /// present BGP. `None` for a plain (unordered) read.
     order: Option<OrderSpec>,
+    /// `true` iff an outer `Count(BGP)` wraps a plain leaf BGP over the materialized present: the
+    /// delivered answer is the cardinality (`result_len`), already chain-authenticated by the
+    /// present-BGP proof — no value-authentication, no new gadget. Mutually exclusive with `order`
+    /// (a `Count` reject-closes an ordered/grouped/distinct/delta child; see `lower_query`).
+    count: bool,
 }
 
 /// The store proof bundle for whichever read path the plan routed to.
 enum ReadProofInner {
     /// Materialized present BGP over the reconciled head.
     Present { reconcile: ReconcileProof, bgp: PresentBgpProof },
+    /// `Count(BGP)` over the reconciled materialized present. The store bundle is the SAME
+    /// reconcile + present-BGP pair as [`ReadProofInner::Present`]; the cardinality is the
+    /// present-BGP proof's chain-authenticated `result_len` (delivered via [`verify_read_bgp`]),
+    /// so no additional aggregate gadget is carried.
+    Count { reconcile: ReconcileProof, bgp: PresentBgpProof },
     /// Single-column full-key numeric `OrderBy` over the reconciled materialized present.
     PresentOrder {
         reconcile: ReconcileProof,
@@ -139,6 +150,10 @@ pub struct ReconciledReadProof {
     /// The lowered `OrderBy` spec the proof was produced for (bound to the verifier's re-compiled
     /// query for anti-substitution), or `None` for a plain unordered read.
     order: Option<OrderSpec>,
+    /// `true` iff this proof was produced for a `Count(BGP)` (bound to the verifier's re-compiled
+    /// query for anti-substitution): a count proof must not be accepted in a plain read's name and
+    /// vice versa.
+    count: bool,
 }
 
 impl ReconciledReadProof {
@@ -160,6 +175,17 @@ fn map_term(term: &AtomTerm) -> PresentTerm {
         AtomTerm::ValueConstant(datatype, lexical) => PresentTerm::Constant(hash_object(
             &CanonicalObject::Value { datatype: *datatype, lexical: lexical.clone() },
         )),
+    }
+}
+
+/// Render a nonneg cardinality as the reconciled `Count`'s single delivered answer cell. The value
+/// is the exact solution count — numerically identical to TerminusDB's `aggregate_all(count, …)`
+/// — delivered as a `UInt64` value object (an internal integer rendering of the count; the count
+/// itself is a cardinality, not a dictionary-resolved binding).
+fn count_object(cardinality: usize) -> CanonicalObject {
+    CanonicalObject::Value {
+        datatype: CanonicalDatatype::UInt64,
+        lexical: (cardinality as u64).to_be_bytes().to_vec(),
     }
 }
 
@@ -249,7 +275,7 @@ fn uniform_source(plan: &LayerBgpPlan) -> Result<ReadSource, ReconciledReadError
 fn lower_plan(plan: &LayerBgpPlan) -> Result<LoweredBgp, ReconciledReadError> {
     let source = uniform_source(plan)?;
     let atoms = plan.atoms.iter().map(map_atom).collect::<Result<Vec<_>, _>>()?;
-    Ok(LoweredBgp { atoms, joins: plan.joins.clone(), source, order: None })
+    Ok(LoweredBgp { atoms, joins: plan.joins.clone(), source, order: None, count: false })
 }
 
 /// Compile `query` with the base [`plan_bgp`] (reusing its full BGP classification: constants /
@@ -257,17 +283,43 @@ fn lower_plan(plan: &LayerBgpPlan) -> Result<LoweredBgp, ReconciledReadError> {
 /// resulting leaf BGP to the store inputs. Reject-closes anything the store paths cannot deliver.
 fn lower_query(query: &Query) -> Result<LoweredBgp, ReconciledReadError> {
     let compiled = plan_bgp(query).map_err(|e| ReconciledReadError::NotBgp(e.to_string()))?;
+    // COUNT — `Count(BGP)` over the reconciled materialized present. The count wrapper sets
+    // `count_variable = Some(_)` AND `projection = Some(vec![])`, so it MUST be handled BEFORE the
+    // projection reject below. The cardinality is the present-BGP result-relation row count
+    // (`result_len`), already chain-authenticated — the join-count identity inside the BGP chain
+    // (resp. the single-atom filter count) proves it — so no value-authentication and no new
+    // aggregate gadget is required (full natural-join assignments over the set-valued present are
+    // already unique, so the row count IS the WOQL `aggregate_all(count, …)` solution count). Only
+    // a plain leaf BGP over the materialized present is accepted; a Distinct-collapsed, ordered,
+    // grouped, joined-composite, or delta-source count reject-closes (fail-closed over coverage).
+    if compiled.count_variable.is_some() {
+        // `Count(Distinct(...))` dedups before counting — a cardinality this slice does not prove.
+        if compiled.full_row_distinct {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled Count over a Distinct relation is unsupported (dedup changes the cardinality)",
+            ));
+        }
+        let plan = compiled.relation.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
+            "reconciled Count requires a plain leaf BGP input (no distinct/group/order/join composite)",
+        ))?;
+        let mut lowered = lower_plan(plan)?;
+        // A count is proven ONLY over the reconciled materialized present; a delta-source count
+        // (Count over AddedTriple/DeletedTriple) is out of scope this slice.
+        if lowered.source != ReadSource::Materialized {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled Count is supported only over the materialized present (not delta additions/removals)",
+            ));
+        }
+        lowered.count = true;
+        return Ok(lowered);
+    }
     // The reconciled path delivers the FULL BGP relation's rows. A Select projection changes
-    // which columns are delivered and a Count delivers a cardinality, not rows — reject both so
-    // the delivered columns are exactly the compiled BGP schema.
+    // which columns are delivered — reject it so the delivered columns are exactly the compiled
+    // BGP schema. (A bare `Count` is handled above; anything still carrying a projection here is a
+    // genuine `Select` whose projected rows this path does not deliver.)
     if compiled.projection.is_some() {
         return Err(ReconciledReadError::UnsupportedShape(
             "Select projection is unsupported on the reconciled path (delivers the full BGP relation)",
-        ));
-    }
-    if compiled.count_variable.is_some() {
-        return Err(ReconciledReadError::UnsupportedShape(
-            "Count is unsupported on the reconciled path (it delivers rows, not a cardinality)",
         ));
     }
     // A single-column, full-key, numeric `OrderBy` over a plain leaf BGP is supported over the
@@ -319,7 +371,30 @@ pub fn prove_reconciled_read(
     query: &Query,
     layers: &[&LayerCommitment],
 ) -> Result<ReconciledReadProof, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source, order } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order, count } = lower_query(query)?;
+    if count {
+        // COUNT over the reconciled materialized present. `lower_query` guarantees
+        // `source == Materialized` and `order == None`. The store bundle is the SAME reconcile +
+        // present-BGP pair a plain read produces; the delivered answer is the single-cell
+        // cardinality (`result_len`), re-derived and bound at verify via [`verify_read_bgp`].
+        let (reconcile, bgp, _rows) = prove_read_bgp(layers, &atoms, &joins)
+            .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+        let cardinality = bgp.result_len;
+        let result = PresentReadResult {
+            columns: vec![vec![ArkFr::from_u64(cardinality as u64)]],
+            len: 1,
+            id_hints: Vec::new(),
+        };
+        return Ok(ReconciledReadProof {
+            inner: ReadProofInner::Count { reconcile, bgp },
+            result,
+            atoms,
+            joins,
+            source,
+            order,
+            count,
+        });
+    }
     let (inner, result) = match (source, order) {
         // Single-column full-key numeric OrderBy over the reconciled materialized present.
         (ReadSource::Materialized, Some(spec)) => {
@@ -350,7 +425,7 @@ pub fn prove_reconciled_read(
             ));
         }
     };
-    Ok(ReconciledReadProof { inner, result, atoms, joins, source, order })
+    Ok(ReconciledReadProof { inner, result, atoms, joins, source, order, count })
 }
 
 /// Verify a reconciled read proof against the trusted head root AND resolve its bindings to
@@ -370,6 +445,32 @@ pub fn verify_and_resolve_reconciled_read(
     let expected = lower_query(query)?;
     if !bgp_spec_eq(&expected, proof) {
         return Err(ReconciledReadError::QueryShapeMismatch);
+    }
+    // COUNT — the delivered answer is the single-cell cardinality, not resolved rows. The
+    // present-BGP proof's chain-authenticated result-row count is re-derived here ([`verify_read_bgp`]
+    // returns it); the delivered cell is then bound to it so a tampered count rejects.
+    if expected.count {
+        let ReadProofInner::Count { reconcile, bgp } = &proof.inner else {
+            return Err(ReconciledReadError::QueryShapeMismatch);
+        };
+        let cardinality = verify_read_bgp(
+            layers,
+            trusted_head_root,
+            &expected.atoms,
+            &expected.joins,
+            reconcile,
+            bgp,
+        )
+        .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+        if proof.result.columns.len() != 1
+            || proof.result.columns[0].len() != 1
+            || proof.result.columns[0][0] != ArkFr::from_u64(cardinality as u64)
+        {
+            return Err(ReconciledReadError::Store(
+                "reconciled count: delivered count cell does not match the chain-authenticated cardinality".to_string(),
+            ));
+        }
+        return Ok(vec![vec![count_object(cardinality)]]);
     }
     match (expected.source, expected.order, &proof.inner) {
         (ReadSource::Materialized, None, ReadProofInner::Present { reconcile, bgp }) => {
@@ -439,7 +540,7 @@ pub fn decode_and_verify_reconciled_delta_read(
 ) -> Result<usize, ReconciledReadError> {
     // A materialized OrderBy also lowers to `source == Materialized`, so it is refused by the
     // `Materialized` arm below (this byte-in path ships a `DeltaReadProof`, never an order proof).
-    let LoweredBgp { atoms, joins, source, order: _ } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order: _, count: _ } = lower_query(query)?;
     let delta_source = match source {
         ReadSource::Additions => DeltaSource::Additions,
         ReadSource::Removals => DeltaSource::Removals,
@@ -475,7 +576,7 @@ pub fn decode_and_verify_reconciled_read_bgp(
     verifier_commitment_bytes: &[&[u8]],
     trusted_head_root: ProofHash,
 ) -> Result<usize, ReconciledReadError> {
-    let LoweredBgp { atoms, joins, source, order } = lower_query(query)?;
+    let LoweredBgp { atoms, joins, source, order, count } = lower_query(query)?;
     // This is the MATERIALIZED-present read; a delta-source query is a different proof shape.
     if source != ReadSource::Materialized {
         return Err(ReconciledReadError::UnsupportedShape(
@@ -487,6 +588,13 @@ pub fn decode_and_verify_reconciled_read_bgp(
     if order.is_some() {
         return Err(ReconciledReadError::UnsupportedShape(
             "reconciled-present byte-in path does not support OrderBy (an ordered read ships a distinct proof bundle)",
+        ));
+    }
+    // A Count delivers a cardinality, not resolved rows; the byte-in count path is out of scope for
+    // this slice (use the in-process verify_and_resolve_reconciled_read for counts).
+    if count {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled-present byte-in path does not support Count (a count delivers a cardinality, not rows)",
         ));
     }
     decode_and_verify_read_bgp(
@@ -537,6 +645,9 @@ fn bgp_spec_eq(expected: &LoweredBgp, proof: &ReconciledReadProof) -> bool {
         // ascending proof (or a different numeric datatype) cannot be accepted in a descending
         // order's name, nor an ordered proof for an unordered query (or vice versa).
         && expected.order == proof.order
+        // The Count flag is part of the anti-substitution binding: a count proof cannot be
+        // accepted in a plain read's name (or vice versa).
+        && expected.count == proof.count
         && expected.atoms.len() == proof.atoms.len()
         && expected.joins.len() == proof.joins.len()
         && expected
