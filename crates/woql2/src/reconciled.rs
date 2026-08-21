@@ -48,13 +48,16 @@ use terminus_store::proof::query::{
     AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
 };
 use terminus_store::proof::reconcile::{
-    decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read,
+    attach_termless_group_openings, decode_and_verify_delta_read, decode_and_verify_group_count,
+    decode_and_verify_group_extrema, decode_and_verify_group_sum, decode_and_verify_read_bgp,
+    prove_delta_read,
     prove_read_group_count_bgp, prove_read_group_extrema_bgp, prove_read_group_sum_bgp,
     prove_read_bgp, prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
     verify_and_resolve_group_count_bgp, verify_and_resolve_group_extrema_bgp,
     verify_and_resolve_group_sum_bgp, verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof,
-    DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult, PresentScalarOrderProof,
-    PresentTerm, ReconcileProof, ReconciledReadBgpProof,
+    DeltaSource, GroupReadAgg, GroupReadSpec, PresentBgpAtom, PresentBgpProof, PresentReadResult,
+    PresentScalarOrderProof, PresentTerm, ReconcileProof, ReconciledGroupReadProof,
+    ReconciledReadBgpProof,
 };
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
@@ -140,6 +143,24 @@ enum GroupAgg {
 struct GroupSpec {
     key_columns: Vec<usize>,
     agg: GroupAgg,
+}
+
+/// Map the compiler-side [`GroupSpec`] to the store-side wire [`GroupReadSpec`] (the anti-substitution
+/// witness carried in a byte-in group proof). The store verifier compares the carried witness to the
+/// verifier's OWN re-lowered spec and reject-closes on mismatch.
+fn to_store_group_spec(spec: &GroupSpec) -> GroupReadSpec {
+    GroupReadSpec {
+        key_columns: spec.key_columns.clone(),
+        agg: match spec.agg {
+            GroupAgg::Count => GroupReadAgg::Count,
+            GroupAgg::Sum { value_column, datatype } => {
+                GroupReadAgg::Sum { value_column, datatype }
+            }
+            GroupAgg::Extrema { value_column, datatype, kind } => {
+                GroupReadAgg::Extrema { value_column, datatype, kind }
+            }
+        },
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -241,12 +262,27 @@ impl ReconciledReadProof {
             ReadProofInner::Delta { proof } => {
                 proof.encode().map_err(|e| ReconciledReadError::Store(e.to_string()))
             }
-            // Ordered / grouped byte-in is delivered by later C4 increments.
+            // A GroupBy aggregate is a verifier-recompute over the child rows, so its bytes carry the
+            // reconcile + present-BGP proof PLUS the delivered child result columns (root-authenticated
+            // at verify) PLUS the GroupSpec as an anti-substitution WITNESS. The witness is COMPARED to
+            // the verifier's re-lowered spec at verify (reject on mismatch); the recompute uses the
+            // verifier's own params, never these bytes.
+            ReadProofInner::Group { reconcile, bgp } => {
+                let spec = self.group.as_ref().ok_or(ReconciledReadError::UnsupportedShape(
+                    "group proof is missing its GroupSpec",
+                ))?;
+                ReconciledGroupReadProof {
+                    reconcile: reconcile.clone(),
+                    bgp: bgp.clone(),
+                    child_columns: self.result.columns.clone(),
+                    spec: to_store_group_spec(spec),
+                }
+                .encode()
+                .map_err(|e| ReconciledReadError::Store(e.to_string()))
+            }
+            // Ordered byte-in is delivered by the next C4 increment.
             ReadProofInner::PresentOrder { .. } => Err(ReconciledReadError::UnsupportedShape(
                 "OrderBy byte-in is not yet wire-exposed (use the in-memory verify_and_resolve_reconciled_read)",
-            )),
-            ReadProofInner::Group { .. } => Err(ReconciledReadError::UnsupportedShape(
-                "GroupBy byte-in is not yet wire-exposed (use the in-memory verify_and_resolve_reconciled_read)",
             )),
         }
     }
@@ -594,12 +630,18 @@ pub fn prove_reconciled_read(
     // reconcile + present-BGP pair a plain read produces; the CHILD rows are delivered in `result`
     // for authentication, and the per-group aggregate is recomputed by the verifier.
     if let Some(agg) = group.as_ref().map(|spec| spec.agg) {
-        let (reconcile, bgp, result) = match agg {
+        let (reconcile, mut bgp, result) = match agg {
             GroupAgg::Count => prove_read_group_count_bgp(layers, &atoms, &joins),
             GroupAgg::Sum { .. } => prove_read_group_sum_bgp(layers, &atoms, &joins),
             GroupAgg::Extrema { .. } => prove_read_group_extrema_bgp(layers, &atoms, &joins),
         }
         .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
+        // Mint the term-less resolution witnesses into the child BGP proof so the SAME proof also
+        // verifies + RESOLVES the child rows DB-free (byte-in) over a term-less VerifierCommitment
+        // chain — a group aggregate is a verifier-recompute over the RESOLVED rows. A term-bearing
+        // verifier (the in-memory path) ignores the witnesses.
+        attach_termless_group_openings(&mut bgp, layers, &atoms, &result.columns)
+            .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
         return Ok(ReconciledReadProof {
             inner: ReadProofInner::Group { reconcile, bgp },
             result,
@@ -948,6 +990,96 @@ pub fn decode_and_verify_reconciled_count(
         &joins,
     )
     .map_err(|e| ReconciledReadError::Store(e.to_string()))
+}
+
+/// C4 byte-in DB-free FFI: verify a reconciled `GroupBy` aggregate (GroupCount / GroupSum / group
+/// Min/Max) shipped as BYTES against the trusted head root, driven by the VERIFIER's OWN WOQL
+/// `query`. Re-lowers the query to its [`GroupSpec`] (key columns + aggregate kind + value column +
+/// datatype) AND the atom/join spec — ALL from the verifier's query, NEVER from the proof bytes
+/// (anti-substitution) — and requires a `GroupBy` aggregate over the materialized present (a plain /
+/// ordered / count / delta-source query reject-closes). Hands the encoded [`ReconciledGroupReadProof`]
+/// (reconcile + present-BGP proof + the delivered child rows) + the term-less `VerifierCommitment`
+/// chain to the store's byte-in `decode_and_verify_group_*`, which root-authenticates + resolves the
+/// child rows (a tampered / fabricated child row rejects there) and RECOMPUTES the per-group
+/// aggregate. Returns the answer COLUMN-major (`keys..., aggregate`), matching the in-memory group
+/// resolver ([`verify_and_resolve_reconciled_read`]).
+pub fn decode_and_verify_reconciled_group(
+    query: &Query,
+    group_proof_bytes: &[u8],
+    verifier_commitment_bytes: &[&[u8]],
+    trusted_head_root: ProofHash,
+) -> Result<Vec<Vec<CanonicalObject>>, ReconciledReadError> {
+    let LoweredBgp { atoms, joins, source, order, count, group } = lower_query(query)?;
+    // The GroupSpec is the verifier's OWN re-lowering: a non-group query (plain / order / count) must
+    // NOT be answered in a group's name. This is the anti-substitution binding for the grouping,
+    // exactly as `bgp_spec_eq` binds it on the in-memory path.
+    let spec = group.ok_or(ReconciledReadError::UnsupportedShape(
+        "reconciled group byte-in path requires a GroupBy aggregate query (a plain/ordered/count read is a different answer shape)",
+    ))?;
+    // `lower_query` only sets `group` for a plain leaf BGP over the MATERIALIZED present with no
+    // order/count wrapper; assert those invariants defensively so a future lowering change cannot
+    // silently mis-route a group over a delta source or a composite child.
+    if source != ReadSource::Materialized || order.is_some() || count {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled group byte-in path requires a materialized-present GroupBy (no delta source, order, or count)",
+        ));
+    }
+    // Dispatch to the store byte-in verifier with the VERIFIER's OWN re-lowered spec (atoms / joins /
+    // key columns / aggregate / value column / datatype / kind). Each entry is (resolved key objects,
+    // trailing aggregate cell): a `UInt64` count, or the sum/extrema rendered value object.
+    let groups: Vec<(Vec<CanonicalObject>, CanonicalObject)> = match spec.agg {
+        GroupAgg::Count => decode_and_verify_group_count(
+            group_proof_bytes,
+            verifier_commitment_bytes,
+            trusted_head_root,
+            &atoms,
+            &joins,
+            &spec.key_columns,
+        )
+        .map_err(|e| ReconciledReadError::Store(e.to_string()))?
+        .into_iter()
+        .map(|(keys, group_count)| (keys, count_object(group_count as usize)))
+        .collect(),
+        GroupAgg::Sum { value_column, datatype } => decode_and_verify_group_sum(
+            group_proof_bytes,
+            verifier_commitment_bytes,
+            trusted_head_root,
+            &atoms,
+            &joins,
+            &spec.key_columns,
+            value_column,
+            datatype,
+        )
+        .map_err(|e| ReconciledReadError::Store(e.to_string()))?,
+        GroupAgg::Extrema { value_column, datatype, kind } => decode_and_verify_group_extrema(
+            group_proof_bytes,
+            verifier_commitment_bytes,
+            trusted_head_root,
+            &atoms,
+            &joins,
+            &spec.key_columns,
+            value_column,
+            datatype,
+            kind,
+        )
+        .map_err(|e| ReconciledReadError::Store(e.to_string()))?,
+    };
+    // Column-major output: one key column per group key, plus the trailing aggregate cell (mirrors
+    // the in-memory group resolver in `verify_and_resolve_reconciled_read`).
+    let ncols = spec.key_columns.len() + 1;
+    let mut columns: Vec<Vec<CanonicalObject>> = vec![Vec::with_capacity(groups.len()); ncols];
+    for (keys, aggregate) in groups {
+        if keys.len() != spec.key_columns.len() {
+            return Err(ReconciledReadError::Store(
+                "reconciled group: recomputed group key arity mismatch".to_string(),
+            ));
+        }
+        for (column, key) in columns.iter_mut().zip(keys) {
+            column.push(key);
+        }
+        columns[ncols - 1].push(aggregate);
+    }
+    Ok(columns)
 }
 
 // --- Anti-substitution spec equality (field-wise; the store atom/join types are not `PartialEq`) ---

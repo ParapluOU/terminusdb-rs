@@ -1340,3 +1340,193 @@ fn woql_group_extrema_mixed_datatype_reject_closes() {
         "expected a datatype-homogeneity reject-close over the mixed salary column, got: {err}"
     );
 }
+
+// ============================================================================================
+// C4 GROUP byte-in — DB-free: prove a reconciled GroupBy aggregate (GroupCount / GroupSum / group
+// Min/Max), ship it as BYTES (the framed `ReconciledGroupReadProof` = reconcile + present-BGP proof
+// + the delivered child rows + the GroupSpec witness, plus one TERM-LESS `VerifierCommitment` per
+// layer), and verify + RESOLVE the grouped answer DB-free through `decode_and_verify_reconciled_group`
+// against the trusted head root. The byte-in answer must bag-equal the in-memory answer. Negatives:
+// a DIFFERENT aggregate / non-group query (spec mismatch) and a truncated / tampered blob reject.
+//
+// A group byte-in RESOLVES the child rows, so over an ALL-TERM-LESS chain it can only resolve
+// HEAD-minted terms (the D5-FIX correctly fail-closes a NON-HEAD term-less NodeValueId). The
+// positive round-trips therefore use stacks whose entire queried/resolved `present` is HEAD-minted;
+// the negatives reject BEFORE resolution (spec check / decode), so they hold on any stack.
+// ============================================================================================
+
+/// One TERM-LESS `VerifierCommitment` per layer, encoded to bytes (the all-term-less chain the
+/// DB-free remote verifier holds).
+fn termless_commit_bytes(lref: &[&LayerCommitment]) -> Vec<Vec<u8>> {
+    lref.iter()
+        .map(|l| l.verifier_commitment_termless().unwrap().encode().unwrap())
+        .collect()
+}
+
+/// A base+delta stack whose queried `member` relation is entirely HEAD-minted: the base holds two
+/// UNRELATED (`other`) records (so its committed group is relocatable and no resolved term is
+/// base-minted), and the HEAD introduces every `member` triple. GroupBy(dept) => d1:3, d2:3.
+fn group_count_head_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for (s, o) in [("base1", "z1"), ("base2", "z2")] {
+        b.add_value_triple(ValueTriple::new_node(&iri(s), &iri("other"), &iri(o))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    for (dept, person) in [("d1", "a1"), ("d1", "a2"), ("d1", "a6"), ("d2", "a3"), ("d2", "a4"), ("d2", "a7")] {
+        child.add_value_triple(ValueTriple::new_node(&iri(dept), &iri("member"), &iri(person))).unwrap();
+    }
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+/// A base+delta stack whose entire `present` salary relation is HEAD-minted: the base holds two
+/// salary records that the HEAD REMOVES (so no base-minted VALUE survives into `present` — a group
+/// range read opens the whole present object column), and the HEAD adds the real salaries.
+/// present salary = d1->{100,200,50}, d2->{300,400,50}. sum d1:350,d2:750; min 50,50; max 200,400.
+fn group_sum_head_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for sal in [10u32, 20] {
+        b.add_value_triple(ValueTriple::new_value(&iri("d0"), &iri("salary"), u32::make_entry(&sal))).unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    for sal in [10u32, 20] {
+        child.remove_value_triple(ValueTriple::new_value(&iri("d0"), &iri("salary"), u32::make_entry(&sal))).unwrap();
+    }
+    for (dept, sal) in [("d1", 100u32), ("d1", 200), ("d1", 50), ("d2", 300), ("d2", 400), ("d2", 50)] {
+        child.add_value_triple(ValueTriple::new_value(&iri(dept), &iri("salary"), u32::make_entry(&sal))).unwrap();
+    }
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+#[test]
+fn woql_group_count_byte_in_matches_in_memory_and_rejects_substitution() {
+    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_group, ReconciledReadError};
+
+    let layers = group_count_head_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let query = group_count_by_dept();
+
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let in_mem = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+
+    let proof_bytes = proof.encode().unwrap();
+    let commit_bytes = termless_commit_bytes(&lref);
+    let commit_refs: Vec<&[u8]> = commit_bytes.iter().map(|b| b.as_slice()).collect();
+
+    let byte_in =
+        decode_and_verify_reconciled_group(&query, &proof_bytes, &commit_refs, head_root).unwrap();
+    assert!(
+        bag_eq(rows_of(&byte_in), rows_of(&in_mem)),
+        "byte-in group-count must match in-memory, got {:?}",
+        rows_of(&byte_in)
+    );
+    assert!(bag_eq(rows_of(&byte_in), vec![vec![node("d1"), ucount(3)], vec![node("d2"), ucount(3)]]));
+
+    // NEGATIVE — non-group query: a plain read re-lowers to `group == None` and reject-closes.
+    let plain = tv("dept", "member", "person");
+    let err = decode_and_verify_reconciled_group(&plain, &proof_bytes, &commit_refs, head_root)
+        .expect_err("a non-group query must be rejected by the group byte-in path");
+    assert!(matches!(err, ReconciledReadError::UnsupportedShape(_)), "got {err:?}");
+
+    // NEGATIVE — truncated blob: framing size/checksum guard fails.
+    let truncated = &proof_bytes[..proof_bytes.len() - 1];
+    assert!(
+        decode_and_verify_reconciled_group(&query, truncated, &commit_refs, head_root).is_err(),
+        "a truncated group proof must fail closed"
+    );
+    // NEGATIVE — tampered body byte: SHA-256 checksum fails.
+    let mut tampered = proof_bytes.clone();
+    let mid = tampered.len() / 2;
+    tampered[mid] ^= 0xff;
+    assert!(
+        decode_and_verify_reconciled_group(&query, &tampered, &commit_refs, head_root).is_err(),
+        "a tampered group proof must fail the checksum"
+    );
+}
+
+#[test]
+fn woql_group_sum_byte_in_matches_in_memory_and_rejects_cross_aggregate() {
+    use terminusdb_woql2::reconciled::decode_and_verify_reconciled_group;
+
+    let layers = group_sum_head_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let sum_q = group_sum_by_dept();
+
+    let sum_proof = prove_reconciled_read(&sum_q, &lref).unwrap();
+    let in_mem = verify_and_resolve_reconciled_read(&sum_q, &lref, head_root, &sum_proof).unwrap();
+
+    let sum_bytes = sum_proof.encode().unwrap();
+    let commit_bytes = termless_commit_bytes(&lref);
+    let commit_refs: Vec<&[u8]> = commit_bytes.iter().map(|b| b.as_slice()).collect();
+
+    let byte_in =
+        decode_and_verify_reconciled_group(&sum_q, &sum_bytes, &commit_refs, head_root).unwrap();
+    assert!(
+        bag_eq(rows_of(&byte_in), rows_of(&in_mem)),
+        "byte-in group-sum must match in-memory (d1:350, d2:750), got {:?}",
+        rows_of(&byte_in)
+    );
+    assert!(bag_eq(rows_of(&byte_in), vec![vec![node("d1"), ucount(350)], vec![node("d2"), ucount(750)]]));
+
+    // NEGATIVE — cross-aggregate over the SAME child BGP: a group-SUM proof verified under a
+    // group-COUNT query must reject on the GroupSpec witness mismatch.
+    let count_q = group_count_by_dept_salary();
+    assert!(
+        decode_and_verify_reconciled_group(&count_q, &sum_bytes, &commit_refs, head_root).is_err(),
+        "a group-sum proof must NOT verify under a group-count query (anti-substitution)"
+    );
+
+    // A group-COUNT proof over the shared child round-trips in its OWN name.
+    let count_proof = prove_reconciled_read(&count_q, &lref).unwrap();
+    let count_bytes = count_proof.encode().unwrap();
+    let count_in = decode_and_verify_reconciled_group(&count_q, &count_bytes, &commit_refs, head_root).unwrap();
+    assert!(bag_eq(rows_of(&count_in), vec![vec![node("d1"), ucount(3)], vec![node("d2"), ucount(3)]]));
+    // The reverse cross: a group-COUNT proof under a group-SUM query rejects too.
+    assert!(
+        decode_and_verify_reconciled_group(&sum_q, &count_bytes, &commit_refs, head_root).is_err(),
+        "a group-count proof must NOT verify under a group-sum query (anti-substitution)"
+    );
+}
+
+#[test]
+fn woql_group_extrema_byte_in_matches_in_memory_and_rejects_cross_kind() {
+    use terminusdb_woql2::reconciled::decode_and_verify_reconciled_group;
+
+    let layers = group_sum_head_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let min_q = group_min_by_dept();
+    let max_q = group_max_by_dept();
+
+    let min_proof = prove_reconciled_read(&min_q, &lref).unwrap();
+    let min_mem = verify_and_resolve_reconciled_read(&min_q, &lref, head_root, &min_proof).unwrap();
+    let min_bytes = min_proof.encode().unwrap();
+    let commit_bytes = termless_commit_bytes(&lref);
+    let commit_refs: Vec<&[u8]> = commit_bytes.iter().map(|b| b.as_slice()).collect();
+
+    let min_in = decode_and_verify_reconciled_group(&min_q, &min_bytes, &commit_refs, head_root).unwrap();
+    assert!(bag_eq(rows_of(&min_in), rows_of(&min_mem)));
+    assert!(bag_eq(rows_of(&min_in), vec![vec![node("d1"), uint(50)], vec![node("d2"), uint(50)]]));
+
+    // NEGATIVE — cross min/max kind over the SAME child BGP: a group-MIN proof under a group-MAX
+    // query must reject on the GroupSpec witness mismatch (the extrema KIND is bound).
+    assert!(
+        decode_and_verify_reconciled_group(&max_q, &min_bytes, &commit_refs, head_root).is_err(),
+        "a group-min proof must NOT verify under a group-max query (anti-substitution)"
+    );
+
+    // Max round-trips in its OWN name.
+    let max_proof = prove_reconciled_read(&max_q, &lref).unwrap();
+    let max_bytes = max_proof.encode().unwrap();
+    let max_in = decode_and_verify_reconciled_group(&max_q, &max_bytes, &commit_refs, head_root).unwrap();
+    assert!(bag_eq(rows_of(&max_in), vec![vec![node("d1"), uint(200)], vec![node("d2"), uint(400)]]));
+}
