@@ -1137,3 +1137,136 @@ fn woql_group_sum_mixed_datatype_reject_closes() {
         "expected a datatype-homogeneity reject-close over the mixed salary column, got: {err}"
     );
 }
+
+// ============================================================================================
+// GROUP MIN/MAX (extrema) — `GroupBy(keys) + RangeMin/RangeMax(value)` over the reconciled present
+// via VERIFIER-RECOMPUTE over the C2a-authenticated numeric VALUE column. The extremum is one of
+// the group's own authenticated values (returned in its original datatype), compared by TRUE
+// numeric value. Same value discipline / homogeneity guards / anti-substitution as GroupSum.
+// ============================================================================================
+
+use terminusdb_woql2::misc::{RangeMax, RangeMin};
+
+/// `GroupBy([dept], RangeMin(sal))` over the shared salary child BGP.
+fn group_min_by_dept() -> Query {
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("sal".into()),
+            group_by: vec!["dept".into()],
+            grouped_value: Value::Variable("sals".into()),
+            query: Box::new(group_child_salary()),
+        }),
+        Query::RangeMin(RangeMin {
+            list: DataValue::Variable("sals".into()),
+            result: DataValue::Variable("least".into()),
+        }),
+    ])
+}
+/// `GroupBy([dept], RangeMax(sal))` over the shared salary child BGP.
+fn group_max_by_dept() -> Query {
+    and_of(vec![
+        Query::GroupBy(GroupBy {
+            template: Value::Variable("sal".into()),
+            group_by: vec!["dept".into()],
+            grouped_value: Value::Variable("sals".into()),
+            query: Box::new(group_child_salary()),
+        }),
+        Query::RangeMax(RangeMax {
+            list: DataValue::Variable("sals".into()),
+            result: DataValue::Variable("most".into()),
+        }),
+    ])
+}
+
+#[test]
+fn woql_group_min_over_delta_stack() {
+    // present salary d1->{100,200,50}, d2->{300,400,50}. Min: d1=50, d2=50 (in original UInt32).
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let query = group_min_by_dept();
+    assert!(is_reconciled_read(&query), "GroupBy min must route to the reconciled path");
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert!(
+        bag_eq(rows_of(&resolved), vec![vec![node("d1"), uint(50)], vec![node("d2"), uint(50)]]),
+        "group-min must be d1:50, d2:50, got {:?}", rows_of(&resolved)
+    );
+    let base_root = lref[0].resolution_root();
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, base_root, &proof).is_err());
+}
+
+#[test]
+fn woql_group_max_over_delta_stack() {
+    // Max: d1=200, d2=400.
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let query = group_max_by_dept();
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    let resolved = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert!(
+        bag_eq(rows_of(&resolved), vec![vec![node("d1"), uint(200)], vec![node("d2"), uint(400)]]),
+        "group-max must be d1:200, d2:400, got {:?}", rows_of(&resolved)
+    );
+}
+
+#[test]
+fn woql_group_extrema_tampered_result_rejects() {
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let query = group_min_by_dept();
+    let mut proof = prove_reconciled_read(&query, &lref).unwrap();
+    let head_root = lref.last().unwrap().resolution_root();
+    proof.result.columns[1][0] = ArkFr::from_u64(987_654_321);
+    assert!(verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).is_err());
+}
+
+#[test]
+fn woql_group_extrema_anti_substitution_rejects_cross_aggregate() {
+    // The aggregate (Min vs Max vs Sum) is part of the anti-substitution binding, over the SAME
+    // child BGP: a group-MIN proof must NOT verify as a group-MAX query, nor as a group-SUM query.
+    let layers = group_sum_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+    let min_q = group_min_by_dept();
+    let max_q = group_max_by_dept();
+    let sum_q = group_sum_by_dept();
+    let min_proof = prove_reconciled_read(&min_q, &lref).unwrap();
+    assert!(verify_and_resolve_reconciled_read(&max_q, &lref, head_root, &min_proof).is_err());
+    assert!(verify_and_resolve_reconciled_read(&sum_q, &lref, head_root, &min_proof).is_err());
+    // Min verifies in its OWN name.
+    let res = verify_and_resolve_reconciled_read(&min_q, &lref, head_root, &min_proof).unwrap();
+    assert!(bag_eq(rows_of(&res), vec![vec![node("d1"), uint(50)], vec![node("d2"), uint(50)]]));
+}
+
+#[test]
+fn woql_group_extrema_mixed_datatype_reject_closes() {
+    // A MIXED value column reject-closes end to end (the child `?sal >= 0` range-path homogeneity
+    // guard fails at prove time — the extremum is never picked from an under-reported column).
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("d1"), &iri("salary"), u32::make_entry(&100u32))).unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("d1"), &iri("salary"), i32::make_entry(&50i32))).unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("z1"), &iri("salary"), u32::make_entry(&9u32))).unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("z2"), &iri("salary"), u32::make_entry(&8u32))).unwrap();
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("z1"), &iri("salary"), u32::make_entry(&9u32))).unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("z2"), &iri("salary"), u32::make_entry(&8u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("d2"), &iri("salary"), u32::make_entry(&300u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("d2"), &iri("salary"), u32::make_entry(&400u32))).unwrap();
+    let layers = vec![base_lc, child.commit().unwrap().proof_commitment().unwrap()];
+    let lref = refs(&layers);
+    let query = group_max_by_dept();
+    assert!(is_reconciled_read(&query));
+    let err = match prove_reconciled_read(&query, &lref) {
+        Ok(_) => panic!("expected a datatype-homogeneity reject-close, but prove succeeded"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous") || err.to_string().contains("datatype"),
+        "expected a datatype-homogeneity reject-close over the mixed salary column, got: {err}"
+    );
+}

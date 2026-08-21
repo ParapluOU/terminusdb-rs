@@ -42,14 +42,16 @@ use dory_pcs::primitives::arithmetic::Field;
 use terminus_store::proof::bgp::JoinStep;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::dict::{hash_object, hash_term};
+use terminus_store::proof::group::GroupExtremaKind;
 use terminus_store::proof::order::OrderDirection;
 use terminus_store::proof::query::{
     AtomTerm, ColumnSource, LayerBgpAtom, LayerBgpPlan, ObjectKindFilter, ObjectRangeSpec,
 };
 use terminus_store::proof::reconcile::{
     decode_and_verify_delta_read, decode_and_verify_read_bgp, prove_delta_read,
-    prove_read_group_count_bgp, prove_read_group_sum_bgp, prove_read_bgp, prove_read_order_bgp,
-    verify_and_resolve_bgp, verify_and_resolve_delta_read, verify_and_resolve_group_count_bgp,
+    prove_read_group_count_bgp, prove_read_group_extrema_bgp, prove_read_group_sum_bgp,
+    prove_read_bgp, prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
+    verify_and_resolve_group_count_bgp, verify_and_resolve_group_extrema_bgp,
     verify_and_resolve_group_sum_bgp, verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof,
     DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult, PresentScalarOrderProof,
     PresentTerm, ReconcileProof,
@@ -118,6 +120,15 @@ enum GroupAgg {
     Sum {
         value_column: usize,
         datatype: CanonicalDatatype,
+    },
+    /// `GroupBy(keys, ..) + RangeMin/RangeMax(value)` — the per-group numeric minimum (`Min`) or
+    /// maximum (`Max`) of the authenticated value column, compared by true numeric value (signed
+    /// offset-binary decoded to its real integer). Same value discipline as `Sum`; no overflow (the
+    /// extremum is a member value).
+    Extrema {
+        value_column: usize,
+        datatype: CanonicalDatatype,
+        kind: GroupExtremaKind,
     },
 }
 
@@ -459,6 +470,43 @@ fn lower_query(query: &Query) -> Result<LoweredBgp, ReconciledReadError> {
         });
         return Ok(lowered);
     }
+    // GROUP MIN/MAX — `GroupBy(keys) + RangeMin/RangeMax(value)` over the reconciled materialized
+    // present. Same verifier-recompute as GroupSum over the C2a value↔term-authenticated numeric
+    // VALUE column, but the per-group answer is the numeric min/max (one of the group's own
+    // authenticated values). The base `plan_group_extrema_form` restricts the value datatype to the
+    // fixed-width integral subset (float excluded) and the keys to the Node domain, and the child
+    // BGP's numeric RANGE atom pins + homogeneity-guards the value column, so a mixed / non-numeric /
+    // float value column reject-closes inside `verify_and_resolve_bgp`. Only the bare extrema over a
+    // plain leaf BGP over the materialized present is accepted; a composite child or delta source
+    // reject-close (fail-closed over coverage).
+    if let CompiledRelationStatement::GroupExtrema {
+        input,
+        key_columns,
+        value_column,
+        datatype,
+        kind,
+    } = &compiled.relation.statement
+    {
+        let plan = input.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
+            "reconciled GroupBy min/max requires a plain leaf BGP child (no distinct/group/order/join composite)",
+        ))?;
+        let mut lowered = lower_plan(plan)?;
+        if lowered.source != ReadSource::Materialized {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled GroupBy min/max is supported only over the materialized present (not delta additions/removals)",
+            ));
+        }
+        if key_columns.is_empty() {
+            return Err(ReconciledReadError::UnsupportedShape(
+                "reconciled GroupBy min/max requires at least one group key",
+            ));
+        }
+        lowered.group = Some(GroupSpec {
+            key_columns: key_columns.clone(),
+            agg: GroupAgg::Extrema { value_column: *value_column, datatype: *datatype, kind: *kind },
+        });
+        return Ok(lowered);
+    }
     // Only a plain leaf BGP maps to the store BGP; every OTHER composite relation
     // (Distinct/GroupBy/join/multi-key-order/…) is out of scope for this path.
     let plan = compiled.relation.as_bgp().ok_or(ReconciledReadError::UnsupportedShape(
@@ -515,6 +563,7 @@ pub fn prove_reconciled_read(
         let (reconcile, bgp, result) = match agg {
             GroupAgg::Count => prove_read_group_count_bgp(layers, &atoms, &joins),
             GroupAgg::Sum { .. } => prove_read_group_sum_bgp(layers, &atoms, &joins),
+            GroupAgg::Extrema { .. } => prove_read_group_extrema_bgp(layers, &atoms, &joins),
         }
         .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
         return Ok(ReconciledReadProof {
@@ -644,6 +693,22 @@ pub fn verify_and_resolve_reconciled_read(
                 &proof.result.columns,
             )
             .map_err(|e| ReconciledReadError::Store(e.to_string()))?,
+            GroupAgg::Extrema { value_column, datatype, kind } => {
+                verify_and_resolve_group_extrema_bgp(
+                    layers,
+                    trusted_head_root,
+                    &expected.atoms,
+                    &expected.joins,
+                    &spec.key_columns,
+                    value_column,
+                    datatype,
+                    kind,
+                    reconcile,
+                    bgp,
+                    &proof.result.columns,
+                )
+                .map_err(|e| ReconciledReadError::Store(e.to_string()))?
+            }
         };
         // Column-major output: one key column per group key, plus the trailing aggregate cell.
         let ncols = spec.key_columns.len() + 1;
