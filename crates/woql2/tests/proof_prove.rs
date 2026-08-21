@@ -2644,17 +2644,20 @@ fn assert_grouped_u32_sum_empty_and_outer_count_are_exact() {
         count: DataValue::Variable("groups".into()),
     }))
     .unwrap();
-    let proved = compiled.prove(&layer).unwrap();
-    assert_eq!(proved.count_binding(&compiled), Some(("groups", 0)));
-    proved
-        .verify_executed_rows(
-            &compiled,
-            &layer,
-            layer.resolution_root(),
-            &["groups".into()],
-            &[vec![0]],
-        )
-        .unwrap();
+    // STRICT homogeneity (fail-closed): the group-sum's numeric range (`?score >= 0`, pinned
+    // UInt32) ranges over an all-NODE column — datatype-heterogeneous vs the pinned numeric
+    // datatype. TerminusDB would send those node IRIs to Prolog structural `compare/3` (which
+    // for `Less` includes them), so an exact-numeric answer could UNDER-report. We refuse rather
+    // than under-report: the atom reject-closes. (This test previously asserted an empty
+    // aggregate; the empty-aggregate-over-HOMOGENEOUS-numeric case is covered by
+    // `homogeneous_numeric_sum_over_empty_bound_is_zero`.)
+    match compiled.prove(&layer) {
+        Ok(_) => panic!("expected a datatype-homogeneity reject-close over the all-node column"),
+        Err(e) => assert!(
+            e.to_string().contains("RangeDatatypeNotHomogeneous"),
+            "expected a datatype reject-close, got: {e}"
+        ),
+    }
 }
 
 #[test]
@@ -11139,4 +11142,108 @@ fn exact_scalar_order_mixed_rational_datatypes_reject_closes() {
         err.to_string().contains("datatype"),
         "expected an order datatype reject-close, got: {err}"
     );
+}
+
+#[test]
+fn range_filter_numeric_plus_string_reject_closes() {
+    // Item-5 under-report case: `metric score` holds 1^^xsd:unsignedInt (numeric) AND a
+    // "z"^^xsd:string. TerminusDB's structural `compare/3` sorts the string ABOVE the numeric
+    // typed term, so `Greater(?v, 0)` returns BOTH rows; our exact-numeric mask would return
+    // only the numeric row = a wrong-but-verifying UNDER-report. Strict homogeneity refuses.
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&1u32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_string_value(&iri("metric"), &iri("score"), "z"))
+        .unwrap();
+    let layer = b.commit().unwrap().proof_commitment().unwrap();
+    let query = and_of(vec![tv_subj_const("metric", "score", "v"), greater(dvar("v"), duint(0))]);
+    let compiled = plan_bgp(&query).unwrap();
+    let err = compiled.prove(&layer).unwrap_err();
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous"),
+        "expected a datatype-homogeneity reject-close (numeric+string), got: {err}"
+    );
+}
+
+#[test]
+fn range_filter_numeric_plus_node_reject_closes() {
+    // `metric score` holds 1^^xsd:unsignedInt (numeric) AND a NODE IRI. A node reaches
+    // TerminusDB's structural `compare/3` too (observable via `Less`/join/count even when ?v is
+    // not projected), so our exact-numeric mask can under-report. Strict homogeneity refuses.
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&1u32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_node(&iri("metric"), &iri("score"), &iri("target")))
+        .unwrap();
+    let layer = b.commit().unwrap().proof_commitment().unwrap();
+    let query = and_of(vec![tv_subj_const("metric", "score", "v"), greater(dvar("v"), duint(0))]);
+    let compiled = plan_bgp(&query).unwrap();
+    let err = compiled.prove(&layer).unwrap_err();
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous"),
+        "expected a datatype-homogeneity reject-close (numeric+node), got: {err}"
+    );
+}
+
+/// A global u32 group-sum whose range bound (`?score >= 1000`) matches nothing over a
+/// HOMOGENEOUS UInt32 column, so the group is empty (0 groups) WITHOUT datatype heterogeneity —
+/// the empty-aggregate coverage the former all-node group-sum test provided, now fail-closed-safe.
+fn empty_bound_global_u32_sum_query() -> Query {
+    let child = and_of(vec![
+        tv_pred_var("category", "predicate", "score"),
+        gte(dvar("score"), duint(1000)),
+    ]);
+    let group = Query::GroupBy(GroupBy {
+        template: Value::Variable("score".into()),
+        group_by: vec![],
+        grouped_value: Value::Variable("scores".into()),
+        query: Box::new(child),
+    });
+    let sum = Query::Sum(Sum {
+        list: DataValue::Variable("scores".into()),
+        result: DataValue::Variable("total".into()),
+    });
+    and_of(vec![group, sum])
+}
+
+fn assert_homogeneous_numeric_sum_over_empty_bound_is_zero() {
+    let store = open_sync_memory_store();
+    let builder = store.create_base_layer().unwrap();
+    for v in [5u32, 7u32] {
+        builder
+            .add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&v)))
+            .unwrap();
+    }
+    let layer = builder.commit().unwrap().proof_commitment().unwrap();
+    let compiled = plan_bgp(&Query::Count(Count {
+        query: Box::new(empty_bound_global_u32_sum_query()),
+        count: DataValue::Variable("groups".into()),
+    }))
+    .unwrap();
+    // Homogeneous UInt32 column → the datatype guard passes; the >= 1000 bound matches nothing →
+    // empty group → 0 groups. Positive control for an empty aggregate under strict homogeneity.
+    let proved = compiled.prove(&layer).unwrap();
+    assert_eq!(proved.count_binding(&compiled), Some(("groups", 0)));
+    proved
+        .verify_executed_rows(
+            &compiled,
+            &layer,
+            layer.resolution_root(),
+            &["groups".into()],
+            &[vec![0]],
+        )
+        .unwrap();
+}
+
+#[test]
+fn homogeneous_numeric_sum_over_empty_bound_is_zero() {
+    std::thread::Builder::new()
+        .name("woql-homogeneous-empty-sum".into())
+        .stack_size(256 * 1024 * 1024)
+        .spawn(assert_homogeneous_numeric_sum_over_empty_bound_is_zero)
+        .unwrap()
+        .join()
+        .unwrap();
 }
