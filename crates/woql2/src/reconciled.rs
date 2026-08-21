@@ -54,7 +54,7 @@ use terminus_store::proof::reconcile::{
     verify_and_resolve_group_count_bgp, verify_and_resolve_group_extrema_bgp,
     verify_and_resolve_group_sum_bgp, verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof,
     DeltaSource, PresentBgpAtom, PresentBgpProof, PresentReadResult, PresentScalarOrderProof,
-    PresentTerm, ReconcileProof,
+    PresentTerm, ReconcileProof, ReconciledReadBgpProof,
 };
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
@@ -215,6 +215,40 @@ impl ReconciledReadProof {
     /// resolved answer comes from [`verify_and_resolve_reconciled_read`].
     pub fn result_columns(&self) -> &[Vec<ArkFr>] {
         &self.result.columns
+    }
+
+    /// C4 byte-in: serialize this reconciled read proof to shippable BYTES for a DB-free remote
+    /// verifier. The bytes carry ONLY the cryptographic proof bundle — NEVER the query spec (atoms /
+    /// joins / source / count flag): the remote verifier re-lowers its OWN query and binds the spec
+    /// (anti-substitution). The framing is the store's audited wire format (framed
+    /// MAGIC ‖ VERSION ‖ body ‖ SHA-256), transparent to verification.
+    ///
+    /// Supported now: the materialized-present plain BGP read AND its `Count(BGP)` wrapper — BOTH
+    /// ship the SAME [`ReconciledReadBgpProof`] (`ReconcileProof` + `PresentBgpProof`), because a
+    /// count proof's crypto bundle IS a reconcile + present-BGP pair; the count-ness is carried by
+    /// the verifier's re-lowered query, not the bytes. The delta read ships its own `DeltaReadProof`
+    /// blob. The ordered / grouped variants are not yet wire-exposed and reject-close here.
+    pub fn encode(&self) -> Result<Vec<u8>, ReconciledReadError> {
+        match &self.inner {
+            // A plain present read and a `Count(BGP)` are the SAME reconcile + present-BGP pair on
+            // the wire; the verifier's re-lowered `count` flag (not the bytes) decides the answer
+            // shape (rows vs cardinality).
+            ReadProofInner::Present { reconcile, bgp } | ReadProofInner::Count { reconcile, bgp } => {
+                ReconciledReadBgpProof { reconcile: reconcile.clone(), bgp: bgp.clone() }
+                    .encode()
+                    .map_err(|e| ReconciledReadError::Store(e.to_string()))
+            }
+            ReadProofInner::Delta { proof } => {
+                proof.encode().map_err(|e| ReconciledReadError::Store(e.to_string()))
+            }
+            // Ordered / grouped byte-in is delivered by later C4 increments.
+            ReadProofInner::PresentOrder { .. } => Err(ReconciledReadError::UnsupportedShape(
+                "OrderBy byte-in is not yet wire-exposed (use the in-memory verify_and_resolve_reconciled_read)",
+            )),
+            ReadProofInner::Group { .. } => Err(ReconciledReadError::UnsupportedShape(
+                "GroupBy byte-in is not yet wire-exposed (use the in-memory verify_and_resolve_reconciled_read)",
+            )),
+        }
     }
 }
 
@@ -860,6 +894,54 @@ pub fn decode_and_verify_reconciled_read_bgp(
     }
     decode_and_verify_read_bgp(
         read_proof_bytes,
+        verifier_commitment_bytes,
+        trusted_head_root,
+        &atoms,
+        &joins,
+    )
+    .map_err(|e| ReconciledReadError::Store(e.to_string()))
+}
+
+/// C4 byte-in DB-free FFI: verify a reconciled `Count(BGP)` cardinality shipped as BYTES against the
+/// trusted head root, driven by the VERIFIER's OWN WOQL `query`. Re-lowers the query to
+/// `(atoms, joins, source, count)` — the COUNT flag AND the atom/join spec come from the verifier's
+/// query, NEVER from the proof bytes (anti-substitution) — and requires a `Count(BGP)` over the
+/// materialized present (a plain / ordered / grouped / delta-source query is a different answer
+/// shape and reject-closes). A count proof ships the SAME [`ReconciledReadBgpProof`] a plain present
+/// read does (its crypto bundle IS a reconcile + present-BGP pair), so this hands the encoded proof
+/// + the term-less `VerifierCommitment` chain to the store's byte-in [`decode_and_verify_read_bgp`],
+/// whose authenticated result-row count IS the reconciled `Count` cardinality (each natural-join
+/// assignment over the set-valued present is unique — the row count equals the WOQL
+/// `aggregate_all(count, …)` solution count). Returns that cardinality.
+pub fn decode_and_verify_reconciled_count(
+    query: &Query,
+    count_proof_bytes: &[u8],
+    verifier_commitment_bytes: &[&[u8]],
+    trusted_head_root: ProofHash,
+) -> Result<usize, ReconciledReadError> {
+    let LoweredBgp { atoms, joins, source, order, count, group } = lower_query(query)?;
+    // The count flag is the verifier's OWN re-lowering: a non-count query (plain read / order /
+    // group) must NOT be answered in a count's name, and a count must NOT be answered as a plain
+    // read. This is the anti-substitution binding for the count-ness, exactly as `bgp_spec_eq`
+    // binds it on the in-memory path.
+    if !count {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled count byte-in path requires a Count(BGP) query (a plain/ordered/grouped read is a different answer shape)",
+        ));
+    }
+    // `lower_query` only sets `count` for a plain leaf BGP over the MATERIALIZED present with no
+    // order/group wrapper; assert those invariants defensively so a future lowering change cannot
+    // silently mis-route a count over a delta source or a composite child.
+    if source != ReadSource::Materialized || order.is_some() || group.is_some() {
+        return Err(ReconciledReadError::UnsupportedShape(
+            "reconciled count byte-in path requires a materialized-present Count(BGP) (no delta source, order, or group)",
+        ));
+    }
+    // The store byte-in read authenticates the BGP result-row count against the trusted head root
+    // over the VERIFIER's re-lowered atoms/joins (a wrong BGP fails the store plan-digest binding).
+    // That row count IS the reconciled `Count` cardinality.
+    decode_and_verify_read_bgp(
+        count_proof_bytes,
         verifier_commitment_bytes,
         trusted_head_root,
         &atoms,

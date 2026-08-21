@@ -860,6 +860,76 @@ fn woql_count_over_delta_source_reject_closes() {
     assert!(prove_reconciled_read(&query, &lref).is_err());
 }
 
+/// C4 byte-in DB-free: prove a reconciled `Count(BGP)`, ship it as BYTES (the framed
+/// `ReconciledReadBgpProof` blob + one TERM-LESS `VerifierCommitment` per layer), and verify the
+/// cardinality DB-free through `decode_and_verify_reconciled_count` against the trusted head root.
+/// The byte-in cardinality must equal the in-memory answer. Anti-substitution + framing negatives:
+/// a non-count query (wrong count flag), a different BGP (wrong plan), and a truncated / tampered
+/// proof blob all reject-close.
+#[test]
+fn woql_count_byte_in_matches_in_memory_and_rejects_substitution() {
+    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_count, ReconciledReadError};
+
+    let layers = age_stack();
+    let lref = refs(&layers);
+    let head_root = lref.last().unwrap().resolution_root();
+
+    // present age triples = 6 (see `woql_count_over_delta_stack`).
+    let query = count_of(tv("x", "age", "v"));
+    let proof = prove_reconciled_read(&query, &lref).unwrap();
+
+    // In-memory answer (the equality target).
+    let in_mem = verify_and_resolve_reconciled_read(&query, &lref, head_root, &proof).unwrap();
+    assert_eq!(rows_of(&in_mem), vec![vec![ucount(6)]]);
+
+    // Cross the byte boundary: encode the proof + one all-term-less VerifierCommitment per layer.
+    // Only `&[u8]` reaches the remote verifier.
+    let proof_bytes = proof.encode().unwrap();
+    let commit_bytes: Vec<Vec<u8>> = lref
+        .iter()
+        .map(|l| l.verifier_commitment_termless().unwrap().encode().unwrap())
+        .collect();
+    let commit_refs: Vec<&[u8]> = commit_bytes.iter().map(|b| b.as_slice()).collect();
+
+    let n =
+        decode_and_verify_reconciled_count(&query, &proof_bytes, &commit_refs, head_root).unwrap();
+    assert_eq!(n, 6, "byte-in reconciled count must equal the in-memory cardinality");
+
+    // NEGATIVE — wrong count flag: a PLAIN (non-count) query re-lowers to `count == false` and must
+    // reject-close (the count-ness is the verifier's re-lowering, not the bytes).
+    let plain = tv("x", "age", "v");
+    let err = decode_and_verify_reconciled_count(&plain, &proof_bytes, &commit_refs, head_root)
+        .expect_err("a non-count query must be rejected by the count byte-in path");
+    assert!(
+        matches!(err, ReconciledReadError::UnsupportedShape(_)),
+        "wrong-count-flag rejection must be an UnsupportedShape shape mismatch, got {err:?}"
+    );
+
+    // NEGATIVE — wrong BGP: a DIFFERENT count query (predicate `name` not `age`) fails the store
+    // plan-digest anti-substitution binding (the atoms come from the verifier's re-lowered query).
+    let wrong_bgp = count_of(tv("x", "name", "v"));
+    assert!(
+        decode_and_verify_reconciled_count(&wrong_bgp, &proof_bytes, &commit_refs, head_root)
+            .is_err(),
+        "a count proof must not verify under a different BGP (anti-substitution)"
+    );
+
+    // NEGATIVE — truncated blob: fails the framing size/checksum guard.
+    let truncated = &proof_bytes[..proof_bytes.len() - 1];
+    assert!(
+        decode_and_verify_reconciled_count(&query, truncated, &commit_refs, head_root).is_err(),
+        "a truncated count proof must fail closed"
+    );
+    // NEGATIVE — tampered body byte: fails the SHA-256 checksum.
+    let mut tampered = proof_bytes.clone();
+    let mid = tampered.len() / 2;
+    tampered[mid] ^= 0xff;
+    assert!(
+        decode_and_verify_reconciled_count(&query, &tampered, &commit_refs, head_root).is_err(),
+        "a tampered count proof must fail the checksum"
+    );
+}
+
 // ============================================================================================
 // GROUP-COUNT — `GroupBy(keys, ..) + Length` over the reconciled materialized present via
 // VERIFIER-RECOMPUTE. The child rows are authenticated + resolved by the store, then grouped by
