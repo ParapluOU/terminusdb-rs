@@ -673,3 +673,100 @@ fn woql_order_by_unsupported_shapes_reject_close() {
     });
     assert!(!is_reconciled_read(&multi_key), "multi-key order is out of the single-column slice");
 }
+
+// ===========================================================================
+// FIDELITY: numeric range / order datatype-HOMOGENEITY guard over the DELTA stack.
+//
+// The present-BGP range path (`reconcile/present_bgp.rs`) and the D1a present-order path
+// (`reconcile/present_order.rs`) must reject-close a compared column that is not
+// datatype-homogeneous over the predicate-matched rows — TerminusDB compares rational-family
+// numerics across subtypes by value (and errors on rational-vs-float), so the exact-datatype
+// mask would silently under-report. See `proof_prove.rs` for the model.
+// ===========================================================================
+
+/// Like `age_stack`, but alice's age is `xsd:int` (Int32) while every other age is
+/// `xsd:unsignedInt` (UInt32) — a MIXED rational compared column under one predicate `age`.
+fn mixed_rational_age_stack() -> Vec<Arc<LayerCommitment>> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("alice"), &iri("age"), i32::make_entry(&30i32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_node(&iri("alice"), &iri("name"), &iri("alice_n")))
+        .unwrap();
+    for (person, age) in [("bob", 15u32), ("carol", 18), ("dave", 40), ("erin", 18), ("frank", 99)] {
+        b.add_value_triple(ValueTriple::new_value(&iri(person), &iri("age"), u32::make_entry(&age)))
+            .unwrap();
+        b.add_value_triple(ValueTriple::new_node(&iri(person), &iri("name"), &iri(&format!("{person}_n"))))
+            .unwrap();
+    }
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.remove_value_triple(ValueTriple::new_value(&iri("frank"), &iri("age"), u32::make_entry(&99u32))).unwrap();
+    child.remove_value_triple(ValueTriple::new_node(&iri("frank"), &iri("name"), &iri("frank_n"))).unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("grace"), &iri("age"), u32::make_entry(&25u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("grace"), &iri("name"), &iri("grace_n"))).unwrap();
+    let head = child.commit().unwrap();
+    vec![base_lc, head.proof_commitment().unwrap()]
+}
+
+#[test]
+fn woql_mixed_rational_range_over_delta_stack_reject_closes() {
+    // present-BGP RANGE path: Triple(?x, age, ?v) & ?v >= 18 over a MIXED rational column
+    // (alice=30^^xsd:int, the rest ^^xsd:unsignedInt). The predicate-matched (age) rows are
+    // not datatype-homogeneous → reject-close (the exact-datatype mask would drop alice).
+    let layers = mixed_rational_age_stack();
+    let lref = refs(&layers);
+    let query = and_of(vec![tv("x", "age", "v"), gte(dvar("v"), duint(18))]);
+    assert!(is_reconciled_read(&query));
+    let err = match prove_reconciled_read(&query, &lref) {
+        Ok(_) => panic!("expected a datatype-homogeneity reject-close, but prove succeeded"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous"),
+        "expected a datatype-homogeneity reject-close over the delta stack, got: {err}"
+    );
+}
+
+#[test]
+fn woql_mixed_rational_order_over_delta_stack_reject_closes() {
+    // D1a present-ORDER path: OrderBy([v ASC], Triple(metric, reading, ?v)) over a MIXED
+    // rational multi-valued column reject-closes (present_order's completeness guard).
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for v in [10u32, 30u32] {
+        b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("reading"), u32::make_entry(&v))).unwrap();
+    }
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("reading"), i32::make_entry(&20i32))).unwrap();
+    b.add_value_triple(ValueTriple::new_node(&iri("metric"), &iri("kind"), &iri("sensor"))).unwrap();
+    let base = b.commit().unwrap();
+    let base_lc = base.proof_commitment().unwrap();
+    let child = base.open_write().unwrap();
+    child.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("reading"), u32::make_entry(&40u32))).unwrap();
+    child.add_value_triple(ValueTriple::new_node(&iri("other"), &iri("kind"), &iri("sensor"))).unwrap();
+    let head = child.commit().unwrap();
+    let layers = vec![base_lc, head.proof_commitment().unwrap()];
+    let lref = refs(&layers);
+    // The `>= 0` range pins the numeric order datatype; over the MIXED delta column the
+    // datatype-homogeneity guard reject-closes the D1a ordered read end to end.
+    let query = Query::OrderBy(terminusdb_woql2::order::OrderBy {
+        ordering: vec![terminusdb_woql2::order::OrderTemplate {
+            variable: "v".into(),
+            order: terminusdb_woql2::order::Order::Asc,
+        }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("metric", "reading", "v"),
+            gte(dvar("v"), duint(0)),
+        ])),
+    });
+    assert!(is_reconciled_read(&query), "OrderBy over the delta stack must route to reconciled");
+    let err = match prove_reconciled_read(&query, &lref) {
+        Ok(_) => panic!("expected an order datatype reject-close, but prove succeeded"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("datatype"),
+        "expected an order datatype reject-close over the delta stack, got: {err}"
+    );
+}

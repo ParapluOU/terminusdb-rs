@@ -11026,3 +11026,117 @@ fn ordered_list_walk_compiler_mirror_end_to_end() {
         .join()
         .unwrap();
 }
+
+// ===========================================================================
+// FIDELITY: numeric range / order datatype-HOMOGENEITY guard (fail-closed).
+//
+// TerminusDB (`woql_compile.pl` `woql_less_normalized` /
+// `numeric_types_compatible_for_comparison`) compares ALL rational-family numerics
+// (xsd:integer / xsd:decimal and every subtype: int, long, unsignedInt, …) by VALUE across
+// subtypes, and ERRORS on rational-vs-IEEE754 (float/double). Our numeric range gadget pins
+// ONE exact datatype from the comparison constant and MASKS the compared column to it, which
+// would silently DROP a matched row of a different rational subtype — a wrong-but-verifying
+// UNDER-report. The store now reject-closes (`RangeDatatypeNotHomogeneous`) unless every
+// predicate-matched row of the compared column carries the pinned datatype (STRICT
+// homogeneity; over-rejects a heterogeneous column, never under-reports). Homogeneous data
+// (the schema-constrained / Parture case) still proves.
+// ===========================================================================
+
+fn homogeneous_score_layer() -> Arc<LayerCommitment> {
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    for v in [10u32, 20, 30] {
+        b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&v)))
+            .unwrap();
+    }
+    b.commit().unwrap().proof_commitment().unwrap()
+}
+
+#[test]
+fn range_filter_homogeneous_datatype_proves() {
+    // POSITIVE CONTROL: a homogeneous UInt32 compared column proves and returns every row.
+    let layer = homogeneous_score_layer();
+    let query = and_of(vec![tv_subj_const("metric", "score", "v"), gte(dvar("v"), duint(0))]);
+    let compiled = plan_bgp(&query).unwrap();
+    let proved = compiled.prove(&layer).unwrap();
+    let values = proved
+        .verify_and_resolve_values(&compiled, &layer, layer.resolution_root())
+        .unwrap();
+    let mut got = resolved_u32_column(&values);
+    got.sort_unstable();
+    assert_eq!(got, [10, 20, 30]);
+}
+
+#[test]
+fn range_filter_mixed_rational_datatypes_reject_closes() {
+    // `metric score` holds 10^^xsd:unsignedInt (UInt32) AND 20^^xsd:int (Int32) — TerminusDB
+    // compares BOTH by value, our exact-datatype mask would DROP the Int32 row (under-report).
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&10u32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), i32::make_entry(&20i32)))
+        .unwrap();
+    let layer = b.commit().unwrap().proof_commitment().unwrap();
+    let query = and_of(vec![tv_subj_const("metric", "score", "v"), gte(dvar("v"), duint(0))]);
+    let compiled = plan_bgp(&query).unwrap();
+    let err = compiled.prove(&layer).unwrap_err();
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous"),
+        "expected a datatype-homogeneity reject-close, got: {err}"
+    );
+}
+
+#[test]
+fn range_filter_rational_plus_float_reject_closes() {
+    // A rational range constant (UInt32) over a column that also holds an IEEE754 float row:
+    // TerminusDB ERRORS on rational-vs-float, so silently excluding the float row would be an
+    // over-claim. Fail closed at prove.
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&10u32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), f64::make_entry(&20.0f64)))
+        .unwrap();
+    let layer = b.commit().unwrap().proof_commitment().unwrap();
+    let query = and_of(vec![tv_subj_const("metric", "score", "v"), gte(dvar("v"), duint(0))]);
+    let compiled = plan_bgp(&query).unwrap();
+    let err = compiled.prove(&layer).unwrap_err();
+    assert!(
+        err.to_string().contains("RangeDatatypeNotHomogeneous"),
+        "expected a datatype-homogeneity reject-close, got: {err}"
+    );
+}
+
+#[test]
+fn exact_scalar_order_mixed_rational_datatypes_reject_closes() {
+    // The ORDER path (base `order.rs`) already enforces datatype homogeneity via its
+    // completeness check (`datatype_selection_commitment == commit(chi_n)`); the delta D1a
+    // path (`present_order.rs`) uses the identical guard. A mixed rational compared column
+    // under a single-key numeric OrderBy fails closed.
+    let store = open_sync_memory_store();
+    let b = store.create_base_layer().unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&10u32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), u32::make_entry(&30u32)))
+        .unwrap();
+    b.add_value_triple(ValueTriple::new_value(&iri("metric"), &iri("score"), i32::make_entry(&20i32)))
+        .unwrap();
+    let layer = b.commit().unwrap().proof_commitment().unwrap();
+    // The `>= 0` range pins the (numeric) order datatype (the order path derives its datatype
+    // from the column's range/equality domain); over the MIXED column the datatype-homogeneity
+    // guard fires, reject-closing the ordered read end to end.
+    let query = Query::OrderBy(OrderBy {
+        ordering: vec![OrderTemplate { variable: "v".into(), order: Order::Asc }],
+        query: Box::new(and_of(vec![
+            tv_subj_const("metric", "score", "v"),
+            gte(dvar("v"), duint(0)),
+        ])),
+    });
+    let compiled = plan_bgp(&query).unwrap();
+    let err = compiled.prove(&layer).unwrap_err();
+    assert!(
+        err.to_string().contains("datatype"),
+        "expected an order datatype reject-close, got: {err}"
+    );
+}
