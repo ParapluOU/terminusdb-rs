@@ -1,11 +1,14 @@
 //! Eval / value-circuit lowering — arithmetic and typecasts.
 //!
-//! Lowers a WOQL `Eval` over integer arithmetic ([`plan_eval_form`]) and the exact decimal /
+//! Lowers a WOQL `Eval` over integer arithmetic (`plan_eval_form`) and the exact decimal /
 //! rational value layer (`Divide`, `Floor`, decimal operands) into a per-row derived-column
-//! relation, and lowers `Typecast` ([`plan_typecast_form`]) between numeric and string types.
+//! relation, and lowers `Typecast` (`plan_typecast_form`) between numeric and string types.
 //! Each is proven by verifier-recompute: the operand columns are authenticated by a child BGP
 //! and the verifier re-derives the result column. Anything outside the provable fragment
 //! (operands not store-bound, unsupported casts, overflow) is rejected closed.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§5 the committed
+//! columns a verifier-recompute re-derives over, and §11 soundness-vs-fidelity).
 
 use super::*;
 
@@ -154,7 +157,7 @@ pub(crate) fn plan_eval_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPl
 /// layer? True iff it contains a `Divide` (`rdiv` — always fractional-capable), a `Floor`, or an
 /// `xsd:decimal` literal. `Div` (integer floor division) is NOT itself a signal (it stays on the
 /// integer path unless a nested `Divide`/`Floor`/decimal forces routing, in which case
-/// [`compile_decimal_expr`] rejects the integer-only `Div`). A bare integer/variable leaf is not a
+/// `compile_decimal_expr` rejects the integer-only `Div`). A bare integer/variable leaf is not a
 /// signal — so an UNPINNED store operand keeps its existing reject-closed behavior on the integer
 /// path rather than being silently reinterpreted as a decimal.
 pub(crate) fn arith_signals_rational(expression: &ArithmeticExpression) -> bool {
@@ -661,7 +664,7 @@ pub(crate) fn plan_typecast_form(query: &Query) -> Result<Option<CompiledBgp>, B
 
 /// Which NUMBER↔STRING cast a `Typecast` target IRI selects, recognized ONLY in the XSD namespace
 /// (the full `http://www.w3.org/2001/XMLSchema#<local>` IRI or the standard `xsd:<local>` prefix
-/// form — see [`xsd_local_name`]), exactly like [`canonical_integer_datatype_from_iri`]. Disjoint
+/// form — see `xsd_local_name`), exactly like `canonical_integer_datatype_from_iri`. Disjoint
 /// from the fixed-width integer set that function recognizes: `integer`/`decimal`/`string` are never
 /// fixed-width integers.
 pub(crate) enum CastStringTarget {
@@ -696,6 +699,10 @@ fn xsd_local_name(iri: &str) -> Option<&str> {
         .or_else(|| iri.strip_prefix(XSD_PREFIX))
 }
 
+/// Classify a `Typecast` target IRI as a NUMBER↔STRING cast target, via the namespace-safe
+/// `xsd_local_name` (so only genuine `xsd:` IRIs match): `xsd:string` → `ToString`, `xsd:integer` →
+/// `FromStringInteger`, `xsd:decimal` → `FromStringDecimal`. Any other local name — or a non-`xsd`
+/// namespace — returns `None` (not a string cast this module handles).
 pub(crate) fn cast_string_target_from_iri(iri: &str) -> Option<CastStringTarget> {
     let local = xsd_local_name(iri)?;
     Some(match local {
@@ -829,7 +836,7 @@ pub(crate) fn resolve_typecast_source(
 }
 
 /// Map a target type IRI IN THE XSD NAMESPACE (the full `http://www.w3.org/2001/XMLSchema#long` IRI
-/// or the standard prefixed `xsd:long` form — see [`xsd_local_name`]) to its fixed-width integer
+/// or the standard prefixed `xsd:long` form — see `xsd_local_name`) to its fixed-width integer
 /// [`CanonicalDatatype`], or `None` for any non-fixed-width-integer type (string/float/decimal,
 /// `xsd:integer` arbitrary precision, the `positiveInteger`/`nonNegativeInteger`/… derived unbounded
 /// types), a bare local name, a foreign namespace, or an unknown IRI. Reject closed on `None`: only

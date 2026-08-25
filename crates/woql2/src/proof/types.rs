@@ -12,6 +12,11 @@
 //! [`ExecutedResultValue`], [`ExecutedResultInput`], [`ProvedQueryStatement`],
 //! [`VerifiedBgpEnvelope`]) are what a caller uses to read a proven query's answer columns.
 //! These are plain data; the proving / verifying / lowering logic lives in the siblings.
+//!
+//! This is the vocabulary the **compile** step emits and the prove/verify steps consume. For
+//! the cryptography these types stand in front of (commitments, sumcheck, gadgets) and the
+//! soundness-vs-fidelity split they sit at, see [`terminus_store::proof::primer`] (§6 gadgets,
+//! §10 prove→verify, §11 soundness-vs-fidelity).
 
 use super::*;
 
@@ -38,12 +43,18 @@ pub struct CompiledBgp {
     pub full_row_distinct: bool,
 }
 
+/// One authenticated relation in the compiled plan tree: a labelled set of output columns
+/// plus the [`CompiledRelationStatement`] that produces them (a base BGP scan, or a
+/// relational operator layered over child relations). Recursive — operators nest child
+/// `CompiledRelation`s.
 #[derive(Clone, Debug)]
 pub struct CompiledRelation {
+    /// The output column names (query variable names), in column order.
     pub schema: Vec<String>,
     /// Exact executor value domains known for each schema column. `None` means the
     /// node/value dictionary column may contain both nodes and differently typed values.
     pub domains: Vec<Option<EqualityValueDomain>>,
+    /// How this relation's rows are produced — the scan or operator to prove.
     pub statement: CompiledRelationStatement,
 }
 
@@ -69,10 +80,21 @@ pub enum ProofGraph {
     Schema,
 }
 
+/// How a [`CompiledRelation`]'s rows are produced: either a base [`LayerBgpPlan`] scan or one
+/// relational / value operator layered over child relations. Each variant maps to a store proof
+/// node the prover runs and the verifier re-checks; the doc on each variant says which WOQL shape
+/// it lowers from and how its result is delivered. Variants without their own doc are the
+/// standard relational operators (filters, natural / anti / outer joins, projections, ordering,
+/// distinct, unions, aggregates) whose meaning matches their name.
 #[derive(Clone, Debug)]
 pub enum CompiledRelationStatement {
+    /// A base authenticated left-deep BGP scan — the leaf every other statement layers over.
     Bgp(LayerBgpPlan),
+    /// The layer's total triple count as a single generated-decimal row (WOQL `TripleCount` over
+    /// the whole instance graph).
     LayerTripleCount,
+    /// Keep child rows whose generated-decimal (unsigned) `column` satisfies `op` against a `u64`
+    /// `constant` — a comparison over a derived count/sum column, not a stored value.
     GeneratedU64Filter {
         input: Box<CompiledRelation>,
         column: usize,
@@ -80,6 +102,8 @@ pub enum CompiledRelationStatement {
         constant: u64,
         constant_on_left: bool,
     },
+    /// As [`Self::GeneratedU64Filter`] but the derived `column` is a SIGNED generated-decimal
+    /// compared against an `i64` `constant`.
     GeneratedI64Filter {
         input: Box<CompiledRelation>,
         column: usize,
@@ -87,11 +111,15 @@ pub enum CompiledRelationStatement {
         constant: i64,
         constant_on_left: bool,
     },
+    /// Multiset UNION of `branches` (a WOQL `Or`) into a common schema; `mappings` renames each
+    /// branch's columns to the shared output columns.
     BagUnion {
         branches: Vec<CompiledRelation>,
         /// Public output column -> child relation column, per ordered branch.
         mappings: Vec<Vec<usize>>,
     },
+    /// Multiset projection: keep child columns `indices` (in order), preserving row count and
+    /// order (a read-side column selection — a WOQL `Select` over a bag).
     BagProjection {
         input: Box<CompiledRelation>,
         indices: Vec<usize>,
@@ -107,11 +135,15 @@ pub enum CompiledRelationStatement {
     When {
         expanded: Box<CompiledRelation>,
     },
+    /// Left ANTI-join: keep `left` rows with NO `right` match on `key_pairs` (a correlated WOQL
+    /// `Not`; global `Not` is length-pinned). Schema is `left`'s.
     LeftAnti {
         left: Box<CompiledRelation>,
         right: Box<CompiledRelation>,
         key_pairs: Vec<(usize, usize)>,
     },
+    /// Natural INNER join of `left` and `right` on the equal-column `key_pairs` (shared query
+    /// variables are the join keys).
     InnerJoin {
         left: Box<CompiledRelation>,
         right: Box<CompiledRelation>,
@@ -123,7 +155,7 @@ pub enum CompiledRelationStatement {
     /// `sys:inherits` subsumption closure of `C`), `right` reads the INSTANCE graph
     /// (`Triple(?x, rdf:type, ?class)`, `[?x, class]`). Each side's class-id column is authenticated to
     /// its `hash_object(IRI)` against its OWN root; a full-field LogUp SEMI-JOIN keeps instance rows
-    /// whose class-hash is a member of the closure hash set. Emitted ONLY by [`plan_isa`]; routed via
+    /// whose class-hash is a member of the closure hash set. Emitted ONLY by `plan_isa`; routed via
     /// the two-layer store `prove_cross_root`/`verify_cross_root`. `left` is a single class column
     /// (`left_key_col == 0`); output = `right`'s `?x` column (instance namespace).
     CrossRootHashJoin {
@@ -132,11 +164,15 @@ pub enum CompiledRelationStatement {
         left_key_col: usize,
         right_key_col: usize,
     },
+    /// Left OUTER join of `left` and `right` on `key_pairs` (a correlated WOQL `Optional`):
+    /// unmatched `left` rows keep `right`'s columns as nulls.
     LeftOuter {
         left: Box<CompiledRelation>,
         right: Box<CompiledRelation>,
         key_pairs: Vec<(usize, usize)>,
     },
+    /// Filter `input` by an authenticated equality `constraint` (a WOQL `Equals`): a column
+    /// against a constant, two columns, or two constants, over a proven exact value domain.
     Equality {
         input: Box<CompiledRelation>,
         constraint: RelationEqualityPlan,
@@ -152,11 +188,16 @@ pub enum CompiledRelationStatement {
         input: Box<CompiledRelation>,
         pairs: Vec<TupleDisequalityPairPlan>,
     },
+    /// Prove `input`'s single output column is delivered in exact sorted `direction` order under
+    /// its order-preserving `datatype` (a full-key single-column WOQL `OrderBy`).
     ExactScalarOrder {
         input: Box<CompiledRelation>,
         datatype: CanonicalDatatype,
         direction: OrderDirection,
     },
+    /// Prove `input`'s rows are delivered in exact lexicographic order by the priority-ordered
+    /// `key_indices` (each with its `datatypes` entry and `directions` entry) — a full-key
+    /// multi-column WOQL `OrderBy`.
     ExactMultiOrder {
         input: Box<CompiledRelation>,
         /// Priority-ordered mapping into the input's canonical schema columns.
@@ -166,6 +207,8 @@ pub enum CompiledRelationStatement {
         /// Directions are parallel to `key_indices`.
         directions: Vec<OrderDirection>,
     },
+    /// A `[offset, offset+limit)` window of an authenticated ORDERED child (WOQL `Start`/`Limit`,
+    /// or Prolog `once`). `limit == None` is an offset-only tail.
     ExactOrderedSlice {
         input: Box<CompiledRelation>,
         offset: u64,
@@ -174,6 +217,8 @@ pub enum CompiledRelationStatement {
         /// the WOQL query digest while reusing the identical Store slice statement.
         once: bool,
     },
+    /// Per-group MIN/MAX (`kind`) of `value_column` (order-preserving `datatype`) grouped by
+    /// `key_columns` — a WOQL `GroupBy` immediately consumed by `RangeMin`/`RangeMax`.
     GroupExtrema {
         input: Box<CompiledRelation>,
         key_columns: Vec<usize>,
@@ -186,7 +231,7 @@ pub enum CompiledRelationStatement {
     /// [`terminus_store::proof::envelope::RelationProofPlanKind::TransitiveClosure`] composite node;
     /// it is emitted ONLY under an endpoint `Distinct` (set semantics), because the leading-Prolog
     /// path evaluator returns an edge-simple BAG of endpoints that equals the reachable SET only once a
-    /// surrounding `Distinct`/`Count` collapses the bag. See [`plan_transitive_closure_path`].
+    /// surrounding `Distinct`/`Count` collapses the bag. See `plan_transitive_closure_path`.
     TransitiveClosure {
         /// The edge relation `E = Triple(?s, p, ?o)` (a single-atom 2-column node/value BGP).
         edge: LayerBgpPlan,
@@ -206,7 +251,7 @@ pub enum CompiledRelationStatement {
         /// RECONSTRUCTS this selector from the trusted compiled query and it is bound into
         /// `relation_query_digest` (additively — `Schema` folds a domain tag, `Instance` folds NOTHING,
         /// keeping every instance-only digest byte-identical), so a prover cannot silently read the
-        /// wrong graph. See [`ProofGraph`] and [`relation_graph`].
+        /// wrong graph. See [`ProofGraph`] and `relation_graph`.
         graph: ProofGraph,
     },
     /// Bounded ALL-PAIRS transitive closure (`Distinct([x,y], path(?x, plus(p), ?y))`, both endpoints
@@ -219,7 +264,7 @@ pub enum CompiledRelationStatement {
     /// both-free identity branch (`X = Y`) is a single UNBOUND row, not a domain diagonal, so the
     /// reflexive rows are not faithfully reconstructible from the committed edge columns. Emitted ONLY
     /// under a `Distinct([x,y])` gate (the reference's edge-simple BAG of endpoint pairs equals the pairs
-    /// SET only once the surrounding `Distinct` collapses the bag). See [`plan_transitive_closure_path`].
+    /// SET only once the surrounding `Distinct` collapses the bag). See `plan_transitive_closure_path`.
     TransitiveClosurePairs {
         /// The edge relation `E = Triple(?s, p, ?o)` (a single-atom 2-column node/value BGP).
         edge: LayerBgpPlan,
@@ -228,7 +273,7 @@ pub enum CompiledRelationStatement {
         inverted: bool,
         /// SCHEMA-GRAPH FOUNDATION — which committed graph the edge/dictionary read against. `Instance`
         /// (the universal default for a WOQL path closure) folds NOTHING into the digest, exactly as the
-        /// single-seed [`Self::TransitiveClosure`]. See [`ProofGraph`] and [`relation_graph`].
+        /// single-seed [`Self::TransitiveClosure`]. See [`ProofGraph`] and `relation_graph`.
         graph: ProofGraph,
     },
     /// Bounded ALL-PAIRS transitive closure (`Distinct([x,y], path(?x, plus(pattern), ?y))`, both
@@ -236,7 +281,7 @@ pub enum CompiledRelationStatement {
     /// [`Self::TransitiveClosurePairs`] is the EDGE: here `E'` is a DERIVED 2-column [start, end]
     /// relation — the full-triple projection `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` for an all-pairs
     /// WILDCARD `.` closure, or the deduped bag-union / projected join for a COMPOUND `(p|q)+` / `(p/q)+`
-    /// body (exactly the [`build_compound_edge`](crate::proof::paths) output that
+    /// body (exactly the `build_compound_edge` output that
     /// [`Self::TransitiveClosureCompound`] uses). Because the store pairs closure driver is
     /// source-agnostic over `E` (takes it BY COMMITMENT), it maps to the SAME store
     /// [`terminus_store::proof::envelope::RelationProofPlanKind::TransitiveClosurePairs`] node — only `E`'s
@@ -295,7 +340,7 @@ pub enum CompiledRelationStatement {
     /// Emitted ONLY under the endpoint `Distinct` gate and ONLY for ONE bound endpoint (a bound source
     /// walks `E'` forward; a bound target walks it backward via `inverted`, which at the SET level
     /// equals `path.pl`'s `invert_path` of the compound pattern). Both-free / both-bound compound
-    /// closures reject-closed (single-seed scope). See [`crate::proof::paths::plan_compound_closure`].
+    /// closures reject-closed (single-seed scope). See `crate::proof::paths::plan_compound_closure`.
     TransitiveClosureCompound {
         /// The derived compound edge relation `E'`, a 2-column [start, end] node/value relation
         /// (deduped). Proven ONCE as a leaf and reused by commitment across every round + the fixpoint.
@@ -336,7 +381,7 @@ pub enum CompiledRelationStatement {
         /// exhaustive graph/digest machinery treats it uniformly with `TransitiveClosure`. The
         /// selector is bound ADDITIVELY into `relation_query_digest` (`Instance` folds nothing) and
         /// is NOT forwarded into the store plan kind (the store recursion is graph-blind — the
-        /// prove/verify ENTRY picks the matching `LayerCommitment`). See [`relation_graph`].
+        /// prove/verify ENTRY picks the matching `LayerCommitment`). See `relation_graph`.
         graph: ProofGraph,
     },
     /// Authenticated ORDERED walk of one stored 1-D DENSE `sys:Array`: given a BOUND subject node `S`
@@ -366,27 +411,37 @@ pub enum CompiledRelationStatement {
         /// graph/digest machinery treats it uniformly with `OrderedListWalk`. The selector is bound
         /// ADDITIVELY into `relation_query_digest` (`Instance` folds nothing) and is NOT forwarded into
         /// the store plan kind (the store recursion is graph-blind — the prove/verify ENTRY picks the
-        /// matching `LayerCommitment`). See [`relation_graph`].
+        /// matching `LayerCommitment`). See `relation_graph`.
         graph: ProofGraph,
     },
+    /// Per-group SUM of `value_column` (exact fixed-width integral `datatype`) grouped by
+    /// `key_columns` — a WOQL `GroupBy` immediately consumed by `Sum`.
     GroupSum {
         input: Box<CompiledRelation>,
         key_columns: Vec<usize>,
         value_column: usize,
         datatype: CanonicalDatatype,
     },
+    /// Per-group ROW COUNT grouped by `key_columns` — a WOQL `GroupBy` immediately consumed by
+    /// `Length`.
     GroupCount {
         input: Box<CompiledRelation>,
         key_columns: Vec<usize>,
     },
+    /// Total row COUNT of the whole child collection as one generated-decimal row — a WOQL
+    /// `Collect` immediately consumed by `Length`.
     CollectionCount {
         input: Box<CompiledRelation>,
     },
+    /// Total SUM over the whole child collection of the `template` value (a child column or a
+    /// constant) at exact integral `datatype` — a WOQL `Collect` immediately consumed by `Sum`.
     CollectionSum {
         input: Box<CompiledRelation>,
         template: CollectionSumTemplate,
         datatype: CanonicalDatatype,
     },
+    /// MIN/MAX (`kind`) of `value_column` (order-preserving `datatype`) over the whole child
+    /// collection — a WOQL `Collect` immediately consumed by `RangeMin`/`RangeMax`.
     CollectionExtrema {
         input: Box<CompiledRelation>,
         value_column: usize,
@@ -447,7 +502,7 @@ pub enum CompiledRelationStatement {
     /// byte-authentication foundation dictates — NO new committed column/format is added. The
     /// committed `result_columns` are the child's operand columns verbatim (already root-bound);
     /// the per-row concatenation is DELIVERED alongside and the verifier RE-DERIVES it from the
-    /// root-authenticated operands (see [`expected_concat_objects`]). Because the inputs are
+    /// root-authenticated operands (see `expected_concat_objects`). Because the inputs are
     /// pinned to the trusted root and byte concatenation is deterministic, there is no biasable
     /// witness — the identical soundness model the arithmetic circuits use.
     Concat {
@@ -473,7 +528,7 @@ pub enum CompiledRelationStatement {
     /// concatenates them VERBATIM (no `term_to_atom`/`atom_string` stringification) — a pure,
     /// LOCALE-INDEPENDENT byte concatenation, exactly like `Concat`. Hence the recompute is
     /// literally `Concat`'s byte recompute over the INTERPOSED element sequence (see
-    /// [`expected_join_objects`]). The mode is `[ground, ground, any]` (`join(X,S,Y)`,
+    /// `expected_join_objects`). The mode is `[ground, ground, any]` (`join(X,S,Y)`,
     /// `woql_compile.pl:2902`): List + Sep must be ground (a concrete inline string list and a
     /// string separator), Result fresh — which is exactly the compile-time shape guard.
     ///
@@ -504,7 +559,7 @@ pub enum CompiledRelationStatement {
     /// Length`, `SubString` = the `Length` characters starting at character offset `Before`. Rust
     /// `char` is a Unicode scalar value (= code point for valid UTF-8, which has no surrogates),
     /// so `text.chars().skip(Before).take(Length)` reproduces SWI's substring byte-for-byte (see
-    /// [`expected_substring_objects`]). When `Before + Length > total_chars` SWI `sub_string`
+    /// `expected_substring_objects`). When `Before + Length > total_chars` SWI `sub_string`
     /// FAILS (the row yields no solution / is dropped); we FAIL CLOSED at recompute rather than
     /// fabricate an out-of-range substring — so a proof is only ever produced when NO row is
     /// dropped, in which case the per-row map equals the reference result exactly. Negative
@@ -543,7 +598,7 @@ pub enum CompiledRelationStatement {
     ///   the target) yields the operand unchanged. Rust `char` = a Unicode scalar value (= code
     ///   point for valid UTF-8), so `text.chars().count()` reproduces SWI's `string_length`, and
     ///   prepending `pad_char`'s exact UTF-8 bytes `L2` times reproduces `repeat_term`/`append`
-    ///   byte-for-byte (see [`expected_pad_objects`]). Operand-longer-than-target FAILS CLOSED at
+    ///   byte-for-byte (see `expected_pad_objects`). Operand-longer-than-target FAILS CLOSED at
     ///   recompute (never fabricate a truncation the reference would reject).
     ///
     /// SOUNDNESS: the operand bytes are pinned to the trusted root; `pad_char` and `target_len` are
@@ -577,13 +632,13 @@ pub enum CompiledRelationStatement {
     ///     then `maplist(encode_id_fragment, Raw, Encoded)`, then `merge_separator_split(Suffix,
     ///     '+', Encoded)` = the encoded fragments joined by a literal `'+'`;
     ///   `crypto_data_hash(Suffix, Hash, [algorithm(sha256)])` = lowercase 64-char hex SHA-256 of
-    ///     the Suffix's bytes (the Suffix is ALWAYS pure ASCII — see [`encode_id_fragment`] — so the
+    ///     the Suffix's bytes (the Suffix is ALWAYS pure ASCII — see `encode_id_fragment` — so the
     ///     hashed bytes are unambiguous);
     ///   `format(string(ID), "~w~w", [Base, Hash])` = the RAW base string (NOT encoded) followed by
     ///     the hex digest.
     /// `encode_id_fragment` = SWI `uri_encoded(segment, ...)` then `re_replace('+' -> '%2B')`; its
     /// exact byte behavior was captured from the reference's own SWI builtins and is reproduced in
-    /// [`encode_id_fragment`]. The result is bound to a `NodeValue` (a URI/node), so we reveal it as
+    /// `encode_id_fragment`. The result is bound to a `NodeValue` (a URI/node), so we reveal it as
     /// a [`CanonicalObject::Node`].
     ///
     /// SOUNDNESS: `Base` and every `Arg` are byte-authenticated against the trusted root (literal
@@ -638,7 +693,7 @@ pub enum CompiledRelationStatement {
     /// the 20th (`(Rem*10^20*2 + Den) // (Den*2)`), TRAILING ZEROS TRIMMED, emitted as an unquoted
     /// JSON number (whole rationals render as the bare integer). Terminating `7 rdiv 2` -> "3.5",
     /// `6 rdiv 2` -> "3", `1 rdiv 4` -> "0.25"; non-terminating `1 rdiv 3` -> "0.33333333333333333333"
-    /// (twenty 3s). This is reproduced BYTE-EXACT by [`rational_to_decimal_string_20`] (rug/GMP is
+    /// (twenty 3s). This is reproduced BYTE-EXACT by `rational_to_decimal_string_20` (rug/GMP is
     /// the same big-integer library SWI uses). The verifier RE-DERIVES the exact rational from the
     /// ROOT-authenticated operands and re-renders this lexical; a mismatch, a zero divisor, or a
     /// non-numeric operand row FAILS CLOSED. Delivered as [`CanonicalObject::Value`] tagged
@@ -659,7 +714,7 @@ pub enum CompiledRelationStatement {
     /// child relation `input` binds AND authenticates the `xsd:date` operand column; this statement
     /// carries the child columns through and appends ONE derived signed-integer column
     /// (`GeneratedDecimalI64`) PER `outputs` entry, which the verifier RE-DERIVES from the
-    /// root-authenticated date (see [`expected_calendar_int_columns`]). `outputs` holds one function
+    /// root-authenticated date (see `expected_calendar_int_columns`). `outputs` holds one function
     /// per bound integer output — one for Weekday/WeekdaySundayStart, two (`[IsoWeekYear, IsoWeekWeek]`)
     /// for IsoWeek — in the SAME order the corresponding result variables were appended to the schema.
     ///
@@ -680,7 +735,7 @@ pub enum CompiledRelationStatement {
     /// column). The child relation `input` binds AND authenticates the operand column (an `xsd:date`
     /// for `Day*`, an `xsd:gYearMonth` for `Month*`); the child columns pass through verbatim and the
     /// per-row result is DELIVERED alongside, re-derived by the verifier (see
-    /// [`expected_calendar_date_objects`]) as the client-facing `YYYY-MM-DD` lexical.
+    /// `expected_calendar_date_objects`) as the client-facing `YYYY-MM-DD` lexical.
     ///
     /// SOUNDNESS: identical to `Concat` — the operand is pinned to the trusted root, the calendar
     /// arithmetic is deterministic and ported byte-exact, and the delivered result must equal the
@@ -701,13 +756,13 @@ pub enum CompiledRelationStatement {
     /// value (NOT a committed column — a synthesized lexical does not encode into a field element
     /// and feeds nothing downstream). The child relation `input` binds AND authenticates the
     /// numeric source column; the child columns pass through verbatim and the per-row cast string
-    /// is DELIVERED alongside and re-derived by the verifier (see [`expected_cast_to_string_objects`]).
+    /// is DELIVERED alongside and re-derived by the verifier (see `expected_cast_to_string_objects`).
     ///
     /// FIDELITY (`casting:typecast_switch`, `terminusdb/src/core/triple/casting.pl`): an integer
     /// source (fixed-width `xsd:int`/`long`/… or arbitrary `xsd:integer`) casts to string via
     /// `format(string(S),"~w",[Val])` = base-10, `-` sign, no leading zeros; an `xsd:decimal`
     /// source casts via `rational_to_decimal_string(Val, S, 20)` — the SAME byte-exact renderer
-    /// [`rational_to_decimal_string_20`] the decimal layer already uses. A `float`/`double` source
+    /// `rational_to_decimal_string_20` the decimal layer already uses. A `float`/`double` source
     /// (SWI's own float `~w` formatting) or any non-numeric source FAILS CLOSED at recompute
     /// (reject-closed over approximate). SOUNDNESS is identical to `RationalArith`: the operand is
     /// pinned to the trusted root, the render is deterministic and byte-exact, and the delivered
@@ -725,7 +780,7 @@ pub enum CompiledRelationStatement {
     /// single field element and feeds nothing downstream). The child relation `input` binds AND
     /// authenticates the `xsd:string` source column; the child columns pass through verbatim and the
     /// parsed value is DELIVERED alongside and re-derived by the verifier (see
-    /// [`expected_cast_from_string_objects`]).
+    /// `expected_cast_from_string_objects`).
     ///
     /// FIDELITY (`casting:typecast_switch`): string→`xsd:integer` parses the `integer//1` grammar
     /// (`^[+-]?[0-9]+$`, leading zeros allowed) — we ship exactly that (`+` accepted, matching SWI);
@@ -735,7 +790,7 @@ pub enum CompiledRelationStatement {
     /// a FLOAT — hex, and Prolog rational literals all REJECTED closed). A malformed/out-of-grammar
     /// string FAILS CLOSED at recompute (SWI `typecast` throws → the query fails → the proof fails
     /// closed, never a wrong/silent value). The result is delivered as its client-facing lexical
-    /// (`xsd:integer` = base-10; `xsd:decimal` = [`rational_to_decimal_string_20`]).
+    /// (`xsd:integer` = base-10; `xsd:decimal` = `rational_to_decimal_string_20`).
     TypecastStringToNumber {
         input: Box<CompiledRelation>,
         /// Index of the authenticated (nonnullable node/value) `xsd:string` source column.
@@ -756,7 +811,7 @@ pub enum StringNumericTarget {
     /// `xsd:integer` (arbitrary precision) via the `integer//1` grammar; delivered as base-10.
     Integer,
     /// `xsd:decimal` (exact rational) via `string_decimal_to_rational/2`; delivered via
-    /// [`rational_to_decimal_string_20`].
+    /// `rational_to_decimal_string_20`.
     Decimal,
 }
 
@@ -881,6 +936,8 @@ pub enum DecimalExpr {
 }
 
 impl CompiledRelation {
+    /// The leaf BGP plan when this relation is a bare [`CompiledRelationStatement::Bgp`] scan,
+    /// else `None`.
     pub fn as_bgp(&self) -> Option<&LayerBgpPlan> {
         match &self.statement {
             CompiledRelationStatement::Bgp(plan) => Some(plan),
@@ -888,6 +945,7 @@ impl CompiledRelation {
         }
     }
 
+    /// The branches and their column mappings when this is a [`CompiledRelationStatement::BagUnion`].
     pub fn as_bag_union(&self) -> Option<(&[CompiledRelation], &[Vec<usize>])> {
         match &self.statement {
             CompiledRelationStatement::BagUnion { branches, mappings } => {
@@ -897,6 +955,7 @@ impl CompiledRelation {
         }
     }
 
+    /// The `(left, right, key_pairs)` when this is a [`CompiledRelationStatement::LeftAnti`].
     pub fn as_left_anti(
         &self,
     ) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
@@ -910,6 +969,8 @@ impl CompiledRelation {
         }
     }
 
+    /// Mutable access to a [`CompiledRelationStatement::LeftAnti`]'s join `key_pairs` (used while
+    /// wiring up the correlation keys during lowering).
     pub fn as_left_anti_mut(&mut self) -> Option<&mut Vec<(usize, usize)>> {
         match &mut self.statement {
             CompiledRelationStatement::LeftAnti { key_pairs, .. } => Some(key_pairs),
@@ -917,6 +978,7 @@ impl CompiledRelation {
         }
     }
 
+    /// The `(left, right, key_pairs)` when this is a [`CompiledRelationStatement::LeftOuter`].
     pub fn as_left_outer(
         &self,
     ) -> Option<(&CompiledRelation, &CompiledRelation, &[(usize, usize)])> {
@@ -930,6 +992,8 @@ impl CompiledRelation {
         }
     }
 
+    /// Mutable access to a [`CompiledRelationStatement::LeftOuter`]'s join `key_pairs` (used while
+    /// wiring up the correlation keys during lowering).
     pub fn as_left_outer_mut(&mut self) -> Option<&mut Vec<(usize, usize)>> {
         match &mut self.statement {
             CompiledRelationStatement::LeftOuter { key_pairs, .. } => Some(key_pairs),
@@ -937,6 +1001,7 @@ impl CompiledRelation {
         }
     }
 
+    /// The `(input, constraint)` when this is a [`CompiledRelationStatement::Equality`] filter.
     pub fn as_equality(&self) -> Option<(&CompiledRelation, &RelationEqualityPlan)> {
         match &self.statement {
             CompiledRelationStatement::Equality { input, constraint } => Some((input, constraint)),
@@ -944,6 +1009,8 @@ impl CompiledRelation {
         }
     }
 
+    /// The `(input, datatype)` when this is a [`CompiledRelationStatement::ExactScalarOrder`]
+    /// (direction dropped; see [`Self::as_exact_scalar_order_with_direction`]).
     pub fn as_exact_scalar_order(&self) -> Option<(&CompiledRelation, CanonicalDatatype)> {
         match &self.statement {
             CompiledRelationStatement::ExactScalarOrder { input, datatype, .. } => {
@@ -966,6 +1033,7 @@ impl CompiledRelation {
         }
     }
 
+    /// The `(input, offset, limit)` when this is a [`CompiledRelationStatement::ExactOrderedSlice`].
     pub fn as_exact_ordered_slice(&self) -> Option<(&CompiledRelation, u64, Option<u64>)> {
         match &self.statement {
             CompiledRelationStatement::ExactOrderedSlice { input, offset, limit, .. } => {
@@ -985,6 +1053,8 @@ impl CompiledBgp {
     }
 }
 
+/// The per-output-column descriptors of a compiled query's authoritative relation (thin wrapper
+/// over `relation_result_descriptors`).
 pub(crate) fn compiled_result_descriptors(
     compiled: &CompiledBgp,
 ) -> std::io::Result<Vec<ResultColumnDescriptor>> {
@@ -996,21 +1066,30 @@ pub(crate) fn compiled_result_descriptors(
 /// no scheduling or persistence policy; applications own when and where proving runs.
 #[derive(Debug)]
 pub struct ProvedBgp {
+    /// The per-node proof tree mirroring the compiled plan (one variant per statement kind).
     pub statement: ProvedQueryStatement,
+    /// Dory commitments of each result column, parallel to `result_columns`.
     pub result_commitments: Vec<ArkGT>,
     /// Real, unpadded Store ID columns in the compiled schema order.
     pub result_columns: Vec<Vec<ArkFr>>,
+    /// `log2` of the padded column length (the number of sumcheck hypercube variables).
     pub result_log_domain: usize,
+    /// The true (unpadded) number of result rows.
     pub result_len: usize,
 }
 
+/// One decoded, TYPED result cell an executor delivers for cross-checking against a proof (the
+/// typed counterpart of the untyped [`ExecutedResultInput`]). Each cell is either a Store
+/// dictionary id, a generated (derived) decimal in the signed or unsigned domain, or a null.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutedResultValue {
+    /// A Store dictionary id (node/value or predicate namespace), nonzero.
     Id(u64),
     /// A generated nonnegative integral xsd:decimal, not a Store dictionary ID.
     GeneratedDecimalU64(u64),
     /// A generated signed integral xsd:decimal, not a Store dictionary ID.
     GeneratedDecimalI64(i64),
+    /// An absent value in a nullable (Optional-derived) column.
     Null,
 }
 
@@ -1024,6 +1103,8 @@ pub enum ExecutedResultInput {
     Null,
 }
 
+/// Parse a generated UNSIGNED decimal lexical to `u64`, rejecting any non-canonical integer form
+/// (leading zeros, sign, out-of-range) so a delivered generated value round-trips exactly.
 pub(crate) fn parse_canonical_u64_decimal(value: &str) -> std::io::Result<u64> {
     let parsed = value.parse::<u64>().map_err(|_| std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -1038,6 +1119,8 @@ pub(crate) fn parse_canonical_u64_decimal(value: &str) -> std::io::Result<u64> {
     Ok(parsed)
 }
 
+/// Parse a generated SIGNED decimal lexical to `i64`, rejecting any non-canonical integer form
+/// (leading zeros, `+` sign, out-of-range) so a delivered generated value round-trips exactly.
 pub(crate) fn parse_canonical_i64_decimal(value: &str) -> std::io::Result<i64> {
     let parsed = value.parse::<i64>().map_err(|_| std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -1052,6 +1135,12 @@ pub(crate) fn parse_canonical_i64_decimal(value: &str) -> std::io::Result<i64> {
     Ok(parsed)
 }
 
+/// Decode untyped executor [`ExecutedResultInput`] rows into typed [`ExecutedResultValue`] rows,
+/// validating them against the compiled query's shape (the projected/count variable list and each
+/// column's [`ResultColumnDescriptor`] namespace + nullability). Fails closed when the delivered
+/// variable list, row width, or a cell's kind does not match the compiled projection — so a
+/// caller cannot cross-check a proof against mis-shaped executor output. This only reshapes
+/// executor input; it proves nothing.
 pub fn decode_executed_result_inputs(
     compiled: &CompiledBgp,
     variables: &[String],
@@ -1131,36 +1220,54 @@ pub fn decode_executed_result_inputs(
         .collect()
 }
 
+/// The proof-side mirror of [`CompiledRelationStatement`]: one variant per proven plan node,
+/// each carrying the store proof piece(s) for that node plus its proven child(ren). A simple
+/// leaf BGP is [`Self::Single`]; recursive operators nest boxed child `ProvedBgp`s. Nodes whose
+/// store proof cannot be decomposed into this tree (the cross-root hash join, the ordered
+/// list/array walks, the all-pairs / compound closures) carry the whole store
+/// [`RecursiveRelationEnvelope`] WHOLESALE and are re-verified by re-running the store's own
+/// recursive verify. The verifier walks this structure in lock-step with the compiled plan.
 #[derive(Debug)]
 pub enum ProvedQueryStatement {
+    /// Proof of a [`CompiledRelationStatement::LayerTripleCount`].
     LayerTripleCount,
+    /// Proof of a [`CompiledRelationStatement::GeneratedU64Filter`] over its proven child.
     GeneratedU64Filter {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::GeneratedI64Filter`] over its proven child.
     GeneratedI64Filter {
         input: Box<ProvedBgp>,
     },
+    /// A single leaf BGP proof plus the authenticated predicate ids of its atoms (the base
+    /// [`CompiledRelationStatement::Bgp`] scan).
     Single {
         proof: Box<LayerBgpProof>,
         predicate_ids: Vec<u64>,
     },
+    /// Proof of a [`CompiledRelationStatement::BagUnion`]: the proven branches + the union proof.
     BagUnion {
         branches: Vec<ProvedBgp>,
         proof: Box<BagUnionProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::BagProjection`] over its proven child.
     BagProjection {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::Distinct`]: the proven child + the dedup proof.
     Distinct {
         input: Box<ProvedBgp>,
         proof: Box<RelationDistinctProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::LeftAnti`]: the two proven children + the anti-join
+    /// proof (absent for a length-pinned global `Not`).
     LeftAnti {
         left: Box<ProvedBgp>,
         right: Box<ProvedBgp>,
         /// Correlated anti joins carry a proof; global Not is length-pinned.
         proof: Option<Box<LeftAntiJoinProof>>,
     },
+    /// Proof of a [`CompiledRelationStatement::InnerJoin`]: the two proven children + the join proof.
     InnerJoin {
         left: Box<ProvedBgp>,
         right: Box<ProvedBgp>,
@@ -1173,30 +1280,39 @@ pub enum ProvedQueryStatement {
     CrossRootHashJoin {
         envelope: Box<RecursiveRelationEnvelope>,
     },
+    /// Proof of a [`CompiledRelationStatement::LeftOuter`]: the two proven children + the outer-join proof.
     LeftOuter {
         left: Box<ProvedBgp>,
         right: Box<ProvedBgp>,
         proof: Box<LeftOuterJoinProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::Equality`] filter: the proven child + the equality proof.
     Equality {
         input: Box<ProvedBgp>,
         proof: Box<RelationEqualityProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::TupleDisequality`] filter: the proven child + the
+    /// disequality proof.
     TupleDisequality {
         input: Box<ProvedBgp>,
         proof: Box<TupleDisequalityProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::ExactScalarOrder`]: the proven child + the order proof.
     ExactScalarOrder {
         input: Box<ProvedBgp>,
         proof: Box<ExactScalarOrderProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::ExactMultiOrder`]: the proven child + the multi-order proof.
     ExactMultiOrder {
         input: Box<ProvedBgp>,
         proof: Box<ExactMultiOrderProof>,
     },
+    /// Proof of a [`CompiledRelationStatement::ExactOrderedSlice`] (the slice is pinned positionally
+    /// against the proven ordered child).
     ExactOrderedSlice {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::GroupExtrema`] over its proven child.
     GroupExtrema {
         input: Box<ProvedBgp>,
     },
@@ -1204,7 +1320,7 @@ pub enum ProvedQueryStatement {
     /// orchestration: it carries the store proof pieces (the edge sub-relation mirrored as a
     /// `ProvedBgp`, plus the seed / rounds / empty-delta fixpoint), reconstructs the store
     /// `RecursiveRelationEnvelope`, and DELEGATES to the audited store verify. See
-    /// [`plan_transitive_closure_path`].
+    /// `plan_transitive_closure_path`.
     TransitiveClosure {
         edge: Box<ProvedBgp>,
         seed: TransitiveClosureSeed,
@@ -1250,18 +1366,23 @@ pub enum ProvedQueryStatement {
     TransitiveClosureCompound {
         envelope: Box<RecursiveRelationEnvelope>,
     },
+    /// Proof of a [`CompiledRelationStatement::GroupSum`] over its proven child.
     GroupSum {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::GroupCount`] over its proven child.
     GroupCount {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::CollectionCount`] over its proven child.
     CollectionCount {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::CollectionSum`] over its proven child.
     CollectionSum {
         input: Box<ProvedBgp>,
     },
+    /// Proof of a [`CompiledRelationStatement::CollectionExtrema`] over its proven child.
     CollectionExtrema {
         input: Box<ProvedBgp>,
     },

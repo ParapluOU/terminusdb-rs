@@ -36,6 +36,13 @@
 //!     joined with removals) — each store read path reads a SINGLE committed group;
 //!   * an object-KIND-restricted variable object (`Link`/`Data`) — no object-kind channel;
 //!   * a fully-ground atom — the store BGP keeps at least one variable per atom.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background: §9 the layer-commitment
+//! model, §10 prove→verify and the reconcile paragraph (`present = ⊎additions − ⊎removals`), and
+//! §11 soundness-vs-fidelity. The byte-in `decode_and_verify_*` entry points below are DB-free: the
+//! verifier re-derives the lowered spec from its OWN query (never from the proof bytes) and binds it
+//! (anti-substitution), so the reconcile + BGP identities are checked against the trusted head root
+//! alone.
 
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
@@ -146,7 +153,7 @@ struct GroupSpec {
     agg: GroupAgg,
 }
 
-/// Map the compiler-side [`GroupSpec`] to the store-side wire [`GroupReadSpec`] (the anti-substitution
+/// Map the compiler-side `GroupSpec` to the store-side wire [`GroupReadSpec`] (the anti-substitution
 /// witness carried in a byte-in group proof). The store verifier compares the carried witness to the
 /// verifier's OWN re-lowered spec and reject-closes on mismatch.
 fn to_store_group_spec(spec: &GroupSpec) -> GroupReadSpec {
@@ -341,7 +348,7 @@ fn classify_source(source: ColumnSource) -> ReadSource {
 
 /// Map one compiled [`LayerBgpAtom`] to a store [`PresentBgpAtom`], reject-closing every SHAPE the
 /// store BGP cannot express (see the module docs). Source-AGNOSTIC: the atom's column source is
-/// classified separately ([`uniform_source`]) so a single mapping serves both the materialized and
+/// classified separately (`uniform_source`) so a single mapping serves both the materialized and
 /// delta-read routes.
 fn map_atom(atom: &LayerBgpAtom) -> Result<PresentBgpAtom, ReconciledReadError> {
     // The store path authenticates a CONSTANT predicate hash; a predicate variable is not
@@ -882,7 +889,7 @@ pub fn verify_and_resolve_reconciled_read(
 /// (anti-substitution) — maps the route to a [`DeltaSource`] (a materialized route is not a delta
 /// read and is rejected as a shape mismatch), then hands the encoded proof + the encoded term-less
 /// `VerifierCommitment` chain to the store's byte-in [`decode_and_verify_delta_read`]. Mirrors
-/// [`crate::proof::prove_entry::decode_verifier_commitment_and_verify_envelope`]. Returns the
+/// `crate::proof::prove_entry::decode_verifier_commitment_and_verify_envelope`. Returns the
 /// authenticated result row count.
 pub fn decode_and_verify_reconciled_delta_read(
     query: &Query,
@@ -1016,7 +1023,7 @@ pub fn decode_and_verify_reconciled_count(
 
 /// C4 byte-in DB-free FFI: verify a reconciled `GroupBy` aggregate (GroupCount / GroupSum / group
 /// Min/Max) shipped as BYTES against the trusted head root, driven by the VERIFIER's OWN WOQL
-/// `query`. Re-lowers the query to its [`GroupSpec`] (key columns + aggregate kind + value column +
+/// `query`. Re-lowers the query to its `GroupSpec` (key columns + aggregate kind + value column +
 /// datatype) AND the atom/join spec — ALL from the verifier's query, NEVER from the proof bytes
 /// (anti-substitution) — and requires a `GroupBy` aggregate over the materialized present (a plain /
 /// ordered / count / delta-source query reject-closes). Hands the encoded [`ReconciledGroupReadProof`]
@@ -1106,7 +1113,7 @@ pub fn decode_and_verify_reconciled_group(
 
 /// C4 byte-in DB-free FFI: verify + resolve a reconciled single-column numeric `OrderBy` shipped as
 /// BYTES against the trusted head root, driven by the VERIFIER's OWN WOQL `query`. Re-lowers the
-/// query to its [`OrderSpec`] (sort datatype + direction) AND the atom/join spec — ALL from the
+/// query to its `OrderSpec` (sort datatype + direction) AND the atom/join spec — ALL from the
 /// verifier's query, NEVER from the proof bytes (anti-substitution) — and requires a supported
 /// single-column full-key numeric `OrderBy` over the materialized present (a plain / count / grouped /
 /// delta-source, or the already-reject-closed subset-key / multi-key / non-numeric / float order, is

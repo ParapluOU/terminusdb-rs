@@ -2,12 +2,19 @@
 //!
 //! Lowers the calendar predicates over store-authenticated date operands into verifier-recompute
 //! relations: the integer-valued functions (weekday, day-of-year, week number, ...) via
-//! [`build_calendar_int`] and the date-valued functions (next / previous day, ...) via
-//! [`build_calendar_date`], dispatched by [`plan_calendar_form`]. The verifier re-derives each
+//! `build_calendar_int` and the date-valued functions (next / previous day, ...) via
+//! `build_calendar_date`, dispatched by `plan_calendar_form`. The verifier re-derives each
 //! result from the decoded date column.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§5 the committed columns
+//! a verifier-recompute re-derives over, and §11 soundness-vs-fidelity).
 
 use super::*;
 
+/// True iff `query` is one of the single-node calendar / date / interval / duration ops this module
+/// dispatches (whether ship-supported or reject-closed). Used by `plan_calendar_form` to locate the
+/// lone calendar conjunct inside an `And`; claiming ALL of them ensures a supported op compiles and an
+/// unsupported one reject-closes, never silently falling through to a mis-plan.
 pub(crate) fn is_calendar_conjunct(query: &Query) -> bool {
     matches!(
         query,
@@ -153,7 +160,7 @@ pub(crate) fn build_calendar_date(
 
 /// Compile a single-input WOQL CALENDAR op conjunct into a verifier-recompute
 /// [`CompiledRelationStatement::CalendarInt`] / [`CompiledRelationStatement::CalendarDate`], modelled
-/// on [`plan_eval_form`]/[`plan_concat_form`].
+/// on `plan_eval_form`/`plan_concat_form`.
 ///
 /// SHIP (reject-closed everywhere else): `Weekday`/`WeekdaySundayStart`/`IsoWeek` (INTEGER outputs
 /// over a bound `xsd:date`) and `DayAfter`/`DayBefore` (`xsd:date`) / `MonthStartDate`/`MonthEndDate`

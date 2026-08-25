@@ -1,14 +1,32 @@
 //! Ordering lowering — `OrderBy`, exact ordered slices, and triple-count comparisons.
 //!
 //! Lowers ordering / slicing constructs into exact-order proof statements:
-//! [`plan_exact_scalar_order`] and [`plan_exact_ordered_slice`] (scalar / multi-key `OrderBy`,
-//! `Start` / `Limit` windows), the ordered-triple value scans ([`compile_ordered_triple_slice`],
-//! [`plan_ordered_triple_value_construct`]), and the layer triple-count comparisons
-//! ([`plan_layer_triple_count`], the `TripleCount` relation). The proof establishes the exact
+//! `plan_exact_scalar_order` and `plan_exact_ordered_slice` (scalar / multi-key `OrderBy`,
+//! `Start` / `Limit` windows), the ordered-triple value scans (`compile_ordered_triple_slice`,
+//! `plan_ordered_triple_value_construct`), and the layer triple-count comparisons
+//! (`plan_layer_triple_count`, the `TripleCount` relation). The proof establishes the exact
 //! sorted order, not merely a permutation.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§6 the sort / order
+//! gadgets these plans drive, and §11 soundness-vs-fidelity — an order proof must attest the
+//! exact TerminusDB ordering, not just some permutation).
 
 use super::*;
 
+/// Compile a WOQL `OrderBy` into an exact-order plan: `ExactScalarOrder` for a single sort column,
+/// `ExactMultiOrder` for two or three. The proof attests the exact TerminusDB order, not merely a
+/// permutation.
+///
+/// ACCEPTS: a bare, non-projected / non-aggregated / non-distinct child BGP of arity 1..=3 whose
+/// columns are all non-nullable node/value columns pinned to a fixed-width INTEGRAL datatype, under
+/// a FULL-key template (every column named, keys distinct).
+///
+/// REJECTS CLOSED: a projected / counted / distinct / wrong-arity child (`OrderByUnsupportedShape`);
+/// a repeated or unknown sort key (`OrderByUnsupportedShape`); a SUBSET-key order — fewer keys than
+/// columns — which would need an un-attestable invented tie-break (`OrderBySubsetKeyUnsupported`, the
+/// "maximum order attestation" rule); and a non-node/value, nullable, or FLOAT sort column
+/// (`OrderByUnsupportedValue`) — floats are excluded because the store's IEEE total order splits
+/// `-0.0`/`+0.0` and misplaces `NaN` versus WOQL numeric order.
 pub(crate) fn plan_exact_scalar_order(
     order_by: &crate::order::OrderBy,
 ) -> Result<CompiledBgp, BgpPlanError> {
@@ -112,6 +130,11 @@ pub(crate) fn plan_exact_scalar_order(
     })
 }
 
+/// Compile a `Start` (offset) / `Limit` / `Once` window into an `ExactOrderedSlice` over an already
+/// exactly-ordered child. The child must itself be an `ExactScalarOrder` / `ExactMultiOrder` /
+/// `ExactOrderedSlice` relation (a window only has a well-defined answer over a proven total order);
+/// a non-ordered, projected, counted, or distinct child rejects closed (`OrderedSliceUnsupportedShape`).
+/// `Once` becomes `limit = 1`.
 pub(crate) fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     let (child_query, offset, limit, once) = match query {
         Query::Start(start) => (start.query.as_ref(), start.start, None, false),
@@ -151,6 +174,11 @@ pub(crate) fn plan_exact_ordered_slice(query: &Query) -> Result<CompiledBgp, Bgp
     })
 }
 
+/// Encode an object `Value::Data` literal to its order-preserving `(datatype-field, constant-field,
+/// canonical datatype)` triple via `encode_range_constant`, restricted to the fixed-width INTEGRAL
+/// datatypes. A non-`Data` value, or any datatype `encode_range_constant` rejects (float and every
+/// other non-order-preserving type), rejects closed (`TripleValueOrderUnsupportedValue`) — the same
+/// float exclusion as `plan_exact_scalar_order`.
 pub(crate) fn encoded_ordered_triple_value(
     value: &Value,
 ) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
@@ -179,6 +207,12 @@ pub(crate) fn encoded_ordered_triple_value(
     Ok(encoded)
 }
 
+/// Build the exact-ordered value scan behind the TripleSlice/TripleNext cursors: a constant-S/P
+/// `Triple(s, p, ?variable)` under the numeric `bounds`, sorted by object value into an
+/// `ExactScalarOrder` (wrapped in a `limit = 1` `ExactOrderedSlice` when `first_only`). Constant S/P
+/// leave the object as the single kept column, so the range + exact-order arguments prove both
+/// membership and the executor-visible order. Rejects closed a variable or schema-graph S/P, or any
+/// shape that does not reduce to the single `[variable]` object column (`TripleValueOrderUnsupportedShape`).
 pub(crate) fn compile_ordered_triple_value_scan(
     subject: &NodeValue,
     predicate: &NodeValue,
@@ -255,6 +289,9 @@ pub(crate) fn compile_ordered_triple_value_scan(
     })
 }
 
+/// Compile a half-open `[low, high)` ordered-object slice for a constant-S/P triple: encode both
+/// bounds (which must share one datatype), then delegate to `compile_ordered_triple_value_scan` with
+/// `Ge low` / `Lt high` bounds. A non-variable object, or mismatched bound datatypes, rejects closed.
 pub(crate) fn compile_ordered_triple_slice(
     subject: &NodeValue,
     predicate: &NodeValue,
@@ -294,6 +331,10 @@ pub(crate) fn compile_ordered_triple_slice(
     )
 }
 
+/// Turn an ordered value scan bound to a hidden object `variable` into a GROUND existence over an
+/// `expected` constant object: gate the scan with an authenticated `Equality` (variable == expected),
+/// then project to the zero-column (unit) relation. Used when the cursor's object position is itself
+/// a constant. A non-`Data` expected value rejects closed (`TripleValueOrderUnsupportedValue`).
 pub(crate) fn constrain_ordered_triple_value_to_ground(
     compiled: CompiledBgp,
     variable: &str,
@@ -456,6 +497,10 @@ pub(crate) fn plan_ordered_triple_value_construct(
     Ok(Some(compiled))
 }
 
+/// Compile a WOQL `TripleCount(resource, ?n)` into the `LayerTripleCount` relation — one column
+/// delivering the layer's authenticated triple count, routed to the resource's collection. The
+/// resource must be a non-empty `.../instance` graph (`TripleCountUnsupportedResource`) and the count
+/// output a variable (`TripleCountOutputNotVariable`).
 pub(crate) fn plan_layer_triple_count(
     count: &crate::misc::TripleCount,
 ) -> Result<CompiledBgp, BgpPlanError> {
@@ -481,6 +526,10 @@ pub(crate) fn plan_layer_triple_count(
     })
 }
 
+/// Decode an `xsd:decimal` literal to an EXACT nonnegative `u64` triple-count comparison constant.
+/// Rejects closed (`TripleCountComparisonUnsupportedConstant`) a non-decimal, negative, or
+/// negative-scale value, and any value not exactly representable as the round-tripped `u64` — the
+/// bounded contract is deliberately NOT broadened to scientific notation / fractional decimals.
 pub(crate) fn exact_integral_decimal_u64(value: &XSDAnySimpleType) -> Result<u64, BgpPlanError> {
     let XSDAnySimpleType::Decimal(decimal) = value else {
         return Err(BgpPlanError::TripleCountComparisonUnsupportedConstant);
@@ -498,6 +547,9 @@ pub(crate) fn exact_integral_decimal_u64(value: &XSDAnySimpleType) -> Result<u64
     Ok(value)
 }
 
+/// Flatten a `TripleCount`-comparison body into its comparison LEAVES: recurse through
+/// `And` / `Pin` / `Immediately`, drop `True` / `Comment` no-ops, and push every other node as a
+/// leaf. The first leaf is expected to be the `TripleCount`; the rest are the comparisons over it.
 pub(crate) fn flatten_triple_count_comparison_body<'a>(query: &'a Query, leaves: &mut Vec<&'a Query>) {
     match query {
         Query::And(and) => {
@@ -514,6 +566,11 @@ pub(crate) fn flatten_triple_count_comparison_body<'a>(query: &'a Query, leaves:
     }
 }
 
+/// Parse one comparison leaf over the count `variable` into a `GeneratedU64Filter` spec
+/// `(op, constant, constant_on_left)`: `Greater`/`Gte`/`Less`/`Lte`/`Equals` between the variable and
+/// an exact-`u64` decimal constant (either operand order). `constant_on_left` records which side the
+/// constant sat on. Any other shape — a comparison not involving the variable, or a non-exact-integral
+/// constant — rejects closed (`TripleCountComparisonUnsupportedShape`).
 pub(crate) fn generated_triple_count_constraint(
     query: &Query,
     variable: &str,
@@ -565,6 +622,11 @@ pub(crate) fn generated_triple_count_constraint(
     }
 }
 
+/// Compile a `TripleCount` followed by comparison leaves into a `LayerTripleCount` wrapped in one
+/// `GeneratedU64Filter` per comparison (each recomputed by the verifier over the authenticated count).
+/// Returns `Ok(None)` when the body carries no `TripleCount` (so other planners can try it); a
+/// `TripleCount` in a non-leading or otherwise unsupported position rejects closed
+/// (`TripleCountComparisonUnsupportedShape`).
 pub(crate) fn plan_triple_count_comparison_body(
     body: &Query,
 ) -> Result<Option<CompiledBgp>, BgpPlanError> {

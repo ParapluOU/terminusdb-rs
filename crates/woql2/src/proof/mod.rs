@@ -4,7 +4,7 @@
 //! only the fragment the authenticated left-deep join chain can encode faithfully and
 //! rejects everything else closed:
 //!
-//! * zero or more nested outer [`Select`]s (projection is read-side only — the proof
+//! * zero or more nested outer `Select`s (projection is read-side only — the proof
 //!   still proves the FULL BGP), wrapping
 //! * an [`And`] (nested `And`s flattened) of `k >= 1` [`Triple`]s, each a
 //!   `<subj> <predicate> <obj>` atom where the predicate is either a constant IRI or a
@@ -24,6 +24,20 @@
 //! can authenticate against its committed node/value dictionary, canonicalized IDENTICALLY
 //! to how the store stored it (node IRIs by their IRI bytes; `xsd:string` literals by
 //! routing through the store's own value construction).
+//!
+//! ## Where this fits in compile → prove → verify
+//!
+//! This module is the **compile** step. It lowers a trusted WOQL query into a variable-blind
+//! [`LayerBgpPlan`] of store gadgets; the store then proves that plan and a verifier
+//! RE-DERIVES the SAME plan from its OWN copy of the query — never from the proof — and checks
+//! it. That re-derivation is the *anti-substitution* property: a proof for one query cannot
+//! masquerade as the answer to another. The plan is where semantic **fidelity** is enforced
+//! (anything it cannot encode faithfully is rejected closed, rather than proved approximately);
+//! the store gadgets it targets provide the cryptographic **soundness**. Both are required and
+//! they are NOT the same property — see the store-side developer primer,
+//! [`terminus_store::proof::primer`] (esp. §10 prove→verify + anti-substitution, §11
+//! soundness-vs-fidelity, §6 gadgets), for the cryptography vocabulary used throughout this
+//! module (commitment, sumcheck, gadget, Fiat–Shamir, `resolution_root`).
 
 use chrono::Datelike;
 use dory_pcs::backends::arkworks::{ArkFr, ArkGT};

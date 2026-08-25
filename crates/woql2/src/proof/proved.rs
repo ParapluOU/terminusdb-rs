@@ -7,6 +7,13 @@
 //! transitive-closure paths — assembling the per-node proofs into one relation proof. The
 //! compiler decides WHAT to prove; the Store's proof primitives do the cryptography. The
 //! matching verification walks the same structure so prover and verifier stay in lock-step.
+//!
+//! This is the **prove** and **verify** step of compile → prove → verify. The verify entries
+//! (`verify` / `verify_over_graphs` / the `verify_and_resolve*` family / `verify_executed_rows`)
+//! anchor everything to a caller-supplied TRUSTED root and re-derive the plan from the caller's
+//! own compiled query — so a proof for one query cannot be substituted for another
+//! (anti-substitution). See [`terminus_store::proof::primer`] §10 (prove→verify) and §9 (the
+//! `resolution_root` trust anchor).
 
 use super::*;
 
@@ -91,6 +98,8 @@ fn relation_attests_order(statement: &CompiledRelationStatement) -> bool {
 }
 
 impl ProvedBgp {
+    /// The leaf BGP proof and its authenticated atom predicate ids when this is a
+    /// [`ProvedQueryStatement::Single`], else `None`.
     pub fn as_single(&self) -> Option<(&LayerBgpProof, &[u64])> {
         match &self.statement {
             ProvedQueryStatement::Single {
@@ -111,6 +120,8 @@ impl ProvedBgp {
         self.as_single().and_then(|(proof, _)| proof.openings.as_ref())
     }
 
+    /// The proven branches and the union proof when this is a [`ProvedQueryStatement::BagUnion`],
+    /// else `None`.
     pub fn as_bag_union(&self) -> Option<(&[ProvedBgp], &BagUnionProof)> {
         match &self.statement {
             ProvedQueryStatement::BagUnion { branches, proof } => Some((branches, proof)),
@@ -273,11 +284,11 @@ impl ProvedBgp {
     ///      to `database_root` ([`terminus_store::proof::commitment::validate_database_root`]). Neither
     ///      per-graph root can be forged, swapped, or mismatched against the trusted anchor.
     ///   2. Reconstruct — from the TRUSTED compiled query — which single graph this query reads
-    ///      ([`relation_graph`]); the graph selector is bound into the query digest, so a prover cannot
+    ///      (`relation_graph`); the graph selector is bound into the query digest, so a prover cannot
     ///      make a schema query verify against the instance graph (or vice versa).
     ///   3. Anchor the audited recursion to the matching commitment + its (now-trusted) root.
     ///
-    /// An instance-only query verifies identically to [`verify`], with the added guarantee that its
+    /// An instance-only query verifies identically to `verify`, with the added guarantee that its
     /// instance root belongs to the trusted database.
     ///
     /// TRUST ANCHOR — the `database_root` argument MUST be obtained from a trusted OUT-OF-BAND pin
@@ -340,7 +351,7 @@ impl ProvedBgp {
         }
     }
 
-    /// [`verify_over_graphs`] that also RESOLVES the delivered result objects (rendered against the
+    /// `verify_over_graphs` that also RESOLVES the delivered result objects (rendered against the
     /// correct per-graph dictionary — e.g. Subsumption class IRIs come out of the SCHEMA node/value
     /// dictionary). Same trust flow: validate both commitments against the trusted `database_root`,
     /// reconstruct the read-graph, verify + resolve against that graph's view.
@@ -2216,6 +2227,12 @@ impl ProvedBgp {
         Ok(())
     }
 
+    /// Like [`Self::verify_executed_rows`], but for a relation with NULLABLE or GENERATED-decimal
+    /// columns: the executor supplies typed [`ExecutedResultValue`] cells (Store id / signed or
+    /// unsigned generated decimal / null) rather than bare ids. Checks the delivered variable list
+    /// and row width against the compiled projection, then confirms the rows against the proof
+    /// (multiset, or positional for an exact-order relation). `Count` bindings use the scalar
+    /// boundary instead and are rejected here.
     pub fn verify_executed_values(
         &self,
         compiled: &CompiledBgp,

@@ -7,11 +7,21 @@
 //! Eval arithmetic, typecasts, string ops (concat / join / substring / pad / hashkey),
 //! group and collection aggregates (sum / count / min / max), calendar and date functions,
 //! and the exact decimal / rational value layer — plus the [`CompiledRelation`] → plan /
-//! descriptor shaping ([`relation_result_descriptors`], [`relation_proof_plan`]) that drives
+//! descriptor shaping (`relation_result_descriptors`, `relation_proof_plan`) that drives
 //! them. Pure arithmetic and encoding; no cryptography lives here.
+//!
+//! "Verifier recompute" is why these routines can be pure arithmetic: they carry no prover
+//! witness, so nothing here needs a bespoke cryptographic gadget. The verifier re-derives the
+//! expected column/objects from the ROOT-AUTHENTICATED input columns and requires an exact
+//! match — a deterministic function of pinned inputs leaves a malicious prover no latitude. See
+//! [`terminus_store::proof::primer`] §6 (gadgets) and §11 (soundness vs fidelity) for how this
+//! sits under the store's cryptography.
 
 use super::*;
 
+/// The per-output-column [`ResultColumnDescriptor`] (id namespace + nullability) a
+/// [`CompiledRelation`] delivers, computed structurally from its statement. Drives result
+/// decoding and resolution; folded into the query digest so the delivered column shape is bound.
 pub(crate) fn relation_result_descriptors(
     relation: &CompiledRelation,
 ) -> std::io::Result<Vec<ResultColumnDescriptor>> {
@@ -355,6 +365,10 @@ pub(crate) fn relation_result_descriptors(
     }
 }
 
+/// Lower a [`CompiledRelation`] (with its precomputed `query_digest`) into the store
+/// [`RelationProofPlan`] the prover proves and the verifier re-checks. Recurses into child
+/// relations (each with its own digest). The verifier-recompute-only statements (the value/eval/
+/// string/calendar forms) have no store plan node and are handled by the query wrapper, not here.
 pub(crate) fn relation_proof_plan(
     relation: &CompiledRelation,
     query_digest: ProofHash,
@@ -494,7 +508,7 @@ pub(crate) fn relation_proof_plan(
             inverted,
             // The graph selector is NOT carried into the store's `RelationProofPlanKind`: the store
             // recursion is graph-blind and reads whichever single `LayerCommitment` (instance or schema)
-            // the prove/verify ENTRY selects for this query (see [`relation_graph`]). The selector's
+            // the prove/verify ENTRY selects for this query (see `relation_graph`). The selector's
             // soundness is anchored by (a) its fold into `relation_query_digest` above and (b) the
             // verifier picking the matching commitment + `commitment_root` from the trusted query.
             graph: _,
@@ -534,7 +548,7 @@ pub(crate) fn relation_proof_plan(
             inverted,
             // The graph selector is NOT carried into the store plan kind (identical to the single-seed
             // closure above): the store recursion is graph-blind and reads whichever single
-            // `LayerCommitment` the prove/verify ENTRY selects (see [`relation_graph`]). Its soundness
+            // `LayerCommitment` the prove/verify ENTRY selects (see `relation_graph`). Its soundness
             // is anchored by (a) the digest fold in `relation_query_digest` and (b) the verifier picking
             // the matching commitment + `commitment_root` from the trusted query.
             graph: _,
@@ -569,7 +583,7 @@ pub(crate) fn relation_proof_plan(
             predicate,
             // The graph selector is NOT carried into the store's plan kind (exactly as the closure
             // above drops it): the store recursion is graph-blind and reads whichever single
-            // `LayerCommitment` the prove/verify ENTRY selects (see [`relation_graph`]). Its
+            // `LayerCommitment` the prove/verify ENTRY selects (see `relation_graph`). Its
             // soundness is anchored by (a) the digest fold in `relation_query_digest` and (b) the
             // verifier picking the matching commitment + `commitment_root` from the trusted query.
             // (OrderedListWalk is always `Instance` in this increment.)
@@ -583,7 +597,7 @@ pub(crate) fn relation_proof_plan(
             predicate,
             // The graph selector is NOT carried into the store's plan kind (exactly as the list walk
             // above drops it): the store recursion is graph-blind and reads whichever single
-            // `LayerCommitment` the prove/verify ENTRY selects (see [`relation_graph`]). Its soundness
+            // `LayerCommitment` the prove/verify ENTRY selects (see `relation_graph`). Its soundness
             // is anchored by (a) the digest fold in `relation_query_digest` and (b) the verifier picking
             // the matching commitment + `commitment_root` from the trusted query. (OrderedArrayWalk is
             // always `Instance` in this increment.)
@@ -741,6 +755,8 @@ pub(crate) fn relation_proof_plan(
     Ok(RelationProofPlan { query_digest, kind })
 }
 
+/// Evaluate one generated-decimal comparison `value op constant` (or `constant op value` when
+/// `constant_on_left`) — the per-row predicate the generated-column filters recompute.
 pub(crate) fn generated_u64_comparison(
     value: u64,
     op: GeneratedU64ComparisonOp,
@@ -761,6 +777,9 @@ pub(crate) fn generated_u64_comparison(
     }
 }
 
+/// Recompute the columns a [`CompiledRelationStatement::GeneratedU64Filter`] delivers: keep the
+/// child rows whose unsigned generated-decimal `column` passes `generated_u64_comparison`,
+/// compacted stably. The verifier re-runs this over the child's authenticated columns.
 pub(crate) fn expected_generated_u64_filter_columns(
     input: &ProvedBgp,
     column: usize,
@@ -805,6 +824,8 @@ pub(crate) fn expected_generated_u64_filter_columns(
         .collect()
 }
 
+/// As `expected_generated_u64_filter_columns` but for a SIGNED generated-decimal `column`
+/// compared against an `i64` `constant` (a [`CompiledRelationStatement::GeneratedI64Filter`]).
 pub(crate) fn expected_generated_i64_filter_columns(
     input: &ProvedBgp,
     column: usize,
@@ -861,9 +882,14 @@ pub(crate) fn expected_generated_i64_filter_columns(
         .collect()
 }
 
+/// A per-row group-sum operand decoded into its exact signedness domain, so an unsigned family
+/// (`xsd:nonNegativeInteger`/`unsignedLong`/…) accumulates in `u64` and a signed family in `i128`
+/// without cross-domain coercion.
 #[derive(Clone, Copy)]
 pub(crate) enum GroupSumValue {
+    /// An unsigned fixed-width integer operand.
     Unsigned(u64),
+    /// A signed fixed-width integer operand.
     Signed(i128),
 }
 
@@ -932,6 +958,9 @@ impl GroupSumValue {
     }
 }
 
+/// Decode a root-authenticated result value into a `GroupSumValue` in the expected exact
+/// fixed-width integral `datatype`'s signedness domain, failing closed on any other datatype
+/// (so a sum never silently coerces a wrong-typed operand).
 pub(crate) fn integral_group_sum_value(
     value: &CanonicalResultValue,
     datatype: CanonicalDatatype,
@@ -1000,6 +1029,10 @@ pub(crate) fn integral_group_sum_value(
     })
 }
 
+/// Recompute the `[keys.., sum]` columns a [`CompiledRelationStatement::GroupSum`] delivers:
+/// resolve the child's authenticated values, group by `key_columns`, and sum `value_column` in
+/// the `datatype`'s exact integral domain. The verifier re-runs this over the root; a wrong-typed
+/// operand fails closed.
 pub(crate) fn expected_group_sum_columns(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
@@ -1089,6 +1122,9 @@ pub(crate) fn expected_group_sum_columns(
     Ok(output)
 }
 
+/// Recompute the `[keys.., extremum]` columns a [`CompiledRelationStatement::GroupExtrema`]
+/// delivers: group the child's authenticated rows by `key_columns` and take the per-group MIN/MAX
+/// (`kind`) of `value_column` under the order-preserving `datatype`. Re-run by the verifier.
 pub(crate) fn expected_group_extrema_columns(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
@@ -1184,6 +1220,9 @@ pub(crate) fn expected_group_extrema_columns(
     Ok(output)
 }
 
+/// Recompute the `[keys.., count]` columns a [`CompiledRelationStatement::GroupCount`] delivers:
+/// group the child's authenticated rows by `key_columns` and count each group (empty `key_columns`
+/// = the whole-relation cardinality). Re-run by the verifier.
 pub(crate) fn expected_group_count_columns(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
@@ -1259,7 +1298,7 @@ pub(crate) fn expected_group_count_columns(
 
 /// Decode ONE root-authenticated operand value to its exact integer, as `i128`.
 ///
-/// Reuses the audited fixed-width lexical decoder [`integral_group_sum_value`] (the same one
+/// Reuses the audited fixed-width lexical decoder `integral_group_sum_value` (the same one
 /// Sum/GroupSum use). That decoder also asserts the AUTHENTICATED dictionary value carries
 /// exactly `datatype`, so a compiler datatype claim that disagrees with the trusted root
 /// value rejects closed here rather than decoding a different integer. Every supported
@@ -1279,7 +1318,7 @@ pub(crate) fn eval_operand_i128(
 /// All accumulation is CHECKED `i128`: an intermediate that escapes `i128` rejects closed
 /// (`i128` cannot overflow silently here — every operand is a fixed-width integer and the
 /// tree is bounded, but `Times` chains are still guarded). The declared-width narrowing to
-/// `i64` happens once at the top (see [`expected_eval_columns`]).
+/// `i64` happens once at the top (see `expected_eval_columns`).
 pub(crate) fn eval_expr_row(
     expr: &EvalExpr,
     values: &[Vec<CanonicalResultValue>],
@@ -1497,8 +1536,8 @@ pub(crate) fn parse_decimal_to_rational(text: &str) -> std::io::Result<BigRation
 /// Decode ONE root-authenticated child value to an EXACT rational for the decimal/rational layer.
 /// The exact datatype is read from the TRUSTED dictionary value (never a compiler claim): the
 /// fixed-width integer family decodes via the SAME order-preserving path `Sum`/`Eval` use
-/// ([`integral_group_sum_value`]); `xsd:decimal` decodes via the store's own lexical decoder
-/// ([`storage_to_decimal`]) then [`parse_decimal_to_rational`]. Any other datatype, a node IRI, a
+/// (`integral_group_sum_value`); `xsd:decimal` decodes via the store's own lexical decoder
+/// ([`storage_to_decimal`]) then `parse_decimal_to_rational`. Any other datatype, a node IRI, a
 /// null, or a generated value FAILS CLOSED — the recompute never fabricates or coerces a numeric.
 pub(crate) fn numeric_operand_rational(value: &CanonicalResultValue) -> std::io::Result<BigRational> {
     let non_numeric = || {
@@ -1628,6 +1667,11 @@ pub(crate) const DECIMAL_LAYER_MAX_FRACTION_DIGITS: u32 = 20;
 /// exponents reject closed rather than compute an astronomically large rational).
 pub(crate) const DECIMAL_LAYER_MAX_EXP: u32 = 256;
 
+/// Render an exact rational as the client-facing decimal lexical, BYTE-EXACT to the reference
+/// `casting:rational_to_decimal_string(R, S, 20)`: up to `DECIMAL_LAYER_MAX_FRACTION_DIGITS`
+/// fractional digits, round-half-up at the last, trailing zeros trimmed, whole rationals as the
+/// bare integer. Used by both the prover and the verifier for the decimal / rational value layer
+/// and the number→string cast. Fails closed on the astronomically-implausible carry-overflow case.
 pub(crate) fn rational_to_decimal_string_20(value: &BigRational) -> std::io::Result<String> {
     let max_decimals = DECIMAL_LAYER_MAX_FRACTION_DIGITS;
     let negative = value.numer().sign() == Sign::Minus;
@@ -1678,7 +1722,7 @@ pub(crate) fn rational_to_decimal_string_20(value: &BigRational) -> std::io::Res
 /// VERIFIER RECOMPUTE for WOQL `floor(x)`: carry the child columns through unchanged and append the
 /// derived integer column, re-derived elementwise from ROOT-authenticated operands in exact
 /// rationals then floored toward −∞ and narrowed to the declared `i64` generated domain (a result
-/// outside `i64` FAILS CLOSED — no field wraparound). Mirrors [`expected_eval_columns`].
+/// outside `i64` FAILS CLOSED — no field wraparound). Mirrors `expected_eval_columns`.
 pub(crate) fn expected_floor_eval_columns(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
@@ -1759,7 +1803,7 @@ pub(crate) fn expected_rational_arith_objects(
 ///   `format(string(S),"~w",[Val])` = base-10 with a leading `-` for negatives and NO leading zeros;
 ///   Rust `to_string()` on `i128`/`u64`/`rug::Integer` reproduces this exactly.
 /// * `xsd:decimal`: SWI `rational_to_decimal_string(Val, S, 20)` — the SAME renderer
-///   [`rational_to_decimal_string_20`] the decimal/rational layer already delivers byte-exact.
+///   `rational_to_decimal_string_20` the decimal/rational layer already delivers byte-exact.
 ///
 /// FAILS CLOSED (reject-closed over approximate) on a `float`/`double` source — whose SWI `~w`
 /// float formatting (shortest round-trip, forced `.0`) we do NOT reproduce — and on any non-numeric
@@ -1904,7 +1948,7 @@ pub(crate) fn cast_string_to_decimal_rational(bytes: &[u8]) -> std::io::Result<B
 
 /// VERIFIER RECOMPUTE for a WOQL NUMBER→STRING `Typecast`: authenticate the numeric source column
 /// against the trusted root, RENDER each row's client-facing `xsd:string` lexical
-/// ([`cast_number_to_string_bytes`]), and deliver revealed `xsd:string` objects. A float/double or
+/// (`cast_number_to_string_bytes`), and deliver revealed `xsd:string` objects. A float/double or
 /// non-numeric operand row FAILS CLOSED, so a proof is only ever produced for rows the reference
 /// itself would cast, and the delivered value matches byte-for-byte.
 pub(crate) fn expected_cast_to_string_objects(
@@ -1938,9 +1982,9 @@ pub(crate) fn expected_cast_to_string_objects(
 }
 
 /// VERIFIER RECOMPUTE for a WOQL STRING→NUMBER `Typecast`: authenticate the `xsd:string` source
-/// column against the trusted root ([`authenticate_string_column`]), PARSE each row with the exact
+/// column against the trusted root (`authenticate_string_column`), PARSE each row with the exact
 /// reference grammar for `target`, and deliver the numeric value's client-facing lexical
-/// (`xsd:integer` base-10 tagged `BigInt`; `xsd:decimal` via [`rational_to_decimal_string_20`] tagged
+/// (`xsd:integer` base-10 tagged `BigInt`; `xsd:decimal` via `rational_to_decimal_string_20` tagged
 /// `Decimal`). A malformed/out-of-grammar string FAILS CLOSED (the reference throws), so a proof is
 /// only ever produced for rows the reference itself would cast, and the delivered value matches.
 pub(crate) fn expected_cast_from_string_objects(
@@ -2268,7 +2312,7 @@ pub(crate) fn cal_date_result_object(year: i64, month: u8, day: u8) -> std::io::
 }
 
 /// VERIFIER RECOMPUTE for the INTEGER-result calendar ops (`Weekday`/`WeekdaySundayStart`/`IsoWeek`),
-/// the calendar analogue of [`expected_eval_columns`]. Carry the child columns through unchanged and
+/// the calendar analogue of `expected_eval_columns`. Carry the child columns through unchanged and
 /// append ONE derived `GeneratedDecimalI64` column PER `outputs` entry (1 for Weekday/WeekdaySundayStart,
 /// 2 for IsoWeek's `[year, week]`), each re-derived elementwise from the ROOT-authenticated `xsd:date`
 /// operand column. A non-date operand row, an `year < 1` input, or a corrupt lexical FAILS CLOSED.
@@ -2337,7 +2381,7 @@ pub(crate) fn expected_calendar_int_columns(
 }
 
 /// VERIFIER RECOMPUTE for the DATE-result calendar ops (`DayAfter`/`DayBefore`/`MonthStartDate`/
-/// `MonthEndDate`), the calendar analogue of [`expected_rational_arith_objects`]: a per-row TERMINAL,
+/// `MonthEndDate`), the calendar analogue of `expected_rational_arith_objects`: a per-row TERMINAL,
 /// REVEALED `xsd:date` value re-derived from the ROOT-authenticated operand (`xsd:date` for `Day*`,
 /// `xsd:gYearMonth` for `Month*`). FAILS CLOSED on a wrong-typed operand, a non-zero timezone offset,
 /// an `year < 1` input/output, or a corrupt lexical — a proof is only ever produced for rows whose
@@ -2456,7 +2500,7 @@ pub(crate) fn integer_target_namespace(datatype: CanonicalDatatype) -> std::io::
 /// elementwise from the ROOT-AUTHENTICATED source column.
 ///
 /// SOUNDNESS: `resolve_result_values` binds every child column to the trusted root (same
-/// authentication Eval/Sum use); the source value is decoded via [`eval_operand_i128`], which
+/// authentication Eval/Sum use); the source value is decoded via `eval_operand_i128`, which
 /// also re-checks the pinned `source_datatype` against the authenticated dictionary value. An
 /// integer→integer cast preserves the numeric value, so the recompute is: assert the value lies
 /// within the target type's exact XSD range and re-emit it in the target's generated namespace.
@@ -2561,7 +2605,7 @@ pub(crate) fn resolve_authenticated_child_values(
 ///
 /// This is the BYTE-AUTHENTICATION FOUNDATION shared by the whole string-op family (concat
 /// now; upper/lower/trim/substring later): given the root-authenticated child values (from
-/// [`resolve_authenticated_child_values`]), require column `column` to be a nonnull xsd:string
+/// `resolve_authenticated_child_values`), require column `column` to be a nonnull xsd:string
 /// VALUE in EVERY row and return its lexical bytes. FAILS CLOSED on a node IRI, a non-string
 /// typed value (e.g. an integer/langString — which `interpolate_string` would STRINGIFY, an
 /// out-of-scope circuit), a null, or an out-of-range column index. Because the values are
@@ -2603,14 +2647,14 @@ pub(crate) fn authenticate_string_column(
         .collect()
 }
 
-/// VERIFIER RECOMPUTE for WOQL `concat` — the byte analogue of [`expected_eval_columns`].
+/// VERIFIER RECOMPUTE for WOQL `concat` — the byte analogue of `expected_eval_columns`.
 ///
 /// Re-derives the per-row concatenation from ROOT-AUTHENTICATED operand columns (+ trusted
 /// query-literal bytes) by appending each element's bytes in LIST ORDER with NO separator —
 /// exactly `interpolate_string/2`'s left-to-right `string_concat` over string elements. The
 /// result is returned as revealed `xsd:string` [`CanonicalObject`]s (a TERMINAL value: not a
 /// committed column). SOUNDNESS: the operand bytes are pinned to the trusted root via
-/// [`resolve_authenticated_child_values`]/[`authenticate_string_column`] and byte concatenation
+/// `resolve_authenticated_child_values`/`authenticate_string_column` and byte concatenation
 /// is deterministic, so the caller's exact-match check against the delivered result column
 /// leaves no biasable witness. FAILS CLOSED (never stringifies) on any non-string operand row.
 pub(crate) fn expected_concat_objects(
@@ -2681,7 +2725,7 @@ pub(crate) fn interpose_join_elements(
 /// element and the separator are xsd:strings, `interpolate_string` concatenates them VERBATIM
 /// (its `string(H)` branch — no `term_to_atom`/`atom_string` rendering), so joining is precisely
 /// concatenating `intersperse(Sep, List)`. We therefore build the interposed sequence
-/// ([`interpose_join_elements`]) and delegate to [`expected_concat_objects`] — the SAME
+/// (`interpose_join_elements`) and delegate to `expected_concat_objects` — the SAME
 /// root-authenticating byte recompute the concat circuit uses. SOUNDNESS is inherited verbatim:
 /// operand bytes are pinned to the trusted root, a non-string operand row FAILS CLOSED (never
 /// stringified), and byte concatenation is deterministic.
@@ -2710,7 +2754,7 @@ pub(crate) fn expected_join_objects(
 /// fabricated out-of-range substring). `before`/`length` are trusted compile-time constants.
 ///
 /// SOUNDNESS: the operand bytes are pinned to the trusted root via
-/// [`resolve_authenticated_child_values`]/[`authenticate_string_column`]; `before`/`length` are
+/// `resolve_authenticated_child_values`/`authenticate_string_column`; `before`/`length` are
 /// bound into the query digest; char-slicing is deterministic — the caller's exact-match check
 /// leaves no biasable witness.
 pub(crate) fn expected_substring_objects(
@@ -2940,6 +2984,9 @@ pub(crate) fn expected_hashkey_objects(
     Ok(out)
 }
 
+/// The single generated-decimal COUNT column a `CollectionCount` / empty-key `GroupCount` delivers:
+/// one row holding `result_len`. `emit_zero_for_empty` chooses whether an empty collection yields a
+/// `0` row or no row (matching the WOQL aggregate's empty-input behaviour).
 pub(crate) fn expected_cardinality_column(
     result_len: usize,
     emit_zero_for_empty: bool,
@@ -2955,6 +3002,9 @@ pub(crate) fn expected_cardinality_column(
     )?)]])
 }
 
+/// The single generated-decimal SUM column a [`CompiledRelationStatement::CollectionSum`] delivers:
+/// sum the `template` value (a child column or a constant) over every child row in the `datatype`'s
+/// exact integral domain. Re-run by the verifier; a wrong-typed operand fails closed.
 pub(crate) fn expected_collection_sum_column(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
@@ -3003,6 +3053,9 @@ pub(crate) fn expected_collection_sum_column(
     Ok(vec![vec![sum.field()?]])
 }
 
+/// The single MIN/MAX (`kind`) column a [`CompiledRelationStatement::CollectionExtrema`] delivers:
+/// the extremum of `value_column` over every child row under the order-preserving `datatype`.
+/// Re-run by the verifier.
 pub(crate) fn expected_collection_extrema_column(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,

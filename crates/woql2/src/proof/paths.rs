@@ -2,14 +2,18 @@
 //!
 //! Lowers `Query::Path` patterns the audited join / union machinery can reproduce EXACTLY:
 //! single predicates and their inverses, distinct-predicate sequences, bounded `Times` ranges,
-//! and single-hop `Or` alternatives ([`plan_deferred_repeated_predicate_path`]), plus the
-//! transitive-closure form ([`plan_transitive_closure_path`]). It rewrites paths into
+//! and single-hop `Or` alternatives (`plan_deferred_repeated_predicate_path`), plus the
+//! transitive-closure form (`plan_transitive_closure_path`). It rewrites paths into
 //! `Triple` / `And` / `Or` / `Select` over fresh intermediate variables (edge-simple, bag
 //! multiplicity faithful to the reference path evaluator). Repeated-predicate chains and
 //! FIXED-LENGTH multi-hop WILDCARD chains are compiled at the plan level via the
 //! `TupleDisequality` edge-simple filter (the latter using the 3-column FULL-TRIPLE fingerprint —
-//! W2). `Star` / `Plus` / open closure route to [`plan_transitive_closure_path`]; a closure over a
+//! W2). `Star` / `Plus` / open closure route to `plan_transitive_closure_path`; a closure over a
 //! multi-hop-wildcard body, edge-list capture, and zero-length identity reject closed.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§6 the join/union
+//! and closure gadgets this lowering drives, and §11 soundness-vs-fidelity — the fail-closed
+//! discipline behind every "reject closed" here is fidelity, not soundness).
 
 use super::*;
 
@@ -93,6 +97,8 @@ impl PathTerm {
     }
 }
 
+/// Resolve a `Path` endpoint `Value` to a `PathTerm` — a bound node IRI or a variable. Any other
+/// value kind (e.g. a typed literal endpoint) rejects closed with `PathEndpointUnsupported`.
 pub(crate) fn path_endpoint_term(value: &Value) -> Result<PathTerm, BgpPlanError> {
     match value {
         Value::Variable(name) => Ok(PathTerm::Variable(name.clone())),
@@ -105,8 +111,8 @@ pub(crate) fn path_endpoint_term(value: &Value) -> Result<PathTerm, BgpPlanError
 /// `InversePredicate` with `predicate == None`), return its orientation (`false` = forward,
 /// `true` = inverse). A single hop cannot reuse a stored edge, so it needs no edge-simple
 /// disequality (unlike a multi-hop wildcard, which folds the predicate id into a 3-column
-/// full-triple disequality — see [`build_disequality_pairs`]) and is compiled by its own dedicated
-/// [`plan_single_hop_wildcard`] handler. Any compound pattern (even a single-element `Sequence([.])`
+/// full-triple disequality — see `build_disequality_pairs`) and is compiled by its own dedicated
+/// `plan_single_hop_wildcard` handler. Any compound pattern (even a single-element `Sequence([.])`
 /// or `Times(., 1, 1)`) returns `None`.
 pub(crate) fn single_hop_wildcard(pattern: &crate::path::PathPattern) -> Option<bool> {
     use crate::path::PathPattern;
@@ -121,7 +127,7 @@ pub(crate) fn single_hop_wildcard(pattern: &crate::path::PathPattern) -> Option<
 /// occurs ANYWHERE inside a fixed-length pattern. Used AFTER the bare single-hop wildcard is
 /// carved out, so a `true` here means the wildcard sits in a multi-hop / nested position
 /// (`Sequence([., .])`, `Times(., n, n)`, a wildcard union branch, …). A FIXED-LENGTH multi-hop
-/// wildcard CHAIN (per [`is_fixed_length_wildcard_chain`]) is then routed to the deferred
+/// wildcard CHAIN (per `is_fixed_length_wildcard_chain`) is then routed to the deferred
 /// full-triple edge-simple disequality (W2); a wildcard in a non-chain position rejects closed.
 pub(crate) fn pattern_contains_wildcard(pattern: &crate::path::PathPattern) -> bool {
     use crate::path::PathPattern;
@@ -157,7 +163,7 @@ pub(crate) fn is_fixed_length_wildcard_chain(pattern: &crate::path::PathPattern)
 /// `Predicate(p)` hop stores `(walk-from, p, walk-to)`, so its walk edge EQUALS the stored triple; an
 /// inverse `InversePredicate(p)` hop stores `(walk-to, p, walk-from)` — the join reads the edge the
 /// other way — so its walk edge is the stored triple REVERSED. The edge-simple disequality
-/// ([`build_disequality_pairs`]) must fingerprint every hop by its WALK edge
+/// (`build_disequality_pairs`) must fingerprint every hop by its WALK edge
 /// `make_edge(walk-from, p, walk-to)` (`path.pl:54-58`, the `Open_Set` key), NOT by the stored
 /// orientation, so a forward `p` hop and an inverse `n(p)` hop over the SAME predicate are compared in
 /// one common frame (they can reuse the same walk edge, so they MUST be constrainable together).
@@ -194,6 +200,8 @@ pub(crate) struct FreshPathVars {
 }
 
 impl FreshPathVars {
+    /// Seed the allocator with the `reserved` names it must never mint (the query's own variables),
+    /// so every fresh `__path_hop_N` waypoint is guaranteed collision-free.
     pub(crate) fn new(reserved: std::collections::BTreeSet<String>) -> Self {
         Self {
             reserved,
@@ -250,7 +258,7 @@ pub(crate) fn reject_non_bgp_typed_leaves(query: &Query) -> Result<(), BgpPlanEr
 
 /// `body_position` is true while `query` is still reachable as the top-level BODY through outer
 /// read-control wrappers ONLY (Select/Distinct/Count/From/…). A standalone (body-position) `IsA` NOW
-/// LOWERS via [`plan_isa`] (a cross-root two-root hash join), so it is allowed through here and its
+/// LOWERS via `plan_isa` (a cross-root two-root hash join), so it is allowed through here and its
 /// precise regime rejection (variable class / bound element) is decided by `plan_isa`. A NESTED `IsA`
 /// (inside And/Or/Not — a BGP conjunction or logical combinator) still rejects closed: the cross-root
 /// node reads two graphs and is top-level only. `TypeOf`/`Dot` never lower and reject in any position.
@@ -431,7 +439,7 @@ pub(crate) fn rewrite_query_paths(query: &Query, alloc: &mut FreshPathVars) -> R
 /// bag-join (it edge-simple over-counts), so `ensure_edge_simple_exact` raises
 /// `PathRepeatedPredicateUnsupported`; we catch exactly that signal and DEFER — returning
 /// the `Path` node UN-lowered so `plan_bgp` routes it to
-/// [`plan_deferred_repeated_predicate_path`], which builds the join chain plus the
+/// `plan_deferred_repeated_predicate_path`, which builds the join chain plus the
 /// `TupleDisequality` edge-simple filter at the plan level (a `Query` cannot express that
 /// filter). Every other rejection (unbounded / wildcard / identity / edge capture)
 /// propagates unchanged.
@@ -1006,9 +1014,9 @@ pub(crate) fn project_path_endpoints(
 
 /// Compile a DEFERRED finite path that a plain bag-join over-counts (a repeated-predicate chain —
 /// single- OR mixed-predicate — OR a FIXED-LENGTH multi-hop WILDCARD chain `Sequence([.,.])` /
-/// `Times(., n, n)` / mixed `Sequence([.,p])`; see [`lower_path`]) to
+/// `Times(., n, n)` / mixed `Sequence([.,p])`; see `lower_path`) to
 /// `BagProjection(TupleDisequality(join-chain))` — the edge-simple-exact plan a plain bag-join
-/// cannot express. The `TupleDisequality` constrains the hop-pairs (see [`build_disequality_pairs`]):
+/// cannot express. The `TupleDisequality` constrains the hop-pairs (see `build_disequality_pairs`):
 /// a CONCRETE repeat drops only same-predicate edge reuse via a 2-column disequality (different
 /// concrete predicates are always distinct edges); a WILDCARD-involving hop-pair uses the 3-column
 /// FULL-TRIPLE disequality (subject AND predicate AND object). A range `Times{a,b}` fans out to a bag
@@ -1165,10 +1173,10 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
 /// SOUNDNESS. The predicate column is retained by the ROOT-BOUND `predicate_variable` atom mode (the
 /// materialized P column, not a resolved dictionary id), so the prover cannot restrict or extend the
 /// predicate range: every stored triple's `(s,o)` is delivered, none injected. The bound-endpoint /
-/// forward-inverse handling is the emitted triple + [`project_path_endpoints`]; the outer
+/// forward-inverse handling is the emitted triple + `project_path_endpoints`; the outer
 /// `Distinct`/`Select`/`Count` wrappers apply exactly as the other body dispatches. NO new crypto:
 /// reuses the audited BGP compiler + endpoint projection. A both-bound single-hop wildcard is out of
-/// scope (rejected in [`lower_path`] before it reaches here); handled defensively below.
+/// scope (rejected in `lower_path` before it reaches here); handled defensively below.
 pub(crate) fn plan_single_hop_wildcard(
     path: &crate::query::Path,
     selections: &[(&[String], bool)],
@@ -1329,7 +1337,7 @@ pub(crate) fn plan_transitive_closure_path(
     // ALL-PAIRS (P2): both endpoints FREE (`path(?x, star|plus(p), ?y)`). This is a different plan
     // shape (a 2-column pairs closure, no bound seed), so it is handled separately from the single-seed
     // path below. `plus` is provable; `star` reject-closes (its reflexive diagonal is not faithfully
-    // reconstructible — see [`plan_all_pairs_closure`]).
+    // reconstructible — see `plan_all_pairs_closure`).
     if let (PathTerm::Variable(x), PathTerm::Variable(y)) = (&source, &target) {
         return plan_all_pairs_closure(
             x.clone(),
@@ -1351,7 +1359,7 @@ pub(crate) fn plan_transitive_closure_path(
     // We lower it to the single-seed closure from `a` (seed = `a`, forward direction) plus an
     // AUTHENTICATED membership gate that keeps only the reachable rows equal to the constant `b`; the
     // ground existence (0 rows = unreachable, ≥1 row = reachable) is the boolean. See
-    // [`plan_both_bound_closure`].
+    // `plan_both_bound_closure`.
     if let (PathTerm::Node(a), PathTerm::Node(b)) = (&source, &target) {
         return plan_both_bound_closure(
             a.clone(),
@@ -1539,7 +1547,7 @@ pub(crate) fn plan_all_pairs_closure(
 /// `Distinct([x,y])` gate. The store pairs closure driver is source-agnostic over its edge, so we DERIVE
 /// the all-pairs edge `E'` (the full-triple projection `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` for a
 /// WILDCARD, or the deduped bag-union / projected join for a COMPOUND body — exactly the
-/// [`build_compound_edge`] output the single-seed compound closure uses) and close over it BY COMMITMENT
+/// `build_compound_edge` output the single-seed compound closure uses) and close over it BY COMMITMENT
 /// via the [`CompiledRelationStatement::TransitiveClosurePairsCompound`] node. The seed
 /// `A_0 = Distinct(π(E'))`, rounds, and 2-column fixpoint are UNCHANGED versus the raw single-predicate
 /// all-pairs closure — only what `E'` *is* changes. NO new crypto.
@@ -1554,13 +1562,13 @@ pub(crate) fn plan_all_pairs_closure(
 /// ([`BgpPlanError::ClosureBothEndpointsFree`]).
 ///
 /// FIDELITY (`src/core/query/path.pl`, verified — the SAME node-simple argument as
-/// [`plan_compound_closure`] and the single-predicate all-pairs closure). `path.pl`'s `plus` is
+/// `plan_compound_closure` and the single-predicate all-pairs closure). `path.pl`'s `plus` is
 /// edge-simple over PRIMITIVE `(s,p,o)` edges, so the transitive closure of `E'` equals `path.pl`'s
 /// edge-simple reachability AT THE SET LEVEL (delivered by the required `Distinct([x,y])`) whenever a
 /// node-simple `E'`-walk uses DISTINCT primitive edges: automatic for the WILDCARD edge (each hop is ONE
 /// primitive edge across ANY predicate) and for the ALTERNATION `(p|q…)` (each hop one primitive edge),
 /// and for the 2-hop sequence `(p/q)` iff `p ≠ q`. Unfaithful shapes (same-predicate `(p/p)`, 3+-hop
-/// sequences, wildcard-in-sequence) all reject-close in [`build_compound_edge`]. No reachable pair
+/// sequences, wildcard-in-sequence) all reject-close in `build_compound_edge`. No reachable pair
 /// dropped or added.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_all_pairs_compound_closure(
@@ -1649,7 +1657,7 @@ pub(crate) fn plan_all_pairs_compound_closure(
 /// node CONSTANTS) to a GROUND boolean reachability existence: "is `b` reachable from `a` over the
 /// closure?". The delivered result is a zero-free-variable relation — `≥1` row iff reachable, `0` rows
 /// iff not — exactly how a fully-ground query (e.g. a constant `Triple(a, p, b)`, or the both-bound
-/// `Subsumption` existence in [`build_subsumption_membership_gate`]) is represented in this proof
+/// `Subsumption` existence in `build_subsumption_membership_gate`) is represented in this proof
 /// system.
 ///
 /// FIDELITY (`src/core/query/path.pl`). With both `X = a` and `Y = b` ground, `run_pattern` walks
@@ -1767,9 +1775,9 @@ pub(crate) fn plan_both_bound_closure(
 /// Compile a `Star`/`Plus` closure over a WILDCARD `.` body (`star|plus(.)` — the ANY-predicate
 /// transitive closure, `path.pl`'s `star(p)`/`plus(p)` with an UNBOUND predicate id, verified by the
 /// `star_any_predicate_*` path.pl tests). The wildcard closure edge is the full-triple projection
-/// `E' = Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` (built by [`build_compound_edge`]'s wildcard arm), so a
+/// `E' = Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` (built by `build_compound_edge`'s wildcard arm), so a
 /// SINGLE-SEED wildcard closure is EXACTLY a compound closure whose derived edge is `E'` — it REUSES the
-/// audited [`plan_compound_closure`] driver + fixpoint UNCHANGED (only what `E'` is changes). NO new crypto.
+/// audited `plan_compound_closure` driver + fixpoint UNCHANGED (only what `E'` is changes). NO new crypto.
 ///
 /// FIDELITY (`src/core/query/path.pl`, verified). `path.pl`'s `plus`/`star` are edge-simple over PRIMITIVE
 /// `(s,p,o)` edges (`Open_Set`). Every `E'`-hop `(s,o)` IS one primitive edge, so — exactly like the flat
@@ -1781,11 +1789,11 @@ pub(crate) fn plan_both_bound_closure(
 /// diagonal-injection concern does not arise for the single-seed case.
 ///
 /// ENDPOINT-SHAPE dispatch (fail-closed). BOTH-FREE wildcard is an ALL-PAIRS closure: `plus(.)` now PROVES
-/// (W1) over the DERIVED wildcard edge via [`plan_all_pairs_compound_closure`] (the pairs closure driver
+/// (W1) over the DERIVED wildcard edge via `plan_all_pairs_compound_closure` (the pairs closure driver
 /// takes the derived edge BY COMMITMENT), while `star(.)` reject-closes as
 /// [`BgpPlanError::ClosureStarBothFreeDomainDeferred`] (its unbound-identity diagonal is unreconstructible)
 /// and a count gate as [`BgpPlanError::ClosureCountGateDeferred`]. SINGLE-SEED (one bound endpoint) and
-/// BOTH-BOUND route to [`plan_compound_closure`] — which compiles the single-seed case (a bound TARGET
+/// BOTH-BOUND route to `plan_compound_closure` — which compiles the single-seed case (a bound TARGET
 /// walks `E'` backward via `inverted`) and reject-closes both-bound
 /// ([`BgpPlanError::ClosureBothEndpointsBound`]) and count-gated ([`BgpPlanError::ClosureCountGateDeferred`]).
 #[allow(clippy::too_many_arguments)]
@@ -1844,7 +1852,7 @@ pub(crate) fn plan_wildcard_closure(
 /// closed (do the `Distinct` form first). The compound body must be a flat alternation `(p|q|…)` or a
 /// 2-hop DISTINCT-predicate sequence `(p/q)` of single (possibly-inverse) predicates — every other
 /// shape (nested unbounded, `Times`, wildcard, non-elementary branch, same-predicate or longer
-/// sequence) rejects closed via [`build_compound_edge`]'s guards.
+/// sequence) rejects closed via `build_compound_edge`'s guards.
 ///
 /// FIDELITY (`src/core/query/path.pl`, verified): `path.pl`'s `plus`/`star` are edge-simple over
 /// PRIMITIVE `(s,p,o)` edges (`Open_Set`). The compound-hop transitive closure of `E'` equals
@@ -1993,10 +2001,10 @@ fn single_hop_triple(
 ///     primitive edge, so it is edge-simple-faithful for ANY predicates;
 ///   * 2-hop sequence `(p/q)` → `Distinct(π_{start,end}(InnerJoin(edge(p)[start,mid], edge(q)[mid,end])))`
 ///     — faithful IFF `p ≠ q` (else a primitive edge could repeat across hops; see the fidelity note on
-///     [`plan_compound_closure`] and [`BgpPlanError::ClosureCompoundSequenceUnfaithful`]).
+///     `plan_compound_closure` and [`BgpPlanError::ClosureCompoundSequenceUnfaithful`]).
 ///   * wildcard `.` (forward or inverse) → `Distinct(π_{start,end}(Triple(start, ?p, end)))` — the
 ///     full-triple projected edge; each hop is one primitive edge, so it is edge-simple-faithful for ANY
-///     predicates (see [`plan_wildcard_closure`]).
+///     predicates (see `plan_wildcard_closure`).
 /// Every other shape (a sequence of length ≠ 2, a same-predicate 2-sequence, a nested unbounded / `Times`
 /// body, or a non-elementary alternation branch) rejects closed.
 fn build_compound_edge(

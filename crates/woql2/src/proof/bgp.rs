@@ -2,14 +2,18 @@
 //!
 //! This is the heart of the compiler. [`plan_bgp`] turns a conjunctive triple query (an `And`
 //! of triples under optional `Select` / routing wrappers) into an authenticated left-deep join
-//! plan. It lifts each triple to an [`Atom`] via [`atom_from_triple`] (with the per-atom safety
-//! checks), attaches numeric range filters, and chains the atoms with [`plan_left_deep`] —
+//! plan. It lifts each triple to an `Atom` via `atom_from_triple` (with the per-atom safety
+//! checks), attaches numeric range filters, and chains the atoms with `plan_left_deep` —
 //! natural joins on shared variables, verifier-known unit-key Cartesian products across
 //! disconnected components. Also here: the sequential read-operator / `Or` / `Distinct` /
 //! projection composition, the equality- and range-constant encoding, and the structural
 //! validation that keeps the emitted plan variable-blind and faithful. Anything the plan cannot
-//! encode is rejected closed (see the `errors` submodule). [`Atom`] and [`TypedTriple`] — the
+//! encode is rejected closed (see the `errors` submodule). `Atom` and [`TypedTriple`] — the
 //! planner's per-triple primitives — are defined here alongside their users.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background this lowering rests on
+//! (§5 sumcheck, §6 the join/filter/range gadgets a BGP drives, and §10 prove→verify with the
+//! variable-blind plan as the anti-substitution safety line).
 
 use super::*;
 
@@ -32,6 +36,10 @@ pub(crate) struct Atom {
     obj_var: Option<String>,
 }
 
+/// A woql2 triple paired with the per-atom metadata the planner needs: its object-kind filter
+/// (a `Link` / `Data` restriction) and its committed column `source` (materialized head vs an
+/// `AddedTriple` / `DeletedTriple` delta file). Produced from a WOQL triple leaf and lifted to an
+/// `Atom` by `atom_from_triple`.
 #[derive(Clone)]
 pub(crate) struct TypedTriple {
     pub(crate) triple: Triple,
@@ -39,15 +47,15 @@ pub(crate) struct TypedTriple {
     /// Which committed column set this atom reads. A plain `Triple`/`Link`/`Data` reads the
     /// materialized head view; a WOQL `AddedTriple`/`DeletedTriple` reads this layer's own
     /// addition/removal delta file. Threaded per-atom onto [`LayerBgpAtom::source`] (via
-    /// [`atom_from_triple`]), so a BGP leaf MAY mix sources — a cross-source join. The plan
-    /// DEFAULT is [`plan_default_column_source`] (the uniform source, else materialized).
+    /// `atom_from_triple`), so a BGP leaf MAY mix sources — a cross-source join. The plan
+    /// DEFAULT is `plan_default_column_source` (the uniform source, else materialized).
     pub(crate) source: ColumnSource,
 }
 
 
 /// Compile a woql2 conjunctive BGP query into a safe [`CompiledBgp`].
 ///
-/// Accepts nested outer [`Select`]s and supported routing/result wrappers around an
+/// Accepts nested outer `Select`s and supported routing/result wrappers around an
 /// `And` of `>= 1` triples of
 /// the form `?subj <constant IRI> ?obj`, whose atoms connect into a
 /// left-deep join tree (each step shares one or two variables). Everything
@@ -171,7 +179,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     // SCHEMA-GRAPH FOUNDATION — `IsA(?x, C)` (node regime, bound class) lowers to a CROSS-DICTIONARY
     // two-root hash join: the downward `sys:inherits` closure of `C` (schema graph) hash-joined against
     // the instance `rdf:type` relation (instance graph). Standalone only (a nested `IsA` inside a BGP
-    // conjunction rejects via `reject_non_bgp_typed_leaves`). See [`plan_isa`].
+    // conjunction rejects via `reject_non_bgp_typed_leaves`). See `plan_isa`.
     if let Query::IsA(isa) = body {
         return plan_isa(isa, &selections, collection, count_variable, &distincts);
     }
@@ -682,6 +690,9 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
     })
 }
 
+/// Infer each output column's equality domain from how its variable is used across the atoms: a
+/// PREDICATE-position variable → `Predicate`, else a SUBJECT-position variable → `Node`, else the
+/// datatype pinned by a numeric range comparison on it (else `None` — unpinned, no equality domain).
 pub(crate) fn infer_schema_domains(
     schema: &[String],
     atoms: &[Atom],
@@ -710,6 +721,14 @@ pub(crate) fn infer_schema_domains(
         .collect()
 }
 
+/// Compile a WOQL `Or` of >= 2 BGP branches into a `BagUnion` relation over a common schema (each
+/// branch remapped to the first branch's column order via `schema_mapping`), then apply the outer
+/// Distinct / Select / Count wrappers. Branch schemas must be name-compatible with matching result
+/// namespaces; nested `BagUnion`s are flattened; column domains are INTERSECTED (a domain survives
+/// only where every branch agrees). Rejects closed: < 2 branches (`OrTooFewBranches`), a branch
+/// carrying its own projection / count / distinct wrapper (`OrUnsupportedBranchWrapper`), incompatible
+/// schemas (`OrIncompatibleSchema`) or namespaces (`OrIncompatibleNamespaces`), or a routing-collection
+/// conflict (`OrRoutingConflict`).
 pub(crate) fn plan_or_relation(
     disjunction: &crate::query::Or,
     selections: &[(&[String], bool)],
@@ -826,6 +845,10 @@ pub(crate) fn plan_or_relation(
     Ok(compiled)
 }
 
+/// One non-positive read operator in a sequential BGP body: `WoqlOptional` (left-outer join), `Not`
+/// (left-anti join), `Equals` (a correlation / filter), or `When`/`If` (conditional). Collected by
+/// `collect_read_operator_sequence` and applied left-to-right over the positive prefix by
+/// `plan_sequential_read_operators`.
 pub(crate) enum ReadOperator {
     Optional(Query),
     Not(Query),
@@ -833,6 +856,9 @@ pub(crate) enum ReadOperator {
     When(crate::control::When),
 }
 
+/// True iff `query` (an `And`, or a bare leaf) carries a top-level `Optional` / `Not` / `Equals` /
+/// `If` — i.e. it must be routed through `plan_sequential_read_operators` rather than the plain
+/// conjunctive BGP path.
 pub(crate) fn has_top_level_read_operator(query: &Query) -> bool {
     match query {
         Query::And(and) => and.and.iter().any(has_top_level_read_operator),
@@ -841,6 +867,10 @@ pub(crate) fn has_top_level_read_operator(query: &Query) -> bool {
     }
 }
 
+/// Split a conjunctive body into its POSITIVE triple prefix (`positive`) and the trailing read
+/// `operators`, in source order (recursing through `And`). A non-triple, non-operator conjunct that
+/// appears AFTER any operator has started rejects closed (`ConjunctNotTriple`): the positive prefix
+/// must come first.
 pub(crate) fn collect_read_operator_sequence(
     query: &Query,
     positive: &mut Vec<Query>,
@@ -868,12 +898,18 @@ pub(crate) fn collect_read_operator_sequence(
     Ok(())
 }
 
+/// One side of a WOQL `Equals`, resolved to either a bound variable name or a canonical constant
+/// (a node IRI or a typed value).
 #[derive(Clone)]
 pub(crate) enum EqualityOperand {
     Variable(String),
     Constant(CanonicalObject),
 }
 
+/// Resolve one `Equals` operand `WoqlValue` to an `EqualityOperand`: a variable stays a variable; a
+/// node becomes a `Node` constant; a data literal becomes its canonical value constant. A `±0.0` /
+/// `NaN` FLOAT literal rejects closed (`FloatSpecialValue`) — its id-based equality diverges from WOQL
+/// numeric `=:=` — and a dictionary / list operand rejects closed (`EqualsUnsupportedOperand`).
 pub(crate) fn equality_operand(value: &crate::value::WoqlValue) -> Result<EqualityOperand, BgpPlanError> {
     match value {
         crate::value::WoqlValue::Variable(variable) => {
@@ -913,6 +949,9 @@ pub(crate) fn equality_operand(value: &crate::value::WoqlValue) -> Result<Equali
     }
 }
 
+/// True iff `datatype` is one of the numeric datatypes across which WOQL `=` coerces — used to reject
+/// closed a cross-datatype numeric CONSTANT==CONSTANT equality (`EqualsCoerciveNumeric`) that the
+/// id-based gadget cannot faithfully decide.
 pub(crate) fn numeric_equality_datatype(datatype: CanonicalDatatype) -> bool {
     use CanonicalDatatype::*;
     matches!(
@@ -936,6 +975,10 @@ pub(crate) fn numeric_equality_datatype(datatype: CanonicalDatatype) -> bool {
     )
 }
 
+/// Resolve an equality variable to its `(column index, equality domain)` in `relation`, requiring the
+/// variable to be present, non-nullable, and to carry a known domain. Rejects closed an unbound
+/// (`EqualsUnboundVariable`), nullable (`EqualsNullableVariable`), or domain-less
+/// (`EqualsUnknownDomain`) variable.
 pub(crate) fn bound_equality_column(
     relation: &CompiledRelation,
     variable: &str,
@@ -960,6 +1003,8 @@ pub(crate) fn bound_equality_column(
     Ok((column, domain))
 }
 
+/// True iff a canonical constant is compatible with an equality column's domain: a `Node` constant for
+/// the `Node` domain, or a value whose datatype matches the pinned `Datatype` domain.
 pub(crate) fn constant_matches_domain(value: &CanonicalObject, domain: EqualityValueDomain) -> bool {
     match (value, domain) {
         (CanonicalObject::Node(_), EqualityValueDomain::Node) => true,
@@ -970,6 +1015,10 @@ pub(crate) fn constant_matches_domain(value: &CanonicalObject, domain: EqualityV
     }
 }
 
+/// Lower a WOQL `Equals` into a `RelationEqualityPlan` over `relation`: column==column (matching
+/// domains — a float column pair rejects closed defensively as `FloatSpecialValue`), column==constant /
+/// constant==column (domain-compatible), or constant==constant. A cross-datatype numeric constant pair
+/// rejects closed (`EqualsCoerciveNumeric`); any domain mismatch rejects closed (`EqualsDomainMismatch`).
 pub(crate) fn compile_equality_constraint(
     relation: &CompiledRelation,
     equals: &crate::compare::Equals,
@@ -1039,6 +1088,9 @@ pub(crate) fn compile_equality_constraint(
     }
 }
 
+/// Assemble the natural-join relation of `left` and `right` on `key_pairs`: the left schema/domains
+/// followed by the right relation's NON-shared columns, wrapping an `InnerJoin` statement. Shape
+/// assembly only — the join keys are chosen upstream (`shared_key_pairs` / `plan_left_deep`).
 pub(crate) fn inner_join_relation(
     left: CompiledRelation,
     right: CompiledRelation,
@@ -1074,10 +1126,16 @@ pub(crate) fn inner_join_relation(
     }
 }
 
+/// The first `schema` column that is a member of `locals`, if any — used to find the join key a
+/// read-operator subplan shares with the accumulated positive relation.
 pub(crate) fn first_local_in_schema(schema: &[String], locals: &[String]) -> Option<String> {
     schema.iter().find(|name| locals.contains(name)).cloned()
 }
 
+/// The first accumulated-local variable a trailing read operator (`Optional` / `Not` / `Equals` /
+/// `When`) correlates on — found by compiling the operator's subplan(s) and matching their schema
+/// against `locals`. Used to order operator application so each fires only once its correlation
+/// variable is already bound.
 pub(crate) fn later_operator_local(
     operator: &ReadOperator,
     locals: &[String],
@@ -1108,6 +1166,12 @@ pub(crate) fn later_operator_local(
     }
 }
 
+/// Compile a body of a positive triple prefix followed by trailing read operators (`Optional` →
+/// LeftOuter, `Not` → LeftAnti, `Equals` → equality/correlation, `When`/`If` → conditional), applied
+/// left-to-right over the accumulated relation, then the outer Distinct / Select / Count wrappers.
+/// A body with NO positive prefix rejects closed with the leading operator's specific "missing
+/// outer/input" error (`OptionalMissingOuter` / `EqualsMissingInput` / `WhenMissingOuter` /
+/// `NotMissingOuter`).
 pub(crate) fn plan_sequential_read_operators(
     query: &Query,
     selections: &[(&[String], bool)],
@@ -1315,6 +1379,12 @@ pub(crate) fn plan_sequential_read_operators(
     Ok(compiled)
 }
 
+/// Bound the compiled relation tree by depth AND node count
+/// (`MAX_RELATION_PROOF_DEPTH` / `MAX_RELATION_PROOF_NODES`), rejecting closed
+/// (`RecursiveStructureLimit`) a pathologically deep or large plan before it reaches the prover.
+/// Recurses into every child-carrying statement; closure / list-walk / array-walk leaves carry a raw
+/// edge plan or bound (subject, predicate) rather than a `CompiledRelation` child, so the recursion
+/// stops there (the compound-closure variants still recurse into their derived-edge child).
 pub(crate) fn validate_compiled_structure(relation: &CompiledRelation) -> Result<(), BgpPlanError> {
     fn visit(
         relation: &CompiledRelation,
@@ -1521,6 +1591,9 @@ pub(crate) fn relation_graph(relation: &CompiledRelation) -> std::io::Result<Pro
     Ok(acc.unwrap_or(ProofGraph::Instance))
 }
 
+/// Reject closed an `Optional` / `Not` subplan that carries its own projection / count / distinct
+/// wrapper (`OptionalUnsupportedSubplan` or `NotUnsupportedSubplan` per `optional`): a read-operator
+/// subplan must be a bare relation.
 pub(crate) fn reject_subplan_wrappers(compiled: &CompiledBgp, optional: bool) -> Result<(), BgpPlanError> {
     if compiled.projection.is_some()
         || compiled.count_variable.is_some()
@@ -1536,6 +1609,8 @@ pub(crate) fn reject_subplan_wrappers(compiled: &CompiledBgp, optional: bool) ->
     }
 }
 
+/// Reject closed a `When` / `If` subplan carrying its own projection / count / distinct wrapper
+/// (`WhenUnsupportedSubplan`): a conditional subplan must be a bare relation.
 pub(crate) fn reject_when_subplan(compiled: &CompiledBgp) -> Result<(), BgpPlanError> {
     if compiled.projection.is_some() || compiled.count_variable.is_some() || compiled.full_row_distinct {
         Err(BgpPlanError::WhenUnsupportedSubplan)
@@ -1544,6 +1619,10 @@ pub(crate) fn reject_when_subplan(compiled: &CompiledBgp) -> Result<(), BgpPlanE
     }
 }
 
+/// Compute the 1..=2 `(outer, subplan)` correlation column pairs a `When` shares by variable name,
+/// requiring matching result namespaces and non-nullable bindings on both sides. Rejects closed a
+/// subplan sharing zero or > 2 variables (`WhenUnsupportedVariables`), or a namespace / nullability
+/// mismatch (`WhenUnsupportedSubplan`).
 pub(crate) fn when_key_pairs(
     outer: &CompiledRelation,
     subplan: &CompiledRelation,
@@ -1587,6 +1666,13 @@ pub(crate) fn is_store_id_namespace(namespace: ResultIdNamespace) -> bool {
     )
 }
 
+/// Compute the natural-join key column pairs `left` and `right` share by variable name (at most 2),
+/// for an `Optional` / `Not` composition. Requires matching result namespaces and non-nullable
+/// bindings, and — for a COMPOSITE (two-key) join — both keys in a Store-ID namespace (`< 2^64`, so
+/// the `col0 + 2^64·col1` packing is injective). Rejects closed > 2 shared vars
+/// (`OptionalSharedVariableCount` / `NotSharedVariableCount`), a namespace conflict
+/// (`VariableNamespaceConflict`), a nullable key (`*UnsupportedSubplan`), or a non-Store-ID composite
+/// key (`CompositeJoinKeyNotStoreId`).
 pub(crate) fn shared_key_pairs(
     left: &CompiledRelation,
     right: &CompiledRelation,
@@ -1667,6 +1753,9 @@ pub(crate) fn shared_key_pairs(
         .collect())
 }
 
+/// If `expected` and `actual` name the same columns (same length), return the permutation mapping each
+/// expected column to its index in `actual`; else `None`. Used to align `Or` branch schemas onto a
+/// common column order.
 pub(crate) fn schema_mapping(expected: &[String], actual: &[String]) -> Option<Vec<usize>> {
     if expected.len() != actual.len() {
         return None;
@@ -1677,6 +1766,8 @@ pub(crate) fn schema_mapping(expected: &[String], actual: &[String]) -> Option<V
         .collect()
 }
 
+/// Fold a candidate routing collection into the running one: adopt it if unset, accept it if equal,
+/// and return `error` on a conflict (two different collections in one plan).
 pub(crate) fn merge_collection(
     current: &mut Option<String>,
     candidate: Option<&String>,
@@ -1799,6 +1890,13 @@ pub(crate) fn is_provably_duplicate_free(relation: &CompiledRelation) -> bool {
     }
 }
 
+/// Apply a WOQL `Distinct` to `relation`, returning `(relation, full_row_distinct)`. A bare
+/// full-schema `Distinct` over a provably duplicate-free child (`is_provably_duplicate_free`) is a
+/// transparent full-row no-op (`full_row_distinct = true`); a visible projected `Distinct`, or one
+/// beneath a `Count`, routes the key columns through the audited store distinct dedup gadget (real bag
+/// dedup). Rejects closed: more than one `Distinct` (`NestedDistinctUnsupported`), a bare distinct not
+/// covering the full schema (`DistinctNotFullSchema`), or a full-row no-op over a duplicate-producing
+/// child (`DistinctOverDuplicateProducingChild`).
 pub(crate) fn compile_distinct_relation(
     relation: CompiledRelation,
     distincts: &[&[String]],
@@ -1926,6 +2024,11 @@ pub(crate) fn compile_distinct_relation(
     ))
 }
 
+/// Compute the final output projection: `None` = deliver every schema column; `Some(indices)` =
+/// project to those column indices (an empty vec = the zero-column / unit relation, used for a `Count`
+/// or a fully-ground query). Validates every `Select` layer outer-to-inner (`validate_selection_chain`)
+/// and, under a `Count`, that the outer selections name only the count binding. A selected variable not
+/// exposed by its nested query rejects closed (`SelectedVariableNotInBgp`).
 pub(crate) fn compile_projection(
     selections: &[(&[String], bool)],
     count_variable: Option<&str>,
@@ -2077,7 +2180,7 @@ pub(crate) fn collect_conjunct<'a>(
     Ok(())
 }
 
-/// Lift one `Triple` to an [`Atom`]: the predicate must be a constant IRI; the subject
+/// Lift one `Triple` to an `Atom`: the predicate must be a constant IRI; the subject
 /// and object are each either a query VARIABLE (a kept output column) or an aligned
 /// CONSTANT (emitted as an [`AtomTerm`] the store authenticates against its node/value
 /// dictionary); and the graph must be the instance graph.
@@ -2085,7 +2188,7 @@ pub(crate) fn collect_conjunct<'a>(
 /// Accepted constants:
 /// * subject/object node IRIs → [`AtomTerm::NodeConstant`] (CP2);
 /// * object typed literals of a round-trip-aligned xsd datatype → [`AtomTerm::ValueConstant`]
-///   (CP3, via [`value_constant_term`]).
+///   (CP3, via `value_constant_term`).
 ///
 /// Rejected closed: cross-namespace reuse of one variable in predicate and S/O positions,
 /// schema-graph triples, dictionary/list object values, and unaligned typed-literal datatypes. A
@@ -2176,6 +2279,9 @@ pub(crate) fn atom_from_triple(typed: &TypedTriple) -> Result<Atom, BgpPlanError
     })
 }
 
+/// Reject closed (`VariableNamespaceConflict`) a BGP where one variable appears BOTH as a predicate
+/// (the predicate-dictionary id namespace) and as a subject/object (the node/value namespace): the two
+/// id namespaces are independent, so such a variable cannot be a sound cross-position join key.
 pub(crate) fn validate_variable_namespaces(atoms: &[Atom]) -> Result<(), BgpPlanError> {
     for atom in atoms {
         if let Some(predicate) = &atom.pred_var {
@@ -2195,7 +2301,7 @@ pub(crate) fn validate_variable_namespaces(atoms: &[Atom]) -> Result<(), BgpPlan
 /// Route each numeric comparison conjunct to an object-value RANGE filter on the atom
 /// that binds the compared variable. For each comparison:
 ///
-/// 1. [`normalize_comparison`] turns it into `(var, op, datatype, c)`, orienting the
+/// 1. `normalize_comparison` turns it into `(var, op, datatype, c)`, orienting the
 ///    operator so `c` is always on the right (`k > ?a` ⇒ `?a < k`), rejecting closed a
 ///    var-vs-var / const-vs-const comparison or an unsupported constant datatype.
 /// 2. v1 constraints (all reject closed): `var` must be the object of EXACTLY ONE atom,
@@ -2268,12 +2374,17 @@ pub(crate) fn attach_ranges(atoms: &mut [Atom], comparisons: &[NormalizedRange])
     Ok(())
 }
 
+/// One normalized numeric range bound: a comparison `op` against an order-preserving encoded constant
+/// `c` (the constant always oriented on the right — see `normalize_comparison`).
 #[derive(Clone)]
 pub(crate) struct NormalizedBound {
     pub(crate) op: RangeOp,
     pub(crate) c: ArkFr,
 }
 
+/// A variable's normalized numeric range: the compared `var`, the store-encoded `datatype` field and
+/// its `canonical_datatype`, and up to two `bounds`. Attached to the atom binding `var` by
+/// `attach_ranges`.
 #[derive(Clone)]
 pub(crate) struct NormalizedRange {
     pub(crate) var: String,
@@ -2285,7 +2396,7 @@ pub(crate) struct NormalizedRange {
 /// Normalize a numeric comparison conjunct into `(var, op, datatype, c)`, where `op` is
 /// oriented so the constant is on the RIGHT (`Greater(k, ?a)` ⇒ `?a < k`), and
 /// `(datatype, c)` is the store-aligned encoding of the constant (see
-/// [`encode_range_constant`]).
+/// `encode_range_constant`).
 ///
 /// Rejects closed: both sides variables ([`BgpPlanError::RangeBothVariables`]), neither
 /// side a variable ([`BgpPlanError::RangeBothConstants`]), or a constant that is not a
@@ -2329,6 +2440,10 @@ pub(crate) fn normalize_comparison(q: &Query) -> Result<NormalizedRange, BgpPlan
     })
 }
 
+/// Normalize a WOQL `InRange` (value in `[start, end]`) into a two-bound `NormalizedRange`
+/// (`Ge start`, `Lt end` — a half-open window). Requires a variable value and constant bounds sharing
+/// one order-preserving datatype; rejects closed a non-variable value (`InRangeValueNotVariable`), a
+/// non-constant bound (`InRangeBoundNotConstant`), or mismatched bound datatypes (`RangeDatatypeMismatch`).
 pub(crate) fn normalize_in_range(range: &InRange) -> Result<NormalizedRange, BgpPlanError> {
     let var = match &range.value {
         DataValue::Variable(var) => var.clone(),
@@ -2421,7 +2536,7 @@ pub(crate) fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry,
 
 /// Encode a numeric range constant to `(datatype_tag, c)` matching the store's committed
 /// node/value dictionary encoding EXACTLY, by routing through the store's OWN value
-/// canonicalization (7.5c alignment trick): build the typed value via [`xsd_scalar_entry`]
+/// canonicalization (7.5c alignment trick): build the typed value via `xsd_scalar_entry`
 /// + [`ValueTriple::new_value`], read back its [`CanonicalObject::Value`] via
 /// [`CanonicalObject::from_store_object`], take its [`CanonicalDatatype`] discriminant as the
 /// datatype tag, and compute `c` as the big-endian unsigned integer of its order-preserving
@@ -2434,8 +2549,8 @@ pub(crate) fn xsd_scalar_entry(xsd: &XSDAnySimpleType) -> Result<TypedDictEntry,
 /// Every other `XSDAnySimpleType` rejects closed: a range over a
 /// non-order-preserving or variable-width datatype (string/decimal/…) would compare a
 /// `0` sentinel in the store, which is unsound at the query level. Adding a datatype
-/// requires a store-routed construction in [`xsd_scalar_entry`], an
-/// [`op_preserving_width`] entry, PLUS a round-trip alignment test.
+/// requires a store-routed construction in `xsd_scalar_entry`, an
+/// `op_preserving_width` entry, PLUS a round-trip alignment test.
 ///
 /// `xsd:float`/`double` REJECT-CLOSE despite being fixed-width order-preserving in the
 /// store. The store keys floats by IEEE TOTAL order (tdb-succinct `f64::to_lexical`), which
@@ -2496,10 +2611,10 @@ pub(crate) fn encode_range_constant(
 /// representable i64-nanoseconds window (endpoints `i64::MIN`/`i64::MAX` excluded — those
 /// are exactly the saturated values a far DATA date takes, so excluding them keeps `c`
 /// strictly between every far-past and far-future data date). Used only as a pre-flight
-/// reject; the emitted `c` is still the store-routed value in [`encode_via_store`].
+/// reject; the emitted `c` is still the store-routed value in `encode_via_store`.
 ///
 /// The constant carries no timezone offset (a WOQL `Date` is a bare `NaiveDate`; a
-/// `DateTime` a UTC instant), matching the `offset: 0` form [`xsd_scalar_entry`] builds —
+/// `DateTime` a UTC instant), matching the `offset: 0` form `xsd_scalar_entry` builds —
 /// so the constant's key is a pure midnight (date) / instant (dateTime), and the `date`
 /// offset tiebreaker in `node_value_op_value` is only ever exercised by DATA rows.
 pub(crate) fn date_constant_nanos(xsd: &XSDAnySimpleType) -> Result<i64, BgpPlanError> {
@@ -2520,7 +2635,7 @@ pub(crate) fn date_constant_nanos(xsd: &XSDAnySimpleType) -> Result<i64, BgpPlan
 /// Canonicalize a `TypedDictEntry` through the store's own value path and derive the
 /// `(datatype_tag, c)` pair. Fails closed if the resulting datatype is not one of the
 /// round-trip-verified order-preserving datatypes (fixed-width numerics, plus
-/// `date`/`dateTime`; see [`op_preserving_width`]).
+/// `date`/`dateTime`; see `op_preserving_width`).
 pub(crate) fn encode_via_store(
     entry: TypedDictEntry,
 ) -> Result<(ArkFr, ArkFr, CanonicalDatatype), BgpPlanError> {
@@ -2563,7 +2678,7 @@ pub(crate) fn encode_via_store(
 /// the store's `to_lexical` writes exactly `width` bytes whose big-endian unsigned read is
 /// monotone in value (`Boolean` 0/1; `(U)Int8/16/32/64` raw-BE / offset-binary;
 /// `Float32/64` IEEE total-order), so `node_value_op_value` and this compiler compute the
-/// SAME `c`. A range over any other datatype rejects closed (see [`encode_range_constant`]).
+/// SAME `c`. A range over any other datatype rejects closed (see `encode_range_constant`).
 pub(crate) fn op_preserving_width(datatype: CanonicalDatatype) -> Option<usize> {
     use CanonicalDatatype::*;
     Some(match datatype {
@@ -2620,7 +2735,7 @@ pub(crate) fn xsd_datatype_name(xsd: &XSDAnySimpleType) -> &'static str {
 /// no re-implementation of the tdb-succinct encoding):
 /// * `xsd:string` via [`ValueTriple::new_string_value`] (the exact path the store uses to
 ///   store a string value);
-/// * every other supported WOQL scalar via [`xsd_scalar_entry`] →
+/// * every other supported WOQL scalar via `xsd_scalar_entry` →
 ///   [`ValueTriple::new_value`] using its matching `tdb-succinct` typed entry.
 ///
 /// See the `object_*_literal_*` round-trip tests. Invalid scalar lexical forms reject closed.
@@ -2781,7 +2896,7 @@ pub(crate) fn plan_left_deep(atoms: &[Atom]) -> Result<(LayerBgpPlan, Vec<String
 }
 
 /// The plan DEFAULT column source for a BGP leaf. Each atom now carries its OWN source
-/// ([`LayerBgpAtom::source`], threaded in [`atom_from_triple`]), so a CROSS-SOURCE conjunction
+/// ([`LayerBgpAtom::source`], threaded in `atom_from_triple`), so a CROSS-SOURCE conjunction
 /// — a materialized `Triple` joined with a delta atom, or additions joined with removals — is
 /// now SUPPORTED (the store joins over the shared dictionaries). This returns the source to
 /// stamp on `plan.source`: when every atom agrees it is that uniform source (which keeps a

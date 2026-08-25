@@ -6,6 +6,11 @@
 //! digests it, and checks the proof commits to the same digest — so a proof for one query
 //! cannot be replayed as if it answered another. Nothing here proves anything; it only
 //! hashes plan structure deterministically (the `digest_*` helpers walk each plan/expr node).
+//!
+//! The digest is the wire binding behind *anti-substitution*: because the verifier recompiles
+//! and re-digests the query from its OWN trusted copy (never from the proof), a proof only
+//! verifies against the exact query it was produced for. See [`terminus_store::proof::primer`]
+//! §10 (prove→verify + anti-substitution) and §8 (the Fiat–Shamir transcript this digest feeds).
 
 use super::*;
 
@@ -666,7 +671,7 @@ pub(crate) fn relation_query_digest(relation: &CompiledRelation) -> std::io::Res
 
 /// Bind the exact rational arithmetic tree into the relation's query identity so a proof cannot be
 /// replayed under a different expression, operand column, literal, or operator/operand order. Each
-/// node carries a DISTINCT leading tag (anti-substitution), disjoint from [`digest_eval_expr`]'s
+/// node carries a DISTINCT leading tag (anti-substitution), disjoint from `digest_eval_expr`'s
 /// tags because this whole statement already lives under a distinct `/decimal-*` statement tag.
 pub(crate) fn digest_decimal_expr(hasher: &mut Sha256, expr: &DecimalExpr) {
     match expr {

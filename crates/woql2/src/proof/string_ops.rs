@@ -1,17 +1,20 @@
 //! String-op lowering — concat / join / substring / pad / hashkey.
 //!
-//! Lowers the read-only string value-circuits: [`plan_concat_form`] (`Concatenate`),
-//! [`plan_join_form`] (`Join`), [`plan_substring_form`] (`Substring`), [`plan_pad_form`]
-//! (`Pad`), and [`plan_hashkey_form`] (`HashKey`). Each takes store-authenticated string
+//! Lowers the read-only string value-circuits: `plan_concat_form` (`Concatenate`),
+//! `plan_join_form` (`Join`), `plan_substring_form` (`Substring`), `plan_pad_form`
+//! (`Pad`), and `plan_hashkey_form` (`HashKey`). Each takes store-authenticated string
 //! columns bound by a child BGP and synthesizes a terminal, revealed result the verifier
 //! recomputes; unsupported shapes (runtime lists, non-string operands, locale case-ops,
 //! already-bound results) reject closed.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§5 the committed
+//! columns a verifier-recompute re-derives over, and §11 soundness-vs-fidelity).
 
 use super::*;
 
 /// Compile a WOQL `Concatenate` conjunct (`concat(List, Result)`) into a verifier-recompute
 /// [`CompiledRelationStatement::Concat`] — the FOUNDATION of the read-only string value-circuit
-/// family, modelled on [`plan_eval_form`].
+/// family, modelled on `plan_eval_form`.
 ///
 /// V1 SCOPE (reject-closed everywhere else): the list must be a CONCRETE inline list whose
 /// elements are xsd:string LITERALS and/or variables bound (in the SAME query) as nonnullable
@@ -288,7 +291,7 @@ pub(crate) fn plan_join_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPl
 
 /// Extract a non-negative `usize` character index from a `Substring` position `DataValue`.
 ///
-/// Accepts only an integer LITERAL (reusing [`eval_integer_literal`]'s exact-integer decode) that
+/// Accepts only an integer LITERAL (reusing `eval_integer_literal`'s exact-integer decode) that
 /// is `>= 0`; a variable index (a store-authenticated per-row index — a heavier circuit) is a
 /// documented follow-up and rejects closed, as does a non-integer literal and a NEGATIVE literal
 /// (SWI `sub_string/5` requires non-negative offsets — a negative one fails/throws, so FAIL
@@ -456,7 +459,7 @@ pub(crate) fn plan_substring_form(query: &Query) -> Result<Option<CompiledBgp>, 
 }
 
 /// Resolve a `Pad` string operand to an authenticated child string column index. Same discipline
-/// as [`substring_string_column`]: the operand must be a VARIABLE bound (in the same query) as a
+/// as `substring_string_column`: the operand must be a VARIABLE bound (in the same query) as a
 /// nonnullable node/value column whose per-row xsd:string-ness is enforced at recompute (unpinned)
 /// or pinned to xsd:string; a pinned NON-string datatype, a nullable/node column, an unbound
 /// variable, or a literal all reject closed (the task requires an AUTHENTICATED xsd:string input).
@@ -626,7 +629,7 @@ pub(crate) fn plan_pad_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPla
 ///
 /// V1 SCOPE (reject-closed everywhere else): `Base` an authenticated child xsd:string column or an
 /// xsd:string LITERAL; each `KeyList` element likewise (authenticated column or string literal —
-/// reusing the [`compile_concat_element`] auth, so non-string/unbound/nested-list elements reject
+/// reusing the `compile_concat_element` auth, so non-string/unbound/nested-list elements reject
 /// closed with the shared `Concat*` operand errors); `Uri` a FRESH variable (the terminal revealed
 /// result). `KeyList` is ALWAYS a concrete `Vec<DataValue>` in the AST (there is no runtime list
 /// variable to reject). The result is NOT added to the committed schema (terminal, revealed); it is

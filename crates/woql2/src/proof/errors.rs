@@ -3,9 +3,14 @@
 //! [`plan_bgp`] and its helpers are "reject-closed": anything the authenticated plan cannot
 //! encode faithfully becomes a descriptive [`BgpPlanError`] rather than being silently
 //! mis-proven. This submodule defines that error enum (one variant per rejection reason) with
-//! its `Display` text, plus small helpers ([`query_variant_name`] and the per-construct reject
+//! its `Display` text, plus small helpers (`query_variant_name` and the per-construct reject
 //! reasons) used to build precise messages. Rejecting soundly is a safety feature: the plan is
 //! the sole line between the provable fragment and the unsupported.
+//!
+//! This taxonomy is the compiler's **fidelity** line made concrete: each variant records a
+//! shape the store gadgets could not prove FAITHFULLY, so the compiler fails closed rather than
+//! authenticate a relation TerminusDB's engine would not compute. Fail-closed beats
+//! wrong-but-verifying — see [`terminus_store::proof::primer`] §11 (soundness vs fidelity).
 
 use super::*;
 
@@ -359,7 +364,7 @@ pub enum BgpPlanError {
     /// wildcard) in a position this pass does not provide. A BARE single-hop wildcard with at
     /// least one free endpoint (`path(a, ., ?y)`, `path(?x, ., ?y)`, `path(?x, ., b)`) IS now
     /// provable (the full-triple `(s,o)` projection over the root-bound predicate column — see
-    /// [`plan_single_hop_wildcard`]); this error survives for the shapes still out of scope: a
+    /// `plan_single_hop_wildcard`); this error survives for the shapes still out of scope: a
     /// both-bound single-hop wildcard boolean (`path(a, ., b)`), and the internal
     /// concrete-predicate-required signal a defensive fallback raises.
     #[error("wildcard path predicate (`.`) is unsupported in this position: only a bare single-hop wildcard with a free endpoint (or a single-seed `star`/`plus(.)` closure) is provable")]
@@ -370,10 +375,10 @@ pub enum BgpPlanError {
     /// NOT a FIXED-LENGTH chain. A FIXED-LENGTH multi-hop wildcard CHAIN (`Sequence([., .])`,
     /// `Times(., n, n)`, mixed `Sequence([., p])`) is NOW provable (W2): its hop-pairs get the
     /// 3-column FULL-TRIPLE `(subject, predicate, object)` edge-simple disequality
-    /// ([`build_disequality_pairs`] folds the predicate id in for any wildcard-involving pair), so
+    /// (`build_disequality_pairs` folds the predicate id in for any wildcard-involving pair), so
     /// two hops are the same stored edge iff subject AND predicate AND object coincide — faithful to
     /// `path.pl`'s `make_edge`. This error survives for the shapes still out of scope: a wildcard in
-    /// a union alternative / non-chain position (routed here by [`is_fixed_length_wildcard_chain`]
+    /// a union alternative / non-chain position (routed here by `is_fixed_length_wildcard_chain`
     /// returning `false`), and — via the closure planner's own guards — a CLOSURE over a
     /// multi-hop-wildcard body (`star((.,.))`), which is a separate, unbounded construct.
     #[error("wildcard path predicate (`.`) is unsupported in this position: only a FIXED-LENGTH multi-hop wildcard chain is provable; a wildcard in a union branch / nested closure / other non-chain position rejects closed")]
@@ -384,7 +389,7 @@ pub enum BgpPlanError {
     /// which plain conjunctive bag-join does NOT model: on self-loop/edge-reuse data the
     /// join over-counts. Paths with pairwise-distinct hop predicates (no edge can repeat)
     /// lower straight to a bag-join; a SINGLE-predicate repeat is instead lowered with a
-    /// `TupleDisequality` edge-simple filter (see [`plan_deferred_repeated_predicate_path`]).
+    /// `TupleDisequality` edge-simple filter (see `plan_deferred_repeated_predicate_path`).
     /// This error is the internal signal `ensure_edge_simple_exact` raises to route a
     /// repeated-predicate chain to that deferred handler; it never escapes for a supported
     /// single-predicate path.
@@ -454,7 +459,7 @@ pub enum BgpPlanError {
     /// FORMERLY the all-pairs wildcard-`plus` deferral. All-pairs wildcard `plus(.)` is now PROVABLE (W1):
     /// the pairs closure driver was generalized to take a DERIVED edge BY COMMITMENT
     /// ([`crate::proof::types::CompiledRelationStatement::TransitiveClosurePairsCompound`]), so
-    /// [`crate::proof::paths::plan_all_pairs_compound_closure`] derives the wildcard edge
+    /// `crate::proof::paths::plan_all_pairs_compound_closure` derives the wildcard edge
     /// `Distinct(π_{s,o}(Triple(?s, ?p, ?o)))` and closes over it — exactly like the single-seed wildcard
     /// closure feeds its edge to the compound driver. This variant is RETAINED (public API) but is no
     /// longer constructed. Related rejects still fire: all-pairs wildcard `star` as
@@ -464,7 +469,7 @@ pub enum BgpPlanError {
     ClosureWildcardAllPairsDeferred,
 
     /// A `Star`/`Plus` path with BOTH endpoints bound (`path(a, star(p), b)`) — a GROUND boolean
-    /// reachability check. This is now IMPLEMENTED (P4): [`crate::proof::paths::plan_both_bound_closure`]
+    /// reachability check. This is now IMPLEMENTED (P4): `crate::proof::paths::plan_both_bound_closure`
     /// lowers it to the single-seed closure from `a` plus an authenticated `ColumnConstant` membership
     /// gate on `b` (a ground existence: 0 rows = unreachable, ≥1 row = reachable). This variant survives
     /// only as a DEFENSIVE fail-closed fallback in the single-seed endpoint match (both-bound is
@@ -503,7 +508,7 @@ pub enum BgpPlanError {
     /// A `Subsumption ?child << ?parent` with BOTH endpoints FREE. Reference `class_subsumed`
     /// with two unbound classes enumerates the reflexive-transitive `sys:inherits` relation over the
     /// WHOLE schema — a two-column pairs enumeration that needs a domain-authenticated diagonal /
-    /// pairs Distinct this pass does not model (mirrors [`ClosureBothEndpointsFree`]). Reject closed.
+    /// pairs Distinct this pass does not model (mirrors `ClosureBothEndpointsFree`). Reject closed.
     #[error("`Subsumption` with two free class endpoints needs a domain-authenticated pairs enumeration (deferred); reject closed")]
     SubsumptionBothEndpointsFree,
 
@@ -574,7 +579,7 @@ pub enum BgpPlanError {
     /// No such primitive exists yet, and it is not a thin layer over the audited gadgets. The proof
     /// recursion anchors an ENTIRE relation to a SINGLE layer + `commitment_root` — `verify_relation`
     /// and the `InnerJoin` arm thread one `expected_root` and verify BOTH join children against the SAME
-    /// layer, and [`relation_graph`] rejects a relation that mixes instance and schema leaves. The store
+    /// layer, and `relation_graph` rejects a relation that mixes instance and schema leaves. The store
     /// commits `(hash(IRI), id)` dict-membership PAIRS per layer (`prove_dict_membership`) but exposes
     /// no in-circuit `id → hash(IRI)` JOINABLE column and no cross-root join binding BOTH roots.
     /// Building the node-regime IsA soundly needs that NEW cross-dict IRI-reconciled join/membership

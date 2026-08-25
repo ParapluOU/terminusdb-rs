@@ -1,14 +1,31 @@
 //! Aggregate lowering — group / collection sum, count, and extrema.
 //!
 //! Lowers the aggregation forms over an authenticated child relation: group-by and
-//! whole-collection `sum` ([`plan_group_sum_form`], [`plan_collection_sum_form`]), `count`
-//! ([`plan_group_count_form`], [`plan_collection_count_form`]), and `min` / `max` extrema
-//! ([`plan_group_extrema_form`], [`plan_collection_extrema_form`]). The verifier recomputes the
+//! whole-collection `sum` (`plan_group_sum_form`, `plan_collection_sum_form`), `count`
+//! (`plan_group_count_form`, `plan_collection_count_form`), and `min` / `max` extrema
+//! (`plan_group_extrema_form`, `plan_collection_extrema_form`). The verifier recomputes the
 //! aggregate over the root-authenticated group columns; only the exact provable numeric
 //! fragment is accepted, everything else is rejected closed.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§5 the committed
+//! columns a verifier-recompute re-derives over, §7 the LogUp/grouping machinery behind the store
+//! group gadgets, and §11 soundness-vs-fidelity).
 
 use super::*;
 
+/// Compile `GroupBy(keys.., grouped_value, template) & RangeMin/RangeMax(list, result)` into a
+/// `GroupExtrema` relation — the per-group numeric MIN (`RangeMin`) or MAX (`RangeMax`) of an
+/// authenticated value column, recomputed by the verifier over the root-authenticated child rows.
+///
+/// ACCEPTS: an `And` of exactly a `GroupBy` and a matching `RangeMin`/`RangeMax` whose `list` is the
+/// group's hidden `grouped_value`; 1..=2 DISTINCT group keys pinned to the `Node` domain; a variable
+/// `template` naming a non-nullable node/value column pinned to a fixed-width INTEGRAL datatype; and
+/// fresh, mutually distinct template/hidden/result/key variables over a bare (non-projected /
+/// non-aggregated / non-distinct) child BGP.
+///
+/// Returns `Ok(None)` when the query is not a group-extrema at all; rejects closed a malformed shape
+/// (`GroupExtremaUnsupportedShape`) or a non-integral / float / nullable value column
+/// (`GroupExtremaUnsupportedValue`).
 pub(crate) fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) if and.and.len() == 2 => &and.and,
@@ -125,6 +142,11 @@ pub(crate) fn plan_group_extrema_form(query: &Query) -> Result<Option<CompiledBg
     }))
 }
 
+/// Compile `Collect(template into hidden) & RangeMin/RangeMax(list, result)` — a WHOLE-collection
+/// (un-grouped) numeric min/max — into a `CollectionExtrema` relation over the single authenticated
+/// integral value column. Yields (`Ok(None)`) to `plan_group_extrema_form` when a `GroupBy` is present;
+/// a `RangeMin`/`RangeMax` without a leading `Collect` rejects closed
+/// (`CollectionExtremaUnsupportedShape`), as does a non-integral value (`CollectionExtremaUnsupportedValue`).
 pub(crate) fn plan_collection_extrema_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) if and.and.len() == 2 => &and.and,
@@ -227,6 +249,9 @@ pub(crate) fn plan_collection_extrema_form(query: &Query) -> Result<Option<Compi
     }))
 }
 
+/// Decode an `xsd:decimal` literal to an EXACT `i64` group-sum comparison constant (the signed
+/// sibling of order.rs's `exact_integral_decimal_u64`). Rejects closed a non-decimal, negative-scale,
+/// or out-of-range / non-round-tripping value (`GroupSumComparisonUnsupportedConstant`).
 pub(crate) fn exact_integral_decimal_i64(value: &XSDAnySimpleType) -> Result<i64, BgpPlanError> {
     let XSDAnySimpleType::Decimal(decimal) = value else {
         return Err(BgpPlanError::GroupSumComparisonUnsupportedConstant);
@@ -242,6 +267,12 @@ pub(crate) fn exact_integral_decimal_i64(value: &XSDAnySimpleType) -> Result<i64
     Ok(value)
 }
 
+/// Parse one comparison over the aggregate `variable` into a filter spec
+/// `(op, namespace, i128 constant, constant_on_left)`: `Greater`/`Gte`/`Less`/`Lte`/`Equals` between
+/// the variable and an exact integral decimal constant (either operand order). `signed` selects the
+/// generated `GeneratedDecimalI64` vs `GeneratedDecimalU64` namespace (and the exact-`i64` vs exact-`u64`
+/// decoding). Any other comparison shape or non-exact constant rejects closed
+/// (`GroupSumComparisonUnsupportedShape` / `GroupSumComparisonUnsupportedConstant`).
 pub(crate) fn generated_group_sum_constraint(
     query: &Query,
     variable: &str,
@@ -302,6 +333,10 @@ pub(crate) fn generated_group_sum_constraint(
     }
 }
 
+/// Map an `xsd` integral literal to a constant-summand `(CollectionSumTemplate, CanonicalDatatype)`
+/// for a `sum` over a CONSTANT template — one arm per fixed-width integral xsd type (`unsignedByte` ..
+/// `long`/`integer`). A non-integral literal, or an `unsignedInt` outside `u32`, rejects closed
+/// (`CollectionSumUnsupportedValue`).
 pub(crate) fn exact_collection_sum_constant(
     value: &XSDAnySimpleType,
 ) -> Result<(CollectionSumTemplate, CanonicalDatatype), BgpPlanError> {
@@ -344,6 +379,15 @@ pub(crate) fn exact_collection_sum_constant(
     })
 }
 
+/// Compile `Collect(template into hidden) & Sum(list, result)` (optionally followed by comparison
+/// leaves) into a `CollectionSum` relation — the numeric sum over the whole collection's authenticated
+/// value column, or over a constant template — with each trailing comparison lowered to a
+/// `GeneratedU64Filter` / `GeneratedI64Filter` per the value's signedness. The template must be a
+/// variable naming a non-nullable node/value column pinned to a fixed-width INTEGRAL datatype, or a
+/// constant integral literal; `hidden` must equal the `Sum` list and be distinct from `result`, over a
+/// bare child BGP. Yields (`Ok(None)`) to the GroupBy planners and to the sequential planner when a
+/// trailing `If`/`Optional`/`Not` appears; a `Collect`-without-`GroupBy` in an unsupported shape rejects
+/// closed (`CollectionSumUnsupportedShape` / `CollectionSumUnsupportedValue`).
 pub(crate) fn plan_collection_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) if and.and.len() >= 2 => &and.and,
@@ -492,6 +536,12 @@ pub(crate) fn plan_collection_sum_form(query: &Query) -> Result<Option<CompiledB
 }
 
 
+/// Compile `Collect(template into hidden) & Length(list, result)` (optionally followed by unsigned
+/// comparison leaves) into a `CollectionCount` relation — the cardinality of the whole collection,
+/// filtered by each trailing `GeneratedU64Filter`. Same shape discipline as `plan_collection_sum_form`
+/// (variable `hidden` == the `Length` list, fresh distinct `result`, bare child); yields (`Ok(None)`) to
+/// the GroupBy planners, and a stray `Collect`/`Length` in an unsupported shape rejects closed
+/// (`CollectionCountUnsupportedShape`).
 pub(crate) fn plan_collection_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) if and.and.len() >= 2 => &and.and,
@@ -582,6 +632,14 @@ pub(crate) fn plan_collection_count_form(query: &Query) -> Result<Option<Compile
     }))
 }
 
+/// Compile `GroupBy(keys.., grouped_value, template) & Length(list, result)` (optionally followed by
+/// unsigned comparison leaves) into a `GroupCount` relation — the per-group solution count, recomputed
+/// by the verifier over the root-authenticated child rows and filtered by each trailing
+/// `GeneratedU64Filter`. Requires 1..=2 distinct `Node`-domain group keys, a template naming a
+/// non-nullable node/value OR predicate column, `hidden == list`, and fresh distinct variables over a
+/// bare child BGP. Returns `Ok(None)` when it is not a group-count; rejects closed a malformed shape
+/// (`GroupCountUnsupportedShape`) or an unsupported key/template value (`GroupCountUnsupportedValue`); a
+/// non-`u64` comparison constant rejects (`GroupSumComparisonUnsupportedConstant`).
 pub(crate) fn plan_group_count_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) if and.and.len() >= 2 => &and.and,
@@ -718,6 +776,13 @@ pub(crate) fn plan_group_count_form(query: &Query) -> Result<Option<CompiledBgp>
     }))
 }
 
+/// Compile `GroupBy(keys.., grouped_value, template) & Sum(list, result)` (optionally followed by
+/// comparison leaves) into a `GroupSum` relation — the per-group numeric sum over an authenticated
+/// integral value column, recomputed by the verifier and filtered by each trailing generated-decimal
+/// comparison (`GeneratedU64Filter` / `GeneratedI64Filter`). Same key / child discipline as
+/// `plan_group_count_form`, with the template pinned to a fixed-width INTEGRAL datatype. Yields
+/// (`Ok(None)`) to the sequential planner for a trailing `If`/`Optional`/`Not`, and when it is not a
+/// group-sum; a malformed shape rejects closed (`GroupSumUnsupportedShape`).
 pub(crate) fn plan_group_sum_form(query: &Query) -> Result<Option<CompiledBgp>, BgpPlanError> {
     let conjuncts = match query {
         Query::And(and) if and.and.len() >= 2 => &and.and,

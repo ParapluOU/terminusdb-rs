@@ -77,6 +77,11 @@
 //! tagged-union/`sys:oneOf`/enum nature anywhere in the ancestor chain (fail-closed). A LINK/ELEMENT
 //! target class that itself inherits still reject-closes (its inherited subdocument-ness is not ruled out
 //! — a separate, larger effort). Compiler-only; nothing under `terminusdb-store-paraplu` changes.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§9 the layer-commitment
+//! model and the combined `database_root` that ties the instance and schema graphs, and §10
+//! prove→verify with the plan-as-pure-function-of-the-query anti-substitution invariant this bundle
+//! leans on).
 
 use super::*;
 
@@ -275,8 +280,8 @@ impl CompiledReadDocument {
 /// and reused VERBATIM.
 ///
 /// SOUNDNESS: the route is chosen by the ENTRY POINT (materialized vs reconciled), never by this
-/// prover-supplied variant. [`InstanceSubjectProof::resolve`] pairs the leaf against the entry's
-/// [`InstanceSource`]; a leaf whose variant disagrees reject-closes. On BOTH paths the delivered rows
+/// prover-supplied variant. `InstanceSubjectProof::resolve` pairs the leaf against the entry's
+/// `InstanceSource`; a leaf whose variant disagrees reject-closes. On BOTH paths the delivered rows
 /// are re-verified against the trusted root before use (`present` is a complete duplicate-free SET by
 /// the reconcile invariant, and the `FilterPosition::Subject` filter selects EXACTLY `id`'s rows).
 #[derive(Debug)]
@@ -320,11 +325,11 @@ impl InstanceSubjectProof {
 /// class `C`'s own frame `Triple(C, ?p, ?r)`, each property range/element node `Triple(R, ?p, ?o)`,
 /// and each strict ancestor's frame — is one of these. Both variants deliver the SAME logical answer
 /// (the complete, deduplicated `(predicate, object)` rows of one bound schema subject), so the
-/// classification logic ([`classify_range`] / [`collect_class_frame`] / [`closure_natures`]) is
+/// classification logic (`classify_range` / `collect_class_frame` / `closure_natures`) is
 /// source-agnostic and reused VERBATIM.
 ///
-/// SOUNDNESS: the route (materialized vs reconciled) is chosen by the ENTRY POINT's [`SchemaSource`],
-/// never by this prover-supplied variant. [`SchemaSubjectProof::resolve`] pairs the leaf against the
+/// SOUNDNESS: the route (materialized vs reconciled) is chosen by the ENTRY POINT's `SchemaSource`,
+/// never by this prover-supplied variant. `SchemaSubjectProof::resolve` pairs the leaf against the
 /// entry's source; a leaf whose variant disagrees reject-closes. On BOTH paths the delivered rows are
 /// re-verified against the trusted SCHEMA root (pinned to the combined `database_root`) before use — a
 /// materialized single-layer BGP, or a reconciled single-atom present filter that selects EXACTLY
@@ -346,7 +351,7 @@ pub enum SchemaSubjectProof {
         columns: Vec<Vec<ArkFr>>,
         /// I2a: the prover's UNTRUSTED per-column dictionary id-hints, bound to the authenticated
         /// result hashes by `verify_and_resolve_single_atom`'s MANDATORY resolution belt-hash — the
-        /// schema-side twin of [`InstanceSubjectProof::Reconciled::id_hints`]. NOT committed.
+        /// schema-side twin of `InstanceSubjectProof::Reconciled::id_hints`. NOT committed.
         id_hints: Vec<Vec<u64>>,
     },
 }
@@ -370,7 +375,7 @@ impl SchemaSubjectProof {
 /// read). The materialized arm is byte-identical to increments 2b–6d (the audited subsumption closure
 /// as a `CompiledBgp`/`ProvedBgp`); the reconciled arm carries the store's standalone
 /// `TransitiveClosure`-over-`present` proof (FOUNDATION-B, 6c-i) run on the SCHEMA chain.
-/// [`SchemaClosureProof`] pairs the carried variant against the entry's [`SchemaSource`]; a variant
+/// [`SchemaClosureProof`] pairs the carried variant against the entry's `SchemaSource`; a variant
 /// that disagrees reject-closes. On BOTH paths the reachable ancestor SET is the closure's proven
 /// output — COMPLETE (empty-delta fixpoint) and deduplicated — never trusted from a prover-supplied
 /// list, so no inherited property can be hidden by dropping an ancestor.
@@ -409,7 +414,7 @@ pub struct ProvedRangeClassification {
     pub node: Vec<u8>,
     /// `Triple(node, ?p, ?o)` proved over the schema graph — a MATERIALIZED bound-subject BGP (base
     /// path) OR a RECONCILED single-atom present filter over a delta schema head (6e). Source-agnostic:
-    /// the route is fixed by the entry point's [`SchemaSource`].
+    /// the route is fixed by the entry point's `SchemaSource`.
     pub schema_read: SchemaSubjectProof,
 }
 
@@ -441,8 +446,8 @@ pub struct ProvedFrame {
 /// The ordered-list-walk proof carried for one PRESENT list property, ROUTED by the entry point (the
 /// materialized-vs-reconciled analogue of [`InstanceSubjectProof`], added for increment 6c-iii). The
 /// materialized arm is byte-identical to increments 2b–5; the reconciled arm carries the store's
-/// standalone `OrderedListWalk`-over-`present` proof. [`ListWalkProof::resolve`] pairs the carried
-/// variant against the entry's [`InstanceSource`]; a variant that disagrees reject-closes.
+/// standalone `OrderedListWalk`-over-`present` proof. `ListWalkProof::resolve` pairs the carried
+/// variant against the entry's `InstanceSource`; a variant that disagrees reject-closes.
 #[derive(Debug)]
 pub enum ListWalkProof {
     /// The materialized `OrderedListWalk` envelope over a single instance layer (the base path).
@@ -479,7 +484,7 @@ pub struct ProvedListProperty {
 /// The ordered-array-walk proof carried for one PRESENT array property, ROUTED by the entry point —
 /// the exact `sys:Array` analogue of [`ListWalkProof`] (added for increment 6d). The materialized arm
 /// is byte-identical to increments 4–5; the reconciled arm carries the store's standalone
-/// `OrderedArrayWalk`-over-`present` proof. A variant that disagrees with the entry's [`InstanceSource`]
+/// `OrderedArrayWalk`-over-`present` proof. A variant that disagrees with the entry's `InstanceSource`
 /// reject-closes.
 #[derive(Debug)]
 pub enum ArrayWalkProof {
@@ -732,10 +737,10 @@ const ANCESTOR_ENDPOINT_VAR: &str = "__rd_ancestor";
 
 /// The reflexive FORWARD `sys:inherits` closure from `class_iri` over the SCHEMA graph — the ancestor
 /// SET `{class} ∪ ancestors(class)`, delivered as one node column. Built through the AUDITED
-/// subsumption-closure gadget ([`build_subsumption_closure`], `inverted = false` = walk `sys:inherits`
+/// subsumption-closure gadget (`build_subsumption_closure`, `inverted = false` = walk `sys:inherits`
 /// object-ward to gather superclasses; `reflexive = true` = the seed subsumes itself) so its proof /
 /// verify / digest machinery is exactly the shipped Subsumption closure. A PURE function of `class_iri`
-/// (used identically by prove and verify), like [`bound_subject_bgp`]. Empty `selections`/`distincts`
+/// (used identically by prove and verify), like `bound_subject_bgp`. Empty `selections`/`distincts`
 /// deliver the full endpoint column; the intrinsic set-collapse `Distinct` is synthesized inside.
 fn ancestor_closure_bgp(class_iri: &str) -> Result<CompiledBgp, BgpPlanError> {
     build_subsumption_closure(
@@ -772,7 +777,7 @@ fn ordered_list_walk_bgp(subject_iri: &[u8], predicate_iri: &[u8]) -> CompiledBg
 
 /// The `OrderedArrayWalk` leaf for `(subject, predicate)` — the exact `sys:index`-ordered `sys:value`
 /// sequence of a stored 1-D DENSE `sys:Array` (increment 4). Direct construction (there is no WOQL
-/// surface for the leaf), the exact analogue of [`ordered_list_walk_bgp`]. The store carries the whole
+/// surface for the leaf), the exact analogue of `ordered_list_walk_bgp`. The store carries the whole
 /// array-walk composite (the cell-set BGP, functional binds, type filter, dictionary index lookup, and
 /// density+order permutation) wholesale.
 fn ordered_array_walk_bgp(subject_iri: &[u8], predicate_iri: &[u8]) -> CompiledBgp {
@@ -849,8 +854,8 @@ fn resolve_subject_rows(
 }
 
 /// Reshape a reconciled single-atom `FilterPosition::Subject` result — two columns `[predicate, object]`
-/// (mirroring the materialized bound-subject BGP; see `filter_output_kinds`) — into [`SubjectRows`],
-/// EXACTLY as [`resolve_subject_rows`] does. `verify_and_resolve_single_atom` already re-committed the
+/// (mirroring the materialized bound-subject BGP; see `filter_output_kinds`) — into `SubjectRows`,
+/// EXACTLY as `resolve_subject_rows` does. `verify_and_resolve_single_atom` already re-committed the
 /// columns to the filter proof AND resolved them against the trusted head-root-bound chain catalogs, so
 /// the rows are root-authenticated.
 fn reshape_present_subject_rows(
@@ -938,7 +943,7 @@ impl InstanceSource<'_> {
 }
 
 impl InstanceSubjectProof {
-    /// Verify + resolve this bound-subject read against the entry-chosen [`InstanceSource`], returning
+    /// Verify + resolve this bound-subject read against the entry-chosen `InstanceSource`, returning
     /// the `(predicate, object)` rows. The route is fixed by `source` (the ENTRY POINT), NOT by this
     /// proof's own variant: a leaf whose variant disagrees with `source` reject-closes (the
     /// pure-function-of-the-query invariant — a prover cannot pick the route). On both arms the rows are
@@ -983,7 +988,7 @@ impl InstanceSubjectProof {
     }
 }
 
-/// The instance-graph PROVE routing — the prove-side twin of [`InstanceSource`], likewise chosen by the
+/// The instance-graph PROVE routing — the prove-side twin of `InstanceSource`, likewise chosen by the
 /// prove ENTRY POINT. It produces a source-agnostic [`InstanceSubjectProof`] plus the resolved rows for
 /// any bound subject.
 enum InstanceProver<'a> {
@@ -1098,11 +1103,11 @@ impl SchemaSource<'_> {
 }
 
 impl SchemaSubjectProof {
-    /// Verify + resolve this schema bound-subject read against the entry-chosen [`SchemaSource`],
+    /// Verify + resolve this schema bound-subject read against the entry-chosen `SchemaSource`,
     /// returning the `(predicate, object)` rows. The route is fixed by `source` (the ENTRY POINT), NOT
     /// by this proof's own variant: a leaf whose variant disagrees with `source` reject-closes (the
     /// pure-function-of-the-query invariant). On both arms the rows are re-verified against the trusted
-    /// schema root before return — the schema mirror of [`InstanceSubjectProof::resolve`].
+    /// schema root before return — the schema mirror of `InstanceSubjectProof::resolve`.
     fn resolve(
         &self,
         node_iri: &str,
@@ -1145,7 +1150,7 @@ impl SchemaSubjectProof {
 }
 
 /// Verify + resolve the ancestor-closure sub-proof against the entry-chosen sources, returning the
-/// authenticated class SET as node-IRI byte vectors. Routed by the entry's [`SchemaSource`] (never the
+/// authenticated class SET as node-IRI byte vectors. Routed by the entry's `SchemaSource` (never the
 /// carried variant): a MATERIALIZED closure re-verifies the audited subsumption BGP through
 /// `verify_over_graphs_and_resolve` (anchored to the SCHEMA root under the trusted combined
 /// `database_root`); a RECONCILED closure re-verifies the store's `TransitiveClosure`-over-`present`
@@ -1196,7 +1201,7 @@ fn resolve_ancestor_closure(
     }
 }
 
-/// The schema-graph PROVE routing — the prove-side twin of [`SchemaSource`], likewise chosen by the
+/// The schema-graph PROVE routing — the prove-side twin of `SchemaSource`, likewise chosen by the
 /// prove ENTRY POINT. It produces a source-agnostic [`SchemaSubjectProof`] / [`SchemaClosureProof`]
 /// plus the resolved rows / ancestor set for any bound schema node.
 enum SchemaProver<'a> {
@@ -1363,7 +1368,7 @@ trait SchemaReader {
 }
 
 /// Prover-side reader: proves + resolves each requested schema node once through the entry-chosen
-/// [`SchemaProver`] (materialized BGP or reconciled present filter), recording a source-agnostic
+/// `SchemaProver` (materialized BGP or reconciled present filter), recording a source-agnostic
 /// [`ProvedRangeClassification`].
 struct ProveReader<'a> {
     ctx: &'a StoreProverContext<'a>,
@@ -1887,7 +1892,7 @@ fn classify_frame(
 }
 
 /// The subdocument / unfoldable natures of a class, computed across its reflexive `sys:inherits`
-/// closure `{class} ∪ ancestors` (LENIENT — unlike [`collect_class_frame`] it does NOT reject a
+/// closure `{class} ∪ ancestors` (LENIENT — unlike `collect_class_frame` it does NOT reject a
 /// tagged-union / enum / oneOf class, because a STOP link to such a document is faithfully rendered as
 /// a bare id). `class_rows` are the class's OWN schema triples; each STRICT ancestor is read through
 /// `reader`. `has_subdocument` mirrors `schema_is_subdocument` (schema.pl:654); `has_unfoldable`
@@ -1931,7 +1936,7 @@ const MAX_SUBDOC_DEPTH: usize = 3;
 /// Max total document nodes (root + every inlined subdocument).
 const MAX_SUBDOC_NODES: usize = 64;
 
-/// Like [`extract_class`] but returns `None` (not an error) when the node has NO `rdf:type` row — a
+/// Like `extract_class` but returns `None` (not an error) when the node has NO `rdf:type` row — a
 /// typeless / dangling LINK target, which the reference renders as a plain link id (a typeless target
 /// is trivially non-subdocument). Still errors on a non-node type or MULTIPLE `rdf:type` rows.
 fn extract_class_opt(rows: &SubjectRows) -> Result<Option<Vec<u8>>, QueryProofError> {
@@ -1975,7 +1980,7 @@ struct ProvenCore {
     natures: ClosureNatures,
 }
 
-/// Prove one node's decision core (see [`ProvenCore`]). Reads the instance subject BGP, binds the
+/// Prove one node's decision core (see `ProvenCore`). Reads the instance subject BGP, binds the
 /// class, proves the reflexive `sys:inherits` closure (only when the class inherits), reads each strict
 /// ancestor's frame, and computes the inheritance-closed subdocument/unfoldable natures. NO property
 /// range classification happens here — so a plain link target's own (possibly unsupported-shape) frame
@@ -2056,7 +2061,7 @@ fn prove_core(
 ///      immediately (no per-element witness needed);
 ///   2. any NODE-valued element whose ACTUAL type (its reflexive `sys:inherits` closure) bears
 ///      `sys:subdocument` / `sys:unfoldable` — the reference would unfold that element — rejects. The
-///      element's ACTUAL type is read from the root-authenticated instance graph (via [`prove_core`], the
+///      element's ACTUAL type is read from the root-authenticated instance graph (via `prove_core`, the
 ///      SAME decision core the single-`Link` path uses), so a SUBCLASS that introduces subdocument-ness
 ///      is caught even when the DECLARED element class is a plain non-subdocument class.
 /// LITERAL/scalar elements cannot unfold and carry no witness. Returns one witness per DISTINCT node
@@ -2115,7 +2120,7 @@ fn prove_collection_elements(
 }
 
 /// Prove a RENDERED node (the root or an inlined subdocument) by EXTENDING an already-proven
-/// [`ProvenCore`]: classify the effective frame, prove one ordered-list walk per present list, and
+/// `ProvenCore`: classify the effective frame, prove one ordered-list walk per present list, and
 /// recurse into each present single-valued class LINK (inlining a subdocument child, stopping at a
 /// plain link). `allow_subdocument` is `false` for the root (its own class must not be a subdocument)
 /// and `true` for an inlined child (it is EXPECTED to be one). The `visited` set + `node_count` +
@@ -2411,7 +2416,7 @@ impl CompiledReadDocument {
         self.prove_on_layers_with_context(&StoreProverContext::cpu(), instance, schema)
     }
 
-    /// [`prove_on_layers`] with a caller-owned prover context.
+    /// `prove_on_layers` with a caller-owned prover context.
     pub fn prove_on_layers_with_context(
         &self,
         ctx: &StoreProverContext<'_>,
@@ -2523,7 +2528,7 @@ impl CompiledReadDocument {
     /// `sys:inherits` closure routes to the store's `TransitiveClosure`-over-`present` (FOUNDATION-B, 6c-i)
     /// on the SCHEMA chain. NO new store crypto — a reconciled schema read is a bound-subject / closure
     /// read over a schema-chain reconciliation, exactly what the instance side and FOUNDATION-A/B already
-    /// do. The delta-head schema reject ([`prove_on_layers_reconciled`]'s guard) is LIFTED here; the route
+    /// do. The delta-head schema reject (`prove_on_layers_reconciled`'s guard) is LIFTED here; the route
     /// (materialized vs reconciled) per graph is a PURE FUNCTION of this entry, never prover data. The
     /// per-graph reconcile ≥2-records-per-group floor applies to BOTH chains. Every base reject +
     /// every 6a–6d shape (flat / inheritance / subdocument / list / array) is supported.
@@ -2659,7 +2664,7 @@ fn verify_child_witness(
 
 /// Verify a PRESENT `Set`/`List` property's per-element ACTUAL-TYPE witnesses and reject-close if the
 /// reference would UNFOLD the collection (increment-3 audit fix; the verify twin of
-/// [`prove_collection_elements`], run IDENTICALLY so a prover cannot skip it). `elements` are the
+/// `prove_collection_elements`, run IDENTICALLY so a prover cannot skip it). `elements` are the
 /// authenticated element objects (a `Set`'s direct objects, or a `List`'s ordered WALK elements). The
 /// bundle must carry EXACTLY the witnesses for the DISTINCT node-valued elements — no missing, no
 /// injected — and each element's ACTUAL type (reflexive `sys:inherits` closure, re-verified against the
@@ -3402,7 +3407,7 @@ mod base_types_subset_guard {
     use super::BASE_TYPES;
 
     /// A snapshot of the server's AUTHORITATIVE `base_type/1` set (`core/triple/base_type.pl`, all 64
-    /// facts). Mirrored here ONLY to mechanically enforce the [`BASE_TYPES`] subset invariant — if
+    /// facts). Mirrored here ONLY to mechanically enforce the `BASE_TYPES` subset invariant — if
     /// `base_type.pl` changes, update this snapshot too. A `BASE_TYPES` entry missing from here is a
     /// SUPERSET, which is a soundness risk (see the `BASE_TYPES` doc comment).
     const REFERENCE_BASE_TYPES: &[&str] = &[

@@ -7,6 +7,11 @@
 //! verifier. Also the small `prove_*_relation` adapters for the verifier-recompute forms and
 //! the [`QueryProofError`] type. Parsing an envelope never confers trust — verification
 //! re-checks it against an independently compiled query and a caller-chosen trusted root.
+//!
+//! These are the entry points of the **prove** and **verify** steps. A proof travels as bytes
+//! plus a separately-obtained trusted root; decoding an envelope never lets the artifact choose
+//! its own trust anchor. See [`terminus_store::proof::primer`] §10 (prove→verify) and §9 (the
+//! `resolution_root` / `database_root` trust anchor).
 
 use super::*;
 
@@ -160,8 +165,8 @@ pub(crate) fn prove_eval_relation(
 }
 
 /// Prove a top-level WOQL `floor(x)`: prove the operand-binding child through the Store, then APPEND
-/// the derived integer column computed by the SAME [`expected_floor_eval_columns`] the verifier
-/// re-runs. Structurally identical to [`prove_eval_relation`] (only the recompute differs — exact
+/// the derived integer column computed by the SAME `expected_floor_eval_columns` the verifier
+/// re-runs. Structurally identical to `prove_eval_relation` (only the recompute differs — exact
 /// rationals then a floor), so a prover cannot deliver a different column and still verify, and
 /// cannot prove a floor whose i64 narrowing overflows or whose operand row is non-numeric.
 pub(crate) fn prove_floor_eval_relation(
@@ -207,7 +212,7 @@ pub(crate) fn prove_floor_eval_relation(
 
 /// Prove a top-level WOQL exact-rational arithmetic (`Divide`/decimal-operand arithmetic): prove the
 /// operand-binding child through the Store, then DELIVER the per-row xsd:decimal result computed by
-/// the SAME [`expected_rational_arith_objects`] the verifier re-runs. Like `Concat`, NO derived
+/// the SAME `expected_rational_arith_objects` the verifier re-runs. Like `Concat`, NO derived
 /// column is committed — the result is TERMINAL/revealed; the child's columns/commitments are reused
 /// verbatim. A zero divisor, a non-numeric operand row, or a carry-overflow render FAILS CLOSED here
 /// (exactly as verify does), so a prover cannot produce a proof for a row the reference would reject.
@@ -243,7 +248,7 @@ pub(crate) fn prove_rational_arith_relation(
 }
 
 /// Prove a top-level WOQL NUMBER→STRING `Typecast`: prove the source-binding child through the Store,
-/// then DELIVER the per-row `xsd:string` cast produced by the SAME [`expected_cast_to_string_objects`]
+/// then DELIVER the per-row `xsd:string` cast produced by the SAME `expected_cast_to_string_objects`
 /// the verifier re-runs. Like `Concat`/`RationalArith`, NO derived column is committed — the child's
 /// columns/commitments are reused verbatim and the synthesized strings are re-checked at verify. A
 /// float/double or non-numeric operand row FAILS CLOSED here (exactly as verify does).
@@ -284,7 +289,7 @@ pub(crate) fn prove_typecast_to_string_relation(
 }
 
 /// Prove a top-level WOQL STRING→NUMBER `Typecast`: prove the source-binding child through the Store,
-/// then DELIVER the per-row numeric cast produced by the SAME [`expected_cast_from_string_objects`]
+/// then DELIVER the per-row numeric cast produced by the SAME `expected_cast_from_string_objects`
 /// the verifier re-runs. Like `Concat`/`RationalArith`, NO derived column is committed. A
 /// malformed/out-of-grammar string, or a non-string operand row, FAILS CLOSED here (exactly as
 /// verify does), so a prover cannot produce a proof for a row the reference would reject.
@@ -328,8 +333,8 @@ pub(crate) fn prove_typecast_from_string_relation(
 
 /// Prove a top-level WOQL INTEGER-result calendar op (`Weekday`/`WeekdaySundayStart`/`IsoWeek`):
 /// prove the operand-binding child through the Store, then APPEND the derived integer column(s)
-/// computed by the SAME [`expected_calendar_int_columns`] the verifier re-runs. Structurally like
-/// [`prove_eval_relation`], but — because `IsoWeek` binds TWO integers — it appends ALL `outputs.len()`
+/// computed by the SAME `expected_calendar_int_columns` the verifier re-runs. Structurally like
+/// `prove_eval_relation`, but — because `IsoWeek` binds TWO integers — it appends ALL `outputs.len()`
 /// derived columns (each committed), NOT just the last: taking only `.last()` would silently drop a
 /// column and mis-shape the proof. A non-date operand row / out-of-range year FAILS CLOSED here
 /// (exactly as verify does), so a prover cannot produce a proof over a row the reference would reject.
@@ -382,7 +387,7 @@ pub(crate) fn prove_calendar_int_relation(
 
 /// Prove a top-level WOQL DATE-result calendar op (`DayAfter`/`DayBefore`/`MonthStartDate`/
 /// `MonthEndDate`): prove the operand-binding child through the Store, then DELIVER the per-row
-/// `xsd:date` result computed by the SAME [`expected_calendar_date_objects`] the verifier re-runs.
+/// `xsd:date` result computed by the SAME `expected_calendar_date_objects` the verifier re-runs.
 /// Like `Concat`, NO derived column is committed — the child's columns/commitments are reused verbatim
 /// and the synthesized date is re-checked at verify. A non-zero offset / out-of-range year / wrong-typed
 /// operand FAILS CLOSED here (exactly as verify does).
@@ -421,7 +426,7 @@ pub(crate) fn prove_calendar_date_relation(
 /// Prove a top-level WOQL `Typecast`: prove the source-binding child through the Store, then
 /// APPEND the derived cast column computed by the SAME recompute the verifier re-runs.
 ///
-/// Structurally identical to [`prove_eval_relation`]: the child's columns/commitments are reused
+/// Structurally identical to `prove_eval_relation`: the child's columns/commitments are reused
 /// verbatim (already root-authenticated by the Store proof); only the one cast column is committed
 /// here. Because it is produced by `expected_typecast_column` — the exact function
 /// `verify_relation` re-runs (including the target-range fail-closed check) — a prover cannot
@@ -522,7 +527,7 @@ pub(crate) fn prove_concat_relation(
 
 /// Prove a top-level WOQL `Join`: prove the operand-binding child through the Store, then DELIVER
 /// the per-row separator-interposed join produced by the SAME recompute the verifier re-runs
-/// ([`expected_join_objects`]). Like `Concat`, NO derived column is committed — the child's
+/// (`expected_join_objects`). Like `Concat`, NO derived column is committed — the child's
 /// columns/commitments are reused verbatim and the synthesized strings are re-checked at verify.
 pub(crate) fn prove_join_relation(
     context: &StoreProverContext<'_>,
@@ -564,7 +569,7 @@ pub(crate) fn prove_join_relation(
 
 /// Prove a top-level WOQL `Substring`: prove the operand-binding child through the Store, then
 /// DELIVER the per-row char-substring produced by the SAME recompute the verifier re-runs
-/// ([`expected_substring_objects`]). Fails closed here (exactly as verify does) on an out-of-range
+/// (`expected_substring_objects`). Fails closed here (exactly as verify does) on an out-of-range
 /// or non-UTF-8 operand row, so a prover cannot produce a proof over a row the reference drops.
 pub(crate) fn prove_substring_relation(
     context: &StoreProverContext<'_>,
@@ -607,7 +612,7 @@ pub(crate) fn prove_substring_relation(
 }
 
 /// Prove a WOQL `Pad`: prove the operand-binding child through the Store, then DELIVER the per-row
-/// left-padded strings recomputed by the SAME [`expected_pad_objects`] the verifier re-runs — no
+/// left-padded strings recomputed by the SAME `expected_pad_objects` the verifier re-runs — no
 /// new Store gadget, no committed result column, the committed columns are the child's verbatim.
 pub(crate) fn prove_pad_relation(
     context: &StoreProverContext<'_>,
@@ -650,7 +655,7 @@ pub(crate) fn prove_pad_relation(
 }
 
 /// Prove a WOQL `HashKey`/`hash`: prove the operand-binding child through the Store, then DELIVER
-/// the per-row `idgen_hash` document-IDs recomputed by the SAME [`expected_hashkey_objects`] the
+/// the per-row `idgen_hash` document-IDs recomputed by the SAME `expected_hashkey_objects` the
 /// verifier re-runs — no new Store gadget, no committed result column.
 pub(crate) fn prove_hashkey_relation(
     context: &StoreProverContext<'_>,
@@ -690,6 +695,10 @@ pub(crate) fn prove_hashkey_relation(
     })
 }
 
+/// Rebuild a woql2 [`ProvedBgp`] tree from a store [`RecursiveRelationEnvelope`]. Most nodes are
+/// decomposed into the matching [`ProvedQueryStatement`]; the nodes whose store proof cannot be
+/// decomposed (cross-root hash join, ordered list/array walks, all-pairs / compound-edge closures)
+/// are carried WHOLESALE and later re-verified by re-running the store's own recursive verify.
 pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> ProvedBgp {
     // The two-root cross-dictionary hash join is carried WHOLESALE (it engages two commitment roots
     // and is verified by `verify_cross_root`, not the single-graph mirror), so it is wrapped directly
@@ -899,13 +908,19 @@ pub(crate) fn proved_from_recursive(envelope: RecursiveRelationEnvelope) -> Prov
 /// Errors at the explicit compile/load/prove boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum QueryProofError {
+    /// The query could not be compiled to a provable plan (a reject-closed shape); see
+    /// [`BgpPlanError`].
     #[error(transparent)]
     Plan(#[from] BgpPlanError),
+    /// A store/IO error while loading a commitment or proving (an [`std::io::Error`]).
     #[error(transparent)]
     Store(#[from] std::io::Error),
 }
 
 
+/// Resolve one authenticated result field element back to its Store dictionary id in the given
+/// `namespace` (node/value or predicate), failing closed if it is absent from that catalog or is a
+/// generated-decimal namespace (which has no dictionary id).
 pub(crate) fn store_id_for_field(
     field: ArkFr,
     namespace: ResultIdNamespace,
@@ -934,6 +949,8 @@ pub(crate) fn store_id_for_field(
     })
 }
 
+/// Resolve the first `n` rows of a proven 2-column group-extrema result into `(key_id, value_id)`
+/// Store id pairs, via `store_id_for_field` in each column's planned namespace.
 pub(crate) fn group_output_rows(
     columns: &[Vec<ArkFr>],
     n: usize,
@@ -957,6 +974,8 @@ pub(crate) fn group_output_rows(
         .collect()
 }
 
+/// Resolve the first `n` rows of a proven distinct result into Store id rows, resolving each column
+/// in its planned namespace via `store_id_for_field`.
 pub(crate) fn distinct_output_rows(
     columns: &[Vec<ArkFr>],
     n: usize,
@@ -1162,9 +1181,9 @@ impl CompiledBgp {
 
     /// SCHEMA-GRAPH FOUNDATION — prove over BOTH committed graphs (instance + schema).
     ///
-    /// Selects, from the compiled plan's single [`relation_graph`], which layer's `LayerCommitment`
+    /// Selects, from the compiled plan's single `relation_graph`, which layer's `LayerCommitment`
     /// the whole proof is built over: an instance query proves over the instance commitment exactly as
-    /// [`prove_on_layer`] (byte-identical), a Subsumption query proves over the schema commitment. The
+    /// `prove_on_layer` (byte-identical), a Subsumption query proves over the schema commitment. The
     /// audited recursion is handed that ONE commitment and stays graph-blind. The trust anchor a
     /// verifier reconstructs is the combined [`terminus_store::proof::commitment::database_root`] of
     /// the two per-graph roots (see [`CompiledBgp::prove_on_layers_root`]).
@@ -1176,7 +1195,7 @@ impl CompiledBgp {
         self.prove_on_layers_with_context(&StoreProverContext::cpu(), instance, schema)
     }
 
-    /// [`prove_on_layers`] with a caller-owned prover context.
+    /// `prove_on_layers` with a caller-owned prover context.
     pub fn prove_on_layers_with_context(
         &self,
         context: &StoreProverContext<'_>,
@@ -1203,7 +1222,7 @@ impl CompiledBgp {
     }
 
     /// Prove a top-level cross-root (IsA) query directly over two already-committed layers (the
-    /// instance and schema `LayerCommitment`s). Mirrors [`prove_on_layers`] for callers that hold
+    /// instance and schema `LayerCommitment`s). Mirrors `prove_on_layers` for callers that hold
     /// commitments rather than `SyncStoreLayer`s.
     pub fn prove_cross_root_layers(
         &self,
@@ -1213,6 +1232,8 @@ impl CompiledBgp {
         self.prove_cross_root_layers_with_context(&StoreProverContext::cpu(), instance, schema)
     }
 
+    /// [`Self::prove_cross_root_layers`] with a caller-owned prover context. Rejects any query that
+    /// is not a cross-root (IsA) statement.
     pub fn prove_cross_root_layers_with_context(
         &self,
         context: &StoreProverContext<'_>,

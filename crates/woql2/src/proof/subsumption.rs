@@ -1,10 +1,14 @@
 //! Schema-graph lowering — Subsumption and `IsA`.
 //!
 //! Lowers the two constructs that read the committed SCHEMA graph rather than the instance
-//! graph: [`plan_subsumption`] (`class_subsumed` — the reflexive-transitive closure of
-//! `sys:inherits` subclass edges) and [`plan_isa`] (an instance's `rdf:type` composed with that
+//! graph: `plan_subsumption` (`class_subsumed` — the reflexive-transitive closure of
+//! `sys:inherits` subclass edges) and `plan_isa` (an instance's `rdf:type` composed with that
 //! subsumption closure). Both emit schema-graph transitive-closure plans over the authenticated
 //! `sys:inherits` / `rdf:type` edges.
+//!
+//! See [`terminus_store::proof::primer`] for the cryptographic background (§6 the transitive-closure
+//! gadget these plans reuse, and §9 the layer model — the schema graph commits its own root, so the
+//! cross-graph `IsA` join is a cross-root, IRI-hash-reconciled join).
 
 use super::*;
 
@@ -20,6 +24,8 @@ pub(crate) enum SubsumptionEndpoint {
     Variable(String),
 }
 
+/// Resolve one `Subsumption` endpoint `NodeValue` to a bound class IRI or a free variable. A
+/// `NodeValue` is only ever a node or a variable, so this is total (it never rejects).
 pub(crate) fn subsumption_endpoint(value: &crate::value::NodeValue) -> Result<SubsumptionEndpoint, BgpPlanError> {
     match value {
         crate::value::NodeValue::Node(iri) => Ok(SubsumptionEndpoint::Class(iri.clone())),
@@ -105,7 +111,7 @@ pub(crate) fn plan_subsumption(
 
 /// The shared schema-graph `sys:inherits` edge `E = Triple(?s, sys:inherits, ?o)`: a single-atom
 /// 2-column node BGP over the SCHEMA graph (identical to the instance-layer edge BGP in
-/// [`plan_transitive_closure_path`], but the enclosing closure carries `graph: ProofGraph::Schema`).
+/// `plan_transitive_closure_path`, but the enclosing closure carries `graph: ProofGraph::Schema`).
 pub(crate) fn sys_inherits_edge() -> LayerBgpPlan {
     LayerBgpPlan {
         source: ColumnSource::Materialized,
