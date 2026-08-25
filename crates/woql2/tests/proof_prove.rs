@@ -4578,6 +4578,108 @@ fn repeated_variable_atom_proves_same_row_equality() {
     );
 }
 
+/// The EXACT differential-fuzzer repro shape (seed `0xf0fac0de12345644`): `?u ?w ?u` — a
+/// self-loop atom with a VARIABLE predicate. The subject==object repeat must be ENFORCED as a
+/// same-row equality so the proof returns ONLY self-loop rows (across every predicate),
+/// matching Prolog's `t(U, W, U)` where the shared logic variable unifies the two positions.
+/// The older `repeated_variable_atom_proves_same_row_equality` covers the CONSTANT-predicate
+/// shape (kept `[S]` + constant `P` + equality); this locks in the variable-predicate filter
+/// shape (kept `[S, P]` + equality `(S, O)`) — the shape the fuzzer hit — end to end.
+#[test]
+fn variable_predicate_self_loop_proves_same_row_equality() {
+    let lc = build_layer(&[
+        ("a", "link", "a"), // self-loop
+        ("a", "link", "b"), // non-self-loop, same predicate
+        ("b", "rel", "b"),  // self-loop, different predicate
+        ("c", "rel", "d"),  // non-self-loop, different predicate
+    ]);
+    let q = and_of(vec![tv_pred_var("u", "w", "u")]);
+    let compiled = plan_bgp(&q).unwrap();
+    // The repeated object variable collapses onto the subject column; the predicate variable
+    // stays its own kept column.
+    assert_eq!(compiled.relation.schema, vec!["u", "w"]);
+    assert!(compiled.bgp_plan().atoms[0].subject_object_equal);
+    assert!(compiled.bgp_plan().atoms[0].predicate_variable);
+
+    let proved = compiled.prove(&lc).unwrap();
+    // ONLY the two self-loops (a-link, b-rel) — NOT all four rows. Returning all rows is the
+    // exact bug: the intra-atom subject==object constraint being silently dropped.
+    assert_eq!(proved.result_len, 2);
+    proved.verify(&compiled, &lc, lc.resolution_root()).unwrap();
+
+    // The proof binds exactly the self-loop rows in stored order: column 0 = subject id,
+    // column 1 = predicate id, for every addition whose subject_id == object_id.
+    let expected_subject: Vec<ArkFr> = lc
+        .additions
+        .iter()
+        .filter(|row| row.subject_id == row.object_id)
+        .map(|row| ArkFr::from_u64(row.subject_id))
+        .collect();
+    let expected_predicate: Vec<ArkFr> = lc
+        .additions
+        .iter()
+        .filter(|row| row.subject_id == row.object_id)
+        .map(|row| ArkFr::from_u64(row.predicate_id))
+        .collect();
+    assert_eq!(
+        proved.result_columns,
+        vec![expected_subject.clone(), expected_predicate.clone()]
+    );
+
+    // Resolution routes column 0 through the node dictionary and column 1 through the
+    // predicate dictionary — exactly the self-loop subjects/predicates, nothing else.
+    // (Membership checks keep this independent of the store's stored-row order; the exact,
+    // order-sensitive binding is already pinned by the `result_columns` equality above.)
+    let objects = proved
+        .verify_and_resolve(&compiled, &lc, lc.resolution_root())
+        .unwrap();
+    assert_eq!(objects.len(), 2);
+    assert_eq!(objects[0].len(), 2);
+    assert_eq!(objects[1].len(), 2);
+    assert!(objects[0].contains(&CanonicalObject::Node(iri("a").into_bytes())));
+    assert!(objects[0].contains(&CanonicalObject::Node(iri("b").into_bytes())));
+    assert!(objects[1].contains(&CanonicalObject::Node(iri("link").into_bytes())));
+    assert!(objects[1].contains(&CanonicalObject::Node(iri("rel").into_bytes())));
+
+    // NEGATIVE (the soundness line): a tampered answer that swaps in a node that is NOT a
+    // self-loop subject must not verify — the committed result columns are bound to the s==o
+    // selection. `c`/`d` appear only in the non-self-loop `(c, rel, d)` row, so neither is a
+    // self-loop subject; injecting one fabricates a row the selection never produced.
+    let self_loop_subjects: Vec<u64> = lc
+        .additions
+        .iter()
+        .filter(|row| row.subject_id == row.object_id)
+        .map(|row| row.subject_id)
+        .collect();
+    let foreign_subject = lc
+        .additions
+        .iter()
+        .flat_map(|row| [row.subject_id, row.object_id])
+        .find(|id| !self_loop_subjects.contains(id))
+        .unwrap();
+    let mut tampered = proved.result_columns.clone();
+    tampered[0][0] = ArkFr::from_u64(foreign_subject);
+    assert!(proved.verify_columns(&tampered).is_err());
+
+    // A perturbation of the predicate column is likewise rejected.
+    let mut tampered_pred = proved.result_columns.clone();
+    tampered_pred[1][0] = tampered_pred[1][0] + ArkFr::one();
+    assert!(proved.verify_columns(&tampered_pred).is_err());
+
+    // End-to-end envelope: encode → decode+verify succeeds; a flipped byte fails.
+    let encoded = proved
+        .encode_envelope(&compiled, &lc, lc.resolution_root())
+        .unwrap();
+    let decoded =
+        decode_and_verify_envelope(&encoded, &compiled, &lc, lc.resolution_root()).unwrap();
+    assert_eq!(decoded.result_objects, objects);
+    let mut corrupt = encoded.clone();
+    corrupt[20] ^= 1;
+    assert!(
+        decode_and_verify_envelope(&corrupt, &compiled, &lc, lc.resolution_root(),).is_err()
+    );
+}
+
 #[test]
 fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
     let store = open_sync_memory_store();

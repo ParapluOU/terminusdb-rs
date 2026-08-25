@@ -4395,6 +4395,41 @@ fn accepts_repeated_variable_as_same_row_equality() {
     assert_eq!(c.bgp_plan().joins.len(), 1);
 }
 
+/// A triple with ALL THREE positions as variables — used to build the intra-atom
+/// repeated-variable reject cases below.
+fn triple_all_var(s: &str, p: &str, o: &str) -> Query {
+    Query::Triple(terminusdb_woql2::triple::Triple {
+        subject: NodeValue::Variable(s.into()),
+        predicate: NodeValue::Variable(p.into()),
+        object: Value::Variable(o.into()),
+        graph: None,
+    })
+}
+
+/// The subject==object intra-atom repeat is ENFORCED as a same-row equality (the tests above).
+/// The two CROSS-DICTIONARY repeats — a variable shared between the predicate-dictionary id
+/// namespace and the node/value namespace — are NOT id-comparable, so they reject-close
+/// (`VariableNamespaceConflict`) rather than emit a wrong answer. This locks in fail-closed
+/// behaviour for `subject==predicate`, `predicate==object`, and the all-three collapse.
+#[test]
+fn rejects_intra_atom_cross_dictionary_repeated_variable() {
+    // subject == predicate: `t(?u, ?u, ?w)`.
+    reject(
+        triple_all_var("u", "u", "w"),
+        BgpPlanError::VariableNamespaceConflict { var: "u".into() },
+    );
+    // predicate == object: `t(?w, ?u, ?u)`.
+    reject(
+        triple_all_var("w", "u", "u"),
+        BgpPlanError::VariableNamespaceConflict { var: "u".into() },
+    );
+    // all three the same variable: `t(?u, ?u, ?u)` — the subject/predicate clash trips first.
+    reject(
+        triple_all_var("u", "u", "u"),
+        BgpPlanError::VariableNamespaceConflict { var: "u".into() },
+    );
+}
+
 #[test]
 fn accepts_composite_key() {
     // t(?x,p,?y), t(?x,q,?y) — the second atom shares BOTH x and y.
