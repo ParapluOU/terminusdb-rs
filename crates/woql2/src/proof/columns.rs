@@ -1040,7 +1040,9 @@ pub(crate) fn expected_group_sum_columns(
     value_column: usize,
     datatype: CanonicalDatatype,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
@@ -1133,7 +1135,9 @@ pub(crate) fn expected_group_extrema_columns(
     datatype: CanonicalDatatype,
     kind: GroupExtremaKind,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(layer, layer.resolution_root(), &input.result_columns, &descriptors)?;
@@ -1228,7 +1232,9 @@ pub(crate) fn expected_group_count_columns(
     input_plan: &CompiledRelation,
     key_columns: &[usize],
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     if key_columns.is_empty() {
         return expected_cardinality_column(input.result_len, false);
@@ -1450,7 +1456,9 @@ pub(crate) fn expected_eval_columns(
     input_plan: &CompiledRelation,
     expr: &EvalExpr,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     // Authenticate EVERY child column against the trusted root (ties operands to the root).
@@ -2515,7 +2523,9 @@ pub(crate) fn expected_typecast_column(
     source_datatype: CanonicalDatatype,
     target_datatype: CanonicalDatatype,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     // Authenticate EVERY child column against the trusted root (ties the source to the root).
@@ -2584,7 +2594,9 @@ pub(crate) fn resolve_authenticated_child_values(
     input: &ProvedBgp,
     input_plan: &CompiledRelation,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<CanonicalResultValue>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(layer, layer.resolution_root(), &input.result_columns, &descriptors)?;
@@ -3011,7 +3023,9 @@ pub(crate) fn expected_collection_sum_column(
     template: CollectionSumTemplate,
     datatype: CanonicalDatatype,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let mut sum = GroupSumValue::zero(datatype)?;
     match template {
@@ -3063,7 +3077,9 @@ pub(crate) fn expected_collection_extrema_column(
     datatype: CanonicalDatatype,
     kind: GroupExtremaKind,
     layer: &impl VerifierLayer,
-    expected_root: ProofHash,
+    // Unused: resolves via the gated `layer.resolution_root()` (see `expect_resolution_root`);
+    // `expected_root` is the commitment-root context, not the resolution root.
+    _expected_root: ProofHash,
 ) -> std::io::Result<Vec<Vec<ArkFr>>> {
     let descriptors = relation_result_descriptors(input_plan)?;
     let values = resolve_result_values(
