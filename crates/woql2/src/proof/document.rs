@@ -98,8 +98,8 @@ use terminus_store::proof::commitment::{database_root, validate_database_root, V
 use dory_pcs::backends::arkworks::ArkFr;
 use terminus_store::proof::dict::hash_object;
 use terminus_store::proof::reconcile::{
-    prove_read_single_atom, verify_and_resolve_single_atom, FilterPosition, PresentFilterProof,
-    ReconcileProof,
+    prove_read_single_atom_with_context, verify_and_resolve_single_atom, FilterPosition,
+    PresentFilterProof, ReconcileProof,
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -1042,7 +1042,7 @@ impl InstanceProver<'_> {
             InstanceProver::Reconciled { layers, head_root } => {
                 let constant = subject_filter_constant(id);
                 let (reconcile, filter, read) =
-                    prove_read_single_atom(layers, FilterPosition::Subject, constant)?;
+                    prove_read_single_atom_with_context(ctx, layers, FilterPosition::Subject, constant)?;
                 let columns = read.columns;
                 // I2a: carry the prover's per-column id-hints; the belt-hash inside
                 // `verify_and_resolve_single_atom` binds them to the authenticated result hashes.
@@ -1238,7 +1238,7 @@ impl SchemaProver<'_> {
             SchemaProver::Reconciled { layers, head_root } => {
                 let constant = subject_filter_constant(node_iri);
                 let (reconcile, filter, read) =
-                    prove_read_single_atom(layers, FilterPosition::Subject, constant)?;
+                    prove_read_single_atom_with_context(ctx, layers, FilterPosition::Subject, constant)?;
                 let columns = read.columns;
                 // I2a: carry the prover's per-column id-hints; the belt-hash inside
                 // `verify_and_resolve_single_atom` binds them to the authenticated result hashes.
@@ -1285,7 +1285,8 @@ impl SchemaProver<'_> {
                 Ok((SchemaClosureProof::Materialized(closure), set))
             }
             SchemaProver::Reconciled { layers, .. } => {
-                let (proof, ids) = prove_reconciled_transitive_closure(
+                let (proof, ids) = prove_reconciled_transitive_closure_with_context(
+                    ctx,
                     layers,
                     SYS_INHERITS_IRI.as_bytes(),
                     class_iri.as_bytes(),
@@ -2212,7 +2213,8 @@ fn prove_body(
                         (ListWalkProof::Materialized(walk), elements)
                     }
                     InstanceProver::Reconciled { layers, .. } => {
-                        let (walk, elements) = prove_ordered_list_walk_reconciled(
+                        let (walk, elements) = prove_ordered_list_walk_reconciled_with_context(
+                            ctx,
                             layers,
                             &CanonicalObject::Node(id.as_bytes().to_vec()),
                             &prop.predicate,
@@ -2264,7 +2266,8 @@ fn prove_body(
                         (ArrayWalkProof::Materialized(walk), elements)
                     }
                     InstanceProver::Reconciled { layers, .. } => {
-                        let (walk, elements) = prove_ordered_array_walk_reconciled(
+                        let (walk, elements) = prove_ordered_array_walk_reconciled_with_context(
+                            ctx,
                             layers,
                             &CanonicalObject::Node(id.as_bytes().to_vec()),
                             &prop.predicate,
@@ -2477,6 +2480,22 @@ impl CompiledReadDocument {
         instance_layers: &[&LayerCommitment],
         schema: &LayerCommitment,
     ) -> Result<ProvedReadDocument, QueryProofError> {
+        self.prove_on_layers_reconciled_with_context(
+            &StoreProverContext::cpu(),
+            instance_layers,
+            schema,
+        )
+    }
+
+    /// [`ReadDocument::prove_on_layers_reconciled`] with a caller-supplied prover context (for
+    /// GPU/Blitzar MSM offload). The context threads through every reconciled instance read on the
+    /// delta stack; identical bytes and proof to the CPU convenience.
+    pub fn prove_on_layers_reconciled_with_context(
+        &self,
+        ctx: &StoreProverContext<'_>,
+        instance_layers: &[&LayerCommitment],
+        schema: &LayerCommitment,
+    ) -> Result<ProvedReadDocument, QueryProofError> {
         // The SCHEMA graph must be MATERIALIZED (6e reconciles the schema stack). A schema commitment
         // that is itself a delta head reject-closes.
         if schema.state.parent_state_root.is_some() {
@@ -2490,7 +2509,6 @@ impl CompiledReadDocument {
         let instance_head_root = head.resolution_root();
         let schema_root = schema.resolution_root();
         let db_root = database_root(&instance_head_root, &schema_root);
-        let ctx = StoreProverContext::cpu();
         // RECONCILED INSTANCE + MATERIALIZED SCHEMA route: the entry FIXES the sources, so every instance
         // read is a `InstanceSubjectProof::Reconciled` single-atom present filter over the delta stack,
         // and every schema read stays a `SchemaSubjectProof::Materialized` BGP (6a–6d unaffected).
@@ -2498,7 +2516,7 @@ impl CompiledReadDocument {
             InstanceProver::Reconciled { layers: instance_layers, head_root: instance_head_root };
         let schema = SchemaProver::Materialized { layer: schema, root: schema_root };
 
-        let core = prove_core(&ctx, &instance, &schema, db_root, &self.id)?;
+        let core = prove_core(ctx, &instance, &schema, db_root, &self.id)?;
         // The ROOT of a `ReadDocument` must be a real typed document.
         if core.class.is_none() {
             return Err(invalid("document has no rdf:type row"));
@@ -2507,7 +2525,7 @@ impl CompiledReadDocument {
         visited.insert(self.id.as_bytes().to_vec());
         let mut node_count = 1usize;
         prove_body(
-            &ctx,
+            ctx,
             &instance,
             &schema,
             db_root,
@@ -2537,6 +2555,22 @@ impl CompiledReadDocument {
         instance_layers: &[&LayerCommitment],
         schema_layers: &[&LayerCommitment],
     ) -> Result<ProvedReadDocument, QueryProofError> {
+        self.prove_on_layers_fully_reconciled_with_context(
+            &StoreProverContext::cpu(),
+            instance_layers,
+            schema_layers,
+        )
+    }
+
+    /// [`ReadDocument::prove_on_layers_fully_reconciled`] with a caller-supplied prover context (for
+    /// GPU/Blitzar MSM offload). The context threads through every reconciled instance AND schema
+    /// read on the delta stacks; identical bytes and proof to the CPU convenience.
+    pub fn prove_on_layers_fully_reconciled_with_context(
+        &self,
+        ctx: &StoreProverContext<'_>,
+        instance_layers: &[&LayerCommitment],
+        schema_layers: &[&LayerCommitment],
+    ) -> Result<ProvedReadDocument, QueryProofError> {
         let instance_head = instance_layers
             .last()
             .ok_or_else(|| invalid("delta instance stack is empty"))?;
@@ -2549,14 +2583,13 @@ impl CompiledReadDocument {
         let schema_head_root = schema_head.resolution_root();
         // BOTH per-graph roots are the delta HEADS now — the combined root pins both trusted head anchors.
         let db_root = database_root(&instance_head_root, &schema_head_root);
-        let ctx = StoreProverContext::cpu();
         // FULLY-RECONCILED route: the entry FIXES BOTH sources to their delta stacks.
         let instance =
             InstanceProver::Reconciled { layers: instance_layers, head_root: instance_head_root };
         let schema =
             SchemaProver::Reconciled { layers: schema_layers, head_root: schema_head_root };
 
-        let core = prove_core(&ctx, &instance, &schema, db_root, &self.id)?;
+        let core = prove_core(ctx, &instance, &schema, db_root, &self.id)?;
         // The ROOT of a `ReadDocument` must be a real typed document.
         if core.class.is_none() {
             return Err(invalid("document has no rdf:type row"));
@@ -2565,7 +2598,7 @@ impl CompiledReadDocument {
         visited.insert(self.id.as_bytes().to_vec());
         let mut node_count = 1usize;
         prove_body(
-            &ctx,
+            ctx,
             &instance,
             &schema,
             db_root,

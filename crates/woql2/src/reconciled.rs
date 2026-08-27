@@ -47,6 +47,7 @@
 use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 use terminus_store::proof::bgp::JoinStep;
+use terminus_store::proof::argument::StoreProverContext;
 use terminus_store::proof::commitment::LayerCommitment;
 use terminus_store::proof::dict::{hash_object, hash_term};
 use terminus_store::proof::group::GroupExtremaKind;
@@ -58,9 +59,11 @@ use terminus_store::proof::reconcile::{
     attach_termless_group_openings, attach_termless_order_openings, decode_and_verify_delta_read,
     decode_and_verify_group_count, decode_and_verify_group_extrema, decode_and_verify_group_sum,
     decode_and_verify_order, decode_and_verify_read_bgp,
-    prove_delta_read,
-    prove_read_group_count_bgp, prove_read_group_extrema_bgp, prove_read_group_sum_bgp,
-    prove_read_bgp, prove_read_order_bgp, verify_and_resolve_bgp, verify_and_resolve_delta_read,
+    prove_delta_read_with_context,
+    prove_read_group_count_bgp_with_context, prove_read_group_extrema_bgp_with_context,
+    prove_read_group_sum_bgp_with_context,
+    prove_read_bgp_with_context, prove_read_order_bgp_with_context,
+    verify_and_resolve_bgp, verify_and_resolve_delta_read,
     verify_and_resolve_group_count_bgp, verify_and_resolve_group_extrema_bgp,
     verify_and_resolve_group_sum_bgp, verify_and_resolve_order_bgp, verify_read_bgp, DeltaReadProof,
     DeltaSource, GroupReadAgg, GroupReadSpec, OrderReadSpec, PresentBgpAtom, PresentBgpProof,
@@ -623,13 +626,26 @@ pub fn prove_reconciled_read(
     query: &Query,
     layers: &[&LayerCommitment],
 ) -> Result<ReconciledReadProof, ReconciledReadError> {
+    prove_reconciled_read_with_context(&StoreProverContext::cpu(), query, layers)
+}
+
+/// [`prove_reconciled_read`] with a caller-supplied prover context (for GPU/Blitzar MSM offload).
+/// The context threads through every store reconcile/present prover on the delta-stack read path
+/// (BGP, count, group, order, delta). Identical bytes and proof to the CPU convenience. (The
+/// optional term-less resolution witnesses — `attach_termless_*` — are attached afterward and their
+/// small render-belt MSMs stay on the default CPU context.)
+pub fn prove_reconciled_read_with_context(
+    context: &StoreProverContext<'_>,
+    query: &Query,
+    layers: &[&LayerCommitment],
+) -> Result<ReconciledReadProof, ReconciledReadError> {
     let LoweredBgp { atoms, joins, source, order, count, group } = lower_query(query)?;
     if count {
         // COUNT over the reconciled materialized present. `lower_query` guarantees
         // `source == Materialized` and `order == None`. The store bundle is the SAME reconcile +
         // present-BGP pair a plain read produces; the delivered answer is the single-cell
         // cardinality (`result_len`), re-derived and bound at verify via [`verify_read_bgp`].
-        let (reconcile, bgp, _rows) = prove_read_bgp(layers, &atoms, &joins)
+        let (reconcile, bgp, _rows) = prove_read_bgp_with_context(context, layers, &atoms, &joins)
             .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
         let cardinality = bgp.result_len;
         let result = PresentReadResult {
@@ -654,9 +670,9 @@ pub fn prove_reconciled_read(
     // for authentication, and the per-group aggregate is recomputed by the verifier.
     if let Some(agg) = group.as_ref().map(|spec| spec.agg) {
         let (reconcile, mut bgp, result) = match agg {
-            GroupAgg::Count => prove_read_group_count_bgp(layers, &atoms, &joins),
-            GroupAgg::Sum { .. } => prove_read_group_sum_bgp(layers, &atoms, &joins),
-            GroupAgg::Extrema { .. } => prove_read_group_extrema_bgp(layers, &atoms, &joins),
+            GroupAgg::Count => prove_read_group_count_bgp_with_context(context, layers, &atoms, &joins),
+            GroupAgg::Sum { .. } => prove_read_group_sum_bgp_with_context(context, layers, &atoms, &joins),
+            GroupAgg::Extrema { .. } => prove_read_group_extrema_bgp_with_context(context, layers, &atoms, &joins),
         }
         .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
         // Mint the term-less resolution witnesses into the child BGP proof so the SAME proof also
@@ -680,7 +696,7 @@ pub fn prove_reconciled_read(
         // Single-column full-key numeric OrderBy over the reconciled materialized present.
         (ReadSource::Materialized, Some(spec)) => {
             let (reconcile, mut bgp, mut order_proof, result) =
-                prove_read_order_bgp(layers, &atoms, &joins, spec.datatype, spec.direction)
+                prove_read_order_bgp_with_context(context, layers, &atoms, &joins, spec.datatype, spec.direction)
                     .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
             // Mint the term-less resolution witnesses (the child range atom's value↔term openings on
             // the BGP proof + the ordered output ids' openings on the order proof) so the SAME proof
@@ -691,7 +707,7 @@ pub fn prove_reconciled_read(
             (ReadProofInner::PresentOrder { reconcile, bgp, order: order_proof }, result)
         }
         (ReadSource::Materialized, None) => {
-            let (reconcile, bgp, result) = prove_read_bgp(layers, &atoms, &joins)
+            let (reconcile, bgp, result) = prove_read_bgp_with_context(context, layers, &atoms, &joins)
                 .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
             (ReadProofInner::Present { reconcile, bgp }, result)
         }
@@ -701,7 +717,7 @@ pub fn prove_reconciled_read(
                 ReadSource::Removals => DeltaSource::Removals,
                 ReadSource::Materialized => unreachable!(),
             };
-            let (proof, result) = prove_delta_read(layers, delta_source, &atoms, &joins)
+            let (proof, result) = prove_delta_read_with_context(context, layers, delta_source, &atoms, &joins)
                 .map_err(|e| ReconciledReadError::Store(e.to_string()))?;
             (ReadProofInner::Delta { proof }, result)
         }

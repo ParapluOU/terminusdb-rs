@@ -56,8 +56,9 @@ use terminus_store::proof::commitment::{
     LayerCommitment, VerifierCommitment, VerifierLayer,
 };
 use terminus_store::proof::envelope::{
-    plan_digest, prove_ordered_array_walk_reconciled, prove_ordered_list_walk_reconciled,
-    prove_reconciled_transitive_closure, resolve_reconciled_node_ids,
+    plan_digest, prove_ordered_array_walk_reconciled_with_context,
+    prove_ordered_list_walk_reconciled_with_context,
+    prove_reconciled_transitive_closure_with_context, resolve_reconciled_node_ids,
     resolve_relation_equality_constraint, resolve_tuple_disequality_pairs,
     verify_ordered_array_walk_reconciled, verify_ordered_list_walk_reconciled,
     verify_reconciled_transitive_closure, CollectionSumTemplate,
