@@ -1,7 +1,7 @@
     use super::*;
-    use crate::compare::Gte;
-    use crate::misc::{Collect, RangeMax, RangeMin};
-    use crate::query::And;
+    use terminusdb_woql2::compare::Gte;
+    use terminusdb_woql2::misc::{Collect, RangeMax, RangeMin};
+    use terminusdb_woql2::query::And;
 
     fn exact_extrema(max: bool) -> Query {
         let child = Query::And(And {

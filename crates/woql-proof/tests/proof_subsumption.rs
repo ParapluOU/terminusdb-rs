@@ -18,7 +18,7 @@ use terminus_store::proof::CanonicalObject;
 use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::compare::Subsumption;
-use terminusdb_woql2::proof::{plan_bgp, BgpPlanError};
+use terminusdb_woql_proof::proof::{plan_bgp, BgpPlanError};
 use terminusdb_woql2::query::Query;
 use terminusdb_woql2::value::NodeValue;
 

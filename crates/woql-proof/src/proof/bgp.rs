@@ -134,7 +134,7 @@ pub fn plan_bgp(query: &Query) -> Result<CompiledBgp, BgpPlanError> {
         // (single-predicate repeat / `Times`) routes to the edge-simple TupleDisequality planner.
         if matches!(
             path.pattern,
-            crate::path::PathPattern::Star(_) | crate::path::PathPattern::Plus(_)
+            terminusdb_woql2::path::PathPattern::Star(_) | terminusdb_woql2::path::PathPattern::Plus(_)
         ) {
             return plan_transitive_closure_path(
                 path,
@@ -730,7 +730,7 @@ pub(crate) fn infer_schema_domains(
 /// schemas (`OrIncompatibleSchema`) or namespaces (`OrIncompatibleNamespaces`), or a routing-collection
 /// conflict (`OrRoutingConflict`).
 pub(crate) fn plan_or_relation(
-    disjunction: &crate::query::Or,
+    disjunction: &terminusdb_woql2::query::Or,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
@@ -852,8 +852,8 @@ pub(crate) fn plan_or_relation(
 pub(crate) enum ReadOperator {
     Optional(Query),
     Not(Query),
-    Equals(crate::compare::Equals),
-    When(crate::control::When),
+    Equals(terminusdb_woql2::compare::Equals),
+    When(terminusdb_woql2::control::When),
 }
 
 /// True iff `query` (an `And`, or a bare leaf) carries a top-level `Optional` / `Not` / `Equals` /
@@ -910,15 +910,15 @@ pub(crate) enum EqualityOperand {
 /// node becomes a `Node` constant; a data literal becomes its canonical value constant. A `±0.0` /
 /// `NaN` FLOAT literal rejects closed (`FloatSpecialValue`) — its id-based equality diverges from WOQL
 /// numeric `=:=` — and a dictionary / list operand rejects closed (`EqualsUnsupportedOperand`).
-pub(crate) fn equality_operand(value: &crate::value::WoqlValue) -> Result<EqualityOperand, BgpPlanError> {
+pub(crate) fn equality_operand(value: &terminusdb_woql2::value::WoqlValue) -> Result<EqualityOperand, BgpPlanError> {
     match value {
-        crate::value::WoqlValue::Variable(variable) => {
+        terminusdb_woql2::value::WoqlValue::Variable(variable) => {
             Ok(EqualityOperand::Variable(variable.clone()))
         }
-        crate::value::WoqlValue::Node(iri) => Ok(EqualityOperand::Constant(CanonicalObject::Node(
+        terminusdb_woql2::value::WoqlValue::Node(iri) => Ok(EqualityOperand::Constant(CanonicalObject::Node(
             iri.clone().into_bytes(),
         ))),
-        crate::value::WoqlValue::Data(value) => {
+        terminusdb_woql2::value::WoqlValue::Data(value) => {
             // Reject-close a `±0.0`/`NaN` float equality constant. The store gives `-0.0`,
             // `+0.0`, and each `NaN` bit-pattern DISTINCT dictionary ids, so the gadget's
             // id-based equality diverges from WOQL numeric `=:=` for exactly these values
@@ -943,7 +943,7 @@ pub(crate) fn equality_operand(value: &crate::value::WoqlValue) -> Result<Equali
                 _ => unreachable!("value_constant_term returned a non-value"),
             }
         }
-        crate::value::WoqlValue::Dictionary(_) | crate::value::WoqlValue::List(_) => {
+        terminusdb_woql2::value::WoqlValue::Dictionary(_) | terminusdb_woql2::value::WoqlValue::List(_) => {
             Err(BgpPlanError::EqualsUnsupportedOperand)
         }
     }
@@ -1021,7 +1021,7 @@ pub(crate) fn constant_matches_domain(value: &CanonicalObject, domain: EqualityV
 /// rejects closed (`EqualsCoerciveNumeric`); any domain mismatch rejects closed (`EqualsDomainMismatch`).
 pub(crate) fn compile_equality_constraint(
     relation: &CompiledRelation,
-    equals: &crate::compare::Equals,
+    equals: &terminusdb_woql2::compare::Equals,
 ) -> Result<RelationEqualityPlan, BgpPlanError> {
     let left = equality_operand(&equals.left)?;
     let right = equality_operand(&equals.right)?;
@@ -1193,7 +1193,7 @@ pub(crate) fn plan_sequential_read_operators(
     let positive_query = if positive.len() == 1 {
         positive.pop().unwrap()
     } else {
-        Query::And(crate::query::And { and: positive })
+        Query::And(terminusdb_woql2::query::And { and: positive })
     };
     let left = plan_bgp(&positive_query)?;
     let mut relation = left.relation;

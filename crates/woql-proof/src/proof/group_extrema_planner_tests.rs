@@ -1,8 +1,8 @@
     use super::*;
-    use crate::compare::Gte;
-    use crate::misc::{RangeMax, RangeMin};
-    use crate::order::GroupBy;
-    use crate::query::And;
+    use terminusdb_woql2::compare::Gte;
+    use terminusdb_woql2::misc::{RangeMax, RangeMin};
+    use terminusdb_woql2::order::GroupBy;
+    use terminusdb_woql2::query::And;
 
     fn exact_min() -> Query {
         let child = Query::And(And {

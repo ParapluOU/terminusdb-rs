@@ -7743,13 +7743,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminusdb-woql2"
+name = "terminusdb-woql-proof"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
  "decimal-rs",
- "derive_builder",
  "dory-pcs",
  "hex",
  "num-bigint",
@@ -7762,6 +7761,25 @@ dependencies = [
  "tap",
  "tdb-succinct",
  "terminus-store 0.21.8",
+ "terminusdb-schema",
+ "terminusdb-schema-derive",
+ "terminusdb-woql2",
+ "thiserror 1.0.69",
+ "tokio 1.52.4",
+ "tracing",
+]
+
+[[package]]
+name = "terminusdb-woql2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "decimal-rs",
+ "derive_builder",
+ "serde",
+ "serde_json",
+ "tap",
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "thiserror 1.0.69",

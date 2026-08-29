@@ -30,14 +30,9 @@ pub mod value;
 // pub mod macros_refactored;
 // pub mod macros_refactored2;
 pub mod path_builder;
-#[cfg(feature = "proof")]
-pub mod proof;
-#[cfg(feature = "proof")]
-pub mod reconciled;
-/// Prover-backend selector (`StoreProverContext` + Blitzar types) surfaced at the
-/// crate root as `terminusdb_woql2::prover` for the high-level prove API.
-#[cfg(feature = "proof")]
-pub use proof::prover;
+// The Proof-of-WOQL compiler/executor (`proof`, `reconciled`, and the `prover`
+// backend selector) was extracted into the `terminusdb-woql-proof` crate; this
+// crate is the lightweight WOQL2 AST only.
 pub mod query_dsl;
 
 pub mod prelude {

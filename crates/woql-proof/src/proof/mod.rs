@@ -113,11 +113,11 @@ use tdb_succinct::tfc::decimal::storage_to_decimal;
 // the number→string cast. `rug::Integer` Display is base-10, matching SWI `format ~w`.
 use tdb_succinct::tfc::integer::storage_to_bigint;
 
-use crate::expression::{ArithmeticExpression, ArithmeticValue};
-use crate::misc::InRange;
-use crate::query::{And, Query};
-use crate::triple::Triple;
-use crate::value::{DataValue, ListOrVariable, NodeValue, Value};
+use terminusdb_woql2::expression::{ArithmeticExpression, ArithmeticValue};
+use terminusdb_woql2::misc::InRange;
+use terminusdb_woql2::query::{And, Query};
+use terminusdb_woql2::triple::Triple;
+use terminusdb_woql2::value::{DataValue, ListOrVariable, NodeValue, Value};
 use terminusdb_schema::{GraphType, XSDAnySimpleType};
 
 /// Prover-context selector re-exports for the high-level prove API.
@@ -139,7 +139,7 @@ pub mod prover {
     ///
     /// Usage:
     /// ```ignore
-    /// use terminusdb_woql2::prover::{BlitzarRuntime, BlitzarRuntimeConfig, ProverSetupTier, StoreProverContext};
+    /// use terminusdb_woql_proof::prover::{BlitzarRuntime, BlitzarRuntimeConfig, ProverSetupTier, StoreProverContext};
     /// let rt = StoreProverContext::initialize_blitzar(BlitzarRuntimeConfig { num_precomputed_generators: 0 });
     /// let ctx = StoreProverContext::blitzar(&rt, ProverSetupTier::Log20)?;
     /// let proved = compiled.prove_with_context(&ctx, &layer)?;

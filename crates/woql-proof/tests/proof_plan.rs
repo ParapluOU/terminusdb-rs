@@ -51,7 +51,7 @@ use dory_pcs::backends::arkworks::ArkFr;
 use dory_pcs::primitives::arithmetic::Field;
 
 use terminusdb_woql2::compare::Subsumption;
-use terminusdb_woql2::proof::{
+use terminusdb_woql_proof::proof::{
     compiled_query_digest, decode_executed_result_inputs, plan_bgp, BgpPlanError, CompiledBgp,
     CompiledRelation, CompiledRelationStatement, ExecutedResultInput, ExecutedResultValue,
     ProofGraph, StringNumericTarget,
@@ -1940,11 +1940,11 @@ fn bounded_when_compiles_prolog_success_plus_true_and_bounds_existential_locals(
     });
     let compiled = plan_bgp(&and_of(vec![tv("x", "p", "y"), when.clone()])).unwrap();
     assert_eq!(compiled.relation.schema, ["x", "y"]);
-    let terminusdb_woql2::proof::CompiledRelationStatement::When { expanded } = &compiled.relation.statement else { panic!("expected canonical When wrapper") };
-    let terminusdb_woql2::proof::CompiledRelationStatement::BagUnion { branches, mappings } = &expanded.statement else { panic!("expected successful branch bag-unioned with true") };
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::When { expanded } = &compiled.relation.statement else { panic!("expected canonical When wrapper") };
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::BagUnion { branches, mappings } = &expanded.statement else { panic!("expected successful branch bag-unioned with true") };
     assert_eq!(branches.len(), 2);
     assert_eq!(mappings, &[vec![0, 1], vec![0, 1]]);
-    assert!(matches!(branches[0].statement, terminusdb_woql2::proof::CompiledRelationStatement::InnerJoin { .. }));
+    assert!(matches!(branches[0].statement, terminusdb_woql_proof::proof::CompiledRelationStatement::InnerJoin { .. }));
 
     reject(when, BgpPlanError::WhenMissingOuter);
     let local_when = || Query::If(When {
@@ -1965,19 +1965,19 @@ fn bounded_when_compiles_prolog_success_plus_true_and_bounds_existential_locals(
     }))
     .unwrap();
     assert_eq!(selected.relation.schema, ["x", "y"]);
-    let terminusdb_woql2::proof::CompiledRelationStatement::When { expanded } =
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::When { expanded } =
         &selected.relation.statement
     else {
         panic!("expected When wrapper")
     };
-    let terminusdb_woql2::proof::CompiledRelationStatement::BagUnion { branches, .. } =
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::BagUnion { branches, .. } =
         &expanded.statement
     else {
         panic!("expected When bag union")
     };
     assert!(matches!(
         branches[0].statement,
-        terminusdb_woql2::proof::CompiledRelationStatement::BagProjection { .. }
+        terminusdb_woql_proof::proof::CompiledRelationStatement::BagProjection { .. }
     ));
 
     let counted = plan_bgp(&Query::Count(Count {
@@ -4028,7 +4028,7 @@ fn count_accepts_exact_projected_distinct_over_one_or_two_known_domains() {
     assert_eq!(compiled.relation.schema, ["x"]);
     assert!(matches!(
         compiled.relation.statement,
-        terminusdb_woql2::proof::CompiledRelationStatement::Distinct {
+        terminusdb_woql_proof::proof::CompiledRelationStatement::Distinct {
             ref key_columns, ..
         } if key_columns == &[0]
     ));
@@ -4049,7 +4049,7 @@ fn count_accepts_exact_projected_distinct_over_one_or_two_known_domains() {
     assert_eq!(compiled.relation.schema, ["x", "age"]);
     assert!(matches!(
         compiled.relation.statement,
-        terminusdb_woql2::proof::CompiledRelationStatement::Distinct {
+        terminusdb_woql_proof::proof::CompiledRelationStatement::Distinct {
             ref key_columns, ..
         } if key_columns == &[0, 1]
     ));
@@ -4068,7 +4068,7 @@ fn count_projected_distinct_composes_over_duplicate_bag_union() {
         count: dvar("count"),
     });
     let compiled = plan_bgp(&query).unwrap();
-    let terminusdb_woql2::proof::CompiledRelationStatement::Distinct { input, .. } =
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::Distinct { input, .. } =
         &compiled.relation.statement
     else {
         panic!("expected exact distinct wrapper")
@@ -4096,7 +4096,7 @@ fn count_projected_distinct_accepts_an_authenticated_ordered_child_but_hides_ord
         count: dvar("count"),
     });
     let compiled = plan_bgp(&query).unwrap();
-    let terminusdb_woql2::proof::CompiledRelationStatement::Distinct { input, .. } =
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::Distinct { input, .. } =
         &compiled.relation.statement
     else {
         panic!("expected exact distinct wrapper")
@@ -5376,7 +5376,7 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
     ])).unwrap();
     assert_eq!(compiled.relation.schema, ["x", "y"]);
     assert!(matches!(compiled.relation.statement,
-        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
+        terminusdb_woql_proof::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
             if key_indices == &[1, 0]));
     let duplicate_union = Query::Or(Or { or: vec![child.clone(), child.clone()] });
     let duplicate_compiled = plan_bgp(&Query::OrderBy(OrderBy {
@@ -5386,7 +5386,7 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
         ],
         query: Box::new(duplicate_union),
     })).unwrap();
-    let terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { input, .. } = &duplicate_compiled.relation.statement else { unreachable!() };
+    let terminusdb_woql_proof::proof::CompiledRelationStatement::ExactMultiOrder { input, .. } = &duplicate_compiled.relation.statement else { unreachable!() };
     assert!(input.as_bag_union().is_some());
     // SUBSET template: naming only `x` (of `[x, y]`) is a subset-key order — its invented ascending
     // tie-break over the unnamed `y` cannot be attested against TerminusDB's stable order, so it
@@ -5424,7 +5424,7 @@ fn exact_complete_row_multikey_order_compiles_and_rejects_key_mappings() {
     })).unwrap();
     assert_eq!(compiled3.relation.schema, ["x", "y", "z"]);
     assert!(matches!(compiled3.relation.statement,
-        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
+        terminusdb_woql_proof::proof::CompiledRelationStatement::ExactMultiOrder { ref key_indices, .. }
             if key_indices == &[2, 0, 1]));
 }
 
@@ -5539,7 +5539,7 @@ fn full_key_order_shapes_still_compile() {
     .unwrap();
     assert!(matches!(
         full_key.relation.statement,
-        terminusdb_woql2::proof::CompiledRelationStatement::ExactMultiOrder { .. }
+        terminusdb_woql_proof::proof::CompiledRelationStatement::ExactMultiOrder { .. }
     ));
 
     // A FULL-key order UNDER a slice compiles to an exact ordered slice.

@@ -312,7 +312,7 @@ pub(crate) fn generated_group_sum_constraint(
         Query::Less(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Lt),
         Query::Lte(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Le),
         Query::Equals(value) => {
-            use crate::value::WoqlValue;
+            use terminusdb_woql2::value::WoqlValue;
             match (&value.left, &value.right) {
                 (WoqlValue::Variable(candidate), WoqlValue::Data(value))
                     if candidate == variable =>

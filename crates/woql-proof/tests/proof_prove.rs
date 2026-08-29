@@ -39,7 +39,7 @@ use terminusdb_woql2::query::Eval;
 use terminusdb_woql2::control::{When, WoqlOptional};
 use terminusdb_woql2::control::{Distinct, Select, Using};
 use terminusdb_woql2::collection::{Length, Sum};
-use terminusdb_woql2::proof::{
+use terminusdb_woql_proof::proof::{
     compiled_query_digest, decode_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp,
     BgpPlanError, CompiledBgp, CompiledRelation, CompiledRelationStatement, ExecutedResultValue,
@@ -49,7 +49,7 @@ use terminusdb_woql2::triple::{
     AddedTriple, Data, DeletedTriple, Link, Triple, TripleNext, TriplePrevious, TripleSlice,
     TripleSliceRev,
 };
-use terminusdb_woql2::reconciled::{prove_reconciled_read, verify_and_resolve_reconciled_read};
+use terminusdb_woql_proof::reconciled::{prove_reconciled_read, verify_and_resolve_reconciled_read};
 use terminusdb_woql2::{
     misc::{Collect, Count, HashKey, InRange, Limit, RangeMax, RangeMin, Start, TripleCount},
     order::{GroupBy, Order, OrderBy, OrderTemplate},
@@ -631,7 +631,7 @@ fn assert_ground_navigation_result(
     layer: &Arc<LayerCommitment>,
     query: &Query,
     expected_len: usize,
-) -> (CompiledBgp, terminusdb_woql2::proof::ProvedBgp) {
+) -> (CompiledBgp, terminusdb_woql_proof::proof::ProvedBgp) {
     let compiled = plan_bgp(query).unwrap();
     assert!(compiled.relation.schema.is_empty());
     let proved = compiled.prove(layer).unwrap();
@@ -2672,8 +2672,8 @@ fn grouped_u32_sum_empty_and_outer_count_are_exact() {
 }
 
 fn resolved_group_extrema(
-    proved: &terminusdb_woql2::proof::ProvedBgp,
-    compiled: &terminusdb_woql2::proof::CompiledBgp,
+    proved: &terminusdb_woql_proof::proof::ProvedBgp,
+    compiled: &terminusdb_woql_proof::proof::CompiledBgp,
     layer: &LayerCommitment,
 ) -> Vec<(String, u32)> {
     let columns = proved

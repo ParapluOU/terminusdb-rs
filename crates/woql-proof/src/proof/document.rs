@@ -87,7 +87,7 @@ use super::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::document::ReadDocument;
+use terminusdb_woql2::document::ReadDocument;
 use terminus_store::proof::commitment::{database_root, validate_database_root, VerifierCommitmentRef};
 
 // The reconciled (delta-stack) instance-read machinery reused VERBATIM for increment 6a. A bound-subject
@@ -679,8 +679,8 @@ impl ResolvedDocument {
 /// exactly one stored subject.
 pub fn plan_read_document(read: &ReadDocument) -> Result<CompiledReadDocument, BgpPlanError> {
     let id = match &read.identifier {
-        crate::value::NodeValue::Node(iri) => iri.clone(),
-        crate::value::NodeValue::Variable(_) => {
+        terminusdb_woql2::value::NodeValue::Node(iri) => iri.clone(),
+        terminusdb_woql2::value::NodeValue::Variable(_) => {
             return Err(BgpPlanError::ReadDocumentUnboundIdentifier)
         }
     };
@@ -722,10 +722,10 @@ pub fn compile_read_document(query: &Query) -> Result<CompiledReadDocument, BgpP
 /// exactly. Used for the instance subject read AND every schema-graph frame read (the graph is chosen
 /// by WHICH commitment prove/verify anchors it to, not by the plan).
 fn bound_subject_bgp(subject_iri: &str) -> Result<CompiledBgp, BgpPlanError> {
-    plan_bgp(&Query::Triple(crate::triple::Triple {
-        subject: crate::value::NodeValue::Node(subject_iri.to_string()),
-        predicate: crate::value::NodeValue::Variable("p".to_string()),
-        object: crate::value::Value::Variable("o".to_string()),
+    plan_bgp(&Query::Triple(terminusdb_woql2::triple::Triple {
+        subject: terminusdb_woql2::value::NodeValue::Node(subject_iri.to_string()),
+        predicate: terminusdb_woql2::value::NodeValue::Variable("p".to_string()),
+        object: terminusdb_woql2::value::Value::Variable("o".to_string()),
         graph: None,
     }))
 }

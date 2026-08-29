@@ -73,7 +73,7 @@ use terminus_store::proof::reconcile::{
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject, ProofHash};
 
 use crate::proof::{plan_bgp, CompiledRelationStatement};
-use crate::query::Query;
+use terminusdb_woql2::query::Query;
 
 /// Every reason the reconciled read path refuses a query.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

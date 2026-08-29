@@ -3,14 +3,9 @@ name = "terminusdb-woql2"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-# Compile WOQL queries into and execute the authenticated Dory/sumcheck query
-# arguments implemented by the Parture terminus-store fork. Keeping this optional
-# prevents ordinary AST/client users from pulling the cryptographic stack.
-proof = ["dep:chrono", "dep:dory-pcs", "dep:hex", "dep:num-bigint", "dep:num-integer", "dep:num-rational", "dep:num-traits", "dep:sha2", "dep:tdb-succinct", "dep:terminus-store", "dep:thiserror"]
-blitzar-cpu = ["proof", "dory-pcs/blitzar-cpu", "terminus-store/blitzar-cpu"]
-blitzar-gpu = ["proof", "dory-pcs/blitzar-gpu", "terminus-store/blitzar-gpu"]
+# The Proof-of-WOQL compiler/executor was extracted into the `terminusdb-woql-proof`
+# crate. This crate is now the lightweight WOQL2 AST only and pulls no cryptographic
+# dependencies. Callers that want proving depend on `terminusdb-woql-proof`.
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -27,75 +22,12 @@ tap = "1.0"
 derive_builder = "0.20.2"
 decimal-rs = { version = "0.1.43", features = ["serde"] }
 tracing = { workspace = true }
-chrono = { workspace = true, optional = true }
-hex = { version = "0.4", optional = true }
-sha2 = { workspace = true, optional = true }
-
-# Optional Proof-of-WOQL compiler/executor dependencies. These are deliberately
-# feature-gated: the canonical AST remains lightweight unless a caller explicitly
-# asks for proof support.
-dory-pcs = { version = "0.4.1", path = "../../../dory", default-features = false, features = ["arkworks", "parallel"], optional = true }
-tdb-succinct = { version = "0.1.2", optional = true }
-terminus-store = { path = "../../../terminusdb-store-paraplu", optional = true }
-thiserror = { workspace = true, optional = true }
-# Exact PURE-RUST big rationals for the xsd:decimal/rational value layer (Floor, Divide, decimal
-# operands). num-bigint/num-rational are the same num-bigint backend the workspace's `rug` SHIM
-# (crates/rug-shim) already uses — deliberately GMP-free so the proof compiler stays
-# cross-compilable (WASM). Exact big-integer arithmetic reproduces the reference's
-# `casting:rational_to_decimal_string/3` (which is itself exact integer arithmetic) bit-for-bit.
-num-bigint = { version = "0.4", optional = true }
-num-rational = { version = "0.4", default-features = false, features = ["num-bigint"], optional = true }
-num-integer = { version = "0.1", optional = true }
-num-traits = { version = "0.2", optional = true }
+# Used by the RFC3339 date-literal macros in `macros.rs` (non-proof AST code).
+chrono = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1.0"
-# Construct xsd:decimal literals (XSDAnySimpleType::Decimal wraps decimal_rs::Decimal) in the
-# decimal/rational value-layer proof tests. Same version as the normal dependency above.
 decimal-rs = { version = "0.1.43", features = ["serde"] }
-
-# Added dependencies from the workspace
 thiserror = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-
-# Added dev-dependencies from the workspace
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-
-# The proof compiler/executor lives behind the optional `proof` feature (see
-# [features] above). These five integration tests exercise that cryptographic
-# stack (they reference `proof::`, `tdb_succinct`, `make_entry`, …), so they only
-# compile when `proof` is enabled. Declaring them explicitly with
-# `required-features = ["proof"]` stops Cargo's test auto-discovery from trying to
-# build them under DEFAULT features — where `cargo test -p terminusdb-woql2`
-# (no `--features proof`) would otherwise fail to compile on unresolved symbols.
-# The other integration tests in tests/ stay auto-discovered (they are non-proof),
-# and tests/proof_common/ is a shared helper module included by these five, not a
-# test target of its own.
-[[test]]
-name = "proof_plan"
-required-features = ["proof"]
-
-[[test]]
-name = "proof_prove"
-required-features = ["proof"]
-
-[[test]]
-name = "proof_reconciled"
-required-features = ["proof"]
-
-[[test]]
-name = "proof_subsumption"
-required-features = ["proof"]
-
-[[test]]
-name = "proof_read_document"
-required-features = ["proof"]
-
-# `cargo test` also compiles examples, and this one drives the same proof stack
-# (`tdb_succinct`, `terminus_store::proof`, …). Gate it identically so the DEFAULT
-# `cargo test -p terminusdb-woql2` build doesn't fail on those unresolved symbols;
-# it stays runnable via `--features proof`. All other examples are non-proof and
-# remain auto-discovered.
-[[example]]
-name = "proof_performance"
-required-features = ["proof"]

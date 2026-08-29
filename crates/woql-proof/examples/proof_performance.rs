@@ -29,7 +29,7 @@ use terminusdb_woql2::compare::Gte;
 use terminusdb_woql2::control::{Select, WoqlOptional};
 use terminusdb_woql2::misc::RangeMin;
 use terminusdb_woql2::order::GroupBy;
-use terminusdb_woql2::proof::{decode_verifier_commitment_and_verify_envelope, plan_bgp};
+use terminusdb_woql_proof::proof::{decode_verifier_commitment_and_verify_envelope, plan_bgp};
 use terminusdb_woql2::query::{And, Not, Or, Query};
 use terminusdb_woql2::triple::Triple;
 use terminusdb_woql2::value::{DataValue, NodeValue, Value};

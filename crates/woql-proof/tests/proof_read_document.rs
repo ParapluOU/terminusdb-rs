@@ -23,7 +23,7 @@ use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::{open_sync_memory_store, ValueTriple};
 
 use terminusdb_woql2::document::ReadDocument;
-use terminusdb_woql2::proof::{
+use terminusdb_woql_proof::proof::{
     plan_read_document, BgpPlanError, CompiledReadDocument, ProvedLinkTarget, QueryProofError,
     ResolvedValue,
 };

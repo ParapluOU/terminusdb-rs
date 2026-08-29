@@ -20,7 +20,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use tdb_succinct::TdbDataType;
 
 use terminusdb_woql2::query::Query;
-use terminusdb_woql2::reconciled::{
+use terminusdb_woql_proof::reconciled::{
     is_reconciled_read, prove_reconciled_read, verify_and_resolve_reconciled_read,
 };
 use terminusdb_woql2::triple::{AddedTriple, DeletedTriple};
@@ -521,7 +521,7 @@ fn woql_verify_rejects_proof_for_a_different_query() {
 /// `c4_reconcile_read_byte_in_matches_in_memory_and_rejects_substitution` covers the positive E2E).
 #[test]
 fn woql_reconciled_read_bgp_byte_in_rejects_delta_source_query() {
-    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_read_bgp, ReconciledReadError};
+    use terminusdb_woql_proof::reconciled::{decode_and_verify_reconciled_read_bgp, ReconciledReadError};
     let layers = filter_stack();
     let lref = refs(&layers);
     let head_root = lref.last().unwrap().resolution_root();
@@ -868,7 +868,7 @@ fn woql_count_over_delta_source_reject_closes() {
 /// proof blob all reject-close.
 #[test]
 fn woql_count_byte_in_matches_in_memory_and_rejects_substitution() {
-    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_count, ReconciledReadError};
+    use terminusdb_woql_proof::reconciled::{decode_and_verify_reconciled_count, ReconciledReadError};
 
     let layers = age_stack();
     let lref = refs(&layers);
@@ -1407,7 +1407,7 @@ fn group_sum_head_stack() -> Vec<Arc<LayerCommitment>> {
 
 #[test]
 fn woql_group_count_byte_in_matches_in_memory_and_rejects_substitution() {
-    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_group, ReconciledReadError};
+    use terminusdb_woql_proof::reconciled::{decode_and_verify_reconciled_group, ReconciledReadError};
 
     let layers = group_count_head_stack();
     let lref = refs(&layers);
@@ -1454,7 +1454,7 @@ fn woql_group_count_byte_in_matches_in_memory_and_rejects_substitution() {
 
 #[test]
 fn woql_group_sum_byte_in_matches_in_memory_and_rejects_cross_aggregate() {
-    use terminusdb_woql2::reconciled::decode_and_verify_reconciled_group;
+    use terminusdb_woql_proof::reconciled::decode_and_verify_reconciled_group;
 
     let layers = group_sum_head_stack();
     let lref = refs(&layers);
@@ -1499,7 +1499,7 @@ fn woql_group_sum_byte_in_matches_in_memory_and_rejects_cross_aggregate() {
 
 #[test]
 fn woql_group_extrema_byte_in_matches_in_memory_and_rejects_cross_kind() {
-    use terminusdb_woql2::reconciled::decode_and_verify_reconciled_group;
+    use terminusdb_woql_proof::reconciled::decode_and_verify_reconciled_group;
 
     let layers = group_sum_head_stack();
     let lref = refs(&layers);
@@ -1570,7 +1570,7 @@ fn order_head_stack() -> Vec<Arc<LayerCommitment>> {
 
 #[test]
 fn woql_order_byte_in_matches_in_memory_and_rejects_substitution() {
-    use terminusdb_woql2::reconciled::{decode_and_verify_reconciled_order, ReconciledReadError};
+    use terminusdb_woql_proof::reconciled::{decode_and_verify_reconciled_order, ReconciledReadError};
 
     let layers = order_head_stack();
     let lref = refs(&layers);

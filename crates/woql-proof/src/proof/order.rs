@@ -28,7 +28,7 @@ use super::*;
 /// (`OrderByUnsupportedValue`) — floats are excluded because the store's IEEE total order splits
 /// `-0.0`/`+0.0` and misplaces `NaN` versus WOQL numeric order.
 pub(crate) fn plan_exact_scalar_order(
-    order_by: &crate::order::OrderBy,
+    order_by: &terminusdb_woql2::order::OrderBy,
 ) -> Result<CompiledBgp, BgpPlanError> {
     if !(1..=3).contains(&order_by.ordering.len()) {
         return Err(BgpPlanError::OrderByUnsupportedShape);
@@ -77,8 +77,8 @@ pub(crate) fn plan_exact_scalar_order(
     // resulting deterministic lexicographic total order matches TerminusDB's `order_by/2` exactly.
     let mut key_indices = named_indices.clone();
     let mut directions = order_by.ordering.iter().map(|ordering| match ordering.order {
-        crate::order::Order::Asc => OrderDirection::Ascending,
-        crate::order::Order::Desc => OrderDirection::Descending,
+        terminusdb_woql2::order::Order::Asc => OrderDirection::Ascending,
+        terminusdb_woql2::order::Order::Desc => OrderDirection::Descending,
     }).collect::<Vec<_>>();
     for column in 0..child.relation.schema.len() {
         if !named_indices.contains(&column) {
@@ -343,7 +343,7 @@ pub(crate) fn constrain_ordered_triple_value_to_ground(
     let Value::Data(expected) = expected else {
         return Err(BgpPlanError::TripleValueOrderUnsupportedValue);
     };
-    let equals = crate::compare::Equals {
+    let equals = terminusdb_woql2::compare::Equals {
         left: Value::Variable(variable.to_owned()),
         right: Value::Data(expected.clone()),
     };
@@ -502,7 +502,7 @@ pub(crate) fn plan_ordered_triple_value_construct(
 /// resource must be a non-empty `.../instance` graph (`TripleCountUnsupportedResource`) and the count
 /// output a variable (`TripleCountOutputNotVariable`).
 pub(crate) fn plan_layer_triple_count(
-    count: &crate::misc::TripleCount,
+    count: &terminusdb_woql2::misc::TripleCount,
 ) -> Result<CompiledBgp, BgpPlanError> {
     let collection = count
         .resource
@@ -595,7 +595,7 @@ pub(crate) fn generated_triple_count_constraint(
         Query::Less(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Lt),
         Query::Lte(value) => range(&value.left, &value.right, GeneratedU64ComparisonOp::Le),
         Query::Equals(value) => {
-            use crate::value::WoqlValue;
+            use terminusdb_woql2::value::WoqlValue;
             match (&value.left, &value.right) {
                 (WoqlValue::Variable(candidate), WoqlValue::Data(value))
                     if candidate == variable =>

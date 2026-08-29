@@ -12,7 +12,7 @@ use proof_common::*;
 
 use terminus_store::proof::commitment::{LayerCommitment, VerifierCommitment};
 use terminus_store::{open_sync_memory_store, ValueTriple};
-use terminusdb_woql2::proof::plan_bgp;
+use terminusdb_woql_proof::proof::plan_bgp;
 
 use tdb_succinct::TdbDataType;
 

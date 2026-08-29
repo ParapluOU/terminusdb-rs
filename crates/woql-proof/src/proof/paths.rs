@@ -114,8 +114,8 @@ pub(crate) fn path_endpoint_term(value: &Value) -> Result<PathTerm, BgpPlanError
 /// full-triple disequality — see `build_disequality_pairs`) and is compiled by its own dedicated
 /// `plan_single_hop_wildcard` handler. Any compound pattern (even a single-element `Sequence([.])`
 /// or `Times(., 1, 1)`) returns `None`.
-pub(crate) fn single_hop_wildcard(pattern: &crate::path::PathPattern) -> Option<bool> {
-    use crate::path::PathPattern;
+pub(crate) fn single_hop_wildcard(pattern: &terminusdb_woql2::path::PathPattern) -> Option<bool> {
+    use terminusdb_woql2::path::PathPattern;
     match pattern {
         PathPattern::Predicate(pred) if pred.predicate.is_none() => Some(false),
         PathPattern::InversePredicate(pred) if pred.predicate.is_none() => Some(true),
@@ -129,8 +129,8 @@ pub(crate) fn single_hop_wildcard(pattern: &crate::path::PathPattern) -> Option<
 /// (`Sequence([., .])`, `Times(., n, n)`, a wildcard union branch, …). A FIXED-LENGTH multi-hop
 /// wildcard CHAIN (per `is_fixed_length_wildcard_chain`) is then routed to the deferred
 /// full-triple edge-simple disequality (W2); a wildcard in a non-chain position rejects closed.
-pub(crate) fn pattern_contains_wildcard(pattern: &crate::path::PathPattern) -> bool {
-    use crate::path::PathPattern;
+pub(crate) fn pattern_contains_wildcard(pattern: &terminusdb_woql2::path::PathPattern) -> bool {
+    use terminusdb_woql2::path::PathPattern;
     match pattern {
         PathPattern::Predicate(pred) => pred.predicate.is_none(),
         PathPattern::InversePredicate(pred) => pred.predicate.is_none(),
@@ -149,8 +149,8 @@ pub(crate) fn pattern_contains_wildcard(pattern: &crate::path::PathPattern) -> b
 /// Used AFTER a wildcard is known present to decide whether a multi-hop wildcard is the FIXED-LENGTH
 /// W2 case (route to the deferred full-triple disequality) or rejects closed. Predicate-blind: a
 /// concrete-only chain also returns `true`, but that path never reaches here (it is not a wildcard).
-pub(crate) fn is_fixed_length_wildcard_chain(pattern: &crate::path::PathPattern) -> bool {
-    use crate::path::PathPattern;
+pub(crate) fn is_fixed_length_wildcard_chain(pattern: &terminusdb_woql2::path::PathPattern) -> bool {
+    use terminusdb_woql2::path::PathPattern;
     match pattern {
         PathPattern::Predicate(_) | PathPattern::InversePredicate(_) => true,
         PathPattern::Sequence(seq) => seq.sequence.iter().all(is_fixed_length_wildcard_chain),
@@ -307,12 +307,12 @@ pub(crate) fn reject_non_bgp_typed_leaves_at(query: &Query, body_position: bool)
 ///
 /// The LITERAL-subject regime of `is_instance` (the XSD datatype lattice, `basetype_subsumption_of`,
 /// instance.pl:50-66) is structurally UNREACHABLE from woql2 `IsA`: its `element` field is a
-/// [`crate::value::NodeValue`], which is only a node IRI or a variable and cannot carry a typed
+/// [`terminusdb_woql2::value::NodeValue`], which is only a node IRI or a variable and cannot carry a typed
 /// literal, so a "literal isa" cannot be constructed here and needs no separate arm.
-pub(crate) fn isa_reject_reason(isa: &crate::compare::IsA) -> BgpPlanError {
+pub(crate) fn isa_reject_reason(isa: &terminusdb_woql2::compare::IsA) -> BgpPlanError {
     match &isa.type_of {
-        crate::value::NodeValue::Variable(_) => BgpPlanError::IsAVariableClass,
-        crate::value::NodeValue::Node(_) => BgpPlanError::IsASubsumptionUnsupported,
+        terminusdb_woql2::value::NodeValue::Variable(_) => BgpPlanError::IsAVariableClass,
+        terminusdb_woql2::value::NodeValue::Node(_) => BgpPlanError::IsASubsumptionUnsupported,
     }
 }
 
@@ -385,47 +385,47 @@ pub(crate) fn rewrite_query_paths(query: &Query, alloc: &mut FreshPathVars) -> R
         };
     Ok(match query {
         Query::Path(path) => lower_path(path, alloc)?,
-        Query::And(and) => Query::And(crate::query::And {
+        Query::And(and) => Query::And(terminusdb_woql2::query::And {
             and: and
                 .and
                 .iter()
                 .map(|q| rewrite_query_paths(q, alloc))
                 .collect::<Result<_, _>>()?,
         }),
-        Query::Or(or) => Query::Or(crate::query::Or {
+        Query::Or(or) => Query::Or(terminusdb_woql2::query::Or {
             or: or
                 .or
                 .iter()
                 .map(|q| rewrite_query_paths(q, alloc))
                 .collect::<Result<_, _>>()?,
         }),
-        Query::Not(not) => Query::Not(crate::query::Not {
+        Query::Not(not) => Query::Not(terminusdb_woql2::query::Not {
             query: rewrite_boxed(&not.query, alloc)?,
         }),
-        Query::Select(select) => Query::Select(crate::control::Select {
+        Query::Select(select) => Query::Select(terminusdb_woql2::control::Select {
             variables: select.variables.clone(),
             query: rewrite_boxed(&select.query, alloc)?,
         }),
-        Query::Distinct(distinct) => Query::Distinct(crate::control::Distinct {
+        Query::Distinct(distinct) => Query::Distinct(terminusdb_woql2::control::Distinct {
             variables: distinct.variables.clone(),
             query: rewrite_boxed(&distinct.query, alloc)?,
         }),
-        Query::Count(count) => Query::Count(crate::misc::Count {
+        Query::Count(count) => Query::Count(terminusdb_woql2::misc::Count {
             query: rewrite_boxed(&count.query, alloc)?,
             count: count.count.clone(),
         }),
-        Query::Using(using) => Query::Using(crate::control::Using {
+        Query::Using(using) => Query::Using(terminusdb_woql2::control::Using {
             collection: using.collection.clone(),
             query: rewrite_boxed(&using.query, alloc)?,
         }),
-        Query::From(from) => Query::From(crate::control::From {
+        Query::From(from) => Query::From(terminusdb_woql2::control::From {
             graph: from.graph.clone(),
             query: rewrite_boxed(&from.query, alloc)?,
         }),
-        Query::Pin(pin) => Query::Pin(crate::control::Pin {
+        Query::Pin(pin) => Query::Pin(terminusdb_woql2::control::Pin {
             query: rewrite_boxed(&pin.query, alloc)?,
         }),
-        Query::Immediately(immediately) => Query::Immediately(crate::control::Immediately {
+        Query::Immediately(immediately) => Query::Immediately(terminusdb_woql2::control::Immediately {
             query: rewrite_boxed(&immediately.query, alloc)?,
         }),
         other => other.clone(),
@@ -444,7 +444,7 @@ pub(crate) fn rewrite_query_paths(query: &Query, alloc: &mut FreshPathVars) -> R
 /// filter). Every other rejection (unbounded / wildcard / identity / edge capture)
 /// propagates unchanged.
 pub(crate) fn lower_path(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     alloc: &mut FreshPathVars,
 ) -> Result<Query, BgpPlanError> {
     if path.path.is_some() {
@@ -458,7 +458,7 @@ pub(crate) fn lower_path(
     // non-triple conjunct and rejects closed there.
     if matches!(
         path.pattern,
-        crate::path::PathPattern::Star(_) | crate::path::PathPattern::Plus(_)
+        terminusdb_woql2::path::PathPattern::Star(_) | terminusdb_woql2::path::PathPattern::Plus(_)
     ) {
         return Ok(Query::Path(path.clone()));
     }
@@ -505,12 +505,12 @@ pub(crate) fn lower_path(
 /// Top-level pattern lowering: may produce a bag union (`Or`) or a conjunctive chain
 /// projected to its endpoints (`Select` over `And`).
 pub(crate) fn lower_top(
-    pattern: &crate::path::PathPattern,
+    pattern: &terminusdb_woql2::path::PathPattern,
     source: &PathTerm,
     target: &PathTerm,
     alloc: &mut FreshPathVars,
 ) -> Result<Query, BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     match pattern {
         PathPattern::Or(_) => {
             let mut branches = Vec::new();
@@ -518,7 +518,7 @@ pub(crate) fn lower_top(
             match branches.len() {
                 0 => Err(BgpPlanError::PathEmptyPattern),
                 1 => Ok(branches.pop().unwrap()),
-                _ => Ok(Query::Or(crate::query::Or { or: branches })),
+                _ => Ok(Query::Or(terminusdb_woql2::query::Or { or: branches })),
             }
         }
         PathPattern::Times(times) if times.from != times.to => {
@@ -551,7 +551,7 @@ pub(crate) fn lower_top(
 /// Expand a bounded-range `Times(pat, a, b)` into a bag union over each exact length.
 /// Every length must lower to a single hop (multi-hop union branches reject closed).
 pub(crate) fn lower_times_range_union(
-    times: &crate::path::PathTimes,
+    times: &terminusdb_woql2::path::PathTimes,
     source: &PathTerm,
     target: &PathTerm,
     alloc: &mut FreshPathVars,
@@ -591,20 +591,20 @@ pub(crate) fn lower_times_range_union(
     match branches.len() {
         0 => Err(BgpPlanError::PathEmptyPattern),
         1 => Ok(branches.pop().unwrap()),
-        _ => Ok(Query::Or(crate::query::Or { or: branches })),
+        _ => Ok(Query::Or(terminusdb_woql2::query::Or { or: branches })),
     }
 }
 
 /// Flatten a union pattern into its single-hop alternative triples. Nested `Or`s
 /// flatten in source order; a multi-hop alternative rejects closed.
 pub(crate) fn lower_union_branches(
-    pattern: &crate::path::PathPattern,
+    pattern: &terminusdb_woql2::path::PathPattern,
     source: &PathTerm,
     target: &PathTerm,
     alloc: &mut FreshPathVars,
     out: &mut Vec<Query>,
 ) -> Result<(), BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     match pattern {
         PathPattern::Or(or) => {
             if or.or.is_empty() {
@@ -645,7 +645,7 @@ pub(crate) fn lower_union_branches(
 /// `source -> ... -> target` through fresh intermediates and appending each hop's
 /// triple and predicate string. Rejects any construct that would introduce a union.
 pub(crate) fn lower_chain(
-    pattern: &crate::path::PathPattern,
+    pattern: &terminusdb_woql2::path::PathPattern,
     source: &PathTerm,
     target: &PathTerm,
     alloc: &mut FreshPathVars,
@@ -653,7 +653,7 @@ pub(crate) fn lower_chain(
     predicates: &mut Vec<HopPredicate>,
     orientations: &mut Vec<HopOrientation>,
 ) -> Result<(), BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     // Resolve a hop's predicate to its emitted `NodeValue` term AND its `HopPredicate` classifier: a
     // CONCRETE IRI stays a bound node; a WILDCARD `.` becomes a FRESH predicate variable (root-bound
     // `Predicate`-namespace column) so the full-triple disequality reads the actual predicate id.
@@ -751,7 +751,7 @@ pub(crate) fn lower_chain(
 
 /// Lower the `n`-fold sequence of `pattern` into a chain `source -> ... -> target`.
 pub(crate) fn lower_n_fold(
-    pattern: &crate::path::PathPattern,
+    pattern: &terminusdb_woql2::path::PathPattern,
     n: u64,
     source: &PathTerm,
     target: &PathTerm,
@@ -823,7 +823,7 @@ pub(crate) fn build_chain_query(
     if hops == 1 {
         return Ok(triples.into_iter().next().unwrap());
     }
-    let body = Query::And(crate::query::And { and: triples });
+    let body = Query::And(terminusdb_woql2::query::And { and: triples });
     // Endpoint variables, in [subject, object] order, deduplicated (subject == object
     // is a legal cycle query binding a single variable).
     let mut endpoints: Vec<String> = Vec::new();
@@ -835,7 +835,7 @@ pub(crate) fn build_chain_query(
             endpoints.push(name.to_string());
         }
     }
-    Ok(Query::Select(crate::control::Select {
+    Ok(Query::Select(terminusdb_woql2::control::Select {
         variables: endpoints,
         query: Box::new(body),
     }))
@@ -1025,13 +1025,13 @@ pub(crate) fn project_path_endpoints(
 /// and the `plan_or_relation` union path; adds only the `TupleDisequality` selection and the endpoint
 /// projection.
 pub(crate) fn plan_deferred_repeated_predicate_path(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
     distincts: &[&[String]],
 ) -> Result<CompiledBgp, BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     if path.path.is_some() {
         return Err(BgpPlanError::PathWitnessCaptureUnsupported);
     }
@@ -1052,9 +1052,9 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
             }
             let mut branches = Vec::with_capacity((times.to - times.from + 1) as usize);
             for length in times.from..=times.to {
-                branches.push(Query::Path(crate::query::Path {
+                branches.push(Query::Path(terminusdb_woql2::query::Path {
                     subject: path.subject.clone(),
-                    pattern: PathPattern::Times(crate::path::PathTimes {
+                    pattern: PathPattern::Times(terminusdb_woql2::path::PathTimes {
                         times: times.times.clone(),
                         from: length,
                         to: length,
@@ -1063,7 +1063,7 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
                     path: None,
                 }));
             }
-            let disjunction = crate::query::Or { or: branches };
+            let disjunction = terminusdb_woql2::query::Or { or: branches };
             return plan_or_relation(
                 &disjunction,
                 selections,
@@ -1106,7 +1106,7 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
     let chain_query = if triples.len() == 1 {
         triples[0].clone()
     } else {
-        Query::And(crate::query::And { and: triples.clone() })
+        Query::And(terminusdb_woql2::query::And { and: triples.clone() })
     };
     let chain = plan_bgp(&chain_query)?;
     if chain.projection.is_some() || chain.count_variable.is_some() || chain.full_row_distinct {
@@ -1178,7 +1178,7 @@ pub(crate) fn plan_deferred_repeated_predicate_path(
 /// reuses the audited BGP compiler + endpoint projection. A both-bound single-hop wildcard is out of
 /// scope (rejected in `lower_path` before it reaches here); handled defensively below.
 pub(crate) fn plan_single_hop_wildcard(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
@@ -1264,13 +1264,13 @@ pub(crate) fn plan_single_hop_wildcard(
 /// over the closure's OWN deduped accumulator `A_K`; see the count-composition note below). Deferred
 /// (reject closed): compound sub-patterns, two free / two bound endpoints, wildcards, edge-list capture.
 pub(crate) fn plan_transitive_closure_path(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
     distincts: &[&[String]],
 ) -> Result<CompiledBgp, BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     if path.path.is_some() {
         return Err(BgpPlanError::PathWitnessCaptureUnsupported);
     }
@@ -1572,9 +1572,9 @@ pub(crate) fn plan_all_pairs_closure(
 /// dropped or added.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_all_pairs_compound_closure(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     reflexive: bool,
-    inner: &crate::path::PathPattern,
+    inner: &terminusdb_woql2::path::PathPattern,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
@@ -1798,9 +1798,9 @@ pub(crate) fn plan_both_bound_closure(
 /// ([`BgpPlanError::ClosureBothEndpointsBound`]) and count-gated ([`BgpPlanError::ClosureCountGateDeferred`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_wildcard_closure(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     reflexive: bool,
-    inner: &crate::path::PathPattern,
+    inner: &terminusdb_woql2::path::PathPattern,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
@@ -1864,9 +1864,9 @@ pub(crate) fn plan_wildcard_closure(
 /// concrete (a bound endpoint), so the all-pairs-`star` diagonal-injection concern does not arise here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_compound_closure(
-    path: &crate::query::Path,
+    path: &terminusdb_woql2::query::Path,
     reflexive: bool,
-    inner: &crate::path::PathPattern,
+    inner: &terminusdb_woql2::path::PathPattern,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
@@ -1952,11 +1952,11 @@ pub(crate) fn plan_compound_closure(
 /// `Triple(end, p, start)` (the edge points the other way). A wildcard predicate or a non-elementary
 /// (compound) sub-pattern rejects closed.
 fn single_hop_triple(
-    pattern: &crate::path::PathPattern,
+    pattern: &terminusdb_woql2::path::PathPattern,
     start: &PathTerm,
     end: &PathTerm,
 ) -> Result<(Query, String), BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     match pattern {
         PathPattern::Predicate(pred) => {
             let predicate = pred
@@ -2008,10 +2008,10 @@ fn single_hop_triple(
 /// Every other shape (a sequence of length ≠ 2, a same-predicate 2-sequence, a nested unbounded / `Times`
 /// body, or a non-elementary alternation branch) rejects closed.
 fn build_compound_edge(
-    inner: &crate::path::PathPattern,
-    path: &crate::query::Path,
+    inner: &terminusdb_woql2::path::PathPattern,
+    path: &terminusdb_woql2::query::Path,
 ) -> Result<CompiledRelation, BgpPlanError> {
-    use crate::path::PathPattern;
+    use terminusdb_woql2::path::PathPattern;
     // Fresh, collision-free start / end / mid variables (the edge relation is self-contained: its
     // columns are projected into the closure's single delivered column, so these names never alias a
     // user binding).
@@ -2035,7 +2035,7 @@ fn build_compound_edge(
                 // compound edge; the outer single-predicate fast path handles a bare predicate).
                 branches.pop().unwrap()
             } else {
-                Query::Or(crate::query::Or { or: branches })
+                Query::Or(terminusdb_woql2::query::Or { or: branches })
             }
         }
         PathPattern::Sequence(seq) => {
@@ -2049,7 +2049,7 @@ fn build_compound_edge(
             if p0 == p1 {
                 return Err(BgpPlanError::ClosureCompoundSequenceUnfaithful);
             }
-            Query::And(crate::query::And { and: vec![t0, t1] })
+            Query::And(terminusdb_woql2::query::And { and: vec![t0, t1] })
         }
         // WILDCARD `.` body: the full-triple projected edge `E' = π_{start,end}(Triple(start, ?p, end))`
         // (forward) or `π(Triple(end, ?p, start))` (inverse). Each `E'`-hop is ONE primitive edge — like a

@@ -26,10 +26,10 @@ pub(crate) enum SubsumptionEndpoint {
 
 /// Resolve one `Subsumption` endpoint `NodeValue` to a bound class IRI or a free variable. A
 /// `NodeValue` is only ever a node or a variable, so this is total (it never rejects).
-pub(crate) fn subsumption_endpoint(value: &crate::value::NodeValue) -> Result<SubsumptionEndpoint, BgpPlanError> {
+pub(crate) fn subsumption_endpoint(value: &terminusdb_woql2::value::NodeValue) -> Result<SubsumptionEndpoint, BgpPlanError> {
     match value {
-        crate::value::NodeValue::Node(iri) => Ok(SubsumptionEndpoint::Class(iri.clone())),
-        crate::value::NodeValue::Variable(name) => Ok(SubsumptionEndpoint::Variable(name.clone())),
+        terminusdb_woql2::value::NodeValue::Node(iri) => Ok(SubsumptionEndpoint::Class(iri.clone())),
+        terminusdb_woql2::value::NodeValue::Variable(name) => Ok(SubsumptionEndpoint::Variable(name.clone())),
     }
 }
 
@@ -53,7 +53,7 @@ pub(crate) fn subsumption_endpoint(value: &crate::value::NodeValue) -> Result<Su
 /// the user to write it. `reflexive = true` always (the `Class ⊑ Class` base case). Both endpoints
 /// FREE is rejected closed (a whole-schema pairs enumeration; deferred).
 pub(crate) fn plan_subsumption(
-    sub: &crate::compare::Subsumption,
+    sub: &terminusdb_woql2::compare::Subsumption,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
@@ -152,20 +152,20 @@ pub(crate) fn rdf_type_edge() -> LayerBgpPlan {
 /// conjunction) are deferred ([`BgpPlanError::IsASubsumptionUnsupported`]); the LITERAL-subject regime
 /// is structurally unrepresentable (`element` is a `NodeValue`, never a typed literal).
 pub(crate) fn plan_isa(
-    isa: &crate::compare::IsA,
+    isa: &terminusdb_woql2::compare::IsA,
     selections: &[(&[String], bool)],
     collection: Option<String>,
     count_variable: Option<String>,
     distincts: &[&[String]],
 ) -> Result<CompiledBgp, BgpPlanError> {
     let x_var = match &isa.element {
-        crate::value::NodeValue::Variable(v) => v.clone(),
+        terminusdb_woql2::value::NodeValue::Variable(v) => v.clone(),
         // A bound element is a ground existence check `<n> isa C`; deferred (needs a different shape).
-        crate::value::NodeValue::Node(_) => return Err(BgpPlanError::IsASubsumptionUnsupported),
+        terminusdb_woql2::value::NodeValue::Node(_) => return Err(BgpPlanError::IsASubsumptionUnsupported),
     };
     let class_iri = match &isa.type_of {
-        crate::value::NodeValue::Node(iri) => iri.clone(),
-        crate::value::NodeValue::Variable(_) => return Err(BgpPlanError::IsAVariableClass),
+        terminusdb_woql2::value::NodeValue::Node(iri) => iri.clone(),
+        terminusdb_woql2::value::NodeValue::Variable(_) => return Err(BgpPlanError::IsAVariableClass),
     };
     // The cross-root node is TOP-LEVEL only (it cannot be nested under a Store `Distinct`); a user
     // `Distinct` gate is therefore deferred. `Count`/`Select` are `CompiledBgp`-level (no nesting).
