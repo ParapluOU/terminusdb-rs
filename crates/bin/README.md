@@ -116,3 +116,70 @@ self-contained on a bare box.
 - First build: ~1-2 minutes (clones and compiles TerminusDB)
 - Subsequent builds: <1 second (uses cached binary)
 - Force rebuild: `TERMINUSDB_FORCE_REBUILD=1 cargo build`
+
+## Troubleshooting
+
+### `bindgen` (`swipl-fli`) fails: `unknown type name 'intmax_t'` / `Unable to find libclang`
+
+Building the FFI dylib runs `bindgen` (in the `swipl-fli` binding), which `dlopen`s a
+`libclang` and preprocesses SWI-Prolog's C headers. If `build.rs` panics with
+`Failed to build TerminusDB: make rust ... failed`, look for one of these upstream causes:
+
+1. **`error: unknown type name 'intmax_t' / 'uintptr_t'`** — bindgen loaded a `libclang`
+   whose version does **not** match the clang builtin *resource headers*
+   (`lib/clang/<v>/include`, which contain `<stdint.h>`/`<stddef.h>`) it was pointed at.
+   Most often the auto-provisioned `.deps/libclang-env` is internally inconsistent — e.g.
+   `lib/libclang.so → libclang.so.13` while only `lib/clang/22/include` is shipped (no
+   `clang/13`), so clang 13 can't find its builtins and a `-I .../clang/22/include` is the
+   wrong version.
+2. **`Unable to find libclang: ... libstdc++.so.6: cannot open shared object file`** — the
+   `libclang-<n>.so` was found but its runtime deps (libstdc++, libLLVM, libxml2, …) were
+   not on the loader path.
+
+**Fix — point at a *coherent* libclang (matching lib version + resource headers) whose deps
+load.** The simplest source is the host system LLVM. With `llvm-<N>` / `clang` installed:
+
+```sh
+export LIBCLANG_PATH=/usr/lib/llvm-<N>/lib
+export BINDGEN_EXTRA_CLANG_ARGS="-I/usr/lib/llvm-<N>/lib/clang/<N>/include"   # MATCHING version
+export LD_LIBRARY_PATH="/usr/lib/llvm-<N>/lib:$LD_LIBRARY_PATH"
+```
+
+If the distro splits libclang's runtime deps across dirs so it won't `dlopen`, symlink
+`libclang-<N>.so.1` **and its deps** (libstdc++, libLLVM.so.<N>, libxml2, …) into one
+directory and set `LIBCLANG_PATH`/`LD_LIBRARY_PATH` to that dir. The rest of the build env
+(SWI-Prolog, GMP, protoc, m4) is provisioned under `.deps/`; the full copy-pasteable recipe
+is [`../../../terminusdb/docs/QUERY_PROOF_RELEASE_TESTS.md`](../../../terminusdb/docs/QUERY_PROOF_RELEASE_TESTS.md).
+
+Then **build the FFI dylib directly once**, so `build.rs`'s staleness check skips its own
+`make rust` rebuild (which is where the bindgen step runs):
+
+```sh
+(cd <terminusdb-repo>/src/rust \
+   && cargo build -p terminusdb-dylib --release \
+   && cp target/release/libterminusdb_dylib.so librust.so)
+```
+
+`build.rs` compares `src/rust/librust.so` against the newest Rust-source mtime; a freshly
+built `librust.so` makes it skip the rebuild entirely, so downstream `cargo` builds succeed.
+
+> **Note:** `build.rs` auto-provisions a `.deps` libclang and injects the matching resource
+> `-I` **only when `LIBCLANG_PATH` is unset** (i.e. when it self-provisions). If you set
+> `LIBCLANG_PATH`, you must also set `BINDGEN_EXTRA_CLANG_ARGS` yourself, as above.
+
+### Reusing the resolved env: `.deps/build-env.sh`
+
+After a **successful** build, `build.rs` writes the exact native build environment it resolved
+to `.deps/build-env.sh` — `PATH`, `SWI_HOME_DIR`, `LD_LIBRARY_PATH`, the GMP include/lib/pkg-config
+dirs, `CFLAGS`/`CXXFLAGS`, and `LIBCLANG_PATH`/`BINDGEN_EXTRA_CLANG_ARGS` (whichever libclang was in
+effect, self-provisioned or one you set). `source` it to reproduce that env for a manual dylib
+rebuild without re-deriving the `.deps` paths:
+
+```sh
+. modules/terminusdb-rs/crates/bin/.deps/build-env.sh
+(cd modules/terminusdb/src/rust && cargo build -p terminusdb-dylib --release \
+   && cp target/release/libterminusdb_dylib.so librust.so)
+```
+
+(The file is regenerated only when `build.rs` actually runs, so it reflects the most recent
+successful build.)
