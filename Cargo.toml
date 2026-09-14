@@ -9,6 +9,7 @@ members = [
     "crates/manager",
     "crates/mcp-server",
     "crates/orm",
+    "crates/proof-model-tests",
     "crates/relation",
     "crates/relation/derive",
     "crates/rug-shim",

@@ -1,0 +1,56 @@
+[package]
+name = "terminusdb-proof-model-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end Proof-of-WOQL tests: differential Prolog-oracle fidelity, replicate-over-HTTP then prove offline, and DB-free verification."
+
+# Moved from the Parture workspace (lib/proof-model-tests): every test here is
+# generic TerminusDB/proof-stack machinery — the real embedded server, the
+# Prolog-as-oracle differential harness, and the HTTP replication flow. The only
+# Parture-specific test (catalog_proof, over the parture_catalog domain model)
+# stayed behind in the Parture workspace.
+
+[features]
+# Validate the Blitzar (CPU-MSM / GPU) prover backend end-to-end. Forwards to the
+# underlying proof crates (NORMAL deps, so the feature forwards cleanly).
+blitzar-cpu = ["terminusdb-woql-proof/blitzar-cpu", "terminus-store/blitzar-cpu"]
+blitzar-gpu = ["terminusdb-woql-proof/blitzar-gpu", "terminus-store/blitzar-gpu"]
+
+[dependencies]
+# The woql2 compiler with the authenticated-proof backend (pulls terminus-store +
+# Dory transitively).
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-woql-proof = { path = "../woql-proof" }
+terminusdb-schema = { path = "../schema" }
+# The committed terminus-store layer (ValueTriple, LayerCommitment, prove/verify).
+# Same sibling-fork path dependency the woql-proof crate uses.
+terminus-store = { path = "../../../terminusdb-store-paraplu" }
+
+[dev-dependencies]
+# Seeded, reproducible PRNG for the phase-3 generative differential fuzzer.
+rand = "0.8"
+# Order-preserving value encodings (make_entry / TypedDictEntry) for value triples.
+# One Cargo source identity with woql2/terminus-store via the workspace root's
+# [patch.crates-io] pin.
+tdb-succinct = "0.1.2"
+# The embedded, proof-capable TerminusDB server (spawns the built SWI-Prolog
+# `terminusdb` binary as a child process; its store IS the ParapluOU fork, so its
+# packs carry proof commitments). build.rs builds/caches the server; set
+# TERMINUSDB_SOURCE if the sibling terminusdb checkout cannot be found.
+terminusdb-bin = { path = "../bin" }
+# The HTTP client (create DB + WOQL AddTriple over `/api/*`). NOTE: this client
+# has NO terminus-store dependency (it is pure reqwest), so adding it does NOT
+# split terminus-store — the fork path store above stays the single copy that the
+# import/prove handles link against.
+terminusdb-client = { path = "../client" }
+# Raw `/api/pack` GET (the client exposes no raw-pack accessor): a genuine TCP
+# socket call to the running server. Features unify with terminusdb-client's own
+# reqwest (default-tls etc.), so this adds no new system dependency.
+reqwest = "0.12"
+# Drives the async server/client/HTTP phase; the sync store import+prove runs
+# afterwards on the test thread (terminus-store's `task_sync` uses its OWN global
+# runtime, so store calls must NOT happen inside a `block_on`).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+anyhow = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
