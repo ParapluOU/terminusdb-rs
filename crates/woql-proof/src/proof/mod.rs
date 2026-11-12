@@ -66,8 +66,8 @@ use terminus_store::proof::envelope::{
     GeneratedU64ComparisonOp, LayerBgpEnvelope, OrderedArrayWalkReconciledProof,
     OrderedListWalkReconciledProof, ReconciledClosureProof,
     RecursiveRelationEnvelope, RecursiveRelationProof, RelationEqualityPlan, RelationProofPlan,
-    RelationProofPlanKind, TransitiveClosureFixpoint, TransitiveClosureRound, TransitiveClosureSeed,
-    TupleDisequalityNode, TupleDisequalityPairPlan,
+    RelationProofPlanKind, TermlessRelationEnvelope, TransitiveClosureFixpoint,
+    TransitiveClosureRound, TransitiveClosureSeed, TupleDisequalityNode, TupleDisequalityPairPlan,
     MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
 };
 use terminus_store::proof::disequality::{verify_tuple_disequality, TupleDisequalityProof};

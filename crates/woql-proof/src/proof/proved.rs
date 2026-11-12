@@ -2386,6 +2386,35 @@ impl ProvedBgp {
         envelope.encode()
     }
 
+    /// Encode the TERM-LESS single-layer envelope: the same checked operator-tree envelope as
+    /// [`Self::encode_envelope`], plus the Merkle resolution witness for exactly the ids its
+    /// verification resolves — so it verifies against the O(1) TERM-LESS `VerifierCommitment`
+    /// (`LayerCommitment::verifier_commitment_termless`) and its size follows the result, not the
+    /// catalog. `layer` is the prover's term-bearing BASE sidecar. Fails closed for a statement
+    /// whose verification reads dictionary values or catalogs (see
+    /// `terminus_store::proof::envelope::require_termless_plan`). Verify with
+    /// [`decode_termless_and_verify_envelope`].
+    pub fn encode_termless_envelope(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        trusted_resolution_root: ProofHash,
+    ) -> std::io::Result<Vec<u8>> {
+        let digest = compiled_query_digest(compiled)?;
+        let plan = relation_proof_plan(&compiled.relation, digest)?;
+        // Gate the statement shape BEFORE the (expensive) checked materialization.
+        terminus_store::proof::envelope::require_termless_plan(&plan)?;
+        let commitment_root = expect_resolution_root(layer, trusted_resolution_root)?;
+        self.verify_relation(&compiled.relation, layer, commitment_root, digest)?;
+        let envelope = self.recursive_envelope_after_verification(
+            &compiled.relation,
+            layer,
+            commitment_root,
+            digest,
+        )?;
+        TermlessRelationEnvelope::from_envelope(envelope, layer, &plan)?.encode()
+    }
+
     /// Materialize an envelope after the caller has verified the complete root relation.
     /// This must remain private: decoded/external envelopes still go through the full
     /// recursive `RecursiveRelationEnvelope::verify` path.

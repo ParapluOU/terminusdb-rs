@@ -49,6 +49,12 @@ pub fn decode_and_verify_envelope(
         ));
     }
     envelope.verify(layer, view.state.commitment_root, &plan)?;
+    verified_bgp_envelope(envelope)
+}
+
+/// Shape a VERIFIED store envelope into the caller-facing result: the proven relation plus its
+/// delivered (root-authenticated) terms. Only called after the envelope verified.
+fn verified_bgp_envelope(envelope: RecursiveRelationEnvelope) -> std::io::Result<VerifiedBgpEnvelope> {
     let nullable = envelope
         .result_descriptors
         .iter()
@@ -111,6 +117,27 @@ pub fn decode_verifier_commitment_and_verify_envelope(
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
     decode_and_verify_envelope(envelope_bytes, compiled, &commitment, trusted_resolution_root)
+}
+
+/// Decode and verify a TERM-LESS single-layer envelope ([`ProvedBgp::encode_termless_envelope`])
+/// against the encoded TERM-LESS `VerifierCommitment` of one BASE layer and the caller's trusted
+/// `resolution_root` — DB-free, byte-in, driven by the caller's OWN compiled query
+/// (anti-substitution). Every delivered term is resolved ONLY through the shipped Merkle openings,
+/// each re-verified against the Merkle roots the trusted root binds; a missing, extra, duplicated,
+/// forged or foreign opening, a term-bearing commitment, or a statement outside the term-less
+/// fragment rejects. Parsing alone never confers verification status.
+pub fn decode_termless_and_verify_envelope(
+    envelope_bytes: &[u8],
+    compiled: &CompiledBgp,
+    verifier_commitment_bytes: &[u8],
+    trusted_resolution_root: ProofHash,
+) -> std::io::Result<VerifiedBgpEnvelope> {
+    let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
+    let termless = TermlessRelationEnvelope::decode(envelope_bytes)?;
+    let digest = compiled_query_digest(compiled)?;
+    let plan = relation_proof_plan(&compiled.relation, digest)?;
+    termless.verify(&commitment, trusted_resolution_root, &plan)?;
+    verified_bgp_envelope(termless.envelope)
 }
 
 /// Prove a top-level WOQL `Eval`: prove the operand-binding child through the Store, then
