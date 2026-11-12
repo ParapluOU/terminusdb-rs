@@ -2415,6 +2415,32 @@ impl ProvedBgp {
         TermlessRelationEnvelope::from_envelope(envelope, layer, &plan)?.encode()
     }
 
+    /// Encode the single-layer envelope over one BASE `layer`, in the smallest form that proves
+    /// this statement: [`Self::encode_termless_envelope`] (size follows the result) when the query
+    /// lies in the term-less scope and its witness needs no dictionary scan, otherwise
+    /// [`Self::encode_envelope`] — exactly the term-bearing proof every shape always had, so a size
+    /// optimization never stops a query from proving. Returns the form with the bytes (the bytes
+    /// also name it in their framing). Verify with [`decode_single_layer_and_verify_envelope`]
+    /// against [`single_layer_verifier_commitment`] of the same layer and form.
+    pub fn encode_single_layer_envelope(
+        &self,
+        compiled: &CompiledBgp,
+        layer: &LayerCommitment,
+        trusted_resolution_root: ProofHash,
+    ) -> std::io::Result<(SingleLayerEnvelopeForm, Vec<u8>)> {
+        if single_layer_termless_eligible(compiled)? {
+            // The term-less witness fails closed for a data-dependent catalog read (an absent
+            // constant's nonmembership scan); the term-bearing form proves it.
+            if let Ok(bytes) = self.encode_termless_envelope(compiled, layer, trusted_resolution_root) {
+                return Ok((SingleLayerEnvelopeForm::Termless, bytes));
+            }
+        }
+        Ok((
+            SingleLayerEnvelopeForm::TermBearing,
+            self.encode_envelope(compiled, layer, trusted_resolution_root)?,
+        ))
+    }
+
     /// Materialize an envelope after the caller has verified the complete root relation.
     /// This must remain private: decoded/external envelopes still go through the full
     /// recursive `RecursiveRelationEnvelope::verify` path.
