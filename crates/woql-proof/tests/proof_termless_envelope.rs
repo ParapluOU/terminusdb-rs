@@ -13,7 +13,7 @@ use terminus_store::{open_sync_memory_store, ValueTriple};
 use terminusdb_woql_proof::proof::{
     decode_single_layer_and_verify_envelope, decode_termless_and_verify_envelope,
     decode_verifier_commitment_and_verify_envelope, plan_bgp, single_layer_termless_eligible,
-    single_layer_verifier_commitment, SingleLayerEnvelopeForm,
+    single_layer_verifier_commitment, SingleLayerEnvelopeForm, TrustedRoot,
 };
 
 use tdb_succinct::TdbDataType;
@@ -49,36 +49,36 @@ fn termless_envelope_verifies_byte_in_and_matches_term_bearing() {
             let reference =
                 decode_verifier_commitment_and_verify_envelope(&reference_bytes, &compiled, &bearing, root)
                     .unwrap();
-            let bytes = proved.encode_termless_envelope(&compiled, &lc, root).unwrap();
-            let verified = decode_termless_and_verify_envelope(&bytes, &compiled, &termless, root).unwrap();
+            let bytes = proved.encode_termless_envelope(&compiled, &lc, TrustedRoot::Bare(root)).unwrap();
+            let verified = decode_termless_and_verify_envelope(&bytes, &compiled, &termless, TrustedRoot::Bare(root)).unwrap();
             assert_eq!(verified.result_objects, reference.result_objects);
             assert_eq!(verified.proved.result_len, reference.proved.result_len);
             assert!(verified.proved.result_len > 0);
 
             // A term-BEARING commitment is not accepted on the term-less path.
-            assert!(decode_termless_and_verify_envelope(&bytes, &compiled, &bearing, root).is_err());
+            assert!(decode_termless_and_verify_envelope(&bytes, &compiled, &bearing, TrustedRoot::Bare(root)).is_err());
             // The term-less envelope is not a term-bearing envelope, and vice versa.
             assert!(decode_verifier_commitment_and_verify_envelope(&bytes, &compiled, &bearing, root).is_err());
-            assert!(decode_termless_and_verify_envelope(&reference_bytes, &compiled, &termless, root).is_err());
+            assert!(decode_termless_and_verify_envelope(&reference_bytes, &compiled, &termless, TrustedRoot::Bare(root)).is_err());
             // A term-less commitment through the TERM-BEARING envelope path fails closed.
             assert!(decode_verifier_commitment_and_verify_envelope(&reference_bytes, &compiled, &termless, root).is_err());
 
             // Witness stripped (re-framed honestly, so only the missing openings differ).
             let mut stripped = TermlessRelationEnvelope::decode(&bytes).unwrap();
             stripped.openings = ResolutionOpenings::default();
-            assert!(decode_termless_and_verify_envelope(&stripped.encode().unwrap(), &compiled, &termless, root).is_err());
+            assert!(decode_termless_and_verify_envelope(&stripped.encode().unwrap(), &compiled, &termless, TrustedRoot::Bare(root)).is_err());
         }
 
         // Another catalog's commitment + root, and the right commitment under another root.
         let other = node_layer(&[("p", "knows", "q"), ("q", "knows", "r")]);
         let other_termless = other.verifier_commitment_termless().unwrap().encode().unwrap();
         let compiled = plan_bgp(&tv("s", "knows", "o")).unwrap();
-        let bytes = compiled.prove(&lc).unwrap().encode_termless_envelope(&compiled, &lc, root).unwrap();
-        assert!(decode_termless_and_verify_envelope(&bytes, &compiled, &other_termless, other.resolution_root()).is_err());
-        assert!(decode_termless_and_verify_envelope(&bytes, &compiled, &termless, other.resolution_root()).is_err());
+        let bytes = compiled.prove(&lc).unwrap().encode_termless_envelope(&compiled, &lc, TrustedRoot::Bare(root)).unwrap();
+        assert!(decode_termless_and_verify_envelope(&bytes, &compiled, &other_termless, TrustedRoot::Bare(other.resolution_root())).is_err());
+        assert!(decode_termless_and_verify_envelope(&bytes, &compiled, &termless, TrustedRoot::Bare(other.resolution_root())).is_err());
         // A different query (anti-substitution).
         let likes = plan_bgp(&tv("s", "likes", "o")).unwrap();
-        assert!(decode_termless_and_verify_envelope(&bytes, &likes, &termless, root).is_err());
+        assert!(decode_termless_and_verify_envelope(&bytes, &likes, &termless, TrustedRoot::Bare(root)).is_err());
     });
 }
 
@@ -95,7 +95,7 @@ fn termless_envelope_fails_closed_for_value_reading_queries() {
         let lc = (*builder.commit().unwrap().proof_commitment().unwrap()).clone();
         let compiled = plan_bgp(&and_of(vec![tv("m", "score", "v"), greater(dvar("v"), duint(15))])).unwrap();
         let proved = compiled.prove(&lc).unwrap();
-        assert!(proved.encode_termless_envelope(&compiled, &lc, lc.resolution_root()).is_err());
+        assert!(proved.encode_termless_envelope(&compiled, &lc, TrustedRoot::Bare(lc.resolution_root())).is_err());
     });
 }
 
@@ -126,13 +126,13 @@ fn single_layer_dispatch_proves_every_shape_and_binds_form_to_commitment() {
             (range.clone(), false, TermBearing, 2),
         ] {
             let compiled = plan_bgp(&query).unwrap();
-            assert_eq!(single_layer_termless_eligible(&compiled).unwrap(), eligible);
+            assert_eq!(single_layer_termless_eligible(&compiled, TrustedRoot::Bare(root)).unwrap(), eligible);
             let proved = compiled.prove(&lc).unwrap();
-            let (used, bytes) = proved.encode_single_layer_envelope(&compiled, &lc, root).unwrap();
+            let (used, bytes) = proved.encode_single_layer_envelope(&compiled, &lc, TrustedRoot::Bare(root)).unwrap();
             assert_eq!(used, form);
             let commitment = single_layer_verifier_commitment(&lc, form).unwrap();
             let (verified_form, verified) =
-                decode_single_layer_and_verify_envelope(&bytes, &compiled, &commitment, root).unwrap();
+                decode_single_layer_and_verify_envelope(&bytes, &compiled, &commitment, TrustedRoot::Bare(root)).unwrap();
             assert_eq!(verified_form, form);
             assert_eq!(verified.proved.result_len, rows);
             let (right_ref, wrong_ref) = match form {
@@ -141,28 +141,76 @@ fn single_layer_dispatch_proves_every_shape_and_binds_form_to_commitment() {
             };
             assert_eq!(&commitment, right_ref);
             // The other commitment kind for the same layer and root rejects.
-            assert!(decode_single_layer_and_verify_envelope(&bytes, &compiled, wrong_ref, root).is_err());
+            assert!(decode_single_layer_and_verify_envelope(&bytes, &compiled, wrong_ref, TrustedRoot::Bare(root)).is_err());
             // Another root rejects.
             let mut other_root = root;
             other_root[0] ^= 1;
-            assert!(decode_single_layer_and_verify_envelope(&bytes, &compiled, right_ref, other_root).is_err());
+            assert!(decode_single_layer_and_verify_envelope(&bytes, &compiled, right_ref, TrustedRoot::Bare(other_root)).is_err());
         }
 
         // A term-less artifact never answers an out-of-scope query, whatever commitment rides along.
         let knows = plan_bgp(&tv("s", "knows", "o")).unwrap();
-        let (_, termless_bytes) = knows.prove(&lc).unwrap().encode_single_layer_envelope(&knows, &lc, root).unwrap();
+        let (_, termless_bytes) = knows.prove(&lc).unwrap().encode_single_layer_envelope(&knows, &lc, TrustedRoot::Bare(root)).unwrap();
         let range = plan_bgp(&range).unwrap();
-        assert!(decode_single_layer_and_verify_envelope(&termless_bytes, &range, &termless_ref, root).is_err());
-        assert!(decode_single_layer_and_verify_envelope(&termless_bytes, &range, &bearing_ref, root).is_err());
+        assert!(decode_single_layer_and_verify_envelope(&termless_bytes, &range, &termless_ref, TrustedRoot::Bare(root)).is_err());
+        assert!(decode_single_layer_and_verify_envelope(&termless_bytes, &range, &bearing_ref, TrustedRoot::Bare(root)).is_err());
         // A term-bearing proof of an in-scope query verifies only against the term-bearing commitment.
         let bearing_bytes = knows.prove(&lc).unwrap().encode_envelope(&knows, &lc, root).unwrap();
         let (form, verified) =
-            decode_single_layer_and_verify_envelope(&bearing_bytes, &knows, &bearing_ref, root).unwrap();
+            decode_single_layer_and_verify_envelope(&bearing_bytes, &knows, &bearing_ref, TrustedRoot::Bare(root)).unwrap();
         assert_eq!((form, verified.proved.result_len), (TermBearing, 1));
-        assert!(decode_single_layer_and_verify_envelope(&bearing_bytes, &knows, &termless_ref, root).is_err());
+        assert!(decode_single_layer_and_verify_envelope(&bearing_bytes, &knows, &termless_ref, TrustedRoot::Bare(root)).is_err());
         // Another query (anti-substitution) and garbage framing reject.
         let likes = plan_bgp(&tv("s", "likes", "o")).unwrap();
-        assert!(decode_single_layer_and_verify_envelope(&termless_bytes, &likes, &termless_ref, root).is_err());
-        assert!(decode_single_layer_and_verify_envelope(b"not an envelope", &knows, &termless_ref, root).is_err());
+        assert!(decode_single_layer_and_verify_envelope(&termless_bytes, &likes, &termless_ref, TrustedRoot::Bare(root)).is_err());
+        assert!(decode_single_layer_and_verify_envelope(b"not an envelope", &knows, &termless_ref, TrustedRoot::Bare(root)).is_err());
+    });
+}
+
+/// Over an ATTESTED root every single-layer statement ships term-less: an absent constant (sorted
+/// index absence) and a range filter (authentic value columns + root facts) included, with the
+/// term-bearing reference's rows. The same artifacts never verify under BARE (out of its scope or
+/// carrying lookups only an attested verifier consumes).
+#[test]
+fn attested_dispatch_ships_every_shape_term_less() {
+    use SingleLayerEnvelopeForm::Termless;
+    big_stack(|| {
+        let store = open_sync_memory_store();
+        let builder = store.create_base_layer().unwrap();
+        for (s, score) in [("a", 10u32), ("b", 20), ("c", 30)] {
+            builder.add_value_triple(ValueTriple::new_value(&iri(s), &iri("score"), u32::make_entry(&score))).unwrap();
+        }
+        builder.add_value_triple(ValueTriple::new_node(&iri("a"), &iri("knows"), &iri("b"))).unwrap();
+        let lc = (*builder.commit().unwrap().proof_commitment().unwrap()).clone();
+        let root = lc.resolution_root();
+        let attested = TrustedRoot::Attested(root);
+        let termless_ref = lc.verifier_commitment_termless().unwrap().encode().unwrap();
+        let bearing_ref = lc.verifier_commitment().unwrap().encode().unwrap();
+        for (query, rows) in [
+            (tv("s", "knows", "o"), 1),
+            (tv_obj_node("s", "knows", "missing"), 0),
+            (and_of(vec![tv("m", "score", "v"), greater(dvar("v"), duint(15))]), 2),
+        ] {
+            let compiled = plan_bgp(&query).unwrap();
+            assert!(single_layer_termless_eligible(&compiled, attested).unwrap());
+            let proved = compiled.prove(&lc).unwrap();
+            let reference = decode_verifier_commitment_and_verify_envelope(
+                &proved.encode_envelope(&compiled, &lc, root).unwrap(), &compiled, &bearing_ref, root,
+            )
+            .unwrap();
+            let (form, bytes) = proved.encode_single_layer_envelope(&compiled, &lc, attested).unwrap();
+            assert_eq!(form, Termless);
+            let (verified_form, verified) =
+                decode_single_layer_and_verify_envelope(&bytes, &compiled, &termless_ref, attested).unwrap();
+            assert_eq!(verified_form, Termless);
+            assert_eq!(verified.proved.result_len, rows);
+            assert_eq!(verified.result_objects, reference.result_objects);
+            // The term-bearing commitment never answers a term-less artifact.
+            assert!(decode_single_layer_and_verify_envelope(&bytes, &compiled, &bearing_ref, attested).is_err());
+            // BARE never accepts the attested artifacts that need attestation.
+            if rows != 1 {
+                assert!(decode_single_layer_and_verify_envelope(&bytes, &compiled, &termless_ref, TrustedRoot::Bare(root)).is_err());
+            }
+        }
     });
 }

@@ -69,11 +69,11 @@ use terminus_store::proof::envelope::{
     RelationProofPlanKind, TermlessRelationEnvelope, TransitiveClosureFixpoint,
     TransitiveClosureRound, TransitiveClosureSeed, TupleDisequalityNode, TupleDisequalityPairPlan,
     MAX_RELATION_PROOF_DEPTH, MAX_RELATION_PROOF_NODES,
-    require_termless_plan, single_layer_envelope_form,
+    single_layer_envelope_form,
 };
 /// The wire form of a single-layer proof (term-less or term-bearing) — see
 /// [`decode_single_layer_and_verify_envelope`] for which form may answer which query.
-pub use terminus_store::proof::envelope::SingleLayerEnvelopeForm;
+pub use terminus_store::proof::envelope::{SingleLayerEnvelopeForm, TrustedRoot};
 use terminus_store::proof::disequality::{verify_tuple_disequality, TupleDisequalityProof};
 use terminus_store::proof::equality::{
     verify_relation_equality, RelationEqualityProof,

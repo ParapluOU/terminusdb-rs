@@ -126,27 +126,36 @@ pub fn decode_verifier_commitment_and_verify_envelope(
 /// each re-verified against the Merkle roots the trusted root binds; a missing, extra, duplicated,
 /// forged or foreign opening, a term-bearing commitment, or a statement outside the term-less
 /// fragment rejects. Parsing alone never confers verification status.
+///
+/// `trusted` is the caller's trust in the root: [`TrustedRoot::Attested`] ONLY for a root whose
+/// well-formedness the caller vouches for (the ledger's squashed catalog head, recomputed by the
+/// validators) — then value-, fact- and lookup-reading statements verify term-less too;
+/// [`TrustedRoot::Bare`] keeps the id-only scope.
 pub fn decode_termless_and_verify_envelope(
     envelope_bytes: &[u8],
     compiled: &CompiledBgp,
     verifier_commitment_bytes: &[u8],
-    trusted_resolution_root: ProofHash,
+    trusted: TrustedRoot,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
     let termless = TermlessRelationEnvelope::decode(envelope_bytes)?;
     let digest = compiled_query_digest(compiled)?;
     let plan = relation_proof_plan(&compiled.relation, digest)?;
-    termless.verify(&commitment, trusted_resolution_root, &plan)?;
+    termless.verify(&commitment, trusted, &plan)?;
     verified_bgp_envelope(termless.envelope)
 }
 
-/// Whether the caller's OWN compiled query lies in the single-layer TERM-LESS scope
-/// (`require_termless_plan`): only then may a term-less envelope answer it. Outside that scope the
-/// term-bearing envelope is the only acceptable form. A pure function of the query.
-pub fn single_layer_termless_eligible(compiled: &CompiledBgp) -> std::io::Result<bool> {
+/// Whether the caller's OWN compiled query lies in the single-layer TERM-LESS scope of its trust
+/// mode (`TrustedRoot::require_plan`: every single-layer statement over an ATTESTED root, the id-only
+/// fragment over a BARE one): only then may a term-less envelope answer it. Outside that scope the
+/// term-bearing envelope is the only acceptable form. A pure function of the query and the mode.
+pub fn single_layer_termless_eligible(
+    compiled: &CompiledBgp,
+    trusted: TrustedRoot,
+) -> std::io::Result<bool> {
     let digest = compiled_query_digest(compiled)?;
     let plan = relation_proof_plan(&compiled.relation, digest)?;
-    Ok(require_termless_plan(&plan).is_ok())
+    Ok(trusted.require_plan(&plan).is_ok())
 }
 
 /// The encoded `VerifierCommitment` of one BASE `layer` that a single-layer envelope of `form`
@@ -186,14 +195,21 @@ pub fn single_layer_verifier_commitment(
 /// The artifact's framing names its form; the commitment must be the matching kind (a term-less
 /// envelope only against a term-less commitment, a term-bearing one only against a term-bearing
 /// BASE commitment), or it rejects.
+///
+/// Over an ATTESTED root ([`TrustedRoot::Attested`]) every single-layer statement lies in the
+/// term-less scope, so the prover ships the term-less form for all of them; the term-bearing form
+/// still verifies (it is sound under any trust) but is never needed.
 pub fn decode_single_layer_and_verify_envelope(
     envelope_bytes: &[u8],
     compiled: &CompiledBgp,
     verifier_commitment_bytes: &[u8],
-    trusted_resolution_root: ProofHash,
+    trusted: TrustedRoot,
 ) -> std::io::Result<(SingleLayerEnvelopeForm, VerifiedBgpEnvelope)> {
+    let trusted_resolution_root = trusted.root();
     let shipped = single_layer_envelope_form(envelope_bytes)?;
-    if shipped == SingleLayerEnvelopeForm::Termless && !single_layer_termless_eligible(compiled)? {
+    if shipped == SingleLayerEnvelopeForm::Termless
+        && !single_layer_termless_eligible(compiled, trusted)?
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "the query lies outside the term-less scope: only a term-bearing single-layer envelope \
@@ -205,7 +221,7 @@ pub fn decode_single_layer_and_verify_envelope(
             envelope_bytes,
             compiled,
             verifier_commitment_bytes,
-            trusted_resolution_root,
+            trusted,
         )?,
         SingleLayerEnvelopeForm::TermBearing => {
             let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
