@@ -203,6 +203,45 @@ pub fn decode_checkpoint_deltas_and_verify_envelope(
     verified_bgp_envelope(verified.envelope)
 }
 
+/// Verify, once per head, the checkpoint view every query at that head reads (no deltas since:
+/// `head = None`; else the head checkpoint's artifact and inductive proof from the trusted
+/// checkpoint and the deltas' term-bearing verifier commitments) — see
+/// `terminus_store::proof::envelope::verify_checkpoint_read_view`. Cache the result per
+/// `(trusted_checkpoint_root, trusted_head_root)` and check each query with
+/// [`decode_checkpoint_view_and_verify_envelope`].
+pub fn verify_checkpoint_read_view(
+    checkpoint_artifact: &[u8],
+    trusted_checkpoint_root: ProofHash,
+    delta_views: &[&[u8]],
+    trusted_head_root: ProofHash,
+    head: Option<(&[u8], &[u8])>,
+    view_proof: &[u8],
+) -> std::io::Result<terminus_store::proof::checkpoint::VerifiedCheckpointView> {
+    terminus_store::proof::envelope::verify_checkpoint_read_view(
+        checkpoint_artifact,
+        trusted_checkpoint_root,
+        delta_views,
+        trusted_head_root,
+        head,
+        view_proof,
+    )
+}
+
+/// Decode and verify a checkpoint envelope ([`ProvedBgp::encode_checkpoint_envelope`]) against a
+/// checkpoint view ALREADY verified by [`verify_checkpoint_read_view`] — the per-query part of
+/// [`decode_checkpoint_and_verify_envelope`] / [`decode_checkpoint_deltas_and_verify_envelope`],
+/// driven by the caller's OWN compiled query.
+pub fn decode_checkpoint_view_and_verify_envelope(
+    envelope_bytes: &[u8],
+    compiled: &CompiledBgp,
+    view: &terminus_store::proof::checkpoint::VerifiedCheckpointView,
+) -> std::io::Result<VerifiedBgpEnvelope> {
+    let digest = compiled_query_digest(compiled)?;
+    let plan = relation_proof_plan(&compiled.relation, digest)?;
+    let verified = terminus_store::proof::envelope::decode_and_verify_checkpoint_read_over_view(envelope_bytes, view, &plan)?;
+    verified_bgp_envelope(verified.envelope)
+}
+
 /// Whether the caller's OWN compiled query lies in the single-layer TERM-LESS scope of its trust
 /// mode (`TrustedRoot::require_plan`: every single-layer statement over an ATTESTED root, the id-only
 /// fragment over a BARE one): only then may a term-less envelope answer it. Outside that scope the
