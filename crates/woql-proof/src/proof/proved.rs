@@ -2418,6 +2418,37 @@ impl ProvedBgp {
         TermlessRelationEnvelope::from_envelope(envelope, layer, &plan, trusted)?.encode()
     }
 
+    /// Encode the single-layer envelope over a PROVEN CHECKPOINT's query view
+    /// (`terminus_store::proof::checkpoint::CheckpointQueryLayer`): the checked operator-tree envelope
+    /// proven over the view's base sidecar (`query.layer()`, which this proof must have been proven
+    /// on) plus the result-sized witness — a term-tree opening per resolved id, a keyed term-index
+    /// path per looked-up constant. Every single-layer statement of the attested scope proves this
+    /// way; the anchor is the checkpoint root, which the chain records after verifying the
+    /// checkpoint, so no quorum attestation is assumed. Verify with
+    /// [`decode_checkpoint_and_verify_envelope`] (no deltas since) or
+    /// [`decode_checkpoint_deltas_and_verify_envelope`] (the checkpoint the query layer was built
+    /// from is the head checkpoint proven from an earlier one and the deltas since).
+    pub fn encode_checkpoint_envelope(
+        &self,
+        compiled: &CompiledBgp,
+        query: &terminus_store::proof::checkpoint::CheckpointQueryLayer,
+    ) -> std::io::Result<Vec<u8>> {
+        let digest = compiled_query_digest(compiled)?;
+        let plan = relation_proof_plan(&compiled.relation, digest)?;
+        terminus_store::proof::envelope::require_attested_termless_plan(&plan)?;
+        let layer = query.layer();
+        let commitment_root = query.commitment_root();
+        self.verify_relation(&compiled.relation, layer, commitment_root, digest)?;
+        let envelope = self.recursive_envelope_after_verification(
+            &compiled.relation,
+            layer,
+            commitment_root,
+            digest,
+        )?;
+        terminus_store::proof::envelope::CheckpointRelationEnvelope::from_envelope(envelope, query, &plan)?
+            .encode()
+    }
+
     /// Encode the single-layer envelope over one BASE `layer`, in the smallest form that proves
     /// this statement: [`Self::encode_termless_envelope`] (size follows the result) when the query
     /// lies in the term-less scope of the trust mode (over an ATTESTED root: every single-layer

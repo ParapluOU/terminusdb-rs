@@ -145,6 +145,64 @@ pub fn decode_termless_and_verify_envelope(
     verified_bgp_envelope(termless.envelope)
 }
 
+/// Decode and verify a single-layer envelope over a PROVEN CHECKPOINT with no deltas since
+/// ([`ProvedBgp::encode_checkpoint_envelope`]) — DB-free, byte-in, driven by the caller's OWN
+/// compiled query. `trusted_checkpoint_root` is the checkpoint root the chain recorded after
+/// verifying the checkpoint's proof; the checkpoint artifact must carry it, the view proof must
+/// relocate its dictionary columns, and every delivered term is resolved through the shipped
+/// term-tree openings, every constant through the shipped keyed term-index paths.
+pub fn decode_checkpoint_and_verify_envelope(
+    envelope_bytes: &[u8],
+    compiled: &CompiledBgp,
+    checkpoint_artifact: &[u8],
+    view_proof: &[u8],
+    trusted_checkpoint_root: ProofHash,
+) -> std::io::Result<VerifiedBgpEnvelope> {
+    let digest = compiled_query_digest(compiled)?;
+    let plan = relation_proof_plan(&compiled.relation, digest)?;
+    let verified = terminus_store::proof::envelope::decode_and_verify_checkpoint_read(
+        envelope_bytes,
+        checkpoint_artifact,
+        view_proof,
+        trusted_checkpoint_root,
+        &plan,
+    )?;
+    verified_bgp_envelope(verified.envelope)
+}
+
+/// Decode and verify a single-layer envelope over a PROVEN CHECKPOINT PLUS THE DELTAS SINCE: the
+/// head checkpoint `C'` is verified from the trusted checkpoint `C_k` (`trusted_checkpoint_root`),
+/// the deltas' TERM-BEARING verifier commitments in chain order and the trusted head root
+/// (`present(C') = present(C_k) ⊎ additions − removals`, bounded by the deltas), then the view of
+/// `C'` and the envelope over it, against the caller's OWN compiled query.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_checkpoint_deltas_and_verify_envelope(
+    envelope_bytes: &[u8],
+    compiled: &CompiledBgp,
+    checkpoint_artifact: &[u8],
+    trusted_checkpoint_root: ProofHash,
+    delta_views: &[&[u8]],
+    trusted_head_root: ProofHash,
+    head_artifact: &[u8],
+    head_checkpoint_proof: &[u8],
+    view_proof: &[u8],
+) -> std::io::Result<VerifiedBgpEnvelope> {
+    let digest = compiled_query_digest(compiled)?;
+    let plan = relation_proof_plan(&compiled.relation, digest)?;
+    let verified = terminus_store::proof::envelope::decode_and_verify_checkpoint_delta_read(
+        envelope_bytes,
+        checkpoint_artifact,
+        trusted_checkpoint_root,
+        delta_views,
+        trusted_head_root,
+        head_artifact,
+        head_checkpoint_proof,
+        view_proof,
+        &plan,
+    )?;
+    verified_bgp_envelope(verified.envelope)
+}
+
 /// Whether the caller's OWN compiled query lies in the single-layer TERM-LESS scope of its trust
 /// mode (`TrustedRoot::require_plan`: every single-layer statement over an ATTESTED root, the id-only
 /// fragment over a BARE one): only then may a term-less envelope answer it. Outside that scope the
