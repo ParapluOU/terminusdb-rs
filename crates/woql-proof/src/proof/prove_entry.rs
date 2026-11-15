@@ -125,23 +125,20 @@ pub fn decode_verifier_commitment_and_verify_envelope(
 /// (anti-substitution). Every delivered term is resolved ONLY through the shipped Merkle openings,
 /// each re-verified against the Merkle roots the trusted root binds; a missing, extra, duplicated,
 /// forged or foreign opening, a term-bearing commitment, or a statement outside the term-less
-/// fragment rejects. Parsing alone never confers verification status.
-///
-/// `trusted` is the caller's trust in the root: [`TrustedRoot::Attested`] ONLY for a root whose
-/// well-formedness the caller vouches for (the ledger's squashed catalog head, recomputed by the
-/// validators) — then value-, fact- and lookup-reading statements verify term-less too;
-/// [`TrustedRoot::Bare`] keeps the id-only scope.
+/// fragment (the id-only scope, `terminus_store::proof::envelope::require_termless_plan`) rejects.
+/// Parsing alone never confers verification status. Value-, fact- and lookup-reading statements
+/// prove term-less over a proven checkpoint instead ([`decode_checkpoint_view_and_verify_envelope`]).
 pub fn decode_termless_and_verify_envelope(
     envelope_bytes: &[u8],
     compiled: &CompiledBgp,
     verifier_commitment_bytes: &[u8],
-    trusted: TrustedRoot,
+    trusted_resolution_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
     let termless = TermlessRelationEnvelope::decode(envelope_bytes)?;
     let digest = compiled_query_digest(compiled)?;
     let plan = relation_proof_plan(&compiled.relation, digest)?;
-    termless.verify(&commitment, trusted, &plan)?;
+    termless.verify(&commitment, trusted_resolution_root, &plan)?;
     verified_bgp_envelope(termless.envelope)
 }
 
@@ -240,106 +237,6 @@ pub fn decode_checkpoint_view_and_verify_envelope(
     let plan = relation_proof_plan(&compiled.relation, digest)?;
     let verified = terminus_store::proof::envelope::decode_and_verify_checkpoint_read_over_view(envelope_bytes, view, &plan)?;
     verified_bgp_envelope(verified.envelope)
-}
-
-/// Whether the caller's OWN compiled query lies in the single-layer TERM-LESS scope of its trust
-/// mode (`TrustedRoot::require_plan`: every single-layer statement over an ATTESTED root, the id-only
-/// fragment over a BARE one): only then may a term-less envelope answer it. Outside that scope the
-/// term-bearing envelope is the only acceptable form. A pure function of the query and the mode.
-pub fn single_layer_termless_eligible(
-    compiled: &CompiledBgp,
-    trusted: TrustedRoot,
-) -> std::io::Result<bool> {
-    let digest = compiled_query_digest(compiled)?;
-    let plan = relation_proof_plan(&compiled.relation, digest)?;
-    Ok(trusted.require_plan(&plan).is_ok())
-}
-
-/// The encoded `VerifierCommitment` of one BASE `layer` that a single-layer envelope of `form`
-/// verifies against: the O(1) TERM-LESS commitment for [`SingleLayerEnvelopeForm::Termless`], the
-/// TERM-BEARING commitment (the layer's dictionaries) for [`SingleLayerEnvelopeForm::TermBearing`].
-/// Both are anchored to the same `resolution_root`.
-pub fn single_layer_verifier_commitment(
-    layer: &LayerCommitment,
-    form: SingleLayerEnvelopeForm,
-) -> std::io::Result<Vec<u8>> {
-    match form {
-        SingleLayerEnvelopeForm::Termless => layer.verifier_commitment_termless()?.encode(),
-        SingleLayerEnvelopeForm::TermBearing => layer.verifier_commitment()?.encode(),
-    }
-}
-
-/// Decode and verify a single-layer envelope of EITHER form
-/// ([`ProvedBgp::encode_single_layer_envelope`]) against the encoded `VerifierCommitment` of one
-/// BASE layer and the caller's trusted `resolution_root` — DB-free, byte-in, driven by the caller's
-/// OWN compiled query (anti-substitution). Returns the form used with the verified result.
-///
-/// Which form may answer the query:
-/// - outside the term-less scope ([`single_layer_termless_eligible`] is false — range/kind filters,
-///   order, aggregates, constant equality, closures, walks …) ONLY the term-bearing form; a
-///   term-less artifact rejects before any decoding of its body;
-/// - inside the term-less scope EITHER form. The term-less form is the prover's default; the
-///   term-bearing form is its fallback when the term-less witness cannot be built — a query
-///   constant ABSENT from the dictionaries needs a catalog nonmembership scan, a data-dependent fact
-///   the plan cannot predict, so no rule that is a function of the query alone can keep such a
-///   query proving without making every constant-bearing (i.e. every) BGP term-bearing.
-///   Accepting both is sound: each form's verifier is sound for the statement on its own (the
-///   term-bearing verifier is the general one every shape has always used, with strictly more
-///   authenticated data), both are anchored to the same trusted root and checked against the
-///   caller's own plan, so a prover's choice of form changes only the proof size, never what a
-///   verified result may claim.
-///
-/// The artifact's framing names its form; the commitment must be the matching kind (a term-less
-/// envelope only against a term-less commitment, a term-bearing one only against a term-bearing
-/// BASE commitment), or it rejects.
-///
-/// Over an ATTESTED root ([`TrustedRoot::Attested`]) every single-layer statement lies in the
-/// term-less scope, so the prover ships the term-less form for all of them; the term-bearing form
-/// still verifies (it is sound under any trust) but is never needed.
-pub fn decode_single_layer_and_verify_envelope(
-    envelope_bytes: &[u8],
-    compiled: &CompiledBgp,
-    verifier_commitment_bytes: &[u8],
-    trusted: TrustedRoot,
-) -> std::io::Result<(SingleLayerEnvelopeForm, VerifiedBgpEnvelope)> {
-    let trusted_resolution_root = trusted.root();
-    let shipped = single_layer_envelope_form(envelope_bytes)?;
-    if shipped == SingleLayerEnvelopeForm::Termless
-        && !single_layer_termless_eligible(compiled, trusted)?
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "the query lies outside the term-less scope: only a term-bearing single-layer envelope \
-             answers it",
-        ));
-    }
-    let verified = match shipped {
-        SingleLayerEnvelopeForm::Termless => decode_termless_and_verify_envelope(
-            envelope_bytes,
-            compiled,
-            verifier_commitment_bytes,
-            trusted,
-        )?,
-        SingleLayerEnvelopeForm::TermBearing => {
-            let commitment = VerifierCommitment::decode(verifier_commitment_bytes)?;
-            let view = commitment.verifier_view();
-            if !view.terms_present {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "the term-bearing single-layer envelope verifies only against a TERM-BEARING \
-                     verifier commitment",
-                ));
-            }
-            if view.state.parent_state_root.is_some() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "a single-layer envelope verifies only against a BASE layer commitment",
-                ));
-            }
-            decode_and_verify_envelope(envelope_bytes, compiled, &commitment, trusted_resolution_root)?
-        }
-    };
-    Ok((shipped, verified))
 }
 
 /// Prove a top-level WOQL `Eval`: prove the operand-binding child through the Store, then

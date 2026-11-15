@@ -2388,26 +2388,23 @@ impl ProvedBgp {
 
     /// Encode the TERM-LESS single-layer envelope: the same checked operator-tree envelope as
     /// [`Self::encode_envelope`], plus the Merkle resolution witness for exactly the ids its
-    /// verification resolves (and, over an ATTESTED root, the term-sorted index lookups for the
-    /// constants it looks up) — so it verifies against the O(1) TERM-LESS `VerifierCommitment`
+    /// verification resolves — so it verifies against the O(1) TERM-LESS `VerifierCommitment`
     /// (`LayerCommitment::verifier_commitment_termless`) and its size follows the result, not the
-    /// catalog. `layer` is the prover's term-bearing BASE sidecar; `trusted` names the trust mode
-    /// the witness is minted for, over `layer`'s own root. Under [`TrustedRoot::Attested`] every
-    /// single-layer statement is in scope; under [`TrustedRoot::Bare`] a statement whose
-    /// verification reads dictionary values or catalogs fails closed (see
-    /// `terminus_store::proof::envelope::require_termless_plan`). Verify with
-    /// [`decode_termless_and_verify_envelope`] in the same trust mode.
+    /// catalog. `layer` is the prover's term-bearing BASE sidecar. A statement whose verification
+    /// reads dictionary values or catalogs fails closed (see
+    /// `terminus_store::proof::envelope::require_termless_plan`); those prove term-less over a
+    /// proven checkpoint ([`Self::encode_checkpoint_envelope`]). Verify with
+    /// [`decode_termless_and_verify_envelope`] against `layer`'s root.
     pub fn encode_termless_envelope(
         &self,
         compiled: &CompiledBgp,
         layer: &LayerCommitment,
-        trusted: TrustedRoot,
     ) -> std::io::Result<Vec<u8>> {
         let digest = compiled_query_digest(compiled)?;
         let plan = relation_proof_plan(&compiled.relation, digest)?;
         // Gate the statement shape BEFORE the (expensive) checked materialization.
-        trusted.require_plan(&plan)?;
-        let commitment_root = expect_resolution_root(layer, trusted.root())?;
+        terminus_store::proof::envelope::require_termless_plan(&plan)?;
+        let commitment_root = expect_resolution_root(layer, layer.resolution_root())?;
         self.verify_relation(&compiled.relation, layer, commitment_root, digest)?;
         let envelope = self.recursive_envelope_after_verification(
             &compiled.relation,
@@ -2415,7 +2412,7 @@ impl ProvedBgp {
             commitment_root,
             digest,
         )?;
-        TermlessRelationEnvelope::from_envelope(envelope, layer, &plan, trusted)?.encode()
+        TermlessRelationEnvelope::from_envelope(envelope, layer, &plan)?.encode()
     }
 
     /// Encode the single-layer envelope over a PROVEN CHECKPOINT's query view
@@ -2424,7 +2421,7 @@ impl ProvedBgp {
     /// on) plus the result-sized witness — a term-tree opening per resolved id, a keyed term-index
     /// path per looked-up constant. Every single-layer statement of the attested scope proves this
     /// way; the anchor is the checkpoint root, which the chain records after verifying the
-    /// checkpoint, so no quorum attestation is assumed. Verify with
+    /// checkpoint. Verify with
     /// [`decode_checkpoint_and_verify_envelope`] (no deltas since) or
     /// [`decode_checkpoint_deltas_and_verify_envelope`] (the checkpoint the query layer was built
     /// from is the head checkpoint proven from an earlier one and the deltas since).
@@ -2447,35 +2444,6 @@ impl ProvedBgp {
         )?;
         terminus_store::proof::envelope::CheckpointRelationEnvelope::from_envelope(envelope, query, &plan)?
             .encode()
-    }
-
-    /// Encode the single-layer envelope over one BASE `layer`, in the smallest form that proves
-    /// this statement: [`Self::encode_termless_envelope`] (size follows the result) when the query
-    /// lies in the term-less scope of the trust mode (over an ATTESTED root: every single-layer
-    /// statement) and its witness builds, otherwise [`Self::encode_envelope`] — exactly the
-    /// term-bearing proof every shape always had, so a size optimization never stops a query from
-    /// proving. Returns the form with the bytes (the bytes also name it in their framing). Verify
-    /// with [`decode_single_layer_and_verify_envelope`] in the same trust mode against
-    /// [`single_layer_verifier_commitment`] of the same layer and form.
-    pub fn encode_single_layer_envelope(
-        &self,
-        compiled: &CompiledBgp,
-        layer: &LayerCommitment,
-        trusted: TrustedRoot,
-    ) -> std::io::Result<(SingleLayerEnvelopeForm, Vec<u8>)> {
-        if single_layer_termless_eligible(compiled, trusted)? {
-            // Under BARE the term-less witness fails closed for a data-dependent catalog read (an
-            // absent constant's nonmembership scan); the term-bearing form proves it. Under
-            // ATTESTED the sorted index answers it, so the fallback is never needed for a
-            // statement that proves at all.
-            if let Ok(bytes) = self.encode_termless_envelope(compiled, layer, trusted) {
-                return Ok((SingleLayerEnvelopeForm::Termless, bytes));
-            }
-        }
-        Ok((
-            SingleLayerEnvelopeForm::TermBearing,
-            self.encode_envelope(compiled, layer, trusted.root())?,
-        ))
     }
 
     /// Materialize an envelope after the caller has verified the complete root relation.
