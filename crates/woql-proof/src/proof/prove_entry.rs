@@ -145,7 +145,8 @@ pub fn decode_termless_and_verify_envelope(
 /// Decode and verify a single-layer envelope over a PROVEN CHECKPOINT with no deltas since
 /// ([`ProvedBgp::encode_checkpoint_envelope`]) — DB-free, byte-in, driven by the caller's OWN
 /// compiled query. `trusted_checkpoint_root` is the checkpoint root the chain recorded after
-/// verifying the checkpoint's proof; the checkpoint artifact must carry it, the view proof must
+/// verifying the checkpoint's proof, `trusted_head_root` the catalog head it was taken at; the
+/// checkpoint artifact must carry both, the view proof must
 /// relocate its dictionary columns, and every delivered term is resolved through the shipped
 /// term-tree openings, every constant through the shipped keyed term-index paths.
 pub fn decode_checkpoint_and_verify_envelope(
@@ -154,6 +155,7 @@ pub fn decode_checkpoint_and_verify_envelope(
     checkpoint_artifact: &[u8],
     view_proof: &[u8],
     trusted_checkpoint_root: ProofHash,
+    trusted_head_root: ProofHash,
 ) -> std::io::Result<VerifiedBgpEnvelope> {
     let digest = compiled_query_digest(compiled)?;
     let plan = relation_proof_plan(&compiled.relation, digest)?;
@@ -162,6 +164,7 @@ pub fn decode_checkpoint_and_verify_envelope(
         checkpoint_artifact,
         view_proof,
         trusted_checkpoint_root,
+        trusted_head_root,
         &plan,
     )?;
     verified_bgp_envelope(verified.envelope)

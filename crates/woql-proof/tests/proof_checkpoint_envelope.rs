@@ -97,7 +97,7 @@ fn checkpoint_envelope_verifies_byte_in_with_and_without_deltas_since() {
             )
             .unwrap();
             let bytes = compiled.prove(query.layer()).unwrap().encode_checkpoint_envelope(&compiled, &query).unwrap();
-            let got = decode_checkpoint_and_verify_envelope(&bytes, &compiled, &artifact, &view, root).unwrap();
+            let got = decode_checkpoint_and_verify_envelope(&bytes, &compiled, &artifact, &view, root, head_root).unwrap();
             let sorted = |v: &Vec<Vec<terminus_store::proof::CanonicalObject>>| {
                 let mut rows: Vec<String> = (0..v.first().map_or(0, Vec::len))
                     .map(|r| v.iter().map(|c| format!("{:?}", c[r])).collect::<Vec<_>>().join("|"))
@@ -114,16 +114,18 @@ fn checkpoint_envelope_verifies_byte_in_with_and_without_deltas_since() {
             assert_eq!(sorted(&via_deltas.result_objects), sorted(&want.result_objects));
 
             // Another checkpoint's root; a missing delta; a stripped witness; another query.
-            assert!(decode_checkpoint_and_verify_envelope(&bytes, &compiled, &artifact, &view, c0_root).is_err());
+            assert!(decode_checkpoint_and_verify_envelope(&bytes, &compiled, &artifact, &view, c0_root, head_root).is_err());
+            // Another head root (the base layer's).
+            assert!(decode_checkpoint_and_verify_envelope(&bytes, &compiled, &artifact, &view, root, layers[0].resolution_root()).is_err());
             assert!(decode_checkpoint_deltas_and_verify_envelope(
                 &bytes, &compiled, &c0_bytes, c0_root, &view_refs[..1], head_root, &artifact, &head_proof, &view,
             )
             .is_err());
             let mut stripped = CheckpointRelationEnvelope::decode(&bytes).unwrap();
             stripped.openings = ResolutionOpenings::default();
-            assert!(decode_checkpoint_and_verify_envelope(&stripped.encode().unwrap(), &compiled, &artifact, &view, root).is_err());
+            assert!(decode_checkpoint_and_verify_envelope(&stripped.encode().unwrap(), &compiled, &artifact, &view, root, head_root).is_err());
             let likes = plan_bgp(&tv("s", "likes", "o")).unwrap();
-            assert!(decode_checkpoint_and_verify_envelope(&bytes, &likes, &artifact, &view, root).is_err());
+            assert!(decode_checkpoint_and_verify_envelope(&bytes, &likes, &artifact, &view, root, head_root).is_err());
         }
     });
 }

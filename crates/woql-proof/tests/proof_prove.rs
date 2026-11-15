@@ -658,7 +658,7 @@ fn ground_triple_slice_proves_membership_boundaries_absence_and_direction_identi
     // Present in the dictionary but not for the selected S/P.
     builder
         .add_value_triple(ValueTriple::new_value(
-            &iri("other"), &iri("score"), u32::make_entry(&35),
+            &iri("other"), &iri("score"), u32::make_entry(&35u32),
         ))
         .unwrap();
     let layer = builder.commit().unwrap().proof_commitment().unwrap();
@@ -2521,7 +2521,7 @@ fn assert_grouped_u32_sum_proves_duplicates_safe_max_and_canonical_child_stack_k
             .add_value_triple(ValueTriple::new_value(
                 &iri("a"),
                 &iri(predicate),
-                u32::make_entry(&2),
+                u32::make_entry(&2u32),
             ))
             .unwrap();
     }
@@ -4688,14 +4688,14 @@ fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
         .add_value_triple(ValueTriple::new_value(
             &iri("a"),
             &iri("age"),
-            u32::make_entry(&42),
+            u32::make_entry(&42u32),
         ))
         .unwrap();
     builder
         .add_value_triple(ValueTriple::new_value(
             &iri("b"),
             &iri("age"),
-            u32::make_entry(&7),
+            u32::make_entry(&7u32),
         ))
         .unwrap();
     let layer = builder.commit().unwrap();
@@ -4729,7 +4729,7 @@ fn typed_literal_results_resolve_through_the_authenticated_dictionary() {
 #[test]
 fn data_variable_proves_mixed_literals_excludes_nodes_and_composes_with_join() {
     let lc = build_layer_triples(vec![
-        ValueTriple::new_value(&iri("alice"), &iri("datum"), u32::make_entry(&42)),
+        ValueTriple::new_value(&iri("alice"), &iri("datum"), u32::make_entry(&42u32)),
         ValueTriple::new_value(&iri("bob"), &iri("datum"), bool::make_entry(&true)),
         ValueTriple::new_node(&iri("carol"), &iri("datum"), &iri("not-data")),
         ValueTriple::new_node(&iri("alice"), &iri("label"), &iri("alice-label")),
