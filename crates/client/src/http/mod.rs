@@ -50,6 +50,7 @@ pub mod open;
 pub mod organization;
 pub mod query;
 pub mod remote;
+pub mod replace_all;
 pub mod response;
 pub mod role;
 pub mod schema;
@@ -73,6 +74,7 @@ pub use client::TerminusDBHttpClient;
 #[cfg(not(target_arch = "wasm32"))]
 pub use concurrency_limiter::ConcurrencyLimitConfig;
 pub use document::DeleteOpts;
+pub use replace_all::ReplaceAllError;
 pub use apply::ApplyOptions;
 pub use diff::{DiffOptions, DiffResponse};
 pub use migration::{MigrationOperation, MigrationOptions, MigrationResponse};
