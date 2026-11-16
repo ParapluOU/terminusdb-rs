@@ -395,6 +395,100 @@ pub struct TerminusDBServer {
     port: u16,
     /// Request timeout for clients created via `client()`.
     request_timeout: Option<Duration>,
+    /// The last lines the server wrote to its standard error.
+    log: ServerLog,
+}
+
+/// How many of the server's last log lines are kept for [`TerminusDBServer::recent_log`].
+const LOG_LINES_KEPT: usize = 500;
+
+/// The tail of a running server's standard error.
+#[derive(Clone, Default)]
+struct ServerLog(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+
+impl ServerLog {
+    fn push(&self, line: String) {
+        // A poisoned lock only means a reader panicked; the lines are still good.
+        let mut lines = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if lines.len() == LOG_LINES_KEPT {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+    }
+
+    fn lines(&self) -> Vec<String> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).iter().cloned().collect()
+    }
+}
+
+/// Keep reading the server's standard error for as long as it runs.
+///
+/// The server writes a line to standard error for every request it serves. Its
+/// standard error is a pipe (so a failed start can be reported), and a pipe nobody
+/// reads holds 64 KiB: once it is full the server blocks in `write(2)` while
+/// holding its log lock, every other request waits on that lock, and the server
+/// stops answering — idle, after about six hundred requests. So somebody has to
+/// read it: this thread does, until the pipe closes when the server exits.
+///
+/// Each line is kept in `log` (the last [`LOG_LINES_KEPT`]) and, if `forward` is
+/// set, written to this process's standard error.
+fn drain_stderr(child: &mut Child, forward: bool) -> anyhow::Result<ServerLog> {
+    use std::io::BufRead;
+
+    let log = ServerLog::default();
+    let Some(stderr) = child.stderr.take() else {
+        anyhow::bail!("the server's standard error is not a pipe that can be read");
+    };
+    // `wait_for_ready` polled the pipe without blocking; from here on, block.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = stderr.as_raw_fd();
+        // SAFETY: `fd` is the open read end of the pipe, owned by `stderr`.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) < 0 {
+                anyhow::bail!(
+                    "the server's standard error could not be set to blocking: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+    }
+    let kept = log.clone();
+    let pid = child.id();
+    std::thread::Builder::new()
+        .name(format!("terminusdb-{pid}-stderr"))
+        .spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match reader.read_until(b'\n', &mut line) {
+                    // The server has exited and closed its end.
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let text = String::from_utf8_lossy(&line);
+                        let text = text.trim_end_matches(['\n', '\r']);
+                        if forward {
+                            eprintln!("[terminusdb {pid}] {text}");
+                        }
+                        kept.push(text.to_string());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        // Not reading any more would stall the server once the pipe
+                        // fills, so say so where it will be seen.
+                        eprintln!(
+                            "[terminusdb-bin] reading the standard error of server PID {pid} failed: {e}; \
+                             the server will stop answering when the pipe is full"
+                        );
+                        break;
+                    }
+                }
+            }
+        })?;
+    Ok(log)
 }
 
 /// Shared test server instance (per-process)
@@ -409,6 +503,13 @@ impl TerminusDBServer {
     /// Get the operating-system process id of the running embedded server.
     pub fn process_id(&self) -> Option<u32> {
         self.child.as_ref().map(Child::id)
+    }
+
+    /// The last lines the server wrote to its standard error since it became
+    /// ready (at most 500), oldest first: one per request served, and whatever
+    /// it had to say about errors.
+    pub fn recent_log(&self) -> Vec<String> {
+        self.log.lines()
     }
 
     /// Start a new test server with default test settings.
@@ -849,11 +950,13 @@ async fn start_server_attempt(opts: &ServerOptions) -> anyhow::Result<TerminusDB
 
     // Wait for server to be ready, checking for early process exit
     wait_for_ready(&mut child, port, Duration::from_secs(30)).await?;
+    let log = drain_stderr(&mut child, !opts.quiet)?;
 
     let server = TerminusDBServer {
         child: Some(child),
         port,
         request_timeout,
+        log,
     };
 
     Ok(server)
@@ -924,11 +1027,13 @@ async fn start_test_server() -> anyhow::Result<TerminusDBServer> {
 
     // Wait for server to be ready, checking for early process exit
     wait_for_ready(&mut child, port, Duration::from_secs(30)).await?;
+    let log = drain_stderr(&mut child, false)?;
 
     Ok(TerminusDBServer {
         child: Some(child),
         port,
         request_timeout: Some(request_timeout),
+        log,
     })
 }
 
