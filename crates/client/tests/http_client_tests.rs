@@ -11,6 +11,20 @@ use terminusdb_schema::{ToJson, ToTDBInstance};
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 use terminusdb_woql2::prelude::*;
 
+/// `Type/id` from an insert result, whether the server answered the compressed
+/// form or a full IRI.
+///
+/// v12.1.0-rc3 unified insert responses on compressed IDs (upstream "Adapt
+/// custom-id tests to unified insert compression"), so `TestDoc/JuY-4jTCbaQ`
+/// arrives where `terminusdb:///data/TestDoc/JuY-4jTCbaQ` used to. Accepting
+/// both keeps these tests honest against either server.
+fn short_id_of(inserted_id: &str) -> String {
+    inserted_id
+        .rsplit_once("terminusdb:///data/")
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_else(|| inserted_id.to_string())
+}
+
 // --- Helper Structs/Enums for Tests ---
 
 #[derive(Debug, Clone, PartialEq, Default, TerminusDBModel, FromTDBInstance)]
@@ -75,8 +89,7 @@ async fn test_insert_and_get_document() -> anyhow::Result<()> {
                 TDBInsertInstanceResult::Inserted(id) => id.clone(),
                 TDBInsertInstanceResult::AlreadyExists(id) => id.clone(),
             };
-            let id_parts: Vec<&str> = inserted_id_full.split("terminusdb:///data/").collect();
-            let short_id = id_parts.get(1).expect("Could not parse ID").to_string();
+            let short_id = short_id_of(&inserted_id_full);
 
             // Get using get_instance and the parsed short_id
             let mut deserializer = DefaultTDBDeserializer;
@@ -110,8 +123,7 @@ async fn test_insert_and_get_instance() -> anyhow::Result<()> {
                 TDBInsertInstanceResult::Inserted(id) => id.clone(),
                 TDBInsertInstanceResult::AlreadyExists(id) => id.clone(),
             };
-            let id_parts: Vec<&str> = inserted_id_full.split("terminusdb:///data/").collect();
-            let short_id = id_parts.get(1).expect("Could not parse ID").to_string();
+            let short_id = short_id_of(&inserted_id_full);
 
             // Get - Use DefaultTDBDeserializer, passing the parsed short_id
             let mut deserializer = DefaultTDBDeserializer;
