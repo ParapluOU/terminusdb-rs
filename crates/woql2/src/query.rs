@@ -1,6 +1,5 @@
 use crate::collection::{
-    Dot, Length, ListToSet, Member, SetDifference, SetIntersection, SetMember, SetUnion, Slice,
-    Sum,
+    Dot, Length, ListToSet, Member, SetDifference, SetIntersection, SetMember, SetUnion, Slice, Sum,
 };
 use crate::compare::{Equals, Greater, Gte, IsA, Less, Lte, Subsumption, TypeOf, Typecast};
 use crate::control::{
@@ -16,7 +15,7 @@ use crate::interval::{
 };
 use crate::misc::{
     Collect, Comment, Count, HashKey, InRange, LexicalKey, Limit, RandomKey, RangeMax, RangeMin,
-    Sequence, Size, Start, TripleCount,
+    Sequence, Size, Start, TripleCount, UuidV7,
 };
 use crate::order::{GroupBy, OrderBy};
 use crate::path::PathPattern;
@@ -24,8 +23,8 @@ use crate::prelude::*;
 use crate::string::{Concatenate, Join, Like, Lower, Pad, Regexp, Split, Substring, Trim, Upper};
 use crate::triple::{
     AddData, AddLink, AddTriple, AddedData, AddedLink, AddedTriple, Data, DeleteLink, DeleteTriple,
-    DeletedLink, DeletedTriple, Link, Triple, TripleNext, TriplePrevious, TripleSlice,
-    TripleSliceRev,
+    DeletedLink, DeletedTriple, Link, Triple, TripleNext, TriplePrevious, TripleRangeCount,
+    TripleRelation, TripleSlice, TripleSliceRev,
 };
 use terminusdb_schema::ToTDBInstance;
 #[cfg(test)]
@@ -170,6 +169,10 @@ pub enum Query {
     MonthStartDates(MonthStartDates),
     MonthEndDate(MonthEndDate),
     MonthEndDates(MonthEndDates),
+    // --- TerminusDB 12.1 additions ---
+    TripleRangeCount(TripleRangeCount),
+    TripleRelation(TripleRelation),
+    UuidV7(UuidV7),
 }
 
 impl Query {

@@ -200,9 +200,7 @@ mod tests {
                 *id != "Query"
                     && match v.get("@inherits") {
                         Some(Value::String(s)) => s == "Query",
-                        Some(Value::Array(a)) => {
-                            a.iter().any(|x| x.as_str() == Some("Query"))
-                        }
+                        Some(Value::Array(a)) => a.iter().any(|x| x.as_str() == Some("Query")),
                         _ => false,
                     }
             })
@@ -235,5 +233,19 @@ mod tests {
             missing,
             extra
         );
+    }
+
+    /// Field-level parity for the classes added or extended in TerminusDB
+    /// 12.1.0-rc3. `assert_schema_matches_spec` compares the property *names*
+    /// and count against the upstream spec, so a missing or misnamed field
+    /// fails here rather than at query time.
+    #[test]
+    fn test_v12_1_classes_match_spec() {
+        let spec_map = load_woql_spec();
+        assert_schema_matches_spec::<TripleCount>("TripleCount", &spec_map);
+        assert_schema_matches_spec::<TripleRangeCount>("TripleRangeCount", &spec_map);
+        assert_schema_matches_spec::<TripleRelation>("TripleRelation", &spec_map);
+        assert_schema_matches_spec::<UuidV7>("UuidV7", &spec_map);
+        assert_schema_matches_spec::<Typecast>("Typecast", &spec_map);
     }
 }

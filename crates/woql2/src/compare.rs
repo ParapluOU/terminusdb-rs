@@ -97,4 +97,7 @@ pub struct Typecast {
     /// The resulting value after cast.
     #[tdb(name = "result")]
     pub result_value: self::Value,
+    /// Optional prefix map (JSON) used to resolve/compress IRIs during the
+    /// cast. (TerminusDB 12.1)
+    pub prefixes: Option<self::Value>,
 }

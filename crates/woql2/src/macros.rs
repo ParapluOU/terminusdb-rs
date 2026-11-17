@@ -747,6 +747,15 @@ macro_rules! cast {
             value: $crate::macros::into_value($value),
             type_uri: $crate::macros::into_node_value($type),
             result_value: $crate::macros::into_value($result),
+            prefixes: None,
+        })
+    };
+    ($value:expr, $type:expr, $result:expr, prefixes = $prefixes:expr) => {
+        $crate::query::Query::Typecast($crate::compare::Typecast {
+            value: $crate::macros::into_value($value),
+            type_uri: $crate::macros::into_node_value($type),
+            result_value: $crate::macros::into_value($result),
+            prefixes: Some($crate::macros::into_value($prefixes)),
         })
     };
 }
@@ -1301,7 +1310,7 @@ macro_rules! size {
     };
 }
 
-/// Create a TripleCount query
+/// Create a TripleCount query in its resource form.
 ///
 /// # Examples
 /// ```
@@ -1311,9 +1320,95 @@ macro_rules! size {
 #[macro_export]
 macro_rules! triple_count {
     ($resource:expr, $count:expr) => {
-        $crate::query::Query::TripleCount($crate::misc::TripleCount {
-            resource: $resource.to_string(),
+        $crate::query::Query::TripleCount($crate::misc::TripleCount::for_resource(
+            $resource.to_string(),
+            $crate::macros::into_data_value($count),
+        ))
+    };
+}
+
+/// Create a TripleCount query in its pattern form (TerminusDB 12.1).
+///
+/// Pass `_` for any position that should be unrestricted.
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = triple_count_pattern!(_, node!("@schema:name"), _, var!(count));
+/// ```
+#[macro_export]
+macro_rules! triple_count_pattern {
+    (@opt_node _) => { None };
+    (@opt_node $v:expr) => { Some($crate::macros::into_node_value($v)) };
+    (@opt_value _) => { None };
+    (@opt_value $v:expr) => { Some($crate::macros::into_value($v)) };
+    ($subject:tt, $predicate:tt, $object:tt, $count:expr) => {
+        $crate::query::Query::TripleCount($crate::misc::TripleCount::pattern(
+            $crate::triple_count_pattern!(@opt_node $subject),
+            $crate::triple_count_pattern!(@opt_node $predicate),
+            $crate::triple_count_pattern!(@opt_value $object),
+            $crate::macros::into_data_value($count),
+        ))
+    };
+}
+
+/// Create a TripleRangeCount query: count triples whose object falls in the
+/// half-open range ['low', 'high'). (TerminusDB 12.1)
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = triple_range_count!(var!(s), node!("@schema:age"), data!(18), data!(65), var!(count));
+/// ```
+#[macro_export]
+macro_rules! triple_range_count {
+    ($subject:expr, $predicate:expr, $low:expr, $high:expr, $count:expr) => {
+        $crate::query::Query::TripleRangeCount($crate::triple::TripleRangeCount {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            low: $crate::macros::into_value($low),
+            high: $crate::macros::into_value($high),
             count: $crate::macros::into_data_value($count),
+            graph: None,
+        })
+    };
+}
+
+/// Create a TripleRelation query: match a triple whose object stands in the
+/// given Allen relation to a reference interval or instant. (TerminusDB 12.1)
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// # use terminusdb_woql2::triple::AllenRelation;
+/// let q = triple_relation!(var!(s), node!("@schema:when"), var!(o), AllenRelation::During, data!("[2020-01-01T00:00:00Z,2021-01-01T00:00:00Z)"));
+/// ```
+#[macro_export]
+macro_rules! triple_relation {
+    ($subject:expr, $predicate:expr, $object:expr, $relation:expr, $value:expr) => {
+        $crate::query::Query::TripleRelation($crate::triple::TripleRelation {
+            subject: $crate::macros::into_node_value($subject),
+            predicate: $crate::macros::into_node_value($predicate),
+            object: $crate::macros::into_value($object),
+            relation: ::std::convert::Into::into($relation),
+            value: $crate::macros::into_data_value($value),
+        })
+    };
+}
+
+/// Create a UuidV7 idgen query (TerminusDB 12.1), sibling of `random_key!`.
+///
+/// # Examples
+/// ```
+/// # use terminusdb_woql2::*;
+/// let q = uuid_v7!(data!("doc:"), var!(uri));
+/// ```
+#[macro_export]
+macro_rules! uuid_v7 {
+    ($base:expr, $uri:expr) => {
+        $crate::query::Query::UuidV7($crate::misc::UuidV7 {
+            base: $crate::macros::into_data_value($base),
+            uri: $crate::macros::into_node_value($uri),
         })
     };
 }

@@ -177,6 +177,11 @@ impl ToDSL for Query {
             Query::MonthStartDates(op) => op.to_dsl(),
             Query::MonthEndDate(op) => op.to_dsl(),
             Query::MonthEndDates(op) => op.to_dsl(),
+            // TerminusDB 12.1 additions
+            Query::TripleCount(op) => op.to_dsl(),
+            Query::TripleRangeCount(op) => op.to_dsl(),
+            Query::TripleRelation(op) => op.to_dsl(),
+            Query::UuidV7(op) => op.to_dsl(),
             // Add more as needed
             _ => format!("// TODO: {}", std::any::type_name_of_val(self)),
         }
@@ -886,8 +891,10 @@ use crate::interval::{
     IntervalRelationTyped, IntervalStartDuration, IsoWeek, MonthEndDate, MonthEndDates,
     MonthStartDate, MonthStartDates, Weekday, WeekdaySundayStart,
 };
-use crate::misc::{Collect, Comment, InRange, RangeMax, RangeMin, Sequence};
-use crate::triple::{TripleNext, TriplePrevious, TripleSlice, TripleSliceRev};
+use crate::misc::{Collect, Comment, InRange, RangeMax, RangeMin, Sequence, TripleCount, UuidV7};
+use crate::triple::{
+    TripleNext, TriplePrevious, TripleRangeCount, TripleRelation, TripleSlice, TripleSliceRev,
+};
 
 impl ToDSL for Slice {
     fn to_dsl(&self) -> String {
@@ -910,7 +917,11 @@ impl ToDSL for SetUnion {
     fn to_dsl(&self) -> String {
         render_function(
             "set_union",
-            &[self.list_a.to_dsl(), self.list_b.to_dsl(), self.result.to_dsl()],
+            &[
+                self.list_a.to_dsl(),
+                self.list_b.to_dsl(),
+                self.result.to_dsl(),
+            ],
         )
     }
 }
@@ -919,7 +930,11 @@ impl ToDSL for SetIntersection {
     fn to_dsl(&self) -> String {
         render_function(
             "set_intersection",
-            &[self.list_a.to_dsl(), self.list_b.to_dsl(), self.result.to_dsl()],
+            &[
+                self.list_a.to_dsl(),
+                self.list_b.to_dsl(),
+                self.result.to_dsl(),
+            ],
         )
     }
 }
@@ -928,7 +943,11 @@ impl ToDSL for SetDifference {
     fn to_dsl(&self) -> String {
         render_function(
             "set_difference",
-            &[self.list_a.to_dsl(), self.list_b.to_dsl(), self.result.to_dsl()],
+            &[
+                self.list_a.to_dsl(),
+                self.list_b.to_dsl(),
+                self.result.to_dsl(),
+            ],
         )
     }
 }
@@ -965,7 +984,11 @@ impl ToDSL for Collect {
     fn to_dsl(&self) -> String {
         render_function(
             "collect",
-            &[self.template.to_dsl(), self.into.to_dsl(), self.query.to_dsl()],
+            &[
+                self.template.to_dsl(),
+                self.into.to_dsl(),
+                self.query.to_dsl(),
+            ],
         )
     }
 }
@@ -1075,7 +1098,11 @@ impl ToDSL for Interval {
     fn to_dsl(&self) -> String {
         render_function(
             "interval",
-            &[self.start.to_dsl(), self.end.to_dsl(), self.interval.to_dsl()],
+            &[
+                self.start.to_dsl(),
+                self.end.to_dsl(),
+                self.interval.to_dsl(),
+            ],
         )
     }
 }
@@ -1084,7 +1111,11 @@ impl ToDSL for IntervalStartDuration {
     fn to_dsl(&self) -> String {
         render_function(
             "interval_start_duration",
-            &[self.start.to_dsl(), self.duration.to_dsl(), self.interval.to_dsl()],
+            &[
+                self.start.to_dsl(),
+                self.duration.to_dsl(),
+                self.interval.to_dsl(),
+            ],
         )
     }
 }
@@ -1093,7 +1124,11 @@ impl ToDSL for IntervalDurationEnd {
     fn to_dsl(&self) -> String {
         render_function(
             "interval_duration_end",
-            &[self.duration.to_dsl(), self.end.to_dsl(), self.interval.to_dsl()],
+            &[
+                self.duration.to_dsl(),
+                self.end.to_dsl(),
+                self.interval.to_dsl(),
+            ],
         )
     }
 }
@@ -1126,7 +1161,11 @@ impl ToDSL for DateDuration {
     fn to_dsl(&self) -> String {
         render_function(
             "date_duration",
-            &[self.start.to_dsl(), self.duration.to_dsl(), self.end.to_dsl()],
+            &[
+                self.start.to_dsl(),
+                self.duration.to_dsl(),
+                self.end.to_dsl(),
+            ],
         )
     }
 }
@@ -1200,5 +1239,77 @@ impl ToDSL for MonthEndDates {
             "month_end_dates",
             &[self.date.to_dsl(), self.start.to_dsl(), self.end.to_dsl()],
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TerminusDB 12.1 operations
+// ---------------------------------------------------------------------------
+
+impl ToDSL for TripleCount {
+    fn to_dsl(&self) -> String {
+        // The resource form renders as triple_count(resource, count); the
+        // pattern form as triple_count_pattern(s, p, o, count).
+        if let Some(resource) = &self.resource {
+            let mut args = vec![escape_string(resource), self.count.to_dsl()];
+            if !matches!(self.graph, None | Some(GraphType::Instance)) {
+                args.push(escape_string(&format!("{:?}", self.graph).to_lowercase()));
+            }
+            return render_function("triple_count", &args);
+        }
+        let unbound = "_".to_string();
+        let mut args = vec![
+            self.subject
+                .as_ref()
+                .map(|v| v.to_dsl())
+                .unwrap_or_else(|| unbound.clone()),
+            self.predicate
+                .as_ref()
+                .map(|v| v.to_dsl())
+                .unwrap_or_else(|| unbound.clone()),
+            self.object.as_ref().map(|v| v.to_dsl()).unwrap_or(unbound),
+            self.count.to_dsl(),
+        ];
+        if !matches!(self.graph, None | Some(GraphType::Instance)) {
+            args.push(escape_string(&format!("{:?}", self.graph).to_lowercase()));
+        }
+        render_function("triple_count_pattern", &args)
+    }
+}
+
+impl ToDSL for TripleRangeCount {
+    fn to_dsl(&self) -> String {
+        let mut args = vec![
+            self.subject.to_dsl(),
+            self.predicate.to_dsl(),
+            self.low.to_dsl(),
+            self.high.to_dsl(),
+            self.count.to_dsl(),
+        ];
+        if !matches!(self.graph, None | Some(GraphType::Instance)) {
+            args.push(escape_string(&format!("{:?}", self.graph).to_lowercase()));
+        }
+        render_function("triple_range_count", &args)
+    }
+}
+
+impl ToDSL for TripleRelation {
+    fn to_dsl(&self) -> String {
+        render_function(
+            "triple_relation",
+            &[
+                self.subject.to_dsl(),
+                self.predicate.to_dsl(),
+                self.object.to_dsl(),
+                self.relation.to_dsl(),
+                self.value.to_dsl(),
+            ],
+        )
+    }
+}
+
+impl ToDSL for UuidV7 {
+    fn to_dsl(&self) -> String {
+        render_function("uuid_v7", &[self.base.to_dsl(), self.uri.to_dsl()])
     }
 }

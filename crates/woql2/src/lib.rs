@@ -35,8 +35,8 @@ pub mod query_dsl;
 pub mod prelude {
     // Re-export core types
     pub use super::collection::{
-        Dot, Length, ListToSet, Member, SetDifference, SetIntersection, SetMember, SetUnion,
-        Slice, Sum,
+        Dot, Length, ListToSet, Member, SetDifference, SetIntersection, SetMember, SetUnion, Slice,
+        Sum,
     };
     pub use super::compare::{Equals, Greater, Gte, IsA, Less, Lte, Subsumption, TypeOf, Typecast};
     pub use super::control::{
@@ -54,7 +54,7 @@ pub mod prelude {
     };
     pub use super::misc::{
         Collect, Comment, Count, HashKey, InRange, LexicalKey, Limit, RandomKey, RangeMax,
-        RangeMin, Sequence, Size, Start, TripleCount,
+        RangeMin, Sequence, Size, Start, TripleCount, UuidV7,
     };
     pub use super::order::{GroupBy, Order, OrderBy, OrderTemplate};
     pub use super::path::{
@@ -66,9 +66,9 @@ pub mod prelude {
         Concatenate, Join, Like, Lower, Pad, Regexp, Split, Substring, Trim, Upper,
     };
     pub use super::triple::{
-        AddData, AddLink, AddTriple, AddedData, AddedLink, AddedTriple, Data, DeleteLink,
-        DeleteTriple, DeletedLink, DeletedTriple, Link, Triple, TripleNext, TriplePrevious,
-        TripleSlice, TripleSliceRev,
+        AddData, AddLink, AddTriple, AddedData, AddedLink, AddedTriple, AllenRelation, Data,
+        DeleteLink, DeleteTriple, DeletedLink, DeletedTriple, Link, Triple, TripleNext,
+        TriplePrevious, TripleRangeCount, TripleRelation, TripleSlice, TripleSliceRev,
     };
     pub use super::value::{DataValue, DictionaryTemplate, FieldValuePair, NodeValue, Value};
     // Export the IntoDataValue trait for ergonomic API usage

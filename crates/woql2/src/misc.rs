@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use terminusdb_schema::GraphType;
 use terminusdb_schema::ToTDBInstance;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
@@ -76,14 +77,82 @@ pub struct Size {
     pub size: DataValue,
 }
 
-/// The number of edges in a database.
+/// The number of edges in a database, or the number of triples matching a
+/// pattern.
+///
+/// TerminusDB 12.1 serves two forms through the same class:
+/// * the *resource* form — `resource` names a collection (e.g. a graph IRI) and
+///   `count` is bound to the number of edges in it;
+/// * the *pattern* form — any of `subject`/`predicate`/`object`/`graph` restrict
+///   the triples counted, answered from the index.
+///
+/// Use [`TripleCount::for_resource`] or [`TripleCount::pattern`] rather than
+/// filling the struct by hand.
 #[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
 
 pub struct TripleCount {
-    /// The resource to obtain the edges from.
-    pub resource: String,
+    /// The resource to obtain the edges from (resource form).
+    pub resource: Option<String>,
+    /// A URI or variable restricting the subject of the counted triples.
+    pub subject: Option<NodeValue>,
+    /// A URI or variable restricting the predicate of the counted triples.
+    pub predicate: Option<NodeValue>,
+    /// A URI, datatype or variable restricting the object of the counted triples.
+    pub object: Option<self::Value>,
+    /// An optional graph (either 'instance' or 'schema').
+    #[tdb(default)]
+    pub graph: Option<GraphType>,
     /// The count of edges.
     pub count: DataValue,
+}
+
+impl TripleCount {
+    /// The resource form: count every edge in `resource`.
+    pub fn for_resource(resource: impl std::convert::Into<String>, count: DataValue) -> Self {
+        Self {
+            resource: Some(resource.into()),
+            subject: None,
+            predicate: None,
+            object: None,
+            graph: None,
+            count,
+        }
+    }
+
+    /// The pattern form: count the triples matching the given (partial) pattern.
+    /// Pass `None` for any position that should be unrestricted.
+    pub fn pattern(
+        subject: Option<NodeValue>,
+        predicate: Option<NodeValue>,
+        object: Option<self::Value>,
+        count: DataValue,
+    ) -> Self {
+        Self {
+            resource: None,
+            subject,
+            predicate,
+            object,
+            graph: None,
+            count,
+        }
+    }
+
+    /// Restrict this count to a particular graph.
+    pub fn with_graph(mut self, graph: GraphType) -> Self {
+        self.graph = Some(graph);
+        self
+    }
+}
+
+/// Generates a UUIDv7 key identical to those generated automatically by
+/// 'UuidV7' `@key` specifications. (TerminusDB 12.1)
+#[derive(TerminusDBModel, FromTDBInstance, Debug, Clone, PartialEq)]
+
+pub struct UuidV7 {
+    /// The URI base to the left of the key.
+    pub base: DataValue,
+    /// The resulting URI.
+    pub uri: NodeValue,
 }
 
 /// Attach a comment to a query; the query itself (if any) is disabled. (TerminusDB 12)

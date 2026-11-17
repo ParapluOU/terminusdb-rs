@@ -374,6 +374,7 @@ impl WoqlBuilder {
             value: value.into_woql2_value(),
             type_uri: type_uri.into_woql2_node_value(),
             result_value: result_value.into_woql2_value(),
+            prefixes: None,
         });
         self.add_query_component(cast_query)
     }
@@ -969,10 +970,10 @@ impl WoqlBuilder {
     /// Returns the count of triples in the specified resource (graph IRI).
     /// This is a standalone query operation.
     pub fn triple_count(resource: impl Into<String>, count_var: impl IntoWoql2) -> Self {
-        let triple_count_query = Woql2Query::TripleCount(Woql2TripleCount {
-            resource: resource.into(),
-            count: count_var.into_woql2_data_value(),
-        });
+        let triple_count_query = Woql2Query::TripleCount(Woql2TripleCount::for_resource(
+            resource.into(),
+            count_var.into_woql2_data_value(),
+        ));
         WoqlBuilder {
             query: Some(triple_count_query),
         }
