@@ -233,10 +233,26 @@ println!("Commit ID: {}", commit_id); // Just "abc123..." without the "branch:" 
 
 This workspace targets **TerminusDB 12.1** and is v12-only (no v11 compatibility).
 The embedded server (`terminusdb-bin`) builds the `ParapluOU/terminusdb` fork
-rebased onto upstream `12.1-rc`, pinned in `crates/bin/build.rs` (default
-`TERMINUSDB_VERSION = "v12.1-rc-paraplu.1"`). See
+rebased onto upstream `v12.1.0-rc3`, pinned in `crates/bin/build.rs` (default
+`TERMINUSDB_VERSION = "v12.1.0-rc3-paraplu.1"`). See
 `docs/terminusdb12-compat-plan.md` for the upgrade milestones and status, and the
 refreshed docs mirror in `docs/terminusdb/`.
+
+The 12.1.0-rc3 surface is covered by `crates/client/tests/test_v12_1_*.rs`
+(every one of them runs against a real embedded server):
+
+- WOQL: `TripleRangeCount`, `TripleRelation` (+ `AllenRelation`), `UuidV7`,
+  `TripleCount`'s pattern form, `Typecast { prefixes }`.
+- Schema/derive: `#[tdb(key = "uuid_v7")]`, `#[tdb(shared = true)]` (`@shared`,
+  cascade-deleted with its last referrer) and field-level `#[tdb(unfold)]`.
+- Client: `document_count` (`counted=true`), `get_changes`,
+  `get_class_frame`/`get_json_schema`, `get_documents_text`
+  (markdown/embedding), the `GetOpts` params `identifiers`/`id_prefix`/
+  `raw_id`/`xsd`/`format`, the new history params + `streaming=true`,
+  `DiffOptions::unfold` and typed `PatchOperation`s.
+- GraphQL: `subscribe_graphql` (subscriptions over SSE, `_ChangeSet`,
+  `_CommitMetadata`) — note the server wraps `next` payloads in a `data`
+  envelope and does **not** apply subscription `filter`s in community rc3.
 
 Numeric handling (v12): the server returns numbers as native JSON numbers at full
 rational precision. `serde_json`'s `arbitrary_precision` feature is enabled
