@@ -59,7 +59,10 @@ impl Integer {
     /// Mirrors rug: a `factor` of 0 or ±1 removes nothing (rug panics on those
     /// only in debug builds of GMP; the callers here always pass 2 or 5).
     pub fn remove_factor(self, factor: &Integer) -> (Integer, u32) {
-        if self.0.is_zero() || factor.0.is_zero() || factor.0.magnitude() == &num_bigint::BigUint::from(1u32) {
+        if self.0.is_zero()
+            || factor.0.is_zero()
+            || factor.0.magnitude() == &num_bigint::BigUint::from(1u32)
+        {
             return (self, 0);
         }
         let mut value = self.0;
@@ -293,7 +296,8 @@ impl std::error::Error for TryFromIntegerError {}
 impl TryFrom<Integer> for usize {
     type Error = TryFromIntegerError;
     fn try_from(val: Integer) -> Result<Self, Self::Error> {
-        val.0.to_biguint()
+        val.0
+            .to_biguint()
             .and_then(|u| usize::try_from(&u).ok())
             .ok_or(TryFromIntegerError(()))
     }
@@ -330,7 +334,8 @@ impl TryFrom<Integer> for i32 {
 impl TryFrom<&Integer> for usize {
     type Error = TryFromIntegerError;
     fn try_from(val: &Integer) -> Result<Self, Self::Error> {
-        val.0.to_biguint()
+        val.0
+            .to_biguint()
             .and_then(|u| usize::try_from(&u).ok())
             .ok_or(TryFromIntegerError(()))
     }

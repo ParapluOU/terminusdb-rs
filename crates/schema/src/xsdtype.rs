@@ -1,7 +1,7 @@
 use crate::{
     json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive,
-    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL,
-    INTEGER, TIME, UNSIGNED_INT, URI,
+    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL, INTEGER, TIME,
+    UNSIGNED_INT, URI,
 };
 use chrono::Utc;
 use decimal_rs::Decimal;
@@ -430,10 +430,7 @@ impl XSDAnySimpleType {
 
     /// A half-open `xdd:dateTimeInterval` from its two endpoints, in the
     /// `<start>/<end>` lexical form the server parses.
-    pub fn date_time_interval(
-        start: chrono::DateTime<Utc>,
-        end: chrono::DateTime<Utc>,
-    ) -> Self {
+    pub fn date_time_interval(start: chrono::DateTime<Utc>, end: chrono::DateTime<Utc>) -> Self {
         Self::typed(
             "xdd:dateTimeInterval",
             format!("{}/{}", start.to_rfc3339(), end.to_rfc3339()),

@@ -105,10 +105,7 @@ fn remove_factor_counts_and_divides() {
         Integer::from(6).remove_factor(&Integer::from(0)),
         (Integer::from(6), 0)
     );
-    assert_eq!(
-        Integer::from(0).remove_factor(&two),
-        (Integer::from(0), 0)
-    );
+    assert_eq!(Integer::from(0).remove_factor(&two), (Integer::from(0), 0));
 }
 
 /// The reason `remove_factor` + `pow` exist in the shim at all: rendering a
