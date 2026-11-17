@@ -40,6 +40,20 @@ pub enum XSDAnySimpleType {
     // DateTime(chrono::DateTime<Tz>)
     UnsignedInt(usize),
     Integer(i64),
+    /// Escape hatch for any literal this enum has no dedicated variant for:
+    /// carries the datatype IRI and the lexical value verbatim.
+    ///
+    /// TerminusDB 12 ships datatypes outside the XSD set — `xdd:dateTimeInterval`,
+    /// `xdd:dateRange`, `xdd:decimalRange`, `xdd:gYearRange`, `xdd:integerRange`,
+    /// `xdd:coordinate`, `xdd:email`, `xdd:url` — and WOQL predicates such as
+    /// `TripleRelation` take them as operands. Without this variant such a
+    /// literal cannot be expressed at all.
+    Typed {
+        /// The datatype IRI, e.g. `"xdd:dateTimeInterval"`.
+        type_uri: String,
+        /// The lexical value, serialised as-is into `@value`.
+        value: serde_json::Value,
+    },
 }
 
 // Helper function to get a consistent numeric representation of the variant for ordering
@@ -56,7 +70,15 @@ fn variant_order(v: &XSDAnySimpleType) -> u8 {
         XSDAnySimpleType::Time(_) => 8,
         XSDAnySimpleType::UnsignedInt(_) => 9,
         XSDAnySimpleType::Integer(_) => 10,
+        XSDAnySimpleType::Typed { .. } => 11,
     }
+}
+
+/// `(type_uri, value)` rendered for a total order / equality on `Typed`.
+/// `serde_json::Value` is neither `Ord` nor `Hash`, so compare its textual
+/// form — stable for the literals this variant carries.
+fn typed_key(type_uri: &str, value: &serde_json::Value) -> (String, String) {
+    (type_uri.to_string(), value.to_string())
 }
 
 impl Into<PrimitiveValue> for XSDAnySimpleType {
@@ -85,6 +107,16 @@ impl PartialOrd for XSDAnySimpleType {
             (Self::Time(l), Self::Time(r)) => l.partial_cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.partial_cmp(r),
             (Self::Integer(l), Self::Integer(r)) => l.partial_cmp(r),
+            (
+                Self::Typed {
+                    type_uri: lt,
+                    value: lv,
+                },
+                Self::Typed {
+                    type_uri: rt,
+                    value: rv,
+                },
+            ) => typed_key(lt, lv).partial_cmp(&typed_key(rt, rv)),
             // This case should be unreachable because we check variant order first
             _ => unreachable!("Variant order mismatch after equality check"),
         }
@@ -114,6 +146,16 @@ impl Ord for XSDAnySimpleType {
             (Self::Time(l), Self::Time(r)) => l.cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.cmp(r),
             (Self::Integer(l), Self::Integer(r)) => l.cmp(r),
+            (
+                Self::Typed {
+                    type_uri: lt,
+                    value: lv,
+                },
+                Self::Typed {
+                    type_uri: rt,
+                    value: rv,
+                },
+            ) => typed_key(lt, lv).cmp(&typed_key(rt, rv)),
             // This case should be unreachable because we check variant order first
             _ => unreachable!("Variant order mismatch after equality check"),
         }
@@ -134,6 +176,16 @@ impl PartialEq for XSDAnySimpleType {
             (Self::Time(l0), Self::Time(r0)) => l0 == r0,
             (Self::UnsignedInt(l0), Self::UnsignedInt(r0)) => l0 == r0,
             (Self::Integer(l0), Self::Integer(r0)) => l0 == r0,
+            (
+                Self::Typed {
+                    type_uri: lt,
+                    value: lv,
+                },
+                Self::Typed {
+                    type_uri: rt,
+                    value: rv,
+                },
+            ) => lt == rt && lv == rv,
             _ => false,
         }
     }
@@ -156,6 +208,7 @@ impl Hash for XSDAnySimpleType {
             XSDAnySimpleType::Time(t) => t.hash(state),
             XSDAnySimpleType::UnsignedInt(i) => i.hash(state),
             XSDAnySimpleType::Integer(i) => i.hash(state),
+            XSDAnySimpleType::Typed { type_uri, value } => typed_key(type_uri, value).hash(state),
         }
     }
 }
@@ -330,6 +383,12 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
                     "@value": i
                 })))
             }
+            XSDAnySimpleType::Typed { type_uri, value } => {
+                InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
+                    "@type": type_uri,
+                    "@value": value
+                })))
+            }
         }
     }
 }
@@ -349,5 +408,35 @@ impl<Parent> InstancePropertyFromJson<Parent> for XSDAnySimpleType {
             }
         };
         Ok(InstanceProperty::Primitive(primitive))
+    }
+}
+
+impl XSDAnySimpleType {
+    /// A literal of an arbitrary datatype, e.g. an `xdd:dateTimeInterval`:
+    ///
+    /// ```
+    /// # use terminusdb_schema::XSDAnySimpleType;
+    /// let interval = XSDAnySimpleType::typed(
+    ///     "xdd:dateTimeInterval",
+    ///     "2026-01-01T00:00:00Z/2026-02-01T00:00:00Z",
+    /// );
+    /// ```
+    pub fn typed(type_uri: impl Into<String>, value: impl Into<serde_json::Value>) -> Self {
+        Self::Typed {
+            type_uri: type_uri.into(),
+            value: value.into(),
+        }
+    }
+
+    /// A half-open `xdd:dateTimeInterval` from its two endpoints, in the
+    /// `<start>/<end>` lexical form the server parses.
+    pub fn date_time_interval(
+        start: chrono::DateTime<Utc>,
+        end: chrono::DateTime<Utc>,
+    ) -> Self {
+        Self::typed(
+            "xdd:dateTimeInterval",
+            format!("{}/{}", start.to_rfc3339(), end.to_rfc3339()),
+        )
     }
 }

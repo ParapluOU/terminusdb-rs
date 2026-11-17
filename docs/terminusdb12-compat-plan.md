@@ -12,11 +12,23 @@ cross-checked against `docs/terminusdb/releases/`. Procedure captured in the
 
 ### Server pin
 
-- [ ] Rebase the 4 fork patches onto `v12.1.0-rc3`, tag `v12.1.0-rc3-paraplu.1`,
+- [x] Rebase the 4 fork patches onto `v12.1.0-rc3`, tag `v12.1.0-rc3-paraplu.1`,
       bump `TERMINUSDB_VERSION` in `crates/bin/build.rs`, `crates/gql`'s
       `terminusdb-community` rev, and the `[patch.crates-io]` pins in the root
       `Cargo.toml` (rc3 pins `tdb-succinct` at tag `v0.2.1` = `3e57cc19`).
-- [ ] Rebuild `terminusdb-bin`; `cargo test -p terminusdb-bin` green.
+- [x] Rebuild `terminusdb-bin`; `cargo test -p terminusdb-bin` green (15/15,
+      including all five server-start tests). Build from the persistent checkout
+      at `/home/paseo/projects/terminusdb-fork` via `TERMINUSDB_SOURCE` — the
+      clone-to-`/tmp` path deletes the tree the saved state loads `librust.so`
+      from, and a set `CARGO_TARGET_DIR` leaks into the inner cargo. Both traps
+      are written up in the `terminusdb-version-upgrade` skill.
+- [x] Fallout of the bump, fixed here: `crates/rug-shim` needed the rug API
+      tdb-succinct v0.2.1 and store-prolog now use (reference-operand
+      arithmetic, `to_i128`, `ops::Pow`, `remove_factor`) or `crates/gql` would
+      not compile; `u64` above `i64::MAX` is rejected by rc3's new
+      `cast_specificity` ladder and is now sent as a decimal string; and insert
+      responses moved to compressed IDs, which two client tests assumed were
+      full IRIs.
 
 ### WOQL AST (`crates/woql2`)
 

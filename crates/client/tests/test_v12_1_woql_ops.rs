@@ -429,4 +429,73 @@ mod tests {
             })
             .await
     }
+
+    /// `TripleRelation` against a genuine `xdd:dateTimeInterval` reference, not
+    /// just an instant.
+    ///
+    /// Interval-only relations are the point here: `during` and `contains` are
+    /// vacuous against the point intervals an `xsd:dateTime` reference coerces
+    /// to, so this is the case that needs
+    /// `XSDAnySimpleType::date_time_interval`. Before that constructor existed
+    /// there was no way to write a literal of a non-XSD datatype at all.
+    #[tokio::test]
+    async fn test_v12_1_triple_relation_against_an_interval_literal() -> anyhow::Result<()> {
+        let server = TerminusDBServer::test_instance().await?;
+        let events = vec![
+            event("jan", 2025, 1, 1)?,
+            event("apr", 2025, 4, 1)?,
+            event("jul", 2025, 7, 1)?,
+        ];
+        server
+            .with_db_seed(
+                "v12_1_triple_relation_interval",
+                events,
+                |client, spec| async move {
+                    // Reference: the half-open interval [2025-03-01, 2025-06-01).
+                    let reference = DataValue::Data(XSDAnySimpleType::date_time_interval(
+                        Utc.with_ymd_and_hms(2025, 3, 1, 0, 0, 0).unwrap(),
+                        Utc.with_ymd_and_hms(2025, 6, 1, 0, 0, 0).unwrap(),
+                    ));
+
+                    // Only the April instant falls inside it.
+                    for (relation, expected) in [
+                        (AllenRelation::During, vec!["2025-04-01"]),
+                        (AllenRelation::Before, vec!["2025-01-01"]),
+                        (AllenRelation::After, vec!["2025-07-01"]),
+                    ] {
+                        let q = Query::TripleRelation(TripleRelation {
+                            subject: node_var("S"),
+                            predicate: node("@schema:when"),
+                            object: WoqlValue::Variable("O".to_string()),
+                            relation: relation.into(),
+                            value: reference.clone(),
+                        });
+                        let b = run(&client, &spec, q).await?;
+                        let mut objects: Vec<String> = b
+                            .iter()
+                            .filter_map(|m| m.get("O").and_then(binding_str))
+                            .collect();
+                        objects.sort();
+                        objects.dedup();
+                        println!(
+                            "TripleRelation(when {relation} [2025-03-01,2025-06-01)) -> {objects:?}"
+                        );
+                        assert_eq!(
+                            objects.len(),
+                            expected.len(),
+                            "wrong number of {relation} matches against the interval: {objects:?}"
+                        );
+                        for (got, want) in objects.iter().zip(expected.iter()) {
+                            assert!(
+                                got.starts_with(want),
+                                "expected a {relation} match at {want}, got {got}"
+                            );
+                        }
+                    }
+
+                    Ok(())
+                },
+            )
+            .await
+    }
 }
