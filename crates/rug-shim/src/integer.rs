@@ -53,6 +53,36 @@ impl Integer {
     }
 
     /// Converts to u64, returns None if out of range
+    /// `rug::Integer::remove_factor`: divide out every occurrence of `factor`,
+    /// returning the remaining value and how many times it divided.
+    ///
+    /// Mirrors rug: a `factor` of 0 or ±1 removes nothing (rug panics on those
+    /// only in debug builds of GMP; the callers here always pass 2 or 5).
+    pub fn remove_factor(self, factor: &Integer) -> (Integer, u32) {
+        if self.0.is_zero() || factor.0.is_zero() || factor.0.magnitude() == &num_bigint::BigUint::from(1u32) {
+            return (self, 0);
+        }
+        let mut value = self.0;
+        let mut count: u32 = 0;
+        loop {
+            let (q, r) = num_integer::Integer::div_rem(&value, &factor.0);
+            if !r.is_zero() {
+                break;
+            }
+            value = q;
+            count += 1;
+        }
+        (Integer(value), count)
+    }
+
+    pub fn to_i128(&self) -> Option<i128> {
+        self.0.to_i128()
+    }
+
+    pub fn to_u128(&self) -> Option<u128> {
+        self.0.to_u128()
+    }
+
     pub fn to_u64(&self) -> Option<u64> {
         self.0.to_u64()
     }

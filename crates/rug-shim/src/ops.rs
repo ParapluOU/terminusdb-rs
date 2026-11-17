@@ -88,6 +88,63 @@ impl SubAssign<i32> for Integer {
     }
 }
 
+// Reference-operand forms. Real `rug` returns a lazy incomplete-computation
+// value here; callers only ever use the result as an `Integer`, so the shim
+// evaluates eagerly instead.
+impl Sub<Integer> for &Integer {
+    type Output = Integer;
+    fn sub(self, rhs: Integer) -> Self::Output {
+        Integer(&self.0 - rhs.0)
+    }
+}
+
+impl Sub<&Integer> for Integer {
+    type Output = Integer;
+    fn sub(self, rhs: &Integer) -> Self::Output {
+        Integer(self.0 - &rhs.0)
+    }
+}
+
+impl Add<&Integer> for Integer {
+    type Output = Integer;
+    fn add(self, rhs: &Integer) -> Self::Output {
+        Integer(self.0 + &rhs.0)
+    }
+}
+
+impl Add<Integer> for &Integer {
+    type Output = Integer;
+    fn add(self, rhs: Integer) -> Self::Output {
+        Integer(&self.0 + rhs.0)
+    }
+}
+
+impl AddAssign<&Integer> for Integer {
+    fn add_assign(&mut self, rhs: &Integer) {
+        self.0 += &rhs.0;
+    }
+}
+
+impl SubAssign<&Integer> for Integer {
+    fn sub_assign(&mut self, rhs: &Integer) {
+        self.0 -= &rhs.0;
+    }
+}
+
+impl Rem<&Integer> for Integer {
+    type Output = Integer;
+    fn rem(self, rhs: &Integer) -> Self::Output {
+        Integer(self.0 % &rhs.0)
+    }
+}
+
+impl Rem<Integer> for &Integer {
+    type Output = Integer;
+    fn rem(self, rhs: Integer) -> Self::Output {
+        Integer(&self.0 % rhs.0)
+    }
+}
+
 // Multiplication
 impl Mul for Integer {
     type Output = Self;
@@ -257,5 +314,26 @@ impl ShrAssign<i32> for Integer {
         } else {
             self.0 <<= (-rhs) as usize;
         }
+    }
+}
+
+/// `rug::ops::Pow`. Exponentiation as a trait, mirroring rug's layout so that
+/// `use rug::ops::Pow` resolves against this shim.
+pub trait Pow<Rhs> {
+    type Output;
+    fn pow(self, rhs: Rhs) -> Self::Output;
+}
+
+impl Pow<u32> for Integer {
+    type Output = Integer;
+    fn pow(self, rhs: u32) -> Self::Output {
+        Integer(num_traits::Pow::pow(self.0, rhs))
+    }
+}
+
+impl Pow<u32> for &Integer {
+    type Output = Integer;
+    fn pow(self, rhs: u32) -> Self::Output {
+        Integer(num_traits::Pow::pow(self.0.clone(), rhs))
     }
 }
