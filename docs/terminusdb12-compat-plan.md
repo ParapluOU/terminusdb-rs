@@ -112,12 +112,29 @@ server source settled:
 Not covered: the `api:CountedNotSupportedForSelector` error path — our
 `document_count` cannot express `counted` together with `id`/`ids`/`query`, so
 there is nothing to test.
-- [ ] History params we lack: `diff`, `streaming` (NDJSON), `fast`, `before`,
+- [x] History params we lack: `diff`, `streaming` (NDJSON), `fast`, `before`,
       `after`, `complete`, `graph_type`.
-- [ ] `unfold` on `POST /api/diff` (default `true`; `false` compares documents
+- [x] `unfold` on `POST /api/diff` (default `true`; `false` compares documents
       as stored).
-- [ ] Typed `Insert`/`Delete` patch operations for `POST /api/patch` alongside
+- [x] Typed `Insert`/`Delete` patch operations for `POST /api/patch` alongside
       the existing field-level `SwapValue`, including `@capture`/`@ref`.
+
+Live-verified in `crates/client/tests/test_v12_1_history_diff_patch.rs` (4/4
+green). Notes from the server:
+
+* `fast=true` is **not** a community feature: the server answers
+  `api:FastHistoryNotAvailable` ("not available in the community edition")
+  rather than falling back to the slow path. The parameter is exposed and the
+  test asserts the refusal — matching this document's enterprise deferral.
+* `before`/`after` take ISO-8601 and must be url-encoded; an unencoded RFC-3339
+  offset (`+00:00`) reaches the server as a space and fails to parse. The URL
+  builder now encodes them.
+* `diff=true` attaches a `diff` object per entry (`SwapValue` per changed
+  field, `@insert` for the creating commit), on both the collected and the
+  `streaming=true` NDJSON path.
+* Patch `Insert` documents are raw JSON-LD, so a model whose id field is an
+  `EntityIDFor` must also carry that field explicitly — it is a required schema
+  property like any other.
 
 ### GraphQL
 

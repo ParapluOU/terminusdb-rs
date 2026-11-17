@@ -226,6 +226,36 @@ impl<'a> UrlBuilder<'a> {
             self.query_params
                 .push(("created".to_string(), created.to_string()));
         }
+        // TerminusDB 12.1 history parameters.
+        if let Some(diff) = params.diff {
+            self.query_params
+                .push(("diff".to_string(), diff.to_string()));
+        }
+        if let Some(complete) = params.complete {
+            self.query_params
+                .push(("complete".to_string(), complete.to_string()));
+        }
+        if let Some(fast) = params.fast {
+            self.query_params
+                .push(("fast".to_string(), fast.to_string()));
+        }
+        // ISO-8601 timestamps must be url-encoded: an RFC-3339 offset
+        // (`+00:00`) would otherwise reach the server as a space and fail to
+        // parse.
+        if let Some(ref before) = params.before {
+            self.query_params.push((
+                "before".to_string(),
+                urlencoding::encode(before).to_string(),
+            ));
+        }
+        if let Some(ref after) = params.after {
+            self.query_params
+                .push(("after".to_string(), urlencoding::encode(after).to_string()));
+        }
+        if let Some(graph_type) = params.graph_type {
+            self.query_params
+                .push(("graph_type".to_string(), graph_type.to_string()));
+        }
 
         self
     }

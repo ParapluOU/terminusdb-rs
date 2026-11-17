@@ -328,4 +328,81 @@ impl super::client::TerminusDBHttpClient {
         self.get_documents_text(spec, Some(id), None, DocumentFormat::Embedding)
             .await
     }
+
+    /// Stream a document's history as newline-delimited JSON
+    /// (`streaming=true`, TerminusDB 12.1).
+    ///
+    /// The non-streaming [`get_document_history`](Self::get_document_history)
+    /// builds the whole array server-side before replying; with
+    /// `streaming=true` the server answers `application/x-ndjson` chunked and
+    /// writes one entry per line as it walks the commit chain, so a long
+    /// history can be consumed incrementally.
+    ///
+    /// All the ordinary history parameters apply, including rc3's `diff`,
+    /// `complete`, `before`/`after` and `graph_type`.
+    pub async fn get_document_history_streaming(
+        &self,
+        document_id: &str,
+        spec: &BranchSpec,
+        params: Option<crate::document::DocumentHistoryParams>,
+    ) -> anyhow::Result<impl futures_util::Stream<Item = anyhow::Result<crate::document::CommitHistoryEntry>>>
+    {
+        use futures_util::StreamExt;
+
+        let params = params.unwrap_or_default();
+        let uri = self
+            .build_url()
+            .endpoint("history")
+            .database_with_branch(spec)
+            .history_params(document_id, &params)
+            .query("streaming", "true")
+            .build();
+        debug!("streaming document history from {}", &uri);
+
+        let _permit = self.acquire_read_permit().await;
+        let res = self
+            .http
+            .get(uri)
+            .basic_auth(&self.user, Some(&self.pass))
+            .send()
+            .await
+            .context("failed to start the streaming history request")?;
+
+        // A failure before streaming begins arrives as an ordinary error body.
+        if !res.status().is_success() {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            anyhow::bail!("streaming history failed ({}): {}", status, text);
+        }
+
+        let byte_stream = res.bytes_stream();
+
+        Ok(async_stream::try_stream! {
+            futures_util::pin_mut!(byte_stream);
+            let mut buf: Vec<u8> = Vec::new();
+
+            while let Some(chunk) = byte_stream.next().await {
+                let chunk = chunk.context("error reading history stream chunk")?;
+                buf.extend_from_slice(&chunk);
+                while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                    let line: Vec<u8> = buf.drain(..=pos).collect();
+                    let line = &line[..line.len() - 1];
+                    if line.iter().all(|b| b.is_ascii_whitespace()) {
+                        continue;
+                    }
+                    let entry: crate::document::CommitHistoryEntry =
+                        serde_json::from_slice(line)
+                            .context("failed to parse a streaming history entry")?;
+                    yield entry;
+                }
+            }
+
+            // A final line without a trailing newline.
+            if !buf.iter().all(|b| b.is_ascii_whitespace()) {
+                let entry: crate::document::CommitHistoryEntry = serde_json::from_slice(&buf)
+                    .context("failed to parse the final streaming history entry")?;
+                yield entry;
+            }
+        })
+    }
 }

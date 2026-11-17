@@ -24,6 +24,11 @@ pub struct DiffOptions {
     pub keep: Option<serde_json::Value>,
     /// Record the exact value in list-copy operations (makes copies explicit).
     pub copy_value: bool,
+    /// TerminusDB 12.1 `unfold` (server default `true`): compare documents
+    /// with their subdocuments/unfoldable links expanded. Set to `false` to
+    /// diff documents exactly as stored, so a changed subdocument shows up as
+    /// a changed *link* rather than as a nested diff.
+    pub unfold: Option<bool>,
 }
 
 /// Request for applying a patch
@@ -168,6 +173,9 @@ impl super::client::TerminusDBHttpClient {
         if options.copy_value {
             body["copy_value"] = json!(true);
         }
+        if let Some(unfold) = options.unfold {
+            body["unfold"] = json!(unfold);
+        }
 
         let _permit = self.acquire_read_permit().await;
         let res = self
@@ -290,5 +298,169 @@ impl super::client::TerminusDBHttpClient {
         );
 
         Ok(response)
+    }
+}
+
+/// A typed entry in a `POST /api/patch` patch list (TerminusDB 12.1).
+///
+/// The patch endpoint accepts three shapes, which this enum keeps apart:
+///
+/// * **Insert** — `{"@op": "Insert", "@insert": {...}}`, creating a whole
+///   document. The inserted document is identified either by its `@id` or by a
+///   `@capture` name, which other entries in the same patch can point at with
+///   [`PatchOperation::reference`].
+/// * **Delete** — `{"@op": "Delete", "@delete": {"@id": "..."}}`.
+/// * **Field-level diffs** — a document-shaped entry carrying per-field
+///   operations such as `SwapValue`, e.g.
+///   `{"@id": "Person/jane", "name": {"@op": "SwapValue", "@before": "Jane",
+///   "@after": "Janet"}}`.
+#[derive(Debug, Clone)]
+pub enum PatchOperation {
+    /// Insert a whole document.
+    Insert {
+        /// The document to insert, including its `@type` and either an `@id` or
+        /// a `@capture`.
+        document: serde_json::Value,
+    },
+    /// Delete a whole document by id.
+    Delete {
+        /// The document id, e.g. `"Person/jane"`.
+        id: String,
+    },
+    /// Replace one field's value on an existing document.
+    SwapValue {
+        /// The document id.
+        id: String,
+        /// The field (property) name.
+        field: String,
+        /// The value the field currently holds. The server refuses the patch
+        /// with a conflict if it does not match.
+        before: serde_json::Value,
+        /// The value to write.
+        after: serde_json::Value,
+    },
+    /// Any other patch entry, passed through verbatim.
+    Raw(serde_json::Value),
+}
+
+impl PatchOperation {
+    /// Insert a document that already carries its own `@id`.
+    pub fn insert(document: serde_json::Value) -> Self {
+        PatchOperation::Insert { document }
+    }
+
+    /// Insert a document under a `@capture` name instead of an explicit `@id`,
+    /// so the server mints the id and other entries in the same patch can link
+    /// to it through [`PatchOperation::reference`].
+    ///
+    /// Two inserts may reference each other, which is the only way to create a
+    /// cycle in a single transaction.
+    pub fn insert_captured(capture: &str, mut document: serde_json::Value) -> Self {
+        if let Some(obj) = document.as_object_mut() {
+            obj.insert(
+                "@capture".to_string(),
+                serde_json::Value::String(capture.to_string()),
+            );
+        }
+        PatchOperation::Insert { document }
+    }
+
+    /// Delete a document by id.
+    pub fn delete(id: impl Into<String>) -> Self {
+        PatchOperation::Delete { id: id.into() }
+    }
+
+    /// Replace a single field value.
+    pub fn swap_value(
+        id: impl Into<String>,
+        field: impl Into<String>,
+        before: serde_json::Value,
+        after: serde_json::Value,
+    ) -> Self {
+        PatchOperation::SwapValue {
+            id: id.into(),
+            field: field.into(),
+            before,
+            after,
+        }
+    }
+
+    /// A link to a document inserted under `capture` elsewhere in the same
+    /// patch: `{"@ref": "<capture>"}`.
+    pub fn reference(capture: &str) -> serde_json::Value {
+        json!({ "@ref": capture })
+    }
+
+    /// Render this operation as the JSON the patch endpoint expects.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            PatchOperation::Insert { document } => json!({
+                "@op": "Insert",
+                "@insert": document,
+            }),
+            PatchOperation::Delete { id } => json!({
+                "@op": "Delete",
+                "@delete": { "@id": id },
+            }),
+            PatchOperation::SwapValue {
+                id,
+                field,
+                before,
+                after,
+            } => {
+                let mut entry = serde_json::Map::new();
+                entry.insert("@id".to_string(), json!(id));
+                entry.insert(
+                    field.clone(),
+                    json!({
+                        "@op": "SwapValue",
+                        "@before": before,
+                        "@after": after,
+                    }),
+                );
+                serde_json::Value::Object(entry)
+            }
+            PatchOperation::Raw(value) => value.clone(),
+        }
+    }
+}
+
+impl super::client::TerminusDBHttpClient {
+    /// Apply a list of typed [`PatchOperation`]s to a branch.
+    ///
+    /// A thin typed wrapper over [`patch`](Self::patch): it renders each
+    /// operation to the wire shape so callers do not hand-build
+    /// `@op`/`@insert`/`@delete` objects.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use terminusdb_client::*;
+    /// # use serde_json::json;
+    /// # async fn example(client: TerminusDBHttpClient) -> anyhow::Result<()> {
+    /// client
+    ///     .patch_typed(
+    ///         "admin/mydb/local/branch/main",
+    ///         &[
+    ///             PatchOperation::insert(json!({
+    ///                 "@id": "City/Leipzig", "@type": "City", "name": "Leipzig"
+    ///             })),
+    ///             PatchOperation::delete("City/Warsaw"),
+    ///         ],
+    ///         "admin",
+    ///         "swap one city for another",
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn patch_typed(
+        &self,
+        branch_path: &str,
+        operations: &[PatchOperation],
+        author: &str,
+        message: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let patch: Vec<serde_json::Value> = operations.iter().map(|op| op.to_json()).collect();
+        self.patch(branch_path, &patch, author, message).await
     }
 }

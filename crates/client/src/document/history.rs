@@ -17,6 +17,22 @@ pub struct DocumentHistoryParams {
     /// if this is set to true, the result will be keyed with
     /// commits organized under a 'created' property
     pub created: Option<bool>,
+    /// TerminusDB 12.1 `diff`: include the diff between each commit's before
+    /// and after state in the entry's `diff` field.
+    pub diff: Option<bool>,
+    /// TerminusDB 12.1 `complete`: walk the complete commit chain rather than
+    /// stopping at the first commit that did not touch the document.
+    pub complete: Option<bool>,
+    /// TerminusDB 12.1 `fast`: skip the per-commit enrichment. This is the
+    /// enterprise-accelerated path; on the community server it simply returns
+    /// unenriched entries.
+    pub fast: Option<bool>,
+    /// TerminusDB 12.1 `before`: only commits before this ISO-8601 timestamp.
+    pub before: Option<String>,
+    /// TerminusDB 12.1 `after`: only commits after this ISO-8601 timestamp.
+    pub after: Option<String>,
+    /// TerminusDB 12.1 `graph_type`: `instance` (default) or `schema`.
+    pub graph_type: Option<crate::document::DocumentType>,
 }
 
 impl DocumentHistoryParams {
@@ -48,6 +64,42 @@ impl DocumentHistoryParams {
         self.created = Some(created);
         self
     }
+
+    /// Include the per-commit diff in each entry (TerminusDB 12.1).
+    pub fn with_diff(mut self, diff: bool) -> Self {
+        self.diff = Some(diff);
+        self
+    }
+
+    /// Walk the complete commit chain (TerminusDB 12.1).
+    pub fn with_complete(mut self, complete: bool) -> Self {
+        self.complete = Some(complete);
+        self
+    }
+
+    /// Skip per-commit enrichment (TerminusDB 12.1).
+    pub fn with_fast(mut self, fast: bool) -> Self {
+        self.fast = Some(fast);
+        self
+    }
+
+    /// Only commits before this ISO-8601 timestamp (TerminusDB 12.1).
+    pub fn with_before(mut self, before: impl Into<String>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    /// Only commits after this ISO-8601 timestamp (TerminusDB 12.1).
+    pub fn with_after(mut self, after: impl Into<String>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    /// Read the history of the instance or the schema graph (TerminusDB 12.1).
+    pub fn with_graph_type(mut self, graph_type: crate::document::DocumentType) -> Self {
+        self.graph_type = Some(graph_type);
+        self
+    }
 }
 
 /// A single commit entry in document history
@@ -62,6 +114,10 @@ pub struct CommitHistoryEntry {
     pub message: String,
     /// When the commit was made (Unix timestamp as float)
     pub timestamp: f64,
+    /// The diff between the document's state before and after this commit.
+    /// Only present when the request set `diff=true` (TerminusDB 12.1).
+    #[serde(default)]
+    pub diff: Option<serde_json::Value>,
 }
 
 fn deserialize_commit_id<'de, D>(deserializer: D) -> Result<CommitId, D::Error>

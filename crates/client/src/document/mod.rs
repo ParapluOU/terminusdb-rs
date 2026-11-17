@@ -4,7 +4,8 @@ mod insert;
 
 pub use {get::*, history::*, insert::*};
 
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DocumentType {
     #[default]
     Instance,

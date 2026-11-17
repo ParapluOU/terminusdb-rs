@@ -13,6 +13,7 @@ mod tests {
             identifier: CommitId::new("abc123"),
             message: "Test commit".to_string(),
             timestamp: 1701423000.0,
+            diff: None,
         };
 
         let result = entry.timestamp_datetime();
@@ -36,6 +37,7 @@ mod tests {
             identifier: CommitId::new("abc123"),
             message: "Test commit".to_string(),
             timestamp: 1701423000.0 + 0.123,
+            diff: None,
         };
 
         let result = entry.timestamp_datetime();
@@ -60,6 +62,7 @@ mod tests {
             identifier: CommitId::new("abc123"),
             message: "Test commit".to_string(),
             timestamp: -86400.0,
+            diff: None,
         };
 
         let result = entry.timestamp_datetime();

@@ -74,7 +74,7 @@ pub use changeset::{ChangesetCommitInfo, ChangesetEvent, DocumentChange, Metadat
 pub use client::TerminusDBHttpClient;
 #[cfg(not(target_arch = "wasm32"))]
 pub use concurrency_limiter::ConcurrencyLimitConfig;
-pub use diff::{DiffOptions, DiffResponse};
+pub use diff::{DiffOptions, DiffResponse, PatchOperation};
 pub use document::DeleteOpts;
 pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
 pub use helpers::{
