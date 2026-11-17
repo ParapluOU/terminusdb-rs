@@ -264,7 +264,26 @@ num_to_prop!(usize);
 num_to_prop!(u32);
 num_to_prop!(i32);
 num_to_prop!(i64);
-num_to_prop!(u64);
+// u64 is NOT num_to_prop!: TerminusDB 12.1.0-rc3 rejects a JSON integer above
+// i64::MAX for any integer-family field, including xsd:unsignedLong whose own
+// range check allows up to u64::MAX. The cutoff is exactly i64::MAX — the
+// request parser loses integrality above it, and rc3's new cast_specificity
+// ladder (src/core/document/inference.pl) then refuses the value with
+// `could_not_interpret_as_type`. A decimal string is cast correctly by the
+// server's string -> unsignedLong clause, so emit one past the cutoff and keep
+// the plain number (which reads back identically) below it. Reads are
+// unaffected: the server always answers integer-family values as JSON numbers.
+impl From<u64> for PrimitiveValue {
+    fn from(num: u64) -> Self {
+        if num > i64::MAX as u64 {
+            Self::String(num.to_string())
+        } else {
+            Self::Number(num.into())
+        }
+    }
+}
+
+to_instance_prop!(u64);
 num_to_prop!(u16);
 // num_to_prop!(u128);
 num_to_prop!(i16);
