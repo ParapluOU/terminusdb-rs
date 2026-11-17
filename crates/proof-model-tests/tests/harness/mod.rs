@@ -46,6 +46,26 @@ use terminusdb_woql2::value::{NodeValue, Value};
 use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::{BranchSpec, TerminusDBHttpClient};
 
+/// Boot the embedded server with proof state **on**.
+///
+/// Proving is opt-in in the store fork (`TERMINUSDB_PROOF_STATE`, off by
+/// default), so a server that must write per-layer proof sidecars has to be
+/// told so explicitly instead of inheriting whatever the test process happens
+/// to have in its environment.
+pub async fn proof_server() -> anyhow::Result<TerminusDBServer> {
+    terminusdb_bin::start_server(terminusdb_bin::ServerOptions {
+        memory: true,
+        quiet: true,
+        test_mode: true,
+        config: terminusdb_bin::ServerConfig {
+            proof_state: Some(true),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .await
+}
+
 use terminusdb_schema::XSDAnySimpleType;
 
 // The store's own xsd:decimal storage decoder — the exact inverse of the BCD
@@ -203,7 +223,7 @@ fn oracle_phase(db: &str, seed: &[SeedTriple], query: &Query) -> anyhow::Result<
     let out = rt.block_on(async {
         let work = async {
         // (1) Boot the real embedded proof-capable server (in-memory).
-        let server = TerminusDBServer::test().await?;
+        let server = proof_server().await?;
         let port = server.port();
         let client = server.client().await?;
         let base = format!("http://localhost:{port}");
@@ -1157,7 +1177,7 @@ impl SharedServer {
             .enable_all()
             .build()?;
         let (server, client, base, http) = rt.block_on(async {
-            let server = TerminusDBServer::test().await?;
+            let server = proof_server().await?;
             let port = server.port();
             let client = server.client().await?;
             let base = format!("http://localhost:{port}");

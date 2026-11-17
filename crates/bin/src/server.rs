@@ -158,6 +158,14 @@ pub struct ServerConfig {
     pub file_storage_path: Option<std::path::PathBuf>,
     /// System CA bundle for outbound TLS (`TERMINUSDB_SYSTEM_SSL_CERTS`).
     pub system_ssl_certs: Option<std::path::PathBuf>,
+    /// Write intrinsic proof state on every commit and pack import
+    /// (`TERMINUSDB_PROOF_STATE`, emitted as `on`/`off`). Default: off.
+    ///
+    /// Only a deployment that proves reads (Proof-of-WOQL) needs this. With it
+    /// on, each commit pays for its layer's commitment sidecar, and a commit
+    /// onto a chain written without proof state fails until that chain has been
+    /// migrated once, so leave it unset for an ordinary server.
+    pub proof_state: Option<bool>,
 
     // --- Dashboard --------------------------------------------------------
     /// Serve the web dashboard UI (`TERMINUSDB_ENABLE_DASHBOARD`). Default: true.
@@ -268,6 +276,9 @@ impl ServerConfig {
         }
         if let Some(ref v) = self.system_ssl_certs {
             cmd.env("TERMINUSDB_SYSTEM_SSL_CERTS", v);
+        }
+        if let Some(v) = self.proof_state {
+            cmd.env("TERMINUSDB_PROOF_STATE", if v { "on" } else { "off" });
         }
 
         if let Some(v) = self.enable_dashboard {
@@ -1182,6 +1193,33 @@ mod tests {
         // Unset fields must not be emitted (fall through to server defaults).
         assert!(!envs.contains_key("TERMINUSDB_TRUST_MIGRATIONS"));
         assert!(!envs.contains_key("TERMINUSDB_SERVER_TMP_PATH"));
+        // Proving is opt-in: an unset `proof_state` emits nothing, so the
+        // server keeps the store default (off).
+        assert!(!envs.contains_key("TERMINUSDB_PROOF_STATE"));
+    }
+
+    /// `proof_state` is emitted as the `on`/`off` atoms the store parses, both
+    /// ways round, so a prover can turn it on and a test can pin it off.
+    #[test]
+    fn server_config_emits_proof_state_atoms() {
+        use std::collections::HashMap;
+
+        for (value, expected) in [(true, "on"), (false, "off")] {
+            let cfg = ServerConfig {
+                proof_state: Some(value),
+                ..Default::default()
+            };
+            let mut cmd = Command::new("true");
+            cfg.apply_env(&mut cmd);
+            let envs: HashMap<String, String> = cmd
+                .get_envs()
+                .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+                .collect();
+            assert_eq!(
+                envs.get("TERMINUSDB_PROOF_STATE").map(String::as_str),
+                Some(expected)
+            );
+        }
     }
 
     /// End-to-end: a memory server started with several `config` options set

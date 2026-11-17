@@ -56,7 +56,6 @@ use terminusdb_woql2::query::{And, Query};
 use terminusdb_woql2::triple::{AddTriple, Triple};
 use terminusdb_woql2::value::{NodeValue, Value};
 
-use terminusdb_bin::TerminusDBServer;
 use terminusdb_client::BranchSpec;
 
 // The distinctive ground triple we commit through the server and later prove over
@@ -88,7 +87,19 @@ fn commit_and_replicate_over_http() -> anyhow::Result<Vec<u8>> {
     let response = rt.block_on(async {
         // (1) Boot the real embedded proof-capable server (in-memory mode: the
         // pack travels over HTTP, so no on-disk store is needed).
-        let server = TerminusDBServer::test().await?;
+        // Proving is opt-in in the store fork, so ask the server for proof
+        // state rather than inheriting it from the test process's environment.
+        let server = terminusdb_bin::start_server(terminusdb_bin::ServerOptions {
+            memory: true,
+            quiet: true,
+            test_mode: true,
+            config: terminusdb_bin::ServerConfig {
+                proof_state: Some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .await?;
         let port = server.port();
         let client = server.client().await?;
         let base = format!("http://localhost:{port}");
