@@ -659,13 +659,16 @@ mod tests {
                                 name: "name".to_string(),
                                 r#type: None,
                                 class: "xsd:string".to_string(),
+                                unfold: false,
                             },
                             Property {
                                 name: "active".to_string(),
                                 r#type: Some(TypeFamily::Optional),
                                 class: "xsd:boolean".to_string(),
+                                unfold: false,
                             },
                         ],
+                        shared: false,
                     },
                     Schema::Enum {
                         id: "Status".to_string(),
@@ -744,7 +747,9 @@ mod tests {
                             name: "name".to_string(),
                             r#type: None,
                             class: "xsd:string".to_string(),
+                            unfold: false,
                         }],
+                        shared: false,
                     },
                     Schema::Class {
                         id: "Ticket".to_string(),
@@ -760,13 +765,16 @@ mod tests {
                                 name: "title".to_string(),
                                 r#type: None,
                                 class: "xsd:string".to_string(),
+                                unfold: false,
                             },
                             Property {
                                 name: "project".to_string(),
                                 r#type: None,
                                 class: "Project".to_string(),
+                                unfold: false,
                             },
                         ],
+                        shared: false,
                     },
                 ]
             }

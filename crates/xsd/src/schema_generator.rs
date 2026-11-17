@@ -102,7 +102,8 @@ impl XsdToSchemaGenerator {
                 // Only map types that have restrictions but are NOT enums
                 // (enums get their own Schema::Enum and the PascalCase reference works)
                 let is_enum = st.restrictions.as_ref().is_some_and(|rs| {
-                    rs.iter().any(|r| matches!(r, crate::schema_model::Restriction::Enumeration { .. }))
+                    rs.iter()
+                        .any(|r| matches!(r, crate::schema_model::Restriction::Enumeration { .. }))
                 });
                 if !is_enum {
                     // Insert under multiple key forms since type references
@@ -111,7 +112,8 @@ impl XsdToSchemaGenerator {
                     // Local name (strip namespace)
                     let local = st.name.split('}').last().unwrap_or(&st.name);
                     if local != st.name {
-                        self.simple_type_bases.insert(local.to_string(), base.clone());
+                        self.simple_type_bases
+                            .insert(local.to_string(), base.clone());
                     }
                     // PascalCase variant
                     use heck::ToPascalCase;
@@ -139,60 +141,27 @@ impl XsdToSchemaGenerator {
             .as_ref()
             .unwrap_or(&xsd_schema.entry_point_elements);
 
-        let mut document_root_types: std::collections::HashSet<String> =
-            {
-                use heck::ToPascalCase;
+        let mut document_root_types: std::collections::HashSet<String> = {
+            use heck::ToPascalCase;
 
-                // First, try to find matches from entry_point_elements
-                let matched_types: std::collections::HashSet<String> = effective_entry_points
-                    .iter()
-                    .filter_map(|elem_name| {
-                        // Find the root element by name (case-insensitive match)
-                        let elem_name_lower = elem_name.to_lowercase();
-                        xsd_schema
-                            .root_elements
-                            .iter()
-                            .find(|e| {
-                                // Match on local name part (after } if Clark notation)
-                                let local = e.name.split('}').last().unwrap_or(&e.name);
-                                local.to_lowercase() == elem_name_lower
-                            })
-                            .map(|elem| {
-                                // Get the type name from the element's type_info.
-                                // For named types, use the type name; for anonymous types,
-                                // use the element name (same as how schemas are generated).
-                                elem.type_info
-                                    .as_ref()
-                                    .and_then(|ti| {
-                                        ti.qualified_name.as_ref().or(ti.name.as_ref()).map(
-                                            |type_name| {
-                                                let local = type_name
-                                                    .split('}')
-                                                    .last()
-                                                    .unwrap_or(type_name);
-                                                local.to_pascal_case()
-                                            },
-                                        )
-                                    })
-                                    .unwrap_or_else(|| {
-                                        // Anonymous type — use element name as class name
-                                        let local =
-                                            elem.name.split('}').last().unwrap_or(&elem.name);
-                                        local.to_pascal_case()
-                                    })
-                            })
-                    })
-                    .collect();
-
-                // If no entry_point_elements matched any root elements, fall back to treating
-                // ALL root element types as document roots. This handles custom schemas where
-                // the file name doesn't match any element name (e.g., choice_types.xsd with
-                // elements like "document", "payment", etc.)
-                if matched_types.is_empty() && !xsd_schema.root_elements.is_empty() {
+            // First, try to find matches from entry_point_elements
+            let matched_types: std::collections::HashSet<String> = effective_entry_points
+                .iter()
+                .filter_map(|elem_name| {
+                    // Find the root element by name (case-insensitive match)
+                    let elem_name_lower = elem_name.to_lowercase();
                     xsd_schema
                         .root_elements
                         .iter()
-                        .filter_map(|elem| {
+                        .find(|e| {
+                            // Match on local name part (after } if Clark notation)
+                            let local = e.name.split('}').last().unwrap_or(&e.name);
+                            local.to_lowercase() == elem_name_lower
+                        })
+                        .map(|elem| {
+                            // Get the type name from the element's type_info.
+                            // For named types, use the type name; for anonymous types,
+                            // use the element name (same as how schemas are generated).
                             elem.type_info
                                 .as_ref()
                                 .and_then(|ti| {
@@ -204,17 +173,47 @@ impl XsdToSchemaGenerator {
                                         },
                                     )
                                 })
-                                .or_else(|| {
-                                    // For anonymous types, use element name as type name
+                                .unwrap_or_else(|| {
+                                    // Anonymous type — use element name as class name
                                     let local = elem.name.split('}').last().unwrap_or(&elem.name);
-                                    Some(local.to_pascal_case())
+                                    local.to_pascal_case()
                                 })
                         })
-                        .collect()
-                } else {
-                    matched_types
-                }
-            };
+                })
+                .collect();
+
+            // If no entry_point_elements matched any root elements, fall back to treating
+            // ALL root element types as document roots. This handles custom schemas where
+            // the file name doesn't match any element name (e.g., choice_types.xsd with
+            // elements like "document", "payment", etc.)
+            if matched_types.is_empty() && !xsd_schema.root_elements.is_empty() {
+                xsd_schema
+                    .root_elements
+                    .iter()
+                    .filter_map(|elem| {
+                        elem.type_info
+                            .as_ref()
+                            .and_then(|ti| {
+                                ti.qualified_name
+                                    .as_ref()
+                                    .or(ti.name.as_ref())
+                                    .map(|type_name| {
+                                        let local =
+                                            type_name.split('}').last().unwrap_or(type_name);
+                                        local.to_pascal_case()
+                                    })
+                            })
+                            .or_else(|| {
+                                // For anonymous types, use element name as type name
+                                let local = elem.name.split('}').last().unwrap_or(&elem.name);
+                                Some(local.to_pascal_case())
+                            })
+                    })
+                    .collect()
+            } else {
+                matched_types
+            }
+        };
 
         // Merge additional document roots (chunk boundaries) configured by the caller.
         // Look up each element name in root_elements to resolve its type name.
@@ -233,8 +232,7 @@ impl XsdToSchemaGenerator {
                             .as_ref()
                             .or(ti.name.as_ref())
                             .map(|type_name| {
-                                let local =
-                                    type_name.split('}').last().unwrap_or(type_name);
+                                let local = type_name.split('}').last().unwrap_or(type_name);
                                 local.to_pascal_case()
                             })
                     })
@@ -335,7 +333,10 @@ impl XsdToSchemaGenerator {
     /// A tuple of (Context, Vec<Schema>) where:
     /// - Context has `@schema` derived from XSD target namespace
     /// - Schemas have unprefixed class names (e.g., "TopicClass")
-    pub fn generate_with_context(&mut self, xsd_schema: &XsdSchema) -> Result<(Context, Vec<Schema>)> {
+    pub fn generate_with_context(
+        &mut self,
+        xsd_schema: &XsdSchema,
+    ) -> Result<(Context, Vec<Schema>)> {
         let schemas = self.generate(xsd_schema)?;
 
         // Derive TerminusDB schema namespace from XSD target namespace
@@ -413,6 +414,7 @@ impl XsdToSchemaGenerator {
                 r#abstract,
                 inherits,
                 unfoldable,
+                shared,
                 properties,
             } => Schema::Class {
                 id,
@@ -423,6 +425,7 @@ impl XsdToSchemaGenerator {
                 r#abstract,
                 inherits,
                 unfoldable,
+                shared,
                 properties,
             },
             Schema::TaggedUnion {
@@ -434,6 +437,7 @@ impl XsdToSchemaGenerator {
                 subdocument,
                 properties,
                 unfoldable,
+                shared,
             } => Schema::TaggedUnion {
                 id,
                 base: Some(normalized_ns.to_string()),
@@ -443,6 +447,7 @@ impl XsdToSchemaGenerator {
                 subdocument,
                 properties,
                 unfoldable,
+                shared,
             },
             Schema::Enum {
                 id,
@@ -1098,10 +1103,7 @@ impl XsdToSchemaGenerator {
             complex_types.iter().any(|ct| {
                 let (_, ct_local) = self.parse_clark_notation(&ct.name);
                 (ct_local == base_local_name || ct.name == *base_type)
-                    && ct
-                        .child_elements
-                        .as_ref()
-                        .is_some_and(|c| !c.is_empty())
+                    && ct.child_elements.as_ref().is_some_and(|c| !c.is_empty())
             })
         } else {
             false
@@ -1123,6 +1125,7 @@ impl XsdToSchemaGenerator {
                 name: "children".to_string(),
                 r#type: Some(TypeFamily::List),
                 class: child_union_name,
+                unfold: false,
             });
         } else if !has_child_elements {
             // No child elements — check for text content
@@ -1154,6 +1157,7 @@ impl XsdToSchemaGenerator {
                     name: "_text".to_string(),
                     r#type: Some(TypeFamily::Optional),
                     class: text_type,
+                    unfold: false,
                 });
             }
         }
@@ -1246,6 +1250,7 @@ impl XsdToSchemaGenerator {
             r#abstract: false,
             inherits,
             unfoldable,
+            shared: false,
             properties,
         });
 
@@ -1289,6 +1294,7 @@ impl XsdToSchemaGenerator {
                             name: tag_name,
                             r#type: None, // TaggedUnion variants are mutually exclusive, not optional
                             class,
+                            unfold: false,
                         }
                     })
                     .collect();
@@ -1303,6 +1309,7 @@ impl XsdToSchemaGenerator {
                     subdocument: true, // Union values are embedded
                     properties,
                     unfoldable: false,
+                    shared: false,
                 }));
             }
         }
@@ -1383,6 +1390,7 @@ impl XsdToSchemaGenerator {
             name,
             r#type,
             class,
+            unfold: false,
         })
     }
 
@@ -1476,6 +1484,7 @@ impl XsdToSchemaGenerator {
             name: local_name,
             r#type,
             class,
+            unfold: false,
         })
     }
 
@@ -1545,11 +1554,20 @@ impl XsdToSchemaGenerator {
                 "xsd:integer"
             }
             // MathML simple types — map to closest XSD primitive
-            "character" | "Character" | "color" | "Color" | "length" | "Length"
-            | "mpadded-length" | "MpaddedLength" | "group-alignment-list" | "GroupAlignmentList"
-            | "group-alignment-list-list" | "GroupAlignmentListList" => "xsd:string",
-            "number" | "Number" | "positive-integer" | "PositiveInteger"
-            | "unsigned-integer" | "UnsignedInteger" => "xsd:integer",
+            "character"
+            | "Character"
+            | "color"
+            | "Color"
+            | "length"
+            | "Length"
+            | "mpadded-length"
+            | "MpaddedLength"
+            | "group-alignment-list"
+            | "GroupAlignmentList"
+            | "group-alignment-list-list"
+            | "GroupAlignmentListList" => "xsd:string",
+            "number" | "Number" | "positive-integer" | "PositiveInteger" | "unsigned-integer"
+            | "UnsignedInteger" => "xsd:integer",
             // xs:anyType allows arbitrary content - map to sys:JSON (unconstrained JSON subdocument)
             "anyType" | "xs:anyType" | "xsd:anyType" => "sys:JSON",
             // Check if this is a restricted simple type with a base type.
@@ -1603,6 +1621,7 @@ impl XsdToSchemaGenerator {
                     name: local_name,
                     r#type: None,
                     class,
+                    unfold: false,
                 })
             })
             .collect();
@@ -1612,6 +1631,7 @@ impl XsdToSchemaGenerator {
                 name: "text".to_string(),
                 r#type: None,
                 class: "xsd:string".to_string(),
+                unfold: false,
             });
         }
 
@@ -1624,6 +1644,7 @@ impl XsdToSchemaGenerator {
             subdocument: true,
             properties: union_properties,
             unfoldable: false,
+            shared: false,
         };
 
         Ok((union_schema, union_name))

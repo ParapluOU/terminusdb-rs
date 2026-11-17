@@ -2,8 +2,8 @@ use crate::iri::TdbIRI;
 use crate::json::InstancePropertyFromJson;
 use crate::{
     Class, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue, Property, Schema,
-    TaggedUnion, TaggedUnionVariant, ToInstanceProperty, ToSchemaClass,
-    ToSchemaProperty, ToTDBSchema, TypeFamily, STRING, URI,
+    TaggedUnion, TaggedUnionVariant, ToInstanceProperty, ToSchemaClass, ToSchemaProperty,
+    ToTDBSchema, TypeFamily, STRING, URI,
 };
 use anyhow::{anyhow, bail};
 // Rocket is a native-only HTTP server framework; its server-side form/param traits
@@ -547,6 +547,7 @@ impl<T: ToTDBSchema + ToSchemaClass, Parent> ToSchemaProperty<Parent> for Entity
             name: prop_name.to_string(),
             r#type: None,
             class: STRING.to_string(),
+            unfold: false,
         }
     }
 }
@@ -777,6 +778,7 @@ impl<T: ToTDBSchema, Parent> ToSchemaProperty<Parent> for ServerIDFor<T> {
             name: prop_name.to_string(),
             r#type: Some(TypeFamily::Optional),
             class: STRING.to_string(),
+            unfold: false,
         }
     }
 }
@@ -1167,6 +1169,7 @@ mod tests {
             inherits: vec![],
             unfoldable: false,
             properties: vec![],
+            shared: false,
         };
 
         let prop = <ServerIDFor<TestEntity> as ToInstanceProperty<TestEntity>>::to_property(

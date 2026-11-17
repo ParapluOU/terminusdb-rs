@@ -31,6 +31,16 @@ pub enum Key {
     /// In the example below, the @key @type is defined as Random, meaning each new database that
     /// is added is unique regardless of label.
     Random,
+
+    /// A UuidV7 key mints a time-ordered UUID version 7 under the class
+    /// `@base`, so keys sort by creation time while staying collision-free.
+    /// (TerminusDB 12.1)
+    ///
+    /// Unlike `Random`, a UuidV7 class also accepts an externally supplied
+    /// `@id` that need not sit under the class `@base`; when no `@id` is given
+    /// the server mints `<base>/<uuid-v7>`. Valid on classes, `@subdocument`
+    /// classes and `TaggedUnion` members.
+    UuidV7,
 }
 
 // todo: replace with derive attr
@@ -60,6 +70,9 @@ impl ToJson for Key {
             }
             Key::Random => {
                 map.insert(keyword::TYPE.to_string(), "Random".into());
+            }
+            Key::UuidV7 => {
+                map.insert(keyword::TYPE.to_string(), "UuidV7".into());
             }
         }
 

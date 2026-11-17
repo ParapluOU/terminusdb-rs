@@ -1,6 +1,4 @@
-use crate::{
-    Instance, InstanceProperty, RelationValue, Schema, SetCardinality, TypeFamily,
-};
+use crate::{Instance, InstanceProperty, RelationValue, Schema, SetCardinality, TypeFamily};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Errors that can occur during instance validation against a schema
@@ -551,13 +549,16 @@ mod tests {
                     name: "name".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 },
                 Property {
                     name: "age".to_string(),
                     r#type: None,
                     class: "xsd:integer".to_string(),
+                    unfold: false,
                 },
             ],
+            shared: false,
         };
 
         let mut properties = BTreeMap::new();
@@ -596,7 +597,9 @@ mod tests {
                 name: "name".to_string(),
                 r#type: None,
                 class: "xsd:string".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         let instance = Instance {
@@ -627,6 +630,7 @@ mod tests {
             inherits: vec![],
             unfoldable: false,
             properties: vec![],
+            shared: false,
         };
 
         let mut properties = BTreeMap::new();
@@ -666,7 +670,9 @@ mod tests {
                 name: "nickname".to_string(),
                 r#type: Some(TypeFamily::Optional),
                 class: "xsd:string".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         let instance = Instance {
@@ -745,7 +751,9 @@ mod tests {
                 name: "members".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Min(2))),
                 class: "xsd:string".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         // Too few members
@@ -786,7 +794,9 @@ mod tests {
                 name: "items".to_string(),
                 r#type: Some(TypeFamily::List),
                 class: "xsd:string".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         // Valid list
@@ -825,7 +835,9 @@ mod tests {
                 name: "name".to_string(),
                 r#type: None,
                 class: "xsd:string".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         // Provide a relation where a primitive is expected
@@ -867,7 +879,9 @@ mod tests {
                 name: "street".to_string(),
                 r#type: None,
                 class: "xsd:string".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         let person_schema = Schema::Class {
@@ -883,7 +897,9 @@ mod tests {
                 name: "address".to_string(),
                 r#type: None,
                 class: "Address".to_string(),
+                unfold: false,
             }],
+            shared: false,
         };
 
         // Create a nested address instance that's missing the required street property
@@ -935,13 +951,16 @@ mod tests {
                     name: "name".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 },
                 Property {
                     name: "price".to_string(),
                     r#type: None,
                     class: "xsd:decimal".to_string(),
+                    unfold: false,
                 },
             ],
+            shared: false,
         };
 
         // Instance with unknown property and missing required properties
@@ -979,6 +998,7 @@ mod tests {
             inherits: vec![],
             unfoldable: false,
             properties: vec![],
+            shared: false,
         };
 
         let instance = Instance {

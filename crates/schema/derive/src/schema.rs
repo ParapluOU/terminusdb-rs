@@ -35,6 +35,7 @@ pub fn generate_totdbschema_impl(
                 }
             }
             "value_hash" => quote! { terminusdb_schema::Key::ValueHash },
+            "uuid_v7" => quote! { terminusdb_schema::Key::UuidV7 },
             "lexical" => {
                 if let Some(fields) = opts.get_key_fields() {
                     let field_strings = fields.iter().map(|f| quote! { #f.to_string() });
@@ -73,6 +74,9 @@ pub fn generate_totdbschema_impl(
 
     // Default unfoldable to false to match the test expectations
     let unfoldable = opts.unfoldable.unwrap_or(false);
+
+    // @shared (TerminusDB 12.1); off unless asked for.
+    let shared = opts.shared.unwrap_or(false);
 
     // Handle subdocument attribute
     let subdocument = if let Some(subdocument) = opts.subdocument {
@@ -163,6 +167,10 @@ pub fn generate_totdbschema_impl(
 
             fn unfoldable() -> bool {
                 #unfoldable
+            }
+
+            fn shared() -> bool {
+                #shared
             }
 
             fn documentation() -> Option<terminusdb_schema::ClassDocumentation> {

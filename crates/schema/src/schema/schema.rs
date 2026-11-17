@@ -202,6 +202,19 @@ pub enum Schema {
         /// should be settable by derive attribute
         unfoldable: bool,
 
+        /// The @shared key is present with the value `[]` or it is not present.
+        /// (TerminusDB 12.1)
+        ///
+        /// A `@shared` class is a regular document — it has its own IRI and can
+        /// be referenced by any number of other documents — but its lifetime is
+        /// managed like a subdocument's: when the last referrer is deleted, the
+        /// shared document is cascade-deleted in the same transaction.
+        ///
+        /// Mutually exclusive with `@subdocument` (the server rejects a class
+        /// carrying both, including by inheritance), and inherited by
+        /// subclasses.
+        shared: bool,
+
         // all user-defined properties
         properties: Vec<Property>,
     },
@@ -451,6 +464,10 @@ pub enum Schema {
 
         /// should be settable by derive attribute
         unfoldable: bool,
+
+        /// The @shared key is present with the value `[]` or it is not present.
+        /// (TerminusDB 12.1) See [`Schema::Class`]'s `shared`.
+        shared: bool,
     },
 }
 
@@ -522,6 +539,17 @@ impl Schema {
         match self {
             Schema::Class { unfoldable, .. } => *unfoldable,
             Schema::TaggedUnion { unfoldable, .. } => *unfoldable,
+            _ => false,
+        }
+    }
+
+    /// Whether this class carries the `@shared` annotation (TerminusDB 12.1):
+    /// a regular document with its own IRI that may be referenced by many
+    /// documents and is cascade-deleted when the last referrer goes.
+    pub fn is_shared(&self) -> bool {
+        match self {
+            Schema::Class { shared, .. } => *shared,
+            Schema::TaggedUnion { shared, .. } => *shared,
             _ => false,
         }
     }
@@ -601,6 +629,7 @@ impl Schema {
             inherits: vec![],
             properties: vec![],
             unfoldable: true,
+            shared: false,
         }
     }
 
@@ -630,6 +659,7 @@ impl Schema {
                 subdocument,
                 inherits,
                 unfoldable,
+                shared,
                 properties,
                 documentation,
                 r#abstract,
@@ -662,6 +692,9 @@ impl Schema {
                 }
                 if *unfoldable {
                     map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if *shared {
+                    map.insert("@shared".to_string(), Value::Array(vec![]));
                 }
                 if let Some(doc) = documentation {
                     map.insert("@documentation".to_string(), doc.to_map().into());
@@ -707,6 +740,7 @@ impl Schema {
                 documentation,
                 r#abstract,
                 unfoldable,
+                shared,
             } => {
                 let mut map = serde_json::Map::new();
 
@@ -735,6 +769,9 @@ impl Schema {
                 }
                 if *unfoldable {
                     map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if *shared {
+                    map.insert("@shared".to_string(), Value::Array(vec![]));
                 }
                 if let Some(doc) = documentation {
                     map.insert("@documentation".to_string(), doc.to_map().into());
@@ -803,6 +840,7 @@ impl ToJson for Schema {
                 subdocument,
                 inherits,
                 unfoldable,
+                shared,
                 properties,
                 documentation,
                 r#abstract,
@@ -830,6 +868,9 @@ impl ToJson for Schema {
                 }
                 if *unfoldable {
                     map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if *shared {
+                    map.insert("@shared".to_string(), Value::Array(vec![]));
                 }
                 if let Some(doc) = documentation {
                     map.insert("@documentation".to_string(), doc.to_map().into());
@@ -877,6 +918,7 @@ impl ToJson for Schema {
                 subdocument,
                 properties,
                 unfoldable,
+                shared,
                 r#abstract,
             } => {
                 // Use SHORT names - Context @schema will expand them
@@ -902,6 +944,9 @@ impl ToJson for Schema {
                 }
                 if *unfoldable {
                     map.insert("@unfoldable".to_string(), Value::Array(vec![]));
+                }
+                if *shared {
+                    map.insert("@shared".to_string(), Value::Array(vec![]));
                 }
                 if let Some(doc) = documentation {
                     map.insert("@documentation".to_string(), doc.to_map().into());
@@ -1030,6 +1075,7 @@ pub trait ToTDBSchema {
                 r#abstract: Self::abstractdocument().unwrap_or_default(),
                 inherits: Self::inherits().unwrap_or_default(),
                 unfoldable: Self::unfoldable(),
+                shared: Self::shared(),
                 properties: Self::properties().unwrap_or_default(),
             },
             SchemaType::SchemaTypeOneOfClass => {
@@ -1050,6 +1096,7 @@ pub trait ToTDBSchema {
                 properties: Self::properties().unwrap_or_default(),
                 unfoldable: Self::unfoldable(),
                 r#abstract: Self::abstractdocument().unwrap_or_default(),
+                shared: false,
             },
         }
     }
@@ -1149,6 +1196,13 @@ pub trait ToTDBSchema {
     /// only supported on data structures that are not self-referencing, directly or indirectly
     fn unfoldable() -> bool {
         true
+    }
+
+    /// Whether this class carries `@shared` (TerminusDB 12.1): a regular
+    /// document, referenceable by many others, that is cascade-deleted when
+    /// its last referrer is deleted. Mutually exclusive with `@subdocument`.
+    fn shared() -> bool {
+        false
     }
 
     fn properties() -> Option<Vec<Property>> {
@@ -1259,16 +1313,19 @@ fn test_schema_taggedunion_json() {
                 name: "leaf".to_string(),
                 class: "sys:Unit".to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
             Property {
                 name: "node".to_string(),
                 class: "Node".to_string().to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
         ],
         unfoldable: true,
+        shared: false,
     };
 
     assert_eq!(
@@ -1303,16 +1360,19 @@ fn test_schema_class_exact_json() {
                 name: "name".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
             Property {
                 name: "hair_colour".to_string(),
                 class: "Colour".to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
         ],
         unfoldable: true,
+        shared: false,
     };
 
     assert_eq!(
@@ -1347,6 +1407,7 @@ fn test_schema_class_oneof_json() {
             name: "name".to_string(),
             class: "xsd:string".to_string(),
             r#type: None,
+            unfold: false,
         }
         .into()],
         classes: vec![
@@ -1355,11 +1416,13 @@ fn test_schema_class_oneof_json() {
                     name: "cat".to_string(),
                     class: "Toy".to_string(),
                     r#type: None,
+                    unfold: false,
                 },
                 Property {
                     name: "dog".to_string(),
                     class: "Friend".to_string(),
                     r#type: None,
+                    unfold: false,
                 },
             ]
             .into_iter()
@@ -1369,11 +1432,13 @@ fn test_schema_class_oneof_json() {
                     name: "employers".to_string(),
                     class: "xsd:positiveInteger".to_string(),
                     r#type: None,
+                    unfold: false,
                 },
                 Property {
                     name: "unemployed".to_string(),
                     class: "xsd:string".to_string(),
                     r#type: None,
+                    unfold: false,
                 },
             ]
             .into_iter()
@@ -1417,16 +1482,19 @@ fn test_schema_relation_opt_json() {
                 name: "code".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
             Property {
                 name: "comment".to_string(),
                 r#type: Some(TypeFamily::Optional),
                 class: "xsd:string".to_string(),
+                unfold: false,
             }
             .into(),
         ],
         unfoldable: true,
+        shared: false,
     };
 
     assert_eq!(
@@ -1464,9 +1532,11 @@ fn test_schema_relation_list_json() {
             name: "tasks".to_string(),
             r#type: Some(TypeFamily::List),
             class: "Task".to_string(),
+            unfold: false,
         }
         .into()],
         unfoldable: true,
+        shared: false,
     };
 
     assert_eq!(
@@ -1504,16 +1574,19 @@ fn test_schema_relation_set_json() {
                 name: "name".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
             Property {
                 name: "friends".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::None)),
                 class: "Person".to_string(),
+                unfold: false,
             }
             .into(),
         ],
         unfoldable: true,
+        shared: false,
     };
 
     assert_eq!(
@@ -1552,28 +1625,33 @@ fn test_schema_relation_set_cardinality_json() {
                 name: "name".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: None,
+                unfold: false,
             }
             .into(),
             Property {
                 name: "friends".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Exact(3))),
                 class: "Person".to_string(),
+                unfold: false,
             }
             .into(),
             Property {
                 name: "friends2".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Min(5))),
                 class: "Person".to_string(),
+                unfold: false,
             }
             .into(),
             Property {
                 name: "friends3".to_string(),
                 r#type: Some(TypeFamily::Set(SetCardinality::Max(10))),
                 class: "Person".to_string(),
+                unfold: false,
             }
             .into(),
         ],
         unfoldable: true,
+        shared: false,
     };
 
     assert_eq!(

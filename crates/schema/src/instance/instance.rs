@@ -339,6 +339,10 @@ impl Instance {
 
         match self.schema.key() {
             Some(Key::Random) => Some(Uuid::new_v4().to_string()),
+            // UuidV7 mints a time-ordered id. We generate it client-side (as
+            // for Random) so the caller knows the id before the insert; the
+            // server accepts an externally supplied @id for UuidV7 classes.
+            Some(Key::UuidV7) => Some(Uuid::now_v7().to_string()),
             Some(Key::Hash(_fields)) => {
                 // For hash keys with specific fields, ID is server-generated based on a hash of specified field values
                 None

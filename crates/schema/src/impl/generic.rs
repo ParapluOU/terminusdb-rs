@@ -74,6 +74,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for T {
             name: prop_name.to_string(),
             class: T::to_class(),
             r#type: None,
+            unfold: false,
         }
     }
 }

@@ -624,13 +624,16 @@ mod tests {
                         name: "name".to_string(),
                         r#type: None,
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                     Property {
                         name: "description".to_string(),
                         r#type: Some(TypeFamily::Optional),
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                 ],
+                shared: false,
             },
             Schema::Enum {
                 id: "Priority".to_string(),
@@ -680,7 +683,9 @@ mod tests {
                     name: "name".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 }],
+                shared: false,
             },
             Schema::Class {
                 id: "Ticket".to_string(),
@@ -696,20 +701,24 @@ mod tests {
                         name: "title".to_string(),
                         r#type: None,
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                     // Edge relation to Project
                     Property {
                         name: "project".to_string(),
                         r#type: None,
                         class: "Project".to_string(),
+                        unfold: false,
                     },
                     // Optional self-reference
                     Property {
                         name: "parent".to_string(),
                         r#type: Some(TypeFamily::Optional),
                         class: "Ticket".to_string(),
+                        unfold: false,
                     },
                 ],
+                shared: false,
             },
         ];
 
@@ -772,6 +781,7 @@ mod tests {
                         name: "title".to_string(),
                         r#type: None,
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                     // Vec<Mood> — triggers the bogus
                     // `CollectionMood_Enum_Filter` reference.
@@ -779,8 +789,10 @@ mod tests {
                         name: "moods".to_string(),
                         r#type: Some(TypeFamily::List),
                         class: "Mood".to_string(),
+                        unfold: false,
                     },
                 ],
+                shared: false,
             },
         ];
         let frames = schemas_vec_to_allframes(&schemas);

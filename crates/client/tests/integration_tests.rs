@@ -22,8 +22,10 @@ fn new_test_schema(id: &str) -> Schema {
             name: "test_prop".to_string(),
             class: terminusdb_schema::UNIT.to_string(),
             r#type: None,
+        unfold: false,
         }],
         unfoldable: true,
+    shared: false,
     }
 }
 

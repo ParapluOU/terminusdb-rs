@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
 use terminusdb_schema::json::{InstancePropertyFromJson, ToJson};
+use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_schema::{
     FromInstanceProperty, InstanceProperty, Property, Schema, ToInstanceProperty, ToSchemaProperty,
     ToTDBInstance,
 };
-use terminusdb_schema::XSDAnySimpleType;
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
 // Helper struct for DictionaryTemplate
@@ -123,6 +123,7 @@ impl<Parent> ToSchemaProperty<Parent> for ListOrVariable {
             name: prop_name.to_string(),
             r#type: None,                    // No type family needed for primitives
             class: "xsd:string".to_string(), // Store as string
+            unfold: false,
         }
     }
 }

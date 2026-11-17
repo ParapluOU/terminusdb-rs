@@ -4,14 +4,14 @@ mod args;
 #[cfg(feature = "generic-derive")]
 mod bounds;
 mod enum_simple;
-mod filter;
-mod from_tuple;
-mod ordering;
 mod enum_union;
+mod filter;
 mod from_instance;
+mod from_tuple;
 mod generics;
 mod instance;
 mod json_deserialize;
+mod ordering;
 mod prelude;
 mod schema;
 mod serde_impl;
@@ -56,7 +56,7 @@ fn implement_for_enum(
 ///
 /// - `#[tdb(class_name = "CustomName")]` - Specify a custom class name (defaults to struct/enum name).
 /// - `#[tdb(base = "http://example.com/")]` - Specify a base URI.
-/// - `#[tdb(key = "value_hash")]` - Key strategy (one of "random", "value_hash", "hash", "lexical").
+/// - `#[tdb(key = "value_hash")]` - Key strategy (one of "random", "value_hash", "hash", "lexical", "uuid_v7").
 /// - `#[tdb(key_fields = "field1,field2")]` - Comma-separated list of fields for "lexical" or "hash" keys.
 /// - `#[tdb(id_field = "id")]` - Field to use as document ID. Must be `Option<T>` for non-random keys.
 /// - `#[tdb(subdocument = true)]` - Mark as a subdocument.

@@ -30,6 +30,12 @@ pub struct TDBModelOpts {
     #[darling(default)]
     pub(crate) unfoldable: Option<bool>,
 
+    /// Whether this class carries `@shared` (TerminusDB 12.1): a regular
+    /// document, referenceable by many others, cascade-deleted when its last
+    /// referrer is deleted. Mutually exclusive with `subdocument`.
+    #[darling(default)]
+    pub(crate) shared: Option<bool>,
+
     /// Whether this is a subdocument
     #[darling(default)]
     pub(crate) subdocument: Option<bool>,
@@ -215,6 +221,14 @@ pub struct TDBFieldOpts {
     /// `Option<T>` where `T: Default`.
     #[darling(default)]
     pub(crate) default: bool,
+
+    /// Field-level `@unfold` (TerminusDB 12.1): unfold this link when the
+    /// containing document is read, whether or not the target class is
+    /// `@unfoldable`. The server carries the flag inside the property's
+    /// type-family object, so it only applies to `Optional`/`Set`/`List`/
+    /// `Array` fields.
+    #[darling(default)]
+    pub(crate) unfold: bool,
 
     /// Exact cardinality for a `Set` field (`@cardinality`). Emits
     /// `SetCardinality::Exact`; mutually exclusive with min/max_cardinality.

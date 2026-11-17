@@ -710,7 +710,9 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
             name: "nullFlavor".to_string(),
             class: "xsd:string".to_string(),
             r#type: None,
+            unfold: false,
         }],
+        shared: false,
     };
 
     // Cs enum - used as the type for 'code' in CD and CE
@@ -746,13 +748,16 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
                 name: "code".to_string(), // First definition of 'code' with type Cs
                 class: "Cs".to_string(),
                 r#type: None,
+                unfold: false,
             },
             Property {
                 name: "codeSystem".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: None,
+                unfold: false,
             },
         ],
+        shared: false,
     };
 
     let ce_schema = Schema::Class {
@@ -768,7 +773,9 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
             name: "code".to_string(), // Redefinition of 'code' with same type Cs
             class: "Cs".to_string(),
             r#type: None,
+            unfold: false,
         }],
+        shared: false,
     };
 
     let eivl_event_schema = Schema::Class {
@@ -784,7 +791,9 @@ async fn test_diamond_inheritance_minimal_reproduction() -> anyhow::Result<()> {
             name: "code".to_string(), // Redefinition with DIFFERENT type TimingEvent
             class: "TimingEvent".to_string(),
             r#type: None,
+            unfold: false,
         }],
+        shared: false,
     };
 
     let schemas = vec![

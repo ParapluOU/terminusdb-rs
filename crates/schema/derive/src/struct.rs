@@ -56,7 +56,9 @@ fn validate_id_field_type(
         // Check if the key strategy is non-Random
         let key_strategy = opts.key.as_ref().map(|s| s.as_str());
         let is_non_random_key = match key_strategy {
-            Some("random") | None => false, // Random is the default
+            // Random and UuidV7 both allow a client-supplied @id, so the
+            // id field does not have to be ServerIDFor<Self>.
+            Some("random") | Some("uuid_v7") | None => false,
             Some("lexical") | Some("hash") | Some("value_hash") => true,
             Some(other) => {
                 return Err(syn::Error::new(
@@ -167,7 +169,8 @@ pub fn implement_for_struct(
     let class_name_expr = quote! { #class_name };
 
     // Extract base generics for all impls
-    let (_base_impl_generics, _base_ty_generics, base_where_clause) = input.generics.split_for_impl();
+    let (_base_impl_generics, _base_ty_generics, base_where_clause) =
+        input.generics.split_for_impl();
 
     // Generate bounds for each trait implementation if generics are enabled
     #[cfg(feature = "generic-derive")]
@@ -544,6 +547,15 @@ pub fn process_named_fields(
                 (None, None, None) => quote! {},
             };
 
+            // Field-level @unfold (TerminusDB 12.1). The flag lives inside the
+            // property's type-family object, so it is only emitted for a
+            // property that has one (Optional/Set/List/Array).
+            let unfold_override = if field_opts.unfold {
+                quote! { prop.unfold = true; }
+            } else {
+                quote! {}
+            };
+
             let property = quote! {
                 // terminusdb_schema::Property {
                 //     name: #property_name.to_string(),
@@ -555,6 +567,7 @@ pub fn process_named_fields(
                     let mut prop = <#field_ty as terminusdb_schema::ToSchemaProperty<#struct_name #ty_generics>>::to_schema_property(#property_name);
                     #classoverride
                     #cardinality_override
+                    #unfold_override
                     prop
                 }
             };

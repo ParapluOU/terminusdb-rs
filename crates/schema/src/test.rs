@@ -121,6 +121,7 @@ fn test_schema_class_generate() {
                 <SubModel as ToSchemaProperty<()>>::to_schema_property("submodel"),
             ],
             unfoldable: false,
+            shared: false,
         }
     )
 }
@@ -414,10 +415,10 @@ mod tests {
     use crate::Instance;
     use crate::InstanceProperty;
     use crate::PrimitiveValue;
-    
+
     use crate::RelationValue;
     use crate::Schema;
-    
+
     use crate::{Client, FromTDBInstance, TdbLazy};
     use pretty_assertions::assert_eq;
     use std::collections::BTreeMap;
@@ -492,6 +493,7 @@ mod tests {
                 inherits: vec![],
                 properties: vec![],
                 unfoldable: true,
+                shared: false,
             },
             capture: false,
             properties,
@@ -899,6 +901,7 @@ mod optional_entity_id_tests {
             inherits: vec![],
             properties: vec![],
             unfoldable: false,
+            shared: false,
         };
 
         let lazy3 = TdbLazy::new_data(user.clone()).unwrap();

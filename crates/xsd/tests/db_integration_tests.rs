@@ -610,8 +610,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "_text".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let title = Schema::Class {
@@ -626,8 +628,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "class".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let body_class = Schema::Class {
@@ -642,8 +646,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "p".to_string(),
             class: "PClass".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let body = Schema::Class {
@@ -658,8 +664,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "class".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let p_class = Schema::Class {
@@ -674,8 +682,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "_text".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let p = Schema::Class {
@@ -690,8 +700,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "class".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let topic_class = Schema::Class {
@@ -707,19 +719,23 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
                 name: "id".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: Some(TypeFamily::Optional),
+                unfold: false,
             },
             Property {
                 name: "title".to_string(),
                 class: "TitleClass".to_string(),
                 r#type: None,
+                unfold: false,
             }, // Required (min=1)
             Property {
                 name: "body".to_string(),
                 class: "BodyClass".to_string(),
                 r#type: Some(TypeFamily::Optional),
+                unfold: false,
             },
         ],
         unfoldable: false,
+        shared: false,
     };
 
     let topic = Schema::Class {
@@ -734,8 +750,10 @@ async fn test_minimal_dita_schema_structure() -> anyhow::Result<()> {
             name: "class".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let schemas = vec![
@@ -814,8 +832,10 @@ async fn test_inherited_properties_with_subdocuments() -> anyhow::Result<()> {
             name: "name".to_string(),
             class: "xsd:string".to_string(),
             r#type: None,
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let child_derived = Schema::Class {
@@ -830,8 +850,10 @@ async fn test_inherited_properties_with_subdocuments() -> anyhow::Result<()> {
             name: "_text".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let parent_base = Schema::Class {
@@ -847,14 +869,17 @@ async fn test_inherited_properties_with_subdocuments() -> anyhow::Result<()> {
                 name: "id".to_string(),
                 class: "xsd:string".to_string(),
                 r#type: None,
+                unfold: false,
             },
             Property {
                 name: "child".to_string(),
                 class: "ChildBaseClass".to_string(),
                 r#type: None,
+                unfold: false,
             },
         ],
         unfoldable: false,
+        shared: false,
     };
 
     let parent_derived = Schema::Class {
@@ -869,8 +894,10 @@ async fn test_inherited_properties_with_subdocuments() -> anyhow::Result<()> {
             name: "_text".to_string(),
             class: "xsd:string".to_string(),
             r#type: Some(TypeFamily::Optional),
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let schemas = vec![child_base, child_derived, parent_base, parent_derived];
@@ -940,8 +967,10 @@ async fn test_subtype_polymorphism_in_subdocuments() -> anyhow::Result<()> {
             name: "name".to_string(),
             class: "xsd:string".to_string(),
             r#type: None,
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let child_schema = Schema::Class {
@@ -956,8 +985,10 @@ async fn test_subtype_polymorphism_in_subdocuments() -> anyhow::Result<()> {
             name: "extra".to_string(),
             class: "xsd:string".to_string(),
             r#type: None,
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let container_schema = Schema::Class {
@@ -972,8 +1003,10 @@ async fn test_subtype_polymorphism_in_subdocuments() -> anyhow::Result<()> {
             name: "item".to_string(),
             class: "ParentClass".to_string(), // Property typed as ParentClass
             r#type: None,
+            unfold: false,
         }],
         unfoldable: false,
+        shared: false,
     };
 
     let schemas = vec![parent_schema, child_schema, container_schema];

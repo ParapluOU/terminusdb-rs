@@ -24,13 +24,16 @@ impl ToTDBSchema for HashMapStringEntry {
                     name: "key".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 },
                 Property {
                     name: "value".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 },
             ],
+            shared: false,
         }
     }
 

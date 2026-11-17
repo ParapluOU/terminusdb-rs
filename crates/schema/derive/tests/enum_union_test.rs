@@ -269,6 +269,7 @@ mod tests {
             key: _,
             subdocument: _,
             unfoldable: _,
+            shared: false,
         } = schema
         {
             assert_eq!(id, "TaggedEnum");
@@ -307,6 +308,7 @@ mod tests {
             key: _,
             subdocument: _,
             unfoldable: _,
+            shared: false,
         } = tagged_enum_schema
         {
             assert_eq!(id, "TaggedEnum");

@@ -1230,13 +1230,16 @@ mod tests {
                     name: "name".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 },
                 Property {
                     name: "age".to_string(),
                     r#type: Some(TypeFamily::Optional),
                     class: "xsd:integer".to_string(),
+                    unfold: false,
                 },
             ],
+            shared: false,
         }]
     }
 

@@ -249,6 +249,7 @@ fn key_to_json(key: &terminusdb_schema::Key) -> Option<Value> {
             "@fields": fields
         })),
         Key::ValueHash => Some(json!({"@type": "ValueHash"})),
+        Key::UuidV7 => Some(json!({"@type": "UuidV7"})),
     }
 }
 
@@ -330,7 +331,9 @@ mod tests {
                     name: "name".to_string(),
                     r#type: None,
                     class: "xsd:string".to_string(),
+                    unfold: false,
                 }],
+                shared: false,
             },
             Schema::Enum {
                 id: "Status".to_string(),
@@ -374,13 +377,16 @@ mod tests {
                         name: "name".to_string(),
                         r#type: None,
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                     terminusdb_schema::Property {
                         name: "description".to_string(),
                         r#type: Some(terminusdb_schema::TypeFamily::Optional),
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                 ],
+                shared: false,
             },
             Schema::Class {
                 id: "Ticket".to_string(),
@@ -396,11 +402,13 @@ mod tests {
                         name: "title".to_string(),
                         r#type: None,
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                     terminusdb_schema::Property {
                         name: "project".to_string(),
                         r#type: None,
                         class: "Project".to_string(),
+                        unfold: false,
                     },
                     terminusdb_schema::Property {
                         name: "labels".to_string(),
@@ -408,8 +416,10 @@ mod tests {
                             terminusdb_schema::SetCardinality::None,
                         )),
                         class: "xsd:string".to_string(),
+                        unfold: false,
                     },
                 ],
+                shared: false,
             },
             Schema::Enum {
                 id: "Priority".to_string(),
@@ -442,6 +452,7 @@ mod tests {
             name: "title".to_string(),
             r#type: None,
             class: "xsd:string".to_string(),
+            unfold: false,
         };
         assert_eq!(property_to_json(&required), json!("xsd:string"));
 
@@ -450,6 +461,7 @@ mod tests {
             name: "description".to_string(),
             r#type: Some(TypeFamily::Optional),
             class: "xsd:string".to_string(),
+            unfold: false,
         };
         assert_eq!(
             property_to_json(&optional),
@@ -461,6 +473,7 @@ mod tests {
             name: "tags".to_string(),
             r#type: Some(TypeFamily::Set(SetCardinality::None)),
             class: "xsd:string".to_string(),
+            unfold: false,
         };
         assert_eq!(
             property_to_json(&set),
@@ -472,6 +485,7 @@ mod tests {
             name: "items".to_string(),
             r#type: Some(TypeFamily::List),
             class: "Item".to_string(),
+            unfold: false,
         };
         assert_eq!(
             property_to_json(&list),

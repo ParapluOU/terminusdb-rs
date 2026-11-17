@@ -36,6 +36,7 @@ impl<Parent> ToSchemaProperty<Parent> for GraphType {
             name: prop_name.to_string(),
             r#type: None,
             class: STRING.to_string(),
+            unfold: false,
         }
     }
 }

@@ -21,6 +21,15 @@ pub struct Property {
     /// multiplicities or optionality
     pub r#type: Option<TypeFamily>,
     pub class: String,
+    /// Field-level `@unfold` (TerminusDB 12.1): unfold this link when the
+    /// containing document is retrieved, independently of whether the target
+    /// class is `@unfoldable`.
+    ///
+    /// The server reads `"@unfold": true` from inside the property's
+    /// type-family object, so this only has an effect when [`Self::r#type`] is
+    /// `Some` — i.e. on `Optional`/`Set`/`List`/`Array` properties. A bare
+    /// property (`"field": "Class"`) has nowhere to carry the flag.
+    pub unfold: bool,
 }
 
 impl Ord for Property {
@@ -60,6 +69,13 @@ impl Property {
     pub fn field_name(&self) -> &String {
         &self.name
     }
+
+    /// Mark this property `@unfold` (TerminusDB 12.1). Only meaningful on a
+    /// property that has a type family; see [`Self::unfold`].
+    pub fn with_unfold(mut self) -> Self {
+        self.unfold = true;
+        self
+    }
 }
 
 impl ToSchemaPropertyJsonValue for Property {
@@ -79,6 +95,11 @@ impl ToSchemaPropertyJsonValue for Property {
 
         // the class of object targeted by the relation
         map.insert(keyword::CLASS.to_string(), self.class.clone().into());
+
+        // Field-level @unfold (TerminusDB 12.1) sits on the type-family object.
+        if self.unfold {
+            map.insert("@unfold".to_string(), Value::Bool(true));
+        }
 
         map.into()
     }

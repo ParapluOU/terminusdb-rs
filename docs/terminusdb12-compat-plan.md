@@ -56,15 +56,24 @@ use `xsd:dateTime` instants (which the server coerces to point intervals).
 
 ### Schema & derive (`crates/schema`, `crates/schema/derive`)
 
-- [ ] `Key::UuidV7` (`@key: {"@type": "UuidV7"}`). Accepts an externally
+- [x] `Key::UuidV7` (`@key: {"@type": "UuidV7"}`). Accepts an externally
       supplied `@id` that need not sit under the class `@base`; otherwise mints
       `<base>/<uuid-v7>`. Valid on classes, `@subdocument` classes and
       `TaggedUnion` members.
-- [ ] `@shared` class annotation (`sys:shared`, serialised as `"@shared": []`):
+- [x] `@shared` class annotation (`sys:shared`, serialised as `"@shared": []`):
       own IRI, referenceable by many, cascade-deleted in the same transaction
       when the last referrer goes. Was deferred in M7 — land it now.
-- [ ] Field-level `@unfold` on `Optional`/`Set`/`List`/`Array` properties,
+- [x] Field-level `@unfold` on `Optional`/`Set`/`List`/`Array` properties,
       independent of the target class being `@unfoldable`.
+
+Live-verified in `crates/client/tests/test_v12_1_schema_annotations.rs` (4/4
+green). Derive surface: `#[tdb(key = "uuid_v7")]`, `#[tdb(shared = true)]` and
+field-level `#[tdb(unfold)]`. `Property` gained an `unfold: bool` and
+`Schema::Class`/`Schema::TaggedUnion` a `shared: bool` (both default-off and
+emitted only when set), which is why ~175 struct-literal sites across
+`schema`, `gql`, `xsd` and `woql2` changed mechanically. The cascade-delete
+half of `@shared` is asserted end-to-end: two referrers, delete one (shared doc
+survives), delete the last (shared doc is gone).
 
 ### Client endpoints & parameters (`crates/client`)
 

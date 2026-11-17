@@ -1,8 +1,8 @@
 use crate::json::InstancePropertyFromJson;
 use crate::{
     FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive, PrimitiveValue,
-    Property, RelationValue, Schema, SetCardinality, ToInstanceProperty,
-    ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
+    Property, RelationValue, Schema, SetCardinality, ToInstanceProperty, ToSchemaClass,
+    ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
 use anyhow::anyhow;
 use serde_json::Value;
@@ -44,6 +44,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for HashSet<T> {
             // todo: retrieve set cardinality as macro derive attr?
             r#type: Some(TypeFamily::Set(SetCardinality::None)),
             class: T::to_class().to_string(),
+            unfold: false,
         }
     }
 }
@@ -55,6 +56,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for BTreeSet<T> {
             // todo: retrieve set cardinality as macro derive attr?
             r#type: Some(TypeFamily::Set(SetCardinality::None)),
             class: T::to_class().to_string(),
+            unfold: false,
         }
     }
 }
@@ -263,6 +265,7 @@ impl<Parent, T: ToSchemaClass, S> ToSchemaProperty<Parent> for HashableHashSet<T
             name: name.to_string(),
             r#type: Some(TypeFamily::Set(SetCardinality::None)),
             class: T::to_class().to_string(),
+            unfold: false,
         }
     }
 }
@@ -307,7 +310,9 @@ where
         match prop {
             InstanceProperty::Primitives(primitives) => {
                 for prim in primitives {
-                    items.push(T::from_property(&InstanceProperty::Primitive(prim.clone()))?);
+                    items.push(T::from_property(&InstanceProperty::Primitive(
+                        prim.clone(),
+                    ))?);
                 }
             }
             InstanceProperty::Relations(relations) => {
@@ -316,9 +321,7 @@ where
                         RelationValue::One(_) => {
                             items.push(T::from_property(&InstanceProperty::Relation(rel.clone()))?);
                         }
-                        _ => {
-                            return Err(anyhow!("Unsupported relation type for HashableHashSet"))
-                        }
+                        _ => return Err(anyhow!("Unsupported relation type for HashableHashSet")),
                     }
                 }
             }
@@ -349,9 +352,7 @@ where
     // An absent set field means the empty set (an empty/rest collection is not
     // written out), so decode `None` to empty rather than erroring like the
     // default does for required properties.
-    fn property_from_maybe_json(
-        json: Option<Value>,
-    ) -> anyhow::Result<InstanceProperty> {
+    fn property_from_maybe_json(json: Option<Value>) -> anyhow::Result<InstanceProperty> {
         match json {
             Some(v) => Self::property_from_json(v),
             None => Ok(InstanceProperty::Relations(Vec::new())),
@@ -389,7 +390,10 @@ where
                     Ok(InstanceProperty::Any(properties))
                 }
             }
-            _ => Err(anyhow!("Expected an array for HashableHashSet, got {:?}", json)),
+            _ => Err(anyhow!(
+                "Expected an array for HashableHashSet, got {:?}",
+                json
+            )),
         }
     }
 }

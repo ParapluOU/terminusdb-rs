@@ -308,7 +308,8 @@ fn process_enum_variants(
                     terminusdb_schema::Property {
                         name: #variant_name_renamed.to_string(),
                         class: "sys:Unit".to_string(),
-                        r#type: None
+                        r#type: None,
+                        unfold: false,
                     }
                 }
             },
@@ -322,7 +323,8 @@ fn process_enum_variants(
                         let mut prop = terminusdb_schema::Property {
                             name: #variant_name_renamed.to_string(),
                             class: <#field_ty as terminusdb_schema::ToSchemaClass>::to_class().to_string(),
-                            r#type: None
+                            r#type: None,
+                            unfold: false,
                         };
                         prop
                     }
@@ -336,7 +338,8 @@ fn process_enum_variants(
                     terminusdb_schema::Property {
                         name: #variant_name_renamed.to_string(),
                         class: #variant_struct_name.to_string(),
-                        r#type: None
+                        r#type: None,
+                        unfold: false,
                     }
                 }
             },
@@ -348,7 +351,8 @@ fn process_enum_variants(
                     terminusdb_schema::Property {
                         name: #variant_name_renamed.to_string(),
                         class: #variant_struct_name.to_string(),
-                        r#type: None
+                        r#type: None,
+                        unfold: false,
                     }
                 }
             }
@@ -448,6 +452,7 @@ fn generate_virtual_structs(
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
                         unfoldable: parent_opts.unfoldable.or(parent_opts.subdocument),
+                        shared: None,
                         subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
@@ -513,6 +518,7 @@ fn generate_virtual_structs(
                         key: Some("value_hash".to_string()),
                         abstract_class: None,
                         unfoldable: parent_opts.unfoldable.or(parent_opts.subdocument),
+                        shared: None,
                         subdocument: parent_opts.subdocument,
                         inherits: None,
                         doc: None,
@@ -585,6 +591,7 @@ fn generate_virtual_structs(
                     key: Some("value_hash".to_string()), // Use ValueHash as default for virtual structs
                     abstract_class: None,
                     unfoldable: parent_opts.unfoldable.or(parent_opts.subdocument),
+                    shared: None,
                     subdocument: parent_opts.subdocument,
                     inherits: None,
                     doc: Some(format!(

@@ -2,10 +2,7 @@ use crate::args::{TDBFieldOpts, TDBModelOpts};
 use crate::prelude::*;
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{
-    Data, DataEnum, DeriveInput, Fields, FieldsNamed,
-    Ident,
-};
+use syn::{Data, DataEnum, DeriveInput, Fields, FieldsNamed, Ident};
 
 /// Enum type for different kinds of enums
 enum EnumType {
@@ -420,6 +417,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                             inherits: vec![],
                                             unfoldable: false,
                                             properties: vec![],
+                                        shared: false,
                                         },
                                         id: None,
                                         capture: false,
@@ -473,6 +471,7 @@ fn implement_instance_from_json_for_tagged_enum(
                                             inherits: vec![],
                                             unfoldable: false,
                                             properties: vec![],
+                                        shared: false,
                                         },
                                         id: None,
                                         capture: false,

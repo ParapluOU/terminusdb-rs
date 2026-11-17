@@ -342,6 +342,7 @@ pub fn process_tagged_enum_for_instance(
                                             inherits: vec![],
                                             unfoldable: false,
                                             properties: vec![],
+                                        shared: false,
                                         },
                                         id: None,
                                         capture: false,

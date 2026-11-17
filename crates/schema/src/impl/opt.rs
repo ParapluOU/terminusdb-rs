@@ -55,6 +55,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<Vec<T>> {
             name: name.to_string(),
             r#type: Some(TypeFamily::Array(1)),
             class: T::to_class().to_string(),
+            unfold: false,
         }
     }
 }
@@ -65,6 +66,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Option<T> {
             name: name.to_string(),
             r#type: Some(TypeFamily::Optional),
             class: T::to_class().to_string(),
+            unfold: false,
         }
     }
 }
@@ -75,6 +77,7 @@ impl<Parent, T: ToTDBSchema + ToSchemaClass> ToSchemaProperty<Parent> for Option
             name: name.to_string(),
             r#type: Some(TypeFamily::Optional),
             class: STRING.to_string(), // EntityIDFor is always a string type
+            unfold: false,
         }
     }
 }

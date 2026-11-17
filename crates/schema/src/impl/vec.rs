@@ -1,8 +1,7 @@
 use crate::{
-    EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance,
-    InstanceProperty, Primitive, PrimitiveValue, Property, RelationValue, Schema,
-    ToInstanceProperty, ToSchemaClass, ToSchemaProperty, ToTDBInstance, ToTDBInstances,
-    ToTDBSchema, TypeFamily,
+    EntityIDFor, FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Primitive,
+    PrimitiveValue, Property, RelationValue, Schema, ToInstanceProperty, ToSchemaClass,
+    ToSchemaProperty, ToTDBInstance, ToTDBInstances, ToTDBSchema, TypeFamily,
 };
 use anyhow::{anyhow, bail};
 use std::collections::HashSet;
@@ -77,6 +76,7 @@ impl<Parent, T: ToSchemaClass> ToSchemaProperty<Parent> for Vec<T> {
             name: name.to_string(),
             r#type: Some(TypeFamily::List),
             class: T::to_class().to_string(),
+            unfold: false,
         }
     }
 }
@@ -246,12 +246,10 @@ impl FromInstanceProperty for Vec<Option<usize>> {
                 .iter()
                 .map(|pv| match pv {
                     PrimitiveValue::Null => Ok(None),
-                    other => {
-                        <usize as FromInstanceProperty>::from_property(
-                            &InstanceProperty::Primitive(other.clone()),
-                        )
-                        .map(Some)
-                    }
+                    other => <usize as FromInstanceProperty>::from_property(
+                        &InstanceProperty::Primitive(other.clone()),
+                    )
+                    .map(Some),
                 })
                 .collect(),
             InstanceProperty::Primitive(PrimitiveValue::Null) => Ok(vec![None]),

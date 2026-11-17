@@ -1,8 +1,8 @@
 use anyhow::*;
 use std::collections::BTreeMap;
 use terminusdb_schema::{
-    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Key,
-    PrimitiveValue, Schema, ToTDBInstance, ToTDBInstances,
+    FromInstanceProperty, FromTDBInstance, Instance, InstanceProperty, Key, PrimitiveValue, Schema,
+    ToTDBInstance, ToTDBInstances,
 };
 use terminusdb_schema_derive::{FromTDBInstance, TerminusDBModel};
 
@@ -79,6 +79,7 @@ impl TestStruct {
                 inherits: vec![],
                 unfoldable: true,
                 properties: vec![],
+                shared: false,
             },
             id: Some("test1".to_string()),
             capture: false,
@@ -275,6 +276,7 @@ mod tests {
                 inherits: vec![],
                 unfoldable: true,
                 properties: vec![],
+                shared: false,
             },
             id: None,
             capture: false,
