@@ -140,9 +140,12 @@ mod tests {
                     )),
                 )
                 .await?;
-                assert!(!b.is_empty(), "TripleCount pattern form returned no bindings");
-                let count = binding_i64(b[0].get("C").expect("no C binding"))
-                    .expect("C was not numeric");
+                assert!(
+                    !b.is_empty(),
+                    "TripleCount pattern form returned no bindings"
+                );
+                let count =
+                    binding_i64(b[0].get("C").expect("no C binding")).expect("C was not numeric");
                 println!("TripleCount(_, @schema:name, _) -> {count}");
                 assert_eq!(count, 3, "expected one name edge per seeded member");
 
@@ -196,9 +199,12 @@ mod tests {
                     Query::TripleCount(TripleCount::for_resource(resource.clone(), var("C"))),
                 )
                 .await?;
-                assert!(!b.is_empty(), "TripleCount resource form returned no bindings");
-                let count = binding_i64(b[0].get("C").expect("no C binding"))
-                    .expect("C was not numeric");
+                assert!(
+                    !b.is_empty(),
+                    "TripleCount resource form returned no bindings"
+                );
+                let count =
+                    binding_i64(b[0].get("C").expect("no C binding")).expect("C was not numeric");
                 println!("TripleCount({resource}) -> {count} edges");
                 assert!(count > 0, "a seeded database has edges");
                 Ok(())
@@ -234,8 +240,8 @@ mod tests {
                 )
                 .await?;
                 assert!(!b.is_empty(), "TripleRangeCount returned no bindings");
-                let count = binding_i64(b[0].get("C").expect("no C binding"))
-                    .expect("C was not numeric");
+                let count =
+                    binding_i64(b[0].get("C").expect("no C binding")).expect("C was not numeric");
                 println!("TripleRangeCount(@schema:age, [20,40)) -> {count}");
                 assert_eq!(count, 2, "ages 20 and 30 are in [20,40); 40 is excluded");
 
@@ -330,7 +336,11 @@ mod tests {
                     .filter_map(|m| m.get("O").and_then(binding_str))
                     .collect();
                 println!("TripleRelation(when equals 2025-04-01) -> {objects:?}");
-                assert_eq!(objects.len(), 1, "exactly one event is at the reference instant");
+                assert_eq!(
+                    objects.len(),
+                    1,
+                    "exactly one event is at the reference instant"
+                );
                 assert!(objects[0].starts_with("2025-04-01"));
                 Ok(())
             })

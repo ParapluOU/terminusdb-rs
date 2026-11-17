@@ -258,14 +258,12 @@ impl super::client::TerminusDBHttpClient {
             Err(anyhow!("document #{} does not exist", id))?
         }
 
-        let mut url_builder = self
+        let url_builder = self
             .build_url()
             .endpoint("document")
             .database(spec)
-            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized);
-        if opts.raw_json {
-            url_builder = url_builder.query("raw_json", "true");
-        }
+            .document_get_params(id, opts.unfold, opts.as_list, opts.minimized)
+            .document_get_optional_params(&opts);
         let uri = url_builder.build();
 
         debug!("retrieving document at {}...", &uri);
@@ -332,7 +330,12 @@ impl super::client::TerminusDBHttpClient {
         // POST with `X-HTTP-Method-Override: GET` so the id travels in a JSON
         // body, not a URL query param — see `get_documents` for why (url-encoded
         // lexical/hash key ids can't be round-tripped through the query string).
-        let uri = self.build_url().endpoint("document").database(spec).build();
+        let uri = self
+            .build_url()
+            .endpoint("document")
+            .database(spec)
+            .document_format_param(&opts)
+            .build();
 
         let mut query_doc = serde_json::Map::new();
         query_doc.insert("id".to_string(), serde_json::Value::String(id.to_string()));
@@ -342,6 +345,7 @@ impl super::client::TerminusDBHttpClient {
             "minimized".to_string(),
             serde_json::Value::Bool(opts.minimized),
         );
+        opts.apply_to_body(&mut query_doc);
         let body = serde_json::to_string(&query_doc)?;
 
         debug!("retrieving document #{} (POST body form)...", id);
@@ -1090,6 +1094,7 @@ impl super::client::TerminusDBHttpClient {
             .endpoint("document")
             .database(spec)
             .document_get_multiple_params(&ids, &opts)
+            .document_get_optional_params(&opts)
             .build();
 
         // Always POST (with `X-HTTP-Method-Override: GET`): the ids travel as a
@@ -1111,7 +1116,12 @@ impl super::client::TerminusDBHttpClient {
 
         let res = if use_post {
             // Use POST with X-HTTP-Method-Override: GET for large requests
-            let base_uri = self.build_url().endpoint("document").database(spec).build();
+            let base_uri = self
+                .build_url()
+                .endpoint("document")
+                .database(spec)
+                .document_format_param(&opts)
+                .build();
 
             // Create query document as JSON
             let mut query_doc = serde_json::Map::new();
@@ -1137,6 +1147,8 @@ impl super::client::TerminusDBHttpClient {
                     serde_json::Value::String(type_filter.clone()),
                 );
             }
+
+            opts.apply_to_body(&mut query_doc);
 
             let query_json = serde_json::to_string(&query_doc)?;
 
@@ -1262,6 +1274,7 @@ impl super::client::TerminusDBHttpClient {
             .endpoint("document")
             .database(spec)
             .document_get_multiple_params(&ids, &opts)
+            .document_get_optional_params(&opts)
             .build();
 
         // Always POST (with `X-HTTP-Method-Override: GET`): the ids travel as a
@@ -1283,7 +1296,12 @@ impl super::client::TerminusDBHttpClient {
 
         let res = if use_post {
             // Use POST with X-HTTP-Method-Override: GET for large requests
-            let base_uri = self.build_url().endpoint("document").database(spec).build();
+            let base_uri = self
+                .build_url()
+                .endpoint("document")
+                .database(spec)
+                .document_format_param(&opts)
+                .build();
 
             // Create query document as JSON
             let mut query_doc = serde_json::Map::new();
@@ -1309,6 +1327,8 @@ impl super::client::TerminusDBHttpClient {
                     serde_json::Value::String(type_filter.clone()),
                 );
             }
+
+            opts.apply_to_body(&mut query_doc);
 
             let query_json = serde_json::to_string(&query_doc)?;
 

@@ -110,6 +110,48 @@ impl<'a> UrlBuilder<'a> {
         self
     }
 
+    /// Append the document output `format` (TerminusDB 12.1), which the server
+    /// only reads from the query string or the `Accept` header — never from a
+    /// request body. Needed even on the body-POST read paths.
+    pub fn document_format_param(mut self, opts: &crate::document::GetOpts) -> Self {
+        if let Some(format) = opts.format {
+            self.query_params
+                .push(("format".to_string(), format.as_str().to_string()));
+        }
+        self
+    }
+
+    /// Append the optional TerminusDB 12.1 document-read parameters that are
+    /// only sent when explicitly set (`raw_json`, `format`, `identifiers`,
+    /// `id_prefix`, `raw_id`, `xsd`). Shared by every document GET path so the
+    /// single- and multi-document reads cannot drift apart.
+    pub fn document_get_optional_params(mut self, opts: &crate::document::GetOpts) -> Self {
+        if opts.raw_json {
+            self.query_params
+                .push(("raw_json".to_string(), "true".to_string()));
+        }
+        if let Some(format) = opts.format {
+            self.query_params
+                .push(("format".to_string(), format.as_str().to_string()));
+        }
+        if let Some(identifiers) = opts.identifiers {
+            self.query_params
+                .push(("identifiers".to_string(), identifiers.to_string()));
+        }
+        if let Some(ref id_prefix) = opts.id_prefix {
+            self.query_params
+                .push(("id_prefix".to_string(), id_prefix.clone()));
+        }
+        if let Some(raw_id) = opts.raw_id {
+            self.query_params
+                .push(("raw_id".to_string(), raw_id.to_string()));
+        }
+        if let Some(ref xsd) = opts.xsd {
+            self.query_params.push(("xsd".to_string(), xsd.clone()));
+        }
+        self
+    }
+
     /// Add document retrieval query parameters for multiple documents
     pub fn document_get_multiple_params(
         mut self,

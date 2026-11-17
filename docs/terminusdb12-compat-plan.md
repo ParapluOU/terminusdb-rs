@@ -77,19 +77,41 @@ survives), delete the last (shared doc is gone).
 
 ### Client endpoints & parameters (`crates/client`)
 
-- [ ] `GET /api/document/<path>?counted=true` → `{"@type":
+- [x] `GET /api/document/<path>?counted=true` → `{"@type":
       "api:DocumentCountResponse", "api:count": N}`. Mutually exclusive with
       `id`/`ids`/`query` (server answers `api:CountedNotSupportedForSelector`).
-- [ ] Remaining new document-list params: `identifiers`, `id_prefix`, `raw_id`,
+- [x] Remaining new document-list params: `identifiers`, `id_prefix`, `raw_id`,
       `xsd` (canonicalisation version; `1.0` is enterprise-only).
-- [ ] Document output formats `format=embedding` (Handlebars template from
+- [x] Document output formats `format=embedding` (Handlebars template from
       `@metadata.embedding`) and `format=markdown`. `jsonld`/`rdfxml`/`turtle`
       are enterprise-gated — out of scope.
-- [ ] `GET /api/changes/<path>?count=N` → `{added, changed, deleted}` document
+- [x] `GET /api/changes/<path>?count=N` → `{added, changed, deleted}` document
       ID lists for a branch head or a specific commit. New endpoint.
-- [ ] `GET /api/schema/<path>` — the class-frame endpoint, which we never
+- [x] `GET /api/schema/<path>` — the class-frame endpoint, which we never
       wrapped at all, plus its new `format=jsonschema` mode (`type`,
       `compress_ids`, `expand_abstract`).
+
+Live-verified in `crates/client/tests/test_v12_1_endpoints.rs` (6/6 green):
+`document_count`, `get_changes`, `get_class_frame`/`get_json_schema`,
+`get_documents_text` (markdown/embedding) and the new `GetOpts` params
+(`identifiers`, `id_prefix`, `raw_id`, `xsd`, `format`). Three things the
+server source settled:
+
+* The document reads that POST their selector in a JSON body (needed so
+  url-encoded lexical/hash ids survive) must pass the new params in that body
+  too — hence `GetOpts::apply_to_body`. **Except `format`**: the server's
+  `detect_output_format/3` reads it only from the query string or the `Accept`
+  header, never from the body.
+* `format=markdown`/`format=embedding` answer `text/markdown` / `text/plain`
+  bodies (one rendered block per document), not JSON, so they get their own
+  text-returning client methods rather than riding the JSON getters.
+* `GET /api/changes` answers *expanded* IRIs
+  (`terminusdb:///data/Member/second`), not the compressed `Type/id` form the
+  document API accepts.
+
+Not covered: the `api:CountedNotSupportedForSelector` error path — our
+`document_count` cannot express `counted` together with `id`/`ids`/`query`, so
+there is nothing to test.
 - [ ] History params we lack: `diff`, `streaming` (NDJSON), `fast`, `before`,
       `after`, `complete`, `graph_type`.
 - [ ] `unfold` on `POST /api/diff` (default `true`; `false` compares documents
@@ -106,7 +128,7 @@ survives), delete the last (shared doc is gone).
       `_CommitMetadata`. This supersedes our own deprecated SSE plugin
       (`http/sse_manager.rs`, `http/changeset.rs`, `http/change_listener.rs`) —
       do not revive that; build on the server's protocol.
-- [ ] Fast `_count` (unfiltered `_count` is index-answered in 12.1).
+- [x] Fast `_count` (unfiltered `_count` is index-answered in 12.1).
 
 ### Explicitly deferred (with reason)
 

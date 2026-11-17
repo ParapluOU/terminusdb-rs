@@ -45,9 +45,9 @@ pub mod log;
 pub mod merge_branch;
 pub mod merge_pool;
 pub mod migration;
-pub mod prefix;
 pub mod open;
 pub mod organization;
+pub mod prefix;
 pub mod query;
 pub mod remote;
 pub mod response;
@@ -55,6 +55,7 @@ pub mod role;
 pub mod schema;
 pub mod url_builder;
 pub mod user;
+pub mod v12_1;
 pub mod versions;
 
 // Internal modules
@@ -66,17 +67,15 @@ pub(crate) mod sse_manager;
 pub mod concurrency_limiter;
 
 // Re-export main types and traits
+pub use apply::ApplyOptions;
 pub use branch_client::BranchClient;
 pub use change_listener::ChangeListener;
 pub use changeset::{ChangesetCommitInfo, ChangesetEvent, DocumentChange, MetadataInfo};
 pub use client::TerminusDBHttpClient;
 #[cfg(not(target_arch = "wasm32"))]
 pub use concurrency_limiter::ConcurrencyLimitConfig;
-pub use document::DeleteOpts;
-pub use apply::ApplyOptions;
 pub use diff::{DiffOptions, DiffResponse};
-pub use migration::{MigrationOperation, MigrationOptions, MigrationResponse};
-pub use prefix::PrefixResponse;
+pub use document::DeleteOpts;
 pub use graphql::{GraphQLError, GraphQLRequest, GraphQLResponse};
 pub use helpers::{
     dedup_documents_by_id, dedup_instances_by_id, dump_failed_payload, dump_json, dump_schema,
@@ -86,15 +85,18 @@ pub use insert_result::InsertInstanceResult;
 pub use merge_branch::{MergeBranchOptions, MergeError, MergeStrategy};
 #[cfg(not(target_arch = "wasm32"))]
 pub use merge_pool::{BranchMergePool, MergePoolOptions, MergePoolStats};
+pub use migration::{MigrationOperation, MigrationOptions, MigrationResponse};
 pub use organization::{
     Capability, Organization, OrganizationDatabase, OrganizationResponse, OrganizationUser,
     Role as OrganizationRole, UserRoleRequest,
 };
+pub use prefix::PrefixResponse;
 pub use remote::{RemoteConfig, RemoteInfo};
 pub use role::{Permission, Role};
 pub use terminusdb_schema::TerminusDBModel;
 pub use url_builder::UrlBuilder;
 pub use user::User;
+pub use v12_1::{ChangesResponse, ClassFrameOptions, DocumentCountResponse};
 
 // Re-export database opening types
 pub use open::{compute_schema_hash, OpenDatabaseError, OpenedDatabase, SchemaState};
