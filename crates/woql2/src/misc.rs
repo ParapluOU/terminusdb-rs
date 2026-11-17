@@ -119,22 +119,40 @@ impl TripleCount {
         }
     }
 
-    /// The pattern form: count the triples matching the given (partial) pattern.
-    /// Pass `None` for any position that should be unrestricted.
+    /// The pattern form: count the triples matching the given pattern.
+    ///
+    /// All three positions must be supplied even though the schema marks them
+    /// optional: the server only recognises the pattern form when `subject`,
+    /// `predicate` and `object` are all *present* in the JSON-LD. An
+    /// unrestricted position is therefore an unbound **variable**, not an
+    /// omitted field — see [`TripleCount::wildcard_node`] and
+    /// [`TripleCount::wildcard_value`], or use the `triple_count_pattern!`
+    /// macro, which accepts `_`.
     pub fn pattern(
-        subject: Option<NodeValue>,
-        predicate: Option<NodeValue>,
-        object: Option<self::Value>,
+        subject: NodeValue,
+        predicate: NodeValue,
+        object: self::Value,
         count: DataValue,
     ) -> Self {
         Self {
             resource: None,
-            subject,
-            predicate,
-            object,
+            subject: Some(subject),
+            predicate: Some(predicate),
+            object: Some(object),
             graph: None,
             count,
         }
+    }
+
+    /// An unbound node variable, for an unrestricted subject or predicate in
+    /// the pattern form. `slot` only has to be unique within the query.
+    pub fn wildcard_node(slot: &str) -> NodeValue {
+        NodeValue::Variable(format!("_TripleCountAny{slot}"))
+    }
+
+    /// An unbound variable, for an unrestricted object in the pattern form.
+    pub fn wildcard_value(slot: &str) -> self::Value {
+        self::Value::Variable(format!("_TripleCountAny{slot}"))
     }
 
     /// Restrict this count to a particular graph.

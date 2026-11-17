@@ -1338,15 +1338,15 @@ macro_rules! triple_count {
 /// ```
 #[macro_export]
 macro_rules! triple_count_pattern {
-    (@opt_node _) => { None };
-    (@opt_node $v:expr) => { Some($crate::macros::into_node_value($v)) };
-    (@opt_value _) => { None };
-    (@opt_value $v:expr) => { Some($crate::macros::into_value($v)) };
+    (@node $slot:expr, _) => { $crate::misc::TripleCount::wildcard_node($slot) };
+    (@node $slot:expr, $v:expr) => { $crate::macros::into_node_value($v) };
+    (@value $slot:expr, _) => { $crate::misc::TripleCount::wildcard_value($slot) };
+    (@value $slot:expr, $v:expr) => { $crate::macros::into_value($v) };
     ($subject:tt, $predicate:tt, $object:tt, $count:expr) => {
         $crate::query::Query::TripleCount($crate::misc::TripleCount::pattern(
-            $crate::triple_count_pattern!(@opt_node $subject),
-            $crate::triple_count_pattern!(@opt_node $predicate),
-            $crate::triple_count_pattern!(@opt_value $object),
+            $crate::triple_count_pattern!(@node "Subject", $subject),
+            $crate::triple_count_pattern!(@node "Predicate", $predicate),
+            $crate::triple_count_pattern!(@value "Object", $object),
             $crate::macros::into_data_value($count),
         ))
     };

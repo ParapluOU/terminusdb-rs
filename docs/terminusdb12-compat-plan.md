@@ -23,16 +23,36 @@ cross-checked against `docs/terminusdb/releases/`. Procedure captured in the
 Our AST already covers every rc3 `woql.json` class except these. Each needs the
 struct, a `Query` enum variant, DSL/macro constructors, and a **live** test.
 
-- [ ] `TripleRangeCount { subject, predicate, low, high, count, graph? }` —
+- [x] `TripleRangeCount { subject, predicate, low, high, count, graph? }` —
       index-answered count of triples whose object falls in `[low, high)`.
-- [ ] `TripleCount` pattern form — add optional `subject`/`predicate`/`object`/
+- [x] `TripleCount` pattern form — add optional `subject`/`predicate`/`object`/
       `graph` alongside the existing `resource` form (both forms are valid).
-- [ ] `TripleRelation { subject, predicate, object, relation, value }` — Allen
+- [x] `TripleRelation { subject, predicate, object, relation, value }` — Allen
       relation match against an interval/instant reference value. Relations:
       before, after, meets, met_by, overlaps, overlapped_by, starts, started_by,
       during, contains, finishes, finished_by, equals.
-- [ ] `UuidV7 { base, uri }` — idgen predicate, sibling of `RandomKey`.
-- [ ] `Typecast` gained a `prefixes` property.
+- [x] `UuidV7 { base, uri }` — idgen predicate, sibling of `RandomKey`.
+- [x] `Typecast` gained a `prefixes` property.
+
+Live-verified in `crates/client/tests/test_v12_1_woql_ops.rs` (6/6 green against
+v12.1.0-rc3). Two behaviours the server source settled, both now encoded in the
+tests:
+
+* `TripleCount`'s pattern form only triggers when `subject`, `predicate` **and**
+  `object` are all *present* in the JSON-LD (`json_woql.pl` matches the dict
+  with `:<`), even though woql.json marks them optional. An unrestricted
+  position is therefore an unbound variable, not an omitted field — hence
+  `TripleCount::pattern` takes all three, with `wildcard_node`/`wildcard_value`
+  (and `_` in `triple_count_pattern!`) for the unrestricted case.
+* `TripleRelation` compiles to `woql_interval_relation_typed/3`, so the object
+  and the reference value must be date-ish; integers never match. Against a
+  *point* reference, `after` is deliberately **on-or-after** (as-of semantics,
+  `check_interval_relation/5`), so an instant equal to the reference matches
+  both `after` and `equals`.
+
+Not expressible yet: a literal of an arbitrary type such as
+`xdd:dateTimeInterval` — `XSDAnySimpleType` has no escape hatch, so the tests
+use `xsd:dateTime` instants (which the server coerces to point intervals).
 
 ### Schema & derive (`crates/schema`, `crates/schema/derive`)
 
