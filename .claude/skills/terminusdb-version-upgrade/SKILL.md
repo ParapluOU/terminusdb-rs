@@ -108,17 +108,43 @@ cd src/rust && cargo check -p terminusdb-community
 ```
 
 Push the branch and an annotated tag, then bump `TERMINUSDB_VERSION` in
-`crates/bin/build.rs` and rebuild:
+`crates/bin/build.rs`, `crates/gql`'s `terminusdb-community` rev, and any
+`[patch.crates-io]` pin whose source spec the server changed (check the fork's
+`src/rust/Cargo.toml` and `Cargo.lock` — the spec must match **exactly**, tag
+for tag, or cargo keeps two copies and shared types stop unifying across the
+FFI boundary). Update the lock surgically (`cargo update -p <pkg>`), never with
+a bare `cargo update`.
+
+Then rebuild **from a persistent source checkout**, not the clone path:
 
 ```bash
 source ~/.claude/tdb-build-env.sh
-cargo build -p terminusdb-bin        # long: SWI-Prolog + the Rust dylib
-cargo test -p terminusdb-bin
+cd /home/paseo/projects/terminusdb-fork && git fetch origin --tags && git checkout <new-tag>
+cd -
+TERMINUSDB_SOURCE=/home/paseo/projects/terminusdb-fork TERMINUSDB_FORCE_REBUILD=1 \
+  cargo build -p terminusdb-bin        # long: the server's Rust dylib + SWI-Prolog
+cargo test -p terminusdb-bin           # must be 15/15; the 5 server-start tests are the real check
 ```
 
+Two traps that both produce a binary that builds and then refuses to start:
+
+- **Do not use the plain clone path for a local build.** With `TERMINUSDB_SOURCE`
+  unset, `build.rs` clones to `/tmp/terminusdb-build`, builds, and then deletes
+  the tree (`should_cleanup`). The server binary is a SWI-Prolog saved state that
+  `use_foreign_library`s `librust.so` by the **absolute path of its build tree**,
+  so it dies at startup with `librust: cannot open shared object file`.
+- **Do not set `CARGO_TARGET_DIR` for this build.** It leaks into the
+  `make`-driven inner cargo, so the dylib lands outside where `make` looks and
+  the build fails at `cp: cannot stat '.../libterminusdb_dylib.so'`. (If it has
+  already happened, the artifact is still valid: copy it to
+  `<source>/src/rust/target/release/libterminusdb_dylib.so`, `touch` it, and
+  re-run — make will skip straight to the copy step.)
+
 The build env script is mandatory on this host (nix gcc15/gmp `-std=gnu17`,
-libclang shim, bindgen headers, bundled `protoc`). See the
-`tdb-build-environment` memory.
+libclang shim, bindgen headers, bundled `protoc`, and the openssl runtime loader
+path). It does not put `m4` on PATH; prepend
+`crates/bin/.deps/m4/x86_64-unknown-linux-gnu/bin` when a gmp/rug build script
+complains. See the `tdb-build-environment` memory.
 
 ## 5. Implement, one feature at a time, each with a test
 
