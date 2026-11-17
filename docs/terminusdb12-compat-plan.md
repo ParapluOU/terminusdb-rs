@@ -138,13 +138,36 @@ green). Notes from the server:
 
 ### GraphQL
 
-- [ ] Native **subscriptions over SSE** (graphql-sse, distinct-connections
+- [x] Native **subscriptions over SSE** (graphql-sse, distinct-connections
       mode) on `POST /api/graphql/<org>/<db>` with `Accept: text/event-stream`:
       `connected` / `next` / `complete` events, `<Type>_added|_updated|_deleted`
       fields, `_ChangeSet` (one event per commit, `include_children`), and
       `_CommitMetadata`. This supersedes our own deprecated SSE plugin
       (`http/sse_manager.rs`, `http/changeset.rs`, `http/change_listener.rs`) —
       do not revive that; build on the server's protocol.
+
+Landed as `crates/client/src/http/subscription.rs`
+(`subscribe_graphql` / `subscribe_graphql_system`, yielding a `Stream` of
+`SubscriptionEvent::{Connected, Next, Errors, Complete}`), with the SSE block
+parser unit-tested and five live tests in
+`crates/client/tests/test_v12_1_graphql_subscriptions.rs` (per-document insert,
+`_ChangeSet` batching + `_CommitMetadata`, deleted-document resolution from the
+pre-commit layer, and in-stream validation errors). The deprecated SSE plugin
+was left untouched.
+
+Two places where rc3's behaviour differs from `docs/terminusdb/graphql-subscriptions.md`:
+
+* **`next` payloads are wrapped in the GraphQL `data` envelope**
+  (`{"data":{"Person_added":{...}}}`), where the doc shows the selection
+  unwrapped. `SubscriptionEvent::payload()` unwraps it; `raw_payload()` keeps it.
+* **The `filter` argument is parsed but not applied** by the community server.
+  `parse_subscription_query` extracts `filter_canonical_json` and the SSE
+  handler forwards it, but `register_subscription_parsed/8` ignores it
+  (`_FilterJson`) and keys the broadcast cohort on
+  (descriptor, class, operation, selection hash, mode). A filtered subscription
+  therefore still receives non-matching documents and must filter client-side.
+  `subscription_filter_is_accepted_but_not_yet_applied` pins this so a future
+  release that starts honouring filters fails loudly.
 - [x] Fast `_count` (unfiltered `_count` is index-answered in 12.1).
 
 ### Explicitly deferred (with reason)

@@ -53,6 +53,8 @@ pub mod remote;
 pub mod response;
 pub mod role;
 pub mod schema;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod subscription;
 pub mod url_builder;
 pub mod user;
 pub mod v12_1;
@@ -94,6 +96,8 @@ pub use prefix::PrefixResponse;
 pub use remote::{RemoteConfig, RemoteInfo};
 pub use role::{Permission, Role};
 pub use terminusdb_schema::TerminusDBModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub use subscription::SubscriptionEvent;
 pub use url_builder::UrlBuilder;
 pub use user::User;
 pub use v12_1::{ChangesResponse, ClassFrameOptions, DocumentCountResponse};
