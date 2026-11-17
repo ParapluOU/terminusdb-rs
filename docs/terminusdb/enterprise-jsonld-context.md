@@ -3,10 +3,10 @@ title: JSON-LD Context Processing
 nextjs:
   metadata:
     title: JSON-LD Context Processing
-    description: How TwinfoxDB Enterprise handles JSON-LD @context for document expansion, compaction, and round-trip context bridging using the Rust json-ld crate.
+    description: How TerminusDB Enterprise Edition handles JSON-LD @context for document expansion, compaction, and round-trip context bridging using the Rust json-ld crate.
     keywords: json-ld, context, expansion, compaction, schema.org, linked data, w3c, enterprise
     alternates:
-      canonical: https://terminusdb.org/docs/enterprise-jsonld-context/
+      canonical: https://terminusdb.com/docs/enterprise-jsonld-context/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 tags:

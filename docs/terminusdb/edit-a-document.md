@@ -6,7 +6,7 @@ nextjs:
     description: How to update documents in TerminusDB using the JavaScript client, Python client, or HTTP API.
     keywords: terminusdb, edit document, update document, modify, javascript client, python client, http api, curl
     alternates:
-      canonical: https://terminusdb.org/docs/edit-a-document/
+      canonical: https://terminusdb.com/docs/edit-a-document/
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-use-edit-a-document.png?raw=true
 tags:

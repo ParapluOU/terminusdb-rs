@@ -8,10 +8,10 @@ title: Enterprise Configuration Reference
 nextjs:
   metadata:
     title: Enterprise Configuration Reference
-    description: Complete reference for all TwinfoxDB Enterprise environment variables covering context caching, remote context processing, LRU cache tuning, and feature activation.
+    description: Complete reference for all TerminusDB Enterprise Edition environment variables covering context caching, remote context processing, LRU cache tuning, and feature activation.
     keywords: configuration, environment variables, enterprise, context cache, lru cache, tuning, reference
     alternates:
-      canonical: https://terminusdb.org/docs/enterprise-configuration/
+      canonical: https://terminusdb.com/docs/enterprise-configuration/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---
@@ -162,6 +162,18 @@ Enterprise inherits all standard TerminusDB environment variables. The most comm
 - `TERMINUSDB_PLUGINS_PATH`
 - `<storage_dir>/plugins`
 - Directory for server plugins (e.g., auto-optimize).
+
+---
+
+- `TERMINUSDB_SERVER_WORKERS`
+- CPU count
+- Number of elaboration worker threads for commit processing. CPU-bound — match to available cores.
+
+---
+
+- `TERMINUSDB_WORKER_POOL_SIZE`
+- `TERMINUSDB_SERVER_WORKERS` or `16`
+- Number of HTTP request worker threads. I/O-bound — can exceed `TERMINUSDB_SERVER_WORKERS` for high-concurrency API workloads.
 
 {% /table %}
 

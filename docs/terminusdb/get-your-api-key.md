@@ -1,44 +1,39 @@
 ---
 tags:
   - how-to
-  - dfrnt-cloud
+  - terminusdb-cloud
   - beginner
-title: How to get your API key using the DFRNT TerminusDB cloud
+title: How to get your API key using TerminusDB Cloud
 nextjs:
   metadata:
-    title: How to get your API key using the DFRNT TerminusDB cloud
+    title: How to get your API key using TerminusDB Cloud
     description: A how-to guide showing how to get your API key to set up and configure your environment to use with a client.
-    keywords: terminusdb, api, fetch, get, get your api key using the dfrnt terminusdb cloud, read, retrieve
+    keywords: terminusdb, api, fetch, get, get your api key using terminusdb cloud, read, retrieve
     openGraph:
       images: https://assets.terminusdb.com/docs/get-your-api-key.png
     alternates:
-      canonical: https://terminusdb.org/docs/get-your-api-key/
+      canonical: https://terminusdb.com/docs/get-your-api-key/
 media: []
 ---
 
 {% callout type="note" %}
 **Prerequisites**
-- A DFRNT Hub account ([sign up](https://dfrnt.com))
+- A TerminusDB Cloud account ([sign up](/docs/cloud/))
 {% /callout %}
 
 {% callout type="note" %}
 **What you'll achieve**
-By the end of this guide, you will have generated an API key for programmatic access to DFRNT Hub.
-{% /callout %}
-
-{% callout type="note" %}
-**TerminusCMS is now DFRNT Hub**
-TerminusCMS has been renamed to **DFRNT Hub**. All features described on this page are available at [dfrnt.com](https://dfrnt.com/hypergraph-content-studio/). The TerminusDB open source database remains unchanged.
+By the end of this guide, you will have generated an API key for programmatic access to TerminusDB Cloud.
 {% /callout %}
 
 
 ## Generate your API key
 
-To use the Python or JavaScript client with TerminusDB, an API key is required. The API key is obtained in the DFRNT TerminusDB cloud by using the steps below.
+To use the Python or JavaScript client with TerminusDB, an API key is required. The API key is obtained in TerminusDB Cloud by using the steps below.
 
 **1\. Log in**
 
-Log in to the modeller user interface [dfrnt.com](https://dfrnt.com/hypergraph-content-studio/)
+Log in to the modeller user interface [TerminusDB Cloud](/docs/cloud/)
 
 **2\. Select a Team**
 

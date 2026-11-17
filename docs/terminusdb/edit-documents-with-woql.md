@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-edit-documents.png
     alternates:
-      canonical: https://terminusdb.org/docs/edit-documents-with-woql/
+      canonical: https://terminusdb.com/docs/edit-documents-with-woql/
 media: []
 ---
 

@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphql-order-by.png
     alternates:
-      canonical: https://terminusdb.org/docs/order-by-in-graphql/
+      canonical: https://terminusdb.com/docs/order-by-in-graphql/
 media: []
 ---
 

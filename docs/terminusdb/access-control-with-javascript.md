@@ -6,7 +6,7 @@ nextjs:
     description: A driver to manage access control with the JS Client
     keywords: access control, javascript client
     alternates:
-      canonical: https://terminusdb.org/docs/access-control-with-javascript/
+      canonical: https://terminusdb.com/docs/access-control-with-javascript/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 tags:
@@ -19,7 +19,7 @@ tags:
 
 ## new AccessControl()
 
-AccessControl is a driver to work with the TerminusDB and DFRNT TerminusDB cloud access control API once launched.
+AccessControl is a driver to work with the TerminusDB and TerminusDB Cloud access control API once launched.
 
 For credentials, you can use a JWT token, an API token or basic authentication with username and password.
 
@@ -27,7 +27,7 @@ For credentials, you can use a JWT token, an API token or basic authentication w
 
 ```javascript
 //connect with the API token
-//(to request a token create an account in  https://terminusdb.org/)
+//(to request a token create an account in  https://terminusdb.com/)
 const accessControl = new AccessControl("https://servername.com",
 {organization:"my_team_name",
 token:"dGVybWludXNkYjovLy9kYXRhL2tleXNfYXB........"})
@@ -85,53 +85,59 @@ Get a organization from parameters.
 
 Sets the Jwt token for the object
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-jwt
+- jwt
+- `string`
+- The jwt api token to use
 
-`string`
-
-The jwt api token to use
+{% /table %}
 
 ## setApiToken
 
 ### accessControl.setApiToken(atokenpi)
 
-Sets the API token for the object. Create a DFRNT TerminusDB cloud account to [get your API token](/docs/how-to-connect-dfrnt-hub/).
+Sets the API token for the object. Create a TerminusDB Cloud account to [get your API token](/docs/how-to-connect-terminusdb-cloud/).
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-atokenpi
+- atokenpi
+- `string`
+- The API token to use to connect with TerminusDB Cloud
 
-`string`
-
-The API token to use to connect with DFRNT TerminusDB cloud
+{% /table %}
 
 ## setApiKey
 
 ### accessControl.setApiKey(atokenpi)
 
-Sets the API token for the object, to request a token create an account in https://terminusdb.org/
+Sets the API token for the object, to request a token create an account in https://terminusdb.com/
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-atokenpi
+- atokenpi
+- `string`
+- The API token to use to connect with TerminusDB
 
-`string`
-
-The API token to use to connect with TerminusDB
+{% /table %}
 
 ## getAPIUrl
 
@@ -141,17 +147,19 @@ Get a API url from cloudAPIUrl
 
 **Returns**: `string` - apiUrl
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-cloudAPIUrl
+- cloudAPIUrl
+- `string`
+- The base url for cloud
 
-`string`
-
-The base url for cloud
+{% /table %}
 
 ## customHeaders
 
@@ -159,13 +167,17 @@ The base url for cloud
 
 add extra headers to your request
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
 
-customHeaders
+---
 
-`object`
+- customHeaders
+- `object`
+
+{% /table %}
 
 ## getOrganization
 
@@ -175,17 +187,19 @@ customHeaders
 
 **Returns**: `object` - - organization
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-organization
+- organization
+- `string`
+- The organization
 
-`string`
-
-The organization
+{% /table %}
 
 ## getAllOrganizations
 
@@ -203,17 +217,19 @@ The organization
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-orgName
+- orgName
+- `string`
+- The organization name to create
 
-`string`
-
-The organization name to create
+{% /table %}
 
 **Example**
 
@@ -231,17 +247,19 @@ accessControl.createOrganization("my_org_name").then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-orgName
+- orgName
+- `string`
+- The organization name to delete
 
-`string`
-
-The organization name to delete
+{% /table %}
 
 **Example**
 
@@ -259,23 +277,25 @@ accessControl.createOrganization("my_org_name").then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[name\]
+- \[name\]
+- `string`
+- The role name.
 
-`string`
+---
 
-The role name.
+- \[actions\]
+- `typedef.RolesActions`
+- A list of actions
 
-\[actions\]
-
-`typedef.RolesActions`
-
-A list of actions
+{% /table %}
 
 **Example**
 
@@ -293,17 +313,19 @@ accessControl.createRole("Reader",[ACTIONS.INSTANCE_READ_ACCESS]).then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[name\]
+- \[name\]
+- `string`
+- The role name.
 
-`string`
-
-The role name.
+{% /table %}
 
 **Example**
 
@@ -336,23 +358,25 @@ accessControl.getAllUsers().then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-name
+- name
+- `string`
+- the user name
 
-`string`
+---
 
-the user name
+- \[password\]
+- `string`
+- you need the password for basic authentication
 
-\[password\]
-
-`string`
-
-you need the password for basic authentication
+{% /table %}
 
 **Example**
 
@@ -370,17 +394,19 @@ accessControl.deleteUser(userId).then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userId
+- userId
+- `string`
+- the document user id
 
-`string`
-
-the document user id
+{% /table %}
 
 **Example**
 
@@ -398,41 +424,43 @@ accessControl.deleteUser(userId).then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userName
+- userName
+- `string`
+- the document user id
 
-`string`
+---
 
-the document user id
+- resourceName
+- `string`
+- the name of a (database or team)
 
-resourceName
+---
 
-`string`
+- rolesArr
+- `array`
+- the roles name list
 
-the name of a (database or team)
+---
 
-rolesArr
+- operation
+- `typedef.CapabilityCommand`
+- grant/revoke operation
 
-`array`
+---
 
-the roles name list
+- scopeType
+- `typedef.ScopeType`
+- the resource type (database or organization)
 
-operation
-
-`typedef.CapabilityCommand`
-
-grant/revoke operation
-
-scopeType
-
-`typedef.ScopeType`
-
-the resource type (database or organization)
+{% /table %}
 
 **Example**
 
@@ -466,17 +494,19 @@ client.manageCapability(myUser,myteam/db__001,[writer],"grant","database").then(
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[orgName\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -517,23 +547,25 @@ accessControl.getOrgUsers().then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[userName\]
+- \[userName\]
+- `string`
+- The user name.
 
-`string`
+---
 
-The organization name.
+- \[orgName\]
+- `string`
+- The organization name.
 
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -572,17 +604,19 @@ accessControl.getTeamUserRole("myUser").then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call status object, 200: if the organization exists and 404: if the organization does not exist
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-orgName
+- orgName
+- `string`
+- The organization name to check if exists.
 
-`string`
-
-The organization name to check if exists.
+{% /table %}
 
 ## createOrganizationRemote
 
@@ -594,17 +628,19 @@ IMPORTANT This does not work with the API-TOKEN. Create an organization
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-orgName
+- orgName
+- `string`
+- The organization name to create
 
-`string`
-
-The organization name to create
+{% /table %}
 
 **Example**
 
@@ -624,17 +660,19 @@ Get the pending invitations list.
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[orgName\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -664,35 +702,37 @@ Send a new invitation
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userEmail
+- userEmail
+- `string`
+- The email of user.
 
-`string`
+---
 
-The email of user.
+- role
+- `string`
+- The role for user. (the document @id role like Role/collaborator)
 
-role
+---
 
-`string`
+- \[note\]
+- `string`
+- The note to send with the invitation.
 
-The role for user. (the document @id role like Role/collaborator)
+---
 
-\[note\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The note to send with the invitation.
-
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -711,23 +751,25 @@ accessControl.sendOrgInvite("new_user@terminusdb.com","Role/admin",
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-inviteId
+- inviteId
+- `string`
+- The invite id to retrieve.
 
-`string`
+---
 
-The invite id to retrieve.
+- \[orgName\]
+- `string`
+- The organization name.
 
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -749,23 +791,25 @@ Delete an invitation
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-inviteId
+- inviteId
+- `string`
+- The invite id to delete.
 
-`string`
+---
 
-The invite id to delete.
+- \[orgName\]
+- `string`
+- The organization name.
 
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -789,29 +833,31 @@ The only user that can accept this invitation is the user registered with the in
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-inviteId
+- inviteId
+- `string`
+- The invite id to update.
 
-`string`
+---
 
-The invite id to updated.
+- accepted
+- `boolean`
+- The status of the invitation.
 
-accepted
+---
 
-`boolean`
+- \[orgName\]
+- `string`
+- The organization name.
 
-The status of the invitation.
-
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -833,17 +879,19 @@ Get the user role for a given organization or the default organization The user 
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[orgName\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -864,23 +912,25 @@ accessControl.getTeamUserRole().then(result=>{
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userId
+- userId
+- `string`
+- The id of the user to be removed. (this is the document user's @id)
 
-`string`
+---
 
-The id of the user to be removed. (this is the document user's @id)
+- \[orgName\]
+- `string`
+- The organization name in which the user is to be removed.
 
-\[orgName\]
-
-`string`
-
-The organization name in which the user is to be removed.
+{% /table %}
 
 **Example**
 
@@ -900,23 +950,25 @@ Get the user's role for every databases under the organization
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userId
+- userId
+- `string`
+- The user's id.
 
-`string`
+---
 
-The user's id.
+- \[orgName\]
+- `string`
+- The organization name.
 
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -952,35 +1004,37 @@ Create a user's a role for a resource (organization/database)
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userId
+- userId
+- `string`
+- The user's id.
 
-`string`
+---
 
-The user's id.
+- scope
+- `string`
+- The resource name/id.
 
-scope
+---
 
-`string`
+- role
+- `string`
+- The user role to be assigned.
 
-The resource name/id.
+---
 
-role
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The user role to be assigned.
-
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -1003,41 +1057,43 @@ Update user's a role for a resource (organization/database), (this api works onl
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-userId
+- userId
+- `string`
+- The user's id.
 
-`string`
+---
 
-The user's id.
+- capabilityId
+- `string`
+- The capability id.
 
-capabilityId
+---
 
-`string`
+- scope
+- `string`
+- The resource name/id.
 
-The capability id.
+---
 
-scope
+- role
+- `string`
+- The user role to be updated.
 
-`string`
+---
 
-The resource name/id.
+- \[orgName\]
+- `string`
+- The organization name.
 
-role
-
-`string`
-
-The user role to be updated.
-
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -1061,17 +1117,19 @@ Get all the access request list for a specify organization
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[orgName\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -1091,35 +1149,37 @@ Get all the access request list for a specify organization
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[email\]
+- \[email\]
+- `string`
+- the user email.
 
-`string`
+---
 
-the user email.
+- \[affiliation\]
+- `string`
+- the user affiliation, company, university etc..
 
-\[affiliation\]
+---
 
-`string`
+- \[note\]
+- `string`
+- the message for the team admin
 
-the user affiliation, company, university etc..
+---
 
-\[note\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-the message for the team admin
-
-\[orgName\]
-
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 
@@ -1142,17 +1202,19 @@ Delete an access request to join your team, only an admin user can delete it
 
 **Returns**: `Promise` - A promise that returns the call response object, or an Error if rejected.
 
-Param
+{% table %}
 
-Type
+- Param
+- Type
+- Description
 
-Description
+---
 
-\[orgName\]
+- \[orgName\]
+- `string`
+- The organization name.
 
-`string`
-
-The organization name.
+{% /table %}
 
 **Example**
 

@@ -6,17 +6,19 @@ tags:
 title: What is Datalog?
 nextjs:
   metadata:
-    title: What is Datalog? Declarative Graph Query Language Guide
-    description: Datalog is a declarative query language for graph databases. Learn what Datalog is, how it compares to SQL, and why it excels at recursive queries.
+    title: What is Datalog? Syntax, Examples, and Datalog vs SQL
+    description: Datalog is a declarative logic language of facts and rules. Learn the syntax step by step, run recursive graph queries, and see how it compares to SQL.
     keywords: what is datalog, datalog query language, datalog vs sql, sql alternative, datalog tutorial
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/what-is-datalog/
+      canonical: https://terminusdb.com/docs/what-is-datalog/
 media: []
 ---
 
-**Datalog** is a declarative query language derived from **Prolog** that excels at querying complex relationships in graph databases. Understanding what Datalog is starts with its foundation in **first-order logic** — specifically a subset called **Horn clauses** — which provides a flexible and powerful approach to handling multi-hop relationships that traditional query languages struggle with.
+**Datalog** is a declarative logic language. You write facts and rules, and the engine finds every answer that follows from them. It is a small, safe subset of **Prolog**, and it is good at questions SQL finds hard, like "find all ancestors" or "who can reach whom" across any number of links.
+
+Its foundation is **first-order logic**, more exactly a subset called **Horn clauses**. This gives a clear and flexible way to handle multi-hop relationships that traditional query languages struggle with.
 
 The Datalog query language offers a logical framework with clarity and simplicity that makes it ideal for:
 - **Graph querying** — traversing relationships of arbitrary depth
@@ -24,6 +26,10 @@ The Datalog query language offers a logical framework with clarity and simplicit
 - **Relational databases** — expressing complex joins elegantly
 
 Unlike imperative query approaches, Datalog's foundation in declarative logical **predicates** and **variables** provides a more elegant and expressive way to query data. You define *what* constitutes a valid result, not *how* to compute it.
+
+{% callout title="Try Datalog in TerminusDB" %}
+TerminusDB is an open-source graph database with a Datalog engine built in. You can run the queries on this page in a few minutes. [Get started](/docs/get-started/) with one Docker command.
+{% /callout %}
 
 ## Why Datalog?
 
@@ -170,7 +176,7 @@ graph LR
 
 The diagram shows how the query pattern (top) matches against the data (bottom). Only Alice matches because Paris connects to France — Bob doesn't match because London connects to UK, not France.
 
-## Datalog vs SQL: A Concrete Comparison
+## Datalog vs SQL
 
 When comparing **Datalog vs SQL**, the difference becomes clear with recursive queries. Consider finding all ancestors of a person.
 

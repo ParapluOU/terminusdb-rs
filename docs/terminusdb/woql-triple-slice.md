@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/woql-triple-slice/
+      canonical: https://terminusdb.com/docs/woql-triple-slice/
 media: []
 ---
 

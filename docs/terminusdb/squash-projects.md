@@ -6,7 +6,7 @@ nextjs:
     description: How to squash multiple commits into one using the JavaScript client, Python client, or HTTP API.
     keywords: terminusdb, squash, compress commits, clean history, branch, javascript client, python client, http api, curl
     alternates:
-      canonical: https://terminusdb.org/docs/squash-projects/
+      canonical: https://terminusdb.com/docs/squash-projects/
     openGraph:
       images: https://assets.terminusdb.com/docs/js-client-collaboration-squash.png
 tags:

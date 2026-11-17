@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/render-as/
+      canonical: https://terminusdb.com/docs/render-as/
 media: []
 tags:
   - typescript
@@ -74,7 +74,7 @@ let data = {
     "@id": "metaDataExample/431b3406a64d99714b57133019408a16a6a514755fb229aff01419b4b423cb62",
     "@type": "metaDataExample",
     "title": "Example",
-    "body": "---\ndescription: >-\n  This page provides an overview of the TerminusDB dashboard to help you\n  navigate its features.\n---\n\n# Product Tour\n\nTerminusDB includes many features to build content infrastructures for complex environments. This product tour aims to provide you with an understanding of how to navigate the product and get started on your projects.&#x20;\n\n* [Creating projects, managing them, and designing your schema](projects-data-products.md)\n* [Content and data curation](content-and-data-curation.md)\n* [Change request workflows for collaborative content management](change-request-workflows.md)\n* [Managing teams and users](manage-teams-and-users.md)\n* [GraphQL and WOQL playgrounds to build and test queries](graphql-and-woql-playgrounds.md)\n\n### Sign Up and Try Out a Demo Project&#x20;\n\nSign up for TerminusDB for free at: [https://dfrnt.com/hypergraph-content-studio/](https://dfrnt.com/hypergraph-content-studio/).\n\nVerify your email address by clicking on the link emailed to you and logging in.\n\nClick get started on the Community Package and then select the automatically generated team.&#x20;\n\nFrom here, clone one of the demo projects to play around with -\n\n<figure><img src=\"../../.gitbook/assets/terminuscms-demos.png\" alt=\"\"><figcaption></figcaption></figure>"
+    "body": "---\ndescription: >-\n  This page provides an overview of the TerminusDB dashboard to help you\n  navigate its features.\n---\n\n# Product Tour\n\nTerminusDB includes many features to build content infrastructures for complex environments. This product tour aims to provide you with an understanding of how to navigate the product and get started on your projects.&#x20;\n\n* [Creating projects, managing them, and designing your schema](projects-data-products.md)\n* [Content and data curation](content-and-data-curation.md)\n* [Change request workflows for collaborative content management](change-request-workflows.md)\n* [Managing teams and users](manage-teams-and-users.md)\n* [GraphQL and WOQL playgrounds to build and test queries](graphql-and-woql-playgrounds.md)\n\n### Sign Up and Try Out a Demo Project&#x20;\n\nSign up for TerminusDB Cloud at: [TerminusDB Cloud](/docs/cloud/).\n\nVerify your email address by clicking on the link emailed to you and logging in.\n\nClick get started on the Community Package and then select the automatically generated team.&#x20;\n\nFrom here, clone one of the demo projects to play around with -\n\n<figure><img src=\"../../.gitbook/assets/terminuscms-demos.png\" alt=\"\"><figcaption></figcaption></figure>"
 }
 
 

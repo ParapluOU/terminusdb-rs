@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/connect-with-the-javascript-client/
+      canonical: https://terminusdb.com/docs/connect-with-the-javascript-client/
 tags:
   - typescript
   - how-to
@@ -27,7 +27,7 @@ This guide uses **TypeScript**. Also available in [Python](/docs/connect-with-py
 ## Prerequisites
 
 - TerminusDB running locally ([Install guide →](/docs/install-terminusdb-as-a-docker-container))
-- Node.js 20+ installed
+- Node.js 22+ installed
 - A terminal
 
 If you haven't run the [curl quickstart](/docs/get-started/) yet, do that first — it takes 5 minutes and introduces the branch/diff/merge concepts this guide builds on.
@@ -46,14 +46,14 @@ npm install terminusdb
 
 Create a file called `index.ts`. You will build it up step by step below, or copy the [complete file](#the-complete-indexts) at the end.
 
-## Connect to TerminusDB
+## Connect to TerminusDB {% step %}
 
 ```typescript test-example id="ts-quickstart-connect" file="examples/ts-quickstart-connect.example.ts"
 ```
 
 **What you should see:** A server info object with version and storage details. If you see a connection error, check that Docker is running and TerminusDB is on port 6363.
 
-## Create a database and insert a document
+## Create a database and insert a document {% step %}
 
 No schema needed — insert any JSON document with `raw_json: true` and give it a human-readable ID:
 
@@ -62,7 +62,7 @@ No schema needed — insert any JSON document with `raw_json: true` and give it 
 
 **What you should see:** `["terminusdb:///data/jane"]`. The `@id` gives the document a stable, human-readable identifier you choose. Schema comes later when you are ready.
 
-## Create a branch
+## Create a branch {% step %}
 
 Just like `git branch`, this creates an isolated copy of your data:
 
@@ -73,14 +73,14 @@ Just like `git branch`, this creates an isolated copy of your data:
 
 Everything you do now happens on `feature` — main is untouched.
 
-## Edit the document on the branch
+## Edit the document on the branch {% step %}
 
 ```typescript test-example id="ts-quickstart-edit" file="examples/ts-quickstart-edit.example.ts"
 ```
 
 **What you should see:** The document retrieved, then confirmation of the update. The change only exists on `feature` — `main` still has the original email.
 
-## See the diff
+## See the diff {% step %}
 
 This is the moment. TerminusDB can show you exactly what changed between branches — structurally, field by field:
 
@@ -103,7 +103,7 @@ This is the moment. TerminusDB can show you exactly what changed between branche
 TerminusDB computed a **structural diff** — not a line-by-line text diff, but semantic operations (`SwapValue`) that know exactly which fields changed, what the old values were, and what the new values are. This patch can be applied, reversed, or composed with other patches.
 {% /callout %}
 
-## Merge the branch
+## Merge the branch {% step %}
 
 Bring the changes back to `main`:
 
@@ -112,7 +112,7 @@ Bring the changes back to `main`:
 
 **What you should see:** `Merged feature into main`
 
-## Verify the merge
+## Verify the merge {% step %}
 
 Confirm the changes are now on `main`:
 

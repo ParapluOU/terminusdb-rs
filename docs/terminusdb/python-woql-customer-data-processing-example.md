@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/python-woql-customer-data-processing-example/
+      canonical: https://terminusdb.com/docs/python-woql-customer-data-processing-example/
 media: []
 ---
 

@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/document-ui-sdk-data-types/
+      canonical: https://terminusdb.com/docs/document-ui-sdk-data-types/
 media: []
 tags:
   - typescript
@@ -377,8 +377,6 @@ return <FrameViewer
 For more information on data types, take a look at the individual types in more details:
 
 *   [Array](/docs/array/)
-*   [Choice Document](/docs/choice-document/)
-*   [Choice Sub Document](/docs/choice-subdocuments/)
 *   [List](/docs/list/)
 *   [Mandatory](/docs/mandatory/)
 *   [One Of](/docs/oneof/)

@@ -12,18 +12,12 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/explore-ecommerce-dataset/
+      canonical: https://terminusdb.com/docs/explore-ecommerce-dataset/
 media: []
 lastUpdated: "2026-04-30"
 ---
 
-Clone a pre-populated ecommerce database to your local TerminusDB instance, query orders across customers and products, update an order status on a branch, and see a field-level structural diff — in 15 minutes.
-
-{% callout type="note" %}
-**Prerequisites**
-- **TerminusDB running on localhost:6363.** Verify: `curl -s -u admin:root http://localhost:6363/api/info` should return JSON containing `"authority": "admin"`. If you get "connection refused", [start TerminusDB first](/docs/get-started/#step-1).
-- **Completed the [First 10 Minutes quickstart](/docs/get-started/)** — you should be comfortable with branches and diffs. This tutorial builds on those concepts with a business dataset.
-{% /callout %}
+Clone a pre-populated ecommerce database to your local TerminusDB instance, query orders across customers and products, update an order status on a branch, and see a field-level structural diff — in 15 minutes. New to TerminusDB? Do the [First 10 Minutes quickstart](/docs/get-started/) first — it teaches the branch/diff/merge workflow this tutorial builds on.
 
 ## What you will build
 
@@ -41,29 +35,44 @@ You will clone a complete ecommerce database (customers, orders, order lines, pr
 
 **Relationship graph:** Customer ← Order ← OrderLine → Product → Category
 
-## Step 1 — Clone the ecommerce database
+## Step 1 — Clone the ecommerce database {% step %}
 
-Pull the entire ecommerce dataset from the public templates server to your local instance:
+Pull the entire ecommerce dataset from the public templates server to your local instance — one POST is all it takes. `Authorization-Remote` carries the public server's anonymous credentials (`public:public`):
 
-{% quickstart-clone remoteUrl="https://data.terminusdb.org/public/ecommerce" localPath="ecommerce" label="Clone Ecommerce Database" description="Get the ecommerce dataset on your local TerminusDB — ready to branch and diff." /%}
+{% http-example method="POST" path="/api/clone/admin/ecommerce" headers="{\"Authorization-Remote\": \"Basic cHVibGljOnB1YmxpYw==\"}" %}
+{"remote_url": "https://data.terminusdb.org/public/ecommerce", "label": "ecommerce", "comment": "Cloned ecommerce from data.terminusdb.org"}
+{% http-expected %}
+{"@type":"api:CloneResponse","api:status":"api:success"}
+{% /http-expected %}
+{% /http-example %}
 
-You just pulled ~155 documents — customers, orders, products, and their relationships — from a public TerminusDB server to your local instance. The data is now yours to query, branch, and modify.
+You just pulled ~155 documents — customers, orders, products, and their relationships — from a public TerminusDB server to your local instance. The data is now yours to query, branch, and modify. If the database already exists locally, the server answers `api:DatabaseAlreadyExists` — that's fine, you're ready.
 
-## Step 2 — Explore what you have
+## Step 2 — List the document types {% step %}
 
 List the document types defined in the schema:
 
 {% http-example method="GET" path="/api/document/admin/ecommerce/local/branch/main?graph_type=schema&as_list=true&skip=1" /%}
 
+{% http-expected %}
+[{"@id":"OrderLine","@key":{"@fields":["order_line_id"],"@type":"Lexical"},"@type":"Class","order":"Order","order_line_id":"xsd:string","product":"Product","quantity":"xsd:integer","unit_price":"xsd:decimal"},{"@id":"Product","@key":{"@fields":["name"],"@type":"Lexical"},"@type":"Class","category":"Category","description":{"@class":"xsd:string","@type":"Optional"},"in_stock":"xsd:boolean","name":"xsd:string","price":"xsd:decimal"},{"@id":"Category","@key":{"@fields":["name"],"@type":"Lexical"},"@type":"Class","name":"xsd:string","parent_category":{"@class":"Category","@type":"Optional"}},{"@id":"Customer","@key":{"@fields":["email"],"@type":"Lexical"},"@type":"Class","country":"xsd:string","email":"xsd:string","name":"xsd:string","registered_date":"xsd:date"},{"@id":"Order","@key":{"@fields":["order_id"],"@type":"Lexical"},"@type":"Class","customer":"Customer","order_date":"xsd:dateTime","order_id":"xsd:string","status":"xsd:string","total":"xsd:decimal"}]
+{% /http-expected %}
+
 The response lists 5 document types — `Category`, `Customer`, `Order`, `OrderLine`, and `Product`.
 
-List all orders:
+## Step 3 — List the orders {% step %}
 
-{% http-example method="GET" path="/api/document/admin/ecommerce/local/branch/main?type=Order&as_list=true" /%}
+List the first five orders (of 30 total):
 
-You see 30 Order documents. The database has 15 customers, 20 products, and 84 order lines — all interconnected, all versioned. Order totals are stored as `xsd:decimal` — arbitrary-precision exact arithmetic, not floating-point. Financial figures stay exact across every query, branch, and diff.
+{% http-example method="GET" path="/api/document/admin/ecommerce/local/branch/main?type=Order&count=5&as_list=true" /%}
 
-## Step 3 — Query: find processing orders with customer details
+{% http-expected %}
+[{"@id":"Order/ORD-0001","@type":"Order","customer":"Customer/alice.smith@example.com","order_date":"2025-06-20T19:37:13.014Z","order_id":"ORD-0001","status":"delivered","total":989.97},{"@id":"Order/ORD-0002","@type":"Order","customer":"Customer/hana.tanaka@example.com","order_date":"2024-03-19T03:10:07.294Z","order_id":"ORD-0002","status":"processing","total":5235.93},{"@id":"Order/ORD-0003","@type":"Order","customer":"Customer/ivan.petrov@example.com","order_date":"2025-06-21T23:34:22.359Z","order_id":"ORD-0003","status":"delivered","total":259.97},{"@id":"Order/ORD-0004","@type":"Order","customer":"Customer/hana.tanaka@example.com","order_date":"2024-06-19T09:28:47.644Z","order_id":"ORD-0004","status":"delivered","total":5828.94},{"@id":"Order/ORD-0005","@type":"Order","customer":"Customer/ivan.petrov@example.com","order_date":"2025-03-31T03:56:59.165Z","order_id":"ORD-0005","status":"delivered","total":2559.95}]
+{% /http-expected %}
+
+The database holds 30 orders plus 15 customers, 20 products, and 84 order lines — all interconnected, all versioned. Order totals are stored as `xsd:decimal` — arbitrary-precision exact arithmetic, not floating-point. Financial figures stay exact across every query, branch, and diff.
+
+## Step 4 — Query: find processing orders with customer details {% step %}
 
 Show all orders still in "processing" status, with the customer's name and country.
 
@@ -103,11 +112,9 @@ console.log(result.bindings);
 
 You just traversed Order → Customer in a single query — no JOIN syntax, no ON clause, no foreign key declaration. TerminusDB follows document links natively. The `customer` field in Order *is* the link; the query simply walks it.
 
-## Step 4 — Branch and modify (fulfil an order)
+## Step 5 — Create a fulfillment branch {% step %}
 
-A processing order has been shipped. Update its status on a branch and see what TerminusDB tracks.
-
-Create a branch called `fulfillment`:
+A processing order has been shipped. Update its status on a branch called `fulfillment`:
 
 {% http-example method="POST" path="/api/branch/admin/ecommerce/local/branch/fulfillment" %}
 {"origin": "admin/ecommerce/local/branch/main"}
@@ -116,18 +123,20 @@ Create a branch called `fulfillment`:
 {% /http-expected %}
 {% /http-example %}
 
+## Step 6 — Ship the order on the branch {% step %}
+
 Update order ORD-0002 to "shipped" on the branch:
 
 {% http-example method="PUT" path="/api/document/admin/ecommerce/local/branch/fulfillment?author=warehouse@example.com&message=Ship+order+ORD-0002" %}
 {"@id": "Order/ORD-0002", "@type": "Order", "order_id": "ORD-0002", "customer": "Customer/hana.tanaka@example.com", "order_date": "2024-03-19T03:10:07.294Z", "status": "shipped", "total": 5235.93}
 {% http-expected %}
-["terminusdb:///data/Order/ORD-0002"]
+["Order/ORD-0002"]
 {% /http-expected %}
 {% /http-example %}
 
 You just updated one field — `status` from "processing" to "shipped" — on an isolated branch. Main still has the original state. Let's see exactly what changed.
 
-## Step 5 — See what changed (the diff)
+## Step 7 — See what changed (the diff) {% step %}
 
 In any other database, answering "what exactly changed in this order?" means querying an audit table, parsing CDC events, or comparing snapshots you exported. In TerminusDB, you ask the database directly — compare your `fulfillment` branch against `main`:
 
@@ -142,7 +151,7 @@ One field changed. TerminusDB knows it was `status`, knows the old value ("proce
 
 This is your audit trail — automatic, precise, and queryable. No trigger tables writing to a separate audit schema. No CDC pipeline capturing change events. No application-level event sourcing. The database *is* the changelog, and this diff can be applied, reversed, or forwarded to any system that needs to know what happened.
 
-## Step 6 — Merge back to main
+## Step 8 — Merge back to main {% step %}
 
 When you are satisfied with the change, merge the fulfillment branch back:
 
@@ -157,13 +166,15 @@ The order status change is now on main. The branch remains as a record of who ch
 
 ---
 
-## Clean up
+## Step 9 — Clean up {% step %}
 
-{% callout type="warning" %}
-This deletes the **ecommerce** data product permanently. Only run this when you are finished experimenting.
-{% /callout %}
+This deletes the **ecommerce** data product permanently — only run it when you are finished experimenting:
 
 {% http-example method="DELETE" path="/api/db/admin/ecommerce" confirm="This will permanently delete the ecommerce data product." /%}
+
+{% http-expected %}
+{"@type":"api:DbDeleteResponse","api:status":"api:success"}
+{% /http-expected %}
 
 ---
 

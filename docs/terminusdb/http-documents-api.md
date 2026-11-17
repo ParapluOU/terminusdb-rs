@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/http-documents-api/
+      canonical: https://terminusdb.com/docs/http-documents-api/
 media: []
 ---
 
@@ -101,14 +101,33 @@ This is particularly useful for:
 
 ### Inserting a document without a schema
 
-Add `raw_json=true` to the query string when posting documents. The document must include an `@id` field to give it a stable identifier:
+Add `raw_json=true` to the query string when posting documents:
 
 ```bash
 curl -s -u admin:root -X POST \
   "http://localhost:6363/api/document/admin/MyDatabase/local/branch/main?author=admin&message=Add+document&raw_json=true" \
   -H "Content-Type: application/json" \
-  -d '{"@id":"terminusdb:///data/jane","name":"Jane Smith","email":"jane@example.com","age":30}'
+  -d '{"name":"Jane Smith","email":"jane@example.com","age":30}'
 ```
+
+The response is a list of the document IDs created, for example `["JSONDocument/pyfUo_jV10Sbvj-2"]`.
+
+`@id` is optional. If you supply one, it becomes the document's stable identifier (any suffix is allowed, for example `product/SKU-001`). If you omit it, the server mints a random ID under the `JSONDocument/` prefix, as above.
+
+### Inserting many documents at once
+
+A top-level JSON array creates one document per element:
+
+```bash
+curl -s -u admin:root -X POST \
+  "http://localhost:6363/api/document/admin/MyDatabase/local/branch/main?author=admin&message=Add+documents&raw_json=true" \
+  -H "Content-Type: application/json" \
+  -d '[{"name":"Jane"},{"name":"Bob"},{"name":"Ada"}]'
+```
+
+returns three IDs, one per element. A top-level object always creates exactly one document — to store an array as a single document, wrap it: `{"data": [...]}`.
+
+For bulk loads, split large arrays into batches rather than posting hundreds of megabytes in one request. A batch of a few thousand small documents per request is a good starting point; a single large JSON object (tens of MB) also works but is stored as one document.
 
 ### Retrieving a raw JSON document
 
@@ -118,6 +137,8 @@ When fetching documents that were inserted with `raw_json=true`, include the sam
 curl -s -u admin:root \
   "http://localhost:6363/api/document/admin/MyDatabase/local/branch/main?id=terminusdb:///data/jane&raw_json=true"
 ```
+
+The returned document always includes its `@id` — it is the document's identity in the store and cannot be omitted. If your application needs the bare object, remove the `@id` field client-side.
 
 Without `raw_json=true`, the server may attempt to interpret the document against the schema and return an error if no matching type exists.
 
@@ -138,13 +159,13 @@ The `raw_json` flag is ideal for getting started quickly or for data that does n
 
 ## Cloud TerminusDB
 
-To connect to a cloud TerminusDB instance, such as with [DFRNT](https://dfrnt.com/hypergraph-content-studio), you need to mint an API token to your instance to get access to your data products, and documents stored in the branches of the data product.
+To connect to a cloud TerminusDB instance, such as with [TerminusDB Cloud](/docs/cloud/), you need to mint an API token to your instance to get access to your data products, and documents stored in the branches of the data product.
 
-To connect to a cloud environment, we will assume you are connecting to the DFRNT TerminusDB cloud.
+To connect to a cloud environment, we will assume you are connecting to TerminusDB Cloud.
 
 ### How to connect to cloud
 
-Below is how to use an API token to connect to a cloud TerminusDB instance at DFRNT. Note that there is a two-part to the api endpoints:
+Below is how to use an API token to connect to a cloud TerminusDB instance on TerminusDB Cloud. Note that there is a two-part to the api endpoints:
 
 1. api/hosted (can also be /api/dfrnt for instances connected via other API tokens)
 2. 000000000000-0000-0000-0000-00000001 (instance name)

@@ -1,78 +1,48 @@
 ---
 tags:
   - explanation
-  - dfrnt-cloud
+  - terminusdb-cloud
   - beginner
-title: What is DFRNT Hub?
+title: What is TerminusDB Cloud?
 nextjs:
   metadata:
-    title: What is DFRNT Hub?
-    keywords: dfrnt, terminusdb hosting, hypergraph content studio, enterprise support
-    description: Learn about DFRNT Hub, the company behind TerminusDB's commercial hosting and enterprise solutions.
+    title: What is TerminusDB Cloud?
+    keywords: terminusdb cloud, terminusdb hosting, managed terminusdb, enterprise support
+    description: Learn about TerminusDB Cloud, the hosting options for TerminusDB — formerly known as DFRNT Hub and TerminusCMS.
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/what-is-dfrnt/
+      canonical: https://terminusdb.com/docs/what-is-dfrnt/
 ---
 
-DFRNT is the company that provides commercial hosting, enterprise support, and a comprehensive user interface for TerminusDB. In 2025, DFRNT assumed stewardship of the open source TerminusDB project, ensuring its continued development and maintenance in collaboration with the community.
+TerminusDB Cloud is the early-access managed hosting offering for TerminusDB, operated by [Gettier](https://gettier.ai), the company that assumed stewardship of the open source TerminusDB project in 2025.
 
-The DFRNT Hub enables Digital Twins of Information Supply Chains with global standards-based financial reporting, Reference Data Management, and a Modeller for TerminusDB.
+The service has been renamed a few times: it launched as **TerminusCMS**, was renamed **DFRNT Hub** (with the Hypergraph Content Studio interface), and is now **TerminusDB Cloud**. If you find older documentation using those names, they all refer to the same hosted TerminusDB service.
 
-## DFRNT Hub with the Hypergraph Content Studio
+## What TerminusDB Cloud provides
 
-DFRNT offers the [Hypergraph Content Studio](https://dfrnt.com/hypergraph-content-studio/), a powerful platform that includes:
+- **Managed TerminusDB hosting** — data products run on operated infrastructure, with no server to maintain
+- **API tokens** — mint tokens for programmatic access from team settings
+- **Team collaboration** — shared instances where teams push, pull, and review change requests, similar to how software teams collaborate on code with Git
+- **Schema modeller** — a visual modeller for designing document schemas is coming with the TerminusDB 12.1 release
 
-- **Visual Modeller** - Design and manage your data models with an intuitive visual interface
-- **WOQL Studio** - Interactive query builder and executor for complex data operations
-- **Record Editor** - User-friendly interface for creating and editing documents
-- **Visualization Tools** - Explore your knowledge graphs with advanced visualization capabilities
-- **Git-for-Data Synchronization** - Seamlessly sync content repositories between local and cloud instances using git-for-data
+## Works with open source
 
-## Cloud Hosting
+TerminusDB Cloud works with both managed instances and self-hosted TerminusDB:
 
-DFRNT provides fully managed TerminusDB hosting with:
+- **Cloud-hosted TerminusDB** — fully managed instances
+- **Self-hosted TerminusDB** — connect to your local Docker installation or private deployment
 
-- **Generous Free Tier** - Build without constraints during development
-- **Scalable Infrastructure** - Upgrade seamlessly as your needs grow
-- **Data Product Hosting** - Upgrade seamlessly as your needs grow
-- **High Availability** - Enterprise-grade reliability and performance
-- **Automatic Backups** - Your data is always protected
+This lets you develop locally with the open source version and move to cloud hosting when ready.
 
-## Works with Open Source
+## Getting access
 
-The DFRNT platform is designed to work with both:
+TerminusDB Cloud is in early access. See [TerminusDB Cloud](/docs/cloud/) for how to request an account, or [connect a client to a cloud instance](/docs/how-to-connect-terminusdb-cloud/) if you already have one.
 
-- **Cloud-hosted TerminusDB** - Fully managed instances in DFRNT's infrastructure
-- **Self-hosted TerminusDB** - Connect to your local Docker installation or private cloud deployment
+## Enterprise deployments
 
-This flexibility allows you to develop locally with the open source version and seamlessly transition to cloud hosting when ready.
+[TerminusDB Enterprise](/docs/enterprise/) adds production features on top of the open source engine — document format endpoints (Turtle, RDF/XML, JSON-LD), observability, and backup tooling. For managed deployments on Azure, AWS, or Google Cloud, see [Deploy TerminusDB on Azure](/docs/deploy-on-azure/) or contact the team at [Gettier](https://gettier.ai/connect).
 
-## Getting Started with DFRNT
+## Open source commitment
 
-1. **Sign up** at [dfrnt.com/sign-up](https://dfrnt.com/sign-up) for a free trial
-2. **Create your first database** using the visual interface or connect to your local instance
-3. **Design your schema** with the visual modeller
-4. **Query your data** using GraphQL, WOQL, or the REST API
-5. **Collaborate** with your team using git-for-data workflows
-
-## Enterprise Support
-
-DFRNT offers enterprise support packages including:
-
-- Priority technical support
-- Custom deployment options
-- Training and onboarding
-- Professional services for data modeling and integration
-- SLA guarantees
-
-## Open Source Commitment
-
-DFRNT is committed to maintaining TerminusDB as open source software. The company actively contributes to the project and supports the community through:
-
-- Regular releases and updates
-- Comprehensive documentation
-- Community forums and support
-- Open development process
-
-Learn more at [dfrnt.com](https://dfrnt.com).
+TerminusDB remains open source under the Apache 2.0 license, maintained by Gettier with the community: regular releases, documentation, and an open development process.

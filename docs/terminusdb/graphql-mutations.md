@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/graphql-filter.png?raw=true
     alternates:
-      canonical: https://terminusdb.org/docs/graphql-mutations/
+      canonical: https://terminusdb.com/docs/graphql-mutations/
 media: []
 ---
 
@@ -27,6 +27,33 @@ TerminusDB provides three main mutation operations:
 - **`_deleteDocuments`** - Delete documents by their IDs
 
 All mutations may include commit metadata (`_commitInfo`) to track changes and must be executed together in a single GraphQL mutation operation.
+
+## Quick Start: curl Example
+
+GraphQL mutations are sent as plain HTTP POST requests to the `/api/graphql` endpoint. The query and variables are JSON fields in the request body — no special client library required:
+
+```bash
+curl -X POST http://localhost:6363/api/graphql/MyOrg/MyDatabase \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "mutation($input: JSON!, $author: String!, $message: String!) { _commitInfo(author: $author, message: $message) _insertDocuments(json: $input) }",
+    "variables": {
+      "author": "alice",
+      "message": "Add person",
+      "input": { "@type": "Person", "name": "Alice", "age": 30 }
+    }
+  }'
+```
+
+The response is standard JSON:
+
+```json
+{
+  "data": {
+    "_insertDocuments": ["Person/abc123"]
+  }
+}
+```
 
 ## Commit Information
 
@@ -50,41 +77,97 @@ The `_insertDocuments` mutation creates new documents in your database.
 ### Syntax
 
 ```graphql
-mutation {
+mutation($input: JSON!) {
   _commitInfo(author: "alice", message: "Add new person")
-  _insertDocuments(
-    json: "JSON string"
-  )
+  _insertDocuments(json: $input)
+}
+```
+
+With variables:
+
+```json
+{
+  "input": {
+    "@type": "Person",
+    "name": "Alice",
+    "age": 30
+  }
 }
 ```
 
 ### Parameters
 
-- **`json`** (required): A JSON string containing the document(s) to insert. Can be a single document or an array of documents.
+- **`json`** (required): A JSON document or array of documents passed as a GraphQL variable of type `JSON`. Native JSON objects are recommended; stringified JSON strings are supported for backward compatibility.
 - **`graph_type`** (optional): Either `InstanceGraph` (default) for data or `SchemaGraph` for schema definitions.
 - **`raw_json`** (optional, unsupported): When `true`, inserts raw JSON without schema validation (as a JSON doc). Default is `false`.
 
 ### Example: Insert a Single Document
 
 ```graphql
-mutation {
+mutation($input: JSON!) {
   _commitInfo(author: "alice", message: "Add new person Alice")
-  _insertDocuments(
-    json: "{\"@type\": \"Person\", \"name\": \"Alice\", \"age\": 30}"
-  )
+  _insertDocuments(json: $input)
+}
+```
+
+With variables:
+
+```json
+{
+  "input": {
+    "@type": "Person",
+    "name": "Alice",
+    "age": 30
+  }
 }
 ```
 
 ### Example: Insert Multiple Documents
 
 ```graphql
-mutation {
+mutation($input: JSON!) {
   _commitInfo(author: "bob", message: "Bulk import people")
+  _insertDocuments(json: $input)
+}
+```
+
+With variables:
+
+```json
+{
+  "input": [
+    {"@type": "Person", "name": "Bob", "age": 25},
+    {"@type": "Person", "name": "Charlie", "age": 35}
+  ]
+}
+```
+
+### Precision Preservation
+
+Native JSON variables preserve full decimal precision end-to-end. When you pass a decimal as a string (e.g. `"0.98765432109876543219"`), the entire precision is retained without truncation. The JSON protocol in TerminusDB also supports arbitrary precision numbers in the wire format, but most language clients will truncate to 64-bit IEEE 754 double precision, beware!
+
+### Backward Compatibility
+
+Stringified JSON can be used inline in the mutation or as a variable. Inline usage requires escaping quotes with backslashes:
+
+```graphql
+mutation {
+  _commitInfo(author: "alice", message: "Add person")
   _insertDocuments(
-    json: "[{\"@type\": \"Person\", \"name\": \"Bob\", \"age\": 25}, {\"@type\": \"Person\", \"name\": \"Charlie\", \"age\": 35}]"
+    json: "{\"@type\": \"Person\", \"name\": \"Alice\", \"age\": 30}"
   )
 }
 ```
+
+Or as a stringified JSON variable:
+
+```json
+{
+  "input": "{\"@type\": \"Person\", \"name\": \"Alice\", \"age\": 30}"
+}
+```
+
+Native JSON objects are recommended for new code since they avoid escaping and preserve numeric precision.
 
 ### Response
 
@@ -94,8 +177,8 @@ The mutation returns an array of document IDs for the inserted documents:
 {
   "data": {
     "_insertDocuments": [
-      "terminusdb:///data/Person/abc123",
-      "terminusdb:///data/Person/def456"
+      "Person/abc123",
+      "Person/def456"
     ]
   }
 }
@@ -108,42 +191,79 @@ The `_replaceDocuments` mutation updates existing documents or creates new ones 
 ### Syntax
 
 ```graphql
-mutation {
+mutation($input: JSON!) {
   _commitInfo(author: "alice", message: "Update person details")
   _replaceDocuments(
-    json: "JSON string"
+    json: $input
     graph_type: InstanceGraph
     create: false
   )
 }
 ```
 
+With variables:
+
+```json
+{
+  "input": {
+    "@type": "Person",
+    "@id": "Person/alice",
+    "name": "Alice",
+    "age": 31
+  }
+}
+```
+
 ### Parameters
 
-- **`json`** (required): A JSON string containing the document(s) to replace. Must include `@id` field for each document.
+- **`json`** (required): A JSON document or array of documents passed as a GraphQL variable of type `JSON`. Must include `@id` field for each document.
 - **`graph_type`** (optional): Either `InstanceGraph` (default) for data or `SchemaGraph` for schema.
 - **`create`** (optional): When `true`, creates the document if it doesn't exist. Default is `false`.
 
 ### Example: Replace an Existing Document
 
 ```graphql
-mutation {
+mutation($input: JSON!) {
   _commitInfo(author: "alice", message: "Update Alice's age")
-  _replaceDocuments(
-    json: "{\"@type\": \"Person\", \"@id\": \"Person/alice\", \"name\": \"Alice\", \"age\": 31}"
-  )
+  _replaceDocuments(json: $input)
+}
+```
+
+With variables:
+
+```json
+{
+  "input": {
+    "@type": "Person",
+    "@id": "Person/alice",
+    "name": "Alice",
+    "age": 31
+  }
 }
 ```
 
 ### Example: Replace or Create Document
 
 ```graphql
-mutation {
+mutation($input: JSON!) {
   _commitInfo(author: "bob", message: "Upsert person record")
   _replaceDocuments(
-    json: "{\"@type\": \"Person\", \"@id\": \"Person/david\", \"name\": \"David\", \"age\": 28}"
+    json: $input
     create: true
   )
+}
+```
+
+With variables:
+
+```json
+{
+  "input": {
+    "@type": "Person",
+    "@id": "Person/david",
+    "name": "David",
+    "age": 28
+  }
 }
 ```
 
@@ -155,7 +275,7 @@ Returns an array of IDs for the replaced/created documents:
 {
   "data": {
     "_replaceDocuments": [
-      "terminusdb:///data/Person/alice"
+      "Person/alice"
     ]
   }
 }
@@ -224,23 +344,28 @@ Returns the array of deleted document IDs:
 You can combine multiple mutation operations in a single GraphQL mutation:
 
 ```graphql
-mutation {
+mutation($new: JSON!, $update: JSON!) {
   _commitInfo(author: "alice", message: "Update database with multiple changes")
-  
+
   # Insert new documents
-  _insertDocuments(
-    json: "{\"@type\": \"Person\", \"name\": \"Eve\", \"age\": 29}"
-  )
-  
+  _insertDocuments(json: $new)
+
   # Update existing documents
-  _replaceDocuments(
-    json: "{\"@type\": \"Person\", \"@id\": \"Person/alice\", \"name\": \"Alice Smith\", \"age\": 31}"
-  )
-  
+  _replaceDocuments(json: $update)
+
   # Delete unwanted documents
   _deleteDocuments(
     ids: ["Person/old_record"]
   )
+}
+```
+
+With variables:
+
+```json
+{
+  "new": {"@type": "Person", "name": "Eve", "age": 29},
+  "update": {"@type": "Person", "@id": "Person/alice", "name": "Alice Smith", "age": 31}
 }
 ```
 
@@ -249,12 +374,25 @@ mutation {
 You can also modify your database schema using mutations with `graph_type: SchemaGraph`:
 
 ```graphql
-mutation {
+mutation($schema: JSON!) {
   _commitInfo(author: "admin", message: "Add new class to schema")
   _insertDocuments(
-    json: "{\"@type\": \"Class\", \"@id\": \"Company\", \"name\": \"xsd:string\", \"employees\": {\"@type\": \"Set\", \"@class\": \"Person\"}}"
+    json: $schema
     graph_type: SchemaGraph
   )
+}
+```
+
+With variables:
+
+```json
+{
+  "schema": {
+    "@type": "Class",
+    "@id": "Company",
+    "name": "xsd:string",
+    "employees": {"@type": "Set", "@class": "Person"}
+  }
 }
 ```
 
@@ -268,9 +406,11 @@ mutation {
 
 4. **Batch operations when possible** - Insert or delete multiple documents in a single mutation for better performance.
 
-5. **Handle errors gracefully** - Check the response for errors and handle them appropriately in your application.
+5. **Use GraphQL variables for JSON documents** - Pass documents as `JSON` type variables instead of inline stringified JSON to avoid escaping errors and preserve numeric precision.
 
-6. **Use `create: true` carefully** - Only use this option when you explicitly want upsert behavior.
+6. **Handle errors gracefully** - Check the response for errors and handle them appropriately in your application.
+
+7. **Use `create: true` carefully** - Only use this option when you explicitly want upsert behavior.
 
 ## Error Handling
 
@@ -293,6 +433,11 @@ Common errors include:
 - **Schema validation errors**: Inserting documents that don't match the schema
 - **Missing required fields**: Not providing required fields like `@type` or `@id`
 - **Invalid JSON**: Malformed JSON in the `json` parameter
+
+## Versions
+
+ * v12.0 series and before only support `json` documents in string format
+ * v12.1 onward support `json` documents as a JSON object too
 
 ## See Also
 

@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphql-offset.png
     alternates:
-      canonical: https://terminusdb.org/docs/offset-to-provide-paging/
+      canonical: https://terminusdb.com/docs/offset-to-provide-paging/
 media: []
 ---
 

@@ -14,7 +14,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/install-terminusdb-as-a-docker-container/
+      canonical: https://terminusdb.com/docs/install-terminusdb-as-a-docker-container/
 media: []
 ---
 

@@ -5,13 +5,13 @@ tags:
 title: TerminusDB vs Neo4j
 nextjs:
   metadata:
-    title: TerminusDB vs Neo4j — Document Graph Database Comparison
+    title: TerminusDB vs Neo4j — Knowledge Graph Database Comparison
     description: A neutral, factual comparison of TerminusDB and Neo4j — data model, query language, version control, schema enforcement, and when to choose each.
-    keywords: terminusdb vs neo4j, graph database comparison, neo4j alternative, document graph database, cypher vs woql, property graph vs rdf
+    keywords: terminusdb vs neo4j, graph database comparison, neo4j alternative, knowledge graph database, cypher vs woql, property graph vs rdf
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/terminusdb-vs-neo4j/
+      canonical: https://terminusdb.com/docs/terminusdb-vs-neo4j/
 media: []
 lastUpdated: "2026-05-01"
 ---
@@ -22,7 +22,7 @@ A factual comparison of TerminusDB and Neo4j for developers evaluating graph dat
 
 **Neo4j** is a property graph database optimised for real-time graph traversal at scale — social networks, recommendation engines, fraud detection. It uses the Cypher query language and stores data as labeled nodes with typed relationships.
 
-**TerminusDB** is a document graph database with built-in version control — it stores JSON documents in a schema-enforced graph, tracks every change as an immutable commit, and supports branch, diff, merge, and time-travel. It uses the WOQL datalog engine for queries.
+**TerminusDB** is a knowledge graph database with built-in version control — it stores JSON documents in a schema-enforced graph, tracks every change as an immutable commit, and supports branch, diff, merge, and time-travel. It uses the WOQL datalog engine for queries.
 
 The key architectural difference: Neo4j is a mutable database designed for high-throughput real-time queries. TerminusDB is an immutable database designed for collaborative data workflows with full audit history.
 

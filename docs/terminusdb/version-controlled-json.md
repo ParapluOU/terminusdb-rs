@@ -10,7 +10,7 @@ nextjs:
       description: Git-like version control for JSON documents. Structural diff, patch, branching, and full commit history with automatic content deduplication.
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/version-controlled-json/
+      canonical: https://terminusdb.com/docs/version-controlled-json/
 tags:
   - tutorial
   - diff-patch
@@ -27,9 +27,7 @@ TerminusDB is a document database that provides Git-like version control for JSO
 
 **What is git-for-data?** A version control model where every data change is recorded as an immutable commit with author, timestamp, and message. Branches isolate work. Diffs show exactly what changed. History is permanent and queryable.
 
-This tutorial walks through all of these operations with working curl examples against a local TerminusDB instance. No schema is required — store any valid JSON and get versioning for free.
-
-{% prerequisites-connected /%}
+This tutorial walks through all of these operations with working curl examples against a local TerminusDB instance. No schema is required — store any valid JSON and get versioning for free. Open the interactive walkthrough to run every step — simulated responses work without a database; run live to execute against your own TerminusDB.
 
 {% callout type="note" %}
 **What you will build**
@@ -41,15 +39,11 @@ By the end of this tutorial you will have:
 5. Compared the current state against a historical point
 {% /callout %}
 
----
-
-## Section 1 — JSON Diff and Patch (the concept)
+## Step 1 — Try a JSON diff {% step %}
 
 Before touching the database, understand what structural diff and patch mean for JSON.
 
 **Diff** takes two JSON objects and returns a precise description of what changed — field by field, value by value. This is not a line-by-line text diff. It is a semantic operation that knows the structure of your data.
-
-**Patch** takes one JSON object and a diff, then applies the changes to produce the other object.
 
 Try it now against the public endpoint (no authentication, no database required):
 
@@ -61,16 +55,15 @@ curl -s -X POST "https://data.terminusdb.org/api/diff" \
     "after":  {"name": "Alice", "role": "lead engineer", "level": 4}
   }'
 ```
-
-Expected output:
-
-```json
+{% http-expected %}
 {"level":{"@after":4,"@before":3,"@op":"SwapValue"},"role":{"@after":"lead engineer","@before":"engineer","@op":"SwapValue"}}
-```
+{% /http-expected %}
 
 TerminusDB detected exactly two field changes: `role` and `level`. The `name` field is identical, so it does not appear in the diff. Each change is a `SwapValue` operation — it records both the old and new value.
 
-Now apply that diff as a patch to transform the original document:
+## Step 2 — Apply the diff as a patch {% step %}
+
+**Patch** takes one JSON object and a diff, then applies the changes to produce the other object:
 
 ```bash
 curl -s -X POST "https://data.terminusdb.org/api/patch" \
@@ -80,12 +73,9 @@ curl -s -X POST "https://data.terminusdb.org/api/patch" \
     "patch":  {"level":{"@after":4,"@before":3,"@op":"SwapValue"},"role":{"@after":"lead engineer","@before":"engineer","@op":"SwapValue"}}
   }'
 ```
-
-Expected output:
-
-```json
+{% http-expected %}
 {"level":4,"name":"Alice","role":"lead engineer"}
-```
+{% /http-expected %}
 
 The patch transformed the `before` document into the `after` document. This is the foundation of TerminusDB's version control — every change is recorded as a reversible, composable patch.
 
@@ -93,33 +83,32 @@ The patch transformed the `before` document into the `after` document. This is t
 Diff and patch are **standalone operations** — they work on any two JSON objects you supply. When you store documents in TerminusDB, the database computes and stores these diffs automatically on every change. That is how you get full history with zero effort.
 {% /callout %}
 
----
-
-## Section 2 — CRUD on a schemaless document
-
-Start TerminusDB and store a JSON document with no schema at all.
-
-### Start TerminusDB
+## Step 3 — Start TerminusDB {% step %}
 
 You need [Docker](https://docs.docker.com/get-docker/) installed. Then start TerminusDB:
 
 ```bash
 docker run --pull always -d -p 127.0.0.1:6363:6363 \
   -v terminusdb_storage:/app/terminusdb/storage \
-  --name terminusdb terminusdb/terminusdb-server:v12
+  --name terminusdb terminusdb/terminusdb-server
 ```
 
-Confirm it is running (you should see a JSON response with version information):
+Confirm it is running:
 
 ```bash
-curl -s -u admin:root http://localhost:6363/api/info | head -c 100
+curl -s -u admin:root http://localhost:6363/api/info
 ```
+{% http-expected %}
+{"@type":"api:InfoResponse","api:info":{"authority":"terminusdb://system/data/User/admin","edition":"community","storage":{"version":"2"},"terminusdb":{"version":"12.1.0-rc2"},"terminusdb_store":{"version":"0.19.8"}},"api:status":"api:success"}
+{% /http-expected %}
 
 {% callout type="warning" title="Already have a container named terminusdb?" %}
 If you see `container name "terminusdb" is already in use`, stop and remove it first: `docker rm -f terminusdb`
 {% /callout %}
 
-### Create a database
+## Step 4 — Create the inventory database {% step %}
+
+Store a JSON document with no schema at all — first, the database:
 
 {% http-example method="POST" path="/api/db/admin/inventory" %}
 {"label": "Inventory", "comment": "Product inventory — schemaless JSON store"}
@@ -128,14 +117,14 @@ If you see `container name "terminusdb" is already in use`, stop and remove it f
 {% /http-expected %}
 {% /http-example %}
 
-### Create a document (POST)
+## Step 5 — Insert a document {% step %}
 
-Insert a product document. The `raw_json=true` parameter tells TerminusDB to accept any valid JSON — no schema required. You must supply an `@id` field to give the document a stable identity:
+Insert a product document. The `raw_json=true` parameter tells TerminusDB to accept any valid JSON — no schema required. Supplying an `@id` field gives the document a stable identity; if you omit it, the server mints a random `JSONDocument/` ID for you:
 
 {% http-example method="POST" path="/api/document/admin/inventory?author=admin&message=Add+first+product&raw_json=true" %}
 {"@id": "product/SKU-001", "name": "Mechanical Keyboard", "price": 149.99, "stock": 42, "tags": ["peripherals", "input"]}
 {% http-expected %}
-["terminusdb:///data/product/SKU-001"]
+["product/SKU-001"]
 {% /http-expected %}
 {% /http-example %}
 
@@ -145,19 +134,17 @@ TerminusDB stored the document exactly as you sent it and returned its identifie
 TerminusDB uses content-addressed storage — identical structures are stored only once, regardless of how many documents or versions share them. If you store thousands of similar JSON documents (common in configuration management, product catalogues, or regulatory filings), repeated fields and sub-objects are automatically deduplicated. Storage grows with the amount of *unique* content, not the number of documents. Combined with structural diffs that record only what changed between versions, this makes TerminusDB exceptionally space-efficient for large collections of similar JSON.
 {% /callout %}
 
-### Read the document (GET)
+## Step 6 — Read it back {% step %}
 
 {% http-example method="GET" path="/api/document/admin/inventory?id=product/SKU-001&raw_json=true" /%}
 
-Expected output:
-
-```json
+{% http-expected %}
 {"@id":"product/SKU-001","name":"Mechanical Keyboard","price":149.99,"stock":42,"tags":["peripherals","input"]}
-```
+{% /http-expected %}
 
-### Update the document (PUT)
+## Step 7 — Restock it {% step %}
 
-Restock the product — change `stock` from 42 to 87:
+Change `stock` from 42 to 87:
 
 {% http-example method="PUT" path="/api/document/admin/inventory?author=admin&message=Restock+SKU-001&raw_json=true" %}
 {"@id": "product/SKU-001", "name": "Mechanical Keyboard", "price": 149.99, "stock": 87, "tags": ["peripherals", "input"]}
@@ -168,26 +155,30 @@ Restock the product — change `stock` from 42 to 87:
 
 TerminusDB replaced the document and recorded the change. The previous version (stock: 42) is preserved in history.
 
-### Delete the document (DELETE)
+## Step 8 — Delete it {% step %}
 
 {% http-example method="DELETE" path="/api/document/admin/inventory?id=product/SKU-001&author=admin&message=Remove+SKU-001&raw_json=true" /%}
 
-The document is gone from the current state, but its full history remains accessible. For the rest of this tutorial, re-insert it so we have data to work with:
+{% http-expected %}
+["product/SKU-001"]
+{% /http-expected %}
+
+The document is gone from the current state, but its full history remains accessible.
+
+## Step 9 — Re-add it {% step %}
+
+For the rest of this tutorial, re-insert the document so we have data to work with:
 
 {% http-example method="POST" path="/api/document/admin/inventory?author=admin&message=Re-add+product&raw_json=true" %}
 {"@id": "product/SKU-001", "name": "Mechanical Keyboard", "price": 149.99, "stock": 87, "tags": ["peripherals", "input"]}
 {% http-expected %}
-["terminusdb:///data/product/SKU-001"]
+["product/SKU-001"]
 {% /http-expected %}
 {% /http-example %}
 
----
+## Step 10 — Create a price-update branch {% step %}
 
-## Section 3 — Branch and upsert
-
-Branches let you make changes in isolation before committing them to your main line. Combined with `PUT ?create=true` (upsert), you get a safe pattern for updating or creating documents on a branch.
-
-### Create a branch
+Branches let you make changes in isolation before committing them to your main line:
 
 {% http-example method="POST" path="/api/branch/admin/inventory/local/branch/price-update" %}
 {"origin": "admin/inventory/local/branch/main"}
@@ -198,7 +189,7 @@ Branches let you make changes in isolation before committing them to your main l
 
 You now have two branches: `main` (unchanged) and `price-update` (a copy, ready for edits).
 
-### Upsert with PUT ?create=true
+## Step 11 — Upsert on the branch {% step layout="longform" %}
 
 The `create=true` parameter makes PUT behave as an **upsert** — it creates the document if it does not exist, or replaces it if it does. This is the idiomatic way to ensure a document exists in a known state:
 
@@ -215,9 +206,7 @@ Two changes on the branch: the price increased from 149.99 to 179.99, and a `"pr
 Without `create=true`, PUT fails if the document does not exist. With it, you can safely write a document regardless of whether it was previously created — useful in scripts, migrations, and automation where you want idempotent writes.
 {% /callout %}
 
----
-
-## Section 4 — Diff between two branches
+## Step 12 — Diff main against the branch {% step %}
 
 Compare `main` and `price-update` to see exactly what diverged:
 
@@ -250,16 +239,13 @@ curl -s -u admin:root -X POST \
     "document_id": "product/SKU-001"
   }'
 ```
+{% http-expected %}
+[{"@id":"terminusdb:///data/product/SKU-001","price":{"@op":"SwapValue","@before":149.99,"@after":179.99},"tags":{"@op":"CopyList","@to":2,"@rest":{"@op":"SwapList","@before":[],"@after":["premium"],"@rest":{"@op":"KeepList"}}}}]
+{% /http-expected %}
 
----
+## Step 13 — Commit another change {% step %}
 
-## Section 5 — Diff against a historical point
-
-Every commit in TerminusDB has a unique data version identifier. You can retrieve the full history of any document — including inline diffs showing exactly what changed in each commit.
-
-### Create another commit
-
-First, update the stock level so there is a clear change to detect when comparing against history:
+Update the stock level so there is a clear change to detect when comparing against history:
 
 {% http-example method="PUT" path="/api/document/admin/inventory?author=admin&message=Stock+adjustment&raw_json=true" %}
 {"@id": "product/SKU-001", "name": "Mechanical Keyboard", "price": 149.99, "stock": 93, "tags": ["peripherals", "input"]}
@@ -270,7 +256,7 @@ First, update the stock level so there is a clear change to detect when comparin
 
 This creates a new commit on `main` — stock changed from 87 to 93. You now have multiple commits in history to compare against.
 
-### Get document history with inline diffs
+## Step 14 — Get the document's history {% step %}
 
 The `/api/history` endpoint returns every commit that touched a document, with an inline diff showing what changed in each commit. Add `diff=true` to include the diffs:
 
@@ -278,10 +264,7 @@ The `/api/history` endpoint returns every commit that touched a document, with a
 curl -s -u admin:root \
   "http://localhost:6363/api/history/admin/inventory/local/branch/main?id=product/SKU-001&diff=true"
 ```
-
-Expected output (timestamps and identifiers will differ; 5 entries shown, abbreviated):
-
-```json
+{% http-expected %}
 [
   {
     "author": "admin",
@@ -343,7 +326,7 @@ Expected output (timestamps and identifiers will differ; 5 entries shown, abbrev
     }
   }
 ]
-```
+{% /http-expected %}
 
 {% callout type="note" title="Reading the history" %}
 Each entry includes commit metadata (`author`, `message`, `timestamp`, `identifier`) and a `diff` field showing the structural patch for that commit:
@@ -359,21 +342,29 @@ The full history of this document shows all five operations from the tutorial: c
 With `diff=true`, a single GET request gives you the complete change history for any document — no need to manually fetch commit IDs and diff them one by one. This is the recommended approach for document-level audit trails.
 {% /callout %}
 
-### Alternative: manual diff between two points
+## Step 15 — Get the commit log {% step %}
 
-You can also compare any two points in history manually. This is useful when you need to diff across branches or between arbitrary commits (not just sequential ones).
-
-Get the commit log to find identifiers:
+You can also compare any two points in history manually — useful when you need to diff across branches or between arbitrary commits (not just sequential ones). Get the commit log to find identifiers:
 
 {% http-example method="GET" path="/api/log/admin/inventory/local/branch/main?count=3" /%}
 
-{% callout type="note" title="Use an identifier from the response above" %}
-Each entry in the log has an `identifier` field — a short string like `dcbrirs75l6c...`. Copy the identifier of the **oldest** commit (the "Add first product" entry) and use it as `before_data_version` in the next example. This lets you diff the current state against the original.
+{% http-expected %}
+[
+  {"author": "admin", "identifier": "26ptm8el...", "message": "Stock adjustment", "timestamp": 1747581234.567},
+  {"author": "admin", "identifier": "6gj2ud03...", "message": "Re-add product", "timestamp": 1747581230.123},
+  {"author": "admin", "identifier": "v3gq229x...", "message": "Remove SKU-001", "timestamp": 1747581228.456}
+]
+{% /http-expected %}
 
-**In the browser:** Click the identifier value in the result table above to copy it, then paste it into the curl command below in your terminal.
+{% callout type="note" title="Use an identifier from the response above" %}
+Each entry in the log has an `identifier` field — a short string like `dcbrirs75l6c...`. The next step uses the identifier of the **oldest** commit (the "Add first product" entry) as `before_data_version`, diffing the current state against the original.
+
+**In the browser:** the identifier flows into the next request automatically when you run the walkthrough — no copy-paste needed.
 {% /callout %}
 
-To diff between two data versions, use an identifier from the history above:
+## Step 16 — Diff against a historical point {% step %}
+
+Diff between two data versions, using an identifier from the history above:
 
 ```bash slot="commit_identifiers" placeholder="DATA_VERSION"
 curl -s -u admin:root -X POST \
@@ -385,12 +376,9 @@ curl -s -u admin:root -X POST \
     "document_id": "product/SKU-001"
   }'
 ```
-
-If you compare against the first commit (when stock was 42), you will see:
-
-```json
+{% http-expected %}
 {"stock":{"@op":"SwapValue","@before":42,"@after":93}}
-```
+{% /http-expected %}
 
 {% callout type="note" title="What you can compare" %}
 The `before_data_version` and `after_data_version` fields accept:
@@ -400,7 +388,23 @@ The `before_data_version` and `after_data_version` fields accept:
 Mix and match: compare a branch against a commit, a commit against another commit, or any combination.
 {% /callout %}
 
----
+## Step 17 — Clean up {% step %}
+
+Delete the database when you are done experimenting:
+
+{% http-example method="DELETE" path="/api/db/admin/inventory" /%}
+
+{% http-expected %}
+{"@type":"api:DbDeleteResponse","api:status":"api:success"}
+{% /http-expected %}
+
+To stop TerminusDB entirely:
+
+```bash
+docker stop terminusdb && docker rm terminusdb
+```
+
+Your data persists in the `terminusdb_storage` Docker volume. To remove it entirely: `docker volume rm terminusdb_storage`.
 
 ## What you just learned
 
@@ -413,24 +417,6 @@ Mix and match: compare a branch against a commit, a commit against another commi
 | **Upsert** | `PUT ?create=true` creates or updates idempotently |
 | **Historical comparison** | Diff any document against any point in its history |
 | **Deduplicated storage** | Unchanged fields are stored once, not copied per version |
-
----
-
-## Clean up
-
-Delete the database when you are done experimenting:
-
-{% http-example method="DELETE" path="/api/db/admin/inventory" /%}
-
-To stop TerminusDB entirely:
-
-```bash
-docker stop terminusdb && docker rm terminusdb
-```
-
-Your data persists in the `terminusdb_storage` Docker volume. To remove it entirely: `docker volume rm terminusdb_storage`.
-
----
 
 ## Next steps
 

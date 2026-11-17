@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-query-schema.png
     alternates:
-      canonical: https://terminusdb.org/docs/schema-queries-with-woql/
+      canonical: https://terminusdb.com/docs/schema-queries-with-woql/
 media: []
 ---
 

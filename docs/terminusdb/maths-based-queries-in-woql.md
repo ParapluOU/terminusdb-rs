@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-maths-query.png
     alternates:
-      canonical: https://terminusdb.org/docs/maths-based-queries-in-woql/
+      canonical: https://terminusdb.com/docs/maths-based-queries-in-woql/
 media: []
 ---
 

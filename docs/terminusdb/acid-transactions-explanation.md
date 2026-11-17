@@ -10,7 +10,7 @@ nextjs:
     description: "An explanation about ACID Transactions and how TerminusDB ensures ACID compliance, Atomicity, Consistency, Isolation, and Durability"
     keywords: ACID transactions, immutable database, knowledge graph, database, RDF, consistency, atomic commits
     alternates:
-      canonical: https://terminusdb.org/docs/acid-transactions-explanation
+      canonical: https://terminusdb.com/docs/acid-transactions-explanation
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---

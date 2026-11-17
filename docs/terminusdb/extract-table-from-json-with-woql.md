@@ -11,7 +11,7 @@ nextjs:
     description: Learn how to extract rows and columns from JSON arrays using the sys:Dictionary pattern and dot operator in WOQL
     keywords: terminusdb, datalog, extract tabular data from json with woql, query language, terminusdb query, woql
     alternates:
-      canonical: https://terminusdb.org/docs/extract-table-from-json-with-woql/
+      canonical: https://terminusdb.com/docs/extract-table-from-json-with-woql/
 media: []
 ---
 

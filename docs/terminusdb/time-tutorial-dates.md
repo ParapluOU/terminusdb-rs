@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/time-tutorial-dates/
+      canonical: https://terminusdb.com/docs/time-tutorial-dates/
 media: []
 ---
 
@@ -33,15 +33,21 @@ By the end of this tutorial you will be able to:
 - A running TerminusDB instance (Docker is easiest: `docker run --rm -p 6363:6363 terminusdb/terminusdb-server`)
 - Basic familiarity with WOQL concepts ([WOQL Tutorial](/docs/woql-tutorial))
 
-Every playground below runs against your local TerminusDB. Click **Settings** on any playground to change the server URL or credentials. The time predicates work in **anonymous mode** — no database needed — because they are pure computations.
+Open the interactive walkthrough to step through the playgrounds — **simulate** shows the expected results instantly, or **run live** against your local TerminusDB. The time predicates are pure computations, so they work against `_system` with no database needed.
 
 ---
 
-## Part 1: Typed Literals — How Dates Are Represented
+## Part 1: Typed Literals — How Dates Are Represented {% step %}
 
 Every value in WOQL is a **typed literal**: a value string paired with a type. The `literal()` function creates one. Run this to see what a date looks like:
 
 {% woql-playground code="eq(\"v:today\", literal(\"2025-03-31\", \"xsd:date\"))" title="Step 1: A typed date literal" description="Bind a date literal to a variable. Notice the @type and @value in the result." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["today"],"bindings":[{"today":{"@type":"xsd:date","@value":"2025-03-31"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 **What happened:** The variable `v:today` is now bound to a value with type `xsd:date` and value `"2025-03-31"`. Every date in TerminusDB carries its type — this is how the system knows to compare it as a calendar date, not as a string.
 
@@ -58,7 +64,7 @@ Try changing the type and value in the playground above. What happens if you use
 
 ---
 
-## Part 2: Comparing Dates
+## Part 2: Comparing Dates {% step %}
 
 WOQL provides four comparison predicates. They work on every ordered type — dates, numbers, strings.
 
@@ -69,56 +75,98 @@ WOQL provides four comparison predicates. They work on every ordered type — da
 | `lte(A, B)` | A ≤ B | A is before or equal to B |
 | `gte(A, B)` | A ≥ B | A is after or equal to B |
 
-### Step 2: Strict comparison
+### Step 2: Strict comparison {% step %}
 
 {% woql-playground showResultOnly=true code="less(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-03-31\", \"xsd:date\")\n)" title="Step 2: less — Is January before March?" description="Check if the first date is before the second. Result shows true/false." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 **What happened:** The result shows **true** (1 row returned). The `less` predicate succeeds because January 1 is before March 31. 
 
 Try changing the dates so the first is after the second — you'll see **false** (0 rows) because the comparison fails.
 
-### Step 3: Boundary equality
+### Step 3: Boundary equality {% step %}
 
 {% woql-playground showResultOnly=true code="gte(\n  literal(\"2025-02-28\", \"xsd:date\"),\n  literal(\"2025-02-28\", \"xsd:date\")\n)" title="Step 3: gte — Equal dates" description="Does >= succeed when both dates are the same?" /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 **What happened:** The result shows **true**. The `gte` (greater than or equal) predicate succeeds when values are equal — that's the "or equal" part. If you used `greater` instead, you'd see **false** because the dates are not strictly greater.
 
 **Key insight:** This distinction matters for "as of" queries (covered below). Use `gte` when you want to include the boundary date, `greater` when you want to exclude it.
 
-### Step 4: Compare different types
+### Step 4: Compare different types {% step %}
 
 {% woql-playground showResultOnly=true code="less(\n  literal(\"2025-01\", \"xsd:gYearMonth\"),\n  literal(\"2025-06\", \"xsd:gYearMonth\")\n)" title="Step 4: Compare gYearMonth values" description="Comparisons work on gYearMonth too. January is before June." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 ---
 
-## Part 3: Half-Open Range Filtering with `in_range`
+## Part 3: Half-Open Range Filtering with `in_range` {% step %}
 
 `in_range(Value, Start, End)` succeeds when `Start ≤ Value < End`. The start is **inclusive**, the end is **exclusive**. This `[start, end)` convention is called a *half-open range*.
 
-### Step 5: Value inside the range
+### Step 5: Value inside the range {% step %}
 
 {% woql-playground showResultOnly=true code="in_range(\n  literal(\"2025-02-15\", \"xsd:date\"),\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-04-01\", \"xsd:date\")\n)" title="Step 5: in_range — Is Feb 15 in Q1?" description="Checks if February 15 falls within [Jan 1, Apr 1)." /%}
 
-### Step 6: Start is inclusive
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 6: Start is inclusive {% step %}
 
 {% woql-playground showResultOnly=true code="in_range(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-04-01\", \"xsd:date\")\n)" title="Step 6: Start boundary — inclusive" description="The start date itself IS in the range." /%}
 
-### Step 7: End is exclusive
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 7: End is exclusive {% step %}
 
 {% woql-playground showResultOnly=true code="in_range(\n  literal(\"2025-04-01\", \"xsd:date\"),\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-04-01\", \"xsd:date\")\n)" title="Step 7: End boundary — exclusive" description="April 1 is NOT in [Jan 1, Apr 1). Zero results." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 **Why half-open?** Because adjacent ranges partition cleanly:
 - Q1 = `[Jan 1, Apr 1)` — contains Mar 31, not Apr 1
 - Q2 = `[Apr 1, Jul 1)` — contains Apr 1, not Jul 1
 - No date falls in both. No date falls in neither. No gap between them.
 
-### Step 8: Integer ranges work too
+### Step 8: Integer ranges work too {% step %}
 
 {% woql-playground showResultOnly=true code="in_range(7, 5, 10)" title="Step 8: Integer in_range" description="Is 7 in [5, 10)? Works with any ordered type." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 ---
 
-## Part 4: "As Of" vs "Period" Queries {#as-of}
+## Part 4: "As Of" vs "Period" Queries {#as-of} {% step %}
 
 This is the most important distinction in financial time processing. Mixing up these two patterns is the #1 source of off-by-one-day bugs.
 
@@ -163,7 +211,7 @@ Both include March 31. But "as of" also includes everything before Q1. The perio
 
 ---
 
-## Part 5: Working with Stored Data
+## Part 5: Working with Stored Data {% step %}
 
 The playgrounds above used anonymous mode (pure computation). For queries on stored data, you need a database. The patterns below work with any schema that has date properties.
 
@@ -192,19 +240,31 @@ triple_slice(v.doc, "transaction_date", v.date, start, end)
 
 ---
 
-## Part 6: Timezone Handling
+## Part 6: Timezone Handling {% step %}
 
-### Dates are timezone-agnostic
+### Dates are timezone-agnostic {% step %}
 
 Calendar dates ignore timezone offsets for comparison and arithmetic:
 
 {% woql-playground showResultOnly=true code="less(\n  literal(\"2025-03-31\", \"xsd:date\"),\n  literal(\"2025-04-01\", \"xsd:date\")\n)" title="Step 9: Date comparison ignores timezone" description="Calendar dates compare by date value only." /%}
 
-### DateTimes normalize to UTC
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### DateTimes normalize to UTC {% step %}
 
 DateTime values are converted to UTC before comparison. `23:00+02:00` is `21:00Z`, which is before `22:00Z`:
 
 {% woql-playground showResultOnly=true code="less(\n  literal(\"2025-03-31T23:00:00+02:00\", \"xsd:dateTime\"),\n  literal(\"2025-03-31T22:00:00Z\", \"xsd:dateTime\")\n)" title="Step 10: DateTime UTC normalization" description="23:00+02:00 = 21:00 UTC, which is before 22:00 UTC." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 **For financial systems:** store timestamps in UTC. Timezone conversion is a display concern, not a data concern.
 

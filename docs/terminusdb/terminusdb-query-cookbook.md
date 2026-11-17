@@ -7,11 +7,11 @@ nextjs:
   metadata:
     title: TerminusDB Query Cookbook
     description: Guides showing how to query using GraphQL, WOQL and in other ways
-    keywords: TerminusDB, DFRNT Cloud, TerminusDB Open Source, TerminusDB Documentation, TerminusDB Query, TerminusDB Query Cookbook
+    keywords: TerminusDB, TerminusDB Cloud, TerminusDB Open Source, TerminusDB Documentation, TerminusDB Query, TerminusDB Query Cookbook
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/how-to-query/
+      canonical: https://terminusdb.com/docs/terminusdb-query-cookbook/
 media: []
 ---
 ## Getting Started

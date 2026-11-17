@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/docker-advanced-configuration/
+      canonical: https://terminusdb.com/docs/docker-advanced-configuration/
 media: []
 ---
 
@@ -35,7 +35,12 @@ BUFFER_AMOUNT=120000
 
 # Server configuration
 TERMINUSDB_SERVER_PORT=6363
-TERMINUSDB_ADMIN_PASS=root
+TERMINUSDB_ADMIN_PASS=root           # applied once, at first store init
+# TERMINUSDB_ADMIN_SET_PASS=        # applied on every start
+
+# Worker threads (optional)
+# TERMINUSDB_SERVER_WORKERS=8      # Elaboration workers (default: CPU count)
+# TERMINUSDB_WORKER_POOL_SIZE=16   # HTTP request workers (default: TERMINUSDB_SERVER_WORKERS or 16)
 ```
 
 Pass the file to Docker Compose:

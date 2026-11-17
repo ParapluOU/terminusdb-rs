@@ -6,7 +6,7 @@ nextjs:
     description: How to clone a TerminusDB database from a remote server using the TypeScript client, Python client, or HTTP API.
     keywords: terminusdb, clone, clone database, replicate, distributed, typescript client, python client, http api, curl
     alternates:
-      canonical: https://terminusdb.org/docs/clone-a-project/
+      canonical: https://terminusdb.com/docs/clone-a-project/
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-collaboration-clone.png?raw=true
 tags:
@@ -81,7 +81,7 @@ You now have a local copy of the Star Wars database with its full commit history
 
 ## Clone a private database
 
-If the database is not public, provide an API token. For example, to clone from a DFRNT Hub team:
+If the database is not public, provide an API token. For example, to clone from a TerminusDB Cloud team:
 
 {% code-tabs %}
 {% code-tab label="TypeScript" %}
@@ -91,7 +91,7 @@ const clonePrivateDb = async () => {
   const cloneDetails = {
     remote_url: "https://cloud.dfrnt.com/MyTeam/MyTeam/mydb",
     label: "My Database",
-    comment: "Cloned from DFRNT Hub",
+    comment: "Cloned from TerminusDB Cloud",
   }
   await client.clonedb(cloneDetails, "my_local_copy")
   console.log("Private database cloned successfully")
@@ -121,7 +121,7 @@ curl -u admin:root -X POST \
   -d '{
     "remote_url": "https://cloud.dfrnt.com/MyTeam/MyTeam/mydb",
     "label": "My Database",
-    "comment": "Cloned from DFRNT Hub"
+    "comment": "Cloned from TerminusDB Cloud"
   }'
 ```
 {% /code-tab %}

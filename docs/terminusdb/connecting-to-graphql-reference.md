@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/connecting-to-graphql-reference/
+      canonical: https://terminusdb.com/docs/connecting-to-graphql-reference/
 media:
   - alt: GraphiQL interface screen shot
     caption: ""
@@ -37,7 +37,7 @@ For instance, with a data product named `admin/people`, and a locally installed 
 http://localhost:6363/api/graphql/admin/people
 ```
 
-For DFRNT TerminusDB cloud you can use the following URL:
+For TerminusDB Cloud you can use the following URL:
 
 ```url
 https://dfrnt.com/api/hosted/TEAM/api/graphql/TEAM/DATA_PRODUCT
@@ -59,9 +59,9 @@ For example, if you would like to connect to `admin/people` with the apollo clie
 npx apollo client:download-schema --endpoint=http://localhost:6363/api/graphql/admin/people schema.graphql --header='Authorization: Basic YWRtaW46cm9vdA=='
 ```
 
-### DFRNT Cloud
+### TerminusDB Cloud
 
-For the DFRNT Cloud hosting, you can use an API key with the following header.
+For the TerminusDB Cloud hosting, you can use an API key with the following header.
 
 For instance, with the apollo client, you can download your schema as follows:
 
@@ -69,7 +69,7 @@ For instance, with the apollo client, you can download your schema as follows:
 npx apollo client:download-schema --endpoint=https://dfrnt.com/api/hosted/TEAM/api/graphql/TEAM/people schema.graphql --header="Authorization: Token $(cat ~/my_token_file)"
 ```
 
-Where `my_token_file` contains an API token for the DFRNT TerminusDB cloud.
+Where `my_token_file` contains an API token for TerminusDB Cloud.
 
 ## GraphiQL
 

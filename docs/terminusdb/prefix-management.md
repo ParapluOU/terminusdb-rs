@@ -11,7 +11,7 @@ nextjs:
     description: Learn how to manage namespace prefixes in TerminusDB to simplify your document IRIs and organize your data vocabularies.
     keywords: prefix, namespace, IRI, REST API, CRUD, vocabulary, semantic web
     alternates:
-      canonical: https://terminusdb.org/docs/prefix-management
+      canonical: https://terminusdb.com/docs/prefix-management
 ---
 
 ## What You'll Learn

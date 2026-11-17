@@ -2,7 +2,7 @@
 tags:
   - how-to
   - vectorlink
-  - dfrnt-cloud
+  - terminusdb-cloud
 title: OpenAI and Handlebars Configuration
 nextjs:
   metadata:
@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/vectorlink-semantic-cms.png
     alternates:
-      canonical: https://terminusdb.org/docs/openai-handlebars-config/
+      canonical: https://terminusdb.com/docs/openai-handlebars-config/
 media:
   - alt: High quality text embeddings for OpenAI using GraphQL query with Handlebars templates
     caption: ""
@@ -63,14 +63,17 @@ This generates the GraphQL query to include in the template. Check that all of t
 
 This is currently a manual process. The templates are written in an easy-to-understand way.
 
-Using the Star Wars dataset as an example, this shows the structure of a semantic template for the People class in Star Wars:
+Using the Star Wars dataset as an example, this shows the structure of a semantic template for the People class in Star Wars, as part of the `@metadata` section of the class definition:
 
 ```json
 {
+  // Part of the Class definition in the TerminusDB schema
+  "@metadata": {
     "embedding": {
-        "query": "query($id: ID){ People(id : $id) { birth_year, created, desc, edited, eye_color, gender, hair_colors, height, homeworld { label }, label, mass, skin_colors, species { label }, url } }",
-        "template": "The person's name is {{label}}.{{#if desc}} They are described with the following synopsis: {{#each desc}} *{{this}} {{/each}}.{{/if}}{{#if gender}} Their gender is {{gender}}.{{/if}}{{#if hair_colors}} They have the following hair colours: {{hair_colors}}.{{/if}}{{#if mass}} They have a mass of {{mass}}.{{/if}}{{#if skin_colors}} Their skin colours are {{skin_colors}}.{{/if}}{{#if species}} Their species is {{species.label}}.{{/if}}{{#if homeworld}} Their homeworld is {{homeworld.label}}.{{/if}}"
+      "query": "query($id: ID){ People(id : $id) { birth_year, created, desc, edited, eye_color, gender, hair_colors, height, homeworld { label }, label, mass, skin_colors, species { label }, url } }",
+      "template": "The person's name is {{label}}.{{#if desc}} They are described with the following synopsis: {{#each desc}} *{{this}} {{/each}}.{{/if}}{{#if gender}} Their gender is {{gender}}.{{/if}}{{#if hair_colors}} They have the following hair colours: {{hair_colors}}.{{/if}}{{#if mass}} They have a mass of {{mass}}.{{/if}}{{#if skin_colors}} Their skin colours are {{skin_colors}}.{{/if}}{{#if species}} Their species is {{species.label}}.{{/if}}{{#if homeworld}} Their homeworld is {{homeworld.label}}.{{/if}}"
     }
+  }
 }
 ```
 

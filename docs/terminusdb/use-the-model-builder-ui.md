@@ -8,11 +8,11 @@ nextjs:
   metadata:
     title: Use the Model Builder UI
     description: The model builder UI allows you to construct classes of objects and define what data they have, and what links (or relationships) they have between them.
-    keywords: terminusdb, dashboard, data model, dfrnt hub, document type, schema, terminuscms, use the model builder ui
+    keywords: terminusdb, dashboard, data model, terminusdb cloud, document type, schema, terminusdb cms, use the model builder ui
     openGraph:
       images: https://assets.terminusdb.com/docs/schema-ui-doc-properties.png
     alternates:
-      canonical: https://terminusdb.org/docs/use-the-model-builder-ui/
+      canonical: https://terminusdb.com/docs/use-the-model-builder-ui/
 media:
   - alt: Create a new data product using the TerminusDB dashboard
     caption: ""
@@ -48,7 +48,7 @@ media:
 
 {% callout type="note" %}
 **Prerequisites**
-- A DFRNT Hub account or TerminusDB with the dashboard
+- A TerminusDB Cloud account or TerminusDB with the dashboard
 {% /callout %}
 
 {% callout type="note" %}
@@ -58,7 +58,7 @@ By the end of this guide, you will have built a schema using the visual model bu
 
 ## Make a New Data Product
 
-First, log in to DFRNT TerminusDB cloud, choose (or create) a team, and then click on `New Data Product`.
+First, log in to TerminusDB Cloud, choose (or create) a team, and then click on `New Data Product`.
 
 ![Create a new data product using the TerminusDB dashboard](https://assets.terminusdb.com/docs/new-data-product.png)
 

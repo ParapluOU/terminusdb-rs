@@ -1,17 +1,20 @@
 # TerminusDB Documentation Index
 
-Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to the flat markdown file in this directory.
+Mirrors the navigation of https://terminusdb.org/docs/. Each entry links to the flat
+markdown file in this directory; release notes live in `releases/`. Regenerate with the
+recipe in `README.md` after refreshing the mirror.
 
 
 ## Getting Started
 
 - [Introduction](start-here.md)
 - **Quickstart**
+  - [Set up with an AI agent](ai-agent-setup.md)
   - [First 10 Minutes (clone)](get-started.md)
   - [First 15 Minutes (from scratch)](first-15-minutes.md)
   - [Git-like Version Control for JSON](version-controlled-json.md)
   - [Clone a Demo Database](clone-a-demo-project.md)
-  - **Interactive Tutorials**
+  - [Interactive Tutorials](https://terminusdb.org/docs/topics/tutorial) *(no markdown upstream — React-only page or external)*
   - [Explore a Real Dataset](explore-a-real-dataset.md)
   - [Explore an Ecommerce Dataset](explore-ecommerce-dataset.md)
   - [TypeScript Quickstart](connect-with-the-javascript-client.md)
@@ -24,31 +27,44 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
   - [Kubernetes](install-on-kubernetes.md)
   - [Build from Source](install-terminusdb-from-source-code.md)
   - [Self-Hosted (Production)](self-hosted-installation.md)
-- [Your First Database](get-started-with-terminusdb.md)
-- [DFRNT Cloud Service](how-to-connect-dfrnt-hub.md)
-  - [Get Your API Key](get-your-api-key.md)
-  - [Create a Project](create-a-project.md)
-  - [Create a Team](create-a-team.md)
-  - [Invite Users](invite-users.md)
-  - [Manage Projects](manage-projects.md)
-- [Browse by Topic](https://terminusdb.org/docs/topics/)
-- [What's New](https://terminusdb.org/docs/whats-new/)
+  - [Running in Production](run-terminusdb-in-production.md)
+  - [Deploy on Azure](deploy-on-azure.md)
+  - [Security](security.md)
+
+## Your First Database
+
+- [TerminusDB Cloud](cloud.md)
+  - [Connect a Client](how-to-connect-terminusdb-cloud.md)
+- [Browse by Topic](https://terminusdb.org/docs/topics) *(no markdown upstream — React-only page or external)*
+- [What's New](https://terminusdb.org/docs/whats-new) *(no markdown upstream — React-only page or external)*
+- [Releases](releases.md)
+  - [12.0 Changelog](releases/12-0-changelog.md)
 
 ## How TerminusDB Works
 
 - [What is TerminusDB?](terminusdb-explanation.md)
 - [At a Glance](at-a-glance.md)
+- [Who Maintains TerminusDB](about-gettier.md)
 - [Knowledge Graph Database](knowledge-graph-database.md)
+- [Knowledge Graph for AI Agents](knowledge-graph-for-ai-agents.md)
 - **Documents & Schema**
   - [The Document Model](documents-explanation.md)
   - [Document Types Compared](document-types-comparison.md)
+  - [Document Type Inference](https://terminusdb.org/docs/document-type-inference) *(no markdown upstream — React-only page or external)*
   - [Schema Weakening](what-is-schema-weakening.md)
+  - [IRIs, Prefixes & Minting](iris-prefixes-and-minting.md)
 - **Git-like Version Control**
-  - [Overview](knowledge-graph-version-control.md)
+  - [Overview](knowledge-graph-database-version-control.md)
+  - [Knowledge Graph Versioning](knowledge-graph-versioning.md)
+  - [Knowledge Graph Diff](knowledge-graph-diff.md)
+  - [RDF Versioning](rdf-versioning.md)
+  - [Versioned Graph Database](graph-database-with-git-like-version-control.md)
+  - [Time Travel Queries](graph-database-with-time-travel-queries.md)
   - [Clone, Push, Pull](use-the-collaboration-features.md)
   - [Merge How-To](merge-howto.md)
   - [Time-Travel How-To](time-travel-howto.md)
   - [Undo & Reset How-To](undo-reset-howto.md)
+  - [Version JSON Data](how-to-version-json-data.md)
   - [Diff & Patch](diff-and-patch-operations.md)
   - [Recover Data](recovery-tutorial.md)
   - [Audit Changes](audit-tutorial.md)
@@ -62,6 +78,8 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
   - [Backtracking & Streaming](woql-query-streaming.md)
 - **Architecture**
   - [ACID Transactions](acid-transactions-explanation.md)
+  - [ACID Verification (ALICE + Jepsen)](https://terminusdb.org/docs/acid-verification-alice-jepsen) *(no markdown upstream — React-only page or external)*
+  - [Open-Source ACID Graph DB](open-source-graph-database-with-acid-transactions.md)
   - [Immutability](immutability-explanation.md)
   - [Immutability & Concurrency](immutability-and-concurrency.md)
   - [Graphs](graphs-explanation.md)
@@ -72,7 +90,7 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
 - **Comparisons**
   - [TerminusDB vs Neo4j](terminusdb-vs-neo4j.md)
   - [TerminusDB vs MongoDB](terminusdb-vs-mongodb.md)
-- [What is DFRNT Hub?](what-is-dfrnt.md)
+  - [Migrate from MongoDB](https://terminusdb.org/docs/migrate-from-mongodb) *(no markdown upstream — React-only page or external)*
 
 ## Build with TerminusDB
 
@@ -98,11 +116,17 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
     - [Squash](squash-projects.md)
 - [Using the Clients](use-the-clients.md)
   - [JavaScript Client](use-the-javascript-client.md)
+  - [TypeScript Client](typescript-with-the-javascript-client.md)
+  - [JS Client Typedefs](javascript-client-typedefs.md)
   - [Python Client](use-the-python-client.md)
   - [JS Collaboration](collaboration-with-javascript-client.md)
   - [Python Collaboration](collaboration-with-python-client.md)
+  - [MCP (AI Agents)](https://terminusdb.org/docs/use-terminusdb-mcp) *(no markdown upstream — React-only page or external)*
 - **Python Ecosystem**
   - [Import Data (CSV, JSON, Pandas)](import-data-with-python-client.md)
+  - [Pydantic Quickstart](pydantic-quickstart.md)
+  - [Pydantic Schema Management](pydantic-schema-management.md)
+  - [Pydantic Schema Reference](pydantic-schema-reference.md)
   - [Certificate Issues](python-certificate-issues.md)
 
 ## Guides
@@ -110,6 +134,7 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
 - [WOQL Query Language](how-to-query-with-woql.md)
   - **Getting Started with WOQL**
     - [Interactive Tutorial](woql-tutorial.md)
+    - [Bike Share Tutorial](https://terminusdb.org/docs/bike-tutorial) *(no markdown upstream — React-only page or external)*
     - [WOQL Basics](woql-basics.md)
     - [Getting Started](woql-getting-started.md)
     - [Variables](woql-variable-generation.md)
@@ -134,10 +159,10 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
   - [Time & Date Processing](time-processing.md)
     - [1. Dates & Range Queries](time-tutorial-dates.md)
     - [2. Durations & Sequences](time-tutorial-durations.md)
-    - [3. Intervals & Allen\](time-tutorial-intervals.md)
+    - [3. Intervals & Allen's Algebra](time-tutorial-intervals.md)
     - [4. Creative Patterns](time-tutorial-patterns.md)
     - [Time Predicate Reference](woql-time-handling.md)
-    - [Allen\](woql-interval-algebra.md)
+    - [Allen's Interval Algebra](woql-interval-algebra.md)
     - [EOM Preservation Rules](woql-eom-rules.md)
   - **Patterns & Recipes**
     - [Common Patterns](woql-common-patterns.md)
@@ -166,8 +191,6 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
   - [Back Links](back-links-in-graphql.md)
   - [IDs and RDF IRIs](graphql-with-rdf-iri.md)
 - **Data Import & Export**
-  - [Dashboard Import](use-the-admin-ui-curate-and-import-data.md)
-  - [Curate & Import Data](curate-and-import-data.md)
   - [Extract Table from JSON](extract-table-from-json-with-woql.md)
   - [Sync CSV files](compare-csv-values-with-woql.md)
   - [Import JSON-LD](import-jsonld-woql.md)
@@ -186,11 +209,13 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
 
 ## Reference
 
-- [Javascript API](https://terminusdb.org/docs/javascript/)
-- [Python API](https://terminusdb.org/docs/python/)
-- [HTTP API (OpenAPI)](https://terminusdb.org/docs/openapi/)
+- [Javascript API](https://terminusdb.org/docs/javascript/) *(no markdown upstream — React-only page or external)*
+- [Python API](https://terminusdb.org/docs/python/) *(no markdown upstream — React-only page or external)*
+- [HTTP API (OpenAPI)](https://terminusdb.org/docs/openapi) *(no markdown upstream — React-only page or external)*
 - [Schema Reference](schema-reference-guide.md)
-  - [Data Types](data-types.md)
+  - [Data Types](xsd-data-types.md)
+  - [A Tour of All of Time](https://terminusdb.org/docs/xdd-datetimeinterval-time-tour) *(no markdown upstream — React-only page or external)*
+  - [QName and SQName](qname-sqname-data-types.md)
   - [WOQL Reference](woql-class-reference-guide.md)
   - [Path Queries](path-query-reference-guide.md)
   - [Document Unfolding](document-unfolding-reference.md)
@@ -217,7 +242,7 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
 - [JSON Diff & Patch](json-diff-and-patch.md)
   - [Patch Endpoint](patch-endpoint.md)
 - [Prefix Management](prefix-management.md)
-- [Dashboard Reference](dfrnt-dashboard-reference.md)
+- [Cloud Dashboard Reference](terminusdb-cms-dashboard-reference.md)
   - [Model Builder UI](use-the-model-builder-ui.md)
   - [JSON Schema Editor](use-the-json-editor.md)
   - [Model Schema](model-schema.md)
@@ -226,7 +251,6 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
   - [Reset](reset.md)
   - [Squash](squash.md)
   - [Time Travel](time-travel.md)
-  - [Collaboration](collaboration-with-dashboard.md)
   - [Change Requests](change-request-workflows.md)
 - [VectorLink](set-up-vectorlink.md)
   - [How to Use VectorLink](use-vectorlink.md)
@@ -240,30 +264,44 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
   - [Document UI SDK](document-ui-sdk.md)
     - [Data Types](document-ui-sdk-data-types.md)
     - [GeoJSON](ui-sdk-geojson.md)
-  - [Data Types](dfrnt-data-types.md)
+  - **Data Types**
     - [Array](array.md)
     - [List](list.md)
     - [Set](set.md)
     - [Optional](optional.md)
     - [Mandatory](mandatory.md)
     - [OneOf (@oneof)](oneof.md)
-    - [Choice Document](choice-document.md)
-    - [Choice Subdocuments](choice-subdocuments.md)
     - [sys:JSON](sysjson.md)
     - [@metadata orderBy](orderby.md)
     - [@metadata renderAs](render-as.md)
   - [Document UI Template](document-ui-template.md)
     - [TDB React Table](tdb-react-table.md)
-    - [useTDBDocuments](usetdbdocuments.md)
-    - [useTDBGraphQLQuery](usetdbgraphqlquery.md)
-    - [UI Components](ui-components.md)
-      - [Document Classes Summary](documentclassessummary.md)
-      - [Documents GraphQL Table](documentsgraphqltable.md)
-      - [Edit Document](edit-document-component.md)
-      - [List Documents](list-documents-component.md)
-      - [New Document](newdocumentcomponent.md)
-      - [View Document](viewdocumentcomponent.md)
+    - [Documents GraphQL Table](documentsgraphqltable.md)
+    - [Edit Document](edit-document-component.md)
+    - [List Documents](list-documents-component.md)
+    - [New Document](newdocumentcomponent.md)
 - [Glossary](glossary.md)
+- [Legacy: TerminusCMS and DFRNT Hub](legacy.md)
+
+## Next Release: 12.1
+
+- [Versioned Search](versioned-search.md)
+  - [Concepts](versioned-search-concepts.md)
+  - [Quickstart](versioned-search-quickstart.md)
+  - [Embedded Engine](versioned-search-embedded.md)
+  - [How Automatic Indexing Works](versioned-search-automatic-indexing.md)
+  - [Indexing by Push](versioned-search-indexing.md)
+  - [Embeddings Field Guide](versioned-search-embeddings.md)
+  - [Searching](versioned-search-querying.md)
+  - [Clustering Embeddings](versioned-search-clustering.md)
+  - [History & Branching](versioned-search-history.md)
+  - [Entity Resolution](versioned-search-entity-resolution.md)
+  - [API Reference](versioned-search-api-reference.md)
+- [MCP Server](https://terminusdb.org/docs/terminusdb-mcp) *(no markdown upstream — React-only page or external)*
+  - [Tool Reference](https://terminusdb.org/docs/terminusdb-mcp-reference) *(no markdown upstream — React-only page or external)*
+- [GraphQL Subscriptions](graphql-subscriptions.md)
+- [Admin Console](admin-console.md)
+- [The Write Path](terminusdb-write-path.md)
 
 ## Enterprise
 
@@ -290,4 +328,4 @@ Mirrors the navigation of https://terminusdb.org/docs/ — each entry links to t
 
 ## Blog
 
-- **All Posts**
+- [All Posts](https://terminusdb.org/blog) *(no markdown upstream — React-only page or external)*

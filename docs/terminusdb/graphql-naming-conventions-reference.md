@@ -11,7 +11,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/graphql-naming-conventions-reference/
+      canonical: https://terminusdb.com/docs/graphql-naming-conventions-reference/
 media: []
 ---
 

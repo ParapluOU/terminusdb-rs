@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/terminusdb-cli-commands/
+      canonical: https://terminusdb.com/docs/terminusdb-cli-commands/
 media: []
 ---
 
@@ -1066,8 +1066,10 @@ terminusdb db delete admin/MyDatabase
     
 *   `TERMINUSDB_SERVER_PORT`: Set the port to use for`terminusdb serve`. Default is `6363`.
     
-*   `TERMINUSDB_SERVER_WORKERS`: Set the number of worker threads to use for `terminusdb serve`. Default is `8`.
-    
+*   `TERMINUSDB_SERVER_WORKERS`: Set the number of elaboration worker threads for commit processing. Default is the machine's CPU count.
+
+*   `TERMINUSDB_WORKER_POOL_SIZE`: Set the number of request worker threads that handle HTTP request dispatch. Falls back to `TERMINUSDB_SERVER_WORKERS` if not set, then to `16` if neither is set. Since HTTP workers are I/O-bound, a higher value than `TERMINUSDB_SERVER_WORKERS` may improve concurrency under heavy API load.
+
 *   `TERMINUSDB_SERVER_MAX_TRANSACTION_RETRIES`: Set the transaction retry count. Default is `3`.
     
 *   `TERMINUSDB_SERVER_DB_PATH`: Set the location of the storage volume to be used by `terminusdb` operations. Can be addressed relative to current path using `./`. Default is `./storage/db`.

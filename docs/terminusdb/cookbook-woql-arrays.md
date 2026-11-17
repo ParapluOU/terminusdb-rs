@@ -10,6 +10,8 @@ nextjs:
     title: "Cookbook: Leveraging Arrays with WOQL"
     description: Learn to query and manipulate TerminusDB multidimensional arrays using WOQL patterns for efficient data access and processing
     keywords: arrays, WOQL, multidimensional arrays, data querying, array manipulation, terminusdb
+    alternates:
+      canonical: https://terminusdb.com/docs/cookbook-woql-arrays/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 media: []

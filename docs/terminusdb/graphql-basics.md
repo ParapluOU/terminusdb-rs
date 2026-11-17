@@ -12,11 +12,13 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphqll-basics.png
     alternates:
-      canonical: https://terminusdb.org/docs/graphql-basics/
+      canonical: https://terminusdb.com/docs/graphql-basics/
 media: []
 ---
 
 This guide teaches you the basics of querying TerminusDB with GraphQL. You will learn how to write queries, select fields, and traverse document relationships — all using a Star Wars dataset as a worked example.
+
+*The GraphQL endpoint was added in [TerminusDB 10.1.8](/docs/releases/10-1-8-graphql-endpoint/).*
 
 > **Prerequisites:** TerminusDB running on `localhost:6363` with the Star Wars dataset cloned. If you haven't done this yet, follow the [Explore a Real Dataset](/docs/explore-a-real-dataset/) tutorial (Steps 1–2), or run:
 >

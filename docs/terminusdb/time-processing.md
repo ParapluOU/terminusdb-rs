@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/time-processing/
+      canonical: https://terminusdb.com/docs/time-processing/
 media: []
 ---
 
@@ -46,9 +46,9 @@ Every tutorial uses the **WOQL Playground** — an interactive editor embedded i
    - User: `admin`
    - Password: `root`
 
-**Option 2: DFRNT Cloud**
+**Option 2: TerminusDB Cloud**
 
-1. **Get your API key** from [dfrnt.com](https://dfrnt.com) after selecting your team
+1. **Get your API key** from [TerminusDB Cloud](/docs/cloud/) after selecting your team
 
 2. **Configure the playground**: Click **Settings** and enter:
    - Server URL: `https://dfrnt.com/api/hosted/YOUR_TEAM`
@@ -106,7 +106,7 @@ Work through these in order. Each builds on concepts from the previous one.
 **Topics covered:**
 - The `xdd:dateTimeInterval` type and its four ISO 8601 forms
 - Inclusive vs half-open: the conversion problem
-- `interval` and `interval_inclusive` — construction and deconstruction
+- `interval` — construction and deconstruction (returns `xsd:dateTime` endpoints)
 - `interval_start_duration` and `interval_duration_end`
 - Typecasting between `xdd:dateRange`, `xdd:dateTimeInterval`, and `xsd:duration`
 - Allen's Interval Algebra: the 13 relations and why exactly one always holds
@@ -148,7 +148,7 @@ These pages provide exhaustive predicate-by-predicate documentation. Use them al
 - **[EOM Preservation Rules](/docs/woql-eom-rules)** — The complete end-of-month rule set with addition/subtraction tables and financial use cases
 - **[Range Queries with triple_slice](/docs/woql-triple-slice)** — O(log n) storage-level range queries for timestamps and ordered values
 - **[Numeric Precision](/docs/numeric-precision-reference)** — Arbitrary-precision decimals for financial calculations without floating-point drift
-- **[Data Types Reference](/docs/data-types)** — Full type catalog including `xdd:dateTimeInterval` and `xdd:dateRange`
+- **[Data Types Reference](/docs/xsd-data-types)** — Full type catalog including `xdd:dateTimeInterval` and `xdd:dateRange`
 
 ---
 
@@ -168,7 +168,6 @@ These pages provide exhaustive predicate-by-predicate documentation. Use them al
 | Get day-of-week | `weekday(date, dow)` | [2](/docs/time-tutorial-durations) |
 | Find min/max in a list | `range_min(list, min)` | [2](/docs/time-tutorial-durations) |
 | Construct a half-open interval | `interval(start, end, iv)` | [3](/docs/time-tutorial-intervals) |
-| Construct from inclusive dates | `interval_inclusive(start, end, iv)` | [3](/docs/time-tutorial-intervals) |
 | Check if intervals are adjacent | `interval_relation_typed("meets", a, b)` | [3](/docs/time-tutorial-intervals) |
 | Classify the relation between periods | `interval_relation_typed(rel, a, b)` | [3](/docs/time-tutorial-intervals) |
 | Detect overlapping periods | `interval_relation_typed("overlaps", a, b)` | [3](/docs/time-tutorial-intervals) |

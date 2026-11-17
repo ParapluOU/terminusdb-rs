@@ -6,19 +6,17 @@ title: TerminusDB Documentation
 nextjs:
   metadata:
     title: TerminusDB Documentation — Getting Started, Guides, and API Reference
-    keywords: terminusdb, terminusdb documentation, git for data, document graph database, version control database, immutable database, datalog engine, branch merge data, terminusdb quickstart
-    description: TerminusDB is an open-source document graph database with built-in version control. Branch, diff, and merge your data like code. Start in 10 minutes with Docker.
+    keywords: terminusdb, terminusdb documentation, git for data, knowledge graph database, version control database, immutable database, datalog engine, branch merge data, terminusdb quickstart
+    description: TerminusDB is an open-source knowledge graph database with built-in version control. Branch, diff, and merge your data like code. Start in 10 minutes with Docker.
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/start-here/
+      canonical: https://terminusdb.com/docs/start-here/
 media: []
 ---
 
-TerminusDB is an open-source document graph database with built-in version control.
+TerminusDB is an open-source knowledge graph database with built-in version control.
 Branch, diff, and merge your data like code.
-
-**TerminusDB** is the open-source database engine you run yourself. **[DFRNT Hub](https://dfrnt.com/hypergraph-content-studio/)** is a managed cloud platform built on TerminusDB — no installation needed.
 
 ## Start here
 
@@ -45,7 +43,7 @@ All quickstarts teach the same git-for-data workflow (branch, diff, merge). Choo
 | **TypeScript / JavaScript** | [TypeScript Quickstart](/docs/connect-with-the-javascript-client/) |
 | **Python** | [Python Quickstart](/docs/connect-with-python-client/) |
 | **Rust** | [Rust Quickstart](/docs/rust-client-quickstart/) |
-| **Cloud (no install)** | [Connect to DFRNT Hub](/docs/how-to-connect-dfrnt-hub/) |
+| **Cloud (no install)** | [Connect to TerminusDB Cloud](/docs/how-to-connect-terminusdb-cloud/) |
 
 Not sure which query language to use after connecting? See [Choosing a Query Interface](/docs/querying-terminusdb/) — WOQL, GraphQL, or HTTP API.
 

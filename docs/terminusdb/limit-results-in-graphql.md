@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphql-limit.png
     alternates:
-      canonical: https://terminusdb.org/docs/limit-results-in-graphql/
+      canonical: https://terminusdb.com/docs/limit-results-in-graphql/
 media: []
 ---
 

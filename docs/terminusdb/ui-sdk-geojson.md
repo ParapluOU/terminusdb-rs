@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/ui-sdk-geojson/
+      canonical: https://terminusdb.com/docs/ui-sdk-geojson/
 media: []
 tags:
   - typescript
@@ -28,7 +28,7 @@ These packages (`@terminusdb/terminusdb-documents-ui` etc.) were last published 
 The GeoJSON Playground is no longer available. The examples below show the expected behaviour of `<FrameViewer/>` with GeoJSON data types.
 {% /callout %}
 
-The [**GeoJSON Playground**](https://documents-ui-playground-geojson.terminusdb.com/Feature) previously demonstrated `<FrameViewer/>` in create, edit or view mode.
+The **GeoJSON Playground** previously demonstrated `<FrameViewer/>` in create, edit or view mode.
 
 
 ## Example
@@ -527,4 +527,4 @@ The equivalent geoJSON frame that can be retrieved from `getSchemaFrame()` call
 The GeoJSON Playground is no longer available. The examples below show the expected behaviour of `<FrameViewer/>` with GeoJSON data types.
 {% /callout %}
 
-The [**Demo Playground**](https://documents-ui-playground-geojson.terminusdb.com/) previously demonstrated `<FrameViewer/>` with geoJSON data.
+The **Demo Playground** previously demonstrated `<FrameViewer/>` with geoJSON data. The source code for `<FrameViewer/>` is in the [terminusdb-documents-ui](https://github.com/terminusdb/terminusdb-documents-ui) repository.

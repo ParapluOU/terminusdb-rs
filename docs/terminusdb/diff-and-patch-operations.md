@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-collaboration-diff-patch.png?raw=true
     alternates:
-      canonical: https://terminusdb.org/docs/diff-and-patch-operations/
+      canonical: https://terminusdb.com/docs/diff-and-patch-operations/
 media: []
 lastUpdated: "2026-05-18"
 tags:
@@ -100,6 +100,21 @@ Here is the example result
    }
 ]
 ```
+
+## The `unfold` option
+
+{% callout type="note" %}
+Added in [TerminusDB 12.0.7](/docs/releases/12-0-7-insert-delete-patches-folded-diffs/).
+{% /callout %}
+
+Diffs between commits expand subdocuments inline by default — a change inside a subdocument is reported as a field-level patch on its parent. Pass `unfold: false` in the options to compare documents as stored: a changed subdocument is then reported as a swap of the subdocument ID rather than of its contents.
+
+```javascript
+const options = { keep: { "@id": true }, unfold: false }
+const diffResult = await client.getVersionDiff(beforeVersion, afterVersion, null, options)
+```
+
+See [Folded diffs](/docs/json-diff-and-patch/#folded-diffs-unfold) for a worked example with real output.
 
 ## Get the patch of difference between a document and an object.
 

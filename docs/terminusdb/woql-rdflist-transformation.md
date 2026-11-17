@@ -11,7 +11,7 @@ nextjs:
     description: Learn how to reorder RDF lists using swap and reverse operations in WOQL for TerminusDB.
     keywords: terminusdb, datalog, query language, rdf, rdf list transformation operations, terminusdb query, woql
     alternates:
-      canonical: https://terminusdb.org/docs/woql-rdflist-transformation/
+      canonical: https://terminusdb.com/docs/woql-rdflist-transformation/
 media: []
 ---
 

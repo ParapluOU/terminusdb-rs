@@ -12,13 +12,15 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/woql-query-streaming/
+      canonical: https://terminusdb.com/docs/woql-query-streaming/
 media: []
 ---
 
 When you send a WOQL query to TerminusDB, something fundamentally different from a SQL database happens under the hood. Instead of scanning tables and assembling rows, the Datalog engine embarks on a *goal-seeking search* through the knowledge graph, discovering solutions one at a time through a process called **backtracking**. Each solution is a complete, self-consistent set of variable bindings that satisfies every constraint in your query.
 
 This page explains how that search works, why it matters for how you design queries, and how TerminusDB lets you choose between collecting all solutions into a single response or streaming them progressively as they are found.
+
+*Query result streaming was added in [TerminusDB 11.1.12](/docs/releases/11-1-12-streaming-woql-queries/).*
 
 > **Prerequisites:** Familiarity with [What is Datalog?](/docs/what-is-datalog/) and [What is Unification?](/docs/what-is-unification/) will help, but isn't required.
 

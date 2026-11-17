@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/schema-migration-reference-guide/
+      canonical: https://terminusdb.com/docs/schema-migration-reference-guide/
 media: []
 tags:
   - typescript
@@ -159,6 +159,18 @@ TerminusDB can _infer_ some migrations silently when they do not impact instance
 - **Strengthening** (breaking): add required fields, delete classes, narrow types. Existing data must be transformed.
 
 The worked example above demonstrates both: `CreateClassProperty` with a default is a strengthening (it modifies instance data), while adding an `Optional` property would be a weakening.
+
+For a step-by-step example of changing a class on a branch and then targeting that schema from `main`, plus a pattern for deprecating classes and properties, see [Ontology Versioning](/docs/ontology-versioning/).
+
+### Inferred migrations on schema writes (`require_migration`)
+
+Schema documents can also be written through the document API (`POST/PUT /api/document` with `graph_type=schema`). Passing `require_migration=true` asks the engine to _infer_ the migration that transforms the old schema into the submitted one, instead of submitting operations to `/api/migration` by hand.
+
+The inference contract:
+
+- **Inferred operations are weakening-or-declared.** A schema edit that reads as a weakening — optional properties added, enum values added, metadata or documentation changes, context `@base`/`@schema` changes, class `@base` changes — is inferred and applied. Edits that would destroy or transform data (dropped properties or classes, narrowed types) are rejected with a `weakening_failure` error unless the request also sets `allow_destructive_migration=true`.
+- **Weakening operations never write instance data.** Every inferrable weakening op performs zero instance operations — context, metadata, documentation, `@base`, optional-property and enum-expansion changes leave the instance graph untouched. A context replacement swaps only the context document; stored IRIs are immutable, so a minted document or class IRI never moves. The new `@base`/`@schema` steer future IRI minting only.
+- **Failures are loud.** When a submitted schema cannot be migrated without violating the contract, the commit fails with a typed `api:` error and a witness naming the offending class or property — no silent data loss and no partial writes. To rewrite stored IRIs deliberately, use the explicit operation surface (`/api/migration`), never an inferred schema write.
 
 ---
 
@@ -364,16 +376,97 @@ to:
   "name" : "xsd:string"}
 ```
 
+## ReplaceClassBase
+
+The `ReplaceClassBase` operation sets or replaces the `@base` on a class. This operation is always a _weakening_ operation and has no effect on instance data: minted IRIs are immutable, so the new base only steers where future instance IRIs for that class are minted.
+
+```typescript
+{ "@type" : "ReplaceClassBase",
+  "class" : <ClassName>,
+  "base" : <BaseIRI> }
+```
+
+### Example
+
+The operation:
+
+```typescript
+{ "@type" : "ReplaceClassBase",
+  "class" : "Person",
+  "base" : "https://example.org/people/" }
+```
+
+Would take the schema:
+
+```typescript
+{ "@id" : "Person",
+  "@type" : "Class",
+  "@base" : "https://example.org/humans/",
+  "name" : "xsd:string" }
+```
+
+to:
+
+```typescript
+{ "@id" : "Person",
+  "@type" : "Class",
+  "@base" : "https://example.org/people/",
+  "name" : "xsd:string" }
+```
+
+Existing `Person` documents keep their IRIs under `https://example.org/humans/`; only documents minted afterwards root at the new base.
+
+## DeleteClassBase
+
+The `DeleteClassBase` operation removes the `@base` from a class, reverting it to the default minting derived from the context. This operation is always a _weakening_ operation and has no effect on instance data.
+
+```typescript
+{ "@type" : "DeleteClassBase",
+  "class" : <ClassName> }
+```
+
 ## ReplaceContext
 
-The `ReplaceContext` operation will update the context object, which will change how URIs are compressed when returning data.
+The `ReplaceContext` operation will update the context object, which will change how URIs are compressed when returning data and where newly minted identifiers are placed.
 
-This operation is a _weakening_ operation only when prefixes other than `@base` and `@schema` are changed. Otherwise, all data in the database will be moved to the new `@base` and `@schema` designations.
+Changing `@base` or `@schema` affects only future IRI creation. Minted IRIs are immutable: a document, class, enum member, or property keeps its existing IRI forever, even after the context or the class itself changes. Multiple classes may share one `@base`, so rebasing stored identifiers is never attempted — instance data is rewritten only when an operation requires it precisely. Fault intolerance has priority: stored references always remain valid.
 
 ```typescript
 { "@type" : "ReplaceContext",
   "context" : <Context> }
 ```
+
+## RebaseIRIPrefix
+
+The `RebaseIRIPrefix` operation rewrites every stored IRI that starts with `from` so that it starts with `to` instead — in the instance, schema and inference graphs, at subject, predicate and object positions. It is the explicit, opt-in counterpart of the rule that minted IRIs are immutable: where `ReplaceContext` only changes future minting, `RebaseIRIPrefix` moves existing data.
+
+```typescript
+{ "@type" : "RebaseIRIPrefix",
+  "from" : <PrefixIRI>,
+  "to" : <PrefixIRI> }
+```
+
+`from` and `to` may be full IRI prefixes or names of prefixes declared in the context — they are resolved under the current context before matching. Rewriting `from` to the same value is an error.
+
+Because the operation rewrites stored identifiers, it is **destructive** and requires `allow_destructive_migration: true`; without the flag the migration fails before any triple moves. Whole-document replacements are never involved: every affected triple is rewritten in place, so subdocuments, captured backlinks and cons cells move with the rest of the graph atomically in a single transaction.
+
+Covered positions include:
+
+- `rdf:type` references, property predicates and document links in the instance graph — including subdocuments, which keep their own minted `@id` paths unless the data prefix itself is rebased.
+- Schema triples: class identifiers, `@inherits` and `@oneOf`/TaggedUnion member references, enum member nodes, key and type-spec node identifiers.
+- Prefix declarations and `@base`/`@schema` minting prefixes — the namespace move carries its own minting declarations so new identifiers land under the new namespace. Pair the operation with `ReplaceContext` when the compression vocabulary should change with it.
+
+Literal values are never rewritten — a stored string or a saved WOQL query that happens to mention the old prefix is data, not vocabulary.
+
+### Example
+
+```typescript
+{ "@type" : "RebaseIRIPrefix",
+  "from" : "terminusdb:///schema#",
+  "to" : "http://example.com/schema#" }
+```
+
+moves every class, property, enum member and instance reference under the new namespace while instance document IRIs (minted under `@base`) stay put.
 
 ## ExpandEnum
 

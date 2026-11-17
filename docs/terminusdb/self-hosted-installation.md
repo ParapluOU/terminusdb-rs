@@ -11,7 +11,7 @@ nextjs:
     description: How to deploy TerminusDB on your own infrastructure with production-ready configuration. Docker single container, Docker Compose, and bare-metal options.
     keywords: self-hosted, Docker, Docker Compose, deployment, production, installation
     alternates:
-      canonical: https://terminusdb.org/docs/self-hosted-installation/
+      canonical: https://terminusdb.com/docs/self-hosted-installation/
 ---
 
 {% callout type="note" %}
@@ -199,12 +199,31 @@ Key configuration variables for production deployments:
 |----------|---------|-------------|
 | `TERMINUSDB_SERVER_PORT` | `6363` | HTTP port the server listens on |
 | `TERMINUSDB_SERVER_NAME` | `127.0.0.1` | Bind address |
-| `TERMINUSDB_SERVER_WORKERS` | `8` | Number of worker threads |
+| `TERMINUSDB_SERVER_WORKERS` | CPU count | Number of elaboration worker threads for commit processing |
+| `TERMINUSDB_WORKER_POOL_SIZE` | `TERMINUSDB_SERVER_WORKERS` or `16` | Number of request worker threads that handle HTTP requests |
 | `TERMINUSDB_SERVER_DB_PATH` | `./storage/db` | Data storage location |
 | `TERMINUSDB_AUTOLOGIN` | `true` | Skip auth for local access (disable in production) |
 | `TERMINUSDB_JWT_ENABLED` | `false` | Enable JWT authentication |
 | `TERMINUSDB_ENABLE_DASHBOARD` | `true` | Serve the web dashboard UI |
 | `TERMINUSDB_SERVER_MAX_TRANSACTION_RETRIES` | `3` | Max retry count for conflicting transactions |
+
+### Worker thread configuration
+
+TerminusDB uses two separate Prolog thread pools. Understanding the distinction helps when tuning for production workloads.
+
+**Elaboration workers** (`TERMINUSDB_SERVER_WORKERS`) handle commit processing — schema validation, JSON document expansion, and writing to the store. These threads are CPU-bound, so the default is the machine's CPU count. Increasing this value helps when commit throughput is the bottleneck, but each thread consumes memory and competes for CPU.
+
+**Request workers** (`TERMINUSDB_WORKER_POOL_SIZE`) handle HTTP request dispatch — routing incoming API calls to plugin handlers and writing responses. These threads spend most of their time waiting on I/O, so a higher count than CPU cores is reasonable. If not set explicitly, this value falls back to `TERMINUSDB_SERVER_WORKERS`, and if neither is set, defaults to `16`.
+
+For most deployments, leaving both at their defaults works well. If you need to tune them independently, set `TERMINUSDB_SERVER_WORKERS` for commit throughput and `TERMINUSDB_WORKER_POOL_SIZE` for HTTP concurrency:
+
+```bash
+# Elaboration: match CPU count for CPU-bound commit work
+export TERMINUSDB_SERVER_WORKERS=8
+
+# Request pool: higher than CPU count since HTTP is I/O-bound
+export TERMINUSDB_WORKER_POOL_SIZE=32
+```
 
 ## Health checks
 

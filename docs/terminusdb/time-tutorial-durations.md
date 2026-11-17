@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/time-tutorial-durations/
+      canonical: https://terminusdb.com/docs/time-tutorial-durations/
 media: []
 ---
 
@@ -32,51 +32,87 @@ By the end of this tutorial you will be able to:
 ## Prerequisites
 
 - Completed [Tutorial 1: Dates](/docs/time-tutorial-dates)
-- A running TerminusDB instance
+- A running TerminusDB instance (optional — the walkthrough simulates every query)
 
 ---
 
-## Part 1: Duration Arithmetic with `date_duration`
+## Part 1: Duration Arithmetic with `date_duration` {% step %}
 
 `date_duration(Start, End, Duration)` relates three values. It is **tri-directional** — give it any two and it computes the third.
 
-### Step 1: Add days to a date
+### Step 1: Add days to a date {% step %}
 
 {% woql-playground code="date_duration(\n  literal(\"2025-03-31\", \"xsd:date\"),\n  \"v:deadline\",\n  literal(\"P60D\", \"xsd:duration\")\n)" title="Step 1: Add 60 days" description="What date is 60 days after March 31?" /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["deadline"],"bindings":[{"deadline":{"@type":"xsd:date","@value":"2025-05-30"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 **What happened:** `v:deadline` is bound to `2025-05-30`. The duration `P60D` means exactly 60 calendar days. The `P` prefix is ISO 8601 for "period".
 
-### Step 2: Compute the duration between two dates
+### Step 2: Compute the duration between two dates {% step %}
 
 {% woql-playground code="date_duration(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-04-01\", \"xsd:date\"),\n  \"v:days\"\n)" title="Step 2: Days between dates" description="How many days from Jan 1 to Apr 1 in 2025?" /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["days"],"bindings":[{"days":{"@type":"xsd:duration","@value":"P90D"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 **Result:** `P90D` — that is 31 (Jan) + 28 (Feb, non-leap) + 31 (Mar) = 90 days.
 
-### Step 3: Compute the start from end minus duration
+### Step 3: Compute the start from end minus duration {% step %}
 
 {% woql-playground code="date_duration(\n  \"v:start\",\n  literal(\"2025-04-01\", \"xsd:date\"),\n  literal(\"P90D\", \"xsd:duration\")\n)" title="Step 3: Subtract duration" description="What date is 90 days before April 1?" /%}
 
-### Step 4: Validate a relationship
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["start"],"bindings":[{"start":{"@type":"xsd:date","@value":"2025-01-01"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 4: Validate a relationship {% step %}
 
 When all three arguments are ground, `date_duration` acts as a **validator** — it succeeds only if the relationship is correct:
 
 {% woql-playground code="date_duration(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-04-01\", \"xsd:date\"),\n  literal(\"P90D\", \"xsd:duration\")\n)" title="Step 4: Validate — correct" description="Is it really 90 days from Jan 1 to Apr 1? Succeeds if yes." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":[],"bindings":[{}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 Now try changing `P90D` to `P89D` — it will return zero results because the relationship is wrong.
 
 ---
 
-## Part 2: Why `P90D` and `P3M` Are Different
+## Part 2: Why `P90D` and `P3M` Are Different {% step %}
 
 This is the most important concept in this tutorial. **Day durations are exact. Month durations are calendar-relative.**
 
-### Step 5: Day-based duration
+### Step 5: Day-based duration {% step %}
 
 {% woql-playground code="date_duration(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  \"v:result\",\n  literal(\"P90D\", \"xsd:duration\")\n)" title="Step 5: P90D — exact days" description="90 days from Jan 1. Always the same result regardless of year." /%}
 
-### Step 6: Month-based duration
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["result"],"bindings":[{"result":{"@type":"xsd:date","@value":"2025-04-01"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 6: Month-based duration {% step %}
 
 {% woql-playground code="date_duration(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  \"v:result\",\n  literal(\"P3M\", \"xsd:duration\")\n)" title="Step 6: P3M — calendar months" description="3 months from Jan 1. Same result here, but P3M can mean different day counts in different years." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["result"],"bindings":[{"result":{"@type":"xsd:date","@value":"2025-04-01"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 Both land on April 1 — but `P3M` covers 90 days in 2025 (non-leap) and 91 days in 2024 (leap). The month duration preserves the *calendar position*, not the *day count*.
 
@@ -84,25 +120,43 @@ Both land on April 1 — but `P3M` covers 90 days in 2025 (non-leap) and 91 days
 
 ---
 
-## Part 3: End-of-Month Preservation
+## Part 3: End-of-Month Preservation {% step %}
 
 What happens when you add a month to January 31? February has no 31st day.
 
-### Step 7: The EOM rule
+### Step 7: The EOM rule {% step %}
 
 {% woql-playground code="date_duration(\n  literal(\"2025-01-31\", \"xsd:date\"),\n  \"v:result\",\n  literal(\"P1M\", \"xsd:duration\")\n)" title="Step 7: Jan 31 + 1 month" description="January 31 is the last day of its month. What happens?" /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["result"],"bindings":[{"result":{"@type":"xsd:date","@value":"2025-02-28"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 **Result:** `2025-02-28`. Because January 31 is the **last day of January**, the result is the **last day of February**. This is end-of-month (EOM) preservation.
 
-### Step 8: The EOM chain
+### Step 8: The EOM chain {% step %}
 
 {% woql-playground code="and(\n  date_duration(literal(\"2025-01-31\", \"xsd:date\"), \"v:feb\", literal(\"P1M\", \"xsd:duration\")),\n  date_duration(literal(\"2025-02-28\", \"xsd:date\"), \"v:mar\", literal(\"P1M\", \"xsd:duration\")),\n  date_duration(literal(\"2025-03-31\", \"xsd:date\"), \"v:apr\", literal(\"P1M\", \"xsd:duration\"))\n)" title="Step 8: EOM chain" description="Jan 31 → Feb 28 → Mar 31 → Apr 30. Every step lands on the last day." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["feb","mar","apr"],"bindings":[{"apr":{"@type":"xsd:date","@value":"2025-04-30"},"feb":{"@type":"xsd:date","@value":"2025-02-28"},"mar":{"@type":"xsd:date","@value":"2025-03-31"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 The chain never breaks. This is exactly what financial systems need for monthly payment schedules and interest accruals.
 
-### Step 9: Non-reversibility warning
+### Step 9: Non-reversibility warning {% step %}
 
 {% woql-playground code="and(\n  date_duration(literal(\"2025-01-31\", \"xsd:date\"), \"v:forward\", literal(\"P1M\", \"xsd:duration\")),\n  date_duration(\"v:backward\", literal(\"2025-02-28\", \"xsd:date\"), literal(\"P1M\", \"xsd:duration\"))\n)" title="Step 9: Non-reversibility" description="Jan 31 + P1M = Feb 28. But Feb 28 - P1M = Jan 28, NOT Jan 31." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["forward","backward"],"bindings":[{"backward":{"@type":"xsd:date","@value":"2025-01-31"},"forward":{"@type":"xsd:date","@value":"2025-02-28"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 **Key insight:** Month arithmetic is not always reversible. Use day-count durations (`P90D`) when round-trip accuracy matters.
 
@@ -110,71 +164,137 @@ The chain never breaks. This is exactly what financial systems need for monthly 
 
 ---
 
-## Part 4: Date Navigation
+## Part 4: Date Navigation {% step %}
 
-### Step 10: `day_after` and `day_before`
+### Step 10: `day_after` and `day_before` {% step %}
 
 {% woql-playground code="and(\n  day_after(literal(\"2025-02-28\", \"xsd:date\"), \"v:next\"),\n  day_before(literal(\"2025-03-01\", \"xsd:date\"), \"v:prev\")\n)" title="Step 10: Day navigation" description="day_after Feb 28 = Mar 1 (non-leap). day_before Mar 1 = Feb 28." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["next","prev"],"bindings":[{"next":{"@type":"xsd:date","@value":"2025-03-01"},"prev":{"@type":"xsd:date","@value":"2025-02-28"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 Try changing the year to 2024 (leap year) — `day_after` Feb 28 will give Feb 29, not Mar 1.
 
-### Step 11: Weekday extraction
+### Step 11: Weekday extraction {% step %}
 
 {% woql-playground code="weekday(\n  literal(\"2025-03-31\", \"xsd:date\"),\n  \"v:dow\"\n)" title="Step 11: Weekday" description="ISO 8601: Monday=1, Sunday=7. What day is March 31, 2025?" /%}
 
-### Step 12: ISO week number
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["dow"],"bindings":[{"dow":{"@type":"xsd:integer","@value":1}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 12: ISO week number {% step %}
 
 {% woql-playground code="iso_week(\n  literal(\"2025-01-01\", \"xsd:date\"),\n  \"v:year\",\n  \"v:week\"\n)" title="Step 12: ISO week" description="Jan 1, 2025 — which ISO week? The ISO year may differ from the calendar year." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["year","week"],"bindings":[{"week":{"@type":"xsd:integer","@value":1},"year":{"@type":"xsd:integer","@value":2025}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 ---
 
-## Part 5: Sequence Generation
+## Part 5: Sequence Generation {% step %}
 
 `sequence(Value, Start, End)` generates values in a half-open range `[Start, End)`. When `Value` is unbound, it **produces each value** via backtracking.
 
-### Step 13: Integer sequence
+### Step 13: Integer sequence {% step %}
 
 {% woql-playground code="sequence(\"v:i\", 1, 6)" title="Step 13: Integer sequence" description="Generate integers 1 through 5. Half-open: [1, 6) = 1,2,3,4,5." /%}
 
-### Step 14: Monthly reporting calendar
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["i"],"bindings":[{"i":{"@type":"xsd:decimal","@value":1}},{"i":{"@type":"xsd:decimal","@value":2}},{"i":{"@type":"xsd:decimal","@value":3}},{"i":{"@type":"xsd:decimal","@value":4}},{"i":{"@type":"xsd:decimal","@value":5}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 14: Monthly reporting calendar {% step %}
 
 {% woql-playground code="sequence(\n  \"v:month\",\n  literal(\"2025-01\", \"xsd:gYearMonth\"),\n  literal(\"2025-07\", \"xsd:gYearMonth\")\n)" title="Step 14: H1 months" description="Every month in the first half of 2025." /%}
 
-### Step 15: Weekly dates with a step
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["month"],"bindings":[{"month":{"@type":"xsd:gYearMonth","@value":"2025-01"}},{"month":{"@type":"xsd:gYearMonth","@value":"2025-02"}},{"month":{"@type":"xsd:gYearMonth","@value":"2025-03"}},{"month":{"@type":"xsd:gYearMonth","@value":"2025-04"}},{"month":{"@type":"xsd:gYearMonth","@value":"2025-05"}},{"month":{"@type":"xsd:gYearMonth","@value":"2025-06"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 15: Weekly dates with a step {% step %}
 
 {% woql-playground code="sequence(\n  \"v:date\",\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-02-01\", \"xsd:date\"),\n  literal(7, \"xsd:integer\")\n)" title="Step 15: Weekly dates" description="Every 7 days starting from Jan 1." /%}
 
-### Step 16: Decimal sequence — no floating-point drift
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["date"],"bindings":[{"date":{"@type":"xsd:date","@value":"2025-01-01"}},{"date":{"@type":"xsd:date","@value":"2025-01-08"}},{"date":{"@type":"xsd:date","@value":"2025-01-15"}},{"date":{"@type":"xsd:date","@value":"2025-01-22"}},{"date":{"@type":"xsd:date","@value":"2025-01-29"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 16: Decimal sequence — no floating-point drift {% step %}
 
 {% woql-playground code="sequence(\n  \"v:rate\",\n  literal(\"0.0\", \"xsd:decimal\"),\n  literal(\"1.0\", \"xsd:decimal\"),\n  literal(\"0.3\", \"xsd:decimal\")\n)" title="Step 16: Decimal sequence" description="0.0, 0.3, 0.6, 0.9 — exact rational arithmetic, no accumulation error." /%}
 
-### Step 17: Empty range = zero results
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["rate"],"bindings":[{"rate":{"@type":"xsd:decimal","@value":0}},{"rate":{"@type":"xsd:decimal","@value":0.3}},{"rate":{"@type":"xsd:decimal","@value":0.6}},{"rate":{"@type":"xsd:decimal","@value":0.9}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 17: Empty range = zero results {% step %}
 
 {% woql-playground code="sequence(\"v:i\", 5, 5)" title="Step 17: Empty range" description="Start == End means empty range. Zero results, not an error." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["i"],"bindings":[],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 ---
 
-## Part 6: Month Boundaries
+## Part 6: Month Boundaries {% step %}
 
 Financial reporting revolves around month boundaries — period starts, period ends, accrual dates.
 
-### Step 18: Last day of a month
+### Step 18: Last day of a month {% step %}
 
 {% woql-playground code="and(\n  month_end_date(literal(\"2025-02\", \"xsd:gYearMonth\"), \"v:feb_end\"),\n  month_end_date(literal(\"2024-02\", \"xsd:gYearMonth\"), \"v:feb_end_leap\")\n)" title="Step 18: Month end date" description="February end: 28 in 2025, 29 in leap year 2024." /%}
 
-### Step 19: All month-end dates in a range
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["feb_end","feb_end_leap"],"bindings":[{"feb_end":{"@type":"xsd:date","@value":"2025-02-28"},"feb_end_leap":{"@type":"xsd:date","@value":"2024-02-29"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
+### Step 19: All month-end dates in a range {% step %}
 
 {% woql-playground code="month_end_dates(\n  \"v:month_end\",\n  literal(\"2025-01-01\", \"xsd:date\"),\n  literal(\"2025-07-01\", \"xsd:date\")\n)" title="Step 19: Month-end dates H1" description="Every month-end date in the first half of 2025." /%}
 
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["month_end"],"bindings":[{"month_end":{"@type":"xsd:date","@value":"2025-01-31"}},{"month_end":{"@type":"xsd:date","@value":"2025-02-28"}},{"month_end":{"@type":"xsd:date","@value":"2025-03-31"}},{"month_end":{"@type":"xsd:date","@value":"2025-04-30"}},{"month_end":{"@type":"xsd:date","@value":"2025-05-31"}},{"month_end":{"@type":"xsd:date","@value":"2025-06-30"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
+
 ---
 
-## Part 7: Range Min and Max
+## Part 7: Range Min and Max {% step %}
 
 `range_min` and `range_max` find the smallest and largest values in a list.
 
-### Step 20: Find the min and max
+### Step 20: Find the min and max {% step %}
 
 {% woql-playground code="and(\n  range_min(\n    [literal(\"2025-06-15\", \"xsd:date\"),\n     literal(\"2025-01-01\", \"xsd:date\"),\n     literal(\"2025-03-31\", \"xsd:date\")],\n    \"v:earliest\"),\n  range_max(\n    [literal(\"2025-06-15\", \"xsd:date\"),\n     literal(\"2025-01-01\", \"xsd:date\"),\n     literal(\"2025-03-31\", \"xsd:date\")],\n    \"v:latest\")\n)" title="Step 20: range_min / range_max" description="Find the earliest and latest dates in a set." /%}
+
+{% http-expected %}
+```json
+{"@type":"api:WoqlResponse","api:status":"api:success","api:variable_names":["earliest","latest"],"bindings":[{"earliest":{"@type":"xsd:date","@value":"2025-01-01"},"latest":{"@type":"xsd:date","@value":"2025-06-15"}}],"deletes":0,"inserts":0,"transaction_retry_count":0}
+```
+{% /http-expected %}
 
 ---
 

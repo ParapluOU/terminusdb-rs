@@ -2,21 +2,31 @@
 tags:
   - explanation
   - beginner
-title: "TerminusDB: At a glance"
+title: "TerminusDB features at a glance"
 nextjs:
   metadata:
-    title: "TerminusDB: At a glance"
-    description: "Description of the key technical features and capabilities of TerminusDB at a glance with links to the documentation"
-    keywords: terminusdb, document database, features overview, graph database, immutable database
+    title: "TerminusDB Features at a Glance: Graph + Git for Data"
+    description: "A quick fact sheet of TerminusDB features: JSON documents in a typed graph, Git-like branch, diff and merge, WOQL and GraphQL. Links to every topic."
+    keywords: terminusdb, terminusdb features, features overview, fact sheet, document database, graph database, immutable database
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/at-a-glance
+      canonical: https://terminusdb.com/docs/at-a-glance
 ---
 
-This page gives you a high-level overview of TerminusDB's capabilities — what it does, how it differs from other databases, and where to go next depending on your use case.
+A short, scannable list of what TerminusDB does, with a link to the docs for each feature. Want the full explanation? Read [What is TerminusDB?](/docs/terminusdb-explanation/). New to knowledge graphs? Start with [What is a knowledge graph database?](/docs/knowledge-graph-database/).
 
-**TerminusDB** is an open-source document graph database with built-in version control. It combines a [schema-enforced JSON document store](/docs/documents-explanation/) with a [knowledge graph](/docs/graphs-explanation/) engine, [git-like collaboration](/docs/git-for-data-reference/) (branch, diff, merge, clone), and [ACID transactions](/docs/acid-transactions-explanation/) backed by an [immutable storage layer](/docs/immutability-explanation/).
+## Quick facts
+
+| | |
+|---|---|
+| **Data model** | [Schema-enforced JSON documents](/docs/documents-explanation/), stored as a [typed graph of RDF triples](/docs/graphs-explanation/) |
+| **Version control** | [Git-like](/docs/git-for-data-reference/) branch, diff, merge, clone, push and pull, plus [time-travel queries](/docs/knowledge-graph-database-version-control/) |
+| **Transactions** | [ACID](/docs/acid-transactions-explanation/), on an [immutable storage layer](/docs/immutability-explanation/) |
+| **Query languages** | [WOQL](/docs/woql-explanation/) (Datalog), [GraphQL](/docs/graphql-query-reference/), and the [HTTP document API](/docs/http-documents-api/) |
+| **Search** | [Versioned semantic and hybrid search](/docs/versioned-search/) with the VectorLink indexer |
+| **Clients** | Official: [JavaScript](/docs/use-the-javascript-client/) and [Python](/docs/use-the-python-client/). Community: [Rust](/docs/rust-client-quickstart/) and [Elixir](https://hex.pm/packages/terminusdb_client) |
+| **License** | Open source, Apache License 2.0 ([GitHub](https://github.com/terminusdb/terminusdb)) |
 
 Three things make it distinctive:
 
@@ -26,11 +36,11 @@ Three things make it distinctive:
 
 3. **Datalog query engine (WOQL)** — A declarative query language based on Prolog foundations. Pattern-match across documents and relationships without JOINs, with built-in support for aggregation, path queries, and schema-aware traversal. See [WOQL Explained](/docs/woql-explanation/).
 
-TerminusDB is maintained by [DFRNT®](https://dfrnt.com?utm_source=terminusdb&utm_medium=referral&utm_campaign=terminusdb_docs_at_a_glance) in collaboration with the open-source community.
+TerminusDB is maintained by [Gettier](https://gettier.ai) in collaboration with the open-source community.
 
 ## Overview of the system
 
-* [A versatile document graph database](/docs/terminusdb-explanation/)
+* [A versatile knowledge graph database](/docs/terminusdb-explanation/)
 * [flexible headless content management system](/docs/document-graph-api/)
 
 ### Document graph paradigm
@@ -65,12 +75,18 @@ TerminusDB is maintained by [DFRNT®](https://dfrnt.com?utm_source=terminusdb&ut
 ### Data model and schema management
 
 * [schema migration](/docs/schema-migration-reference-guide/)
-* [XML Datatypes for its data structures](/docs/dfrnt-data-types/)
+* [XML Datatypes for its data structures](/docs/xsd-data-types/)
 * [schema reference](/docs/schema-reference-guide/)
 
 ### Git-for-data
 
 * [git-for-data (including push, pull clone and branching)](/docs/git-for-data-reference/)
+
+### Storage engine
+
+* [In-memory succinct data structures](/docs/terminusdb-explanation/) — documents decompose into content-addressed, immutable delta layers; all data persists to disk with ACID guarantees, while queries execute in-memory against the succinct representation (roughly 13 bytes per triple on large datasets)
+* [Delta rollup](/docs/delta-rollup/) — periodic compaction that keeps the in-memory footprint bounded
+* [Immutable storage layer](/docs/immutability-explanation/)
 
 ### Interoperability
 
@@ -79,7 +95,9 @@ TerminusDB is maintained by [DFRNT®](https://dfrnt.com?utm_source=terminusdb&ut
 * [Rust-based high performance GraphQL Engine](/docs/graphql-query-reference/) 
 * [Javascript Client](/docs/use-the-javascript-client/)
 * [Python Client](/docs/use-the-python-client/)
+* [Rust Client](/docs/rust-client-quickstart/) (community)
+* [Elixir Client](https://hex.pm/packages/terminusdb_client) (community)
 
 ### Complete User Interface
 
-The [DFRNT Studio for TerminusDB](https://dfrnt.com/hypergraph-content-studio/) offers a commercially packaged solution, with hosting API tokens and collaborative environments, modelling environment and document UI that help you go from idea to prototype and production in a few hours or a few days.
+The [TerminusDB Cloud](/docs/cloud/) offers a commercially packaged solution, with hosting API tokens and collaborative environments, modelling environment and document UI that help you go from idea to prototype and production in a few hours or a few days.

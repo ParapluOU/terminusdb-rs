@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/python-client-use-import-data.png
     alternates:
-      canonical: https://terminusdb.org/docs/import-data-with-python-client/
+      canonical: https://terminusdb.com/docs/import-data-with-python-client/
 media: []
 ---
 

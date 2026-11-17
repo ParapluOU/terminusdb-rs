@@ -11,7 +11,7 @@ nextjs:
     description: Learn how to create organizations, invite users with specific roles, and manage authorization in TerminusDB using the REST API
     keywords: terminusdb, api, managing users and invitations in terminusdb
     alternates:
-      canonical: https://terminusdb.org/docs/managing-users-and-invitations/
+      canonical: https://terminusdb.com/docs/managing-users-and-invitations/
 ---
 
 This guide demonstrates how to manage users, organizations, and authorization in TerminusDB. You'll learn how to invite users to organizations and data products with specific capabilities, creating a complete authorization hierarchy.

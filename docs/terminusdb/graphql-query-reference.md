@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/graphql-query-reference/
+      canonical: https://terminusdb.com/docs/graphql-query-reference/
 media: []
 ---
 
@@ -371,6 +371,18 @@ This returns the fully qualified URI of the given instance of the `Person` class
 ### `_type`
 
 This returns the class at which this instance is instantiated. This is useful when a super-class is queried, as we can obtain what concrete subclass it corresponds to.
+
+### `_count`
+
+*Available as of the 12.1 release candidates.* Returns the number of matching instances instead of the instances themselves. With an empty filter the count resolves from the store indexes, so it stays fast on large collections:
+
+```graphql
+{
+  _count(Person: {})
+}
+```
+
+Filtered `_count` traverses matching documents as before.
 
 ### _backlink Backlinks
 

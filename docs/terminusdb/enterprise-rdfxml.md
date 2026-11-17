@@ -9,10 +9,10 @@ title: RDF/XML Support
 nextjs:
   metadata:
     title: RDF/XML Support
-    description: How TwinfoxDB Enterprise serializes and parses RDF/XML documents with proper namespace declarations, typed literals, subdocument nesting, and round-trip integrity.
+    description: How TerminusDB Enterprise Edition serializes and parses RDF/XML documents with proper namespace declarations, typed literals, subdocument nesting, and round-trip integrity.
     keywords: rdf xml, rdf, xml, namespace, typed literals, subdocument, enterprise, serialization
     alternates:
-      canonical: https://terminusdb.org/docs/enterprise-rdfxml/
+      canonical: https://terminusdb.com/docs/enterprise-rdfxml/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---
@@ -184,4 +184,5 @@ RDF/XML is the right format choice when integrating with:
 - [Document Formats & Content Negotiation](/docs/enterprise-document-formats/) — how to select formats
 - [Turtle Support](/docs/enterprise-turtle/) — the compact, human-readable RDF counterpart
 - [JSON-LD Context Processing](/docs/enterprise-jsonld-context/) — the JSON-LD counterpart
+- [RDF Versioning](/docs/rdf-versioning/) — how to keep past versions of RDF data, and how TerminusDB does it with commits
 - [Multi-Format Document API Tutorial](/docs/document-format-api-curl-tutorial/) — hands-on round-trip walkthrough

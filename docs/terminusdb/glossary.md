@@ -11,7 +11,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/glossary/
+      canonical: https://terminusdb.com/docs/glossary/
 media: []
 ---
 
@@ -165,7 +165,7 @@ In TerminusDB, a **database** is the fundamental storage unit — a named contai
 
 ### Data product
 
-A **data product** is the higher-level concept for a database that is published, shared, or collaborated on within an organisation. When you clone a database from a remote, push changes to a team, or browse available datasets in DFRNT, you are working with data products. In practice, "database" and "data product" often refer to the same underlying object — the distinction is one of perspective: *database* emphasises the storage engine and API operations, while *data product* emphasises collaboration, discovery, and organisational ownership.
+A **data product** is the higher-level concept for a database that is published, shared, or collaborated on within an organisation. When you clone a database from a remote, push changes to a team, or browse available datasets in TerminusDB Cloud, you are working with data products. In practice, "database" and "data product" often refer to the same underlying object — the distinction is one of perspective: *database* emphasises the storage engine and API operations, while *data product* emphasises collaboration, discovery, and organisational ownership.
 
 ### WOQL
 

@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/git-for-data-reference/
+      canonical: https://terminusdb.com/docs/git-for-data-reference/
 media: []
 lastUpdated: "2026-05-01"
 ---
@@ -22,6 +22,8 @@ By the end of this guide, you will know how to push, pull, fetch, and clone data
 {% /callout %}
 
 **Git-for-Data** lets you transport data between TerminusDB instances using operations that mirror git: `clone`, `push`, `pull`, and `fetch`. You can collaborate on structured data by synchronising content repositories across cloud-hosted and local TerminusDB instances.
+
+For the bigger picture of database version control in TerminusDB, read [a graph database with git-like version control](/docs/graph-database-with-git-like-version-control/).
 
 {% callout title="Prerequisites" %}
 - Two TerminusDB instances running (examples use `localhost:6363` as local and `localhost:6364` as remote)

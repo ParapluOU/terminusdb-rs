@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/first-15-minutes/
+      canonical: https://terminusdb.com/docs/first-15-minutes/
 tags:
   - typescript
   - tutorial
@@ -24,7 +24,7 @@ Build the entire git-for-data workflow from scratch. You will create a database,
 If you want to skip the manual setup and start exploring immediately, use the [clone-based quickstart](/docs/get-started/) — it gives you a pre-populated database in one click.
 {% /callout %}
 
-## Step 1 — Start TerminusDB
+## Step 1 — Start TerminusDB {% step %}
 
 Pull and run TerminusDB in one command:
 
@@ -39,6 +39,9 @@ Wait a few seconds for the server to start, then confirm it is running:
 ```bash
 curl -s -u admin:root http://localhost:6363/api/info
 ```
+{% http-expected %}
+{"@type":"api:InfoResponse","api:info":{"authority":"terminusdb://system/data/User/admin","edition":"community","storage":{"version":"2"},"terminusdb":{"version":"12.1.0-rc2"},"terminusdb_store":{"version":"0.19.8"}},"api:status":"api:success"}
+{% /http-expected %}
 
 You should see a JSON response with `"authority": "admin"` confirming the server is ready.
 
@@ -46,7 +49,7 @@ You should see a JSON response with `"authority": "admin"` confirming the server
 If the command hangs or returns a connection error: Docker may not be running, port 6363 may already be in use, or a previous container named `terminusdb` may already exist. See [Troubleshooting Connection Failures](/docs/troubleshooting-connection) and [Authentication Errors](/docs/troubleshooting-auth) for solutions.
 {% /callout %}
 
-## Step 2 — Create a database
+## Step 2 — Create a database {% step %}
 
 {% http-example method="POST" path="/api/db/admin/MyDatabase" fixture="docs-test" %}
 {"label": "MyDatabase", "comment": "My first TerminusDB database"}
@@ -55,59 +58,53 @@ If the command hangs or returns a connection error: Docker may not be running, p
 {% /http-expected %}
 {% /http-example %}
 
-## Step 3 — Define a schema and insert a document
+## Step 3 — Define a schema {% step %}
 
-TerminusDB is primarily a typed database, with some vanilla JSON handling too. Define a simple `Person` schema class, then insert a document:
+TerminusDB is primarily a typed database, with some vanilla JSON handling too. Define a simple `Person` schema class:
 
 {% http-example method="POST" path="/api/document/admin/MyDatabase?author=admin&message=Add+schema&graph_type=schema" %}
 {"@type": "Class", "@id": "Person", "name": "xsd:string", "email": "xsd:string", "age": "xsd:integer"}
+{% http-expected %}
+["Person"]
+{% /http-expected %}
 {% /http-example %}
 
-Expected output:
-```json
-["Person"]
-```
+## Step 4 — Insert a document {% step %}
 
-Now insert a person:
+Insert a person:
 
 {% http-example method="POST" path="/api/document/admin/MyDatabase?author=admin&message=Add+Jane" %}
 {"@type": "Person", "@id": "Person/jane", "name": "Jane Smith", "email": "jane@example.com", "age": 30}
+{% http-expected %}
+["Person/jane"]
+{% /http-expected %}
 {% /http-example %}
 
-Expected output:
-```json
-["terminusdb:///data/Person/jane"]
-```
-
-## Step 4 — Create a branch
+## Step 5 — Create a branch {% step %}
 
 {% http-example method="POST" path="/api/branch/admin/MyDatabase/local/branch/feature" %}
 {"origin": "admin/MyDatabase/local/branch/main"}
-{% /http-example %}
-
-Expected output:
-```json
+{% http-expected %}
 {"@type":"api:BranchResponse","api:status":"api:success"}
-```
+{% /http-expected %}
+{% /http-example %}
 
 You now have two branches: `main` (unchanged) and `feature` (a copy, ready for edits).
 
-## Step 5 — Edit the document on the branch
+## Step 6 — Edit the document on the branch {% step %}
 
 Update Jane's email on the `feature` branch only:
 
 {% http-example method="PUT" path="/api/document/admin/MyDatabase/local/branch/feature?author=admin&message=Update+Jane+email" %}
 {"@type": "Person", "@id": "Person/jane", "name": "Jane Smith", "email": "jane.smith@company.com", "age": 30}
+{% http-expected %}
+["Person/jane"]
+{% /http-expected %}
 {% /http-example %}
-
-Expected output:
-```json
-["terminusdb:///data/Person/jane"]
-```
 
 The edit lives only on `feature`. The `main` branch still has the original email.
 
-## Step 6 — Diff the branches
+## Step 7 — Diff the branches {% step %}
 
 This is the moment. TerminusDB computes a structural, semantic diff between any two branches:
 
@@ -125,26 +122,29 @@ TerminusDB computed a **structural diff** between two branches — not a line-by
 The URL path (`/api/diff/admin/MyDatabase`) identifies the database; the body specifies which branches to compare. You can also diff a single document by adding `"document_id": "Person/jane"` to the request body.
 {% /callout %}
 
-## Step 7 — Merge the branch
+## Step 8 — Merge the branch {% step %}
 
 Apply the changes from `feature` onto `main`:
 
 {% http-example method="POST" path="/api/apply/admin/MyDatabase/local/branch/main" %}
 {"before_commit": "main", "after_commit": "feature", "commit_info": {"author": "admin", "message": "Merge feature into main"}}
+{% http-expected %}
+{"@type":"api:ApplyResponse","api:status":"api:success"}
+{% /http-expected %}
 {% /http-example %}
 
-Expected output:
-```json
-{"@type":"api:ApplyResponse","api:status":"api:success"}
-```
+## Step 9 — Verify the merge {% step %}
 
-Verify the merge — `main` now has the updated email:
+`main` now has the updated email:
 
 {% http-example method="GET" path="/api/document/admin/MyDatabase?id=Person/jane" /%}
-
-```json
+{% http-expected %}
 {"@id":"Person/jane","@type":"Person","age":30,"email":"jane.smith@company.com","name":"Jane Smith"}
-```
+{% /http-expected %}
+
+{% http-expected %}
+{"@id":"Person/jane","@type":"Person","age":30,"email":"jane.smith@company.com","name":"Jane Smith"}
+{% /http-expected %}
 
 ---
 
@@ -226,6 +226,9 @@ curl -u admin:root -X POST "http://localhost:6363/api/db/admin/MyDatabase" \
   -H "Content-Type: application/json" \
   -d '{"label": "MyDatabase", "comment": "My database"}'
 ```
+{% http-expected %}
+{"@type":"api:DbCreateResponse","api:database_uri":"terminusdb://system/data/UserDatabase/gO4sd3rTFspkgb3x","api:status":"api:success"}
+{% /http-expected %}
 
 Common path mistakes: using `MyDatabase` instead of `admin/MyDatabase` in the URL, or forgetting that the database was deleted in a previous tutorial run.
 
@@ -263,6 +266,9 @@ sudo apt-get install jq
 # Delete the old database, then re-run from Step 2
 curl -u admin:root -X DELETE "http://localhost:6363/api/db/admin/MyDatabase"
 ```
+{% http-expected %}
+{"@type":"api:DbDeleteResponse","api:status":"api:success"}
+{% /http-expected %}
 
 ## Next steps
 
@@ -315,6 +321,9 @@ This deletes the **MyDatabase** data product permanently. Only run this when you
 {% /callout %}
 
 {% http-example method="DELETE" path="/api/db/admin/MyDatabase" confirm="This will permanently delete the MyDatabase data product." /%}
+{% http-expected %}
+{"@type":"api:DbDeleteErrorResponse","api:error": {"@type":"api:UnknownDatabase","api:database_name":"MyDatabase","api:organization_name":"admin"},"api:message":"Unknown database: admin/MyDatabase","api:request_id":"39f6e995-18c7-485c-b525-078fa5fc6523","api:status":"api:not_found"}
+{% /http-expected %}
 
 Your TerminusDB instance is still running. To stop it entirely:
 

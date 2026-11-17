@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/install-terminusdb-js-client/
+      canonical: https://terminusdb.com/docs/install-terminusdb-js-client/
 media: []
 ---
 
@@ -29,7 +29,7 @@ This page covers installing the **client library** — the SDK you use to talk t
 {% code-tabs %}
 {% code-tab label="TypeScript / Node.js" %}
 
-**Requirements:** Node.js 18+
+**Requirements:** Node.js 22+
 
 ```bash
 npm install terminusdb

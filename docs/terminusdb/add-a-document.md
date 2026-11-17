@@ -6,7 +6,7 @@ nextjs:
     description: How to insert documents into TerminusDB using the JavaScript client, Python client, or HTTP API.
     keywords: terminusdb, add document, insert document, javascript client, python client, http api, curl
     alternates:
-      canonical: https://terminusdb.org/docs/add-a-document
+      canonical: https://terminusdb.com/docs/add-a-document
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-use-add-documents.png?raw=true
 tags:

@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/connect-with-python-client/
+      canonical: https://terminusdb.com/docs/connect-with-python-client/
 ---
 
 {% callout type="note" %}
@@ -40,14 +40,14 @@ pip install terminusdb-client
 
 Create a file called `quickstart.py`. You will build it up step by step below.
 
-## Connect to TerminusDB
+## Connect to TerminusDB {% step %}
 
 ```python test-example id="py-quickstart-connect" file="examples/py-quickstart-connect.example.py"
 ```
 
 **What you should see:** A dict with server version and storage details. If you see a connection error, check that Docker is running and TerminusDB is on port 6363.
 
-## Create a database and insert a document
+## Create a database and insert a document {% step %}
 
 No schema needed — insert any dict with `raw_json=True` and give it a human-readable ID:
 
@@ -56,7 +56,7 @@ No schema needed — insert any dict with `raw_json=True` and give it a human-re
 
 **What you should see:** A list containing `"terminusdb:///data/jane"`. The `@id` gives the document a stable, human-readable identifier. Schema comes later when you are ready.
 
-## Create a branch
+## Create a branch {% step %}
 
 Just like `git branch`, this creates an isolated copy of your data:
 
@@ -67,14 +67,14 @@ Just like `git branch`, this creates an isolated copy of your data:
 
 Everything you do now happens on `feature` — main is untouched.
 
-## Edit the document on the branch
+## Edit the document on the branch {% step %}
 
 ```python test-example id="py-quickstart-edit" file="examples/py-quickstart-edit.example.py"
 ```
 
 **What you should see:** The document retrieved, then confirmation of the update. The change only exists on `feature` — `main` still has the original email.
 
-## See the diff
+## See the diff {% step %}
 
 This is the moment. TerminusDB can show you exactly what changed between branches — structurally, field by field:
 
@@ -97,7 +97,7 @@ This is the moment. TerminusDB can show you exactly what changed between branche
 TerminusDB computed a **structural diff** — not a line-by-line text diff, but a semantic operation (`SwapValue`) that knows exactly which field changed, what the old value was, and what the new value is. This patch can be applied, reversed, or composed with other patches.
 {% /callout %}
 
-## Merge the branch
+## Merge the branch {% step %}
 
 Bring the changes back to `main`:
 
@@ -106,7 +106,7 @@ Bring the changes back to `main`:
 
 **What you should see:** `Merged feature into main`
 
-## Verify the merge
+## Verify the merge {% step %}
 
 Confirm the changes are now on `main`:
 

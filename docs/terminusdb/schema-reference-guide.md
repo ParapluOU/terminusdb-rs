@@ -2,13 +2,13 @@
 title: Schema Reference Guide
 nextjs:
   metadata:
-    title: Schema Reference Guide
-    description: Complete reference for the TerminusDB schema language — document classes, properties, key strategies, enums, and type inference rules.
+    title: "TerminusDB Schema Reference: Classes, Keys, Types"
+    description: "Reference for the TerminusDB schema language: document classes, subdocuments, key strategies (Lexical, Hash, Random, UuidV7), enums and type rules, with JSON."
     keywords: terminusdb, schema, data model, document type, json schema, graph database schema, document database
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/schema-reference-guide/
+      canonical: https://terminusdb.com/docs/schema-reference-guide/
 media: []
 tags:
   - typescript
@@ -54,11 +54,11 @@ A key is one of two values, **keyword** or **property**, described in the table 
 
 {%/table%}
 
-Property names beginning with `@` (at-sign) are reserved for TerminusDB schema definition language keywords such as `@id`, `@type`, `@key`, `@base`, `@schema`, `@context`, `@inherits`, `@documentation`, `@subdocument`, `@abstract`, `@unfoldable`, `@metadata`, `@inherits`, `@oneOf`.
+Property names beginning with `@` (at-sign) are reserved for TerminusDB schema definition language keywords such as `@id`, `@type`, `@key`, `@base`, `@schema`, `@context`, `@inherits`, `@documentation`, `@subdocument`, `@abstract`, `@unfoldable`, `@metadata`, `@oneOf`.
 
 ## Class definition
 
-The basic unit of specification is a **class**. A class definition is a schema object with the keyword `@type` with type value `Class`. The keyword `@id` specifies the name of the class. The example below define a class named `Person` with a property `name` of type `xsd:string`. See [Data Types](/docs/data-types/) for a complete reference of all supported types.
+The basic unit of specification is a **class**. A class definition is a schema object with the keyword `@type` with type value `Class`. The keyword `@id` specifies the name of the class. The example below define a class named `Person` with a property `name` of type `xsd:string`. See [Data Types](/docs/xsd-data-types/) for a complete reference of all supported types.
 
 ### Code: The basic unit of specification
 
@@ -208,6 +208,49 @@ An example of metadata for a branch, such as `main` of a data product:
   "@metadata" : { "configuration" : { "frob" : 29 } }
 }
 ```
+
+#### TerminusDB data product options
+
+The `@metadata.terminusdb.options` field is an array of strings that controls data product branch behaviour in TerminusDB. No restart or environment variable is needed — the options are read from the schema at commit time.
+
+| Option | Description |
+|--------|-------------|
+| `"store_indices"` | Enables automatic indexing for the data product branch. When set, TerminusDB triggers indexing on every commit via the `post_commit_hook`. Without this option, or if no indexer is attached, indexing is skipped entirely. |
+| `"store_clustering"` | Enables clustering embeddings to be stored in addition to the primary document embeddings for supported asymmetric embeddings models. Each chunk is embedded with a secondary clustering embedding role, supporting projection, deduplication, and entity resolution with a tuned embedding. Requires `"store_indices"` to be in effect. |
+
+Example schema with both options enabled:
+
+```json
+[
+  {
+    "@type": "@context",
+    "@base": "terminusdb:///data/",
+    "@schema": "terminusdb:///schema#",
+    "@metadata": {
+      "terminusdb": {
+        "options": ["store_indices", "store_clustering"]
+      }
+    }
+  },
+  {
+    "@id": "Article",
+    "@type": "Class",
+    "@key": { "@type": "Lexical", "@fields": ["title"] },
+    "title": "xsd:string",
+    "body": "xsd:string",
+    "@metadata": {
+      "embedding": {
+        "query": "query($id: ID){ Article(id: $id) { title body } }",
+        "template": "Title: {{title}}. Body: {{body}}."
+      }
+    }
+  }
+]
+```
+
+If `@metadata`, `terminusdb`, or `options` is missing — or a particular option string is not present — that option is off. The default is always `false`.
+
+> Valid since: 12.1 (release candidate)
 
 ### @language
 
@@ -535,7 +578,7 @@ The `@id` key of a class defines the class name and identifier. The name uniquel
 
 ### @key
 
-`@key` specifies the mechanism to define the `@id` of documents in the database, similar to a primary key in relational database terms. Valid key types are `Lexical`, `Hash`, `ValueHash`, `Random`.
+`@key` specifies the mechanism to define the `@id` of documents in the database, similar to a primary key in relational database terms. Valid key types are `Lexical`, `Hash`, `ValueHash`, `Random`, `UuidV7`.
 
 If the key `@base` is specified in the class, then this is pre-pended to the key. If this is a fully qualified URI then it is complete, otherwise, it is combined with the value of `@base` from the context.
 
@@ -660,6 +703,33 @@ Use `Random` as a convenient key type when an object has no important characteri
     "creation_date"         : "xsd:dateTime",
     "state"                 : "DatabaseState" 
 }
+```
+
+#### UuidV7
+
+`UuidV7` generates keys from RFC 9562 UUID version 7 identifiers. If `@id` is not supplied, the `@id` is formed from the class `@base` followed by a freshly generated UUID v7, for example `Person/01a120f0-47a7-7f20-9295-b3034d7fc5d3`. Because UUID v7 embeds a timestamp, generated identifiers are time-ordered.
+
+Unlike `Random`, a `UuidV7` class accepts **any** `@id` supplied by the user, with no `@base` prefix enforcement. This is useful when loading data that already carries identifiers, such as enterprise systems using UUIDs or GUIDs, or ontologies such as Linked Art with heterogeneous instance IRIs.
+
+#### Code: An example of a UuidV7 key
+
+```json
+{
+    "@id"                   : "Artwork",
+    "@type"                 : "Class",
+    "@key"                  : 
+    {
+        "@type"             : "UuidV7" 
+    },
+    "title"                 : "xsd:string" 
+}
+```
+
+Documents can then be inserted either with an arbitrary external `@id` or none at all:
+
+```json
+{ "@type" : "Artwork", "@id" : "https://linked.art/example/object/47", "title" : "External reference" }
+{ "@type" : "Artwork", "title" : "Generated id" }
 ```
 
 ### @documentation
@@ -811,7 +881,7 @@ or with properties pointing to JSON objects, as:
 
 The `@subdocument` key is present with the value `[]` or it is not present.
 
-A class designated as a sub-document is considered to be completely owned by its containing document. It is not possible to directly update or delete a subdocument, but it must be done through the containing document. Currently, subdocuments **must have a key** that is `Random` or `ValueHash` (this restriction may be relaxed in the future.)
+A class designated as a sub-document is considered to be completely owned by its containing document. It is not possible to directly update or delete a subdocument, but it must be done through the containing document. Currently, subdocuments **must have a key** that is `Random`, `UuidV7`, or `ValueHash` (this restriction may be relaxed in the future.)
 
 See below for examples of a subdocument declaration in a schema, and a corresponding subdocument.
 
@@ -975,6 +1045,47 @@ An example of inheritance of properties and an object meeting this specification
     "right_hand" : "But this one is dexterous" 
 }
 ```
+
+#### Code: A mix-in example with two abstract parents
+
+A more everyday use of multiple inheritance is the mix-in. Put shared properties on small abstract classes, then let a concrete class inherit from all of them. Here `Project` gets `name` from `NamedEntity` and `created` from `Timestamped`:
+
+```json
+{
+    "@type"      : "@context",
+    "@base"      : "terminusdb://i/",
+    "@schema"    : "terminusdb://s#"
+}
+{
+    "@type"      : "Class",
+    "@abstract"  : [],
+    "@id"        : "NamedEntity",
+    "name"       : "xsd:string"
+}
+{
+    "@type"      : "Class",
+    "@abstract"  : [],
+    "@id"        : "Timestamped",
+    "created"    : "xsd:dateTime"
+}
+{
+    "@type"      : "Class",
+    "@id"        : "Project",
+    "@inherits"  : ["NamedEntity", "Timestamped"],
+    "status"     : "xsd:string"
+}
+```
+
+```json
+{
+    "@type"      : "Project",
+    "name"       : "Website renewal",
+    "created"    : "2026-11-01T09:00:00Z",
+    "status"     : "active"
+}
+```
+
+`NamedEntity` and `Timestamped` are abstract, so you cannot create them on their own. Another class, for example a `Dataset`, can reuse the same two parents. This is often a better fit than a deep "is a kind of" tree.
 
 ### @unfoldable
 
@@ -1188,7 +1299,7 @@ The `customer` is fully unfolded while `items` remain as ID references.
 
 See also the [Document Unfolding Reference](/docs/document-unfolding-reference/) for more details on cycle detection and performance characteristics.
 
-### @shared (as of version 12.0.6)
+### @shared (reference-counted documents)
 
 The `@shared` key is present with the value `[]` or it is not present.
 
@@ -1486,7 +1597,7 @@ Two special JSON types exist in TerminusDB. One is for use as field type, essent
 
 IDs for subdocuments of type `"sys:JSON"` are formed from a hash of the content internally, meaning that subdocuments share reference-counted storage if their content is the same; via deduplication and reference counting, for efficient triple-based storage.
 
-However, documents of type `"sys:JSONDocument"` are assigned a random id, such that they can be retrieved, modified etc. Alternatively they can be assigned an id by passing in an id of the form `{ "@id" : "JSONDocument/my_id_here", ...}`, where the `JSONDocument/` prefix makes JSON documents easy to recognize in the document graph database.
+However, documents of type `"sys:JSONDocument"` are assigned a random id, such that they can be retrieved, modified etc. Alternatively they can be assigned an id by passing in an id of the form `{ "@id" : "JSONDocument/my_id_here", ...}`, where the `JSONDocument/` prefix makes JSON documents easy to recognize in the knowledge graph database.
 
 `@id`, `@type`, and some other JSON-LD control properties (such as `@context`, `@value`) in `sys:JSON` and `sys:JSONDocument` documents receive special treatment to not interfere with JSON-LD processing. They are escaped by prefixing with an additional `@` sign (e.g., `@id` → `@@id`, `@type` → `@@type`) within the triple store. This escaping is transparent in the document interfaces and happens automatically during storage and retrieval. It enables any JSON to be stored as a document, even if it contains JSON-LD control properties, and to be processed as triples.
 
@@ -1922,4 +2033,4 @@ We can then insert a point document which might be written as:
 - [**Schema migration**](/docs/schema-migration-reference-guide/) — evolve schemas with automatic data transformation
 - [**Schema weakening**](/docs/what-is-schema-weakening/) — understand backward-compatible schema changes
 - [**Document types compared**](/docs/document-types-comparison/) — choose between documents, subdocuments, and shared documents
-- [**Data types reference**](/docs/data-types/) — all supported XSD and extension types
+- [**Data types reference**](/docs/xsd-data-types/) — all supported XSD and extension types

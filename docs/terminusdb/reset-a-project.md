@@ -6,7 +6,7 @@ nextjs:
     description: How to reset a TerminusDB branch to a specific commit using the JavaScript client, Python client, or HTTP API.
     keywords: terminusdb, reset, rollback, branch, commit, undo, javascript client, python client, http api, curl
     alternates:
-      canonical: https://terminusdb.org/docs/reset-a-project/
+      canonical: https://terminusdb.com/docs/reset-a-project/
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-collaboration-reset.png?raw=true
 tags:

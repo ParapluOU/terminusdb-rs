@@ -2,17 +2,17 @@
 tags:
   - explanation
   - dashboard
-  - dfrnt-cloud
+  - terminusdb-cloud
 title: TerminusDB Dashboard Status
 nextjs:
   metadata:
     title: TerminusDB Dashboard Status
     description: Information about the TerminusDB Dashboard component, its discontinuation, and how to continue using it if needed.
-    keywords: terminusdb, dashboard, dfrnt hub, terminuscms, terminusdb dashboard status
+    keywords: terminusdb, dashboard, terminusdb cloud, terminusdb cms, terminusdb dashboard status
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/dashboard/
+      canonical: https://terminusdb.com/docs/dashboard/
 media: []
 ---
 
@@ -26,7 +26,7 @@ The dashboard mounting feature still works perfectly and can be used for mountin
 
 The decision to discontinue the dashboard was made to:
 
-- **Inconsistent User Interface**: Features working correctly in the core database did not work properly in the user interface, leaving a bad impression. With significantly better alternatives now on the market (such as DFRNT), we recommend to use them instead of the built in dashboard.
+- **Inconsistent User Interface**: Features working correctly in the core database did not work properly in the user interface, leaving a bad impression. With significantly better alternatives now on the market (such as TerminusDB Cloud), we recommend to use them instead of the built in dashboard.
 - **Focus on Core Database Features**: Concentrate development efforts on the database engine, query languages (WOQL, Document API, GraphQL), and performance improvements
 - **Embrace Modern Development Practices**: Encourage users to build custom interfaces using TerminusDB's powerful APIs rather than maintaining a one-size-fits-all UI
 - **Reduce Maintenance Burden**: The dashboard required significant maintenance effort that could be better spent on core database functionality
@@ -48,8 +48,8 @@ Instead of the built-in dashboard, we recommend:
    - Use the [TerminusDB CLI](/docs/terminusdb-cli-commands/) for database management
    - Perfect for automation and scripting
 
-4. **DFRNT Cloud**
-   - For a fully-featured cloud dashboard experience, consider [DFRNT Cloud](https://studio.dfrnt.com)
+4. **TerminusDB Cloud**
+   - For a fully-featured cloud dashboard experience, consider [TerminusDB Cloud](/docs/cloud/)
    - Includes team management, full localhost modelling experience with self-sovereign data, visual schema modeling, and data curation
 
 ---
@@ -275,7 +275,7 @@ For users migrating away from the dashboard, here's a typical workflow transitio
 - [Document API Reference](/docs/document-graph-api/)
 
 For questions or support, join our community:
-- [Discord Community](https://discord.gg/terminusdb)
+- [Discord Community](https://discord.gg/GZ5gaCmBHc)
 - [GitHub Discussions](https://github.com/terminusdb/terminusdb/discussions)
 
 ---

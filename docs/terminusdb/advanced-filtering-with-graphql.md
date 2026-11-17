@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphql-advanced-filter.png
     alternates:
-      canonical: https://terminusdb.org/docs/advanced-filtering-with-graphql/
+      canonical: https://terminusdb.com/docs/advanced-filtering-with-graphql/
 ---
 
 {% callout type="note" %}

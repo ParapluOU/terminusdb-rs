@@ -5,26 +5,28 @@ tags:
   - curl
   - beginner
   - self-hosted
-title: Getting Started
+title: Curl Quickstart - JSON Documents
 nextjs:
   metadata:
-    title: Getting Started
-    description: Technical documentation for TerminusDB and the DFRNT TerminusDB cloud.
-    keywords: terminusdb, document, document database, documents, getting started, json-ld
+    title: Curl Quickstart for TerminusDB JSON Documents
+    description: Use curl and the TerminusDB HTTP API to create a database, store unstructured JSON, then add a schema for structured JSON-LD documents.
+    keywords: terminusdb, curl, http api, document database, json documents, json-ld
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/get-started/
+      canonical: https://terminusdb.com/docs/quickstart-example/
 media: []
 ---
 
-## Getting started with TerminusDB in less than 15 minutes
+## Curl quickstart: JSON documents in TerminusDB
 
 TerminusDB is a database with version history. It stores a graph of documents as database records. Documents can either have an enforced structure or be unstructured JSON.
 
-If you are not familiar with the command line, we recommend to get started with the [DFRNT](https://dfrnt.com/hypergraph-content-studio/) cloud environment instead. It provides a complete web based user interface for TerminusDB, that you can even use the cloud solution with your local Docker TerminusDB instance!
+If you are not familiar with the command line, we recommend to get started with the [TerminusDB Cloud](/docs/cloud/) cloud environment instead. It provides a complete web based user interface for TerminusDB, that you can even use the cloud solution with your local Docker TerminusDB instance!
 
 ### Let's get started!
+
+For the fastest first run with branch, diff and merge, see [Get Started](/docs/get-started/). This page goes deeper into JSON documents over the HTTP API.
 
 In this quickstart tutorial, we assume you have docker installed already. Use the [Docker installation guide](https://docs.docker.com/get-docker/) if you don't have Docker installed already.
 

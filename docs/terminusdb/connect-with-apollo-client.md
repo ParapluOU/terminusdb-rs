@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/connect-with-apollo-client/
+      canonical: https://terminusdb.com/docs/connect-with-apollo-client/
 media: []
 tags:
   - typescript
@@ -26,11 +26,6 @@ tags:
 {% callout type="note" %}
 **What you'll achieve**
 By the end of this guide, you will have connected Apollo Client to TerminusDB's GraphQL endpoint.
-{% /callout %}
-
-{% callout type="note" %}
-**TerminusCMS is now DFRNT Hub**
-TerminusCMS has been renamed to **DFRNT Hub**. All features described on this page are available at [dfrnt.com](https://dfrnt.com/hypergraph-content-studio/). The TerminusDB open source database remains unchanged.
 {% /callout %}
 
 
@@ -112,9 +107,9 @@ apolloClient
   .catch(err =>console.log(err.message));
 ```
 
-## Connect with DFRNT TerminusDB cloud
+## Connect with TerminusDB Cloud
 
-> You will need to [get your API key](/docs/how-to-connect-dfrnt-hub/) to connect with DFRNT TerminusDB cloud
+> You will need to [get your API key](/docs/how-to-connect-terminusdb-cloud/) to connect with TerminusDB Cloud
 
 ```javascript
 const orgName = "myOrganizationName"

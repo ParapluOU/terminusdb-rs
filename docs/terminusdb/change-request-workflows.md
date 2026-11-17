@@ -2,7 +2,7 @@
 tags:
   - explanation
   - collaboration
-  - dfrnt-cloud
+  - terminusdb-cloud
 title: Change Request Workflows - TerminusDB Tour
 nextjs:
   metadata:
@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/change-request-workflows/
+      canonical: https://terminusdb.com/docs/change-request-workflows/
 media:
   - alt: Opening a change request
     caption: ""

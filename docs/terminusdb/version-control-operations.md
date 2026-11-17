@@ -11,7 +11,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/version-control-operations/
+      canonical: https://terminusdb.com/docs/version-control-operations/
 media: []
 lastUpdated: "2026-05-01"
 ---
@@ -48,7 +48,7 @@ The difference: Git operates on text files with line-based diffs. TerminusDB ope
 - A database to work with. The examples below use `admin/tdb-example-mydb`. Create one with: `curl -u admin:root -X POST http://localhost:6363/api/db/admin/tdb-example-mydb -d '{"label":"My Database"}'`
 {% /callout %}
 
-## Create a branch
+## Create a branch {% step %}
 
 Create a new branch from an existing branch. Branches are cheap — they share history until they diverge.
 
@@ -59,7 +59,7 @@ Create a new branch from an existing branch. Branches are cheap — they share h
 {% /http-expected %}
 {% /http-example %}
 
-## List branches
+## List branches {% step %}
 
 List all branches in a database.
 
@@ -67,7 +67,7 @@ List all branches in a database.
 
 Expected response: an array of Branch documents, each with `name` and `head` (commit ID).
 
-## Switch branch (query a branch)
+## Switch branch (query a branch) {% step %}
 
 There is no "checkout" — you simply query or write to the branch path you want:
 
@@ -76,18 +76,18 @@ There is no "checkout" — you simply query or write to the branch path you want
 
 Every API path that includes `/local/branch/{name}` targets that branch.
 
-## Commit (write with message)
+## Commit (write with message) {% step %}
 
 Every write is a commit. Add `author` and `message` query parameters to record who changed what and why:
 
 {% http-example method="POST" path="/api/document/admin/tdb-example-mydb/local/branch/main?author=alice@example.com&message=Add+initial+product+data" runnable=false %}
 {"@type": "Product", "name": "Widget", "price": 9.99}
 {% http-expected %}
-["terminusdb:///data/Product/Widget"]
+["Product/Widget"]
 {% /http-expected %}
 {% /http-example %}
 
-## Get commit history
+## Get commit history {% step %}
 
 View the commit log for a branch:
 
@@ -95,33 +95,39 @@ View the commit log for a branch:
 
 Expected response: an array of commit objects with `author`, `message`, `timestamp`, and `identifier` (commit ID).
 
-## Diff (compare branches or commits)
+## Diff (compare branches or commits) {% step %}
 
 Compare two branches to see exactly what changed — field-level structural diff, not line diff:
 
 {% http-example method="POST" path="/api/diff/admin/tdb-example-mydb" runnable=false %}
 {"before_data_version": "main", "after_data_version": "feature"}
 {% http-expected %}
-[{"@id": "terminusdb:///data/Product/Widget", "price": {"@op": "SwapValue", "@before": 9.99, "@after": 12.50}}]
+[{"@id": "Product/Widget", "price": {"@op": "SwapValue", "@before": 9.99, "@after": 12.50}}]
 {% /http-expected %}
 {% /http-example %}
 
 The diff shows typed operations: `SwapValue` (field changed), `Insert` (added), `Delete` (removed). No other fields changed.
 
-## Merge a branch
+## Merge a branch {% step %}
 
-Apply changes from one branch onto another:
+Apply changes from one branch onto another. `before_commit` is the **common ancestor** — the commit where the two branches diverged. Find it with `/api/log`: the most recent commit ID that appears in both branches' history. If `feature` was just created and `main` has not moved since, main's head is the common ancestor.
 
-{% http-example method="POST" path="/api/apply/admin/tdb-example-mydb/local/branch/main" %}
-{"before_commit": "main", "after_commit": "feature", "commit_info": {"author": "alice@example.com", "message": "Merge feature into main"}}
+`before_commit` and `after_commit` accept a branch name (`"main"`), a commit ID, or a data-version string — `"commit:<id>"` or `"branch:<commit-id>"`, the same format as the `TerminusDB-Data-Version` response header.
+
+{% http-example method="POST" path="/api/apply/admin/tdb-example-mydb/local/branch/main" runnable=false %}
+{"before_commit": "commit:abc123def456", "after_commit": "feature", "commit_info": {"author": "alice@example.com", "message": "Merge feature into main"}}
 {% http-expected %}
 {"@type":"api:ApplyResponse","api:status":"api:success"}
 {% /http-expected %}
 {% /http-example %}
 
-If there are conflicts (both branches modified the same field), the merge fails with a conflict report — no silent overwrites.
+If there are conflicts (both branches modified the same field), the merge fails with HTTP 409 and a conflict report.
 
-## Squash commits
+{% callout type="warning" %}
+`before_commit` must be the common-ancestor commit, not the target branch's own tip. Passing a branch tip applies a plain two-way diff between the two heads: changes the target made since the divergence are silently discarded or overwritten with `api:status: "api:success"` — no conflict is raised.
+{% /callout %}
+
+## Squash commits {% step %}
 
 Collapse all commits on a branch into a single commit — useful for cleaning up history before merging:
 
@@ -132,7 +138,7 @@ Collapse all commits on a branch into a single commit — useful for cleaning up
 {% /http-expected %}
 {% /http-example %}
 
-## Time-travel (query at a previous commit)
+## Time-travel (query at a previous commit) {% step %}
 
 Query the database as it was at any previous point in time. Use a commit path instead of a branch path:
 
@@ -140,7 +146,7 @@ Query the database as it was at any previous point in time. Use a commit path in
 
 Replace `abc123def456` with an actual commit identifier from the log. The response shows the database state at that exact commit — you did not modify anything, you are simply looking at a snapshot.
 
-## Reset a branch
+## Reset a branch {% step %}
 
 Move a branch pointer back to a previous commit, discarding subsequent commits:
 
@@ -155,7 +161,7 @@ Move a branch pointer back to a previous commit, discarding subsequent commits:
 Reset is destructive — commits after the target become unreachable (though the immutable commit graph still stores them). Use with care.
 {% /callout %}
 
-## Delete a branch
+## Delete a branch {% step %}
 
 Remove a branch. The commits remain in the database graph but this branch name no longer reaches them:
 
@@ -165,14 +171,14 @@ Remove a branch. The commits remain in the database graph but this branch name n
 {% /http-expected %}
 {% /http-example %}
 
-## Patch (apply a diff)
+## Patch (apply a diff) {% step %}
 
 Apply a previously obtained diff to a document. Useful for conflict resolution or programmatic updates:
 
 {% http-example method="POST" path="/api/patch/admin/tdb-example-mydb/local/branch/main" runnable=false %}
-{"before": {"@id": "terminusdb:///data/Product/Widget", "@type": "Product", "name": "Widget", "price": 9.99}, "patch": {"price": {"@op": "SwapValue", "@before": 9.99, "@after": 14.99}}}
+{"patch": [{"@id": "Product/Widget", "price": {"@op": "SwapValue", "@before": 9.99, "@after": 14.99}}], "author": "alice@example.com", "message": "Apply price change"}
 {% http-expected %}
-{"@type":"api:PatchResponse","api:status":"api:success"}
+["Product/Widget"]
 {% /http-expected %}
 {% /http-example %}
 

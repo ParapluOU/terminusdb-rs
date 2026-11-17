@@ -21,7 +21,7 @@ In the enterprise world you’re often faced with digital business information t
 
 We believe that human agency can be improved by offering generic, highly performant and accurate platforms for rapid digital innovation.
 
-All images were generated via the dfrnt.com data product builder.
+All images were generated with the TerminusDB Cloud data product builder.
 
 {% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*V1qW8MHyao1Gk2UmSqoYrw.png" alt="Visualisation showing how SKUs are connected through a product taxonomy. This is a narrow set, supporting the example where some record properties get inherited through the classes of the taxonomy." caption="Visualisation showing how SKUs are connected through a product taxonomy. This is a narrow set, supporting the example where some record properties get inherited through the classes of the taxonomy." %}
 {% /figure %}
@@ -137,7 +137,7 @@ A path traversal is specified by sharing which property name to follow in the gr
 
 ### Getting CustomerEntity records from the LegalEntity master
 
-The legal entity master contains records that represent all the companies connected to our business, and elegantly, they can have any add-on roles such as Supplier, Customer etc. This is all modelled using structure-enforced hierarchical records using dfrnt.com.
+The legal entity master contains records that represent all the companies connected to our business, and elegantly, they can have any add-on roles such as Supplier, Customer etc. This is all modelled using structure-enforced hierarchical records using TerminusDB Cloud.
 
 In the legal entity example, below logic would bring us information for all customers:
 
@@ -285,7 +285,7 @@ The first example shows how to build single representations of complex phenomena
 
 The second example built on the foundations to show how a taxonomy can be traversed and constrained using logic to implement inheritance of property values and bring complete records with significant flexibility.
 
-The collaborative aspects of structure-enforced knowledge graphs hosted at DFRNT enable safe experimentation on critical information, which translates into significantly faster iterations, business innovation and to sharpen our customers’ competitive edge, with a generic ability to process business information into structure-enforced collaborative knowledge graphs.
+The collaborative aspects of structure-enforced knowledge graphs hosted on TerminusDB Cloud enable safe experimentation on critical information, which translates into significantly faster iterations, business innovation and to sharpen our customers’ competitive edge, with a generic ability to process business information into structure-enforced collaborative knowledge graphs.
 
 If the schema definitions are interesting as well, add a comment below and I’ll add a second post digging deeper.
 
@@ -293,6 +293,6 @@ If the schema definitions are interesting as well, add a comment below and I’l
 
 This page was adapted from a Medium article by `@hoijnet` with permission: [Build advanced collaborative taxonomies using hypergraphs](https://medium.com/the-semantic-data-practitioner/build-advanced-collaborative-taxonomies-using-hypergraphs-f752403887db).
 
-Images are from the [dfrnt.com data product builder](https://dfrnt.com/hypergraph-content-studio/) in action, where the WOQL, and solution development was done.
+Images are from the [TerminusDB Cloud](/docs/cloud/) in action, where the WOQL, and solution development was done.
 
 ---

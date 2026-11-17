@@ -12,7 +12,7 @@ nextjs:
     description: How to store and retrieve multilingual text in TerminusDB using rdf:langString and the HTTP API with curl.
     keywords: rdf:langString, language string, multilingual, curl, HTTP API, i18n, @language
     alternates:
-      canonical: https://terminusdb.org/docs/language-strings-with-curl/
+      canonical: https://terminusdb.com/docs/language-strings-with-curl/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---
@@ -268,7 +268,7 @@ curl -u admin:root -X DELETE "http://localhost:6363/api/db/admin/greetings"
 
 ## Further reading
 
-- [Data Types Reference](/docs/data-types/) — full list of supported types including `rdf:langString`
+- [Data Types Reference](/docs/xsd-data-types/) — full list of supported types including `rdf:langString`
 - [Document API Reference](/docs/document-insertion/) — complete HTTP API parameter reference
 - [Curl Quickstart](/docs/quickstart-example/) — broader introduction to the HTTP API
 - [Schema Reference](/docs/schema-reference-guide/) — how to define classes and properties

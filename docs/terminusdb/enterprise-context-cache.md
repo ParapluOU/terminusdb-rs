@@ -8,10 +8,10 @@ title: Context Cache
 nextjs:
   metadata:
     title: Context Cache
-    description: How TwinfoxDB Enterprise caches remote JSON-LD contexts locally using pre-seeded files and a disk-backed HTTP cache.
+    description: How TerminusDB Enterprise Edition caches remote JSON-LD contexts locally using pre-seeded files and a disk-backed HTTP cache.
     keywords: context cache, json-ld, schema.org, seed files, enterprise, terminusdb
     alternates:
-      canonical: https://terminusdb.org/docs/enterprise-context-cache/
+      canonical: https://terminusdb.com/docs/enterprise-context-cache/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---

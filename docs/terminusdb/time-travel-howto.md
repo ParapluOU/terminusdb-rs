@@ -6,13 +6,13 @@ tags:
 title: How to Time-Travel (Query Historical Data)
 nextjs:
   metadata:
-    title: How to Time-Travel in TerminusDB — Query Data at Any Point in History
-    description: Step-by-step guide to querying historical data in TerminusDB — get commit history, query at a specific commit, compare points in time, and restore previous states. HTTP API, TypeScript, and Python examples.
-    keywords: time travel database, query historical data, database history, point-in-time query, terminusdb time travel, database audit trail, immutable database history, version history database
+    title: How to Run Time Travel Queries in TerminusDB
+    description: Run time travel queries in TerminusDB — get commit history, query at a specific commit, compare points in time and restore. HTTP, TypeScript, Python.
+    keywords: time travel queries, time travel database, query historical data, database history, point-in-time query, terminusdb time travel, database audit trail, immutable database history, version history database
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/time-travel-howto/
+      canonical: https://terminusdb.com/docs/time-travel-howto/
 media: []
 lastUpdated: "2026-05-18"
 ---
@@ -22,6 +22,8 @@ By the end of this guide, you will know how to query your database at any histor
 {% /callout %}
 
 **Time-travel** in TerminusDB lets you query the database as it was at any point in history — without modifying anything. Because every write creates an immutable commit, you can "go back in time" to see the exact state of your data at any previous commit. No backups, no log replay, no special configuration.
+
+New to the idea? Read [Graph Database with Time Travel Queries](/docs/graph-database-with-time-travel-queries/) for a short overview and how it compares to other tools.
 
 {% callout type="note" title="How it works" %}
 TerminusDB stores data as immutable delta layers. When you time-travel, you read a snapshot frozen at that commit — the current database stays unchanged. This is read-only; you cannot accidentally modify history.
@@ -292,3 +294,4 @@ curl -u admin:root -X POST http://localhost:6363/api/diff/admin/tdb-example-mydb
 - [How to Branch](/docs/branch-howto/) — create and manage branches
 - [How to Merge](/docs/merge-howto/) — merge branches with conflict handling
 - [Version Control Operations Reference](/docs/version-control-operations/) — complete API reference
+- [Graph Database with Time Travel Queries](/docs/graph-database-with-time-travel-queries/) — what time travel queries are and how they compare

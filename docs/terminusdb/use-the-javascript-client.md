@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/use-the-javascript-client/
+      canonical: https://terminusdb.com/docs/use-the-javascript-client/
 media: []
 ---
 
@@ -29,4 +29,6 @@ These guides walk you through every common operation with the JavaScript/TypeScr
 * [Get Docs with JS](/docs/get-documents/)
 * [Query Docs with JS](/docs/query-documents/)
 * [Run WOQL Query](/docs/run-woql-query/)
+* [TypeScript with the JavaScript Client](/docs/typescript-with-the-javascript-client/)
+* [JavaScript Client Type Definitions](/docs/javascript-client-typedefs/)
 * [API Reference for Javascript Client](/docs/javascript/)

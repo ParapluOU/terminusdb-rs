@@ -11,7 +11,7 @@ nextjs:
     description: How to set author and message on document writes so the commit log records who made the change and why.
     keywords: commit message, author, audit trail, document API, insert, update, delete
     alternates:
-      canonical: https://terminusdb.org/docs/commit-message-howto/
+      canonical: https://terminusdb.com/docs/commit-message-howto/
 ---
 
 {% callout type="note" %}
@@ -45,7 +45,7 @@ These parameters apply to:
 The HTTP Basic Auth user (`admin`) authorises the API request. The `author` query parameter records who is *logically responsible* for the change. They serve different purposes — always pass the end user's identity as `author`.
 {% /callout %}
 
-## curl example (insert)
+## curl example (insert) {% step %}
 
 {% http-example method="POST" path="/api/document/admin/MyDatabase?author=jane@example.com&message=Add+new+product+SKU-2001&raw_json=true" runnable=false %}
 ```json
@@ -55,22 +55,20 @@ The HTTP Basic Auth user (`admin`) authorises the API request. The `author` quer
 
 The `author` and `message` values are URL-encoded query parameters. Use `+` for spaces or `%20`.
 
-## TypeScript example (JS client)
+## TypeScript example (JS client) {% step %}
 
 ```typescript test-example file="examples/commit-message-ts.example.ts"
 ```
 
 The fourth parameter to `addDocument` is the commit message. The author is taken from the client's authenticated user.
 
-## Verify your commit message
+## Verify your commit message {% step %}
 
 After writing, confirm the message was recorded:
 
 {% http-example method="GET" path="/api/log/admin/MyDatabase?count=1" runnable=false /%}
 
-**Expected:**
-
-```json
+{% http-expected %}
 [
   {
     "@id": "ValidCommit/<commit-sha>",
@@ -84,7 +82,7 @@ After writing, confirm the message was recorded:
     "timestamp": 1714400000.0
   }
 ]
-```
+{% /http-expected %}
 
 ## Python example
 

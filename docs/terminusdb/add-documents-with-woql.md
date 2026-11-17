@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-add-documents.png
     alternates:
-      canonical: https://terminusdb.org/docs/add-documents-with-woql/
+      canonical: https://terminusdb.com/docs/add-documents-with-woql/
 ---
 
 {% callout type="note" %}

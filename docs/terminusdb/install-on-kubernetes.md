@@ -14,7 +14,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/install-on-kubernetes/
+      canonical: https://terminusdb.com/docs/install-on-kubernetes/
 media: []
 ---
 
@@ -140,4 +140,4 @@ You've deployed TerminusDB on Kubernetes. To continue building your setup:
 
 - [**Advanced Docker configuration**](/docs/docker-advanced-configuration/) — environment variables, CLI access, and production hardening
 - [**Self-hosted production deployment**](/docs/self-hosted-installation/) — full guide for running TerminusDB in production
-- [**Connect with an API key**](/docs/how-to-connect-dfrnt-hub/) — connect clients to your deployed instance programmatically
+- [**Connect with an API key**](/docs/how-to-connect-terminusdb-cloud/) — connect clients to your deployed instance programmatically

@@ -11,7 +11,7 @@ nextjs:
     description: Build a task queue using RDF list operations in TerminusDB with step-by-step examples.
     keywords: terminusdb, datalog, query language, rdf, rdf list queue tutorial, terminusdb query, woql
     alternates:
-      canonical: https://terminusdb.org/docs/woql-rdflist-queue-tutorial/
+      canonical: https://terminusdb.com/docs/woql-rdflist-queue-tutorial/
 ---
 
 This tutorial demonstrates how to build a task queue using WOQL RDF list operations. You'll learn how to create, modify, and query ordered lists stored as document properties.

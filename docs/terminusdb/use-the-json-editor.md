@@ -8,11 +8,11 @@ nextjs:
   metadata:
     title: Use the JSON View for building a Schema
     description: "Use the JSON editor to build your TerminusDB schema. Define documents, properties, links, and enums. "
-    keywords: terminusdb, dashboard, dfrnt hub, document, document database, documents, edit, json-ld
+    keywords: terminusdb, dashboard, terminusdb cloud, document, document database, documents, edit, json-ld
     openGraph:
       images: https://assets.terminusdb.com/docs/schema-as-code.png
     alternates:
-      canonical: https://terminusdb.org/docs/use-the-json-editor/
+      canonical: https://terminusdb.com/docs/use-the-json-editor/
 media:
   - alt: Create a new product with the TerminusDB dashboard
     caption: ""
@@ -28,7 +28,7 @@ media:
 
 {% callout type="note" %}
 **Prerequisites**
-- A DFRNT Hub account or TerminusDB with the dashboard
+- A TerminusDB Cloud account or TerminusDB with the dashboard
 - A data product with documents
 {% /callout %}
 
@@ -39,9 +39,9 @@ By the end of this guide, you will know how to use the JSON editor to view and e
 
 ## Make a New Data Product
 
-First, log in to DFRNT TerminusDB cloud, choose (or create) a team, and then click on "New Data Product".
+First, log in to TerminusDB Cloud, choose (or create) a team, and then click on "New Data Product".
 
-![Create a new product with the DFRNT TerminusDB cloud or TerminusDB dashboard](https://assets.terminusdb.com/docs/new-data-product.png)
+![Create a new product with TerminusDB Cloud or TerminusDB dashboard](https://assets.terminusdb.com/docs/new-data-product.png)
 
 ## Create a schema as JSON
 

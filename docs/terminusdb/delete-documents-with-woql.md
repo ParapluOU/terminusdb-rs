@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-delete-documents.png
     alternates:
-      canonical: https://terminusdb.org/docs/delete-documents-with-woql/
+      canonical: https://terminusdb.com/docs/delete-documents-with-woql/
 media: []
 ---
 

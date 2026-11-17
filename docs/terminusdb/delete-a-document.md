@@ -6,7 +6,7 @@ nextjs:
     description: How to delete documents from TerminusDB using the JavaScript client, Python client, or HTTP API.
     keywords: terminusdb, delete document, remove document, javascript client, python client, http api, curl
     alternates:
-      canonical: https://terminusdb.org/docs/delete-a-document/
+      canonical: https://terminusdb.com/docs/delete-a-document/
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-use-delete-a-document.png?raw=true
 tags:

@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-filter.png
     alternates:
-      canonical: https://terminusdb.org/docs/filter-with-woql/
+      canonical: https://terminusdb.com/docs/filter-with-woql/
 media: []
 ---
 

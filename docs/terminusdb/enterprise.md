@@ -2,23 +2,23 @@
 tags:
   - explanation
   - enterprise
-title: DFRNT TwinfoxDB Enterprise Edition
+title: TerminusDB Enterprise Edition
 nextjs:
   metadata:
     title: Enterprise Edition
-    description: DFRNT TwinfoxDB Enterprise extends TerminusDB with commercial support, multi-format document processing including JSON-LD @context support, RDF/XML, and Turtle, management tooling, and observability.
-    keywords: enterprise, twinfoxdb, json-ld, rdf xml, turtle, ttl, backup, restore, prometheus, observability
+    description: TerminusDB Enterprise extends TerminusDB Community with commercial support, multi-format document processing including JSON-LD @context support, RDF/XML, and Turtle, management tooling, and observability.
+    keywords: enterprise, json-ld, rdf xml, turtle, ttl, backup, restore, prometheus, observability
     alternates:
-      canonical: https://terminusdb.org/docs/enterprise/
+      canonical: https://terminusdb.com/docs/enterprise/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---
 
-DFRNT TwinfoxDB Enterprise extends TerminusDB with increased performance and additional capabilities for organizations that need multi-format data exchange, standards-compliant linked data context processing, operational backup and restore, and production observability.
+TerminusDB Enterprise extends TerminusDB with increased performance and additional capabilities for organizations that need multi-format data exchange, standards-compliant linked data context processing, operational backup and restore, and production observability.
 
 All enterprise features are additive — they extend the open-source TerminusDB core without changing its behavior. Existing databases, queries, and client integrations work unchanged.
 
-[Contact DFRNT](https://dfrnt.com/contact?utm_source=terminusdb) for more information on how to deploy the enterprise version.
+[Contact Gettier](https://gettier.ai/connect?utm_source=terminusdb) for more information on how to deploy the enterprise version.
 
 ## What Enterprise adds
 

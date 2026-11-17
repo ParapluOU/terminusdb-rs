@@ -6,7 +6,7 @@ nextjs:
     description: How to pull new commits from a remote TerminusDB database into your local clone using the TypeScript client, Python client, or HTTP API.
     keywords: terminusdb, pull, sync, fetch, remote, distributed, typescript client, python client, http api
     alternates:
-      canonical: https://terminusdb.org/docs/pull-from-project/
+      canonical: https://terminusdb.com/docs/pull-from-project/
     openGraph:
       images: https://github.com/terminusdb/terminusdb-web-assets/blob/master/docs/js-client-collaboration-clone.png?raw=true
 tags:

@@ -12,7 +12,7 @@ nextjs:
     description: TerminusDB stores data as RDF triples and presents it as JSON-LD. This guide shows how to load existing JSON-LD from files, APIs, or other sources using the Document API or WOQL.
     keywords: JSON-LD, import, WOQL, insert_document, migration
     alternates:
-      canonical: https://terminusdb.org/docs/import-jsonld-woql/
+      canonical: https://terminusdb.com/docs/import-jsonld-woql/
 ---
 
 {% callout type="note" %}

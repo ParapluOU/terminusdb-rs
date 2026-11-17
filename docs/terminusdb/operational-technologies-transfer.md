@@ -10,7 +10,7 @@ nextjs:
     description: How to use TerminusDB in Operational Technologies environments for IEC62443, Purdue model and other environments where network segmentation is strict.
     keywords: terminusdb, operational technologies information transfer
     alternates:
-      canonical: https://terminusdb.org/docs/operational-technologies-transfer/
+      canonical: https://terminusdb.com/docs/operational-technologies-transfer/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 media: []

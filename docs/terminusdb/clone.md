@@ -9,11 +9,11 @@ nextjs:
   metadata:
     title: Clone a Project using the TerminusDB Dashboard
     description: A guide to show how to clone a project using the TerminusDB dashboard.
-    keywords: terminusdb, branch, clone, clone a project using the terminusdb dashboard, commit, copy, dashboard, dfrnt hub
+    keywords: terminusdb, branch, clone, clone a project using the terminusdb dashboard, commit, copy, dashboard, terminusdb cloud
     openGraph:
       images: https://assets.terminusdb.com/docs/project-admin.png
     alternates:
-      canonical: https://terminusdb.org/docs/clone/
+      canonical: https://terminusdb.com/docs/clone/
 media:
   - alt: Clone a project from the project home page
     caption: ""

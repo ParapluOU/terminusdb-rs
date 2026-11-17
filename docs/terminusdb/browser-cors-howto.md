@@ -10,7 +10,7 @@ nextjs:
     description: How to make HTTP requests to the TerminusDB API from browser JavaScript. No CORS configuration needed — TerminusDB allows all origins by default.
     keywords: CORS, browser, fetch, JavaScript, Angular, React, cross-origin
     alternates:
-      canonical: https://terminusdb.org/docs/browser-cors-howto/
+      canonical: https://terminusdb.com/docs/browser-cors-howto/
 ---
 
 {% callout type="note" %}
@@ -28,7 +28,7 @@ Make HTTP requests to the TerminusDB API from browser JavaScript without CORS er
 
 **TerminusDB allows all CORS origins by default.** The server reflects the request's `Origin` header back as `Access-Control-Allow-Origin`, so any browser origin can make requests without additional configuration. There is no environment variable to set and no allow-list to configure.
 
-## Step 1 — Verify CORS is working
+## Step 1 — Verify CORS is working {% step %}
 
 Open your browser's developer console and run:
 
@@ -40,16 +40,24 @@ const data = await response.json();
 console.log(data);
 ```
 
+Or run the same check as a request — this is exactly what the browser sends:
+
+{% http-example method="GET" path="/api/info" %}
+{% http-expected %}
+{"@type":"api:InfoResponse","api:info":{"authority":"terminusdb://system/data/User/admin","edition":"community","http_engine":"metal","indexer":{"available":false,"backend":"none","configured":false,"endpoint_available":true,"tokenizer_available":true},"storage":{"version":"2"},"terminusdb":{"git_hash":"*","version":"*"},"terminusdb_store":{"version":"*"}},"api:status":"api:success"}
+{% /http-expected %}
+{% /http-example %}
+
 If you see a JSON response with `"authority": "admin"`, CORS is working. No server configuration needed.
 
-## Step 2 — Fetch documents from your application
+## Step 2 — Fetch documents from your application {% step %}
 
 A minimal example using the Fetch API (works in any framework):
 
 ```javascript test-example file="examples/browser-fetch.example.ts"
 ```
 
-## Step 3 — Insert a document from the browser
+## Step 3 — Insert a document from the browser {% step %}
 
 ```javascript
 async function insertDocument(database, doc, message) {

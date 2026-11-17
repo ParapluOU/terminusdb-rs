@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/writing-plugins/
+      canonical: https://terminusdb.com/docs/writing-plugins/
 media: []
 tags:
   - how-to
@@ -34,10 +34,14 @@ TerminusDB supports a plugin system that allows you to extend the database with 
 ### Plugin Architecture Overview
 
 Plugins in TerminusDB:
-- Are written in Prolog (`.pl` files)
-- Are loaded at runtime from the `/plugins` directory
+- Are written in Prolog (`.pl` files), or in Rust/C/Go as native shared objects
+- Are loaded at runtime from two directories: `builtin_plugins/` (shipped with the server, always present — path override `TERMINUSDB_BUILTIN_PLUGINS_PATH`) and `plugins/` (operator-installed, path override `TERMINUSDB_PLUGINS_PATH`). Your custom plugins go in `plugins/`.
 - Use the `plugins` multifile predicates to hook into database events
 - Run in the context of the compiled TerminusDB binary
+
+{% callout type="note" %}
+Builtin does not mean always active — a shipped plugin may still be gated behind an environment variable. For example `auto-optimize` runs by default but can be disabled with `TERMINUSDB_ENABLE_OPTIMIZER=0` (test harnesses do this for deterministic data versions), and the vectorlink plugin only serves search when `TERMINUSDB_INDEXER_BACKEND=vectorlink` selects the embedded engine.
+{% /callout %}
 
 ### Important: Module Loading for Plugins
 
@@ -212,10 +216,10 @@ When you import `core(api)`, you get access to:
 
 #### Development
 
-Place your plugin file in `src/plugins/`:
+Place your plugin file in `plugins/` at the repository root (the user plugin directory — `builtin_plugins/` is reserved for plugins shipped with the server):
 
 ```bash
-src/plugins/my_plugin.pl
+plugins/my_plugin.pl
 ```
 
 Restart TerminusDB to load the plugin:
@@ -327,4 +331,4 @@ Submit your plugins to the community repository at [terminusdb-labs/terminusdb-p
 
 ---
 
-**Need help?** Join the [TerminusDB Discord community](https://discord.gg/terminusdb) or [open an issue on GitHub](https://github.com/terminusdb/terminusdb/issues).
+**Need help?** Join the [TerminusDB Discord community](https://discord.gg/GZ5gaCmBHc) or [open an issue on GitHub](https://github.com/terminusdb/terminusdb/issues).

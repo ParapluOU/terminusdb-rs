@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/access-control/
+      canonical: https://terminusdb.com/docs/access-control/
 ---
 
 TerminusDB provides role-based access control (RBAC) for managing who can access databases and what operations they can perform. This page is a complete reference for the access control model and its HTTP API.

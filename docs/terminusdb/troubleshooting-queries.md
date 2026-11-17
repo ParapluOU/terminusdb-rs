@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/troubleshooting-queries/
+      canonical: https://terminusdb.com/docs/troubleshooting-queries/
 media: []
 ---
 
@@ -235,7 +235,7 @@ WOQL.and(
    WOQL.eq("v:Date", {"@type": "xsd:dateTime", "@value": "2024-01-15T00:00:00Z"})
    ```
 
-See [Data Types reference](/docs/data-types) for the full list of supported XSD types and their expected formats.
+See [Data Types reference](/docs/xsd-data-types) for the full list of supported XSD types and their expected formats.
 
 ## Still stuck?
 

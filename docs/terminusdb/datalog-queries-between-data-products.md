@@ -30,7 +30,7 @@ By the end of this guide, you will know how to write WOQL queries that span mult
 
 Knowledge graphs enable domain experts to encode their data in a way that resembles the real world, more than traditional relational databases do out of the box. In general, relational databases get very complex very quickly. Most data storage engine make use of one type of language, datalog, that enables users to assert what they want from a data source, and get that back, usually in a tabular format. A good datalog lets the data engine figure out how to get to the data, not the user. Examples of datalog languages include SQL, Cypher, WOQL (TerminusDB), and others.
 
-{% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*bGWLqvujoDcM3pPFO71nIg.png" alt="How a TerminusDB Knowledge Graph can be used to visualize connections (dfrnt.com)" caption="How a TerminusDB Knowledge Graph can be used to visualize connections (dfrnt.com)" %}
+{% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*bGWLqvujoDcM3pPFO71nIg.png" alt="How a TerminusDB Knowledge Graph can be used to visualize connections (TerminusDB Cloud)" caption="How a TerminusDB Knowledge Graph can be used to visualize connections (TerminusDB Cloud)" %}
 {% /figure %}
 
 ## What is the difference between a hypergraph and a knowledge graph?
@@ -67,9 +67,9 @@ We just talk about the importance of datalog, data objects and data products. Le
 
 With the using WOQL keyword, you can reference multiple data products in one logical query. The data model I used here is extremely simplified, but is enough to show the concept in action.
 
-I created one data product at first, and added the built-in DFRNT `Entity` data type to keep things easy and neat. It has just a single property (predicate), label, for object instances created from it. Then I cloned that data product so I had two data products, to not have to duplicate that work and to keep them the same. I then created an instance of `Entity` in each, named `DP1` and `DP2`.
+I created one data product at first, and added the built-in `Entity` data type to keep things easy and neat. It has just a single property (predicate), label, for object instances created from it. Then I cloned that data product so I had two data products, to not have to duplicate that work and to keep them the same. I then created an instance of `Entity` in each, named `DP1` and `DP2`.
 
-{% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*dsOLAdO_5FiJ6gnr-BcRyw.png" alt="Here we see the type `Entity`, and the instance `Entity/`DP1``, with the label `DP1` (dfrnt.com)" caption="Here we see the type `Entity`, and the instance `Entity/`DP1``, with the label `DP1` (dfrnt.com)" %}{% /figure %}
+{% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*dsOLAdO_5FiJ6gnr-BcRyw.png" alt="Here we see the type `Entity`, and the instance `Entity/`DP1``, with the label `DP1` (TerminusDB Cloud)" caption="Here we see the type `Entity`, and the instance `Entity/`DP1``, with the label `DP1` (TerminusDB Cloud)" %}{% /figure %}
 
 And then, with below logic saved in `logic-dp-1`, I query the two data products, that are both located in the same instance, `LogicalTwins`:
 
@@ -92,9 +92,9 @@ A sidenote on the `main` branch is that it is the default branch that exists in 
 
 The triple keyword specifies that we want to constrain the variable v:subject to only the triples (knowledge atoms) that have a predicate label, and put the labels of the subject in the variable `v:label`.
 
-The result of this query across the two data products is the below one, as created by the just-released Logical Studio for TerminusDB in DFRNT that allows users to build datalog queries in a user interface and save them as part of the data product itself.
+The result of this query across the two data products is the below one, as created by the just-released Logical Studio in TerminusDB Cloud that allows users to build datalog queries in a user interface and save them as part of the data product itself.
 
-{% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*bGWLqvujoDcM3pPFO71nIg.png" alt="Result from TerminusDB, including the labels and ID:s from the TerminusDB data products (dfrnt.com)" caption="Result from TerminusDB, including the labels and ID:s from the TerminusDB data products (dfrnt.com)" %}{% /figure %}
+{% figure src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*bGWLqvujoDcM3pPFO71nIg.png" alt="Result from TerminusDB, including the labels and ID:s from the TerminusDB data products (TerminusDB Cloud)" caption="Result from TerminusDB, including the labels and ID:s from the TerminusDB data products (TerminusDB Cloud)" %}{% /figure %}
 
 What we see above is that each of the objects, one from each data product, were selected by the query and returned.
 

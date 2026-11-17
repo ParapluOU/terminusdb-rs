@@ -11,7 +11,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/vectorlink-semantic-cms.png
     alternates:
-      canonical: https://terminusdb.org/docs/use-vectorlink/
+      canonical: https://terminusdb.com/docs/use-vectorlink/
 media: []
 ---
 

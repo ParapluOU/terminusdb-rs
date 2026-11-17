@@ -3,12 +3,12 @@ title: TerminusDB Document Model — Documents, Subdocuments, and Graph Relation
 nextjs:
   metadata:
     title: TerminusDB Document Model — Documents, Subdocuments, and Graph Relationships
-    keywords: terminusdb document model, json document database, document graph database, subdocuments, document references, schema-enforced json, knowledge graph documents
+    keywords: terminusdb document model, json document database, knowledge graph database, subdocuments, document references, schema-enforced json, knowledge graph documents
     description: TerminusDB stores graph documents in a schema-enforced triple store. Documents have typed relationships, subdocuments for nested data, and shared documents for reuse — combining document-store convenience with graph traversal power.
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/documents-explanation/
+      canonical: https://terminusdb.com/docs/documents-explanation/
 media:
   - alt: ""
     caption: ""
@@ -23,7 +23,7 @@ tags:
 
 TerminusDB combines the developer experience of a JSON document store with the traversal power of a knowledge graph. You write and read JSON documents; under the hood, TerminusDB decomposes them into a typed, schema-enforced graph of triples. This means you get document-store convenience (insert a JSON object, get a JSON object back) *and* graph-database power (traverse relationships across documents without JOINs, query patterns across the entire dataset).
 
-A pure document store (MongoDB, CouchDB) gives you flexible JSON but no enforced relationships between documents. A pure graph database (Neo4j, RDF stores) gives you traversal but forces you to think in triples or nodes-and-edges. As a **document graph database**, TerminusDB gives you both: documents *are* the interface, the graph *is* the engine.
+A pure document store (MongoDB, CouchDB) gives you flexible JSON but no enforced relationships between documents. A pure graph database (Neo4j, RDF stores) gives you traversal but forces you to think in triples or nodes-and-edges. As a **knowledge graph database**, TerminusDB gives you both: documents *are* the interface, the graph *is* the engine.
 
 ## The document model
 

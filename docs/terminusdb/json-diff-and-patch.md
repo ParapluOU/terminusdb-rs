@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/json-diff-and-patch/
+      canonical: https://terminusdb.com/docs/json-diff-and-patch/
 media: []
 lastUpdated: "2026-05-18"
 tags:
@@ -53,7 +53,7 @@ A **diff** takes two JSON objects and presents any differences between them. Dif
 
 A **patch** applies a diff to two objects to obtain a new object with any differences highlighted. A patch is applied individually or in bulk to a patch endpoint that will apply the patch to the specified data product.
 
-## Quickstart — try it without installation
+## Quickstart — try it without installation {% step %}
 
 The diff and patch endpoints are available anonymously on the public data server at `data.terminusdb.org` — no authentication required:
 
@@ -64,20 +64,18 @@ The endpoint at data.terminusdb.org is for non-production and exploratory use on
 ```bash test-example id="diff-public-demo" file="examples/diff-public-demo.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {"name": {"@after":"Bob", "@before":"Alice", "@op":"SwapValue"}}
-```
+{% /http-expected %}
 
 ```bash test-example id="patch-public-demo" file="examples/patch-public-demo.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {"name": "Bob"}
-```
+{% /http-expected %}
 
-## Diff and Patch Endpoints
+## Diff and Patch Endpoints {% step %}
 
 The Patch and Diff endpoints are available on any TerminusDB instance. Use your local server endpoint for each operation:
 
@@ -93,9 +91,9 @@ http://localhost:6363/api/diff
 http://localhost:6363/api/patch
 ```
 
-> **Note:** The former cloud endpoints (`cloud.terminusdb.org/jsondiff` and `cloud.terminusdb.org/jsonpatch`) are no longer available. Use your own TerminusDB instance or [create a DFRNT account](https://dfrnt.com/create-account) for hosted access.
+> **Note:** The former cloud endpoints (`cloud.terminusdb.org/jsondiff` and `cloud.terminusdb.org/jsonpatch`) are no longer available. Use your own TerminusDB instance or [request early access](/docs/cloud/) for hosted access.
 
-### Diff
+### Diff {% step %}
 
 The diff endpoint takes a POST of two JSON documents, _before_, and _after_. This endpoint then returns a 200 and a patch which takes _before_ to _after_ if applied using the patch interface.
 
@@ -106,10 +104,11 @@ The payload is structured as a JSON document with one of the following forms:
 *   With `"before_data_version"`, `"after_data_version"` and `"document_id"` specifying the data version or commit ID with which to compare the document given by `"document_id"`
 *   With `"before_data_version"`, `"after_data_version"`, meaning that we would like to get a diff for _all_ documents between the two specified data versions.
 
-There are also two options:
+There are also these options:
 
 *   `keep`: A dictionary which has keys which need to be copied
 *   `copy_value`: Which specifies that we should make _explicit_ which values existed during a list copy.
+*   `unfold`: Whether to expand subdocuments inline before comparing. Defaults to `true`. See [Folded diffs](#folded-diffs-unfold) below. _Added in [TerminusDB 12.0.7](/docs/releases/12-0-7-insert-delete-patches-folded-diffs/)._
 
 An example of the payload:
 
@@ -140,32 +139,60 @@ An example of a payload comparing only dataversions:
   "document_id" : "terminusdb:///data/test/665df8a9c3a58be6db622be4b37a76bea46c3e5e3cd2db923e708e574d1566be"}
 ```
 
+#### Folded diffs (`unfold`)
+
+{% callout type="note" %}
+Added in [TerminusDB 12.0.7](/docs/releases/12-0-7-insert-delete-patches-folded-diffs/). The CLI has a matching `--unfold` flag (default `true`).
+{% /callout %}
+
+By default, diffs between commits expand subdocuments inline — a change inside a subdocument shows up as a field-level patch on the parent. Set `"unfold": false` to compare documents as they are stored: a changed subdocument then appears as a swap of the subdocument ID, not of its contents.
+
+Given `House/Villa` whose `address` subdocument changed `city` from `Paris` to `Lyon`:
+
+```json
+{ "before_data_version" : "commit:dxfebts1uq4xilqmxywr3gk6dznqkut",
+  "after_data_version"  : "commit:leonn5n090wxwk8qf9nmknefr8iyulk",
+  "document_id"         : "terminusdb:///data/House/Villa",
+  "unfold"              : true }
+```
+
+```json
+{ "@id" : "House/Villa",
+  "address" : { "city" : { "@op" : "SwapValue", "@before" : "Paris", "@after" : "Lyon" } } }
+```
+
+With `"unfold": false`, the same diff is reported as a swap of the whole subdocument:
+
+```json
+{ "@id" : "House/Villa",
+  "address" : { "@op" : "SwapValue",
+                "@before" : "House/Villa/address/Address/5cDEiMhi_iSFy5tV",
+                "@after"  : "House/Villa/address/Address/OI3KNPsYVskjBKy5" } }
+```
+
 #### Diff examples using curl
 
 ```bash test-example id="diff-swap-with-keep" file="examples/diff-swap-with-keep.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {
   "asdf": {"@after":"bar", "@before":"foo", "@op":"SwapValue"},
   "fdsa":"bar"
 }
-```
+{% /http-expected %}
 
 ```bash test-example id="diff-array-object-swap" file="examples/diff-array-object-swap.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 [{"asdf": {"@after":"bar", "@before":"foo", "@op":"SwapValue"}}]
-```
+{% /http-expected %}
 
 ```bash test-example id="diff-list-append" file="examples/diff-list-append.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {
   "@op":"CopyList",
   "@rest": {
@@ -176,13 +203,12 @@ Expected output:
   },
   "@to":3
 }
-```
+{% /http-expected %}
 
 ```bash test-example id="diff-list-append-copy-value" file="examples/diff-list-append-copy-value.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {
   "@op":"CopyList",
   "@rest": {
@@ -194,25 +220,24 @@ Expected output:
   "@to":3,
   "@value": [0, 1, 2 ]
 }
-```
+{% /http-expected %}
 
 ```bash test-example id="diff-nested-object-swap" file="examples/diff-nested-object-swap.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {
   "asdf": {"fdsa": {"@after":"quuz", "@before":"quux", "@op":"SwapValue"}}
 }
-```
+{% /http-expected %}
 
-### Patch
+### Patch {% step %}
 
 Patch takes a POST with a _before_ document and a _patch_ and produces an _after_ document.
 
 ```json
 { "before" : { "@id" : "Person/Jane", "@type" : "Person", "name" : "Jane"}
-  "patch" : {"name" : { "@op" : "ValueSwap", "@before" : "Jane", "@after": "Janine" }}}
+  "patch" : {"name" : { "@op" : "SwapValue", "@before" : "Jane", "@after": "Janine" }}}
 ```
 
 Resulting in the following document:
@@ -228,24 +253,22 @@ Apply a patch that swaps a nested field value:
 ```bash test-example id="patch-nested-object" file="examples/patch-nested-object.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 {"alpha":1, "asdf": {"fdsa":"quuz"}}
-```
+{% /http-expected %}
 
 Append an element to a list using a `CopyList` + `SwapList` patch:
 
 ```bash test-example id="patch-list-append" file="examples/patch-list-append.example.sh"
 ```
 
-Expected output:
-```json
+{% http-expected %}
 [0, 1, 2, 3]
-```
+{% /http-expected %}
 
-## Use the DFRNT hosted endpoint
+## Use the hosted endpoint
 
-The diff and patch endpoints can be used directly as an API without running your own TerminusDB instance, using the [dfrnt.com](https://dfrnt.com/hypergraph-content-studio/) cloud hosting.
+The diff and patch endpoints can be used directly as an API without running your own TerminusDB instance, using the [TerminusDB Cloud](/docs/cloud/) cloud hosting.
 
 Use the hosted endpoint for each operation. Have your API token ready to run the commands below.
 
@@ -415,6 +438,8 @@ Optional diffs also contain `@before`/`@after` designations, but potentially `nu
              '@after' : "Jim" }}
 ```
 
+When using the [patch endpoint](/docs/patch-endpoint/), `SwapValue` operations also support `@ref` in `@before` and `@after` to reference captures from same-transaction inserts. See the [patch endpoint documentation](/docs/patch-endpoint/#ref-in-field-level-patches) for details.
+
 ### Set / Cardinality
 
 Set requires the ability to explicitly remove or add elements — we can do this by maintaining a `@before`/`@after` with a list of those which exist *only* on the left, and *only* on the right.
@@ -495,6 +520,39 @@ A **force** patch (`ForceValue`) sets the value of a location regardless of the 
   'name' : { '@op' : 'ForceValue',
              '@after' : "Jake" }}
 ```
+
+### Insert and Delete
+
+{% callout type="note" %}
+Added in [TerminusDB 12.0.7](/docs/releases/12-0-7-insert-delete-patches-folded-diffs/).
+{% /callout %}
+
+Besides field-level operations, the `patch` array accepted by the [patch endpoint](/docs/patch-endpoint/) can insert and delete whole documents. These two operations use the same format the diff endpoint produces, which enables a diff → pick → apply workflow for resolving merge conflicts:
+
+```typescript
+{ '@op' : 'Insert', '@insert' : { ...document... } }
+{ '@op' : 'Delete', '@delete' : { '@id' : 'Document/id' } }
+```
+
+A patch that inserts `Person/Bob`, deletes `Person/Old`, and links `Person/Jane` to the new document in one commit:
+
+```json
+{ "author" : "admin",
+  "message" : "insert, delete and link",
+  "patch" : [
+    { "@op" : "Insert",
+      "@insert" : { "@type" : "Person", "@id" : "Person/Bob",
+                    "@capture" : "B", "name" : "Bob" } },
+    { "@op" : "Delete",
+      "@delete" : { "@id" : "Person/Old" } },
+    { "@id" : "Person/Jane",
+      "friend" : { "@op" : "SwapValue", "@before" : null, "@after" : { "@ref" : "B" } } }
+  ] }
+```
+
+`@capture` names an inserted document so other entries in the same patch can reference it with `{"@ref" : "B"}` — including `SwapValue` `@after` values, as above. The patch is atomic: if any entry conflicts with the stored state (for example a `@before` that does not match), the whole call fails and nothing is written.
+
+**Read more:** [Insert, Delete, `@capture` and `@ref` on the patch endpoint](/docs/patch-endpoint/)
 
 ### Table
 

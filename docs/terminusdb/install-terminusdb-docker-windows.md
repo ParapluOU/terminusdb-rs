@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/install-terminusdb-docker-windows/
+      canonical: https://terminusdb.com/docs/install-terminusdb-docker-windows/
 media: []
 ---
 
@@ -271,4 +271,4 @@ Now that you have TerminusDB running on Windows:
 
 - [General Docker Installation Guide](/docs/install-terminusdb-as-a-docker-container)
 - [TerminusDB GitHub Repository](https://github.com/terminusdb/terminusdb)
-- [DFRNT Cloud Service](https://dfrnt.com/sign-up)
+- [TerminusDB Cloud Service](/docs/cloud/)

@@ -7,11 +7,11 @@ nextjs:
   metadata:
     title: TerminusDB vs MongoDB — Document Database Comparison
     description: A neutral, factual comparison of TerminusDB and MongoDB — data model, schema enforcement, version control, querying, and when to choose each document database.
-    keywords: terminusdb vs mongodb, document database comparison, mongodb alternative, json database version control, schema enforcement, document graph database
+    keywords: terminusdb vs mongodb, document database comparison, mongodb alternative, json database version control, schema enforcement, knowledge graph database
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/terminusdb-vs-mongodb/
+      canonical: https://terminusdb.com/docs/terminusdb-vs-mongodb/
 media: []
 lastUpdated: "2026-05-01"
 ---
@@ -22,7 +22,7 @@ A factual comparison of TerminusDB and MongoDB for developers evaluating documen
 
 **MongoDB** is a general-purpose document database designed for high-throughput, horizontally scalable workloads. It stores BSON documents in schemaless collections and excels at operational data — web applications, content management, real-time analytics.
 
-**TerminusDB** is a document graph database with built-in version control. It stores JSON documents in a schema-enforced graph, tracks every change as an immutable commit, and supports branch, diff, merge, and time-travel. It is designed for collaborative, auditable data workflows.
+**TerminusDB** is a knowledge graph database with built-in version control. It stores JSON documents in a schema-enforced graph, tracks every change as an immutable commit, and supports branch, diff, merge, and time-travel. It is designed for collaborative, auditable data workflows.
 
 The key architectural difference: MongoDB is a mutable database optimised for write throughput and horizontal scale. TerminusDB is an immutable database optimised for read throughput at scale, data integrity, collaboration, and full change history.
 
@@ -149,7 +149,7 @@ curl -X POST "http://localhost:6363/api/document/admin/shop/local/branch/main?au
   -d '{"@type": "Order", "customer": "Customer/alice", "total": 19.98, "status": "pending"}'
 ```
 
-You get branch, diff, merge, time-travel, and clone — built into the database. See [Version Control Operations](/docs/version-control-operations/) for the full API reference.
+You get branch, diff, merge, time-travel, and clone — built into the database. See [A Graph Database with Git-like Version Control](/docs/graph-database-with-git-like-version-control/) for the full model and [Version Control Operations](/docs/version-control-operations/) for the API reference.
 
 ### MongoDB: no built-in version control
 

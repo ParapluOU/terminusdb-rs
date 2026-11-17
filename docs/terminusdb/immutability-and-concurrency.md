@@ -10,7 +10,7 @@ nextjs:
     description: Why TerminusDB avoids locks and how its immutable delta architecture enables safe concurrent access.
     keywords: immutability, concurrency, locks, MVCC, delta layers, architecture
     alternates:
-      canonical: https://terminusdb.org/docs/immutability-and-concurrency/
+      canonical: https://terminusdb.com/docs/immutability-and-concurrency/
 ---
 
 Traditional databases use locks to prevent concurrent readers and writers from corrupting shared state. TerminusDB takes a fundamentally different approach: by making all committed data immutable, it eliminates the need for locks entirely.
@@ -74,11 +74,11 @@ For application developers, the practical implications are:
 - **Predictable latency** — because reads require no coordination, their latency is determined only by the layer traversal depth (bounded by rollup) and I/O speed, not by how many writers are active.
 - **Simplified error handling** — the only failure mode for writes is an optimistic concurrency conflict, which the server retries automatically (up to a configurable limit). Applications never need to implement retry-on-deadlock logic.
 
-## The trade-off: layer accumulation
+## Layers and rollup
 
-The cost of immutability is that layers accumulate. After hundreds of commits, reading a single triple may require traversing a deep parent chain. This is where [delta rollup](/docs/delta-rollup/) comes in: a maintenance operation that compresses layers into fewer, flatter layers without changing semantics or commit history.
+Every commit adds a layer, so layers accumulate. Reads do not slow down because of this. [Delta rollup](/docs/delta-rollup/) compacts layers into fewer, flatter layers without changing semantics or commit history, and the auto-optimizer that runs it is standard. Together with the layer cache, rollup keeps read and write performance consistent as history grows. The exponential strategy (base 3) means that even workloads with thousands of commits only have a logarithmic number of layers to combine.
 
-TerminusDB includes an auto-optimize plugin that triggers compaction probabilistically after commits, keeping layer depth manageable without manual intervention. The exponential strategy (base 3) means that even high-throughput workloads producing thousands of commits will only accumulate a logarithmic number of layers between rollups.
+The real cost is disk storage. TerminusDB keeps every layer, because each one backs a historic view, plus some intermediate rollup layers so combined layers load in one go. For how this works inside, see [TerminusDB Internals Part 2 - Change is Gonna Come](/blog/2022-11-14-terminusdb-internals-2/).
 
 ## Comparison with PostgreSQL MVCC
 
@@ -88,7 +88,7 @@ Additionally, PostgreSQL's MVCC still requires locks for DDL operations (schema 
 
 ## Summary
 
-TerminusDB's immutable delta architecture eliminates the fundamental tension between readers and writers. Readers always see a consistent snapshot. Writers append new layers without disturbing existing data. No locks means no contention, no deadlocks, and predictable performance under concurrent load — at the cost of periodic compaction to manage layer depth.
+TerminusDB's immutable delta architecture eliminates the fundamental tension between readers and writers. Readers always see a consistent snapshot. Writers append new layers without disturbing existing data. No locks means no contention, no deadlocks, and predictable performance under concurrent load. The cost is disk storage for the layers that keep every version available.
 
 The net result is an architecture where concurrency is not a problem to be managed — it is a natural consequence of the storage model.
 

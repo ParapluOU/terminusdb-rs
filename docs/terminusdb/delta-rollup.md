@@ -11,7 +11,7 @@ nextjs:
     description: How delta rollup works in TerminusDB. Automatic in standard deployments via the built-in rollup plugin — manual optimisation is available for custom deployments.
     keywords: delta rollup, optimize, performance, layers, compaction, maintenance
     alternates:
-      canonical: https://terminusdb.org/docs/delta-rollup/
+      canonical: https://terminusdb.com/docs/delta-rollup/
 ---
 
 {% callout type="note" %}
@@ -34,7 +34,11 @@ TerminusDB includes a rollup plugin that is enabled by default. It probabilistic
 
 ## Why layers accumulate
 
-Every commit in TerminusDB creates a new **delta layer** — an immutable record of additions and deletions relative to the layer beneath it. Over hundreds or thousands of commits, the layer stack grows deep. When TerminusDB resolves a triple, it must traverse the entire parent chain from newest to oldest layer, checking each for the presence or absence of that triple. A deep stack means slower reads.
+Every commit in TerminusDB creates a new **delta layer** — an immutable record of additions and deletions relative to the layer beneath it. Over hundreds or thousands of commits, the layer stack grows deep. Without compaction, TerminusDB would have to traverse the parent chain from newest to oldest layer to resolve a triple, checking each layer for the presence or absence of that triple.
+
+Delta rollup removes that cost. The auto-optimizer is standard, and in recent releases performance does not degrade as history grows. Rollup layers, together with the layer cache, let TerminusDB load combined layers in one go, so read and write performance stays consistent despite the delta encoding. Every version stays easy to access, and every version is available to hybrid search (vector and full-text). Vector search uses the same storage: documents are referenced efficiently and each document vector is stored only once.
+
+The cost is disk storage. TerminusDB keeps some intermediate rollup layers on disk so that combined layers load quickly and storage stays efficient. For a deeper look at how rollup works, see [TerminusDB Internals Part 2 - Change is Gonna Come](/blog/2022-11-14-terminusdb-internals-2/).
 
 ## When to perform a rollup
 
@@ -42,12 +46,12 @@ Every commit in TerminusDB creates a new **delta layer** — an immutable record
 
 Run a rollup when:
 
-- Read queries have become noticeably slower after many commits
+- The auto-optimize plugin is disabled and you have made many commits
 - You have completed a bulk import (hundreds or thousands of documents)
 - You observe the layer stack depth exceeding ~50–100 layers
 - Routine maintenance — for example, nightly or weekly on active databases
 
-TerminusDB also ships an optional **auto-optimize plugin** that probabilistically triggers optimization after commits, removing the need for manual scheduling in most deployments.
+The standard **auto-optimize plugin** probabilistically triggers optimization after commits, removing the need for manual scheduling in most deployments.
 
 ## How to trigger a rollup
 
@@ -134,11 +138,12 @@ For most users, the `optimize` endpoint handles this automatically. The auto-opt
 - **Duration** — Rollup time is proportional to the total data size, not the number of layers. Large databases (millions of triples) may take seconds to minutes.
 - **Concurrent access** — Rollups create parallel files alongside existing layers. Readers are never blocked; they continue using the existing layer chain until the rollup completes. There is no lock contention.
 - **Idempotency** — Running optimize on an already-optimized database is a no-op and completes immediately.
-- **Disk space** — Rolled-up layers coexist with their source layers temporarily. TerminusDB garbage-collects unreferenced layers over time.
+- **Disk space** — Rollup layers are stored on disk alongside the layers they cover. This is the main cost of the approach, and the reason combined layers can be loaded in one go. Every layer is kept, because each one backs a historic view of the data.
 - **Permissions** — The caller requires `meta_write_access` on the target resource (or must be a super-user for `_system`).
 
 ## Further reading
 
+- [TerminusDB Internals Part 2 - Change is Gonna Come](/blog/2022-11-14-terminusdb-internals-2/) — how delta encoding and rollup work inside TerminusDB
 - [Immutability and Concurrency](/docs/immutability-and-concurrency/) — why the layer architecture avoids locks
 - [ACID Transactions](/docs/acid-transactions-explanation/) — how immutability enables atomic, isolated transactions
 - [Graphs](/docs/graphs-explanation/) — the full layer and graph hierarchy

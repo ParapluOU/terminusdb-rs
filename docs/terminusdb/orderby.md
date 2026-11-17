@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/orderby/
+      canonical: https://terminusdb.com/docs/orderby/
 media: []
 tags:
   - typescript
@@ -100,7 +100,7 @@ let data = {
         "@type": "SubBody",
         "text": "sample text",
     "section": "a section",
-    "url": "https://terminusdb.org/"
+    "url": "https://terminusdb.com/"
     },
 }
 

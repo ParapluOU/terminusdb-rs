@@ -12,13 +12,15 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphql-path-query.png
     alternates:
-      canonical: https://terminusdb.org/docs/path-queries-in-graphql/
+      canonical: https://terminusdb.com/docs/path-queries-in-graphql/
 media: []
 ---
 
 {% callout type="note" %}
 **What you'll achieve**
 By the end of this guide, you will know how to traverse graph paths using TerminusDB's GraphQL path queries.
+
+*Path queries in GraphQL were added in [TerminusDB 10.1.10](/docs/releases/10-1-10-graphql-backlinks-path-queries/); whitespace in patterns was allowed from [11.1.9](/docs/releases/11-1-9-graphql-path-whitespace/).*
 {% /callout %}
 
 > **Prerequisites:** TerminusDB running on `localhost:6363` with the Star Wars dataset cloned. If you haven't done this yet, follow the [Explore a Real Dataset](/docs/explore-a-real-dataset/) tutorial (Steps 1–2), or run:

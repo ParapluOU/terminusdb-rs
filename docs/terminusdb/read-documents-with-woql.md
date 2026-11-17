@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-read-documents.png
     alternates:
-      canonical: https://terminusdb.org/docs/read-documents-with-woql/
+      canonical: https://terminusdb.com/docs/read-documents-with-woql/
 media: []
 ---
 

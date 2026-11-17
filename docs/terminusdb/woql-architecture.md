@@ -6,7 +6,7 @@ nextjs:
     description: How WOQL's AST-based architecture prevents injection attacks by construction, provides type safety across languages, and differs from string-based query approaches.
     keywords: woql architecture, ast query, query injection, sql injection prevention, type safe queries, woql security, datalog ast, json-ld query, query builder pattern
     alternates:
-      canonical: https://terminusdb.org/docs/woql-architecture/
+      canonical: https://terminusdb.com/docs/woql-architecture/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 tags:

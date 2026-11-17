@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/troubleshooting-schema/
+      canonical: https://terminusdb.com/docs/troubleshooting-schema/
 media: []
 tags:
   - typescript
@@ -203,6 +203,6 @@ This page covers errors that occur when inserting or updating documents that vio
 
 - [Open an issue](https://github.com/terminusdb/terminusdb/issues) with your schema definition and the document you are trying to insert
 - Check the [Schema Reference](/docs/schema-reference-guide) for complete type documentation
-- Check the [Data Types reference](/docs/data-types) for supported XSD types
+- Check the [Data Types reference](/docs/xsd-data-types) for supported XSD types
 - See [Troubleshooting Data Model](/docs/troubleshooting-data-model/) for issues with document structure and keying
 - See [Schema Migration Reference](/docs/schema-migration-reference-guide/) for safe migration strategies

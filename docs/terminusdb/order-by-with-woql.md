@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-order-by.png
     alternates:
-      canonical: https://terminusdb.org/docs/order-by-with-woql/
+      canonical: https://terminusdb.com/docs/order-by-with-woql/
 media: []
 ---
 

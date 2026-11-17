@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-group-query-results.png
     alternates:
-      canonical: https://terminusdb.org/docs/group-query-results/
+      canonical: https://terminusdb.com/docs/group-query-results/
 media: []
 ---
 

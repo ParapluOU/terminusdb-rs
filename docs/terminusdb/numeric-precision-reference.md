@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/numeric-precision-reference/
+      canonical: https://terminusdb.com/docs/numeric-precision-reference/
 media: []
 tags:
   - typescript
@@ -510,6 +510,6 @@ For performance-critical operations with millions of calculations:
 
 ## See Also
 
-- [Supported Data Types](/docs/dfrnt-data-types) - Complete list of XSD types
+- [Supported Data Types](/docs/xsd-data-types/) - Complete list of XSD types
 - [WOQL Math Queries](/docs/maths-based-queries-in-woql) - Arithmetic operations in WOQL
 - [Schema Reference Guide](/docs/schema-reference-guide) - Defining numeric properties in schemas

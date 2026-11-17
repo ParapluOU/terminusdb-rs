@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/troubleshooting-auth/
+      canonical: https://terminusdb.com/docs/troubleshooting-auth/
 media: []
 ---
 
@@ -47,16 +47,17 @@ This page covers errors that occur after your client reaches the server but fail
    ```bash
    curl -u admin:root http://localhost:6363/api/info
    ```
-3. If you set a custom password via `TERMINUSDB_ADMIN_PASS`, use that value instead.
-4. If you have forgotten the password, recreate the container with a new password:
+3. If you set a custom password via `TERMINUSDB_ADMIN_PASS` or `TERMINUSDB_ADMIN_SET_PASS`, use that value instead.
+4. If you have forgotten the password, restart the container with `TERMINUSDB_ADMIN_SET_PASS` — it is applied on every start, unlike `TERMINUSDB_ADMIN_PASS` which only takes effect at first store init:
    ```bash
    docker rm -f terminusdb
    docker run -d --name terminusdb \
      -p 6363:6363 \
      -v terminusdb_storage:/app/terminusdb/storage \
-     -e TERMINUSDB_ADMIN_PASS=mynewpassword \
+     -e TERMINUSDB_ADMIN_SET_PASS=mynewpassword \
      terminusdb/terminusdb-server
    ```
+   You can remove the variable again once you are back in — the password persists in the store.
 
 ### Python client: `password` vs `key` parameter
 
@@ -83,15 +84,15 @@ If you are using an older version of the client library, upgrade:
 pip install --upgrade terminusdb-client
 ```
 
-### API key format (DFRNT Cloud)
+### API key format (TerminusDB Cloud)
 
-**Error message:** `HTTP 401: Unauthorized` when connecting to DFRNT Cloud
+**Error message:** `HTTP 401: Unauthorized` when connecting to TerminusDB Cloud
 
 **Cause:** The API token is malformed, expired, or passed with the wrong header format.
 
 **Fix:**
 
-1. Generate a fresh API token from [DFRNT Cloud](https://studio.dfrnt.com) under your team settings.
+1. Generate a fresh API token from [TerminusDB Cloud](/docs/cloud/) under your team settings.
 2. Use the correct `Authorization` header format:
    ```bash
    curl -H "Authorization: Token YOUR_API_TOKEN" \
@@ -134,15 +135,15 @@ pip install --upgrade terminusdb-client
    ```
 3. See the [Access Control documentation](/docs/access-control-with-javascript) for full details on managing roles and capabilities.
 
-### Token expired (DFRNT Cloud)
+### Token expired (TerminusDB Cloud)
 
 **Error message:** `HTTP 401: Unauthorized` on a request that previously worked, or `"token_expired"` in the response body
 
-**Cause:** API tokens issued by DFRNT Cloud have an expiry. Once expired, all requests using that token fail with 401 — even though the token format is valid and the user has the correct permissions.
+**Cause:** API tokens issued by TerminusDB Cloud have an expiry. Once expired, all requests using that token fail with 401 — even though the token format is valid and the user has the correct permissions.
 
 **Fix:**
 
-1. Generate a new token from [DFRNT Cloud](https://studio.dfrnt.com) under your team settings.
+1. Generate a new token from [TerminusDB Cloud](/docs/cloud/) under your team settings.
 2. If you use a long-running automation or CI pipeline, implement token refresh logic:
    ```bash
    # Check token validity before making requests
@@ -151,11 +152,11 @@ pip install --upgrade terminusdb-client
      https://dfrnt.com/api/hosted/MyTeam/api/info)
 
    if [ "$RESPONSE" = "401" ]; then
-     echo "Token expired — regenerate from DFRNT Cloud dashboard"
+     echo "Token expired — regenerate from TerminusDB Cloud dashboard"
      exit 1
    fi
    ```
-3. For service accounts, contact your DFRNT Cloud team admin about long-lived tokens.
+3. For service accounts, contact your TerminusDB Cloud team admin about long-lived tokens.
 
 ### CORS preflight rejected (browser-based requests)
 

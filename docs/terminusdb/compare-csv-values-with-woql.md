@@ -11,7 +11,7 @@ nextjs:
     description: Learn how to efficiently compare a list of values against a CSV file to find additions, deletions, and unchanged items using WOQL
     keywords: terminusdb, compare values with a csv file using woql, datalog, query language, terminusdb query, woql
     alternates:
-      canonical: https://terminusdb.org/docs/compare-csv-values-with-woql/
+      canonical: https://terminusdb.com/docs/compare-csv-values-with-woql/
 media: []
 ---
 

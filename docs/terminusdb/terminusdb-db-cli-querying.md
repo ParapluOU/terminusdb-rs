@@ -14,7 +14,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/terminusdb-db-cli-querying/
+      canonical: https://terminusdb.com/docs/terminusdb-db-cli-querying/
 media: []
 ---
 
@@ -36,7 +36,7 @@ This is a tutorial to learn the command line CLI interface to start exploring th
 
 The local TerminusDB database CLI has a WOQL query interface built in, with a distinct syntax to other flavours. When working with a local TerminusDB instance, it is often handy to perform offline commands against it, or extract information in a data pipeline for ML/Ops.
 
-This syntax is for advanced users who have significant experience with TerminusDB and WOQL. If you are new to TerminusDB, we recommend starting with the [TerminusDB Quickstart](/docs/get-started-with-terminusdb/).
+This syntax is for advanced users who have significant experience with TerminusDB and WOQL. If you are new to TerminusDB, we recommend starting with the [TerminusDB Quickstart](/docs/get-started/).
 
 ## Addressing TerminusDB data products with GRAPH_SPEC and DB_SPEC
 

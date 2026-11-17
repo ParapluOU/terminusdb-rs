@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/use-the-python-client/
+      canonical: https://terminusdb.com/docs/use-the-python-client/
 media: []
 ---
 

@@ -6,7 +6,7 @@ nextjs:
     description: Create, read, update, and delete schema classes and properties in TerminusDB using the TypeScript client, Python client, or HTTP API.
     keywords: terminusdb, schema, crud, create schema, read schema, update schema, delete schema, graph_type, schema operations, typescript client, python client, http api
     alternates:
-      canonical: https://terminusdb.org/docs/schema-crud-operations/
+      canonical: https://terminusdb.com/docs/schema-crud-operations/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 tags:

@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/merge-howto/
+      canonical: https://terminusdb.com/docs/merge-howto/
 media: []
 lastUpdated: "2026-05-01"
 ---
@@ -24,7 +24,7 @@ By the end of this guide, you will know how to merge branches, detect conflicts,
 **Merging** in TerminusDB applies changes from one branch onto another — like `git merge`. TerminusDB uses a three-way merge that detects conflicts at the field level. If both branches modified the same field on the same document, the merge fails with a precise conflict report — no silent data loss.
 
 {% callout type="note" title="No silent overwrites" %}
-TerminusDB never silently resolves conflicts. If two branches changed the same field, the merge fails and reports exactly what conflicted. You decide which value wins.
+TerminusDB never silently resolves conflicts — provided `before_commit` is the true common ancestor of the two branches. If two branches changed the same field, the merge fails and reports exactly what conflicted. You decide which value wins.
 {% /callout %}
 
 {% callout type="note" title="Prerequisites" %}
@@ -42,14 +42,18 @@ TerminusDB never silently resolves conflicts. If two branches changed the same f
 
 Apply all changes from `feature` onto `main`. This is the most common merge operation.
 
+`before_commit` is the **common ancestor** — the commit where the two branches diverged. Find it with the [commit log](/docs/version-control-operations/#get-commit-history): the most recent commit ID that appears in both branches' history. If `feature` was just created and `main` has not moved since, main's head is the common ancestor.
+
+`before_commit` and `after_commit` accept a branch name (`"main"`), a commit ID, or a data-version string — `"commit:<id>"` or `"branch:<commit-id>"`, the same format as the `TerminusDB-Data-Version` response header.
+
 ### HTTP API
 
 ```bash
 curl -u admin:root -X POST http://localhost:6363/api/apply/admin/tdb-example-mydb/local/branch/main \
   -H "Content-Type: application/json" \
   -d '{
-    "before_commit": "admin/tdb-example-mydb/local/branch/main",
-    "after_commit": "admin/tdb-example-mydb/local/branch/feature",
+    "before_commit": "commit:abc123def456",
+    "after_commit": "feature",
     "commit_info": {
       "author": "alice@example.com",
       "message": "Merge feature into main"
@@ -63,6 +67,10 @@ curl -u admin:root -X POST http://localhost:6363/api/apply/admin/tdb-example-myd
 {"@type": "api:ApplyResponse", "api:status": "api:success"}
 ```
 
+{% callout type="warning" %}
+Do not pass the target branch's own tip as `before_commit`. A branch tip is not a common ancestor — apply then computes a plain two-way diff between the two heads, and changes the target branch made since the divergence are silently reverted or overwritten with `api:status: "api:success"` and no conflict raised.
+{% /callout %}
+
 ### TypeScript
 
 ```typescript
@@ -75,11 +83,11 @@ const client = new TerminusClient.WOQLClient("http://localhost:6363", {
   db: "tdb-example-mydb",
 });
 
+client.checkout("main"); // apply onto main
 await client.apply(
-  "admin/tdb-example-mydb/local/branch/main",    // target branch
-  "admin/tdb-example-mydb/local/branch/main",    // before (common ancestor)
-  "admin/tdb-example-mydb/local/branch/feature", // after (source of changes)
-  { author: "alice@example.com", message: "Merge feature into main" }
+  "commit:abc123def456", // common ancestor of main and feature
+  "feature",             // source of changes
+  "Merge feature into main"
 );
 ```
 
@@ -92,9 +100,10 @@ client = Client("http://localhost:6363")
 client.connect(user="admin", key="root", db="tdb-example-mydb")
 
 client.apply(
-    before_commit="admin/tdb-example-mydb/local/branch/main",
-    after_commit="admin/tdb-example-mydb/local/branch/feature",
-    commit_msg="Merge feature into main",
+    before_version="commit:abc123def456",  # common ancestor of main and feature
+    after_version="feature",               # source of changes
+    branch="main",
+    message="Merge feature into main",
     author="alice@example.com"
 )
 ```
@@ -135,18 +144,19 @@ A conflict occurs when both branches changed the same field on the same document
 
 ### Conflict response
 
+The apply endpoint rejects a conflicting merge with **HTTP 409** and `api:status: "api:conflict"`:
+
 ```json
 {
-  "@type": "api:ApplyResponse",
+  "@type": "api:ApplyError",
   "api:status": "api:conflict",
   "api:witnesses": [
     {
-      "@id": "terminusdb:///data/Product/Widget",
+      "@id": "Product/Widget",
       "price": {
-        "@op": "SwapValue",
-        "@before": 9.99,
-        "@after_left": 12.99,
-        "@after_right": 14.99
+        "@op": "Conflict",
+        "@expected": 9.99,
+        "@found": 12.99
       }
     }
   ]
@@ -156,9 +166,10 @@ A conflict occurs when both branches changed the same field on the same document
 This tells you:
 - **Document:** `Product/Widget`
 - **Field:** `price`
-- **Original value:** 9.99
-- **main changed it to:** 12.99 (`@after_left`)
-- **feature changed it to:** 14.99 (`@after_right`)
+- **Expected value:** 9.99 (`@expected`) — the base value the patch expected to find
+- **Found value:** 12.99 (`@found`) — the value currently on the target branch
+
+The witness does not contain the source branch's value. Run a diff (step 2) against the common ancestor and `feature` to see what `feature` was trying to write.
 
 ### Resolving conflicts
 
@@ -217,8 +228,8 @@ Keep your feature branch up-to-date with main by merging main's changes into you
 curl -u admin:root -X POST http://localhost:6363/api/apply/admin/tdb-example-mydb/local/branch/feature \
   -H "Content-Type: application/json" \
   -d '{
-    "before_commit": "admin/tdb-example-mydb/local/branch/feature",
-    "after_commit": "admin/tdb-example-mydb/local/branch/main",
+    "before_commit": "commit:abc123def456",
+    "after_commit": "main",
     "commit_info": {
       "author": "alice@example.com",
       "message": "Merge latest main into feature"
@@ -243,10 +254,10 @@ curl -u admin:root -X POST http://localhost:6363/api/squash/admin/tdb-example-my
   -H "Content-Type: application/json" \
   -d '{"commit_info": {"author": "alice", "message": "Feature: add Widget product"}}'
 
-# 3. Merge into main
+# 3. Merge into main (before_commit = common ancestor commit from /api/log)
 curl -u admin:root -X POST http://localhost:6363/api/apply/admin/tdb-example-mydb/local/branch/main \
   -H "Content-Type: application/json" \
-  -d '{"before_commit": "admin/tdb-example-mydb/local/branch/main", "after_commit": "admin/tdb-example-mydb/local/branch/feature", "commit_info": {"author": "alice", "message": "Merge feature: add Widget product"}}'
+  -d '{"before_commit": "commit:abc123def456", "after_commit": "feature", "commit_info": {"author": "alice", "message": "Merge feature: add Widget product"}}'
 
 # 4. Clean up the branch
 curl -u admin:root -X DELETE http://localhost:6363/api/branch/admin/tdb-example-mydb/local/branch/feature

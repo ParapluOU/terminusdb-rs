@@ -7,11 +7,11 @@ tags:
 title: Handle SSL Certificate Errors in the Python Client
 nextjs:
   metadata:
-    title: Handle SSL Certificate Errors in the Python Client
-    description: How to suppress or resolve SSL certificate verification errors when connecting the TerminusDB Python client to local or self-signed TLS instances.
+    title: Fix Python SSL CERTIFICATE_VERIFY_FAILED in TerminusDB
+    description: "Fix SSLCertVerificationError when the TerminusDB Python client connects to a local or self-signed server: use a CA bundle, export the cert, or skip checks."
     keywords: python, SSL, certificate, self-signed, TLS, verify
     alternates:
-      canonical: https://terminusdb.org/docs/python-certificate-issues/
+      canonical: https://terminusdb.com/docs/python-certificate-issues/
 ---
 
 When connecting the Python client to a TerminusDB instance using a self-signed certificate or a local TLS proxy, you may see errors like `SSLCertVerificationError` or `CERTIFICATE_VERIFY_FAILED`. This guide shows how to handle them.
@@ -97,7 +97,7 @@ This is not a certificate error — the server is unreachable. Check that Termin
 | Self-signed cert in development | `verify=False` is acceptable |
 | Internal CA in staging/production | Point `verify` to your CA bundle |
 | CI/CD pipeline with internal CA | Set `REQUESTS_CA_BUNDLE` env var |
-| Public DFRNT Cloud | No action needed — certificates are valid |
+| Public TerminusDB Cloud | No action needed — certificates are valid |
 
 ## See also
 

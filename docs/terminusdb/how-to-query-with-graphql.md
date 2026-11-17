@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/how-to-query-with-graphql/
+      canonical: https://terminusdb.com/docs/how-to-query-with-graphql/
 media: []
 ---
 

@@ -13,15 +13,15 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/woql-interval-algebra/
+      canonical: https://terminusdb.com/docs/woql-interval-algebra/
 media: []
 ---
 
-Every calendar has two stories to tell. One is the human story: "Q1 runs from January 1 to March 31." The other is the computational story: "Q1 is the half-open interval [January 1, April 1]." These two stories describe the same period, but they use different conventions — and mixing them up causes real bugs in financial systems, scheduling engines, and regulatory reporting.
+Every calendar has two stories to tell. One is the human story: "Q1 runs from January 1 to March 31." The other is the computational story: "Q1 is the half-open interval [January 1, April 1)" (notice the end bracket for the half-open interval). These two stories describe the same period, but they use different conventions — and mixing them up causes real bugs in financial systems, scheduling engines, and regulatory reporting.
 
 This page explains the difference, introduces TerminusDB's `xdd:dateTimeInterval` type for ISO 8601 intervals, and shows how to use Allen's Interval Algebra to reason about temporal relationships in WOQL. Unfortunately the XSD Data Types do not include an explicit interval type, so we include it in the xdd namespace instead.
 
-> **See also:** [WOQL Time Handling](/docs/woql-time-handling/) | [Data Types Reference](/docs/data-types/) | [WOQL Class Reference](/docs/woql-class-reference-guide/)
+> **See also:** [WOQL Time Handling](/docs/woql-time-handling/) | [Data Types Reference](/docs/xsd-data-types/) | [WOQL Class Reference](/docs/woql-class-reference-guide/) | [dateTimeInterval semantics](/docs/datetime-interval-semantics/)
 
 ---
 
@@ -33,7 +33,7 @@ ISO 8601, the international standard for date and time representation, does defi
 
 | Form | Example | Description |
 |------|---------|-------------|
-| Start/end | `2025-01-01/2025-04-01` | Two explicit endpoints |
+| Start/end | `2025-01-01/2025-03-31` | Two explicit endpoints; date-only end is stored as the next day's midnight, but when submitted as `xsd:date` only it is treated as the inclusive end date (including the full end day duration) |
 | Start/duration | `2025-01-01/P3M` | Start date plus a duration |
 | Duration/end | `P3M/2025-04-01` | Duration ending at a date |
 | Duration only | `P3M` | A length of time with no anchor |
@@ -64,7 +64,7 @@ Half-open intervals have three properties that make them essential for computati
 
 - **No gaps**: Q1 ends at April 1; Q2 starts at April 1. There is no missing day between them.
 - **No overlaps**: March 31 belongs to Q1 only. April 1 belongs to Q2 only.
-- **Clean partitioning**: The year `[Jan 1, Jan 1 next year]` divides exactly into 12 monthly intervals with no gaps or overlaps.
+- **Clean partitioning**: The year `[Jan 1, Jan 1 next year)  ` divides exactly into 12 monthly intervals with no gaps or overlaps.
 
 ### The one-day offset
 
@@ -72,7 +72,7 @@ Converting between inclusive and half-open is straightforward — add one day to
 
 ```
 Inclusive:   [2025-01-01, 2025-03-31]     ← xdd:dateRange
-Half-open:   [2025-01-01, 2025-04-01]     ← xdd:dateTimeInterval
+Half-open:   [2025-01-01, 2025-04-01)     ← xdd:dateTimeInterval
                                   ↑
                         March 31 + 1 day = April 1
 ```
@@ -80,13 +80,13 @@ Half-open:   [2025-01-01, 2025-04-01]     ← xdd:dateTimeInterval
 And to convert back, subtract one day from the exclusive end:
 
 ```
-Half-open:   [2025-01-01, 2025-04-01]     ← xdd:dateTimeInterval
+Half-open:   [2025-01-01, 2025-04-01)     ← xdd:dateTimeInterval
 Inclusive:   [2025-01-01, 2025-03-31]     ← xdd:dateRange
                                   ↑
                         April 1 - 1 day = March 31
 ```
 
-TerminusDB handles this conversion automatically through typecasting and the `interval_inclusive` predicate.
+TerminusDB handles this conversion automatically through typecasting. Use `interval` to construct half-open intervals from inclusive dates; use `typecast` to `xdd:dateRange` to convert back for display.
 
 ---
 
@@ -111,8 +111,8 @@ TerminusDB provides three types for temporal extent, each serving a different pu
 * Human-readable reporting periods, regulatory filings
 ---
 * **`xdd:dateTimeInterval`**
-* `2025-01-01/2025-04-01`
-* Half-open — start included, end excluded. ISO 8601 interval notation.
+* `2025-01-01/2025-03-31` (input) → stored as `2025-01-01T00:00:00Z/2025-04-01T00:00:00Z`
+* Half-open — start included, end excluded. ISO 8601 interval notation; plain-date ends are stored at the next day's `00:00:00Z`.
 * Temporal algebra, scheduling, partitioning, Allen's relations
 {% /table %}
 
@@ -137,7 +137,7 @@ xsd:anySimpleType
 The type uses the ISO 8601 solidus (`/`) separator. All four interval forms are supported:
 
 ```
-2025-01-01/2025-04-01              ← Form 1: start/end (dates)
+2025-01-01/2025-03-31              ← Form 1: start/end (dates); stored as 2025-01-01T00:00:00Z/2025-04-01T00:00:00Z
 2025-01-01T00:00:00Z/2025-04-01T00:00:00Z  ← Form 1: start/end (dateTimes)
 2025-01-01/P3M                     ← Form 2: start/duration
 P3M/2025-04-01                     ← Form 3: duration/end
@@ -194,9 +194,10 @@ Parse an ISO 8601 interval string, or format an interval back to a string:
 ```javascript
 // Parse string to interval
 WOQL.typecast(
-  literal("2025-01-01/2025-04-01", "xsd:string"),
+  literal("2025-01-01/2025-03-31", "xsd:string"),
   "xdd:dateTimeInterval",
   v.interval)
+// v.interval = "2025-01-01T00:00:00Z/2025-04-01T00:00:00Z"^^xdd:dateTimeInterval
 
 // Format interval to string
 WOQL.typecast(v.interval, "xsd:string", v.str)
@@ -207,7 +208,7 @@ WOQL.typecast(v.interval, "xsd:string", v.str)
 Converts the inclusive end date by adding one day:
 
 ```javascript
-// [2025-01-01, 2025-03-31] → 2025-01-01/2025-04-01
+// [2025-01-01, 2025-03-31] → 2025-01-01T00:00:00Z/2025-04-01T00:00:00Z
 WOQL.typecast(v.date_range, "xdd:dateTimeInterval", v.interval)
 ```
 
@@ -216,7 +217,7 @@ WOQL.typecast(v.date_range, "xdd:dateTimeInterval", v.interval)
 Converts the exclusive end date by subtracting one day:
 
 ```javascript
-// 2025-01-01/2025-04-01 → [2025-01-01, 2025-03-31]
+// 2025-01-01T00:00:00Z/2025-04-01T00:00:00Z → [2025-01-01, 2025-03-31]
 WOQL.typecast(v.interval, "xdd:dateRange", v.date_range)
 ```
 
@@ -250,38 +251,45 @@ Creates or unpacks an interval using half-open semantics. The end date is exclus
 let v = Vars("q1");
 WOQL.interval(
   literal("2025-01-01", "xsd:date"),
-  literal("2025-04-01", "xsd:date"),
+  literal("2025-03-31", "xsd:date"),
   v.q1)
-// v.q1 = "2025-01-01/2025-04-01"^^xdd:dateTimeInterval
+// v.q1 = "2025-01-01T00:00:00Z/2025-04-01T00:00:00Z"^^xdd:dateTimeInterval
 
-// Unpack: interval value → two dates
+// Unpack: interval value → two dateTimes
 let v = Vars("start", "end");
 WOQL.interval(v.start, v.end, some_interval)
-// v.start = "2025-01-01"^^xsd:date
-// v.end   = "2025-04-01"^^xsd:date
+// v.start = "2025-01-01T00:00:00Z"^^xsd:dateTime
+// v.end   = "2025-04-01T00:00:00Z"^^xsd:dateTime
 ```
 
 For a duration-only interval (form 4), both start and end unify with `rdf:nil`.
 
-### `interval_inclusive` — Inclusive Construction
+### `interval` — Inclusive Date Input, Half-Open Storage
 
-Creates or unpacks an interval using inclusive semantics. Internally, the inclusive end is converted to an exclusive end by adding one day.
+`interval` accepts inclusive `xsd:date` endpoints. A date-only end is converted to an exclusive `xsd:dateTime` by adding one day. When deconstructing an interval, both endpoints are returned as `xsd:dateTime` values.
 
 ```javascript
 // Construct from inclusive dates (the reporting convention)
 let v = Vars("q1");
-WOQL.interval_inclusive(
+WOQL.interval(
   literal("2025-01-01", "xsd:date"),
-  literal("2025-03-31", "xsd:date"),  // inclusive end
+  literal("2025-03-31", "xsd:date"),  // inclusive end as written
   v.q1)
-// v.q1 = "2025-01-01/2025-04-01"^^xdd:dateTimeInterval
+// v.q1 = "2025-01-01T00:00:00Z/2025-04-01T00:00:00Z"^^xdd:dateTimeInterval
 // (March 31 + 1 day = April 1 stored as exclusive end)
 
-// Unpack to inclusive dates for display
-let v = Vars("start", "incl_end");
-WOQL.interval_inclusive(v.start, v.incl_end, some_interval)
-// v.start    = "2025-01-01"^^xsd:date
-// v.incl_end = "2025-03-31"^^xsd:date
+// Deconstruct returns dateTime endpoints
+let v = Vars("start", "end");
+WOQL.interval(v.start, v.end, some_interval)
+// v.start = "2025-01-01T00:00:00Z"^^xsd:dateTime
+// v.end   = "2025-04-01T00:00:00Z"^^xsd:dateTime  (stored half-open end)
+```
+
+To recover inclusive dates for display, typecast the interval to `xdd:dateRange`:
+
+```javascript
+WOQL.typecast(some_interval, "xdd:dateRange", v.range)
+// v.range = "[2025-01-01, 2025-03-31]"^^xdd:dateRange
 ```
 
 ---
@@ -532,20 +540,20 @@ WOQL.and(
 let v = Vars("interval");
 WOQL.interval(
   literal("2025-01-01", "xsd:date"),
-  literal("2025-04-01", "xsd:date"),
+  literal("2025-03-31", "xsd:date"),
   v.interval)
-// v.interval = "2025-01-01/2025-04-01"^^xdd:dateTimeInterval
+// v.interval = "2025-01-01T00:00:00Z/2025-04-01T00:00:00Z"^^xdd:dateTimeInterval
 ```
 
 ### From two inclusive dates (reporting convention)
 
 ```javascript
 let v = Vars("interval");
-WOQL.interval_inclusive(
+WOQL.interval(
   literal("2025-01-01", "xsd:date"),
   literal("2025-03-31", "xsd:date"),
   v.interval)
-// v.interval = "2025-01-01/2025-04-01"^^xdd:dateTimeInterval
+// v.interval = "2025-01-01T00:00:00Z/2025-04-01T00:00:00Z"^^xdd:dateTimeInterval
 // (internally: March 31 + 1 day = April 1)
 ```
 
@@ -557,7 +565,7 @@ WOQL.typecast(
   literal("[2025-01-01, 2025-03-31]", "xdd:dateRange"),
   "xdd:dateTimeInterval",
   v.interval)
-// v.interval = "2025-01-01/2025-04-01"^^xdd:dateTimeInterval
+// v.interval = "2025-01-01T00:00:00Z/2025-04-01T00:00:00Z"^^xdd:dateTimeInterval
 ```
 
 ### From a start date and duration (form 2)
@@ -599,8 +607,8 @@ All 13 Allen relations work identically. The predicate internally decomposes eac
 ```javascript
 WOQL.interval_relation_typed(
   literal("meets", "xsd:string"),
-  literal("2025-01-01/2025-04-01", "xdd:dateTimeInterval"),
-  literal("2025-04-01/2025-07-01", "xdd:dateTimeInterval"))
+  literal("2025-01-01/2025-03-31", "xdd:dateTimeInterval"),
+  literal("2025-04-01/2025-06-30", "xdd:dateTimeInterval"))
 // Succeeds
 ```
 
@@ -609,8 +617,8 @@ WOQL.interval_relation_typed(
 ```javascript
 let v = Vars("rel");
 WOQL.interval_relation_typed(v.rel,
-  literal("2025-01-01/2025-04-01", "xdd:dateTimeInterval"),
-  literal("2025-04-01/2025-07-01", "xdd:dateTimeInterval"))
+  literal("2025-01-01/2025-03-31", "xdd:dateTimeInterval"),
+  literal("2025-04-01/2025-06-30", "xdd:dateTimeInterval"))
 // v.rel = "meets"
 ```
 
@@ -629,8 +637,8 @@ WOQL.interval_relation_typed(v.rel,
 ```python
 from terminusdb_client.woqlquery import WOQLQuery as WOQL
 
-q1 = {"@type": "xdd:dateTimeInterval", "@value": "2025-01-01/2025-04-01"}
-q2 = {"@type": "xdd:dateTimeInterval", "@value": "2025-04-01/2025-07-01"}
+q1 = {"@type": "xdd:dateTimeInterval", "@value": "2025-01-01/2025-03-31"}
+q2 = {"@type": "xdd:dateTimeInterval", "@value": "2025-04-01/2025-06-30"}
 
 result = client.query(WOQL().interval_relation_typed("meets", q1, q2))
 assert len(result["bindings"]) == 1
@@ -642,7 +650,7 @@ assert len(result["bindings"]) == 1
 |----------|-----------|-----|
 | Endpoints already in separate variables | `interval_relation(rel, xs, xe, ys, ye)` | No need to construct intervals first |
 | Intervals stored as `xdd:dateTimeInterval` | `interval_relation_typed(rel, x, y)` | Cleaner — no unpacking needed |
-| Intervals constructed from inclusive dates | `interval_relation_typed(rel, x, y)` | Pair with `interval_inclusive` |
+| Intervals constructed from inclusive dates | `interval_relation_typed(rel, x, y)` | Construct intervals from inclusive dates with `interval` |
 
 ---
 
@@ -652,20 +660,20 @@ This example demonstrates the full cycle: reporting periods expressed as inclusi
 
 ```javascript
 let v = Vars("q1", "q2", "q3", "q4", "rel_q1_q2",
-             "q1_start", "q1_end_incl", "q2_start", "q2_end_incl");
+             "q1_range", "q2_range");
 
 WOQL.and(
   // Step 1: Construct intervals from inclusive reporting dates
-  WOQL.interval_inclusive(
+  WOQL.interval(
     literal("2025-01-01", "xsd:date"),
     literal("2025-03-31", "xsd:date"), v.q1),
-  WOQL.interval_inclusive(
+  WOQL.interval(
     literal("2025-04-01", "xsd:date"),
     literal("2025-06-30", "xsd:date"), v.q2),
-  WOQL.interval_inclusive(
+  WOQL.interval(
     literal("2025-07-01", "xsd:date"),
     literal("2025-09-30", "xsd:date"), v.q3),
-  WOQL.interval_inclusive(
+  WOQL.interval(
     literal("2025-10-01", "xsd:date"),
     literal("2025-12-31", "xsd:date"), v.q4),
 
@@ -679,12 +687,12 @@ WOQL.and(
   WOQL.interval_relation_typed(v.rel_q1_q2, v.q1, v.q2),
   // v.rel_q1_q2 = "meets"
 
-  // Step 4: Unpack back to inclusive dates for display
-  WOQL.interval_inclusive(v.q1_start, v.q1_end_incl, v.q1),
-  WOQL.interval_inclusive(v.q2_start, v.q2_end_incl, v.q2)
-  // v.q1_start = "2025-01-01", v.q1_end_incl = "2025-03-31"
-  // v.q2_start = "2025-04-01", v.q2_end_incl = "2025-06-30"
+  // Step 4: Convert back to inclusive dateRange for display
+  WOQL.typecast(v.q1, "xdd:dateRange", v.q1_range),
+  WOQL.typecast(v.q2, "xdd:dateRange", v.q2_range)
+  // v.q1_range = "[2025-01-01, 2025-03-31]"^^xdd:dateRange
+  // v.q2_range = "[2025-04-01, 2025-06-30]"^^xdd:dateRange
 )
 ```
 
-The key insight: inclusive dates go in, Allen's algebra verifies the temporal structure, and inclusive dates come back out. The half-open conversion happens transparently inside the interval type.
+The key insight: inclusive dates go in, Allen's algebra verifies the temporal structure on the half-open representation, and inclusive dates come back out via typecasting. The half-open conversion happens transparently inside the interval type.

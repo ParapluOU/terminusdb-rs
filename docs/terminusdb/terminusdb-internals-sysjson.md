@@ -8,7 +8,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/terminusdb-internals-sysjson/
+      canonical: https://terminusdb.com/docs/terminusdb-internals-sysjson/
 media: []
 tags:
   - typescript
@@ -629,5 +629,5 @@ If migrating from TerminusDB versions before v11.1.x:
 For issues or questions about `sys:JSON`:
 
 - [GitHub Issues](https://github.com/terminusdb/terminusdb/issues)
-- [Discord Community](https://discord.gg/terminusdb)
+- [Discord Community](https://discord.gg/GZ5gaCmBHc)
 - [Stack Overflow](https://stackoverflow.com/questions/tagged/terminusdb) - Tag: `terminusdb`

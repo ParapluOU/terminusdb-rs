@@ -12,12 +12,14 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/graphql-backlink.png
     alternates:
-      canonical: https://terminusdb.org/docs/back-links-in-graphql/
+      canonical: https://terminusdb.com/docs/back-links-in-graphql/
 ---
 
 {% callout type="note" %}
 **What you'll achieve**
 By the end of this guide, you will know how to query back-links (reverse relationships) using GraphQL.
+
+*GraphQL backlinks were added in [TerminusDB 10.1.10](/docs/releases/10-1-10-graphql-backlinks-path-queries/).*
 {% /callout %}
 
 > **Prerequisites:** TerminusDB running on `localhost:6363` with the Star Wars dataset cloned. If you haven't done this yet, follow the [Explore a Real Dataset](/docs/explore-a-real-dataset/) tutorial (Steps 1–2), or run:

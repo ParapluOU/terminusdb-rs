@@ -12,7 +12,7 @@ nextjs:
     description: A hands-on tutorial for using the TerminusDB Document API with curl to work with JSON, JSON-LD, RDF/XML, and Turtle formats. Covers a full round-trip cycle for enterprise reference data management.
     keywords: document api, curl, json-ld, rdf xml, turtle, ttl, enterprise, reference data, multi-format
     alternates:
-      canonical: https://terminusdb.org/docs/document-format-api-curl-tutorial/
+      canonical: https://terminusdb.com/docs/document-format-api-curl-tutorial/
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
 ---
@@ -34,7 +34,7 @@ By the end of this tutorial you will be able to:
 
 ## Prerequisites
 
-- A running TwinfoxDB Enterprise instance (Docker or local) on `localhost:6363`
+- A running TerminusDB Enterprise Edition instance (Docker or local) on `localhost:6363`
 - `curl` installed (any recent version)
 - Basic familiarity with JSON and HTTP
 
@@ -561,7 +561,7 @@ The `Content-Type: application/ld+json` header tells TerminusDB to parse the bod
 
 ## Step 9 — Import from RDF/XML
 
-You can also submit documents as RDF/XML. This is particularly valuable when receiving data from systems that only export in RDF formats — common in government, healthcare, and standards bodies. TwinfoxDB automatically reflows the document to match the internal structure of the document and its subdocuments.
+You can also submit documents as RDF/XML. This is particularly valuable when receiving data from systems that only export in RDF formats — common in government, healthcare, and standards bodies. TerminusDB automatically reflows the document to match the internal structure of the document and its subdocuments.
 
 ```bash
 curl -s -X POST \

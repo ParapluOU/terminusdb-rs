@@ -12,9 +12,9 @@ nextjs:
     description: A comprehensive guide to creating, reading, updating, and deleting subdocuments using WOQL queries in TerminusDB.
     keywords: terminusdb, data model, datalog, document, document database, document type, documents, json-ld
     openGraph:
-      images: https://assets.terminusdb.com/docs/woql-subdocuments.png
+      images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/woql-subdocument-handling/
+      canonical: https://terminusdb.com/docs/woql-subdocument-handling/
 ---
 
 {% callout type="note" %}

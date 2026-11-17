@@ -12,7 +12,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/woql-basics.png
     alternates:
-      canonical: https://terminusdb.org/docs/woql-basics/
+      canonical: https://terminusdb.com/docs/woql-basics/
 media:
   - alt: WOQL query playground in the TerminusDB dashboard
     caption: ""

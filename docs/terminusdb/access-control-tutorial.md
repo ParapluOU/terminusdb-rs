@@ -13,7 +13,7 @@ nextjs:
     openGraph:
       images: https://assets.terminusdb.com/docs/technical-documentation-terminuscms-og.png
     alternates:
-      canonical: https://terminusdb.org/docs/access-control-tutorial/
+      canonical: https://terminusdb.com/docs/access-control-tutorial/
 ---
 
 In this tutorial you will create a second user with read-only access to a database. By the end you will have:
