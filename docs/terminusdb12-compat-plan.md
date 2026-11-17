@@ -1,5 +1,95 @@
 # TerminusDB 12 Compatibility Plan
 
+## 12.1.0-rc3 upgrade (2026-11-17)
+
+Our fork pin `v12.1-rc-paraplu.1` was based on upstream `12.0.6+140`
+(`d0fcdc54`, 2026-07-13). Upstream is now **925 commits ahead** at
+`v12.1.0-rc3`, spanning releases 12.0.7, 12.0.8, 12.0.9 and 12.1.0-rc1/2/3.
+The surface below was derived by diffing the server tree itself
+(`src/terminus-schema/woql.json`, `src/server/routes.pl`, `src/core/api/`),
+cross-checked against `docs/terminusdb/releases/`. Procedure captured in the
+`terminusdb-version-upgrade` skill.
+
+### Server pin
+
+- [ ] Rebase the 4 fork patches onto `v12.1.0-rc3`, tag `v12.1.0-rc3-paraplu.1`,
+      bump `TERMINUSDB_VERSION` in `crates/bin/build.rs`, `crates/gql`'s
+      `terminusdb-community` rev, and the `[patch.crates-io]` pins in the root
+      `Cargo.toml` (rc3 pins `tdb-succinct` at tag `v0.2.1` = `3e57cc19`).
+- [ ] Rebuild `terminusdb-bin`; `cargo test -p terminusdb-bin` green.
+
+### WOQL AST (`crates/woql2`)
+
+Our AST already covers every rc3 `woql.json` class except these. Each needs the
+struct, a `Query` enum variant, DSL/macro constructors, and a **live** test.
+
+- [ ] `TripleRangeCount { subject, predicate, low, high, count, graph? }` —
+      index-answered count of triples whose object falls in `[low, high)`.
+- [ ] `TripleCount` pattern form — add optional `subject`/`predicate`/`object`/
+      `graph` alongside the existing `resource` form (both forms are valid).
+- [ ] `TripleRelation { subject, predicate, object, relation, value }` — Allen
+      relation match against an interval/instant reference value. Relations:
+      before, after, meets, met_by, overlaps, overlapped_by, starts, started_by,
+      during, contains, finishes, finished_by, equals.
+- [ ] `UuidV7 { base, uri }` — idgen predicate, sibling of `RandomKey`.
+- [ ] `Typecast` gained a `prefixes` property.
+
+### Schema & derive (`crates/schema`, `crates/schema/derive`)
+
+- [ ] `Key::UuidV7` (`@key: {"@type": "UuidV7"}`). Accepts an externally
+      supplied `@id` that need not sit under the class `@base`; otherwise mints
+      `<base>/<uuid-v7>`. Valid on classes, `@subdocument` classes and
+      `TaggedUnion` members.
+- [ ] `@shared` class annotation (`sys:shared`, serialised as `"@shared": []`):
+      own IRI, referenceable by many, cascade-deleted in the same transaction
+      when the last referrer goes. Was deferred in M7 — land it now.
+- [ ] Field-level `@unfold` on `Optional`/`Set`/`List`/`Array` properties,
+      independent of the target class being `@unfoldable`.
+
+### Client endpoints & parameters (`crates/client`)
+
+- [ ] `GET /api/document/<path>?counted=true` → `{"@type":
+      "api:DocumentCountResponse", "api:count": N}`. Mutually exclusive with
+      `id`/`ids`/`query` (server answers `api:CountedNotSupportedForSelector`).
+- [ ] Remaining new document-list params: `identifiers`, `id_prefix`, `raw_id`,
+      `xsd` (canonicalisation version; `1.0` is enterprise-only).
+- [ ] Document output formats `format=embedding` (Handlebars template from
+      `@metadata.embedding`) and `format=markdown`. `jsonld`/`rdfxml`/`turtle`
+      are enterprise-gated — out of scope.
+- [ ] `GET /api/changes/<path>?count=N` → `{added, changed, deleted}` document
+      ID lists for a branch head or a specific commit. New endpoint.
+- [ ] `GET /api/schema/<path>` — the class-frame endpoint, which we never
+      wrapped at all, plus its new `format=jsonschema` mode (`type`,
+      `compress_ids`, `expand_abstract`).
+- [ ] History params we lack: `diff`, `streaming` (NDJSON), `fast`, `before`,
+      `after`, `complete`, `graph_type`.
+- [ ] `unfold` on `POST /api/diff` (default `true`; `false` compares documents
+      as stored).
+- [ ] Typed `Insert`/`Delete` patch operations for `POST /api/patch` alongside
+      the existing field-level `SwapValue`, including `@capture`/`@ref`.
+
+### GraphQL
+
+- [ ] Native **subscriptions over SSE** (graphql-sse, distinct-connections
+      mode) on `POST /api/graphql/<org>/<db>` with `Accept: text/event-stream`:
+      `connected` / `next` / `complete` events, `<Type>_added|_updated|_deleted`
+      fields, `_ChangeSet` (one event per commit, `include_children`), and
+      `_CommitMetadata`. This supersedes our own deprecated SSE plugin
+      (`http/sse_manager.rs`, `http/changeset.rs`, `http/change_listener.rs`) —
+      do not revive that; build on the server's protocol.
+- [ ] Fast `_count` (unfiltered `_count` is index-answered in 12.1).
+
+### Explicitly deferred (with reason)
+
+- **Versioned search** (`api_search.pl`: search, similar, duplicates,
+  statistics, resolve, compare, delete-domain) — fronts an external
+  `tdb-search` engine and is gated on `indexer_backend(http_vectorlink)`. Not
+  runnable against the embedded community server, so untestable here.
+- **Enterprise-only surfaces** — `jsonld`/`rdfxml`/`turtle` document output,
+  `xsd=1.0` canonicalisation, the `fast` history enrichment path.
+
+---
+
 ## Live verification against 12.1 (2026-07-16)
 
 Target retargeted v12.0.6 → **v12.1** (upstream `12.1-rc` branch; no v12.1 tag
