@@ -7,7 +7,6 @@
 // and `unused_variables` — stays ACTIVE so real bugs surface.
 #![allow(dead_code, incomplete_features)]
 
-
 use terminusdb_schema::*;
 use terminusdb_schema_derive::*;
 
@@ -27,6 +26,9 @@ pub use http::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod debug;
+// Platform-independent: a plain string-rendering type with no native
+// dependencies, so it must NOT inherit the wasm gate above.
+pub mod cache_condition;
 pub mod deserialize;
 // The top-level `document`/`log`/`query` modules deliberately share names with the
 // `http::{document,log,query}` submodules pulled in by `pub use http::*` above; the
@@ -234,6 +236,7 @@ fn test_commit_id_conversions() {
     );
 }
 
+pub use self::cache_condition::CacheCondition;
 pub use self::document::GetOpts;
 // `log` is a native-only module (it drives the HTTP commit-log endpoints); its
 // re-export must be gated to match, or wasm builds fail on the missing module.

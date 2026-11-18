@@ -113,6 +113,13 @@ metrics! {
         store_put_errors: "Content-addressed store writes that failed (body kept inline).",
         store_promotions: "Bodies promoted from the warm tier into the hot tier on read.",
         store_evictions: "Bodies evicted from the hot tier to stay within budget.",
+        woql_without_conditions: "WOQL reads bypassed because the client stated no \
+                                  invalidation condition. WOQL can return data without \
+                                  revealing which entities it was derived from, so a \
+                                  condition has to come from the caller.",
+        woql_bad_conditions: "WOQL reads bypassed because a stated invalidation \
+                              condition did not parse.",
+        woql_with_conditions: "WOQL reads cached against client-stated conditions.",
     }
     gauges {
         store_bytes: "Approximate bytes held by the fragment store.",

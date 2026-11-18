@@ -332,6 +332,24 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
         return response;
     }
 
+    // Visibility into the opt-in WOQL rule: an operator needs to see how often
+    // a query declines to be cached, and why.
+    match &plan {
+        Plan::Bypass { reason } => match *reason {
+            "woql needs an explicit invalidation condition" => {
+                state.engine.metrics().woql_without_conditions.inc()
+            }
+            "woql invalidation condition did not parse" => {
+                state.engine.metrics().woql_bad_conditions.inc()
+            }
+            _ => {}
+        },
+        Plan::Read { terms, .. } if view.target.endpoint() == "woql" && !terms.is_empty() => {
+            state.engine.metrics().woql_with_conditions.inc()
+        }
+        _ => {}
+    }
+
     match plan {
         Plan::Bypass { reason } => {
             forward(&state, &request, CacheState::Bypass, Some(reason)).await

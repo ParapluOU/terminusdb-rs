@@ -431,6 +431,268 @@ pub enum TermBucket {
 /// logged, compared in tests, and iterated while matching, and a stable order
 /// makes all three reproducible.
 pub type TermSet = std::collections::BTreeSet<Term>;
+// ------------------------------------------------------------ text encoding
+
+/// The wire encoding of a [`Term`], for the `X-Reactor-Invalidate-On` header.
+///
+/// A client states a cache condition as text, so the encoding is part of the
+/// public interface and has to be stable and exactly round-trippable:
+///
+/// ```text
+/// doc:Person/alice
+/// docfield:Person/alice.name
+/// edge:Person/alice.friend
+/// members:Person
+/// class:Person
+/// classfield:Person.name
+/// index:Person.name="Ann"
+/// backlink:Person/alice.friend<-Person
+/// path:Person,Company
+/// path:Person/alice>Person,Company
+/// path:*
+/// schema
+/// everything
+/// ```
+///
+/// Two decisions worth stating, because both are places where a convenient
+/// choice would have been an unsound one:
+///
+/// * **`index:` values are canonical JSON, not bare scalars.** `index:Person.age=30`
+///   is the number 30; `index:Person.name="Ann"` is the string `Ann`. A bare
+///   `index:Person.name=Ann` is **rejected**. The tempting alternative — guess
+///   the type, or treat anything unparseable as a string — silently produces a
+///   [`ValueKey`] that does not equal the one `fire` derives from the document,
+///   so the entry is never invalidated by the change it named. Stale forever, and
+///   invisible. Rejecting is the only safe answer, and it matches
+///   [`ValueKey::of`] exactly.
+/// * **The last separator wins.** A document id may contain dots and slashes
+///   (`Person/alice.v2`), so `docfield:`/`edge:`/`classfield:` split on the
+///   *last* `.` and `backlink:` on the last `<-`. Property names containing a
+///   dot are therefore not expressible; that is documented rather than guessed
+///   at.
+impl std::fmt::Display for Term {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Term::DocField(id, prop) => write!(f, "docfield:{id}.{prop}"),
+            Term::Doc(id) => write!(f, "doc:{id}"),
+            Term::Edge(id, prop) => write!(f, "edge:{id}.{prop}"),
+            Term::Backlink {
+                target,
+                prop,
+                from_class,
+            } => write!(f, "backlink:{target}.{prop}<-{from_class}"),
+            Term::Index { class, prop, value } => {
+                write!(f, "index:{class}.{prop}={}", value.as_str())
+            }
+            Term::ClassField(class, prop) => write!(f, "classfield:{class}.{prop}"),
+            Term::Members(class) => write!(f, "members:{class}"),
+            Term::Class(class) => write!(f, "class:{class}"),
+            Term::Path { from, classes } => {
+                // `*` for "no derivable classes", which is the barrier form.
+                // It needs a spelling of its own so every `Term` round-trips;
+                // an empty payload stays a parse error.
+                let classes = if classes.is_empty() {
+                    "*".to_owned()
+                } else {
+                    classes
+                        .iter()
+                        .map(ClassName::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                match from {
+                    Some(from) => write!(f, "path:{from}>{classes}"),
+                    None => write!(f, "path:{classes}"),
+                }
+            }
+            Term::Schema => f.write_str("schema"),
+            Term::Everything => f.write_str("everything"),
+        }
+    }
+}
+
+impl Term {
+    /// Parse the wire encoding. See [`Term`]'s `Display` for the grammar.
+    ///
+    /// `None` on anything unrecognized — never a guess. A caller that cannot
+    /// parse a stated condition must refuse to cache, because a condition we
+    /// misunderstood is worse than no condition at all.
+    pub fn parse(text: &str) -> Option<Term> {
+        let text = text.trim();
+        match text {
+            "schema" => return Some(Term::Schema),
+            "everything" => return Some(Term::Everything),
+            _ => {}
+        }
+        let (tag, rest) = text.split_once(':')?;
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return None;
+        }
+        // A comma separates *terms*, and no id, class or property name may
+        // contain one. Rejecting it here is what stops a malformed list from
+        // being absorbed into a name: `class:Person,typo` must fail, not become
+        // a condition on a class called `Person,typo` that nothing ever fires.
+        // `path:` is the one tag whose payload is itself comma-separated.
+        if tag.trim() != "path" && rest.contains(',') {
+            return None;
+        }
+        match tag.trim() {
+            "doc" => Some(Term::Doc(DocId::parse(rest))),
+            "members" => Some(Term::Members(ClassName::new(rest))),
+            "class" => Some(Term::Class(ClassName::new(rest))),
+            "docfield" => {
+                let (id, prop) = split_last_dot(rest)?;
+                Some(Term::DocField(DocId::parse(id), PropName::new(prop)))
+            }
+            "edge" => {
+                let (id, prop) = split_last_dot(rest)?;
+                Some(Term::Edge(DocId::parse(id), PropName::new(prop)))
+            }
+            "classfield" => {
+                let (class, prop) = split_last_dot(rest)?;
+                Some(Term::ClassField(ClassName::new(class), PropName::new(prop)))
+            }
+            "index" => {
+                // Split on the FIRST `=`: a canonical JSON value may contain one.
+                let (lhs, value) = rest.split_once('=')?;
+                let (class, prop) = split_last_dot(lhs.trim())?;
+                let parsed: serde_json::Value = serde_json::from_str(value.trim()).ok()?;
+                Some(Term::Index {
+                    class: ClassName::new(class),
+                    prop: PropName::new(prop),
+                    value: ValueKey::of(&parsed),
+                })
+            }
+            "backlink" => {
+                let idx = rest.rfind("<-")?;
+                let (lhs, from_class) = (&rest[..idx], &rest[idx + 2..]);
+                let (target, prop) = split_last_dot(lhs.trim())?;
+                let from_class = from_class.trim();
+                if from_class.is_empty() {
+                    return None;
+                }
+                Some(Term::Backlink {
+                    target: DocId::parse(target),
+                    prop: PropName::new(prop),
+                    from_class: ClassName::new(from_class),
+                })
+            }
+            "path" => {
+                let (from, classes) = match rest.split_once('>') {
+                    Some((from, classes)) => {
+                        let from = from.trim();
+                        if from.is_empty() {
+                            return None;
+                        }
+                        (Some(DocId::parse(from)), classes)
+                    }
+                    None => (None, rest),
+                };
+                let classes = classes.trim();
+                if classes.is_empty() {
+                    // An empty payload is a typo, not a barrier. The barrier is
+                    // spelled `path:*` (or, more plainly, `everything`).
+                    return None;
+                }
+                if classes == "*" {
+                    return Some(Term::Path {
+                        from,
+                        classes: Vec::new(),
+                    });
+                }
+                let classes: Vec<ClassName> = classes
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|c| !c.is_empty())
+                    .map(ClassName::new)
+                    .collect();
+                if classes.is_empty() {
+                    // The payload was only separators (`path:,,`): a typo.
+                    return None;
+                }
+                Some(Term::Path { from, classes })
+            }
+            _ => None,
+        }
+    }
+
+    /// Parse a comma-separated list of conditions.
+    ///
+    /// All-or-nothing: if any element fails, the whole list fails. A partially
+    /// understood condition set is not a smaller condition set — it is a wrong
+    /// one, and acting on it would under-invalidate.
+    pub fn parse_list(text: &str) -> Option<Vec<Term>> {
+        let mut out = Vec::new();
+        for element in split_conditions(text) {
+            out.push(Term::parse(element)?);
+        }
+        if out.is_empty() {
+            return None;
+        }
+        out.sort();
+        out.dedup();
+        Some(out)
+    }
+}
+
+impl std::str::FromStr for Term {
+    type Err = ();
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Term::parse(text).ok_or(())
+    }
+}
+
+/// Split a condition list on commas that separate *terms*.
+///
+/// A `path:` term's own class list is comma-separated, so a naive split would
+/// tear it apart. Splitting only on commas that are followed by a recognized
+/// tag keeps both grammars in one header.
+fn split_conditions(text: &str) -> Vec<&str> {
+    const TAGS: &[&str] = &[
+        "doc:",
+        "docfield:",
+        "edge:",
+        "members:",
+        "class:",
+        "classfield:",
+        "index:",
+        "backlink:",
+        "path:",
+        "schema",
+        "everything",
+    ];
+    let mut out = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+    for (i, byte) in bytes.iter().enumerate() {
+        if *byte != b',' {
+            continue;
+        }
+        let tail = text[i + 1..].trim_start();
+        if TAGS.iter().any(|tag| tail.starts_with(tag)) {
+            out.push(text[start..i].trim());
+            start = i + 1;
+        }
+    }
+    let last = text[start..].trim();
+    if !last.is_empty() {
+        out.push(last);
+    }
+    out.retain(|element| !element.is_empty());
+    out
+}
+
+/// Split on the last `.`, rejecting an empty side.
+fn split_last_dot(text: &str) -> Option<(&str, &str)> {
+    let idx = text.rfind('.')?;
+    let (left, right) = (&text[..idx], &text[idx + 1..]);
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    Some((left, right))
+}
 
 #[cfg(test)]
 mod tests {
@@ -1051,6 +1313,374 @@ mod tests {
                 Term::Everything,
             ]
         );
+    }
+
+    // ----------------------------------------------------- text encoding
+
+    /// Every variant, through `Display` and back. This encoding is a public
+    /// interface — clients write it into a header — so a silent change here
+    /// would break callers and, worse, could change which term a stated
+    /// condition means.
+    #[test]
+    fn every_term_round_trips_through_its_text_encoding() {
+        for term in term_population() {
+            let text = term.to_string();
+            let parsed =
+                Term::parse(&text).unwrap_or_else(|| panic!("{text} (from {term:?}) must parse"));
+            assert_eq!(parsed, term, "round trip changed {text}");
+        }
+    }
+
+    #[test]
+    fn the_documented_spellings_parse_to_the_expected_terms() {
+        let cases: Vec<(&str, Term)> = vec![
+            ("doc:Person/alice", Term::Doc(doc("Person/alice"))),
+            (
+                "docfield:Person/alice.name",
+                Term::DocField(doc("Person/alice"), prop("name")),
+            ),
+            (
+                "edge:Person/alice.friend",
+                Term::Edge(doc("Person/alice"), prop("friend")),
+            ),
+            ("members:Person", Term::Members(cls("Person"))),
+            ("class:Person", Term::Class(cls("Person"))),
+            (
+                "classfield:Person.name",
+                Term::ClassField(cls("Person"), prop("name")),
+            ),
+            (
+                "index:Person.name=\"Ann\"",
+                Term::Index {
+                    class: cls("Person"),
+                    prop: prop("name"),
+                    value: vk(json!("Ann")),
+                },
+            ),
+            (
+                "backlink:Person/alice.friend<-Person",
+                Term::Backlink {
+                    target: doc("Person/alice"),
+                    prop: prop("friend"),
+                    from_class: cls("Person"),
+                },
+            ),
+            (
+                "path:Person,Company",
+                Term::Path {
+                    from: None,
+                    classes: vec![cls("Person"), cls("Company")],
+                },
+            ),
+            (
+                "path:Person/alice>Person,Company",
+                Term::Path {
+                    from: Some(doc("Person/alice")),
+                    classes: vec![cls("Person"), cls("Company")],
+                },
+            ),
+            (
+                "path:*",
+                Term::Path {
+                    from: None,
+                    classes: vec![],
+                },
+            ),
+            (
+                "path:Person/alice>*",
+                Term::Path {
+                    from: Some(doc("Person/alice")),
+                    classes: vec![],
+                },
+            ),
+            ("schema", Term::Schema),
+            ("everything", Term::Everything),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(Term::parse(text), Some(expected.clone()), "parsing {text}");
+            assert_eq!(expected.to_string(), text, "rendering {expected:?}");
+        }
+    }
+
+    #[test]
+    fn ids_containing_dots_and_slashes_survive_the_encoding() {
+        // The id is everything before the LAST dot, so a dotted id is fine.
+        let term = Term::DocField(doc("Person/alice.v2/sub"), prop("name"));
+        assert_eq!(term.to_string(), "docfield:Person/alice.v2/sub.name");
+        assert_eq!(Term::parse(&term.to_string()), Some(term));
+
+        let edge = Term::Edge(doc("A/b.c.d"), prop("p"));
+        assert_eq!(Term::parse(&edge.to_string()), Some(edge));
+
+        let backlink = Term::Backlink {
+            target: doc("Person/a.b"),
+            prop: prop("friend"),
+            from_class: cls("Person"),
+        };
+        assert_eq!(Term::parse(&backlink.to_string()), Some(backlink));
+    }
+
+    #[test]
+    fn an_index_value_containing_an_equals_sign_survives() {
+        // Split on the FIRST `=`, so the value may contain more of them.
+        let term = Term::Index {
+            class: cls("Person"),
+            prop: prop("motto"),
+            value: vk(json!("a=b=c")),
+        };
+        assert_eq!(term.to_string(), "index:Person.motto=\"a=b=c\"");
+        assert_eq!(Term::parse(&term.to_string()), Some(term));
+    }
+
+    #[test]
+    fn index_values_are_canonical_json_so_types_cannot_be_confused() {
+        // The number 30 and the string "30" are different buckets, and `fire`
+        // distinguishes them. A bare scalar would make us guess which was
+        // meant, and a wrong guess means the entry is never invalidated.
+        let number = Term::parse("index:Person.age=30").expect("a JSON number");
+        let string = Term::parse("index:Person.age=\"30\"").expect("a JSON string");
+        assert_ne!(number, string);
+        assert_eq!(
+            number,
+            Term::Index {
+                class: cls("Person"),
+                prop: prop("age"),
+                value: vk(json!(30))
+            }
+        );
+
+        // A bare, unquoted scalar is rejected rather than assumed to be a
+        // string: see the encoding docs for why.
+        assert_eq!(Term::parse("index:Person.name=Ann"), None);
+    }
+
+    #[test]
+    fn an_index_value_matches_what_fire_would_derive() {
+        // The whole point of the encoding: a client's stated condition has to
+        // equal the term a commit fires, or it invalidates nothing.
+        let stated = Term::parse("index:Person.name=\"Ann\"").unwrap();
+        let fired = Term::Index {
+            class: cls("Person"),
+            prop: prop("name"),
+            value: ValueKey::of(&json!("Ann")),
+        };
+        assert_eq!(stated, fired);
+    }
+
+    #[test]
+    fn unparseable_conditions_are_rejected_not_guessed() {
+        for text in [
+            "",
+            "   ",
+            "nonsense",
+            "doc:",
+            "doc",
+            "docfield:Person/alice",          // no property
+            "docfield:.name",                 // no id
+            "docfield:Person/alice.",         // empty property
+            "classfield:Person",              // no property
+            "index:Person.name",              // no value
+            "index:Person=\"Ann\"",           // no property
+            "index:Person.name=Ann",          // not canonical JSON
+            "index:Person.name=",             // empty value
+            "backlink:Person/alice.friend",   // no from-class
+            "backlink:Person/alice<-Person",  // no property
+            "backlink:Person/alice.friend<-", // empty from-class
+            "path:",
+            "path:Person/alice>", // from but no classes
+            "path:>Person",       // classes but empty from
+            "future_term:x",
+            "SCHEMA", // case-sensitive on purpose
+        ] {
+            assert_eq!(Term::parse(text), None, "{text:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn whitespace_around_a_condition_is_tolerated() {
+        assert_eq!(
+            Term::parse("  class:Person  "),
+            Some(Term::Class(cls("Person")))
+        );
+        assert_eq!(Term::parse(" schema "), Some(Term::Schema));
+    }
+
+    #[test]
+    fn a_condition_list_parses_and_is_deduplicated() {
+        let parsed = Term::parse_list("class:Person, members:Company ,doc:Person/alice").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                Term::Doc(doc("Person/alice")),
+                Term::Members(cls("Company")),
+                Term::Class(cls("Person")),
+            ],
+            "sorted precise-to-coarse and deduplicated"
+        );
+        assert_eq!(
+            Term::parse_list("class:Person,class:Person").unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_path_terms_own_comma_list_is_not_split_into_separate_terms() {
+        // `path:` is the one term whose payload contains commas.
+        let parsed = Term::parse_list("path:Person,Company,class:Agent").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                Term::Class(cls("Agent")),
+                Term::Path {
+                    from: None,
+                    classes: vec![cls("Person"), cls("Company")]
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_may_not_absorb_a_following_term() {
+        // Regression, and it was a soundness hole: because a comma only split
+        // the list when followed by a recognized tag, `class:Person,typo`
+        // parsed as a condition on a class literally called `Person,typo` —
+        // which nothing ever fires, so the entry would have been cached and
+        // then never invalidated. No name may contain a comma.
+        assert_eq!(Term::parse("class:Person,typo"), None);
+        assert_eq!(Term::parse("members:Person,typo"), None);
+        assert_eq!(Term::parse("doc:Person/alice,typo"), None);
+        assert_eq!(Term::parse("classfield:Person,x.name"), None);
+        assert_eq!(Term::parse_list("class:Person,typo"), None);
+    }
+
+    #[test]
+    fn a_list_with_one_bad_element_fails_entirely() {
+        // All-or-nothing: a partly understood condition set is a wrong one, not
+        // a smaller one.
+        assert_eq!(Term::parse_list("class:Person,nonsense"), None);
+        assert_eq!(Term::parse_list("nonsense,class:Person"), None);
+        assert_eq!(Term::parse_list(""), None);
+        assert_eq!(Term::parse_list(" , "), None);
+    }
+
+    #[test]
+    fn from_str_agrees_with_parse() {
+        use std::str::FromStr;
+        assert_eq!(
+            Term::from_str("class:Person").unwrap(),
+            Term::Class(cls("Person"))
+        );
+        assert!(Term::from_str("nope").is_err());
+    }
+
+    /// The client's `CacheCondition` renders the same encoding this parses.
+    ///
+    /// `terminusdb-client` must not depend on this crate, so its renderer is a
+    /// separate implementation of the same grammar — which means the two can
+    /// drift. This test is the only thing that would notice, so it covers every
+    /// constructor.
+    #[test]
+    fn client_cache_conditions_parse_as_the_terms_they_name() {
+        use terminusdb_client::CacheCondition;
+        let cases: Vec<(CacheCondition, Term)> = vec![
+            (
+                CacheCondition::doc("Person/alice"),
+                Term::Doc(doc("Person/alice")),
+            ),
+            (
+                CacheCondition::doc_field("Person/alice", "name"),
+                Term::DocField(doc("Person/alice"), prop("name")),
+            ),
+            (
+                CacheCondition::edge("Person/alice", "friend"),
+                Term::Edge(doc("Person/alice"), prop("friend")),
+            ),
+            (
+                CacheCondition::members("Person"),
+                Term::Members(cls("Person")),
+            ),
+            (CacheCondition::class("Person"), Term::Class(cls("Person"))),
+            (
+                CacheCondition::class_field("Person", "name"),
+                Term::ClassField(cls("Person"), prop("name")),
+            ),
+            (
+                CacheCondition::index("Person", "name", json!("Ann")),
+                Term::Index {
+                    class: cls("Person"),
+                    prop: prop("name"),
+                    value: vk(json!("Ann")),
+                },
+            ),
+            (
+                CacheCondition::index("Person", "age", json!(30)),
+                Term::Index {
+                    class: cls("Person"),
+                    prop: prop("age"),
+                    value: vk(json!(30)),
+                },
+            ),
+            (
+                CacheCondition::backlink("Person/alice", "friend", "Person"),
+                Term::Backlink {
+                    target: doc("Person/alice"),
+                    prop: prop("friend"),
+                    from_class: cls("Person"),
+                },
+            ),
+            (
+                CacheCondition::path(["Person", "Company"]),
+                Term::Path {
+                    from: None,
+                    classes: vec![cls("Person"), cls("Company")],
+                },
+            ),
+            (
+                CacheCondition::path_from("Person/alice", ["Person"]),
+                Term::Path {
+                    from: Some(doc("Person/alice")),
+                    classes: vec![cls("Person")],
+                },
+            ),
+            (
+                CacheCondition::path(Vec::<String>::new()),
+                Term::Path {
+                    from: None,
+                    classes: vec![],
+                },
+            ),
+            (CacheCondition::schema(), Term::Schema),
+            (CacheCondition::everything(), Term::Everything),
+        ];
+        for (condition, expected) in cases {
+            let rendered = condition.to_string();
+            assert_eq!(
+                Term::parse(&rendered),
+                Some(expected.clone()),
+                "the client renders {condition:?} as {rendered:?}, which must parse as \
+                 {expected:?}"
+            );
+            assert_eq!(
+                expected.to_string(),
+                rendered,
+                "and both sides must render it identically"
+            );
+        }
+    }
+
+    #[test]
+    fn a_client_condition_list_parses_as_a_whole() {
+        use terminusdb_client::CacheCondition;
+        let header = CacheCondition::header_value(&[
+            CacheCondition::class("Person"),
+            CacheCondition::members("Company"),
+            CacheCondition::index("Person", "age", json!(30)),
+        ])
+        .expect("a non-empty list");
+        let parsed = Term::parse_list(&header).expect("the client's header must parse");
+        assert_eq!(parsed.len(), 3, "got {parsed:?} from {header}");
+        assert!(parsed.contains(&Term::Class(cls("Person"))));
+        assert!(parsed.contains(&Term::Members(cls("Company"))));
     }
 
     #[test]

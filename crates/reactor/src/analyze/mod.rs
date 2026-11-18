@@ -315,6 +315,34 @@ pub enum Augment {
     DocIds,
 }
 
+/// The header through which a client states when a cached answer dies.
+///
+/// `X-Reactor-Invalidate-On: class:Person, members:Company`
+///
+/// This exists because of a hard limit on what a proxy can infer. A WOQL query
+/// can return data without revealing which entities the data was derived from —
+/// `select ?n where { alice friend ?f . ?f name ?n }` returns a name and nothing
+/// that identifies `?f` — so neither the response nor the AST tells us what the
+/// answer depends on. Only the caller knows. See [`crate::analyze::woql`].
+pub const INVALIDATE_ON_HEADER: &str = "x-reactor-invalidate-on";
+
+/// The conditions a request stated, if any.
+///
+/// * `None` — the header was absent.
+/// * `Some(Err(()))` — the header was present but did not parse. The caller
+///   must **bypass**: a condition we misunderstood is worse than no condition,
+///   because we would cache against a term that never fires.
+/// * `Some(Ok(terms))` — use these as the dependency set.
+#[allow(clippy::result_unit_err)]
+pub fn stated_conditions(headers: &http::HeaderMap) -> Option<Result<Vec<Term>, ()>> {
+    let raw = headers.get(INVALIDATE_ON_HEADER)?;
+    let text = match raw.to_str() {
+        Ok(text) => text,
+        Err(_) => return Some(Err(())),
+    };
+    Some(Term::parse_list(text).ok_or(()))
+}
+
 /// Analyzer tuning.
 #[derive(Clone, Debug)]
 pub struct AnalyzeConfig {

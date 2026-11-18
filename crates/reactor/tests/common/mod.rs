@@ -289,6 +289,17 @@ impl Reactor {
         config.upstream.org = "admin".to_owned();
         // Tests want to see capture happen, not wait for it.
         config.capture.poll_interval_ms = 100;
+        // Default to the poll driver in tests.
+        //
+        // FINDING: with `driver = "both"` the `_ChangeSet` GraphQL subscription
+        // takes the embedded 12.1.0-rc3 server down — "Plugin handler failed"
+        // followed by `unwind(halt(1))`, i.e. the server process exits, after
+        // which every later test in the binary gets connection-refused. That
+        // matches this workspace's note that the changeset-SSE plugin is
+        // unstable and is disabled in docker. The subscription driver is
+        // exercised on purpose by `tests/capture.rs`, which is the one place
+        // that should risk it; everything else polls.
+        config.capture.driver = Driver::Poll;
         config.consistency.write_fence_ms = 10_000;
         config.consistency.min_version_wait_ms = 2_000;
         config.namespaces = vec![NamespaceConfig {
@@ -440,6 +451,24 @@ impl Reactor {
             .post(self.url(path_and_query))
             .basic_auth("admin", Some("root"))
             .json(&body);
+        Probe::of(request.send().await?).await
+    }
+
+    /// A raw POST with extra headers, for stating cache conditions.
+    pub async fn post_with(
+        &self,
+        path_and_query: &str,
+        body: serde_json::Value,
+        headers: &[(&str, &str)],
+    ) -> Result<Probe> {
+        let mut request = self
+            .http
+            .post(self.url(path_and_query))
+            .basic_auth("admin", Some("root"))
+            .json(&body);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
         Probe::of(request.send().await?).await
     }
 
@@ -607,6 +636,24 @@ pub mod models {
             id: EntityIDFor::new(id)?,
             name: name.to_owned(),
             age,
+        })
+    }
+
+    /// A second top-level class, so a test can commit to something unrelated.
+    #[derive(Debug, Clone, PartialEq, TerminusDBModel, FromTDBInstance)]
+    #[tdb(id_field = "id")]
+    pub struct Company {
+        /// Stable id.
+        pub id: EntityIDFor<Self>,
+        /// A value property.
+        pub name: String,
+    }
+
+    /// Build a `Company`.
+    pub fn company(id: &str, name: &str) -> anyhow::Result<Company> {
+        Ok(Company {
+            id: EntityIDFor::new(id)?,
+            name: name.to_owned(),
         })
     }
 

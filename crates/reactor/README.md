@@ -61,6 +61,76 @@ precision are now both demonstrated.
 | `frontend/*`, `config`, `main` | the proxy itself | done |
 | `tests/*` | fidelity, caching, auth, capture, spikes | done |
 
+### What is cached, and what has to be asked for
+
+**`/api/document` is fully cacheable, with no cooperation from the client.** Its
+read set is derivable from the request: `id=` is one document, `type=` is a
+class's membership, `graph_type=schema` is the schema. GraphQL likewise, because
+Reactor injects `_id`/`_type` and maps the response back to documents.
+
+**WOQL is opt-in.** A WOQL query can return data without revealing which
+entities the data was derived from:
+
+```text
+select ?n where { alice friend ?f . ?f name ?n }
+```
+
+The answer is a list of names. Nothing in it identifies `?f`, so renaming one of
+those friends changes the answer with no trace in the cached bytes — and the AST
+is no help either, because the subject is a variable. Our analyzer is *sound*
+about this (the regression test
+`a_traversal_through_unnamed_documents_depends_on_everything` proves it emits the
+`Everything` barrier), but soundness is not the issue: an entry that depends on
+`Everything` is filled, stored and then discarded by the very next commit in the
+namespace. Overhead and an extra thing to get wrong, for no hit rate.
+
+So a WOQL read is cached **only** when the caller states what invalidates it:
+
+```http
+POST /api/woql/admin/mydb
+X-Reactor-Invalidate-On: class:Person, members:Company
+```
+
+From Rust, additively and without hand-writing the header:
+
+```rust
+use terminusdb_client::CacheCondition;
+
+let result = client
+    .query_with_conditions(Some(spec), query, &[CacheCondition::class("Person")])
+    .await?;
+```
+
+Three rules, all of them deliberate:
+
+* **No conditions ⇒ forwarded uncached.** The safe default, not a failure.
+* **An unparseable condition ⇒ forwarded uncached**, and said so in
+  `Cache-Status`. A condition we misunderstood is worse than none, because we
+  would cache against a term that never fires.
+* **A condition cannot widen what is allowed.** The AST analysis still refuses a
+  query carrying a write (that becomes a forwarded write) or one reading another
+  database via `Using`/`From`/`Into`. A client may say *when* an answer dies; it
+  may not thereby make a mutation or a cross-namespace read cacheable.
+
+A commit-pinned WOQL query (`…/local/commit/<id>`) is cached with no condition,
+because nothing can change under it.
+
+Stating a *wrong* condition is the one way to get stale data out of Reactor, and
+it is the caller's to get right: name every class the query touches.
+
+The condition grammar (`Term`'s `Display`/`parse`, round-tripped in both crates):
+
+```text
+doc:Person/alice          docfield:Person/alice.name   edge:Person/alice.friend
+members:Person            class:Person                 classfield:Person.name
+index:Person.name="Ann"   backlink:Person/alice.friend<-Person
+path:Person,Company       schema                       everything
+```
+
+`index:` values are canonical JSON, so `=30` is the number and `="30"` is the
+string — a bare `=Ann` is rejected rather than guessed at, because guessing the
+type wrong produces a condition that silently never fires.
+
 ### What the tests actually prove, and what they don't
 
 **Soundness is demonstrated** against a live node: answers are correct after a

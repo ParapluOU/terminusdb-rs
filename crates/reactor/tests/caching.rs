@@ -16,7 +16,7 @@
 mod common;
 
 use anyhow::Result;
-use common::models::{person, Person};
+use common::models::{company, person, Company, Person};
 use common::Reactor;
 use std::time::Duration;
 use terminusdb_client::DocumentInsertArgs;
@@ -624,6 +624,216 @@ async fn an_untracked_namespace_is_never_cached() -> Result<()> {
                 .get("/api/document/admin/some_other_db?id=Person/alice")
                 .await?;
             assert!(again.is_bypass(), "got {}", again.cache_status());
+            Ok(())
+        })
+        .await
+}
+
+/// **WOQL caching, end to end.** A read with a stated condition caches, survives
+/// an unrelated-class commit, and dies on a commit to the class it named.
+///
+/// This is the pay-off of the opt-in design: without a condition this query
+/// would depend on `Everything` and be dropped by every commit, so there would
+/// be nothing to test.
+#[tokio::test]
+async fn a_woql_read_with_a_condition_caches_and_invalidates_precisely() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person, Company), _, _, _>("rx_cache_woql", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args.clone())
+                .await?;
+            direct
+                .insert_instance(&company("acme", "Acme")?, args.clone())
+                .await?;
+
+            let reactor = Reactor::start(up, &spec.db).await?;
+            let path = format!("/api/woql/admin/{}", spec.db);
+            let query = terminusdb_woql2::triple!(
+                terminusdb_woql2::node!("Person/alice"),
+                "name",
+                terminusdb_woql2::var!("n")
+            );
+            let body = serde_json::json!({"query": query.to_woql_json()});
+
+            // Without a condition: forwarded, never cached, however many
+            // times it is asked.
+            let bare = reactor.post(&path, body.clone()).await?;
+            assert_eq!(bare.status, 200, "body: {}", bare.text());
+            assert!(
+                bare.is_bypass(),
+                "WOQL without a condition must not be cached, got {}",
+                bare.cache_status()
+            );
+            let bare_again = reactor.post(&path, body.clone()).await?;
+            assert!(bare_again.is_bypass(), "got {}", bare_again.cache_status());
+
+            // With a condition: cached.
+            let conditions = terminusdb_client::CacheCondition::header_value(&[
+                terminusdb_client::CacheCondition::class("Person"),
+            ])
+            .unwrap();
+            let first = reactor
+                .post_with(
+                    &path,
+                    body.clone(),
+                    &[("x-reactor-invalidate-on", &conditions)],
+                )
+                .await?;
+            assert_eq!(first.status, 200, "body: {}", first.text());
+            assert!(
+                first.is_miss(),
+                "the first conditioned read is a miss, got {}",
+                first.cache_status()
+            );
+            let second = reactor
+                .post_with(
+                    &path,
+                    body.clone(),
+                    &[("x-reactor-invalidate-on", &conditions)],
+                )
+                .await?;
+            assert!(
+                second.is_hit(),
+                "a conditioned WOQL read must cache, got {}",
+                second.cache_status()
+            );
+            assert_eq!(first.body, second.body, "and return the same bytes");
+
+            // A commit to an unrelated class must leave it cached — this is
+            // the whole point of stating `class:Person` rather than
+            // `everything`.
+            let before = reactor.head();
+            direct
+                .insert_instance(&company("acme", "Acme Industries")?, args.clone())
+                .await?;
+            assert!(reactor
+                .await_watermark_change(before.as_ref())
+                .await
+                .is_some());
+
+            let after_unrelated = reactor
+                .post_with(
+                    &path,
+                    body.clone(),
+                    &[("x-reactor-invalidate-on", &conditions)],
+                )
+                .await?;
+            if up.supports_changes().await {
+                assert!(
+                    after_unrelated.is_hit(),
+                    "a Company commit must not invalidate a class:Person \
+                         condition, got {}",
+                    after_unrelated.cache_status()
+                );
+            } else {
+                // Without /api/changes every commit fires Everything, so
+                // precision is not demonstrable here. See tests/spikes.rs.
+                println!(
+                    "FINDING WOQL condition precision not demonstrable on this node: {}",
+                    after_unrelated.cache_status()
+                );
+            }
+
+            // A commit to the named class must kill it.
+            let before = reactor.head();
+            direct
+                .insert_instance(&person("alice", "Anne", 31)?, args)
+                .await?;
+            assert!(reactor
+                .await_watermark_change(before.as_ref())
+                .await
+                .is_some());
+
+            let after_related = reactor
+                .post_with(&path, body, &[("x-reactor-invalidate-on", &conditions)])
+                .await?;
+            assert!(
+                after_related.text().contains("Anne"),
+                "a Person commit must invalidate a class:Person condition, so \
+                     the refilled answer shows the new name: {} ({})",
+                after_related.text(),
+                after_related.cache_status()
+            );
+            Ok(())
+        })
+        .await
+}
+
+/// A malformed condition is refused rather than half-understood.
+#[tokio::test]
+async fn a_malformed_woql_condition_is_not_cached() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person,), _, _, _>("rx_cache_woql_bad", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args)
+                .await?;
+
+            let reactor = Reactor::start(up, &spec.db).await?;
+            let path = format!("/api/woql/admin/{}", spec.db);
+            let query = terminusdb_woql2::triple!(
+                terminusdb_woql2::node!("Person/alice"),
+                "name",
+                terminusdb_woql2::var!("n")
+            );
+            let body = serde_json::json!({"query": query.to_woql_json()});
+
+            for bad in ["class:Person,typo", "nonsense", "index:Person.name=Ann"] {
+                let probe = reactor
+                    .post_with(&path, body.clone(), &[("x-reactor-invalidate-on", bad)])
+                    .await?;
+                assert_eq!(
+                    probe.status,
+                    200,
+                    "the query itself still runs: {}",
+                    probe.text()
+                );
+                assert!(
+                    probe.is_bypass(),
+                    "{bad:?} must not be cached on a guess, got {}",
+                    probe.cache_status()
+                );
+            }
+            Ok(())
+        })
+        .await
+}
+
+/// A commit-pinned WOQL query needs no condition: nothing can change under it.
+#[tokio::test]
+async fn a_pinned_woql_read_caches_without_a_condition() -> Result<()> {
+    let server = common::upstream().await?;
+    let up = &server;
+    server
+        .with_schema::<(Person,), _, _, _>("rx_cache_woql_pin", |direct, spec| async move {
+            let args = DocumentInsertArgs::from(spec.clone());
+            direct
+                .insert_instance(&person("alice", "Ann", 30)?, args)
+                .await?;
+
+            let reactor = Reactor::start(up, &spec.db).await?;
+            let head = reactor.head().expect("a watermark");
+            let path = format!("/api/woql/admin/{}/local/commit/{}", spec.db, head);
+            let query = terminusdb_woql2::triple!(
+                terminusdb_woql2::node!("Person/alice"),
+                "name",
+                terminusdb_woql2::var!("n")
+            );
+            let body = serde_json::json!({"query": query.to_woql_json()});
+
+            let first = reactor.post(&path, body.clone()).await?;
+            assert_eq!(first.status, 200, "body: {}", first.text());
+            let second = reactor.post(&path, body).await?;
+            assert!(
+                second.is_hit(),
+                "a pinned WOQL read is immutable and needs no condition, got {}",
+                second.cache_status()
+            );
             Ok(())
         })
         .await

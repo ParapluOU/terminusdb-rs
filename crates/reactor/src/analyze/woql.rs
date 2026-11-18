@@ -1,5 +1,29 @@
 //! `/api/woql` analysis.
 //!
+//! # WOQL caching is opt-in, and that is not a limitation we chose
+//!
+//! A WOQL query can return data without revealing which entities the data was
+//! derived from. `select ?n where { alice friend ?f . ?f name ?n }` returns a
+//! name; nothing in the response identifies `?f`, so changing that document
+//! changes the answer with no trace in the bytes we cached. The AST does not
+//! save us either: the subject is a variable, so the tightest sound term
+//! available is [`crate::term::Term::Everything`].
+//!
+//! The analysis below *is* sound — the regression test
+//! `a_traversal_through_unnamed_documents_depends_on_everything` proves the
+//! barrier is emitted — but soundness is not the problem. An entry whose
+//! dependency is `Everything` is filled, stored, and discarded by the next
+//! commit in the namespace: pure overhead, plus a cache entry to get wrong, for
+//! no hit rate at all.
+//!
+//! So a WOQL read is cached **only** when the caller states what invalidates it
+//! (`X-Reactor-Invalidate-On`, see [`crate::analyze::INVALIDATE_ON_HEADER`]),
+//! because the caller is the only party that knows. Two things are unaffected:
+//! a query carrying a write is still detected from the AST and forwarded as a
+//! write, and a commit-pinned query is still cached unconditionally because
+//! nothing can change under it. `/api/document` is unaffected entirely — its
+//! read set *is* derivable from the request.
+//!
 //! WOQL arrives as JSON-LD and we analyze it **as JSON**, not by deserializing
 //! into [`terminusdb_woql2::query::Query`] — that type derives
 //! `TerminusDBModel`/`FromTDBInstance`, not serde's `Deserialize`, so there is
@@ -28,7 +52,7 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
-use crate::analyze::{is_read_method, Augment, CanonicalRequest, Plan, ReqView};
+use crate::analyze::{is_read_method, Augment, CanonicalRequest, Plan, ReqView, Target};
 use crate::ids::{ClassName, DocId, Namespace, PropName};
 use crate::schema_index::{PropKind, SchemaIndex};
 use crate::term::Term;
@@ -122,18 +146,14 @@ pub(super) fn plan(
         Ok(body) => body,
         Err(_) => return Plan::bypass("woql body is not JSON"),
     };
-    // The client wraps the query as `{"query": {...}, "commit_info": …}` on some
-    // paths. Unwrap that envelope — but ONLY when the outer object is not itself
-    // a WOQL node: `Using`, `Select`, `Limit`, `Not` and friends all have a
-    // `query` field of their own, and unwrapping one of those would silently
-    // discard the node that carries the resource scope.
-    let query = if body.get("@type").is_none() {
-        body.get("query").filter(|q| q.is_object()).unwrap_or(&body)
-    } else {
-        &body
-    };
+    let query = unwrap_envelope(&body);
 
     let analysis = analyze_woql(query, ns, schema, cfg);
+
+    // The AST analysis still decides what may NOT be cached, and it outranks
+    // anything the client says. A stated condition is permission to cache a
+    // *read*; it is not permission to cache a mutation, and not permission to
+    // file another namespace's read set under ours.
     if let Some(reason) = analysis.bypass {
         return Plan::bypass(reason);
     }
@@ -141,26 +161,77 @@ pub(super) fn plan(
         return Plan::Write;
     }
 
+    // A commit-pinned query is immutable whatever it reads, so it needs no
+    // condition: there is nothing that could invalidate it. The pin may come
+    // from the *URL* (`/local/commit/<id>`) as well as from a `Using` in the
+    // body, and both have to be recognized here — checking only the body made
+    // a URL-pinned query bypass for want of a condition before the caller
+    // could mark it immutable.
+    let immutable = analysis.immutable || matches!(req.target, Target::Pinned { .. });
+
+    let conditions = match crate::analyze::stated_conditions(req.headers) {
+        Some(Ok(conditions)) => Some(conditions),
+        Some(Err(())) => {
+            if immutable {
+                None
+            } else {
+                return Plan::bypass("woql invalidation condition did not parse");
+            }
+        }
+        None => None,
+    };
+
+    let terms = if immutable {
+        Vec::new()
+    } else {
+        match conditions {
+            Some(conditions) => conditions,
+            // The AST-derived read set is deliberately NOT used as the
+            // dependency set here. See the module docs: it is sound only
+            // because it falls back to `Everything`, which means we would fill
+            // the entry, store it, and drop it on the next commit — overhead
+            // and risk surface for no benefit.
+            None => return Plan::bypass("woql needs an explicit invalidation condition"),
+        }
+    };
+
     let canonical = CanonicalRequest::with_params(
         "woql",
         ns,
-        Vec::new(),
+        // Two requests stating different conditions are different cache
+        // entries: the condition is part of what the entry promises.
+        terms
+            .iter()
+            .map(|term| ("invalidate-on".to_owned(), term.to_string()))
+            .collect(),
         req.body,
         Some(analysis.shape.clone()),
     );
     Plan::Read {
         key: canonical.request_key(ns, None),
-        terms: if analysis.immutable {
-            Vec::new()
-        } else {
-            analysis.terms
-        },
-        immutable: analysis.immutable,
+        terms,
+        immutable,
         rewrite: None,
         // WOQL bindings are variable values, not documents; there is no
-        // reliable id field to harvest, so the read set stands as analyzed.
+        // reliable id field to harvest, so the read set stands as stated.
         augment: Augment::None,
     }
+}
+
+/// Strip the client's request envelope, if that is what this is.
+///
+/// Some client paths post `{"query": {...}, "commit_info": …}`. Unwrap that —
+/// but **only** when the outer object is not itself a WOQL node. `Using`,
+/// `Select`, `Limit` and `Not` all have a `query` field of their own, and
+/// unwrapping one of those would silently discard the node that carries the
+/// resource scope: a `Using("admin/otherdb", …)` would become a plain,
+/// cacheable-looking read of the wrong database. The presence of `@type` is
+/// what distinguishes a node from an envelope.
+pub fn unwrap_envelope(body: &Value) -> &Value {
+    if body.get("@type").is_some() {
+        return body;
+    }
+    body.get("query").filter(|q| q.is_object()).unwrap_or(body)
 }
 
 /// Analyze a WOQL JSON-LD tree.
@@ -640,9 +711,17 @@ mod tests {
         )
     }
 
+    /// Plan a WOQL read, supplying a condition so it is cacheable at all.
+    ///
+    /// WOQL caching is opt-in (see the module docs), so a test that wants to
+    /// reach the `Read` path has to state a condition like a real client would.
     fn plan_query(query: Query) -> Plan {
         let body = Bytes::from(query.to_woql_json().to_string());
-        let headers = HeaderMap::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::analyze::INVALIDATE_ON_HEADER,
+            http::HeaderValue::from_static("class:Person"),
+        );
         let req = ReqView::new(&Method::POST, "/api/woql/admin/mydb", "", &headers, &body);
         analyze(&req, &schema_fixture(), &AnalyzeConfig::default())
     }
@@ -1111,10 +1190,10 @@ mod tests {
     #[test]
     fn a_woql_node_with_its_own_query_field_is_not_mistaken_for_an_envelope() {
         // Regression: `Using`, `Select`, `Limit` and `Not` all have a `query`
-        // field. Unwrapping the client envelope by looking for `query` alone
-        // discarded the outer node — which, for `Using`, threw away the whole
-        // resource scope and turned an out-of-namespace read into a cacheable
-        // one. The `@type` check is what prevents that.
+        // field. Unwrapping by looking for `query` alone discarded the outer
+        // node — and for `Using` that threw away the resource scope, turning an
+        // out-of-namespace read into a cacheable-looking one. The `@type` check
+        // is what prevents it.
         let outer = Query::Using(Using {
             collection: "admin/otherdb".into(),
             query: Box::new(triple_of(
@@ -1122,19 +1201,30 @@ mod tests {
                 "name",
                 WValue::Variable("n".into()),
             )),
-        });
-        let body = Bytes::from(outer.to_woql_json().to_string());
-        let headers = HeaderMap::new();
+        })
+        .to_woql_json();
+        assert_eq!(
+            unwrap_envelope(&outer),
+            &outer,
+            "a node with an @type is never an envelope"
+        );
+
+        let body = Bytes::from(outer.to_string());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::analyze::INVALIDATE_ON_HEADER,
+            http::HeaderValue::from_static("class:Person"),
+        );
         let req = ReqView::new(&Method::POST, "/api/woql/admin/mydb", "", &headers, &body);
         assert!(
             matches!(
                 analyze(&req, &schema_fixture(), &AnalyzeConfig::default()),
                 Plan::Bypass { .. }
             ),
-            "the Using wrapper must still be seen"
+            "the Using wrapper must still be seen, even with a stated condition"
         );
 
-        // And a Select is still analyzed as a Select, not as its subquery.
+        // A Select keeps its own shape too.
         let select = terminusdb_woql2::select!(
             [terminusdb_woql2::var!("n")],
             triple_of(
@@ -1142,16 +1232,9 @@ mod tests {
                 "name",
                 WValue::Variable("n".into())
             )
-        );
-        let body = Bytes::from(select.to_woql_json().to_string());
-        let req = ReqView::new(&Method::POST, "/api/woql/admin/mydb", "", &headers, &body);
-        match analyze(&req, &schema_fixture(), &AnalyzeConfig::default()) {
-            Plan::Read { terms, .. } => assert_eq!(
-                terms,
-                vec![Term::DocField(doc("Person/alice"), prop("name"))]
-            ),
-            other => panic!("expected a read, got {other:?}"),
-        }
+        )
+        .to_woql_json();
+        assert_eq!(unwrap_envelope(&select), &select);
     }
 
     #[test]
@@ -1160,20 +1243,270 @@ mod tests {
             WValue::Node("Person/alice".into()),
             "name",
             WValue::Variable("n".into()),
+        )
+        .to_woql_json();
+        let enveloped = serde_json::json!({"query": inner.clone(), "commit_info": {}});
+        assert_eq!(unwrap_envelope(&enveloped), &inner);
+
+        // And the unwrapped query is what gets analyzed.
+        let analysis = analyze_woql(
+            unwrap_envelope(&enveloped),
+            &ns(),
+            &schema_fixture(),
+            &AnalyzeConfig::default(),
         );
-        let body = Bytes::from(serde_json::json!({"query": inner.to_woql_json()}).to_string());
-        let headers = HeaderMap::new();
+        assert_eq!(
+            analysis.terms,
+            vec![Term::DocField(doc("Person/alice"), prop("name"))]
+        );
+    }
+
+    // ----------------------------------------------------------------- shape
+
+    // ------------------------------------------------- opt-in caching
+
+    /// Plan a WOQL body with the given `X-Reactor-Invalidate-On` header value.
+    fn plan_with_conditions(query: Query, conditions: Option<&str>) -> Plan {
+        let body = Bytes::from(query.to_woql_json().to_string());
+        let mut headers = HeaderMap::new();
+        if let Some(conditions) = conditions {
+            headers.insert(
+                crate::analyze::INVALIDATE_ON_HEADER,
+                http::HeaderValue::from_str(conditions).unwrap(),
+            );
+        }
         let req = ReqView::new(&Method::POST, "/api/woql/admin/mydb", "", &headers, &body);
-        match analyze(&req, &schema_fixture(), &AnalyzeConfig::default()) {
-            Plan::Read { terms, .. } => assert_eq!(
+        analyze(&req, &schema_fixture(), &AnalyzeConfig::default())
+    }
+
+    fn a_read() -> Query {
+        triple_of(
+            WValue::Node("Person/alice".into()),
+            "name",
+            WValue::Variable("n".into()),
+        )
+    }
+
+    /// **The reason this whole design exists.**
+    ///
+    /// A precise triple conjoined with a traversal whose intermediate documents
+    /// never appear in the result: changing alice's friend's name changes the
+    /// answer, but the response contains only the name, and the AST has only a
+    /// variable where that document's identity would be. The analysis is sound
+    /// — it emits the `Everything` barrier — but an entry that depends on
+    /// `Everything` dies on the next commit in the namespace, so caching it is
+    /// pure overhead. Hence: WOQL is cached only against a client-stated
+    /// condition.
+    #[test]
+    fn a_traversal_through_unnamed_documents_depends_on_everything() {
+        let query = serde_json::json!({
+            "@type": "Select",
+            "variables": ["n"],
+            "query": {"@type": "And", "and": [
+                {"@type":"Triple",
+                 "subject":{"@type":"NodeValue","node":"Person/alice"},
+                 "predicate":{"@type":"NodeValue","node":"friend"},
+                 "object":{"@type":"Value","variable":"f"}},
+                {"@type":"Triple",
+                 "subject":{"@type":"NodeValue","variable":"f"},
+                 "predicate":{"@type":"NodeValue","node":"name"},
+                 "object":{"@type":"Value","variable":"n"}}
+            ]}
+        });
+        let analysis = analyze_woql(
+            &query,
+            &ns(),
+            &SchemaIndex::default(),
+            &AnalyzeConfig::default(),
+        );
+        assert!(
+            analysis.terms.contains(&Term::Everything),
+            "the read set must contain the barrier, or a traversal through \
+             documents the result does not name would go stale: {:?}",
+            analysis.terms
+        );
+        assert!(!analysis.is_write);
+        assert_eq!(analysis.bypass, None);
+    }
+
+    #[test]
+    fn a_woql_read_without_conditions_is_not_cached() {
+        match plan_with_conditions(a_read(), None) {
+            Plan::Bypass { reason } => {
+                assert_eq!(reason, "woql needs an explicit invalidation condition")
+            }
+            other => panic!("expected a bypass, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_woql_read_with_conditions_is_cached_against_exactly_those_terms() {
+        match plan_with_conditions(a_read(), Some("class:Person, members:Company")) {
+            Plan::Read {
                 terms,
-                vec![Term::DocField(doc("Person/alice"), prop("name"))]
-            ),
+                immutable,
+                augment,
+                ..
+            } => {
+                assert_eq!(
+                    terms,
+                    vec![Term::Members(cls("Company")), Term::Class(cls("Person"))],
+                    "the stated conditions ARE the dependency set"
+                );
+                assert!(!immutable);
+                assert_eq!(augment, Augment::None);
+                assert!(
+                    !terms.contains(&Term::Everything),
+                    "and the AST-derived read set is not mixed in"
+                );
+            }
             other => panic!("expected a read, got {other:?}"),
         }
     }
 
-    // ----------------------------------------------------------------- shape
+    #[test]
+    fn a_malformed_condition_bypasses_rather_than_caching_on_a_guess() {
+        for conditions in ["class:Person,typo", "nonsense", "index:Person.name=Ann", ""] {
+            match plan_with_conditions(a_read(), Some(conditions)) {
+                Plan::Bypass { reason } => assert_eq!(
+                    reason, "woql invalidation condition did not parse",
+                    "for {conditions:?}"
+                ),
+                other => panic!("{conditions:?} should bypass, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn different_conditions_are_different_cache_entries() {
+        // The condition is part of what the entry promises, so it has to be in
+        // the key — otherwise one caller's narrow condition would be applied to
+        // another caller's identical query.
+        let key_of = |conditions: &str| match plan_with_conditions(a_read(), Some(conditions)) {
+            Plan::Read { key, .. } => key,
+            other => panic!("expected a read, got {other:?}"),
+        };
+        assert_ne!(key_of("class:Person"), key_of("members:Person"));
+        assert_eq!(key_of("class:Person"), key_of("class:Person"));
+        // Order and duplication do not matter; the parsed set does.
+        assert_eq!(
+            key_of("class:Person,members:Company"),
+            key_of("members:Company, class:Person")
+        );
+    }
+
+    #[test]
+    fn a_pinned_woql_read_needs_no_conditions() {
+        let body = Bytes::from(a_read().to_woql_json().to_string());
+        let headers = HeaderMap::new();
+        let req = ReqView::new(
+            &Method::POST,
+            "/api/woql/admin/mydb/local/commit/abc123",
+            "",
+            &headers,
+            &body,
+        );
+        match analyze(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+            Plan::Read {
+                immutable, terms, ..
+            } => {
+                assert!(immutable, "a commit cannot change under us");
+                assert!(terms.is_empty());
+            }
+            other => panic!("expected an immutable read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_condition_cannot_rescue_a_write() {
+        // A client may say when a result dies. It may not thereby make a
+        // mutation cacheable.
+        let write = Query::AddTriple(AddTriple {
+            subject: NodeValue::Node("Person/alice".into()),
+            predicate: NodeValue::Node("name".into()),
+            object: WValue::Data(terminusdb_schema::XSDAnySimpleType::String("bob".into())),
+            graph: None,
+        });
+        assert_eq!(
+            plan_with_conditions(write, Some("class:Person")),
+            Plan::Write
+        );
+    }
+
+    #[test]
+    fn a_condition_cannot_rescue_a_cross_namespace_read() {
+        // Terms stated for our namespace would never be fired by the other
+        // database's commits, so this stays refused however it is labelled.
+        let elsewhere = Query::Using(Using {
+            collection: "admin/otherdb".into(),
+            query: Box::new(a_read()),
+        });
+        assert!(matches!(
+            plan_with_conditions(elsewhere, Some("class:Person")),
+            Plan::Bypass { .. }
+        ));
+    }
+
+    #[test]
+    fn a_condition_cannot_rescue_an_external_resource_read() {
+        let get = serde_json::json!({
+            "@type": "Get",
+            "columns": [],
+            "resource": {"@type": "QueryResource",
+                         "source": {"@type": "Source", "url": "file:///tmp/x.csv"},
+                         "format": "csv"},
+            "has_header": true
+        });
+        let body = Bytes::from(get.to_string());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::analyze::INVALIDATE_ON_HEADER,
+            http::HeaderValue::from_static("class:Person"),
+        );
+        let req = ReqView::new(&Method::POST, "/api/woql/admin/mydb", "", &headers, &body);
+        assert!(matches!(
+            analyze(&req, &schema_fixture(), &AnalyzeConfig::default()),
+            Plan::Bypass { .. }
+        ));
+    }
+
+    #[test]
+    fn a_stated_condition_is_what_invalidates_the_entry() {
+        // End to end at the term level: the engine's subsumption decides, so a
+        // condition of `class:Person` must be dirtied by a Person change and
+        // not by a Company one.
+        let schema = schema_fixture();
+        let terms = match plan_with_conditions(a_read(), Some("class:Person")) {
+            Plan::Read { terms, .. } => terms,
+            other => panic!("expected a read, got {other:?}"),
+        };
+        let dep = &terms[0];
+        assert!(dep.subsumes(&Term::Doc(doc("Person/alice")), &schema));
+        assert!(dep.subsumes(&Term::Members(cls("Employee")), &schema));
+        assert!(!dep.subsumes(&Term::Doc(doc("Company/acme")), &schema));
+        assert!(!dep.subsumes(&Term::Members(cls("Company")), &schema));
+    }
+
+    #[test]
+    fn the_document_endpoint_is_unaffected_by_the_woql_rule() {
+        // `/api/document` read sets ARE derivable from the request, so it keeps
+        // caching with no condition at all.
+        let body = Bytes::new();
+        let headers = HeaderMap::new();
+        let req = ReqView::new(
+            &Method::GET,
+            "/api/document/admin/mydb",
+            "id=Person/alice",
+            &headers,
+            &body,
+        );
+        match analyze(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+            Plan::Read { terms, .. } => {
+                assert_eq!(terms, vec![Term::Doc(doc("Person/alice"))])
+            }
+            other => panic!("expected a read, got {other:?}"),
+        }
+    }
 
     #[test]
     fn the_shape_ignores_literal_values_and_ids() {

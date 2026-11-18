@@ -27,20 +27,18 @@ use {
 
 use crate::woql_helpers::isa_model;
 
+use crate::cache_condition::CacheCondition;
 use crate::result::ResponseWithHeaders;
 
 /// Parse one ndjson line of a streaming WOQL response. Returns the binding map
 /// (with the `@type` marker stripped) for a `Binding` record, `None` for
 /// `PrefaceRecord`/`PostscriptRecord`/blank lines, and an error for a trailing
 /// `api:ErrorResponse` record.
-fn parse_woql_stream_line(
-    line: &[u8],
-) -> anyhow::Result<Option<serde_json::Map<String, Value>>> {
+fn parse_woql_stream_line(line: &[u8]) -> anyhow::Result<Option<serde_json::Map<String, Value>>> {
     if line.is_empty() {
         return Ok(None);
     }
-    let val: Value =
-        serde_json::from_slice(line).context("invalid ndjson line in WOQL stream")?;
+    let val: Value = serde_json::from_slice(line).context("invalid ndjson line in WOQL stream")?;
     match val.get("@type").and_then(|t| t.as_str()) {
         Some("Binding") => {
             if let Value::Object(mut map) = val {
@@ -50,9 +48,7 @@ fn parse_woql_stream_line(
                 Ok(None)
             }
         }
-        Some("api:ErrorResponse") => {
-            Err(anyhow::anyhow!("streaming WOQL error: {}", val))
-        }
+        Some("api:ErrorResponse") => Err(anyhow::anyhow!("streaming WOQL error: {}", val)),
         _ => Ok(None),
     }
 }
@@ -91,10 +87,48 @@ impl super::client::TerminusDBHttpClient {
         ),
         err
     )]
+    ///
+    /// Carries **no cache conditions**, so a caching proxy in front of
+    /// TerminusDB will forward it uncached: a WOQL answer does not reveal which
+    /// entities it was derived from, so only the caller can say when it dies.
+    /// Use [`query_with_conditions`](Self::query_with_conditions) to state that
+    /// and make the query cacheable.
     pub async fn query<T: Debug + DeserializeOwned>(
         &self,
         db: Option<BranchSpec>,
         query: Woql2Query, // Changed input type
+    ) -> anyhow::Result<WOQLResult<T>> {
+        self.query_with_conditions(db, query, &[]).await
+    }
+
+    /// As [`query`](Self::query), additionally stating when a caching proxy
+    /// must consider the answer dead.
+    ///
+    /// A WOQL query can return data without revealing which entities the data
+    /// came from — `select ?n where { alice friend ?f . ?f name ?n }` returns
+    /// names and nothing identifying `?f` — so a proxy can neither read the
+    /// dependency out of the response nor derive it from the AST. You wrote the
+    /// query, so only you know. State it:
+    ///
+    /// ```no_run
+    /// # use terminusdb_client::{CacheCondition, TerminusDBHttpClient};
+    /// # async fn example(client: TerminusDBHttpClient, spec: terminusdb_client::BranchSpec,
+    /// #                  query: terminusdb_woql2::query::Query) -> anyhow::Result<()> {
+    /// let result: terminusdb_client::WOQLResult<serde_json::Value> = client
+    ///     .query_with_conditions(Some(spec), query, &[CacheCondition::class("Person")])
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// With an empty list no header is sent and a proxy will forward the query
+    /// uncached, which is the safe default rather than a failure. A condition
+    /// that is *wrong* is worse than none: the proxy will keep serving a stale
+    /// answer and nothing will look broken.
+    pub async fn query_with_conditions<T: Debug + DeserializeOwned>(
+        &self,
+        db: Option<BranchSpec>,
+        query: Woql2Query,
+        conditions: &[CacheCondition],
     ) -> anyhow::Result<WOQLResult<T>> {
         let start_time = Instant::now();
 
@@ -118,7 +152,9 @@ impl super::client::TerminusDBHttpClient {
         .with_query(query.clone());
 
         // Execute the query
-        let result = self.query_raw(db.clone(), json_query.clone(), None).await;
+        let result = self
+            .query_raw_with_conditions(db.clone(), json_query.clone(), None, conditions)
+            .await;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -322,8 +358,25 @@ impl super::client::TerminusDBHttpClient {
     pub async fn query_raw<T: Debug + DeserializeOwned>(
         &self,
         spec: Option<BranchSpec>,
+        query: serde_json::Value,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<WOQLResult<T>> {
+        self.query_raw_with_conditions(spec, query, timeout, &[])
+            .await
+    }
+
+    /// As [`query_raw`](Self::query_raw), additionally stating when a caching
+    /// proxy must consider the answer dead.
+    ///
+    /// The conditions travel as `X-Reactor-Invalidate-On`. An empty list sends
+    /// no header, which leaves the query uncached — see [`CacheCondition`] for
+    /// why a WOQL query cannot be cached without one.
+    pub async fn query_raw_with_conditions<T: Debug + DeserializeOwned>(
+        &self,
+        spec: Option<BranchSpec>,
         mut query: serde_json::Value,
         timeout: Option<Duration>,
+        conditions: &[CacheCondition],
     ) -> anyhow::Result<WOQLResult<T>> {
         let _start_time = Instant::now();
 
@@ -361,6 +414,12 @@ impl super::client::TerminusDBHttpClient {
             .header("Content-Type", "application/json")
             .body(json_string);
 
+        // Only sent when the caller stated something: no header means "do not
+        // cache this", which is the safe default for WOQL.
+        if let Some(value) = CacheCondition::header_value(conditions) {
+            request = request.header("X-Reactor-Invalidate-On", value);
+        }
+
         // Apply timeout if provided
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
@@ -388,8 +447,9 @@ impl super::client::TerminusDBHttpClient {
         &self,
         spec: Option<BranchSpec>,
         query: Woql2Query,
-    ) -> anyhow::Result<impl futures_util::Stream<Item = anyhow::Result<serde_json::Map<String, Value>>>>
-    {
+    ) -> anyhow::Result<
+        impl futures_util::Stream<Item = anyhow::Result<serde_json::Map<String, Value>>>,
+    > {
         use futures_util::StreamExt;
 
         let uri = match &spec {
