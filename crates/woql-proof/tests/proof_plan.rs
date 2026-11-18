@@ -68,10 +68,9 @@ fn reject(q: Query, want: BgpPlanError) {
 }
 
 fn triple_count(resource: &str, output: DataValue) -> Query {
-    Query::TripleCount(TripleCount {
-        resource: resource.into(),
-        count: output,
-    })
+    // The resource form (TerminusDB 12.1 also gives TripleCount a pattern form,
+    // which the compiler rejects closed — see the pattern-form test below).
+    Query::TripleCount(TripleCount::for_resource(resource, output))
 }
 
 fn decimal_value(value: &str) -> DataValue {
@@ -6137,6 +6136,7 @@ fn typecast_conjunct(source: &str, target: NodeValue, result: &str) -> Query {
         value: Value::Variable(source.into()),
         type_uri: target,
         result_value: Value::Variable(result.into()),
+        prefixes: None,
     })
 }
 

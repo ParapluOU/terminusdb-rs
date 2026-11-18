@@ -91,10 +91,10 @@ fn resolved_u32_column(values: &[Vec<CanonicalResultValue>]) -> Vec<u32> {
 }
 
 fn triple_count_query(resource: &str) -> Query {
-    Query::TripleCount(TripleCount {
-        resource: resource.into(),
-        count: DataValue::Variable("Count".into()),
-    })
+    Query::TripleCount(TripleCount::for_resource(
+        resource,
+        DataValue::Variable("Count".into()),
+    ))
 }
 
 fn triple_count_decimal(value: &str) -> DataValue {
@@ -8630,6 +8630,7 @@ fn typecast_query_e2e(target: NodeValue, result: &str) -> Query {
             value: Value::Variable("a".into()),
             type_uri: target,
             result_value: Value::Variable(result.into()),
+            prefixes: None,
         }),
     ])
 }
@@ -8784,6 +8785,7 @@ fn cast_query(pred: &str, source: &str, target: NodeValue, result: &str) -> Quer
             value: Value::Variable(source.into()),
             type_uri: target,
             result_value: Value::Variable(result.into()),
+            prefixes: None,
         }),
     ])
 }

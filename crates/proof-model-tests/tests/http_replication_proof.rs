@@ -49,6 +49,14 @@ use terminus_store::proof::query::CanonicalResultValue;
 use terminus_store::proof::CanonicalObject;
 use terminus_store::storage::pack_layer_parents;
 use terminus_store::store::sync::{open_sync_memory_store, SyncStore};
+/// A local store that writes proof state. Proving is opt-in in the store fork
+/// (`TERMINUSDB_PROOF_STATE`, off by default), and these stores are where a
+/// replicated pack's proof state is computed and proved, so they ask for it
+/// rather than depending on the environment the test runs in.
+fn proving_store() -> SyncStore {
+    open_sync_memory_store().with_proof_state(terminus_store::storage::ProofStateMode::On)
+}
+
 use terminus_store::{Layer, ObjectType, ValueTriple};
 
 use terminusdb_woql_proof::proof::{decode_and_verify_envelope, plan_bgp};
@@ -266,7 +274,7 @@ fn replicate_over_real_http_then_prove_offline() {
     let (_repository_head, pack) = pack_response.split_at(40);
 
     // Import the replicated layers into a LOCAL fork terminus-store we control.
-    let store = open_sync_memory_store();
+    let store = proving_store();
     let imported = import_pack_into(&store, pack);
     assert!(
         !imported.is_empty(),

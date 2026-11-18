@@ -126,6 +126,7 @@ swipl-fli = { git = "https://github.com/terminusdb-org/swipl-rs", rev = "2fdd55e
 # tdb-succinct as pinned by v12.1.0-rc3. NB: the source spec must match the
 # community crate's own `tag="v0.2.1"` EXACTLY, or cargo resolves two distinct
 # copies and the shared types stop unifying (same trap as terminus-store below).
-# Carries DateTimeInterval,
-# required by terminusdb-store-prolog @ v12.1.
+# Carries DateTimeInterval, required by terminusdb-store-prolog @ v12.1. The
+# 0.2 line is not published, so this patch is also the only way the proof
+# crates' and the store fork's `tdb-succinct = "0.2"` requirements resolve.
 tdb-succinct = { git = "https://github.com/terminusdb-org/tdb-succinct", tag = "v0.2.1" }
