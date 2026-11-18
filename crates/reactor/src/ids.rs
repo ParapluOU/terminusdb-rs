@@ -304,8 +304,26 @@ str_newtype!(PropName, "property name");
 /// commits and branches), it is the `ETag` we hand clients (TerminusDB has no
 /// ETags of its own), and it is how backdating recognizes "this recomputation
 /// produced the same bytes, so nothing downstream needs to change".
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentHash([u8; 32]);
+
+// Serialized as a hex string rather than as the derived 32-element byte array.
+// These appear in `/_reactor/explain` output and in `ETag`s, where a JSON array
+// of 32 integers is unreadable and four times the size; hex round-trips exactly
+// and is the same spelling used for store paths.
+impl Serialize for ContentHash {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for ContentHash {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        ContentHash::from_hex(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("not a 64-char hex digest: {s}")))
+    }
+}
 
 impl ContentHash {
     /// Hash a body.

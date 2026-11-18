@@ -3,6 +3,7 @@
 use std::time::Instant;
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 
 use crate::ids::{ContentHash, DocId, Namespace, Position, ShapeId};
 use crate::term::Term;
@@ -14,7 +15,7 @@ use terminusdb_client::CommitId;
 /// *question*, and [`FragmentVersion`] names the answers it has had over time.
 /// That is what lets one key accumulate a validity history and lets backdating
 /// recognize an unchanged answer.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FragmentKey {
     /// The namespace the question is asked of.
     pub ns: Namespace,
@@ -45,7 +46,7 @@ impl FragmentKey {
 }
 
 /// What a fragment is about.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RootKey {
     /// A single document's projection. The decomposable case: many responses
     /// can reference the same document fragment, so one changed document

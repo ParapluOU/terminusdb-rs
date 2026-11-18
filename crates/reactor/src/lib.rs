@@ -35,17 +35,20 @@
 //!   insert protocol that makes the fill/commit race exactly solvable.
 //! * [`store`] — immutable, content-addressed bodies; also the shared-tier story
 //!   for multi-node deployments.
+//! * [`analyze`] — request → plan. Where soundness is decided: a dependency
+//!   this layer fails to emit is data that goes stale and never recovers.
 //!
 //! # Implementation status
 //!
-//! Phases A and B are implemented: identity, terms, the schema index, firing,
-//! the engine state machine and the fragment store. The request-analysis
-//! (`analyze`), commit-capture (`capture`) and HTTP (`frontend`) layers are not
-//! here yet, so the binary is a placeholder.
+//! Phases A, B and C are implemented: identity, terms, the schema index, firing,
+//! the engine state machine, the fragment store, and request analysis. The
+//! commit-capture (`capture`) and HTTP (`frontend`) layers are not here yet, so
+//! the binary is a placeholder.
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod analyze;
 pub mod change;
 pub mod engine;
 pub mod ids;
@@ -57,6 +60,10 @@ pub mod term;
 #[cfg(test)]
 mod testutil;
 
+pub use analyze::{
+    augment_terms_from_response, AnalyzeConfig, Augment, InjectedField, Plan, ReqView, Rewrite,
+    Target,
+};
 pub use change::{fire, ChangeSet, DocChange};
 pub use engine::{
     BodyRef, Engine, EngineConfig, FillResult, FragmentKey, FragmentSlot, FragmentVersion, Lookup,
