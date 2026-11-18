@@ -2668,6 +2668,7 @@ dependencies = [
 [[package]]
 name = "dory-derive"
 version = "0.3.0"
+source = "git+https://github.com/ParapluOU/dory?branch=main#36d00ea888d73123c23c014e6ad5605036dd7f7d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2677,6 +2678,7 @@ dependencies = [
 [[package]]
 name = "dory-pcs"
 version = "0.4.2"
+source = "git+https://github.com/ParapluOU/dory?branch=main#36d00ea888d73123c23c014e6ad5605036dd7f7d"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -7176,6 +7178,7 @@ dependencies = [
 [[package]]
 name = "terminus-store"
 version = "0.21.8"
+source = "git+https://github.com/ParapluOU/terminusdb-store?branch=parture-proof-of-woql#c118258edb765601bb74f39977f78dba64d49371"
 dependencies = [
  "ark-bn254",
  "ark-ec",
