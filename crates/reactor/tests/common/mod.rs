@@ -42,24 +42,141 @@ pub fn init_tracing() {
     });
 }
 
+/// How many databases one embedded server is asked to host before we replace
+/// it.
+///
+/// WHY THIS EXISTS: the embedded memory-mode server stops answering after a
+/// number of databases have been created and dropped in one process. The
+/// observed signature is a `Plugin handler failed` or
+/// `Document operation failed: unwind(halt(1))` on some operation — `halt(1)`
+/// meaning the server process *exited* — after which every later test in the
+/// binary gets `Connection refused`. It correlates with the **count of
+/// databases created**, not with elapsed time or with any one operation: it has
+/// fired after as few as 6 and as many as 17, earlier when the machine is busy.
+/// `with_tmp_db` does delete each database, so this looks like the memory-mode
+/// store not reclaiming.
+///
+/// Rather than let that decide our test results, the harness retires a server
+/// before it gets there. Five is comfortably under the lowest failure seen.
+/// Each retirement costs one server boot (~1-2s).
+const MAX_DATABASES_PER_SERVER: usize = 5;
+
+/// Attempts to boot a replacement server before giving up.
+///
+/// Bounded because `extract_binary` in `terminusdb-bin` compares only file
+/// *size*, so when another build in the workspace has produced a
+/// differently-sized server binary and is executing the shared cached copy,
+/// extraction fails with `ETXTBSY` until that process exits.
+const BOOT_ATTEMPTS: usize = 4;
+
+/// The process-wide supervised embedded server.
+struct ServerPool {
+    server: Option<Arc<TerminusDBServer>>,
+    /// Databases handed out since this server booted.
+    databases: usize,
+    /// How many servers we have booted, for the run's report.
+    boots: usize,
+    /// How many of those were replacements for a server that had died.
+    deaths: usize,
+}
+
+static POOL: std::sync::OnceLock<tokio::sync::Mutex<ServerPool>> = std::sync::OnceLock::new();
+
+fn pool() -> &'static tokio::sync::Mutex<ServerPool> {
+    POOL.get_or_init(|| {
+        tokio::sync::Mutex::new(ServerPool {
+            server: None,
+            databases: 0,
+            boots: 0,
+            deaths: 0,
+        })
+    })
+}
+
+/// Hand out a **live** embedded server, replacing it when necessary.
+///
+/// This is deliberately a supervised resource rather than a one-shot
+/// `OnceCell`: `TerminusDBServer::test_instance()` caches its handle forever, so
+/// once that server dies every later test in the binary fails with
+/// `Connection refused` and the suite's result starts depending on machine
+/// load. A result that depends on load is not a signal.
+///
+/// Every replacement is logged with the reason. A restart is **not** a retry of
+/// a test: a test that fails against a freshly booted server fails, and stays
+/// red.
+async fn embedded_server() -> Result<Arc<TerminusDBServer>> {
+    let mut pool = pool().lock().await;
+
+    if let Some(current) = pool.server.clone() {
+        let alive = probe_port(current.port()).await;
+        let retire = pool.databases >= MAX_DATABASES_PER_SERVER;
+        if alive && !retire {
+            pool.databases += 1;
+            return Ok(current);
+        }
+        if alive {
+            eprintln!(
+                "[harness] retiring the embedded server on port {} after {} databases \
+                 (pre-emptive: see MAX_DATABASES_PER_SERVER)",
+                current.port(),
+                pool.databases
+            );
+        } else {
+            pool.deaths += 1;
+            eprintln!(
+                "[harness] the embedded server on port {} DIED after {} databases; \
+                 booting a replacement. Tests that already failed against it are real \
+                 failures, not retried.",
+                current.port(),
+                pool.databases
+            );
+        }
+        // Dropping the last handle kills the child process.
+        pool.server = None;
+        pool.databases = 0;
+    }
+
+    let mut last = None;
+    for attempt in 1..=BOOT_ATTEMPTS {
+        match TerminusDBServer::test().await {
+            Ok(server) => {
+                let server = Arc::new(server);
+                pool.boots += 1;
+                pool.databases = 1;
+                eprintln!(
+                    "[harness] embedded server #{} up on port {}",
+                    pool.boots,
+                    server.port()
+                );
+                pool.server = Some(Arc::clone(&server));
+                return Ok(server);
+            }
+            Err(err) => {
+                eprintln!("[harness] server boot attempt {attempt} failed: {err:#}");
+                last = Some(err);
+                tokio::time::sleep(Duration::from_millis(400 * attempt as u64)).await;
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("could not boot an embedded server")))
+}
+
 /// The TerminusDB node these tests run against.
 ///
-/// `Embedded` is the preferred path and what CLAUDE.md prescribes: a per-process
-/// server, unique database per test, parallel-safe, no `#[ignore]`.
+/// `Embedded` is the preferred path and what CLAUDE.md prescribes: a server per
+/// test process, a unique database per test, no `#[ignore]`. It is *supervised*
+/// — see [`embedded_server`] — because the memory-mode server does not survive
+/// unbounded database churn.
 ///
-/// `External` exists because `TerminusDBServer::test_instance()` extracts its
-/// server binary into a **shared** temp-dir cache keyed only on file size, and
-/// rewrites it whenever the size differs. When another build in the same
-/// workspace has produced a differently-sized binary and is *executing* the
-/// cached one, every extraction fails with `ETXTBSY` and no embedded server can
-/// start at all. Rather than skip the whole integration suite in that
-/// situation, the harness falls back to a node that is already running. The
-/// isolation story is unchanged — a uuid-named database per test, deleted
-/// afterwards — and the chosen upstream is printed so the test output records
-/// which one was used.
+/// `External` exists for two reasons: an explicit
+/// `REACTOR_TEST_UPSTREAM_PORT` override, and the case where no embedded server
+/// can be booted at all (`extract_binary` fights with a concurrent build over
+/// the shared binary cache). Isolation is unchanged — a uuid-named database per
+/// test, deleted afterwards — and the chosen upstream is printed so the output
+/// records which was used.
 pub enum Upstream {
-    /// A per-process embedded server.
-    Embedded(&'static TerminusDBServer),
+    /// A supervised embedded server.
+    Embedded(Arc<TerminusDBServer>),
     /// An already-running node.
     External {
         /// Its port.
@@ -68,9 +185,10 @@ pub enum Upstream {
 }
 
 impl Upstream {
-    /// Resolve an upstream: an explicit port, else an embedded server, else a
-    /// node already listening on the conventional port.
+    /// Resolve an upstream: an explicit port, else a live embedded server, else
+    /// a node already listening on the conventional port.
     pub async fn resolve() -> Result<Upstream> {
+        // An explicit override wins: that is what an override is for.
         if let Ok(port) = std::env::var("REACTOR_TEST_UPSTREAM_PORT") {
             if let Ok(port) = port.parse::<u16>() {
                 eprintln!(
@@ -80,38 +198,19 @@ impl Upstream {
             }
         }
 
-        let mut embedded_error = None;
-        for attempt in 1..=6 {
-            match TerminusDBServer::test_instance().await {
-                Ok(server) => {
+        match embedded_server().await {
+            Ok(server) => Ok(Upstream::Embedded(server)),
+            Err(err) => {
+                if probe_port(6363).await {
                     eprintln!(
-                        "[harness] using an embedded server on port {}",
-                        server.port()
+                        "[harness] FALLING BACK to the node already running on :6363 \
+                         (no embedded server: {err:#})"
                     );
-                    return Ok(Upstream::Embedded(server));
+                    return Ok(Upstream::External { port: 6363 });
                 }
-                Err(err) => {
-                    eprintln!("[harness] embedded server attempt {attempt} failed: {err:#}");
-                    embedded_error = Some(err);
-                    tokio::time::sleep(Duration::from_millis(400 * attempt)).await;
-                }
+                Err(err)
             }
         }
-
-        if probe_port(6363).await {
-            eprintln!(
-                "[harness] FALLING BACK to the node already running on :6363 \
-                 (embedded server unavailable: {})",
-                embedded_error
-                    .as_ref()
-                    .map(|e| e.to_string())
-                    .unwrap_or_default()
-            );
-            return Ok(Upstream::External { port: 6363 });
-        }
-
-        Err(embedded_error
-            .unwrap_or_else(|| anyhow::anyhow!("no embedded and no external TerminusDB available")))
     }
 
     /// The port the node listens on.
@@ -194,35 +293,37 @@ impl Upstream {
 
     /// Does this node have `GET /api/changes`?
     ///
-    /// It is a TerminusDB **12.1** endpoint. On 12.0.x it 404s — and because
-    /// the client's `ChangesResponse` defaults every field, that 404 body
-    /// deserializes into three empty lists rather than an error. The resolver
-    /// now treats an empty list as *unknown* (firing `Everything`), so Reactor
-    /// stays sound on an older node; but **per-document invalidation precision
-    /// cannot be demonstrated there**, so tests that assert precision check this
-    /// first and say so.
+    /// Decided from the reported version rather than by probing the endpoint,
+    /// because probing needs a database and every database spent brings the
+    /// memory-mode server closer to falling over (see
+    /// `MAX_DATABASES_PER_SERVER`). `/api/changes` arrived in **12.1**; on
+    /// 12.0.x it 404s, and because `ChangesResponse` defaults every field that
+    /// 404 body deserializes into three empty lists rather than an error. The
+    /// resolver treats an empty list as *unknown* and fires `Everything`, so
+    /// Reactor stays sound on an older node — but per-document invalidation
+    /// *precision* cannot be demonstrated there, so tests that assert precision
+    /// check this first and say so.
     pub async fn supports_changes(&self) -> bool {
-        let db = format!("rx_probe_{}", uuid::Uuid::new_v4().simple());
-        let client = match self.client().await {
-            Ok(client) => client,
-            Err(_) => return false,
-        };
-        if client.ensure_database(&db).await.is_err() {
-            return false;
+        match self.version().await {
+            Ok(version) => {
+                let major_minor = version
+                    .split('-')
+                    .next()
+                    .unwrap_or(&version)
+                    .rsplit_once('.')
+                    .map(|(head, _)| head.to_owned())
+                    .unwrap_or_default();
+                match major_minor.split_once('.') {
+                    Some((major, minor)) => {
+                        let major: u32 = major.parse().unwrap_or(0);
+                        let minor: u32 = minor.parse().unwrap_or(0);
+                        (major, minor) >= (12, 1)
+                    }
+                    None => false,
+                }
+            }
+            Err(_) => false,
         }
-        let status = reqwest::Client::new()
-            .get(format!(
-                "http://localhost:{}/api/changes/admin/{}",
-                self.port(),
-                db
-            ))
-            .basic_auth("admin", Some("root"))
-            .send()
-            .await
-            .map(|r| r.status().as_u16())
-            .unwrap_or(0);
-        let _ = client.delete_database(&db).await;
-        status == 200
     }
 }
 
