@@ -368,8 +368,12 @@ impl CommitHistory for TerminusHistory {
         Ok(entries
             .into_iter()
             .map(|entry| LogCommit {
-                commit: CommitId::new(entry.identifier),
-                parent: entry.parent.map(CommitId::new),
+                // Both fields go through the shared normalizer: `identifier` is
+                // already bare, but `parent` carries a `ValidCommit/` prefix that
+                // a pinned resource path rejects.
+                commit: super::commit_id_from_any(&entry.identifier)
+                    .unwrap_or_else(|| CommitId::new(entry.identifier)),
+                parent: entry.parent.as_deref().and_then(super::commit_id_from_any),
             })
             .collect())
     }

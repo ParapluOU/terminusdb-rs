@@ -148,6 +148,26 @@ pub enum Applied {
     NonFastForward,
 }
 
+/// Normalize a commit *document id* to the bare hash a resource path needs.
+///
+/// TerminusDB reports commits in two shapes: `LogEntry::identifier` and a
+/// subscription's `_CommitMetadata._id` are bare hashes or prefixed document ids
+/// (`ValidCommit/<hash>`) depending on the source, while `LogEntry::parent` is
+/// always the prefixed form. A resource path wants the bare hash: pinning at
+/// `…/local/commit/ValidCommit/<hash>` is rejected with `api:InvalidResourcePath`,
+/// which previously made every before-state read fail, which made every
+/// changeset `complete: false`, which made every commit fire `Everything` — a
+/// correct cache with no precision at all, and silent about it.
+///
+/// Every driver must funnel commit ids through here so the two cannot drift.
+pub(crate) fn commit_id_from_any(id: &str) -> Option<CommitId> {
+    let hash = id.rsplit('/').next().unwrap_or(id).trim();
+    if hash.is_empty() {
+        return None;
+    }
+    Some(CommitId::new(hash))
+}
+
 /// Owns correctness. Drivers are untrusted inputs.
 pub struct Applier {
     engine: Arc<Engine>,
@@ -295,6 +315,27 @@ impl Applier {
 
 #[cfg(test)]
 mod tests {
+    /// A pinned resource path takes the bare hash. `LogEntry::parent` does not
+    /// give you one, and using it verbatim silently costs the cache all of its
+    /// precision — see `commit_id_from_any`.
+    #[test]
+    fn a_prefixed_commit_document_id_normalizes_to_the_bare_hash() {
+        let bare = "vjfq3rblf2kyo0pbs60ljjvyyo1uerq";
+        for spelling in [
+            "vjfq3rblf2kyo0pbs60ljjvyyo1uerq",
+            "ValidCommit/vjfq3rblf2kyo0pbs60ljjvyyo1uerq",
+            "terminusdb:///data/ValidCommit/vjfq3rblf2kyo0pbs60ljjvyyo1uerq",
+        ] {
+            assert_eq!(
+                commit_id_from_any(spelling).map(|c| c.as_str().to_string()),
+                Some(bare.to_string()),
+                "{spelling} should normalize to the bare hash"
+            );
+        }
+        assert_eq!(commit_id_from_any(""), None);
+        assert_eq!(commit_id_from_any("ValidCommit/"), None);
+    }
+
     use super::*;
     use crate::engine::{EngineConfig, NamespaceWriter};
     use crate::store::TieredStore;

@@ -47,9 +47,10 @@ Everything else follows from these, and each is load-bearing:
 
 ## Status
 
-All five phases of [`SPEC.md`](SPEC.md) are implemented. **402 tests pass,
-including integration tests against a live TerminusDB node.** Not
-production-ready: see the honest reading of those results below.
+All five phases of [`SPEC.md`](SPEC.md) are implemented. **403 tests pass,
+including integration tests against an embedded TerminusDB 12.1.0-rc3 server.**
+Not production-ready — see the scope limits below — but soundness *and*
+precision are now both demonstrated.
 
 | Module | What | State |
 |---|---|---|
@@ -73,25 +74,16 @@ read-your-writes holds, the poll and subscription drivers both advance the
 watermark, a 5-commit gap is recovered in order, and a `reset` is handled as a
 non-fast-forward.
 
-**Precision is not demonstrated.** The only server available on this machine is
-**12.0.6**, and `/api/changes` — which is how the resolver enumerates a commit's
-documents — is a **12.1** endpoint. Without it the resolver cannot attribute a
-commit to documents, so it reports `complete: false` and fires `Everything`.
-Reactor is *correct* in that mode and behaves like a cache that drops everything
-on any commit, which is precisely the half of the value proposition that is
-untested. The precision assertion is version-gated rather than relaxed
-(`tests/caching.rs::an_unrelated_commit_leaves_the_fragment_cached`), so
-re-running against 12.1 lights it up with no edits. **Do this first.**
-
-### Deliberately out of scope for now
-
-- **GraphQL fragment splicing.** Fragments are whole responses. The types carry
-  `children` and the russian-doll composition machinery, and the NDJSON
-  document-list case composes by concatenation, but splicing a GraphQL body out
-  of per-document fragments is future work. Said plainly rather than half-built.
-- **A shared cache tier** is supported but not the default — see below.
-- **Kafka and hypercore commit sources.** The `CommitSource` trait exists so they
-  drop in without redesign; only head-poll and `_ChangeSet` are implemented.
+**Precision is now demonstrated too**, against an embedded **12.1.0-rc3** server:
+a commit to an unrelated document leaves a cached fragment a `hit`, so
+"invalidation works" means more than "we drop everything". Getting there took
+fixing a real bug that only a 12.1 run could expose — `LogEntry::parent` carries
+a `ValidCommit/` prefix, and pinning a before-state read at
+`…/local/commit/ValidCommit/<hash>` is rejected as `api:InvalidResourcePath`, so
+every before-state read failed, so every changeset was `complete: false`, so
+every commit fired `Everything`. A correct cache with no precision, and silent
+about it. All commit ids now funnel through one normalizer
+(`capture::commit_id_from_any`).
 
 ## Running it
 
@@ -166,11 +158,10 @@ is that it makes `Index` and `Backlink` firing exact), and
   `TerminusDB-Data-Version`, so a fill can always be placed at a known commit.
 - ~~**Schema-commit detection**~~ **Resolved:** `LogEntry.migration` *is*
   populated for a schema commit, so the detector is better than feared.
-- **Subdocument change reporting** is still unverified — it needs 12.1's
-  `/api/changes`. One useful lead from the unfold spike: subdocument ids are
-  parent-scoped (`Resident/r1/address/Address/…`), so a changed subdocument can
-  be mapped back to its owner by id prefix, which may be a better basis for
-  `@subdocument` terms than class attribution.
+- ~~**Subdocument change reporting**~~ **Resolved on 12.1:** a subdocument
+  change is attributed to the **parent** (`changed=["Resident/r1"]`, with the
+  subdocument itself not mentioned), so a `Doc(parent)` dependency is invalidated
+  by it — exactly what the analyzer assumes.
 - **Running Reactor's tests needs an upstream.** The embedded 12.1 server would
   not start here: `terminusdb-bin`'s `extract_binary` compares only file *size*,
   so two differently-built binaries overwrite the same

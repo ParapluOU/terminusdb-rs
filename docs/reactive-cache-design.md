@@ -146,21 +146,25 @@ port: `POST /v1/streams/:resource` → uuid, `DELETE /v1/streams/:uuid`,
 
 ### Must-verify before committing to the design (M0 spikes)
 
-> **Status 2026-11-18.** S3–S8 are now executable tests in
-> `crates/reactor/tests/spikes.rs`, which print their findings so the test
-> output is the record. Answers so far, all against a **12.0.6** node (the only
-> one that would start on the build host):
-> **resolved** — GraphQL is pinnable at `/local/commit/<id>`; every read
-> endpoint (document GET, GraphQL POST, WOQL POST) returns
-> `TerminusDB-Data-Version`, so a fill can always be placed at a commit;
-> `LogEntry.migration` is populated for a schema commit; a `_ChangeSet` query
-> over 50 classes is 4158 bytes and well-formed.
-> **still open** — S3 (subdocument attribution) needs 12.1's `/api/changes`,
-> though the unfold spike shows subdocument ids are parent-scoped
-> (`Resident/r1/address/Address/…`), which may be a better basis for
-> `@subdocument` terms than class attribution. S1 and S2 need two nodes and a
-> NAS mount, so they remain untouched.
+> **Status 2026-11-18 (updated after a 12.1.0-rc3 run).** S3–S8 are executable
+> tests in `crates/reactor/tests/spikes.rs`, which print their findings so the
+> test output is the record. All now **resolved** against an embedded
+> 12.1.0-rc3 server: GraphQL is pinnable at `/local/commit/<id>`; every read
+> endpoint returns `TerminusDB-Data-Version`; `LogEntry.migration` is populated
+> for a schema commit; a `_ChangeSet` query over 50 classes is 4158 bytes; and
+> **S3 — a subdocument change is attributed to the parent** (`changed` names
+> `Resident/r1`, not the nested `Address`), so a `Doc(parent)` dependency is
+> invalidated by it, which is what the analyzer already assumed. S1 and S2 need
+> two nodes and a NAS mount, so they remain the only untouched spikes.
 >
+> A second finding, visible only once `/api/changes` existed: `LogEntry.parent`
+> carries a `ValidCommit/` prefix, and a pinned read at
+> `…/local/commit/ValidCommit/<hash>` is rejected as `api:InvalidResourcePath`.
+> Every before-state read therefore failed, every changeset was
+> `complete: false`, and every commit fired `Everything` — sound, and silently
+> devoid of precision. The same shape of bug as the one below, and the same
+> lesson.
+
 > One finding reshaped the implementation: **`/api/changes` is 12.1-only, and
 > `ChangesResponse` defaults all three fields**, so on an older node its 404
 > body deserializes into three empty lists *without error*. Read as "nothing

@@ -91,11 +91,7 @@ fn commit_of(payload: &serde_json::Value) -> Option<CommitId> {
         .or_else(|| payload.get("_CommitMetadata"))
         .and_then(|meta| meta.get("_id"))
         .and_then(|id| id.as_str())?;
-    let hash = id.rsplit('/').next().unwrap_or(id);
-    if hash.is_empty() {
-        return None;
-    }
-    Some(CommitId::new(hash))
+    super::commit_id_from_any(id)
 }
 
 impl CommitSource for ChangeSetSubscription {
