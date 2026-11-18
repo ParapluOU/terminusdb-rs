@@ -23,6 +23,13 @@
 //! *losing* [`crate::term::Term::Backlink`]. Both are exactly the terms that
 //! make filtered lists and reverse edges cacheable at all. Design doc §5.3.
 //!
+//! # `/api/changes` is a TerminusDB 12.1 endpoint
+//!
+//! On an older node it 404s, and the client's `ChangesResponse` turns that
+//! error body into three empty lists (every field is `#[serde(default)]`). An
+//! empty list is therefore treated as *unknown*, not as *nothing changed* — see
+//! the comment at the `is_empty` check. Verified in `tests/spikes.rs`.
+//!
 //! # Known gap in schema-change detection
 //!
 //! `schema_changed` is derived from a log entry's `migration` list plus any
@@ -162,6 +169,32 @@ impl ChangeResolver for TerminusResolver {
             schema_changed,
             complete: true,
         };
+
+        // An empty change list is NOT evidence that the commit changed nothing.
+        //
+        // Found the hard way in `tests/spikes.rs`: on a server without
+        // `/api/changes` (it is a 12.1 addition — 12.0.6 answers 404) the
+        // client's `ChangesResponse` deserializes the *error body* into
+        // `added/changed/deleted = []`, because all three fields are
+        // `#[serde(default)]`. The resolver then produced an empty, **complete**
+        // changeset, which fires no terms at all and silently under-invalidates
+        // every cached fragment — exactly the failure this design exists to
+        // prevent, and invisible from the outside.
+        //
+        // So an empty list is treated as "we do not know". A commit that
+        // genuinely touched no instance documents (a schema-only commit) then
+        // fires `Everything`, costing a namespace-wide refill. That is the right
+        // trade: over-invalidation is a performance bug, under-invalidation is a
+        // correctness bug.
+        if changes.is_empty() {
+            tracing::debug!(
+                %ns, %commit,
+                "/api/changes reported no documents: treating the commit as opaque \
+                 rather than as empty"
+            );
+            changeset.complete = false;
+            return Ok(changeset);
+        }
 
         // Too big to read document by document. Fire coarse terms instead:
         // over-invalidation is a performance bug, under-invalidation is a

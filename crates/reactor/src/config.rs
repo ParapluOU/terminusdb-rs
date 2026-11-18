@@ -240,15 +240,6 @@ pub struct CaptureConfig {
     /// Walk at most this many commits to recover a gap before treating it as a
     /// non-fast-forward.
     pub max_gap_walk: usize,
-    /// Use `POST /api/diff` for before/after state instead of `/api/changes`
-    /// plus pinned reads.
-    ///
-    /// **Unverified.** `/api/diff` wants a raw `TerminusDB-Data-Version`
-    /// string, and synthesising one for an arbitrary commit is guesswork, so
-    /// the default resolver does not use it. Left here as a flag so the
-    /// alternative can be measured once someone has verified it against a live
-    /// server; nothing reads it yet.
-    pub use_diff_endpoint: bool,
 }
 
 impl Default for CaptureConfig {
@@ -258,7 +249,6 @@ impl Default for CaptureConfig {
             poll_interval_ms: 150,
             diff_threshold: 2000,
             max_gap_walk: 500,
-            use_diff_endpoint: false,
         }
     }
 }

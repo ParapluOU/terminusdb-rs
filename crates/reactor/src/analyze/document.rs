@@ -43,6 +43,21 @@ pub const RECOGNIZED_DOCUMENT_PARAMS: &[&str] = &[
     "full_replace",
     "merge_repeats",
     "counted",
+    // Write-side parameters the client's URL builder sends. They never affect a
+    // cached read's shape, but listing them keeps a write from looking
+    // unanalyzable.
+    "create",
+    "nuke",
+    // History/diff read parameters (`/api/document` history forms).
+    "start",
+    "verbose",
+    "created",
+    "updated",
+    "before",
+    "after",
+    "diff",
+    "fast",
+    "complete",
 ];
 
 /// Plan a `/api/document` request.
@@ -56,6 +71,24 @@ pub(super) fn plan(
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
 
+    // Writes are classified FIRST, before the parameter whitelist.
+    //
+    // The whitelist protects *cache keys*: a parameter we do not model might
+    // reshape a response in a way the shape hash misses. A write has no cache
+    // key, so the whitelist has nothing to protect there — and bypassing a
+    // write costs us the capture hint, which is what read-your-writes depends
+    // on. Found by `tests/caching.rs`: `insert_instance` sends `create=...`,
+    // which was missing from the list, so every insert through Reactor
+    // bypassed, no commit hint was sent, no write fence was applied, and the
+    // very next read was served from the stale cache.
+    //
+    // Note that TerminusDB 12.1 also accepts POST for some *reads*;
+    // classifying those as writes is wasteful but sound — we forward them and
+    // tell capture to look for a commit, which simply finds none.
+    if !is_read_method(req.method) {
+        return Plan::Write;
+    }
+
     for (name, _) in &params {
         if !RECOGNIZED_DOCUMENT_PARAMS.contains(&name.as_str()) {
             // Not "ignore it": a parameter we do not model may change the body
@@ -63,14 +96,6 @@ pub(super) fn plan(
             // request's bytes for another.
             return Plan::bypass("unrecognized document parameter");
         }
-    }
-
-    // Writes: POST (insert), PUT (replace), DELETE. Note that TerminusDB 12.1
-    // also accepts POST for some *reads*; classifying those as writes is
-    // wasteful but sound — we forward them and tell capture to look for a
-    // commit, which simply finds none.
-    if !is_read_method(req.method) {
-        return Plan::Write;
     }
 
     let get = |name: &str| -> Option<&str> {
@@ -340,13 +365,29 @@ mod tests {
     }
 
     #[test]
-    fn a_write_with_an_unknown_parameter_still_bypasses() {
-        // The parameter check runs first on purpose: we would rather forward
-        // without a capture hint than mis-key anything.
-        assert!(matches!(
+    fn a_write_is_a_write_even_with_an_unknown_parameter() {
+        // Regression: the whitelist used to run first, so a write carrying a
+        // parameter we did not model (`create=true`, which every
+        // `insert_instance` sends) was bypassed — losing the capture hint and
+        // with it read-your-writes. A write has no cache key, so there is
+        // nothing for the whitelist to protect.
+        assert_eq!(
             plan_with(&Method::POST, "surprise=1", &Bytes::from_static(b"{}")),
-            Plan::Bypass { .. }
-        ));
+            Plan::Write
+        );
+    }
+
+    #[test]
+    fn the_client_s_own_write_parameters_are_recognized() {
+        // Exactly what `insert_instance` sends.
+        assert_eq!(
+            plan_with(
+                &Method::POST,
+                "author=me&message=hi&graph_type=instance&create=true",
+                &Bytes::from_static(b"{}")
+            ),
+            Plan::Write
+        );
     }
 
     #[test]
