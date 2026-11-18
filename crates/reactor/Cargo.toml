@@ -1,0 +1,77 @@
+[package]
+name = "terminusdb-reactor"
+description = "Reactive, graph-tracked cache engine and reverse proxy for TerminusDB 12"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "terminusdb_reactor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tdb-reactor"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates. The client is used for the *fill* and *capture* paths
+# (typed reads, /api/changes, /api/diff, /api/log, GraphQL subscriptions).
+# The passthrough path deliberately does NOT go through it: see docs.
+terminusdb-client = { path = "../client" }
+terminusdb-format = { path = "../format" }
+terminusdb-schema = { path = "../schema" }
+terminusdb-woql2 = { path = "../woql2" }
+
+# Async runtime / HTTP server
+tokio = { workspace = true }
+axum = "0.8"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "tokio"] }
+http = { workspace = true }
+http-body-util = "0.1"
+bytes = "1"
+tower = "0.5"
+
+# Upstream HTTP (streaming, byte-faithful passthrough)
+reqwest = { workspace = true }
+
+# Serialization. NB: arbitrary_precision is feature-unified workspace-wide;
+# cached bodies are stored as raw bytes and never round-tripped through Value.
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+
+# GraphQL parsing / normalization / `_id` injection
+graphql-parser = "0.3"
+
+# Hashing (cache keys, content addresses)
+blake3 = "1"
+
+# Concurrency primitives
+dashmap = "5"
+parking_lot = "0.12"
+arc-swap = "1"
+futures-util = { workspace = true }
+async-stream = { workspace = true }
+
+# Misc
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+chrono = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
+uuid = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+
+[dev-dependencies]
+terminusdb-bin = { path = "../bin" }
+terminusdb-schema-derive = { path = "../schema/derive" }
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[features]
+default = []

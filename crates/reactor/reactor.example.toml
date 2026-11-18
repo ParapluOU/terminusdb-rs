@@ -1,0 +1,109 @@
+# Reactor — example configuration.
+#
+# One Reactor runs as a sidecar next to exactly one TerminusDB node. It talks to
+# that node over localhost, tracks only that node's branch heads, and makes no
+# claim about any other node. See docs/reactive-cache-design.md §5.7.
+
+[node]
+# Identity reported in the `X-Reactor-Node` response header and in metrics.
+# Defaults to the hostname.
+id = "tdb-reader-01"
+# Where this Reactor listens. Point the load balancer here, not at TerminusDB.
+listen = "0.0.0.0:6364"
+
+[upstream]
+# The local TerminusDB node. Must be local: Reactor assumes cheap, reliable
+# access and issues extra pinned reads against it.
+url = "http://localhost:6363"
+# Credentials for Reactor's OWN requests (capture, fills, schema reads).
+# Client requests are forwarded with the client's own Authorization header;
+# Reactor never substitutes its credentials for a client's.
+user = "admin"
+pass = "root"
+org = "admin"
+# Cap on concurrent fill requests Reactor will have in flight upstream, so a
+# commit that dirties thousands of fragments cannot stampede the node.
+max_inflight_fills = 32
+request_timeout_ms = 30000
+
+[cache]
+# Hot in-memory tier budget. Eviction is least-recently-read; an evicted
+# fragment is simply refilled on demand (Noria-style partial state).
+memory_budget_mb = 512
+# Warm tier: a filesystem content-addressed store. Fragments are immutable and
+# content-addressed, so pointing several nodes at the same NAS directory turns
+# this into the shared tier from §5.7 mode 2 — with no coherence protocol,
+# because nothing is ever updated in place. Comment out for a purely private,
+# in-memory cache (§5.7 mode 1, the default recommendation).
+# dir = "/var/lib/reactor/cas"
+# Keep at most this many versions per fragment key. Older versions are dropped
+# once no live reader is latched below them.
+max_versions_per_key = 4
+
+[consistency]
+# What to do when a request carries `X-Reactor-Min-Version: <commit>` and this
+# node's watermark has not reached it yet:
+#   "wait"        - block up to min_version_wait_ms, then fall through to origin
+#   "fail"        - answer 412 Precondition Failed so the LB retries elsewhere
+#                   (the right setting for read-after-write paths in a
+#                   horizontally scaled, eventually-consistent cluster)
+#   "serve-stale" - answer anyway, labelled via Cache-Status and Age
+min_version_policy = "wait"
+min_version_wait_ms = 500
+# Hold a write's response until our watermark reaches the commit it produced, so
+# a subsequent read on THIS node is read-your-writes. Costs the write a little
+# latency. Set to 0 to disable.
+write_fence_ms = 2000
+
+[capture]
+# How commits are noticed. Drivers are untrusted: the watermark only advances
+# past a commit after a pinned read at that commit has succeeded here.
+#   "poll"         - head-poll /api/log. The ONLY driver that works on a
+#                    shared-disk reader node, where nothing commits locally and
+#                    the GraphQL subscription is expected to be silent.
+#   "subscription" - _ChangeSet over SSE. Low latency; needs a local commit path.
+#   "both"         - subscription for latency, poll as the liveness backstop.
+#                    The default, and the right answer when unsure.
+driver = "both"
+poll_interval_ms = 150
+# Above this many changed documents in one commit, stop paying for a per-commit
+# /api/diff and fire coarse terms instead. Over-invalidation is a performance
+# bug; under-invalidation is a correctness bug.
+diff_threshold = 2000
+# Walk at most this many commits when recovering a gap before giving up and
+# treating it as a non-fast-forward (which drops the namespace's local state).
+max_gap_walk = 500
+
+# Namespaces to track. A namespace not listed here is proxied but never cached,
+# which is the safe default for an unknown database.
+[[namespace]]
+org = "admin"
+db = "people"
+branch = "main"
+# Per-namespace override of [capture].driver, e.g. "poll" on a reader node.
+# driver = "poll"
+# "lazy"  - fill on demand (default)
+# "eager" - recompute dirtied fragments as soon as a commit lands
+policy = "lazy"
+
+[analyze]
+# When an analyzer cannot prove a tight dependency it must pick a coarser one.
+# strict = true makes it bypass the cache instead, trading hit rate for the
+# smallest possible blast radius. Recommended while rolling out.
+strict = false
+# Cache GraphQL query responses. Requires injecting `_id`/`_type` into every
+# selection set so responses can be mapped back to documents.
+graphql = true
+# Cache read-only WOQL. Any query containing a write op anywhere is forwarded.
+woql = true
+# Requests pinned to a commit are immutable and cached forever. This is the
+# zero-risk case; there is no reason to turn it off.
+pinned = true
+
+[observability]
+# Serve from cache AND re-execute against the local node at the same pinned
+# commit, comparing bytes, reporting divergence with the dependency trace.
+# Sample rate 0.0-1.0. Run at 1.0 during rollout: a cache you cannot audit
+# online is a cache nobody should trust.
+shadow_sample_rate = 0.0
+log_level = "info"
