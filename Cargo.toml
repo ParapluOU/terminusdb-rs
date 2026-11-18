@@ -121,6 +121,8 @@ rug = { path = "crates/rug-shim" }
 # swipl-rs as pinned by 12.1-rc (terminusdb-org).
 swipl = { git = "https://github.com/terminusdb-org/swipl-rs", rev = "2fdd55ee360afc3657aca44e3bf04ca1f48b1c50" }
 swipl-fli = { git = "https://github.com/terminusdb-org/swipl-rs", rev = "2fdd55ee360afc3657aca44e3bf04ca1f48b1c50" }
-# tdb-succinct on 12.1-rc's xbrl-json-iso-intervals branch (adds DateTimeInterval,
-# required by terminusdb-store-prolog @ v12.1).
-tdb-succinct = { git = "https://github.com/terminusdb-org/tdb-succinct", rev = "ec1519923e44e73cad17264f21534065855be6e0" }
+# tdb-succinct v0.2.1, what TerminusDB 12.1.0-rc3 pins (it supersedes the 0.1.x
+# xbrl-json-iso-intervals rev). The 0.2 line is not on crates.io, so this patch
+# is what makes every `tdb-succinct = "0.2"` requirement in the graph —
+# including the store fork's — resolve at all.
+tdb-succinct = { git = "https://github.com/terminusdb-org/tdb-succinct", tag = "v0.2.1" }

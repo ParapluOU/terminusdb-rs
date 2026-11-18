@@ -36,6 +36,14 @@ use terminus_store::proof::query::CanonicalResultValue;
 use terminus_store::proof::{CanonicalDatatype, CanonicalObject};
 use terminus_store::storage::pack_layer_parents;
 use terminus_store::store::sync::{open_sync_memory_store, SyncStore};
+/// A local store that writes proof state. Proving is opt-in in the store fork
+/// (`TERMINUSDB_PROOF_STATE`, off by default), and these stores are where a
+/// replicated pack's proof state is computed and proved, so they ask for it
+/// rather than depending on the environment the test runs in.
+fn proving_store() -> SyncStore {
+    open_sync_memory_store().with_proof_state(terminus_store::storage::ProofStateMode::On)
+}
+
 use terminus_store::Layer;
 
 use terminusdb_woql_proof::proof::{plan_bgp, CompiledBgp};
@@ -460,7 +468,7 @@ pub fn run_differential(seed: &[SeedTriple], query: &Query) -> DifferentialResul
     let phase = oracle_phase(&db, seed, query).expect("oracle/replication phase failed");
 
     // Phase B (sync): prove + resolve the SAME query over the replicated layer.
-    let store = open_sync_memory_store();
+    let store = proving_store();
     let imported = import_pack_into(&store, &phase.pack);
     assert!(
         !imported.is_empty(),
@@ -543,7 +551,7 @@ pub fn probe_prove(seed: &[SeedTriple], query: &Query) -> ProveProbe {
 
     let phase = oracle_phase(&db, seed, query).expect("oracle/replication phase failed");
 
-    let store = open_sync_memory_store();
+    let store = proving_store();
     let imported = import_pack_into(&store, &phase.pack);
     assert!(
         !imported.is_empty(),
@@ -1303,7 +1311,7 @@ pub fn run_differential_on(
 
     let (oracle_bindings, oracle_var_names, pack) = shared.oracle_once(db, seed, query)?;
 
-    let store = open_sync_memory_store();
+    let store = proving_store();
     let imported = import_pack_into(&store, &pack);
     anyhow::ensure!(!imported.is_empty(), "no layer imported from replicated pack");
     let commitment = discover_commitment(&store, &imported);

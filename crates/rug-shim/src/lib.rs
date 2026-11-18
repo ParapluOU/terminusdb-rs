@@ -6,7 +6,7 @@
 //! Only the subset of rug's API actually used by tdb-succinct and terminus-store is implemented.
 
 mod integer;
-mod ops;
+pub mod ops;
 mod parse;
 
 pub use integer::Integer;

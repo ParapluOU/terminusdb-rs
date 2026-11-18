@@ -7106,9 +7106,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdb-datetime"
+version = "0.1.0"
+source = "git+https://github.com/terminusdb-org/tdb-succinct?tag=v0.2.1#3e57cc19323e0e294d407c227b7bd0f3e80dc9fb"
+
+[[package]]
 name = "tdb-succinct"
-version = "0.1.4"
-source = "git+https://github.com/terminusdb-org/tdb-succinct?rev=ec1519923e44e73cad17264f21534065855be6e0#ec1519923e44e73cad17264f21534065855be6e0"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd2121c78e3a6efd81722c3828e01ab51123cb38d6a54794eb84ab435ad9022"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -7124,6 +7130,31 @@ dependencies = [
  "num-traits",
  "regex",
  "rug",
+ "thiserror 1.0.69",
+ "tokio 1.52.4",
+ "tokio-util 0.7.18",
+]
+
+[[package]]
+name = "tdb-succinct"
+version = "0.2.1"
+source = "git+https://github.com/terminusdb-org/tdb-succinct?tag=v0.2.1#3e57cc19323e0e294d407c227b7bd0f3e80dc9fb"
+dependencies = [
+ "async-trait",
+ "base64 0.21.7",
+ "bitvec",
+ "byteorder",
+ "bytes 1.12.1",
+ "chrono",
+ "futures",
+ "hex",
+ "itertools 0.12.1",
+ "lazy_static",
+ "num-derive",
+ "num-traits",
+ "regex",
+ "rug",
+ "tdb-datetime",
  "thiserror 1.0.69",
  "tokio 1.52.4",
  "tokio-util 0.7.18",
@@ -7168,7 +7199,7 @@ dependencies = [
  "regex",
  "rug",
  "tar",
- "tdb-succinct",
+ "tdb-succinct 0.1.2",
  "tempfile",
  "thiserror 1.0.69",
  "tokio 1.52.4",
@@ -7178,7 +7209,7 @@ dependencies = [
 [[package]]
 name = "terminus-store"
 version = "0.21.8"
-source = "git+https://github.com/ParapluOU/terminusdb-store?branch=parture-proof-of-woql#c118258edb765601bb74f39977f78dba64d49371"
+source = "git+https://github.com/ParapluOU/terminusdb-store?branch=parture-proof-of-woql#ebc118901c04f2b0d28213a1d9aeb1975ab83f62"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -7211,7 +7242,7 @@ dependencies = [
  "rug",
  "sha2 0.10.9",
  "tar",
- "tdb-succinct",
+ "tdb-succinct 0.2.1",
  "tempfile",
  "thiserror 1.0.69",
  "tokio 1.52.4",
@@ -7348,7 +7379,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "swipl",
- "tdb-succinct",
+ "tdb-succinct 0.1.2",
  "terminusdb-store-prolog",
  "terminusdb-webserver",
  "thiserror 1.0.69",
@@ -7497,7 +7528,7 @@ dependencies = [
  "rand 0.8.7",
  "reqwest 0.12.28",
  "serde_json",
- "tdb-succinct",
+ "tdb-succinct 0.2.1",
  "terminus-store 0.21.8",
  "terminusdb-bin",
  "terminusdb-client",
@@ -7656,7 +7687,7 @@ dependencies = [
  "rug",
  "sha-1",
  "swipl",
- "tdb-succinct",
+ "tdb-succinct 0.1.2",
  "terminus-store 0.21.7",
  "terminusdb-grpc-labelstore-client",
  "urlencoding 1.3.3",
@@ -7780,7 +7811,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tap",
- "tdb-succinct",
+ "tdb-succinct 0.2.1",
  "terminus-store 0.21.8",
  "terminusdb-schema",
  "terminusdb-schema-derive",
