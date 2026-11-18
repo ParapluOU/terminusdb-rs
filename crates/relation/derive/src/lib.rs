@@ -117,13 +117,26 @@ fn extract_entity_id_target(ty: &Type) -> Option<Type> {
     None
 }
 
+/// The PascalCase marker-type name for a relation field, or `None` when that
+/// name would not be a valid Rust identifier.
+///
+/// Field names that start with a digit after case conversion are the reason
+/// this is fallible: the virtual structs the TaggedUnion derive generates for
+/// multi-field tuple variants have fields `_0`, `_1`, …, and `AsUpperCamelCase`
+/// renders `_0` as `0`. Feeding that to `format_ident!` panics the whole derive
+/// with "`0` is not a valid identifier". Such fields are positional payloads,
+/// never relations, so skipping them is correct as well as safe.
+fn marker_type_ident(field_name: &str) -> Option<syn::Ident> {
+    let pascal = AsUpperCamelCase(field_name).to_string();
+    syn::parse_str::<syn::Ident>(&pascal).ok()
+}
+
 /// Analyze a field and extract TdbLazy relation information.
 /// Only TdbLazy creates document links in TDB - used for ForwardRelation/ReverseRelation.
 fn analyze_field_for_tdblazy(field: &syn::Field) -> Option<TdbLazyFieldInfo> {
     let field_ident = field.ident.as_ref()?;
     let field_name = field_ident.to_string();
-    let field_name_upper = AsUpperCamelCase(&field_name);
-    let marker_type_name = format_ident!("{}", field_name_upper.to_string());
+    let marker_type_name = marker_type_ident(&field_name)?;
 
     let ty = &field.ty;
 
@@ -170,8 +183,7 @@ fn analyze_field_for_tdblazy(field: &syn::Field) -> Option<TdbLazyFieldInfo> {
 fn analyze_field_for_entity_id(field: &syn::Field) -> Option<EntityIdFieldInfo> {
     let field_ident = field.ident.as_ref()?;
     let field_name = field_ident.to_string();
-    let field_name_upper = AsUpperCamelCase(&field_name);
-    let marker_type_name = format_ident!("{}", field_name_upper.to_string());
+    let marker_type_name = marker_type_ident(&field_name)?;
 
     let ty = &field.ty;
 
@@ -243,11 +255,13 @@ pub fn generate_relation_impls(
         };
 
         let field_name = field_ident.to_string();
-        let field_name_upper = AsUpperCamelCase(&field_name);
         let field_type = &field.ty;
 
         // Generate marker type name (PascalCase of field name)
-        let marker_type_name = format_ident!("{}", field_name_upper.to_string());
+        let marker_type_name = match marker_type_ident(&field_name) {
+            Some(ident) => ident,
+            None => continue,
+        };
 
         // Define marker type inside the Fields module
         field_markers.push(quote! {

@@ -10,8 +10,8 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-terminusdb-client = { version = "0.1.0", path = "../client" }
-terminusdb-schema = { version = "0.1.0", path = "../schema" }
+terminusdb-client = { version = "0.2.0", path = "../client" }
+terminusdb-schema = { version = "0.2.0", path = "../schema" }
 tokio = { workspace = true, features = ["time"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
@@ -51,7 +51,11 @@ flate2 = "1"
 tar = "0.4"
 
 [dev-dependencies]
-terminusdb-schema-derive = { version = "0.1.0", path = "../schema/derive" }
+terminusdb-schema-derive = { version = "0.2.0", path = "../schema/derive" }
+# The TerminusDBModel derive expands to paths in these two crates, so test code
+# deriving it needs them linked even though this crate's own code does not.
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-relation = { path = "../relation" }
 futures = "0.3"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

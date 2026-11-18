@@ -12,23 +12,76 @@ graph database built for the web age.
 >
 > **[Let's talk! &#8594;](https://codesocietyhub.com/contact.html)**
 
+## Supported TerminusDB version
+
+| | |
+|---|---|
+| **TerminusDB server** | **12.1.0-rc3** |
+| Embedded server build (`terminusdb-bin`) | fork tag `v12.1.0-rc3-paraplu.1` ([ParapluOU/terminusdb](https://github.com/ParapluOU/terminusdb)) |
+| Older servers | **not supported** — this workspace is v12-only, with no v11 compatibility |
+
+Everything here is tested against that exact server: `terminusdb-bin` builds and
+embeds it, and the integration tests run against the embedded instance rather
+than mocks. The pin lives in one place, `TERMINUSDB_VERSION` in
+[`crates/bin/build.rs`](crates/bin/build.rs), and can be overridden per build:
+
+```bash
+# Track a different tag or branch of the server fork
+TERMINUSDB_VERSION=v12.1.0-rc3-paraplu.1 cargo build -p terminusdb-bin
+
+# Or build from a local server checkout (recommended for local development:
+# the saved state loads librust.so by absolute path, so the tree must persist)
+TERMINUSDB_SOURCE=/path/to/terminusdb cargo build -p terminusdb-bin
+```
+
+Features added by 12.0.7 through 12.1.0-rc3 — `UuidV7` keys, `@shared` classes,
+field-level `@unfold`, counted document listings, `/api/changes`, class frames
+and `format=jsonschema`, history diffs and streaming, typed patch operations,
+`TripleRangeCount`/`TripleRelation`, and GraphQL subscriptions over SSE — are
+supported and covered by live tests. See
+[`docs/terminusdb12-compat-plan.md`](docs/terminusdb12-compat-plan.md) for the
+full surface, including what is deliberately not supported (versioned search,
+which needs an external `tdb-search` engine, and enterprise-only surfaces).
+
 ## Overview
 
 This repository contains multiple crates that provide comprehensive Rust support
 for TerminusDB:
 
+**Core**
+
 - **`terminusdb-client`** - High-level client for interacting with TerminusDB
 - **`terminusdb-schema`** - Schema definitions and validation for TerminusDB
 - **`terminusdb-schema-derive`** - Derive macros for TerminusDB schema types
+- **`terminusdb-bin`** - Builds and embeds the TerminusDB server; also provides
+  `TerminusDBServer` for integration tests that need a real database
+- **`terminusdb`** - Convenience facade re-exporting the common crates
+
+**Querying**
+
+- **`terminusdb-woql2`** - Canonical WOQL (Web Object Query Language) AST;
+  build new queries against this
 - **`terminusdb-orm`** - ActiveRecord-style ORM: typed filters/ordering and
   relation traversal with no hand-written GraphQL (see
   [`crates/orm/README.md`](crates/orm/README.md))
-- **`terminusdb-woql2`** - Canonical WOQL (Web Object Query Language) AST;
-  build new queries against this
+- **`terminusdb-relation`** - Typed relation traits and traversal
+- **`terminusdb-gql`** - GraphQL schema generation over TerminusDB frames
+- **`terminusdb-sql`** / **`terminusdb-sparql`** / **`terminusdb-xpath`** -
+  SQL, SPARQL and XPath front ends that compile to WOQL
 - **`terminusdb-woql-builder`** - Legacy fluent builder over `woql2`
-  (maintenance-only — still used by the client; not recommended for new code)
+  (maintenance-only — do not add operations here; construct new queries with
+  `woql2` directly)
 - **`terminusdb-woql-js`** - Bridge for parsing JavaScript-syntax WOQL via
   `terminusdb-client-js`
+
+**Supporting**
+
+- **`terminusdb-format`** - JSON-LD keyword constants and formatting
+- **`terminusdb-turtle`** - Serializes TerminusDB models as RDF Turtle
+- **`terminusdb-types`** / **`terminusdb-xsd`** / **`terminusdb-typestate`** -
+  Shared type definitions, XSD support and typestate helpers
+- **`terminusdb-cli`** / **`terminusdb-mcp-server`** - Command-line interface
+  and an MCP server for agent access
 
 Also present in-tree but not currently part of the workspace build:
 `terminusdb-woql-dsl` — a standalone parser for textual WOQL-DSL source that
@@ -41,7 +94,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-terminusdb-client = "0.1.0"
+terminusdb-client = "0.2.0"
 ```
 
 ## Quick Start
@@ -697,6 +750,29 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
+
+## Versioning and release tags
+
+Two things move independently here, so they get two tags.
+
+- **Release tags — `v<semver>`**, e.g. `v0.2.0`. Our own version, shared by
+  every crate in the workspace (they all inherit `version.workspace = true`, so
+  there is a single place to bump). The tag's annotation records which
+  TerminusDB server that release was built and tested against.
+- **Server-tracking tags — `tdb/<server version>`**, e.g. `tdb/12.1.0-rc3`.
+  Marks the commit where support for that TerminusDB release landed. Each
+  server bump adds a new one, so `git tag -l 'tdb/*'` is the history of which
+  upstream versions this workspace has tracked.
+
+To find what a given commit supports, `git describe --match 'tdb/*'`; for our
+own version, `git describe --match 'v*'`.
+
+Upgrading to a new TerminusDB release is a documented procedure — see the
+`terminusdb-version-upgrade` skill in
+[`.claude/skills/`](.claude/skills/terminusdb-version-upgrade/SKILL.md), which
+covers refreshing the docs mirror, diffing the server's own WOQL schema and
+routes to find new functionality, rebasing the server fork, and the build
+traps specific to the embedded server.
 
 ## Contributing
 

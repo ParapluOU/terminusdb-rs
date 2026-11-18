@@ -1,6 +1,6 @@
 [package]
 name = "terminusdb-schema"
-version = "0.1.0"
+version.workspace = true
 edition = "2018"
 publish = false
 
@@ -34,7 +34,7 @@ terminusdb-format = { path = "../format" }
 enum_variant_macros = "0.3.0"
 pseudonym.workspace = true
 anyhow = { workspace = true }
-typestate = { version = "0.1.0", path = "../typestate" }
+typestate = { version = "0.2.0", path = "../typestate" }
 uuid = { version = "1.4", features = ["v4", "v7", "serde"] }
 tap = "1.0.1"
 sha2 = "0.10.8"

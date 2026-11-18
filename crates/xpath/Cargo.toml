@@ -1,7 +1,7 @@
 [package]
 name = "terminusdb-xpath"
 description = "Compile XPath expressions into TerminusDB WOQL queries"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license.workspace = true
 repository.workspace = true

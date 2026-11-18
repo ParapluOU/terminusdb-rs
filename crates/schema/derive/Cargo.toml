@@ -3,7 +3,7 @@ name = "terminusdb-schema-derive"
 description = "TerminusDB Schema Derive Macros"
 readme = "crates/terminusdb/schema/README.md"
 license = "AGPL-3.0"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 publish = false
 

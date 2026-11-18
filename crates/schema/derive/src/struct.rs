@@ -443,16 +443,37 @@ pub fn implement_for_struct(
 
     // Generate RelationTo implementations only if relations feature is enabled.
     // Non-named shapes have no relation fields, so they emit nothing.
+    //
+    // Skipped entirely while compiling terminusdb-schema itself. The relation
+    // traits (`BelongsTo`, `RelationTo`) live in terminusdb-relation, which
+    // depends on terminusdb-schema, and their signatures mention
+    // `terminusdb_schema::EntityIDFor`. Inside terminusdb-schema's own unit
+    // tests `terminusdb_schema` is an alias for `crate` (the documented trick
+    // for deriving models in-crate), so the impl body's `EntityIDFor` is the
+    // crate-under-test's type while the trait's is the dependency copy's —
+    // genuinely different types, giving "expected `EntityIDFor<T>`, found a
+    // different `EntityIDFor<T>`". No path spelling can reconcile that; a crate
+    // cannot implement a downstream trait parameterised over a foreign copy of
+    // its own type. Those in-crate test models have no use for relations anyway.
+    //
+    // This only ever triggers in a whole-workspace build: cargo unifies
+    // features across one invocation, so terminusdb-relation's
+    // `features = ["relations"]` dev-dependency turns the feature on for every
+    // crate in the build, terminusdb-schema included.
     #[cfg(feature = "relations")]
-    let relation_impls = match &data_struct.fields {
-        Fields::Named(fields_named) => terminusdb_relation_derive::generate_relation_impls(
-            struct_name,
-            fields_named,
-            &impl_generics,
-            &ty_generics,
-            &base_where_clause.cloned(),
-        ),
-        _ => quote! {},
+    let relation_impls = if std::env::var("CARGO_PKG_NAME").as_deref() == Ok("terminusdb-schema") {
+        quote! {}
+    } else {
+        match &data_struct.fields {
+            Fields::Named(fields_named) => terminusdb_relation_derive::generate_relation_impls(
+                struct_name,
+                fields_named,
+                &impl_generics,
+                &ty_generics,
+                &base_where_clause.cloned(),
+            ),
+            _ => quote! {},
+        }
     };
 
     #[cfg(not(feature = "relations"))]

@@ -17,6 +17,10 @@ urlencoding.workspace = true
 
 [dev-dependencies]
 terminusdb-schema-derive = { path = "../schema/derive" }
+# The TerminusDBModel derive expands to paths in these two crates, so anything
+# deriving it needs them linked even when this crate's own code does not.
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-relation = { path = "../relation" }
 anyhow.workspace = true
 serde.workspace = true
 tracing.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "terminusdb-woql-js"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 authors = ["TerminusDB Team"]
 description = "JavaScript WOQL syntax parser using terminusdb-client-js"

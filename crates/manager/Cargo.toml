@@ -1,6 +1,6 @@
 [package]
 name = "terminusdb-manager"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 
 [dependencies]
@@ -35,8 +35,8 @@ portpicker = "0.1"
 parking_lot = "0.12"
 dirs = "6.0.0"
 futures = "0.3.31"
-terminusdb-woql2 = { version = "0.1.0", path = "../woql2" }
-terminusdb-relation = { version = "0.1.0", path = "../relation" }
+terminusdb-woql2 = { version = "0.2.0", path = "../woql2" }
+terminusdb-relation = { version = "0.2.0", path = "../relation" }
 
 # Process management (Unix only)
 [target.'cfg(unix)'.dependencies]
