@@ -378,3 +378,75 @@ fn test_flattening_continues_through_subdocuments() {
     );
     assert_eq!(company.unwrap().id.as_ref().unwrap(), "Company/tech-corp");
 }
+
+// A document carrying its own id (as content-addressed models do), held by inline
+// documents that have none
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
+struct Amount {
+    units: u32,
+}
+
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
+struct Change {
+    all: bool,
+    amount: Amount,
+}
+
+#[derive(Debug, Clone, Default, TerminusDBModel, FromTDBInstance)]
+struct Ledger {
+    first: Change,
+    second: Change,
+    direct: Amount,
+}
+
+/// Every flattened instance holds only references to other documents: one left inline
+/// because it has no id still has the documents it holds lifted out. Otherwise a
+/// document also sent at top level arrives twice in one request (the server refuses
+/// "same document id mutated multiple times").
+#[test]
+fn documents_inside_an_inline_document_without_an_id_are_lifted_out() {
+    let amount = Amount { units: 14 };
+    let ledger = Ledger {
+        first: Change { all: false, amount: amount.clone() },
+        second: Change { all: true, amount: amount.clone() },
+        direct: amount,
+    };
+    let mut instance = ledger.to_instance(None);
+    // the Amount under one id everywhere, the inline Change documents without one
+    fn address(instance: &mut terminusdb_schema::Instance) {
+        match instance.schema.class_name().as_str() {
+            "Amount" => instance.id = Some("Amount/14".to_string()),
+            "Change" => instance.id = None,
+            _ => {}
+        }
+        for (_, prop) in instance.properties.iter_mut() {
+            if let terminusdb_schema::InstanceProperty::Relation(terminusdb_schema::RelationValue::One(inner)) = prop {
+                address(inner);
+            }
+        }
+    }
+    address(&mut instance);
+
+    let mut found = Vec::new();
+    fn inline_documents(value: &serde_json::Value, depth: usize, found: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if depth > 0 && map.len() > 2 {
+                    if let Some(id) = map.get("@id").and_then(|id| id.as_str()) {
+                        found.push(id.to_string());
+                    }
+                }
+                for child in map.values() {
+                    inline_documents(child, depth + 1, found);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| inline_documents(item, depth, found)),
+            _ => {}
+        }
+    }
+    for flat in instance.to_instance_tree_flatten(true) {
+        use terminusdb_schema::json::ToJson;
+        inline_documents(&flat.to_json(), 0, &mut found);
+    }
+    assert!(found.is_empty(), "documents left inline: {found:?}");
+}

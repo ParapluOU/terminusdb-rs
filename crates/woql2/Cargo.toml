@@ -3,6 +3,10 @@ name = "terminusdb-woql2"
 version.workspace = true
 edition = "2021"
 
+# The Proof-of-WOQL compiler/executor was extracted into the `terminusdb-woql-proof`
+# crate. This crate is now the lightweight WOQL2 AST only and pulls no cryptographic
+# dependencies. Callers that want proving depend on `terminusdb-woql-proof`.
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -18,13 +22,12 @@ tap = "1.0"
 derive_builder = "0.20.2"
 decimal-rs = { version = "0.1.43", features = ["serde"] }
 tracing = { workspace = true }
+# Used by the RFC3339 date-literal macros in `macros.rs` (non-proof AST code).
+chrono = { workspace = true }
 
 [dev-dependencies]
 serde_json = "1.0"
-
-# Added dependencies from the workspace
+decimal-rs = { version = "0.1.43", features = ["serde"] }
 thiserror = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-
-# Added dev-dependencies from the workspace
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] } 
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

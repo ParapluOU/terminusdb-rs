@@ -267,6 +267,48 @@ fn check_tool(name: &str) -> bool {
     which::which(name).is_ok()
 }
 
+/// Newest modification time among the Rust sources (`*.rs`, `Cargo.toml`) under
+/// `dir`, skipping build/dep/VCS dirs. Used to decide whether the committed FFI
+/// dylib is stale relative to the source tree (a dylib older than the NIF sources
+/// may miss newly added foreign predicates, which breaks the Prolog qsave).
+fn newest_rust_src_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    fn walk(dir: &Path, best: &mut Option<std::time::SystemTime>) {
+        let rd = match fs::read_dir(dir) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                if matches!(name.as_ref(), "target" | ".deps" | ".git" | "node_modules") {
+                    continue;
+                }
+                walk(&path, best);
+            } else {
+                let is_src = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .map(|e| e == "rs")
+                    .unwrap_or(false)
+                    || name == "Cargo.toml";
+                if is_src {
+                    if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                        if best.map(|b| mtime > b).unwrap_or(true) {
+                            *best = Some(mtime);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut best = None;
+    walk(dir, &mut best);
+    best
+}
+
 /// SWI-Prolog's per-architecture library subdir name (PLARCH), e.g.
 /// `x86_64-linux`. Used to locate `lib/swipl/lib/<PLARCH>`.
 fn plarch() -> String {
@@ -1241,6 +1283,21 @@ fn write_swipl_certfix(swipl_root: &Path, ca_bundle: &Path) -> Result<PathBuf, S
     Ok(path)
 }
 
+/// POSIX single-quote a string for safe emission into a sourceable `.sh` file.
+fn shell_squote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), String> {
     println!("cargo:warning=Installing SWI-Prolog pack dependencies...");
 
@@ -1390,7 +1447,14 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
             cmd.env("LIBCLANG_PATH", lc);
         }
         if let Some(ref inc) = clang_resource_inc {
-            let mut val = std::ffi::OsString::from("-isystem ");
+            // Use `-I<dir>` (not `-isystem`) for clang's builtin resource headers.
+            // With the provisioned conda clang (which defaults to its own
+            // conda sysroot), `-isystem` lands *after* that sysroot in the search
+            // order, so `<stdint.h>`/`<inttypes.h>` resolve against headers that
+            // lack `intmax_t`/`int64_t` and bindgen aborts ("unknown type name
+            // 'intmax_t'"). A plain `-I` puts clang's own resource headers first,
+            // matching the documented QUERY_PROOF_RELEASE_TESTS recipe.
+            let mut val = std::ffi::OsString::from("-I");
             val.push(inc);
             if let Ok(existing) = env::var("BINDGEN_EXTRA_CLANG_ARGS") {
                 if !existing.trim().is_empty() {
@@ -1419,6 +1483,54 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
         return Err(format!("make install-deps failed with status: {}", status));
     }
 
+    // Rebuild the Rust FFI dylib (src/rust/librust.<ext>) ONLY when it is missing
+    // or older than the current Rust sources. The default `make` target runs only
+    // the Prolog qsave (distribution/Makefile.prolog), which *loads* the committed
+    // dylib but never rebuilds it — so a dylib predating the current NIF (e.g. new
+    // `query_proof_*` foreign predicates) makes the qsave fail with "Exported
+    // procedure terminus_store:... is not defined". When stale we regenerate it via
+    // `make rust` (same provisioned libclang/swipl/gmp env); when fresh we skip the
+    // heavy rebuild so terminusdb-bin stays self-sufficient without a manual step.
+    //
+    // NB: on hosts where the provisioned conda libclang can't resolve the C system
+    // headers for bindgen (swipl-fli), pre-build the dylib once with a working
+    // libclang (e.g. `LIBCLANG_PATH=/usr/lib/llvm-<v>/lib`) so this step is skipped.
+    let dylib_name = if cfg!(target_os = "macos") {
+        "librust.dylib"
+    } else {
+        "librust.so"
+    };
+    let src_rust = repo_path.join("src").join("rust");
+    let librust = src_rust.join(dylib_name);
+    let dylib_stale = match fs::metadata(&librust).and_then(|m| m.modified()) {
+        Err(_) => true, // missing => rebuild
+        Ok(dylib_mtime) => newest_rust_src_mtime(&src_rust)
+            .map(|newest| newest > dylib_mtime)
+            .unwrap_or(true),
+    };
+    if dylib_stale {
+        println!(
+            "cargo:warning=librust dylib missing/stale — rebuilding from source (make rust)..."
+        );
+        let mut rust_cmd = Command::new("make");
+        rust_cmd
+            .arg("rust")
+            .arg("PROFILE=release")
+            .current_dir(repo_path);
+        apply_env(&mut rust_cmd);
+        let status = rust_cmd
+            .status()
+            .map_err(|e| format!("Failed to run make rust (dylib rebuild): {}", e))?;
+        if !status.success() {
+            return Err(format!(
+                "make rust (librust dylib rebuild) failed with status: {}",
+                status
+            ));
+        }
+    } else {
+        println!("cargo:warning=librust dylib is up to date — skipping FFI dylib rebuild");
+    }
+
     println!("cargo:warning=Building TerminusDB binary...");
 
     // On macOS, use 'make PROFILE=release dev' target to create a development binary
@@ -1441,6 +1553,60 @@ fn build_terminusdb(repo_path: &Path, ctx: &DependencyContext) -> Result<(), Str
 
     if !status.success() {
         return Err(format!("make failed with status: {}", status));
+    }
+
+    // Persist the resolved native build environment to `.deps/build-env.sh` so future
+    // MANUAL rebuilds (e.g. `cargo build -p terminusdb-dylib`) and humans can `source` it
+    // instead of re-deriving the provisioned `.deps` paths. Best-effort; never fatal.
+    if let Ok(mani) = env::var("CARGO_MANIFEST_DIR") {
+        let env_file = Path::new(&mani).join(".deps").join("build-env.sh");
+        let mut sh = String::from(
+            "#!/bin/sh\n\
+             # Auto-generated by terminusdb-bin build.rs — the native build env it resolved.\n\
+             # `source` this before a manual `cargo build -p terminusdb-dylib` or a downstream\n\
+             # build that compiles terminusdb-bin. If bindgen still fails with\n\
+             # `unknown type name 'intmax_t'`, the libclang below is version-inconsistent —\n\
+             # see crates/bin/README.md \"Troubleshooting\".\n",
+        );
+        let osq = |v: &std::ffi::OsStr| shell_squote(&v.to_string_lossy());
+        sh.push_str(&format!("export PATH={}\n", osq(&new_path)));
+        if let Some(ref h) = swipl_home {
+            sh.push_str(&format!("export SWI_HOME_DIR={}\n", shell_squote(&h.to_string_lossy())));
+        }
+        if let Some(ref ld) = swipl_ld_path {
+            sh.push_str(&format!("export LD_LIBRARY_PATH={}\n", osq(ld)));
+        }
+        if let Some((ref c, ref cpp, ref lib, ref pc)) = gmp_paths {
+            if let Ok(v) = c { sh.push_str(&format!("export C_INCLUDE_PATH={}\n", osq(v))); }
+            if let Ok(v) = cpp { sh.push_str(&format!("export CPLUS_INCLUDE_PATH={}\n", osq(v))); }
+            if let Ok(v) = lib { sh.push_str(&format!("export LIBRARY_PATH={}\n", osq(v))); }
+            if let Ok(v) = pc { sh.push_str(&format!("export PKG_CONFIG_PATH={}\n", osq(v))); }
+        }
+        // Record whichever libclang was actually in effect: the one we self-provisioned,
+        // or (when the caller set LIBCLANG_PATH / BINDGEN_EXTRA_CLANG_ARGS externally) theirs,
+        // so the emitted env is complete regardless of source.
+        if let Some(ref lc) = libclang_lib {
+            sh.push_str(&format!("export LIBCLANG_PATH={}\n", shell_squote(&lc.to_string_lossy())));
+        } else if let Ok(v) = env::var("LIBCLANG_PATH") {
+            sh.push_str(&format!("export LIBCLANG_PATH={}\n", shell_squote(&v)));
+        }
+        if let Some(ref inc) = clang_resource_inc {
+            sh.push_str(&format!(
+                "export BINDGEN_EXTRA_CLANG_ARGS={}\n",
+                shell_squote(&format!("-I{}", inc.display()))
+            ));
+        } else if let Ok(v) = env::var("BINDGEN_EXTRA_CLANG_ARGS") {
+            sh.push_str(&format!("export BINDGEN_EXTRA_CLANG_ARGS={}\n", shell_squote(&v)));
+        }
+        sh.push_str("export CFLAGS=\"${CFLAGS:+$CFLAGS }-std=gnu17\"\n");
+        sh.push_str("export CXXFLAGS=\"${CXXFLAGS:+$CXXFLAGS }-std=gnu++17\"\n");
+        match fs::write(&env_file, sh) {
+            Ok(()) => println!(
+                "cargo:warning=Wrote resolved build env to {} (source it for manual dylib rebuilds)",
+                env_file.display()
+            ),
+            Err(e) => println!("cargo:warning=Could not write .deps/build-env.sh: {}", e),
+        }
     }
 
     println!("cargo:warning=TerminusDB build completed successfully");

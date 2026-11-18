@@ -1,13 +1,14 @@
 use crate::{
-    json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive,
-    PrimitiveValue, Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL, INTEGER, TIME,
-    UNSIGNED_INT, URI,
+    json::InstancePropertyFromJson, FromInstanceProperty, InstanceProperty, Primitive, PrimitiveValue,
+    Schema, ToInstanceProperty, ToSchemaClass, DATETIME, DECIMAL, INTEGER, TIME, UNSIGNED_INT, URI,
 };
 use chrono::Utc;
 use decimal_rs::Decimal;
 use serde::Serialize;
 use std::cmp::Ordering;
+use std::convert::TryFrom;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug)]
 pub struct XSDDate {
@@ -38,16 +39,24 @@ pub enum XSDAnySimpleType {
     Date(chrono::NaiveDate),
     Time(chrono::NaiveTime),
     // DateTime(chrono::DateTime<Tz>)
+    UnsignedByte(u8),
+    Byte(i8),
+    UnsignedShort(u16),
+    Short(i16),
     UnsignedInt(usize),
+    Int(i32),
+    UnsignedLong(u64),
+    Long(i64),
+    /// The currently representable, bounded-i64 subset of arbitrary-precision `xsd:integer`.
     Integer(i64),
-    /// Escape hatch for any literal this enum has no dedicated variant for:
-    /// carries the datatype IRI and the lexical value verbatim.
+    /// Escape hatch for a literal of any datatype this enum has no dedicated
+    /// variant for: carries the datatype IRI and the lexical value verbatim.
     ///
-    /// TerminusDB 12 ships datatypes outside the XSD set — `xdd:dateTimeInterval`,
-    /// `xdd:dateRange`, `xdd:decimalRange`, `xdd:gYearRange`, `xdd:integerRange`,
-    /// `xdd:coordinate`, `xdd:email`, `xdd:url` — and WOQL predicates such as
-    /// `TripleRelation` take them as operands. Without this variant such a
-    /// literal cannot be expressed at all.
+    /// TerminusDB 12 ships datatypes outside the XSD set —
+    /// `xdd:dateTimeInterval`, `xdd:dateRange`, `xdd:decimalRange`,
+    /// `xdd:gYearRange`, `xdd:integerRange`, `xdd:coordinate`, `xdd:email`,
+    /// `xdd:url` — and WOQL predicates such as `TripleRelation` take them as
+    /// operands. Without this variant such a literal cannot be expressed.
     Typed {
         /// The datatype IRI, e.g. `"xdd:dateTimeInterval"`.
         type_uri: String,
@@ -68,9 +77,16 @@ fn variant_order(v: &XSDAnySimpleType) -> u8 {
         XSDAnySimpleType::DateTime(_) => 6,
         XSDAnySimpleType::Date(_) => 7,
         XSDAnySimpleType::Time(_) => 8,
-        XSDAnySimpleType::UnsignedInt(_) => 9,
-        XSDAnySimpleType::Integer(_) => 10,
-        XSDAnySimpleType::Typed { .. } => 11,
+        XSDAnySimpleType::UnsignedByte(_) => 9,
+        XSDAnySimpleType::Byte(_) => 10,
+        XSDAnySimpleType::UnsignedShort(_) => 11,
+        XSDAnySimpleType::Short(_) => 12,
+        XSDAnySimpleType::UnsignedInt(_) => 13,
+        XSDAnySimpleType::Int(_) => 14,
+        XSDAnySimpleType::UnsignedLong(_) => 15,
+        XSDAnySimpleType::Long(_) => 16,
+        XSDAnySimpleType::Integer(_) => 17,
+        XSDAnySimpleType::Typed { .. } => 18,
     }
 }
 
@@ -105,7 +121,14 @@ impl PartialOrd for XSDAnySimpleType {
             (Self::DateTime(l), Self::DateTime(r)) => l.partial_cmp(r),
             (Self::Date(l), Self::Date(r)) => l.partial_cmp(r),
             (Self::Time(l), Self::Time(r)) => l.partial_cmp(r),
+            (Self::UnsignedByte(l), Self::UnsignedByte(r)) => l.partial_cmp(r),
+            (Self::Byte(l), Self::Byte(r)) => l.partial_cmp(r),
+            (Self::UnsignedShort(l), Self::UnsignedShort(r)) => l.partial_cmp(r),
+            (Self::Short(l), Self::Short(r)) => l.partial_cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.partial_cmp(r),
+            (Self::Int(l), Self::Int(r)) => l.partial_cmp(r),
+            (Self::UnsignedLong(l), Self::UnsignedLong(r)) => l.partial_cmp(r),
+            (Self::Long(l), Self::Long(r)) => l.partial_cmp(r),
             (Self::Integer(l), Self::Integer(r)) => l.partial_cmp(r),
             (
                 Self::Typed {
@@ -144,7 +167,14 @@ impl Ord for XSDAnySimpleType {
             (Self::DateTime(l), Self::DateTime(r)) => l.cmp(r),
             (Self::Date(l), Self::Date(r)) => l.cmp(r),
             (Self::Time(l), Self::Time(r)) => l.cmp(r),
+            (Self::UnsignedByte(l), Self::UnsignedByte(r)) => l.cmp(r),
+            (Self::Byte(l), Self::Byte(r)) => l.cmp(r),
+            (Self::UnsignedShort(l), Self::UnsignedShort(r)) => l.cmp(r),
+            (Self::Short(l), Self::Short(r)) => l.cmp(r),
             (Self::UnsignedInt(l), Self::UnsignedInt(r)) => l.cmp(r),
+            (Self::Int(l), Self::Int(r)) => l.cmp(r),
+            (Self::UnsignedLong(l), Self::UnsignedLong(r)) => l.cmp(r),
+            (Self::Long(l), Self::Long(r)) => l.cmp(r),
             (Self::Integer(l), Self::Integer(r)) => l.cmp(r),
             (
                 Self::Typed {
@@ -174,7 +204,14 @@ impl PartialEq for XSDAnySimpleType {
             (Self::DateTime(l0), Self::DateTime(r0)) => l0 == r0,
             (Self::Date(l0), Self::Date(r0)) => l0 == r0,
             (Self::Time(l0), Self::Time(r0)) => l0 == r0,
+            (Self::UnsignedByte(l0), Self::UnsignedByte(r0)) => l0 == r0,
+            (Self::Byte(l0), Self::Byte(r0)) => l0 == r0,
+            (Self::UnsignedShort(l0), Self::UnsignedShort(r0)) => l0 == r0,
+            (Self::Short(l0), Self::Short(r0)) => l0 == r0,
             (Self::UnsignedInt(l0), Self::UnsignedInt(r0)) => l0 == r0,
+            (Self::Int(l0), Self::Int(r0)) => l0 == r0,
+            (Self::UnsignedLong(l0), Self::UnsignedLong(r0)) => l0 == r0,
+            (Self::Long(l0), Self::Long(r0)) => l0 == r0,
             (Self::Integer(l0), Self::Integer(r0)) => l0 == r0,
             (
                 Self::Typed {
@@ -206,7 +243,14 @@ impl Hash for XSDAnySimpleType {
             XSDAnySimpleType::DateTime(dt) => dt.hash(state),
             XSDAnySimpleType::Date(d) => d.hash(state),
             XSDAnySimpleType::Time(t) => t.hash(state),
+            XSDAnySimpleType::UnsignedByte(i) => i.hash(state),
+            XSDAnySimpleType::Byte(i) => i.hash(state),
+            XSDAnySimpleType::UnsignedShort(i) => i.hash(state),
+            XSDAnySimpleType::Short(i) => i.hash(state),
             XSDAnySimpleType::UnsignedInt(i) => i.hash(state),
+            XSDAnySimpleType::Int(i) => i.hash(state),
+            XSDAnySimpleType::UnsignedLong(i) => i.hash(state),
+            XSDAnySimpleType::Long(i) => i.hash(state),
             XSDAnySimpleType::Integer(i) => i.hash(state),
             XSDAnySimpleType::Typed { type_uri, value } => typed_key(type_uri, value).hash(state),
         }
@@ -306,6 +350,61 @@ mod tests {
             // This would require custom serialization implementation
         }
     }
+
+    #[test]
+    fn canonical_typed_xsd_json_roundtrips_and_rejects_malformed_objects() {
+        let json = serde_json::json!({"@type": "xsd:unsignedInt", "@value": 42});
+        let property =
+            <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(json).unwrap();
+        assert_eq!(
+            XSDAnySimpleType::from_property(&property).unwrap(),
+            XSDAnySimpleType::UnsignedInt(42)
+        );
+        for invalid in [
+            serde_json::json!({"@type": "xsd:unsignedInt"}),
+            serde_json::json!({"@type": "xsd:unsignedInt", "@value": 42, "extra": true}),
+            serde_json::json!({"@type": "xsd:unknown", "@value": 42}),
+            serde_json::json!({"@type": "xsd:unsignedInt", "@value": -1}),
+        ] {
+            assert!(
+                <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(invalid)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_fixed_width_integer_json_roundtrips_edges() {
+        let cases = [
+            (serde_json::json!({"@type": "xsd:unsignedByte", "@value": 255}), XSDAnySimpleType::UnsignedByte(u8::MAX)),
+            (serde_json::json!({"@type": "xsd:byte", "@value": -128}), XSDAnySimpleType::Byte(i8::MIN)),
+            (serde_json::json!({"@type": "xsd:unsignedShort", "@value": 65535}), XSDAnySimpleType::UnsignedShort(u16::MAX)),
+            (serde_json::json!({"@type": "xsd:short", "@value": -32768}), XSDAnySimpleType::Short(i16::MIN)),
+            (serde_json::json!({"@type": "xsd:int", "@value": -2147483648i64}), XSDAnySimpleType::Int(i32::MIN)),
+            (serde_json::json!({"@type": "xsd:unsignedLong", "@value": u64::MAX}), XSDAnySimpleType::UnsignedLong(u64::MAX)),
+            (serde_json::json!({"@type": "xsd:long", "@value": i64::MIN}), XSDAnySimpleType::Long(i64::MIN)),
+        ];
+        for (json, expected) in cases {
+            let property =
+                <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(json)
+                    .unwrap();
+            assert_eq!(XSDAnySimpleType::from_property(&property).unwrap(), expected);
+        }
+
+        for invalid in [
+            serde_json::json!({"@type": "xsd:byte", "@value": -129}),
+            serde_json::json!({"@type": "xsd:unsignedByte", "@value": 256}),
+            serde_json::json!({"@type": "xsd:short", "@value": 32768}),
+            serde_json::json!({"@type": "xsd:unsignedShort", "@value": -1}),
+            serde_json::json!({"@type": "xsd:int", "@value": 2147483648u64}),
+            serde_json::json!({"@type": "xsd:unsignedLong", "@value": -1}),
+        ] {
+            assert!(
+                <XSDAnySimpleType as InstancePropertyFromJson<()>>::property_from_json(invalid)
+                    .is_err()
+            );
+        }
+    }
 }
 
 // impl ToTDBSchema for XSDAnySimpleType {
@@ -331,8 +430,23 @@ mod tests {
 // }
 
 impl FromInstanceProperty for XSDAnySimpleType {
-    fn from_property(_prop: &InstanceProperty) -> anyhow::Result<Self> {
-        todo!()
+    fn from_property(prop: &InstanceProperty) -> anyhow::Result<Self> {
+        let primitive = match prop {
+            InstanceProperty::Primitive(value) => value,
+            _ => return Err(anyhow::anyhow!("xsd value must be a primitive property")),
+        };
+        match primitive {
+            PrimitiveValue::String(value) => Ok(Self::String(value.clone())),
+            PrimitiveValue::Bool(value) => Ok(Self::Boolean(*value)),
+            PrimitiveValue::Number(value) => value
+                .as_f64()
+                .map(Self::Float)
+                .ok_or_else(|| anyhow::anyhow!("xsd numeric value is not representable as f64")),
+            PrimitiveValue::Object(value) => xsd_from_typed_json(value),
+            PrimitiveValue::Null | PrimitiveValue::Unit => Err(anyhow::anyhow!(
+                "null/unit is not an xsd:anySimpleType value"
+            )),
+        }
     }
 }
 
@@ -371,12 +485,19 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
                     "@value": t.format("%H:%M:%S%.f").to_string()
                 })))
             }
+            XSDAnySimpleType::UnsignedByte(i) => typed_integer_property("xsd:unsignedByte", i),
+            XSDAnySimpleType::Byte(i) => typed_integer_property("xsd:byte", i),
+            XSDAnySimpleType::UnsignedShort(i) => typed_integer_property("xsd:unsignedShort", i),
+            XSDAnySimpleType::Short(i) => typed_integer_property("xsd:short", i),
             XSDAnySimpleType::UnsignedInt(i) => {
                 InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
                     "@type": UNSIGNED_INT,
                     "@value": i
                 })))
             }
+            XSDAnySimpleType::Int(i) => typed_integer_property("xsd:int", i),
+            XSDAnySimpleType::UnsignedLong(i) => typed_integer_property("xsd:unsignedLong", i),
+            XSDAnySimpleType::Long(i) => typed_integer_property("xsd:long", i),
             XSDAnySimpleType::Integer(i) => {
                 InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
                     "@type": INTEGER,
@@ -390,24 +511,6 @@ impl<Parent> ToInstanceProperty<Parent> for XSDAnySimpleType {
                 })))
             }
         }
-    }
-}
-
-impl<Parent> InstancePropertyFromJson<Parent> for XSDAnySimpleType {
-    fn property_from_json(json: serde_json::Value) -> anyhow::Result<InstanceProperty> {
-        // Convert serde_json::Value to PrimitiveValue
-        let primitive = match json {
-            serde_json::Value::String(s) => PrimitiveValue::String(s),
-            serde_json::Value::Number(n) => PrimitiveValue::Number(n),
-            serde_json::Value::Bool(b) => PrimitiveValue::Bool(b),
-            serde_json::Value::Null => PrimitiveValue::Null,
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Unsupported JSON type for XSDAnySimpleType"
-                ))
-            }
-        };
-        Ok(InstanceProperty::Primitive(primitive))
     }
 }
 
@@ -436,4 +539,151 @@ impl XSDAnySimpleType {
             format!("{}/{}", start.to_rfc3339(), end.to_rfc3339()),
         )
     }
+}
+
+fn typed_integer_property<T: Serialize>(datatype: &str, value: T) -> InstanceProperty {
+    InstanceProperty::Primitive(PrimitiveValue::Object(serde_json::json!({
+        "@type": datatype,
+        "@value": value
+    })))
+}
+
+impl<Parent> InstancePropertyFromJson<Parent> for XSDAnySimpleType {
+    fn property_from_json(json: serde_json::Value) -> anyhow::Result<InstanceProperty> {
+        // Convert serde_json::Value to PrimitiveValue
+        let primitive = match json {
+            serde_json::Value::String(s) => PrimitiveValue::String(s),
+            serde_json::Value::Number(n) => PrimitiveValue::Number(n),
+            serde_json::Value::Bool(b) => PrimitiveValue::Bool(b),
+            serde_json::Value::Null => PrimitiveValue::Null,
+            serde_json::Value::Object(_) => {
+                // Validate the canonical typed JSON now, then retain it verbatim so
+                // `FromInstanceProperty` can reconstruct the exact enum variant.
+                xsd_from_typed_json(&json)?;
+                PrimitiveValue::Object(json)
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "Unsupported JSON type for XSDAnySimpleType"
+                ))
+            }
+        };
+        Ok(InstanceProperty::Primitive(primitive))
+    }
+}
+
+fn xsd_from_typed_json(json: &serde_json::Value) -> anyhow::Result<XSDAnySimpleType> {
+    let map = json
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("typed xsd value must be an object"))?;
+    if map.len() != 2 || !map.contains_key("@type") || !map.contains_key("@value") {
+        return Err(anyhow::anyhow!(
+            "typed xsd value must contain exactly @type and @value"
+        ));
+    }
+    let datatype = map["@type"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("typed xsd @type must be a string"))?;
+    let value = &map["@value"];
+    let string = || {
+        value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("{datatype} @value must be a string"))
+    };
+    Ok(match datatype {
+        "xsd:string" => XSDAnySimpleType::String(string()?),
+        "xsd:boolean" => XSDAnySimpleType::Boolean(
+            value
+                .as_bool()
+                .ok_or_else(|| anyhow::anyhow!("xsd:boolean @value must be boolean"))?,
+        ),
+        "xsd:unsignedInt" => XSDAnySimpleType::UnsignedInt(
+            usize::try_from(
+                value
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:unsignedInt @value must be unsigned"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:unsignedInt does not fit usize"))?,
+        ),
+        "xsd:unsignedByte" => XSDAnySimpleType::UnsignedByte(
+            u8::try_from(
+                value
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:unsignedByte @value must be unsigned"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:unsignedByte does not fit u8"))?,
+        ),
+        "xsd:byte" => XSDAnySimpleType::Byte(
+            i8::try_from(
+                value
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:byte @value must be an integer"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:byte does not fit i8"))?,
+        ),
+        "xsd:unsignedShort" => XSDAnySimpleType::UnsignedShort(
+            u16::try_from(
+                value.as_u64().ok_or_else(|| {
+                    anyhow::anyhow!("xsd:unsignedShort @value must be unsigned")
+                })?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:unsignedShort does not fit u16"))?,
+        ),
+        "xsd:short" => XSDAnySimpleType::Short(
+            i16::try_from(
+                value
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:short @value must be an integer"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:short does not fit i16"))?,
+        ),
+        "xsd:int" => XSDAnySimpleType::Int(
+            i32::try_from(
+                value
+                    .as_i64()
+                    .ok_or_else(|| anyhow::anyhow!("xsd:int @value must be an integer"))?,
+            )
+            .map_err(|_| anyhow::anyhow!("xsd:int does not fit i32"))?,
+        ),
+        "xsd:unsignedLong" => XSDAnySimpleType::UnsignedLong(
+            value
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("xsd:unsignedLong @value must fit u64"))?,
+        ),
+        "xsd:long" => XSDAnySimpleType::Long(
+            value
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("xsd:long @value must fit i64"))?,
+        ),
+        "xsd:integer" => XSDAnySimpleType::Integer(
+            value
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("xsd:integer @value must fit i64"))?,
+        ),
+        "xsd:float" | "xsd:double" => XSDAnySimpleType::Float(
+            value
+                .as_f64()
+                .ok_or_else(|| anyhow::anyhow!("{datatype} @value must be numeric"))?,
+        ),
+        "xsd:decimal" => XSDAnySimpleType::Decimal(
+            Decimal::from_str(&string()?).map_err(|_| anyhow::anyhow!("invalid xsd:decimal"))?,
+        ),
+        "xsd:hexBinary" => XSDAnySimpleType::HexBinary(string()?),
+        "xsd:anyURI" => XSDAnySimpleType::URI(string()?),
+        "xsd:dateTime" => XSDAnySimpleType::DateTime(
+            chrono::DateTime::parse_from_rfc3339(&string()?)
+                .map_err(|_| anyhow::anyhow!("invalid xsd:dateTime"))?
+                .with_timezone(&Utc),
+        ),
+        "xsd:date" => XSDAnySimpleType::Date(
+            chrono::NaiveDate::parse_from_str(&string()?, "%Y-%m-%d")
+                .map_err(|_| anyhow::anyhow!("invalid xsd:date"))?,
+        ),
+        "xsd:time" => XSDAnySimpleType::Time(
+            chrono::NaiveTime::parse_from_str(&string()?, "%H:%M:%S%.f")
+                .map_err(|_| anyhow::anyhow!("invalid xsd:time"))?,
+        ),
+        _ => return Err(anyhow::anyhow!("unsupported xsd datatype tag '{datatype}'")),
+    })
 }

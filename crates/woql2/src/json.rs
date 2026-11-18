@@ -71,9 +71,314 @@ pub fn normalize_woql_json(value: &mut Value) {
 
 #[cfg(test)]
 mod tests {
-    use crate::prelude::{NodeValue, Query, Triple};
+    use crate::collection::{Length, Sum};
+    use crate::misc::{Collect, RangeMax, RangeMin, TripleCount};
+    use crate::order::{GroupBy, Order};
+    use crate::prelude::{DataValue, NodeValue, Query, Triple, True, When};
+    use crate::query::And;
     use crate::value::Value as WoqlValue;
-    use terminusdb_schema::{ToJson, ToTDBInstance};
+    use terminusdb_schema::{FromTDBInstance, ToJson, ToTDBInstance};
+
+    #[test]
+    fn when_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
+        let query = Query::If(When {
+            query: Box::new(Query::True(True {})),
+            consequent: Box::new(Query::True(True {})),
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["@type"], "When");
+        assert!(json.get("query").is_some());
+        assert!(json.get("consequent").is_some());
+        assert!(json.get("test").is_none());
+        assert!(json.get("then").is_none());
+        assert!(json.get("else").is_none());
+
+        let decoded = Query::from_json(json).expect("domain decoder accepts Prolog When JSON");
+        assert!(matches!(decoded, Query::If(_)));
+    }
+
+    #[test]
+    fn order_by_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
+        // This is the shape accepted by json_woql.pl: OrderBy(ordering, query), with
+        // OrderTemplate(variable, "asc"|"desc"). Query proofs consume the decoded
+        // domain AST below; JSON-LD is never the proof statement.
+        let decoded = Query::from_json(serde_json::json!({
+            "@type": "OrderBy",
+            "ordering": [
+                {
+                    "@type": "OrderTemplate",
+                    "variable": "secondary",
+                    "order": "desc"
+                },
+                {
+                    "@type": "OrderTemplate",
+                    "variable": "primary",
+                    "order": "asc"
+                }
+            ],
+            "query": { "@type": "True" }
+        }))
+        .expect("domain decoder accepts Prolog OrderBy JSON");
+        let Query::OrderBy(order_by) = decoded else {
+            panic!("expected decoded OrderBy domain AST");
+        };
+        assert_eq!(order_by.ordering.len(), 2);
+        assert_eq!(order_by.ordering[0].variable, "secondary");
+        assert_eq!(order_by.ordering[0].order, Order::Desc);
+        assert_eq!(order_by.ordering[1].variable, "primary");
+        assert_eq!(order_by.ordering[1].order, Order::Asc);
+        assert!(matches!(*order_by.query, Query::True(_)));
+    }
+
+    #[test]
+    fn start_limit_use_authoritative_prolog_wire_shape_and_domain_decoder() {
+        let decoded = Query::from_json(serde_json::json!({
+            "@type": "Limit",
+            "limit": 2,
+            "query": {
+                "@type": "Start",
+                "start": 1,
+                "query": { "@type": "True" }
+            }
+        }))
+        .expect("domain decoder accepts Prolog Limit(Start(Query)) JSON");
+        let Query::Limit(limit) = decoded else {
+            panic!("expected decoded Limit domain AST");
+        };
+        assert_eq!(limit.limit, 2);
+        let Query::Start(start) = *limit.query else {
+            panic!("expected nested Start domain AST");
+        };
+        assert_eq!(start.start, 1);
+        assert!(matches!(*start.query, Query::True(_)));
+    }
+
+    #[test]
+    fn triple_count_uses_domain_decoder_and_prolog_resource_shape() {
+        // `resource` is Optional since 12.1.0-rc3 gave TripleCount a pattern
+        // form alongside the resource form; `for_resource` builds the latter.
+        let query = Query::TripleCount(TripleCount::for_resource(
+            "admin/db/local/branch/main/instance",
+            DataValue::Variable("Count".into()),
+        ));
+        let json = query.to_woql_json();
+        assert_eq!(json["@type"], "TripleCount");
+        assert_eq!(json["resource"], "admin/db/local/branch/main/instance");
+
+        let decoded = Query::from_json(json)
+            .expect("domain decoder accepts the leading Prolog TripleCount shape");
+        let Query::TripleCount(decoded) = decoded else {
+            panic!("expected decoded TripleCount domain AST");
+        };
+        assert_eq!(
+            decoded.resource.as_deref(),
+            Some("admin/db/local/branch/main/instance")
+        );
+        assert_eq!(decoded.count, DataValue::Variable("Count".into()));
+    }
+
+    #[test]
+    fn immediate_group_by_sum_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::GroupBy(GroupBy {
+                    template: WoqlValue::Variable("score".into()),
+                    group_by: vec!["category".into()],
+                    grouped_value: WoqlValue::Variable("scores".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Sum(Sum {
+                    list: DataValue::Variable("scores".into()),
+                    result: DataValue::Variable("total".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][0]["@type"], "GroupBy");
+        assert_eq!(json["and"][0]["group_by"][0], "category");
+        assert!(json["and"][0].get("grouped").is_some());
+        assert_eq!(json["and"][1]["@type"], "Sum");
+        assert!(json["and"][1].get("list").is_some());
+        assert!(json["and"][1].get("result").is_some());
+
+        let decoded = Query::from_json(json)
+            .expect("domain decoder accepts canonical immediate GroupBy followed by Sum");
+        assert_eq!(decoded, query);
+
+        let Query::And(mut global) = query else {
+            unreachable!()
+        };
+        let Query::GroupBy(group) = &mut global.and[0] else {
+            unreachable!()
+        };
+        group.group_by.clear();
+        let global = Query::And(global);
+        let json = global.to_woql_json();
+        assert_eq!(json["and"][0]["group_by"], serde_json::json!([]));
+        assert_eq!(
+            Query::from_json(json).expect("domain decoder accepts zero-key GroupBy"),
+            global,
+        );
+    }
+
+    #[test]
+    fn immediate_group_by_extrema_preserve_zero_and_two_declared_keys() {
+        for keys in [Vec::new(), vec!["right".into(), "left".into()]] {
+            let query = Query::And(And {
+                and: vec![
+                    Query::GroupBy(GroupBy {
+                        template: WoqlValue::Variable("score".into()),
+                        group_by: keys.clone(),
+                        grouped_value: WoqlValue::Variable("scores".into()),
+                        query: Box::new(Query::True(True {})),
+                    }),
+                    Query::RangeMin(RangeMin {
+                        list: DataValue::Variable("scores".into()),
+                        result: DataValue::Variable("extremum".into()),
+                    }),
+                ],
+            });
+            let json = query.to_woql_json();
+            assert_eq!(json["and"][0]["group_by"], serde_json::json!(keys));
+            assert_eq!(json["and"][1]["@type"], "RangeMin");
+            assert_eq!(
+                Query::from_json(json)
+                    .expect("domain decoder accepts bounded immediate grouped extrema"),
+                query,
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_group_by_length_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::GroupBy(GroupBy {
+                    template: WoqlValue::Variable("score".into()),
+                    group_by: vec!["right".into(), "left".into()],
+                    grouped_value: WoqlValue::Variable("scores".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Length(Length {
+                    list: DataValue::Variable("scores".into()),
+                    length: DataValue::Variable("cardinality".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][1]["@type"], "Length");
+        assert!(json["and"][1].get("list").is_some());
+        assert!(json["and"][1].get("length").is_some());
+        assert_eq!(
+            Query::from_json(json)
+                .expect("domain decoder accepts canonical immediate GroupBy followed by Length"),
+            query,
+        );
+    }
+
+    #[test]
+    fn immediate_collect_length_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::Collect(Collect {
+                    template: WoqlValue::Variable("object".into()),
+                    into: WoqlValue::Variable("objects".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Length(Length {
+                    list: DataValue::Variable("objects".into()),
+                    length: DataValue::Variable("cardinality".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][0]["@type"], "Collect");
+        assert!(json["and"][0].get("template").is_some());
+        assert!(json["and"][0].get("into").is_some());
+        assert!(json["and"][0].get("query").is_some());
+        assert_eq!(json["and"][1]["@type"], "Length");
+        assert_eq!(
+            Query::from_json(json)
+                .expect("domain decoder accepts canonical immediate Collect followed by Length"),
+            query,
+        );
+    }
+
+    #[test]
+    fn immediate_collect_sum_uses_canonical_domain_decoder_shapes() {
+        let query = Query::And(And {
+            and: vec![
+                Query::Collect(Collect {
+                    template: WoqlValue::Variable("score".into()),
+                    into: WoqlValue::Variable("scores".into()),
+                    query: Box::new(Query::True(True {})),
+                }),
+                Query::Sum(Sum {
+                    list: DataValue::Variable("scores".into()),
+                    result: DataValue::Variable("total".into()),
+                }),
+            ],
+        });
+        let json = query.to_woql_json();
+        assert_eq!(json["and"][0]["@type"], "Collect");
+        assert_eq!(json["and"][1]["@type"], "Sum");
+        assert_eq!(
+            Query::from_json(json)
+                .expect("domain decoder accepts canonical immediate Collect followed by Sum"),
+            query,
+        );
+    }
+
+    #[test]
+    fn immediate_collect_extrema_use_canonical_domain_decoder_shapes() {
+        for range in [
+            Query::RangeMin(RangeMin {
+                list: DataValue::Variable("scores".into()),
+                result: DataValue::Variable("extreme".into()),
+            }),
+            Query::RangeMax(RangeMax {
+                list: DataValue::Variable("scores".into()),
+                result: DataValue::Variable("extreme".into()),
+            }),
+        ] {
+            let query = Query::And(And {
+                and: vec![
+                    Query::Collect(Collect {
+                        template: WoqlValue::Variable("score".into()),
+                        into: WoqlValue::Variable("scores".into()),
+                        query: Box::new(Query::True(True {})),
+                    }),
+                    range,
+                ],
+            });
+            let json = query.to_woql_json();
+            assert_eq!(json["and"][0]["@type"], "Collect");
+            assert!(matches!(
+                json["and"][1]["@type"].as_str(),
+                Some("RangeMin" | "RangeMax")
+            ));
+            assert!(json["and"][1].get("list").is_some());
+            assert!(json["and"][1].get("result").is_some());
+            assert_eq!(
+                Query::from_json(json)
+                    .expect("domain decoder accepts canonical immediate collected extrema"),
+                query,
+            );
+        }
+    }
+
+    #[test]
+    fn once_uses_authoritative_prolog_wire_shape_and_domain_decoder() {
+        let decoded = Query::from_json(serde_json::json!({
+            "@type": "Once",
+            "query": { "@type": "True" }
+        }))
+        .expect("domain decoder accepts Prolog Once JSON");
+        let Query::Once(once) = decoded else {
+            panic!("expected decoded Once domain AST");
+        };
+        assert!(matches!(*once.query, Query::True(_)));
+    }
 
     #[test]
     fn none_graph_serializes_as_instance() {

@@ -9,6 +9,7 @@ members = [
     "crates/manager",
     "crates/mcp-server",
     "crates/orm",
+    "crates/proof-model-tests",
     "crates/reactor",
     "crates/relation",
     "crates/relation/derive",
@@ -27,6 +28,7 @@ members = [
     "crates/woql-dsl",
     "crates/woql-js",
     "crates/woql2",
+    "crates/woql-proof",
     "crates/xpath",
     "crates/xsd",
 ]

@@ -101,6 +101,11 @@ impl InstanceProperty {
                             if for_transaction {
                                 rel.make_tx_ref();
                             }
+                        } else {
+                            // no id to refer to it by: it stays inline, but the documents it
+                            // holds are still lifted out (else one also sent at top level
+                            // arrives twice in the same request)
+                            removed.extend(inst.flatten(for_transaction));
                         }
                     } else {
                         // For instances that should remain embedded, still flatten any nested regular documents
@@ -122,6 +127,9 @@ impl InstanceProperty {
                                 if for_transaction {
                                     rel.make_tx_ref();
                                 }
+                            } else {
+                                // inline (no id), but what it holds is still lifted out
+                                removed.extend(inst.flatten(for_transaction));
                             }
                         } else {
                             // For instances that should remain embedded, still flatten any nested regular documents

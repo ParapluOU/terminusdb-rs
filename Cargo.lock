@@ -202,6 +202,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arc-swap"
+version = "1.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84a22b5d51209f6de83d37a0b33d320acb8da88823e42a94c075140708f032a5"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "ariadne"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1144,7 +1153,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3474,7 +3483,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio 1.52.4",
  "tower-layer",
@@ -5357,7 +5366,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.18",
  "tokio 1.52.4",
  "tracing",
@@ -5395,7 +5404,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -7145,7 +7154,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "terminusdb-bin",
  "terminusdb-client",
@@ -7156,7 +7165,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-bin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -7167,8 +7176,10 @@ dependencies = [
  "serde_json",
  "tar",
  "terminusdb-client",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
+ "terminusdb-woql2",
  "tokio 1.52.4",
  "tracing",
  "url",
@@ -7179,7 +7190,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "atty",
@@ -7205,7 +7216,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -7290,7 +7301,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-format"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7299,7 +7310,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-gql"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "apollo-compiler",
@@ -7346,7 +7357,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-manager"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7378,7 +7389,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-mcp-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7402,7 +7413,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-orm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7422,8 +7433,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminusdb-reactor"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-stream",
+ "async-trait",
+ "axum 0.8.9",
+ "blake3",
+ "bytes 1.12.1",
+ "chrono",
+ "clap",
+ "dashmap 5.5.3",
+ "futures-util",
+ "graphql-parser 0.3.0",
+ "http 1.4.2",
+ "http-body-util",
+ "hyper 1.10.1",
+ "hyper-util",
+ "parking_lot",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "terminusdb-bin",
+ "terminusdb-client",
+ "terminusdb-format",
+ "terminusdb-schema",
+ "terminusdb-schema-derive",
+ "terminusdb-woql2",
+ "thiserror 1.0.69",
+ "tokio 1.52.4",
+ "toml",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "urlencoding 2.1.3",
+ "uuid 1.24.0",
+]
+
+[[package]]
 name = "terminusdb-relation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -7436,7 +7490,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-relation-derive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "darling 0.20.11",
  "heck 0.4.1",
@@ -7447,7 +7501,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-schema"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bigdecimal",
@@ -7486,7 +7540,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-schema-derive"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7512,7 +7566,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-sparql"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7524,6 +7578,7 @@ dependencies = [
  "terminusdb-bin",
  "terminusdb-client",
  "terminusdb-format",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "terminusdb-woql2",
@@ -7534,7 +7589,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-sql"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7549,6 +7604,7 @@ dependencies = [
  "terminusdb-bin",
  "terminusdb-client",
  "terminusdb-format",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "terminusdb-woql2",
@@ -7578,7 +7634,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-test"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "terminusdb-bin",
@@ -7589,7 +7645,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-test-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7598,13 +7654,15 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-turtle"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
+ "terminusdb-woql2",
  "thiserror 1.0.69",
  "tracing",
  "urlencoding 2.1.3",
@@ -7612,7 +7670,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -7652,7 +7710,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-woql-builder"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "decimal-rs",
@@ -7663,7 +7721,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-woql-dsl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nom",
  "pretty_assertions",
@@ -7676,7 +7734,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-woql-js"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "rquickjs",
@@ -7688,7 +7746,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-woql2"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7706,13 +7764,14 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-xpath"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
  "serde_json",
  "terminusdb-bin",
  "terminusdb-client",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
  "terminusdb-woql2",
@@ -7725,7 +7784,7 @@ dependencies = [
 
 [[package]]
 name = "terminusdb-xsd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7739,8 +7798,10 @@ dependencies = [
  "tempfile",
  "terminusdb-bin",
  "terminusdb-client",
+ "terminusdb-relation",
  "terminusdb-schema",
  "terminusdb-schema-derive",
+ "terminusdb-woql2",
  "thiserror 1.0.69",
  "tokio 1.52.4",
  "tracing",
@@ -8326,7 +8387,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "typestate"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "ubyte"
@@ -8673,7 +8734,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

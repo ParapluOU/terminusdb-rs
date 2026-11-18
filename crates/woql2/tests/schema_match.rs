@@ -218,6 +218,16 @@ mod tests {
         };
         variant_classes.sort();
 
+        // Known spec-vs-server divergence: woql.json declares the conditional
+        // as `If`, but the server's decoder (`json_type_to_woql_ast('When', …)`
+        // in src/core/query/json_woql.pl) only accepts `When`. We follow the
+        // server — `Query::If` carries a `When`, with `pub type If = When` kept
+        // for callers — so treat the spec's `If` as covered by `When`.
+        let variant_classes: Vec<String> = variant_classes
+            .into_iter()
+            .map(|c| if c == "When" { "If".to_string() } else { c })
+            .collect();
+
         let missing: Vec<_> = spec_classes
             .iter()
             .filter(|c| !variant_classes.contains(c))

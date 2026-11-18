@@ -995,16 +995,49 @@ impl<'a> XmlToInstanceParser<'a> {
             let child_union_schema = self.schemas.get(&child_union_name).unwrap();
             let mut children = Vec::new();
 
-            // Text before first child element (for mixed content)
-            if let Some(ref text) = elem.text {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    children.push(self.make_text_child(child_union_schema, trimmed));
+            // Mixed content: text and elements in document order. A run of
+            // whitespace is one space; the element's own leading and trailing
+            // whitespace (indentation, in a pretty-printed file) is dropped, while
+            // the spaces between text and an inline element are content and stay.
+            let last_text_at = elem.children.iter().rposition(|child| child.tail.is_some());
+            // Only where the schema allows text among the children: between the
+            // children of an element-only type, whitespace is layout, not content.
+            let allows_text = match child_union_schema {
+                Schema::TaggedUnion { properties, .. } => properties.iter().any(|property| property.name == "text"),
+                _ => false,
+            };
+            let text_piece = |raw: &str, first: bool, last: bool| -> Option<String> {
+                if !allows_text {
+                    return None;
+                }
+                let mut piece = String::new();
+                let mut in_space = false;
+                for c in raw.chars() {
+                    if c.is_whitespace() {
+                        in_space = true;
+                    } else {
+                        if in_space && !(first && piece.is_empty()) {
+                            piece.push(' ');
+                        }
+                        in_space = false;
+                        piece.push(c);
+                    }
+                }
+                if in_space && !last && !(first && piece.is_empty()) {
+                    piece.push(' ');
+                }
+                (!piece.is_empty()).then_some(piece)
+            };
+            if let Some(ref lead) = elem.lead {
+                let is_last = last_text_at.is_none();
+                if let Some(piece) = text_piece(lead, true, is_last) {
+                    children.push(self.make_text_child(child_union_schema, &piece));
                 }
             }
 
-            // Child elements in document order
-            for child_elem in &elem.children {
+            // Child elements in document order, each followed by the text after it
+            for (child_at, child_elem) in elem.children.iter().enumerate() {
+                let tail_piece = child_elem.tail.as_deref().and_then(|tail| text_piece(tail, false, Some(child_at) == last_text_at));
                 match self.xml_element_to_instance(child_elem) {
                     Ok(child_instance) => {
                         children.push(self.make_element_child(
@@ -1034,6 +1067,9 @@ impl<'a> XmlToInstanceParser<'a> {
                             );
                         }
                     }
+                }
+                if let Some(piece) = tail_piece {
+                    children.push(self.make_text_child(child_union_schema, &piece));
                 }
             }
 
