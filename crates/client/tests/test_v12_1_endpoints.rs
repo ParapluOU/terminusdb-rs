@@ -101,6 +101,7 @@ async fn new_document_list_params_are_honoured() -> Result<()> {
             }
 
             // id_prefix: only the two alpha members.
+            #[allow(deprecated)] // exercising the raw endpoint is the point of this test
             let docs = client
                 .get_documents(
                     vec![],

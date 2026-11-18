@@ -1607,6 +1607,9 @@ impl super::client::TerminusDBHttpClient {
         );
 
         // Retrieve the raw JSON documents
+        // The recommended path is implemented on top of the discouraged one;
+        // that is the point of deprecating the raw getter rather than removing it.
+        #[allow(deprecated)]
         let json_docs = self.get_documents(formatted_ids, spec, opts).await?;
 
         debug!(

@@ -431,6 +431,7 @@ async fn typed_patch_operations() -> Result<()> {
                 )
                 .await?;
             println!("captured insert -> {captured}");
+            #[allow(deprecated)] // exercising the raw endpoint is the point of this test
             let cities = client
                 .get_documents(
                     vec![],

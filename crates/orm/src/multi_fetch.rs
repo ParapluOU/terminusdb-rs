@@ -116,6 +116,9 @@ async fn fetch_by_ids_impl(
     }
 
     // Single API call for all IDs, regardless of type
+    // Deliberately untyped: this fetches a heterogeneous id set and dispatches to
+    // per-type deserializers afterwards, so there is no single Target to ask for.
+    #[allow(deprecated)]
     let documents = client.get_documents(unique_ids.clone(), spec, opts).await?;
 
     // TDB's batch fetch does not guarantee documents come back in the requested

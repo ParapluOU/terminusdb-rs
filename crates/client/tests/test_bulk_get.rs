@@ -86,6 +86,7 @@ mod tests {
         let ids = vec!["Person/alice".to_string(), "Person/bob".to_string()];
         let opts = GetOpts::default().with_unfold(true);
 
+        #[allow(deprecated)] // exercising the raw endpoint is the point of this test
         let result = client.get_documents(ids, &spec, opts).await;
         // Would assert based on expected data
     }
