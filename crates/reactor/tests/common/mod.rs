@@ -599,6 +599,24 @@ where
     false
 }
 
+/// Track several branches of the same database.
+///
+/// The engine is partitioned by `Namespace { org, db, branch }`, so each branch
+/// gets its own writer, watermark and term index. A test that wants to show
+/// branches are independent has to have Reactor tracking both.
+pub fn with_branches<'a>(branches: &'a [&'a str]) -> impl FnOnce(&mut Config) + 'a {
+    move |config: &mut Config| {
+        let template = config.namespaces[0].clone();
+        config.namespaces = branches
+            .iter()
+            .map(|branch| NamespaceConfig {
+                branch: (*branch).to_owned(),
+                ..template.clone()
+            })
+            .collect();
+    }
+}
+
 /// A driver override, for the per-driver capture tests.
 pub fn with_driver(driver: Driver) -> impl FnOnce(&mut Config) {
     move |config: &mut Config| {

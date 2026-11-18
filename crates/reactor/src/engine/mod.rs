@@ -186,8 +186,24 @@ pub enum WriterMsg {
     Insert(Box<FillResult>),
     /// The schema index was re-derived.
     Schema(Arc<SchemaIndex>),
-    /// Operator action: drop everything for this namespace.
-    Purge,
+    /// Drop everything cached for this namespace.
+    ///
+    /// `forget_watermark` decides whether we also forget *where we are*, and it
+    /// is the difference between two genuinely different situations:
+    ///
+    /// * `false` — an operator asked us to empty the cache (`/_reactor/invalidate`).
+    ///   The history is intact, so the watermark is still true and keeping it
+    ///   means reads can be served (refilled) immediately.
+    /// * `true` — the branch's history was **rewritten** underneath us by a
+    ///   `reset`/`rebase`/`squash`/`apply`/`pull`. The watermark then names a
+    ///   commit that may no longer be on the branch, and a fill pinned there
+    ///   would faithfully return *pre-rewrite* data. Forgetting it makes reads
+    ///   bypass to the origin until capture establishes a new one — a brief
+    ///   loss of hit rate instead of a stale answer.
+    Purge {
+        /// Also forget the published watermark. See above.
+        forget_watermark: bool,
+    },
 }
 
 /// Per-namespace state shared between readers and the writer.

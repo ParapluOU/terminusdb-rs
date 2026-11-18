@@ -438,8 +438,18 @@ pub enum WriterMsg {
     Insert(Box<FillResult>),
     /// The schema index was re-derived.
     Schema(Arc<SchemaIndex>),
-    /// Operator action: drop everything for this namespace.
-    Purge,
+    /// Drop everything for this namespace.
+    ///
+    /// `forget_watermark` is the difference between "the cache is wrong" and
+    /// "history moved under us". A rewriting topology call (squash/reset/
+    /// rebase/apply/pull/optimize/migration) must pass `true`: emptying the
+    /// cache is not enough on its own, because the watermark still names a
+    /// commit that may no longer be on the branch, and the very next refill
+    /// would pin there and serve pre-rewrite bytes. Publishing no watermark
+    /// makes readers bypass to the origin until capture establishes a new one —
+    /// a brief hit-rate loss instead of a stale answer. Operator invalidation
+    /// passes `false`: history is intact, so the watermark is still true.
+    Purge { forget_watermark: bool },
 }
 
 pub struct FillResult {

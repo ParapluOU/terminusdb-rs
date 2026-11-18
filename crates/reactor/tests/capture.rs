@@ -265,6 +265,7 @@ async fn a_reset_is_handled_as_a_non_fast_forward() -> Result<()> {
             assert!(reactor.get(&path).await?.is_hit(), "precondition: cached");
 
             let epochs_before = reactor.engine.metrics().epoch_bumps.get();
+            let purges_before = reactor.engine.metrics().purges.get();
 
             // Reset the branch back to the first commit: the head is now an
             // *ancestor* of our watermark, so our watermark is not reachable
@@ -293,20 +294,28 @@ async fn a_reset_is_handled_as_a_non_fast_forward() -> Result<()> {
                 return Ok(());
             }
 
-            // Capture must notice and bump the epoch rather than carry on.
-            let bumped = common::eventually(Duration::from_secs(30), || {
-                reactor.engine.metrics().epoch_bumps.get() > epochs_before
+            // Since the topology-purge path landed, a `reset` through Reactor
+            // is handled at the frontend: the branch is purged inline, before
+            // the 200 reaches the client, and the watermark is forgotten (it
+            // named a commit that may no longer be on the branch). So the
+            // observable effect is a purge, and the applier's
+            // non-fast-forward *inference* may never run — which is the
+            // improvement: we no longer depend on inferring it.
+            let purged = common::eventually(Duration::from_secs(30), || {
+                reactor.engine.metrics().purges.get() > purges_before
+                    || reactor.engine.metrics().epoch_bumps.get() > epochs_before
             })
             .await;
             println!(
-                "FINDING after reset: epoch_bumps {} -> {}, purges {}",
+                "FINDING after reset: purges {} -> {}, epoch_bumps {} -> {}",
+                purges_before,
+                reactor.engine.metrics().purges.get(),
                 epochs_before,
-                reactor.engine.metrics().epoch_bumps.get(),
-                reactor.engine.metrics().purges.get()
+                reactor.engine.metrics().epoch_bumps.get()
             );
             assert!(
-                bumped,
-                "a head that is not a descendant of the watermark must bump the epoch"
+                purged,
+                "a rewritten branch must be dropped, by purge or by epoch bump"
             );
 
             // And the answer must be the reset state, not the pre-reset bytes.

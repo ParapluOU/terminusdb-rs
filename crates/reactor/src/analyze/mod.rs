@@ -169,6 +169,17 @@ impl Target {
                 endpoint,
                 ns: Namespace::new(*org, *db, *branch),
             },
+            // NOTE on the branch: `…/local/commit/<id>` carries no branch
+            // segment, so there is nothing in the path to read one from — a
+            // commit belongs to a repository, and may be reachable from several
+            // branches or none. `DEFAULT_BRANCH` is therefore a placeholder, not
+            // a claim. Cached content is unaffected (it is keyed by the commit
+            // hash, which is what makes a pinned read immutable), and the
+            // authorization gate only uses `org`/`db`; the one cost is that a
+            // pinned read on a non-main branch is attributed to `main` in
+            // per-namespace metrics. Fixing that would mean asking the server
+            // which branches contain the commit, on the request path, to label
+            // a metric — not worth it.
             [org, db, "local", "commit", commit] => Target::Pinned {
                 endpoint,
                 ns: Namespace::new(*org, *db, DEFAULT_BRANCH),
@@ -204,6 +215,36 @@ impl Target {
     }
 }
 
+/// How much cached state a topology call invalidates.
+///
+/// Branch-rewriting endpoints do not merely move a head forward — `reset`,
+/// `rebase`, `squash` and `apply` can move it sideways, `pull` can land a
+/// divergent history, and `optimize` may not move it at all while still
+/// rewriting the layers underneath. Inferring a non-fast-forward from the
+/// outside is possible but fragile, and the cost of getting it wrong is serving
+/// pre-rewrite bytes. So these calls purge outright rather than relying on
+/// inference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PurgeScope {
+    /// Nothing is dropped; the head is merely re-examined.
+    #[default]
+    None,
+    /// Drop everything cached for the branch named in the path.
+    Branch,
+    /// Drop everything cached for *every* branch of the database.
+    ///
+    /// For `DELETE /api/db`: the data is gone, so keeping any of it cached is
+    /// indefensible.
+    Database,
+}
+
+impl PurgeScope {
+    /// True when anything is dropped.
+    pub fn purges(self) -> bool {
+        !matches!(self, PurgeScope::None)
+    }
+}
+
 /// What the frontend should do with a request.
 ///
 /// `Serialize` because `/_reactor/explain` returns a plan as JSON without
@@ -233,6 +274,8 @@ pub enum Plan {
         reason: &'static str,
         /// The namespace to resynchronize, when the path named one.
         ns: Option<Namespace>,
+        /// How much cached state this call invalidates.
+        purge: PurgeScope,
     },
     /// Cacheable with these dependencies.
     Read {
@@ -395,6 +438,41 @@ const TOPOLOGY_ENDPOINTS: &[&str] = &[
     "unpack",
 ];
 
+/// Endpoints that rewrite a branch's data or history, and therefore purge it.
+///
+/// `optimize` is in the list precisely because it may *not* move the head: it
+/// rewrites the layers a commit is made of, so a head comparison would conclude
+/// nothing happened while every cached body could be affected.
+const BRANCH_REWRITING_ENDPOINTS: &[&str] = &[
+    "squash",
+    "reset",
+    "rebase",
+    "apply",
+    "pull",
+    "optimize",
+    "migration",
+];
+
+/// How much a successful topology call invalidates.
+///
+/// `fetch`, `push` and `clone` are deliberately absent: none of them changes
+/// the data of the branch named in the path (fetch writes remote-tracking
+/// state, push and clone are outbound). They only warrant a resync.
+fn purge_scope(endpoint: &str, method: &http::Method) -> PurgeScope {
+    if BRANCH_REWRITING_ENDPOINTS.contains(&endpoint) {
+        return PurgeScope::Branch;
+    }
+    // Deleting the thing is the most complete invalidation there is.
+    if *method == http::Method::DELETE {
+        return match endpoint {
+            "db" => PurgeScope::Database,
+            "branch" => PurgeScope::Branch,
+            _ => PurgeScope::None,
+        };
+    }
+    PurgeScope::None
+}
+
 /// Classify a request.
 pub fn plan(req: &ReqView, schema: &SchemaIndex, cfg: &AnalyzeConfig) -> Plan {
     let endpoint = req.target.endpoint().to_owned();
@@ -414,9 +492,12 @@ pub fn plan(req: &ReqView, schema: &SchemaIndex, cfg: &AnalyzeConfig) -> Plan {
             // No namespace: a system or management route. Still worth a resync
             // signal if it can change a database's topology.
             if TOPOLOGY_ENDPOINTS.contains(&endpoint.as_str()) && !is_read_method(req.method) {
+                // No namespace in the path, so there is nothing to purge by
+                // name; capture re-examines whatever it tracks.
                 return Plan::Resync {
                     reason: "topology endpoint",
                     ns: None,
+                    purge: PurgeScope::None,
                 };
             }
             return Plan::bypass("not a branch-scoped endpoint");
@@ -429,6 +510,7 @@ pub fn plan(req: &ReqView, schema: &SchemaIndex, cfg: &AnalyzeConfig) -> Plan {
         }
         return Plan::Resync {
             reason: "topology endpoint",
+            purge: purge_scope(&endpoint, req.method),
             ns: Some(ns),
         };
     }
@@ -853,27 +935,114 @@ mod tests {
     }
 
     #[test]
-    fn topology_endpoints_request_a_resync_after_a_write() {
+    fn every_branch_rewriting_endpoint_purges_the_branch() {
+        // The user's list, verbatim. Each of these can change the data of the
+        // branch in the path — `optimize` without even moving the head — so
+        // inference from the head is not good enough.
         let body = Bytes::new();
         let h = headers();
         for endpoint in [
-            "db",
-            "branch",
             "squash",
             "reset",
             "rebase",
             "apply",
             "pull",
+            "optimize",
             "migration",
         ] {
+            let path = format!("/api/{endpoint}/admin/mydb/local/branch/main");
+            let req = view(&Method::POST, &path, "", &h, &body);
+            match plan(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+                Plan::Resync { ns, purge, .. } => {
+                    assert_eq!(
+                        purge,
+                        PurgeScope::Branch,
+                        "{endpoint} must purge the branch"
+                    );
+                    assert_eq!(ns, Some(Namespace::new("admin", "mydb", "main")));
+                }
+                other => panic!("{endpoint}: expected a purging resync, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_against_a_topology_endpoint_purges_nothing() {
+        let body = Bytes::new();
+        let h = headers();
+        for endpoint in [
+            "squash",
+            "reset",
+            "rebase",
+            "apply",
+            "pull",
+            "optimize",
+            "migration",
+            "db",
+            "branch",
+        ] {
+            let path = format!("/api/{endpoint}/admin/mydb/local/branch/main");
+            let req = view(&Method::GET, &path, "", &h, &body);
+            let plan = plan(&req, &schema_fixture(), &AnalyzeConfig::default());
+            assert!(
+                matches!(plan, Plan::Bypass { .. }),
+                "a GET against {endpoint} changes nothing, got {plan:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_outbound_and_metadata_endpoints_only_resync() {
+        // None of these changes the data of the branch in the path: `fetch`
+        // writes remote-tracking state, `push` and `clone` are outbound, and
+        // creating a db or branch adds rather than rewrites.
+        let body = Bytes::new();
+        let h = headers();
+        for endpoint in ["fetch", "push", "clone", "db", "branch"] {
             let path = format!("/api/{endpoint}/admin/mydb");
             let req = view(&Method::POST, &path, "", &h, &body);
             match plan(&req, &schema_fixture(), &AnalyzeConfig::default()) {
-                Plan::Resync { ns, .. } => {
+                Plan::Resync { purge, ns, .. } => {
+                    assert_eq!(purge, PurgeScope::None, "{endpoint} must not purge");
                     assert_eq!(ns, Some(Namespace::new("admin", "mydb", "main")));
                 }
-                other => panic!("{endpoint}: expected a resync, got {other:?}"),
+                other => panic!("{endpoint}: expected a plain resync, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn deleting_a_database_purges_every_branch_of_it() {
+        let body = Bytes::new();
+        let h = headers();
+        let req = view(&Method::DELETE, "/api/db/admin/mydb", "", &h, &body);
+        match plan(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+            Plan::Resync { purge, .. } => assert_eq!(
+                purge,
+                PurgeScope::Database,
+                "the data is gone; caching any of it is indefensible"
+            ),
+            other => panic!("expected a purging resync, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deleting_a_branch_purges_that_branch() {
+        let body = Bytes::new();
+        let h = headers();
+        let req = view(
+            &Method::DELETE,
+            "/api/branch/admin/mydb/local/branch/feature",
+            "",
+            &h,
+            &body,
+        );
+        match plan(&req, &schema_fixture(), &AnalyzeConfig::default()) {
+            Plan::Resync { purge, ns, .. } => {
+                assert_eq!(purge, PurgeScope::Branch);
+                assert_eq!(ns, Some(Namespace::new("admin", "mydb", "feature")));
+            }
+            other => panic!("expected a purging resync, got {other:?}"),
         }
     }
 
@@ -1072,8 +1241,10 @@ mod tests {
         let json = serde_json::to_value(Plan::Resync {
             reason: "rebase",
             ns: None,
+            purge: PurgeScope::Branch,
         })
         .unwrap();
         assert_eq!(json["Resync"]["reason"], serde_json::json!("rebase"));
+        assert_eq!(json["Resync"]["purge"], serde_json::json!("Branch"));
     }
 }

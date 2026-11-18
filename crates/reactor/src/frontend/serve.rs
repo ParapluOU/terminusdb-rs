@@ -355,10 +355,28 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
             forward(&state, &request, CacheState::Bypass, Some(reason)).await
         }
         Plan::Write => serve_write(&state, &request, &ns).await,
-        Plan::Resync { reason, ns: hinted } => {
+        Plan::Resync {
+            reason,
+            ns: hinted,
+            purge,
+        } => {
             let response = forward(&state, &request, CacheState::Bypass, Some(reason)).await;
             if response.status().is_success() {
                 let target = hinted.unwrap_or(ns);
+                // Purge BEFORE the response goes back to the client, and wait
+                // for it to actually take effect.
+                //
+                // Queuing it is not enough. `Engine::send` only hands the
+                // message to the writer's mailbox; if we answered 200 while the
+                // purge was still queued, a client that immediately re-read
+                // would be served the pre-rewrite entry it just invalidated —
+                // exactly the bug this path exists to prevent. So we wait for
+                // the epoch to advance, which is the observable effect of a
+                // purge having been applied.
+                purge_now(&state, &target, purge).await;
+                // And resynchronize: a purged namespace with a stale watermark
+                // would pin later fills at a commit that may no longer be on
+                // the branch.
                 state.hint(CaptureHint::Resync { ns: target });
             }
             response
@@ -383,6 +401,71 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
                 augment,
             )
             .await
+        }
+    }
+}
+
+/// How long to wait for a purge to be applied before answering anyway.
+///
+/// Short: this is on the response path of a topology call that has already
+/// done its work upstream. Giving up leaves a brief window in which a stale
+/// entry could still be served, which is why the wait exists at all — but
+/// blocking a successful `reset` indefinitely because a writer task is wedged
+/// would be worse.
+const PURGE_WAIT: Duration = Duration::from_secs(2);
+
+/// Drop cached state for a topology call that rewrote data.
+///
+/// Namespace-scoped on purpose: a `reset` on one branch must not empty another
+/// branch's cache, and a database-wide purge must not reach another database.
+async fn purge_now(state: &AppState, target: &Namespace, scope: analyze::PurgeScope) {
+    let namespaces: Vec<Namespace> = match scope {
+        analyze::PurgeScope::None => return,
+        analyze::PurgeScope::Branch => vec![target.clone()],
+        // Every branch of this database that we track.
+        analyze::PurgeScope::Database => state
+            .config
+            .namespaces()
+            .into_iter()
+            .filter(|ns| ns.org == target.org && ns.db == target.db)
+            .collect(),
+    };
+
+    for ns in namespaces {
+        let before = state.engine.watermark(&ns).map(|w| w.pos.epoch);
+        // These endpoints rewrite history, so the watermark must go too: it
+        // names a commit that may no longer be on the branch, and a fill pinned
+        // there would faithfully return pre-rewrite data. Found by
+        // `reset_purges_the_branch`, which saw exactly that — the cache was
+        // correctly emptied and then refilled with pre-reset bytes.
+        if state
+            .engine
+            .send(
+                &ns,
+                crate::engine::WriterMsg::Purge {
+                    forget_watermark: true,
+                },
+            )
+            .is_err()
+        {
+            tracing::debug!(%ns, "no writer to purge");
+            continue;
+        }
+        tracing::info!(%ns, ?scope, "purging after a topology call");
+
+        // With no watermark nothing can have been cached (a read without one
+        // bypasses, because there is no position to pin a fill at), so there is
+        // nothing to wait for.
+        let Some(before) = before else { continue };
+        let deadline = Instant::now() + PURGE_WAIT;
+        while Instant::now() < deadline {
+            match state.engine.watermark(&ns).map(|w| w.pos.epoch) {
+                // Either observable effect of the purge having been applied:
+                // the watermark is gone, or the epoch advanced.
+                None => break,
+                Some(now) if now > before => break,
+                _ => tokio::time::sleep(Duration::from_millis(2)).await,
+            }
         }
     }
 }

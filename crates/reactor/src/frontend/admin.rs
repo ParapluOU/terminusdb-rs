@@ -233,7 +233,14 @@ pub async fn invalidate(
     Json(request): Json<InvalidateRequest>,
 ) -> Response {
     let ns = Namespace::new(request.org, request.db, request.branch);
-    match state.engine.send(&ns, WriterMsg::Purge) {
+    // The history is intact, so the watermark is still true: keeping it lets
+    // the next read refill immediately rather than bypassing.
+    match state.engine.send(
+        &ns,
+        WriterMsg::Purge {
+            forget_watermark: false,
+        },
+    ) {
         Ok(()) => {
             state.auth.clear();
             tracing::info!(%ns, "namespace invalidated by operator request");

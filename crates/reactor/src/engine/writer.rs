@@ -186,7 +186,7 @@ impl NamespaceWriter {
             } => self.on_non_fast_forward(old_head, new_head, fired),
             WriterMsg::Insert(fill) => self.on_insert(*fill),
             WriterMsg::Schema(schema) => self.on_schema(schema),
-            WriterMsg::Purge => self.on_purge(),
+            WriterMsg::Purge { forget_watermark } => self.on_purge(forget_watermark),
         }
     }
 
@@ -271,16 +271,24 @@ impl NamespaceWriter {
         tracing::debug!(ns = %self.state.ns, "schema index refreshed");
     }
 
-    fn on_purge(&mut self) {
-        // Bump the epoch even though the history did not move: in-flight fills
+    fn on_purge(&mut self, forget_watermark: bool) {
+        // Bump the epoch even when the history did not move: in-flight fills
         // pinned before the purge must not be allowed to land afterwards.
         let pos = self.head.next_epoch();
         self.purge_state(pos);
         self.head = pos;
         self.metrics.purges.inc();
-        let commit = self.head_commit.clone();
-        self.publish(commit.map(|commit| Watermark { pos, commit }));
-        tracing::info!(ns = %self.state.ns, %pos, "namespace purged");
+        if forget_watermark {
+            // The history was rewritten, so our commit may no longer be on the
+            // branch. Publishing nothing makes readers bypass to the origin
+            // until capture establishes a new watermark — see `WriterMsg::Purge`.
+            self.head_commit = None;
+            self.publish(None);
+        } else {
+            let commit = self.head_commit.clone();
+            self.publish(commit.map(|commit| Watermark { pos, commit }));
+        }
+        tracing::info!(ns = %self.state.ns, %pos, forget_watermark, "namespace purged");
     }
 
     /// Close every registered version the fired set dirties, and unregister it.
@@ -698,11 +706,49 @@ mod tests {
     }
 
     #[test]
+    fn a_rewriting_purge_forgets_the_watermark_so_reads_bypass() {
+        // Regression, and it was a real staleness bug: after a `reset` the
+        // cache was correctly emptied, but the watermark still named the
+        // pre-reset commit, so the refill pinned there and returned pre-reset
+        // bytes. Forgetting the watermark makes reads bypass to the origin
+        // until capture establishes a new one.
+        let (engine, mut writer) = harness();
+        writer.handle(commit("c1", vec![]));
+        assert!(engine.watermark(&ns()).is_some());
+
+        writer.handle(WriterMsg::Purge {
+            forget_watermark: true,
+        });
+        assert!(
+            engine.watermark(&ns()).is_none(),
+            "a rewritten history leaves no position we can honestly pin a fill at"
+        );
+        assert_eq!(writer.head(), pos(1, 0), "and the epoch still advances");
+        assert!(writer.head_commit().is_none());
+    }
+
+    #[test]
+    fn an_operator_purge_keeps_the_watermark() {
+        // Nothing was rewritten, so where we are is still true and the next
+        // read can refill immediately instead of bypassing.
+        let (engine, mut writer) = harness();
+        writer.handle(commit("c1", vec![]));
+        writer.handle(WriterMsg::Purge {
+            forget_watermark: false,
+        });
+        let watermark = engine.watermark(&ns()).expect("still established");
+        assert_eq!(watermark.commit, CommitId::new("c1"));
+        assert_eq!(watermark.pos, pos(1, 0));
+    }
+
+    #[test]
     fn a_purge_keeps_the_commit_ring() {
         use crate::engine::CommitLookup;
         let (engine, mut writer) = harness();
         writer.handle(commit("c1", vec![]));
-        writer.handle(WriterMsg::Purge);
+        writer.handle(WriterMsg::Purge {
+            forget_watermark: false,
+        });
         assert_eq!(
             engine.position_of(&ns(), &CommitId::new("c1")),
             CommitLookup::Applied(pos(0, 1)),
@@ -1154,7 +1200,9 @@ mod tests {
         let (engine, mut writer) = harness();
         writer.handle(commit("c1", vec![]));
         let k = key("alice");
-        writer.handle(WriterMsg::Purge);
+        writer.handle(WriterMsg::Purge {
+            forget_watermark: false,
+        });
         assert_eq!(writer.head(), pos(1, 0));
 
         writer.handle(insert(
@@ -1528,7 +1576,9 @@ mod tests {
                             fired: None,
                         });
                     } else {
-                        writer.handle(WriterMsg::Purge);
+                        writer.handle(WriterMsg::Purge {
+                            forget_watermark: false,
+                        });
                     }
                     clear_floor = writer.head();
                     history.push((writer.head(), TermSet::new()));
