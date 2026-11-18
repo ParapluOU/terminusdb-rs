@@ -813,8 +813,10 @@ fn extract_root(
             children,
             ..
         } => {
-            // `_count(Member: {…})` — the *argument name* is the class, which is
-            // why this is handled before the class lookup below.
+            // `_count(Person: {})` — the *argument name* is the class, which is
+            // why this is handled before the class lookup below. Documented in
+            // `docs/terminusdb/graphql-query-reference.md`; an empty filter is
+            // answered from the store indexes.
             if name == "_count" {
                 let mut matched = false;
                 for (arg, value) in args {

@@ -86,6 +86,8 @@ pub struct NamespaceWriter {
     log: FiredLog,
     head: Position,
     head_commit: Option<CommitId>,
+    /// Insertion order for the published commit ring, so eviction is FIFO.
+    commit_order: std::collections::VecDeque<CommitId>,
 }
 
 impl NamespaceWriter {
@@ -109,6 +111,7 @@ impl NamespaceWriter {
             log,
             head: Position::ZERO,
             head_commit: None,
+            commit_order: std::collections::VecDeque::new(),
         }
     }
 
@@ -131,6 +134,20 @@ impl NamespaceWriter {
             }
         }
         tracing::debug!(ns = %self.state.ns, "namespace writer stopped");
+    }
+
+    /// Apply every message already in the mailbox, without waiting for more.
+    ///
+    /// For a caller that owns the writer and wants to flush it at a known point
+    /// — a test, or a supervisor that has just sent a bootstrap and needs the
+    /// watermark published before it starts serving.
+    pub fn drain(&mut self) -> usize {
+        let mut applied = 0;
+        while let Ok(msg) = self.inbox.try_recv() {
+            self.handle(msg);
+            applied += 1;
+        }
+        applied
     }
 
     /// The current head position. Equal to the published watermark's position.
@@ -196,6 +213,11 @@ impl NamespaceWriter {
         self.head = pos;
         self.head_commit = Some(cs.commit.clone());
         self.metrics.commits_applied.inc();
+        // After invalidation, before the watermark: a reader may then see
+        // `Applied(pos)` while the watermark is still below `pos`, which the
+        // fence handles by comparing against its own latched watermark. The
+        // reverse order would let a fence pass before invalidation finished.
+        self.register_commit(pos, cs.commit.clone());
         // Published last, and only now: see the module docs.
         self.publish(Some(Watermark {
             pos,
@@ -235,6 +257,7 @@ impl NamespaceWriter {
         }
         self.head = pos;
         self.head_commit = Some(new_head.clone());
+        self.register_commit(pos, new_head.clone());
         self.publish(Some(Watermark {
             pos,
             commit: new_head,
@@ -288,6 +311,22 @@ impl NamespaceWriter {
         self.index.clear();
         self.log.clear(floor);
         self.metrics.tracked_keys.set(0);
+        // The commit ring is NOT cleared: which commit we applied at which
+        // position is still true, and a fence asking about one of them deserves
+        // a real answer. Only cached content was ever wrong.
+    }
+
+    /// Publish `commit -> pos` for readers, evicting the oldest entry when the
+    /// ring is full.
+    fn register_commit(&mut self, pos: Position, commit: CommitId) {
+        if self.state.commits.insert(commit.clone(), pos).is_none() {
+            self.commit_order.push_back(commit);
+        }
+        while self.commit_order.len() > self.cfg.commit_ring_capacity {
+            if let Some(evicted) = self.commit_order.pop_front() {
+                self.state.commits.remove(&evicted);
+            }
+        }
     }
 
     fn request_schema_refresh(&self) {
@@ -602,6 +641,73 @@ mod tests {
         assert_eq!(wm.pos, pos(0, 1));
         assert_eq!(wm.commit, CommitId::new("c1"));
         assert_eq!(writer.head(), pos(0, 1));
+    }
+
+    #[test]
+    fn bootstrap_establishes_a_first_watermark_without_invalidating_anything() {
+        let engine = Arc::new(Engine::new(
+            EngineConfig::default(),
+            Arc::new(TieredStore::memory_only(1 << 20)),
+        ));
+        let mut writer = engine.take_writer(&ns()).expect("a fresh writer");
+        assert!(engine.watermark(&ns()).is_none());
+
+        engine.bootstrap(&ns(), CommitId::new("head")).unwrap();
+        // Drain the mailbox by hand: the writer task is phase D's job.
+        let msg = writer.inbox.try_recv().expect("the bootstrap message");
+        writer.handle(msg);
+
+        let wm = engine.watermark(&ns()).expect("a watermark");
+        assert_eq!(wm.pos, pos(0, 1));
+        assert_eq!(wm.commit, CommitId::new("head"));
+        assert_eq!(engine.metrics().versions_invalidated.get(), 0);
+        assert_eq!(
+            engine.position_of(&ns(), &CommitId::new("head")),
+            crate::engine::CommitLookup::Applied(pos(0, 1))
+        );
+    }
+
+    #[test]
+    fn the_commit_ring_answers_position_queries_and_forgets_in_order() {
+        use crate::engine::CommitLookup;
+        let (engine, mut writer) = harness_with(EngineConfig {
+            commit_ring_capacity: 2,
+            ..EngineConfig::default()
+        });
+        for i in 1..=3 {
+            writer.handle(commit(&format!("c{i}"), vec![]));
+        }
+        assert_eq!(
+            engine.position_of(&ns(), &CommitId::new("c3")),
+            CommitLookup::Applied(pos(0, 3))
+        );
+        assert_eq!(
+            engine.position_of(&ns(), &CommitId::new("c2")),
+            CommitLookup::Applied(pos(0, 2))
+        );
+        assert_eq!(
+            engine.position_of(&ns(), &CommitId::new("c1")),
+            CommitLookup::Unknown,
+            "evicted and never-applied are the same answer, and a fence must \
+             treat both as unsatisfied"
+        );
+        assert_eq!(
+            engine.position_of(&ns(), &CommitId::new("never")),
+            CommitLookup::Unknown
+        );
+    }
+
+    #[test]
+    fn a_purge_keeps_the_commit_ring() {
+        use crate::engine::CommitLookup;
+        let (engine, mut writer) = harness();
+        writer.handle(commit("c1", vec![]));
+        writer.handle(WriterMsg::Purge);
+        assert_eq!(
+            engine.position_of(&ns(), &CommitId::new("c1")),
+            CommitLookup::Applied(pos(0, 1)),
+            "which commit we applied where is still true after a purge"
+        );
     }
 
     #[test]

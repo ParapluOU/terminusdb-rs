@@ -58,6 +58,7 @@ async-stream = { workspace = true }
 
 # Misc
 anyhow = { workspace = true }
+async-trait = "0.1"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

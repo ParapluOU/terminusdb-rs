@@ -39,6 +39,10 @@ memory_budget_mb = 512
 # Keep at most this many versions per fragment key. Older versions are dropped
 # once no live reader is latched below them.
 max_versions_per_key = 4
+# A cacheable response larger than this is streamed through and not cached: we
+# need the whole body in memory to hash it, and that is not worth it past a
+# point. Bypassed and streaming responses are never buffered regardless.
+max_cacheable_body_mb = 8
 
 [consistency]
 # What to do when a request carries `X-Reactor-Min-Version: <commit>` and this
@@ -54,6 +58,13 @@ min_version_wait_ms = 500
 # a subsequent read on THIS node is read-your-writes. Costs the write a little
 # latency. Set to 0 to disable.
 write_fence_ms = 2000
+# Cache keys deliberately contain no user, so a hit must not become an
+# access-control bypass: before serving one, Reactor checks that the caller may
+# read the namespace and memoizes that grant for this long. Successes only are
+# cached — a just-granted capability must never be denied for the whole TTL,
+# while a just-revoked one costs us at most this long (POST /_reactor/invalidate
+# clears grants immediately if you need it sooner).
+auth_ttl_secs = 30
 
 [capture]
 # How commits are noticed. Drivers are untrusted: the watermark only advances

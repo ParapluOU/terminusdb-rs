@@ -40,17 +40,21 @@
 //!
 //! # Implementation status
 //!
-//! Phases A, B and C are implemented: identity, terms, the schema index, firing,
-//! the engine state machine, the fragment store, and request analysis. The
-//! commit-capture (`capture`) and HTTP (`frontend`) layers are not here yet, so
-//! the binary is a placeholder.
+//! Phases A through D are implemented: identity, terms, the schema index,
+//! firing, the engine state machine, the fragment store, request analysis,
+//! commit capture and the HTTP front end. What remains (phase E) is integration
+//! testing against a live `terminusdb_bin::TerminusDBServer`, plus the
+//! russian-doll decomposition that the `children` field is reserved for.
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
 pub mod analyze;
+pub mod capture;
 pub mod change;
+pub mod config;
 pub mod engine;
+pub mod frontend;
 pub mod ids;
 pub mod metrics;
 pub mod schema_index;
@@ -64,11 +68,14 @@ pub use analyze::{
     augment_terms_from_response, AnalyzeConfig, Augment, InjectedField, Plan, ReqView, Rewrite,
     Target,
 };
+pub use capture::{Applier, ChangeResolver, CommitEvent, CommitSource, ReadinessGate};
 pub use change::{fire, ChangeSet, DocChange};
+pub use config::{Cli, Config, Driver, MinVersionPolicy};
 pub use engine::{
     BodyRef, Engine, EngineConfig, FillResult, FragmentKey, FragmentSlot, FragmentVersion, Lookup,
     NamespaceWriter, Policy, ResponseMeta, RootKey, TermIndex, WriterMsg,
 };
+pub use frontend::{router, AppState};
 pub use ids::{
     ClassName, ContentHash, DocId, Epoch, Namespace, Position, PropName, Seq, ShapeId, Watermark,
 };

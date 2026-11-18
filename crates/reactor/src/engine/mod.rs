@@ -76,6 +76,22 @@ impl Lookup {
     }
 }
 
+/// Whether a commit has been applied here, and where.
+///
+/// There is deliberately no third variant. "Not applied yet" and "applied so
+/// long ago that it fell out of the ring" are both [`CommitLookup::Unknown`],
+/// and a fence **must** treat `Unknown` as unsatisfied. Conflating the two — in
+/// either direction — is how a fence silently stops fencing: an evicted commit
+/// treated as satisfied would let a stale read through, and the whole point of
+/// `X-Reactor-Min-Version` is that it never silently pretends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitLookup {
+    /// Applied at this position.
+    Applied(Position),
+    /// Not applied here, or no longer remembered. Treat as unsatisfied.
+    Unknown,
+}
+
 /// Engine tuning.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -92,6 +108,12 @@ pub struct EngineConfig {
     /// that latched a moment ago still find their answer. Until the frontend
     /// tracks live readers (phase D) this is the only reader-safety margin.
     pub version_retention: u64,
+    /// How many `commit -> Position` entries to publish for readers.
+    ///
+    /// Bounds the window in which `X-Reactor-Min-Version` can be satisfied. A
+    /// client fencing on a commit older than this gets `Unknown`, and therefore
+    /// the configured miss policy, rather than a wrong answer.
+    pub commit_ring_capacity: usize,
 }
 
 impl Default for EngineConfig {
@@ -101,6 +123,7 @@ impl Default for EngineConfig {
             fired_log_capacity: 1024,
             max_versions_per_key: 8,
             version_retention: 64,
+            commit_ring_capacity: 1024,
         }
     }
 }
@@ -180,6 +203,19 @@ pub(crate) struct NsState {
     pub(crate) watermark: ArcSwapOption<Watermark>,
     pub(crate) schema: ArcSwap<SchemaIndex>,
     pub(crate) slots: DashMap<FragmentKey, FragmentSlot>,
+    /// Commit id → the position it was applied at.
+    ///
+    /// Readers need this to honour `X-Reactor-Min-Version`: a commit id is a
+    /// content hash and cannot be compared, so the only way to ask "have we
+    /// reached commit C" is to look up the position we gave it. The writer owns
+    /// `FiredLog`, so this is the published, reader-visible half of that
+    /// knowledge. Bounded — see `EngineConfig::commit_ring_capacity`.
+    ///
+    /// The writer inserts here *after* invalidation and *before* publishing the
+    /// watermark, so a reader can briefly see `Applied(p)` while the watermark
+    /// is still below `p`. The fence compares against its latched watermark for
+    /// exactly that reason.
+    pub(crate) commits: DashMap<CommitId, Position>,
     pub(crate) schema_dirty: AtomicBool,
     pub(crate) schema_notify: Notify,
     pub(crate) tx: mpsc::UnboundedSender<WriterMsg>,
@@ -204,6 +240,7 @@ impl NsState {
             watermark: ArcSwapOption::empty(),
             schema: ArcSwap::from_pointee(SchemaIndex::default()),
             slots: DashMap::new(),
+            commits: DashMap::new(),
             schema_dirty: AtomicBool::new(false),
             schema_notify: Notify::new(),
             tx,
@@ -284,6 +321,33 @@ impl Engine {
                 Lookup::Miss
             }
         }
+    }
+
+    /// Where a commit was applied, if we still remember.
+    ///
+    /// Lock-light (one sharded hash lookup) and safe to call per request.
+    pub fn position_of(&self, ns: &Namespace, commit: &CommitId) -> CommitLookup {
+        match self.namespaces.get(ns) {
+            Some(state) => match state.commits.get(commit) {
+                Some(pos) => CommitLookup::Applied(*pos.value()),
+                None => CommitLookup::Unknown,
+            },
+            None => CommitLookup::Unknown,
+        }
+    }
+
+    /// Establish a namespace's first watermark at `commit`.
+    ///
+    /// Sent as an empty, *complete* changeset: `fire` returns an empty term set,
+    /// so nothing is invalidated and the watermark simply publishes. That is the
+    /// whole bootstrap — a namespace with no watermark cannot be served from
+    /// cache at all (there is no position to pin a fill at), so capture has to
+    /// do this before anything else.
+    pub fn bootstrap(&self, ns: &Namespace, commit: CommitId) -> anyhow::Result<()> {
+        self.send(
+            ns,
+            WriterMsg::Commit(Box::new(ChangeSet::empty(ns.clone(), commit, None))),
+        )
     }
 
     /// A debugging snapshot of a key's whole version history, for
