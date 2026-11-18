@@ -2719,6 +2719,13 @@ pub(crate) fn xsd_datatype_name(xsd: &XSDAnySimpleType) -> &'static str {
         XSDAnySimpleType::UnsignedLong(_) => "unsignedLong",
         XSDAnySimpleType::Long(_) => "long",
         XSDAnySimpleType::Integer(_) => "integer",
+        // The escape-hatch literal (a datatype IRI plus a verbatim lexical,
+        // e.g. xdd:dateTimeInterval). Every path that canonicalizes a constant
+        // rejects it — this compiler only emits a `(CanonicalDatatype, lexical)`
+        // it can produce through the store's own value construction — so the
+        // name is only ever read out of a rejection message. It is one static
+        // label because the IRI it carries cannot be named at compile time.
+        XSDAnySimpleType::Typed { .. } => "a typed literal of a non-XSD datatype",
     }
 }
 

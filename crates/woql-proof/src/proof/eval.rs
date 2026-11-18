@@ -494,6 +494,10 @@ pub(crate) fn xsd_simple_type_name(value: &XSDAnySimpleType) -> &'static str {
         XSDAnySimpleType::UnsignedLong(_) => "xsd:unsignedLong",
         XSDAnySimpleType::Long(_) => "xsd:long",
         XSDAnySimpleType::Integer(_) => "xsd:integer",
+        // The escape-hatch literal (datatype IRI + verbatim lexical). Arithmetic
+        // over it is never provable, so it only reaches here as the name in the
+        // rejection it already caused.
+        XSDAnySimpleType::Typed { .. } => "a typed literal of a non-XSD datatype",
     }
 }
 

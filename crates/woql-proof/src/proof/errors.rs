@@ -274,6 +274,12 @@ pub enum BgpPlanError {
     #[error("TripleCount proof coverage requires an explicit instance-graph resource")]
     TripleCountUnsupportedResource,
 
+    #[error(
+        "TripleCount proof coverage is the whole-layer resource form; a subject, predicate or \
+         object pattern counts something else"
+    )]
+    TripleCountPatternFormUnsupported,
+
     #[error("TripleCount output must be a variable")]
     TripleCountOutputNotVariable,
 

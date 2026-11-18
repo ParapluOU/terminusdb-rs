@@ -28,9 +28,18 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 
 # Authenticated Dory/sumcheck proof stack.
-dory-pcs = { version = "0.4.1", path = "../../../dory", default-features = false, features = ["arkworks", "parallel"] }
-tdb-succinct = { version = "0.1.2" }
-terminus-store = { path = "../../../terminusdb-store-paraplu" }
+#
+# Git dependencies on the two ParapluOU forks, not sibling paths: this
+# workspace has to build from a plain clone, which a `../../../dory` or
+# `../../../terminusdb-store-paraplu` path outside the repository cannot do.
+# The store's proof work lives on its `parture-proof-of-woql` branch (its
+# `main` carries none of it); the exact revisions are pinned by Cargo.lock. A
+# workspace that holds all three checked out patches these two sources back to
+# its local copies (see Parture's root manifest), so in-tree edits still apply
+# and there is one Cargo source identity for terminus-store.
+dory-pcs = { version = "0.4.2", git = "https://github.com/ParapluOU/dory", branch = "main", default-features = false, features = ["arkworks", "parallel"] }
+tdb-succinct = { version = "0.2" }
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
 
 # Exact PURE-RUST big rationals for the xsd:decimal/rational value layer (GMP-free so
 # the compiler stays cross-compilable / WASM-friendly).

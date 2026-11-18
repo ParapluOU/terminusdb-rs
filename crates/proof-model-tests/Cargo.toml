@@ -24,8 +24,10 @@ terminusdb-woql2 = { path = "../woql2" }
 terminusdb-woql-proof = { path = "../woql-proof" }
 terminusdb-schema = { path = "../schema" }
 # The committed terminus-store layer (ValueTriple, LayerCommitment, prove/verify).
-# Same sibling-fork path dependency the woql-proof crate uses.
-terminus-store = { path = "../../../terminusdb-store-paraplu" }
+# The same git dependency on the fork's proof branch that woql-proof declares,
+# so both resolve to one source identity (and one package, under a workspace
+# that patches it to a local checkout).
+terminus-store = { git = "https://github.com/ParapluOU/terminusdb-store", branch = "parture-proof-of-woql" }
 
 [dev-dependencies]
 # Seeded, reproducible PRNG for the phase-3 generative differential fuzzer.
@@ -33,7 +35,7 @@ rand = "0.8"
 # Order-preserving value encodings (make_entry / TypedDictEntry) for value triples.
 # One Cargo source identity with woql2/terminus-store via the workspace root's
 # [patch.crates-io] pin.
-tdb-succinct = "0.1.2"
+tdb-succinct = "0.2"
 # The embedded, proof-capable TerminusDB server (spawns the built SWI-Prolog
 # `terminusdb` binary as a child process; its store IS the ParapluOU fork, so its
 # packs carry proof commitments). build.rs builds/caches the server; set
@@ -41,8 +43,8 @@ tdb-succinct = "0.1.2"
 terminusdb-bin = { path = "../bin" }
 # The HTTP client (create DB + WOQL AddTriple over `/api/*`). NOTE: this client
 # has NO terminus-store dependency (it is pure reqwest), so adding it does NOT
-# split terminus-store — the fork path store above stays the single copy that the
-# import/prove handles link against.
+# split terminus-store — the fork store declared above stays the single copy that
+# the import/prove handles link against.
 terminusdb-client = { path = "../client" }
 # Raw `/api/pack` GET (the client exposes no raw-pack accessor): a genuine TCP
 # socket call to the running server. Features unify with terminusdb-client's own

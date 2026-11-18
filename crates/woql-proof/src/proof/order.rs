@@ -501,12 +501,22 @@ pub(crate) fn plan_ordered_triple_value_construct(
 /// delivering the layer's authenticated triple count, routed to the resource's collection. The
 /// resource must be a non-empty `.../instance` graph (`TripleCountUnsupportedResource`) and the count
 /// output a variable (`TripleCountOutputNotVariable`).
+///
+/// Only the RESOURCE form is provable. `LayerTripleCount` delivers the count the
+/// layer commits, which is every triple in it, so a `TripleCount` that also
+/// restricts subject, predicate or object means a different number and rejects
+/// closed (`TripleCountPatternFormUnsupported`) rather than being answered with
+/// the whole-layer count.
 pub(crate) fn plan_layer_triple_count(
     count: &terminusdb_woql2::misc::TripleCount,
 ) -> Result<CompiledBgp, BgpPlanError> {
+    if count.subject.is_some() || count.predicate.is_some() || count.object.is_some() {
+        return Err(BgpPlanError::TripleCountPatternFormUnsupported);
+    }
     let collection = count
         .resource
-        .strip_suffix("/instance")
+        .as_deref()
+        .and_then(|resource| resource.strip_suffix("/instance"))
         .filter(|collection| !collection.is_empty())
         .ok_or(BgpPlanError::TripleCountUnsupportedResource)?;
     let variable = match &count.count {
