@@ -146,6 +146,29 @@ port: `POST /v1/streams/:resource` → uuid, `DELETE /v1/streams/:uuid`,
 
 ### Must-verify before committing to the design (M0 spikes)
 
+> **Status 2026-11-18.** S3–S8 are now executable tests in
+> `crates/reactor/tests/spikes.rs`, which print their findings so the test
+> output is the record. Answers so far, all against a **12.0.6** node (the only
+> one that would start on the build host):
+> **resolved** — GraphQL is pinnable at `/local/commit/<id>`; every read
+> endpoint (document GET, GraphQL POST, WOQL POST) returns
+> `TerminusDB-Data-Version`, so a fill can always be placed at a commit;
+> `LogEntry.migration` is populated for a schema commit; a `_ChangeSet` query
+> over 50 classes is 4158 bytes and well-formed.
+> **still open** — S3 (subdocument attribution) needs 12.1's `/api/changes`,
+> though the unfold spike shows subdocument ids are parent-scoped
+> (`Resident/r1/address/Address/…`), which may be a better basis for
+> `@subdocument` terms than class attribution. S1 and S2 need two nodes and a
+> NAS mount, so they remain untouched.
+>
+> One finding reshaped the implementation: **`/api/changes` is 12.1-only, and
+> `ChangesResponse` defaults all three fields**, so on an older node its 404
+> body deserializes into three empty lists *without error*. Read as "nothing
+> changed", that fires no terms and silently disables invalidation entirely. The
+> resolver now treats an empty changeset as *unknown* → `complete: false` →
+> `Everything`. This is the clearest argument in the whole project for
+> invariant 5: the failure mode of a too-trusting analyzer is invisible.
+
 Two of these are new, and both come from the horizontal-scaling requirement.
 They are first because either answer can reshape §5.7.
 

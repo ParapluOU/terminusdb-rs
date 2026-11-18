@@ -47,17 +47,37 @@ Everything else follows from these, and each is load-bearing:
 
 ## Status
 
-Phases A–C of [`SPEC.md`](SPEC.md) are implemented and tested; D and E are in
-progress. **Not production-ready, and not yet run against a live server** — the
-integration tests are Phase E.
+All five phases of [`SPEC.md`](SPEC.md) are implemented. **402 tests pass,
+including integration tests against a live TerminusDB node.** Not
+production-ready: see the honest reading of those results below.
 
 | Module | What | State |
 |---|---|---|
 | `ids`, `term`, `schema_index`, `change` | identity, the invalidation algebra, `fire()` | done |
 | `engine/*`, `store/*` | the dependency graph, single writer per namespace, content-addressed bodies | done |
 | `analyze/*` | request → plan, for document / GraphQL / WOQL | done |
-| `capture/*` | `CommitSource` / `ChangeResolver` / `ReadinessGate` + applier | in progress |
-| `frontend/*`, `config`, `main` | the proxy itself | in progress |
+| `capture/*` | `CommitSource` / `ChangeResolver` / `ReadinessGate` / `CommitHistory` + applier | done |
+| `frontend/*`, `config`, `main` | the proxy itself | done |
+| `tests/*` | fidelity, caching, auth, capture, spikes | done |
+
+### What the tests actually prove, and what they don't
+
+**Soundness is demonstrated** against a live node: answers are correct after a
+commit, high-precision `xsd:decimal` responses are byte-identical through
+Reactor and direct, wrong credentials cannot read a populated cache,
+read-your-writes holds, the poll and subscription drivers both advance the
+watermark, a 5-commit gap is recovered in order, and a `reset` is handled as a
+non-fast-forward.
+
+**Precision is not demonstrated.** The only server available on this machine is
+**12.0.6**, and `/api/changes` — which is how the resolver enumerates a commit's
+documents — is a **12.1** endpoint. Without it the resolver cannot attribute a
+commit to documents, so it reports `complete: false` and fires `Everything`.
+Reactor is *correct* in that mode and behaves like a cache that drops everything
+on any commit, which is precisely the half of the value proposition that is
+untested. The precision assertion is version-gated rather than relaxed
+(`tests/caching.rs::an_unrelated_commit_leaves_the_fragment_cached`), so
+re-running against 12.1 lights it up with no edits. **Do this first.**
 
 ### Deliberately out of scope for now
 
@@ -137,14 +157,21 @@ is that it makes `Index` and `Backlink` firing exact), and
   assumes yes (commits are content-addressed). Unverified empirically; if false,
   fragments need keying by `(node, commit)` and the shared tier collapses to
   per-node caches.
-- **Is `/local/commit/<id>` accepted by every read endpoint**, GraphQL in
-  particular? The fill path handles both outcomes — it prefers the response's
-  `TerminusDB-Data-Version` over the pin it requested, and declines to cache
-  anything it cannot place at a known commit — but this wants a real test.
-- **Schema-commit detection** keys off `LogEntry.migration` being non-empty,
-  which is a partial detector.
-- **Subdocument change reporting** is unverified: whether a changed subdocument
-  surfaces as its own class, as the parent's `_changed`, or both, decides the
-  dependency terms for `@subdocument` trees.
+- ~~**Is `/local/commit/<id>` accepted by every read endpoint?**~~ **Resolved:**
+  yes, GraphQL included (200 with correct data), and every read endpoint returns
+  `TerminusDB-Data-Version`, so a fill can always be placed at a known commit.
+- ~~**Schema-commit detection**~~ **Resolved:** `LogEntry.migration` *is*
+  populated for a schema commit, so the detector is better than feared.
+- **Subdocument change reporting** is still unverified — it needs 12.1's
+  `/api/changes`. One useful lead from the unfold spike: subdocument ids are
+  parent-scoped (`Resident/r1/address/Address/…`), so a changed subdocument can
+  be mapped back to its owner by id prefix, which may be a better basis for
+  `@subdocument` terms than class attribution.
+- **Running Reactor's tests needs an upstream.** The embedded 12.1 server would
+  not start here: `terminusdb-bin`'s `extract_binary` compares only file *size*,
+  so two differently-built binaries overwrite the same
+  `/tmp/terminusdb-bin-cache/terminusdb` and collide (`ETXTBSY`). The harness
+  therefore falls back to `REACTOR_TEST_UPSTREAM_PORT`, then to a node already on
+  `:6363`. That cache bug lives in `crates/bin` and was left alone.
 
 The full spike list, with what to measure and why, is §4 of the design doc.
