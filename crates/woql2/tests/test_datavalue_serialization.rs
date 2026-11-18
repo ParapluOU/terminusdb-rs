@@ -5,7 +5,11 @@ use terminusdb_woql2::value::{DataValue, ListOrVariable};
 
 #[test]
 fn test_datavalue_list_serialization() {
-    // Test that DataValue::List serializes as an array, not an object
+    // A DataValue::List is a tagged object carrying a `list` array — the enum
+    // keeps its `@type` discriminator rather than collapsing to a bare array.
+    //
+    // NB: this pins the *serde* shape only. The JSON-LD actually sent to the
+    // server comes from `ToJson`/`to_woql_json`, not from serde.
     let list = DataValue::List(vec![
         DataValue::Data(XSDAnySimpleType::String("Hello".to_string())),
         DataValue::Variable("World".to_string()),
@@ -13,22 +17,19 @@ fn test_datavalue_list_serialization() {
 
     let json = serde_json::to_value(&list).unwrap();
 
-    // Should be an array, not an object
-    assert!(json.is_array());
-    assert_eq!(json.as_array().unwrap().len(), 2);
+    assert!(json.is_object());
+    assert_eq!(json["@type"], "DataValue");
 
-    // Check the first element
-    let first = &json[0];
-    assert!(first.is_object());
-    assert_eq!(first["@type"], "DataValue");
-    // XSDAnySimpleType::String is serialized as {"String": "Hello"}
-    assert_eq!(first["data"]["String"], "Hello");
+    let items = json["list"].as_array().expect("list should be an array");
+    assert_eq!(items.len(), 2);
 
-    // Check the second element
-    let second = &json[1];
-    assert!(second.is_object());
-    assert_eq!(second["@type"], "DataValue");
-    assert_eq!(second["variable"], "World");
+    // A data element carries its literal directly under `data`.
+    assert_eq!(items[0]["@type"], "DataValue");
+    assert_eq!(items[0]["data"], "Hello");
+
+    // A variable element carries its name under `variable`.
+    assert_eq!(items[1]["@type"], "DataValue");
+    assert_eq!(items[1]["variable"], "World");
 }
 
 #[test]
@@ -59,8 +60,9 @@ fn test_concatenate_with_list() {
         println!("Warning: @type field is missing from Concatenate");
     }
     assert!(json["list"].is_array());
-    assert_eq!(json["result_string"]["@type"], "DataValue");
-    assert_eq!(json["result_string"]["variable"], "PubIRIStr");
+    // `result_string` is `#[tdb(name = "result")]`, so it is `result` on the wire.
+    assert_eq!(json["result"]["@type"], "DataValue");
+    assert_eq!(json["result"]["variable"], "PubIRIStr");
 }
 
 #[test]
@@ -82,6 +84,7 @@ fn test_datavalue_data_serialization() {
 
     assert!(json.is_object());
     assert_eq!(json["@type"], "DataValue");
-    // XSDAnySimpleType::String is serialized as {"String": "TestData"}
-    assert_eq!(json["data"]["String"], "TestData");
+    // The string literal sits directly under `data`, not wrapped in a
+    // variant-named object.
+    assert_eq!(json["data"], "TestData");
 }

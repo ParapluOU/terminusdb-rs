@@ -57,6 +57,18 @@ pub struct Article {
 // ============================================================================
 
 /// Test basic GraphQL query to fetch an Author by ID.
+/// GraphQL's `id:` argument matches on the full IRI, while v12.1.0-rc3 returns
+/// compressed ids from an insert (`Author/abc`, where it used to answer
+/// `terminusdb:///data/Author/abc`). Expand before querying, accepting either
+/// form so this works against both servers.
+fn graphql_id(id: &str) -> String {
+    if id.starts_with("terminusdb:///data/") {
+        id.to_string()
+    } else {
+        format!("terminusdb:///data/{id}")
+    }
+}
+
 #[db_test(db = "graphql_basic")]
 async fn test_basic_graphql_query(client: _, spec: _) -> anyhow::Result<()> {
     // Insert schema
@@ -84,7 +96,7 @@ async fn test_basic_graphql_query(client: _, spec: _) -> anyhow::Result<()> {
             }}
         }}
     "#,
-        author_id
+        graphql_id(&author_id)
     );
 
     println!("Executing query:\n{}", query);
@@ -169,7 +181,7 @@ async fn test_entity_id_stored_as_string(client: _, spec: _) -> anyhow::Result<(
             }}
         }}
     "#,
-        article_id
+        graphql_id(&article_id)
     );
 
     println!("Executing query:\n{}", query);
@@ -227,7 +239,9 @@ fn test_query_builder_syntax() {
         .build_with_ids(&["Author/123".to_string()]);
 
     println!("Single ID query:\n{}", query);
-    assert!(query.contains(r#"Author(id: "Author/123")"#));
+    // build_with_ids expands a compressed id to the full document IRI,
+    // which is what GraphQL's `id:` argument matches on.
+    assert!(query.contains(r#"Author(id: "terminusdb:///data/Author/123")"#));
     assert!(query.contains("name"));
     assert!(query.contains("email"));
 

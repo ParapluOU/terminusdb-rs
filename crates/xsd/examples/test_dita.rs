@@ -65,7 +65,7 @@ fn main() {
 
     // Test DITA 1.3 combined
     println!("\n=== DITA 1.3 Combined Entry Points ===");
-    match XsdModel::from_entry_points(&[ditabase_13.clone(), map_13.clone()], None::<PathBuf>) {
+    match XsdModel::from_entry_points(&[ditabase_13.clone(), map_13.clone()], None::<PathBuf>, None) {
         Ok(model) => {
             println!("Combined DITA 1.3: {} schemas", model.schemas().len());
 
@@ -99,8 +99,8 @@ fn main() {
         .join("xsd1.2-url/technicalContent/xsd/ditabase.xsd");
     let map_12 = dir12.path().join("xsd1.2-url/technicalContent/xsd/map.xsd");
 
-    let model_12 = XsdModel::from_entry_points(&[ditabase_12, map_12], None::<PathBuf>).unwrap();
-    let model_13 = XsdModel::from_entry_points(&[ditabase_13, map_13], None::<PathBuf>).unwrap();
+    let model_12 = XsdModel::from_entry_points(&[ditabase_12, map_12], None::<PathBuf>, None).unwrap();
+    let model_13 = XsdModel::from_entry_points(&[ditabase_13, map_13], None::<PathBuf>, None).unwrap();
 
     println!("DITA 1.2 combined schemas: {}", model_12.schemas().len());
     println!("DITA 1.3 combined schemas: {}", model_13.schemas().len());

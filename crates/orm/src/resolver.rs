@@ -100,6 +100,21 @@ pub struct QueryPlan {
     pub strategy: LoadStrategy,
 }
 
+/// GraphQL's `id:`/`ids:` arguments match on the full document IRI.
+///
+/// TerminusDB 12.1.0-rc3 answers inserts with **compressed** ids
+/// (`Writer/abc`, where earlier versions returned
+/// `terminusdb:///data/Writer/abc`), so an id taken straight from an insert
+/// result no longer matches and the query silently returns nothing. Expand
+/// here, leaving ids that already carry a scheme alone.
+fn graphql_document_iri(id: &str) -> String {
+    if id.contains("://") {
+        id.to_string()
+    } else {
+        format!("terminusdb:///data/{id}")
+    }
+}
+
 impl QueryPlan {
     /// Create a new query plan.
     pub fn new(primary_ids: Vec<String>, primary_type: String) -> Self {
@@ -429,7 +444,11 @@ impl GraphQLRelationQuery {
         // TerminusDB uses 'id' parameter for filtering, not '_ids'
         // For now, we support single ID lookup
         if ids.len() == 1 {
-            query.push_str(&format!("  {}(id: \"{}\") {{\n", self.primary_type, ids[0]));
+            query.push_str(&format!(
+                "  {}(id: \"{}\") {{\n",
+                self.primary_type,
+                graphql_document_iri(&ids[0])
+            ));
         } else {
             // For multiple IDs, we query all and filter client-side
             // (TerminusDB GraphQL doesn't have a built-in _ids filter)
@@ -584,10 +603,13 @@ pub fn build_graphql_from_relation_specs(
     if primary_ids.len() == 1 {
         query.push_str(&format!(
             "  {}(id: \"{}\") {{\n",
-            primary_type, primary_ids[0]
+            primary_type,
+            graphql_document_iri(&primary_ids[0])
         ));
     } else if !primary_ids.is_empty() {
-        let ids_json = serde_json::to_string(primary_ids).unwrap_or_else(|_| "[]".to_string());
+        let expanded: Vec<String> =
+            primary_ids.iter().map(|id| graphql_document_iri(id)).collect();
+        let ids_json = serde_json::to_string(&expanded).unwrap_or_else(|_| "[]".to_string());
         query.push_str(&format!("  {}(ids: {}) {{\n", primary_type, ids_json));
     } else {
         query.push_str(&format!("  {} {{\n", primary_type));
@@ -775,7 +797,7 @@ mod tests {
         let query = GraphQLRelationQuery::new("User").build_with_ids(&["User/1".to_string()]);
 
         // Single ID uses the id: parameter
-        assert!(query.contains("User(id: \"User/1\")"));
+        assert!(query.contains("User(id: \"terminusdb:///data/User/1\")"));
     }
 
     #[test]
@@ -798,7 +820,7 @@ mod tests {
             .build_with_ids(&["User/alice".to_string()]);
 
         // Primary type with single ID filter
-        assert!(query.contains("User(id: \"User/alice\")"));
+        assert!(query.contains("User(id: \"terminusdb:///data/User/alice\")"));
         // Forward relation
         assert!(query.contains("profile {"));
         // Reverse relations using auto-generated fields
@@ -864,7 +886,7 @@ mod tests {
         let query = generate_graphql_query("User", &["User/1".to_string()], &plans);
 
         // Single ID uses id: parameter
-        assert!(query.contains("User(id: \"User/1\")"));
+        assert!(query.contains("User(id: \"terminusdb:///data/User/1\")"));
         // Reverse relation uses auto-generated field: _<fieldname>_of_<SourceType>
         assert!(query.contains("_author_id_of_Post {"));
         // Forward relation uses field name directly
@@ -892,7 +914,7 @@ mod tests {
         let query =
             build_graphql_from_relation_specs("Writer", &["Writer/123".to_string()], &relations);
 
-        assert!(query.contains("Writer(id: \"Writer/123\")"));
+        assert!(query.contains("Writer(id: \"terminusdb:///data/Writer/123\")"));
         assert!(query.contains("_writer_of_BlogPost {"));
         assert!(query.contains("_id"));
     }
@@ -926,7 +948,9 @@ mod tests {
 
         // Scoped to the discovered IDs, not an unscoped whole-type scan.
         assert!(
-            query.contains("OrgMembership(ids: [\"OrgMembership/a\",\"OrgMembership/b\"])"),
+            query.contains(
+                "OrgMembership(ids: [\"terminusdb:///data/OrgMembership/a\",\"terminusdb:///data/OrgMembership/b\"])"
+            ),
             "expected ids-scoped root, got:\n{query}"
         );
         assert!(!query.contains("OrgMembership {"), "must not scan whole type:\n{query}");
@@ -983,7 +1007,7 @@ mod tests {
         println!("Generated query:\n{}", query);
 
         // Check structure
-        assert!(query.contains("Writer(id: \"Writer/123\")"));
+        assert!(query.contains("Writer(id: \"terminusdb:///data/Writer/123\")"));
         assert!(query.contains("_writer_of_BlogPost {"));
         assert!(query.contains("_writer_of_Comment {"));
         assert!(query.contains("_comment_of_Reply {"));
@@ -1047,7 +1071,7 @@ mod tests {
         println!("Generated query with options:\n{}", query);
 
         // Check that all options are present
-        assert!(query.contains("Project(id: \"Project/123\")"));
+        assert!(query.contains("Project(id: \"terminusdb:///data/Project/123\")"));
         assert!(
             query.contains("_project_of_Ticket("),
             "Should have opening paren for args"

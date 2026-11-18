@@ -60,6 +60,12 @@ pub enum ApiResponseError {
     #[serde(rename = "api:SubmittedIdDoesNotMatchGeneratedId")]
     SubmittedIdDoesNotMatchGeneratedId(SubmittedIdDoesNotMatchGeneratedIdError),
 
+    /// A document uses a prefix the database's `@context` does not declare.
+    /// Prefix management became atomic in 12.0.4 (`/api/prefix/`), and the
+    /// server rejects undeclared prefixes rather than guessing.
+    #[serde(rename = "api:UnknownPrefixError")]
+    UnknownPrefix(UnknownPrefixError),
+
     Other(Value),
 
     #[default]
@@ -83,6 +89,7 @@ impl Display for ApiResponseError {
                 Display::fmt(error, f)
             }
             ApiResponseError::MissingParameter(error) => Display::fmt(error, f),
+            ApiResponseError::UnknownPrefix(error) => Display::fmt(error, f),
             ApiResponseError::IncorrectAuthentication(error) => Display::fmt(error, f),
             ApiResponseError::SubmittedIdDoesNotMatchGeneratedId(error) => Display::fmt(error, f),
             _ => f.write_str(&format!("{:#?}", self)),
@@ -518,6 +525,24 @@ impl Display for SameDocumentIdsMutatedInOneTransactionError {
             f,
             "Tried to mutate {} documents with the same ID in one transaction",
             self.duplicate_ids.len()
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UnknownPrefixError {
+    /// The offending key, e.g. `ditaarch:DITAArchVersion`.
+    #[serde(rename = "api:key")]
+    pub key: String,
+}
+
+impl Display for UnknownPrefixError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The key '{}' uses a prefix the database does not declare; \
+             add it to the schema @context (see the /api/prefix endpoint)",
+            self.key
         )
     }
 }
@@ -1221,5 +1246,44 @@ fn test_deserialize_submitted_id_does_not_match_generated_id_error() {
         ApiResponse::Success(_) => {
             panic!("Expected error response, got success");
         }
+    }
+}
+
+#[test]
+fn test_deserialize_unknown_prefix_error() {
+    // Verbatim from a v12.1.0-rc3 server rejecting a schema whose property
+    // keys use a prefix the database's @context never declares. Before this
+    // variant existed the whole envelope failed to deserialize, so the caller
+    // saw "failed to deserialize into ApiResponse" instead of the real cause
+    // (the `Other(Value)` fallback cannot catch it — serde's internally tagged
+    // enums reject an unknown tag outright).
+    let json = json!({
+        "@type": "api:ReplaceDocumentErrorResponse",
+        "api:error": {
+            "@type": "api:UnknownPrefixError",
+            "api:key": "ditaarch:DITAArchVersion",
+        },
+        "api:message": "The key 'ditaarch:DITAArchVersion' is utilising an unknown prefix.",
+        "api:request_id": "eaac12c8-9ca3-4fe9-b315-6b6fd9d7edd2",
+        "api:status": "api:failure",
+    });
+
+    let response: TypedErrorResponse = serde_json::from_value(json).unwrap();
+
+    match response {
+        TypedErrorResponse::ReplaceDocumentError { error: err, .. } => {
+            assert!(matches!(err.api_status, TerminusAPIStatus::Failure));
+            match err.api_error {
+                Some(ApiResponseError::UnknownPrefix(prefix_err)) => {
+                    assert_eq!(prefix_err.key, "ditaarch:DITAArchVersion");
+                    // The message names the key and points at the fix.
+                    let rendered = prefix_err.to_string();
+                    assert!(rendered.contains("ditaarch:DITAArchVersion"));
+                    assert!(rendered.contains("@context"));
+                }
+                other => panic!("Expected UnknownPrefix error, got: {other:?}"),
+            }
+        }
+        other => panic!("Expected ReplaceDocumentError, got: {other:?}"),
     }
 }

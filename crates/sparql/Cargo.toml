@@ -46,5 +46,6 @@ terminusdb-schema-derive = { path = "../schema/derive" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 anyhow = { workspace = true }
 # Referenced by the TerminusDBModel/FromTDBInstance derive-generated code.
+terminusdb-relation = { path = "../relation" }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }

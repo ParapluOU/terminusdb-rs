@@ -44,6 +44,9 @@ tempfile = "3"
 terminusdb-bin = { path = "../bin" }
 terminusdb-client = { path = "../client" }
 terminusdb-schema-derive = { path = "../schema/derive" }
+# The TerminusDBModel derive expands to paths in these two crates.
+terminusdb-woql2 = { path = "../woql2" }
+terminusdb-relation = { path = "../relation" }
 # For testing
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

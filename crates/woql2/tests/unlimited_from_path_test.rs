@@ -114,8 +114,6 @@ fn test_complex_unlimited_chain() {
     struct F;
     struct G;
     struct H;
-    #[allow(dead_code)]
-    struct I;
     struct J;
 
     // 10-node chain with mixed patterns
@@ -138,6 +136,8 @@ fn test_complex_unlimited_chain() {
     assert!(dsl.contains("@schema:F"));
     assert!(dsl.contains("@schema:G"));
     assert!(dsl.contains("@schema:H"));
-    assert!(dsl.contains("@schema:I"));
+    // No `@schema:I`: there is no I in the chain above
+    // (a:A > B > c:C < D > E < f:F < G > h:H < j:J). The assertion and its
+    // dead `struct I` were left over from an earlier version of the path.
     assert!(dsl.contains("@schema:J"));
 }

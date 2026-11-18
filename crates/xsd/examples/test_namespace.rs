@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         element_form_default: Some("qualified".to_string()),
         root_elements: vec![],
         entry_point_elements: vec![],
+        namespace_prefixes: Default::default(),
         complex_types: vec![
             // Named complex type with namespace
             XsdComplexType {
@@ -28,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 content_model: Some("XsdGroup".to_string()),
                 attributes: Some(vec![XsdAttribute {
                     name: "id".to_string(),
+                    namespace: None,
                     attr_type: "{http://www.w3.org/2001/XMLSchema}string".to_string(),
                     use_type: "required".to_string(),
                     default: None,
@@ -62,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 content_model: Some("XsdGroup".to_string()),
                 attributes: Some(vec![XsdAttribute {
                     name: "isbn".to_string(),
+                    namespace: None,
                     attr_type: "{http://www.w3.org/2001/XMLSchema}string".to_string(),
                     use_type: "required".to_string(),
                     default: None,
@@ -95,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Generate TerminusDB schemas
-    let generator = XsdToSchemaGenerator::with_namespace("http://example.com/terminusdb#");
+    let mut generator = XsdToSchemaGenerator::with_namespace("http://example.com/terminusdb#");
     let schemas = generator.generate(&xsd_schema)?;
 
     println!("🔧 Generated {} TerminusDB schemas\n", schemas.len());

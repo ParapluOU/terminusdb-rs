@@ -63,7 +63,7 @@ fn main() -> Result<()> {
 
     // Generate TerminusDB schemas
     println!("\nGenerating TerminusDB schemas...");
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let schemas = generator.generate(&xsd_schema)?;
 
     println!("✓ Generated {} schemas\n", schemas.len());

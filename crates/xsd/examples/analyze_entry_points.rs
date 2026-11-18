@@ -53,7 +53,7 @@ fn analyze_directory(name: &str, schema_dir: &PathBuf) -> Result<(), Box<dyn std
     println!("\n📂 Analyzing: {}", name);
     println!("   Path: {:?}\n", schema_dir);
 
-    let generator = XsdToSchemaGenerator::new();
+    let mut generator = XsdToSchemaGenerator::new();
     let candidates = generator.analyze_entry_point_candidates(schema_dir)?;
 
     if candidates.is_empty() {

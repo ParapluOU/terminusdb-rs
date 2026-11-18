@@ -28,24 +28,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📂 NISO schema directory: {:?}\n", niso_dir);
 
-    let generator =
+    let mut generator =
         XsdToSchemaGenerator::with_namespace("https://www.niso.org/standards/z39-102-2022#");
 
     // Method 1: Auto-detection
     println!("--- Method 1: Auto-Detection ---\n");
-    test_auto_detection(&generator, &niso_dir)?;
+    test_auto_detection(&mut generator, &niso_dir)?;
 
     println!("\n{}\n", "=".repeat(80));
 
     // Method 2: Explicit entry points (recommended for production)
     println!("--- Method 2: Explicit Entry Points (Customer-Provided) ---\n");
-    test_explicit_entry_points(&generator, &niso_dir)?;
+    test_explicit_entry_points(&mut generator, &niso_dir)?;
 
     Ok(())
 }
 
 fn test_auto_detection(
-    generator: &XsdToSchemaGenerator,
+    generator: &mut XsdToSchemaGenerator,
     niso_dir: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Auto-detecting entry points...\n");
@@ -58,7 +58,7 @@ fn test_auto_detection(
 }
 
 fn test_explicit_entry_points(
-    generator: &XsdToSchemaGenerator,
+    generator: &mut XsdToSchemaGenerator,
     niso_dir: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Customer provides explicit entry point paths

@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate TerminusDB schemas
     println!("🔧 Generating TerminusDB schemas with PascalCase naming...\n");
-    let generator = XsdToSchemaGenerator::with_namespace("http://example.com/terminusdb#");
+    let mut generator = XsdToSchemaGenerator::with_namespace("http://example.com/terminusdb#");
     let schemas = generator.generate(&xsd_schema)?;
 
     println!("✅ Generated {} TerminusDB schemas\n", schemas.len());

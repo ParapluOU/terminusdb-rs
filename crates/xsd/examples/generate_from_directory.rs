@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📂 Schema directory: {:?}\n", schema_dir);
 
     // Generate schemas from ALL XSD files in the directory
-    let generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/terminusdb#");
+    let mut generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/terminusdb#");
 
     println!("🔧 Processing entire schema bundle...\n");
     let schemas = generator.generate_from_directory(&schema_dir, None::<PathBuf>)?;

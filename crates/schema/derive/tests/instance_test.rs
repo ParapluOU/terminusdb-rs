@@ -336,6 +336,13 @@ mod tests {
         );
     }
 
+    // `HashMap<String, String>` is stored as a single `sys:JSON` object
+    // (`{key: value}`), not as a set of `HashMapStringEntry` subdocuments. The
+    // subdocument form was write-only — nothing could deserialize it back — so
+    // `crates/schema/src/impl/map.rs` replaced it with the JSON form that
+    // matches its `FromInstanceProperty` impl and `HashMap<String, Value>`.
+    // These three tests asserted the removed representation.
+
     #[test]
     fn test_hashmap_instance() {
         let mut properties = HashMap::new();
@@ -360,76 +367,41 @@ mod tests {
             panic!("Expected name property to be a String");
         }
 
-        // Verify properties field contains HashMap entries
-        if let Some(InstanceProperty::Any(entries)) = instance.properties.get("properties") {
-            assert_eq!(entries.len(), 2);
-
-            // Check each entry has the expected structure
-            for entry in entries {
-                if let InstanceProperty::Relation(RelationValue::One(entry_instance)) = entry {
-                    // Check it's a HashMapStringEntry
-                    if let Schema::Class { id, .. } = &entry_instance.schema {
-                        assert_eq!(id, "HashMapStringEntry");
-                    } else {
-                        panic!("Expected Class schema");
-                    }
-
-                    // Get key and value
-                    let key =
-                        if let Some(InstanceProperty::Primitive(PrimitiveValue::String(key))) =
-                            entry_instance.properties.get("key")
-                        {
-                            key.clone()
-                        } else {
-                            panic!("Expected key property to be a String");
-                        };
-
-                    let value =
-                        if let Some(InstanceProperty::Primitive(PrimitiveValue::String(value))) =
-                            entry_instance.properties.get("value")
-                        {
-                            value.clone()
-                        } else {
-                            panic!("Expected value property to be a String");
-                        };
-
-                    // Verify the key-value pairs match what we put in
-                    if key == "color" {
-                        assert_eq!(value, "red");
-                    } else if key == "size" {
-                        assert_eq!(value, "large");
-                    } else {
-                        panic!("Unexpected key: {}", key);
-                    }
-                } else {
-                    panic!("Expected Relation entry");
-                }
-            }
-        } else {
-            panic!("Expected properties to be an Any with entries");
-        }
+        // The map is one JSON object, keys mapping straight to string values.
+        let Some(InstanceProperty::Primitive(PrimitiveValue::Object(json))) =
+            instance.properties.get("properties")
+        else {
+            panic!(
+                "expected properties to be a JSON object, got {:?}",
+                instance.properties.get("properties")
+            );
+        };
+        let map = json.as_object().expect("properties should be a JSON object");
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get("color").and_then(|v| v.as_str()), Some("red"));
+        assert_eq!(map.get("size").and_then(|v| v.as_str()), Some("large"));
     }
 
     #[test]
     fn test_hashmap_schema() {
         let schema = <StructWithHashMap as ToTDBSchema>::to_schema();
 
-        if let Schema::Class { properties, .. } = &schema {
-            // Find the properties field
-            let prop = properties
-                .iter()
-                .find(|p| p.name == "properties")
-                .expect("properties field not found in schema");
-
-            // Verify it's a Set type referencing HashMapStringEntry
-            if let Some(TypeFamily::Set(_)) = &prop.r#type {
-                assert_eq!(prop.class, "HashMapStringEntry");
-            } else {
-                panic!("Expected Set type family");
-            }
-        } else {
+        let Schema::Class { properties, .. } = &schema else {
             panic!("Expected Class schema");
-        }
+        };
+        let prop = properties
+            .iter()
+            .find(|p| p.name == "properties")
+            .expect("properties field not found in schema");
+
+        // A plain `sys:JSON` datatype property: no type family, no subdocument
+        // class to reference.
+        assert_eq!(prop.class, "sys:JSON");
+        assert!(
+            prop.r#type.is_none(),
+            "expected no type family for a JSON map, got {:?}",
+            prop.r#type
+        );
     }
 
     #[test]
@@ -445,10 +417,9 @@ mod tests {
 
         let instance_tree = data.to_instance_tree();
 
-        // Should have at least one instance (the main struct)
-        assert!(!instance_tree.is_empty());
-
-        // First instance should be the main struct
+        // The map is a primitive, so it contributes no further instances: the
+        // tree is just the struct itself.
+        assert_eq!(instance_tree.len(), 1);
         let main_instance = &instance_tree[0];
         if let Schema::Class { id, .. } = &main_instance.schema {
             assert_eq!(id, "StructWithHashMap");
@@ -456,28 +427,9 @@ mod tests {
             panic!("Expected Class schema");
         }
 
-        // Verify the main instance contains the HashMap entries
-        if let Some(InstanceProperty::Any(entries)) = main_instance.properties.get("properties") {
-            assert_eq!(entries.len(), 2);
-
-            // Check each entry has the expected structure
-            for entry in entries {
-                if let InstanceProperty::Relation(RelationValue::One(entry_instance)) = entry {
-                    if let Schema::Class { id, .. } = &entry_instance.schema {
-                        assert_eq!(id, "HashMapStringEntry");
-                    } else {
-                        panic!("Expected Class schema");
-                    }
-
-                    // Verify each entry has key and value properties
-                    assert!(entry_instance.properties.contains_key("key"));
-                    assert!(entry_instance.properties.contains_key("value"));
-                } else {
-                    panic!("Expected Relation entry");
-                }
-            }
-        } else {
-            panic!("Expected properties to be an Any with entries");
-        }
+        assert!(matches!(
+            main_instance.properties.get("properties"),
+            Some(InstanceProperty::Primitive(PrimitiveValue::Object(_)))
+        ));
     }
 }

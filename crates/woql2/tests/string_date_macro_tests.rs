@@ -49,20 +49,30 @@ fn test_string_operation_macros() {
 
 #[test]
 fn test_today_macro() {
-    // Test today! macro
+    // `today!()` yields a typed `xsd:dateTime`, not a string: the macro builds
+    // XSDAnySimpleType::DateTime(Utc::now()) so the server gets a real
+    // dateTime literal instead of something it has to cast.
     let today_value = today!();
     match today_value {
-        Value::Data(terminusdb_schema::XSDAnySimpleType::String(date_str)) => {
-            // Check that it's a valid ISO 8601 date
-            assert!(date_str.len() > 20); // Should be like "2024-01-15T12:34:56.789Z"
-            assert!(date_str.contains("T"));
-            assert!(date_str.ends_with("Z"));
+        Value::Data(terminusdb_schema::XSDAnySimpleType::DateTime(dt)) => {
+            // Sanity-check the instant rather than its formatting: it must be
+            // "about now".
+            let skew = (chrono::Utc::now() - dt).num_seconds().abs();
+            assert!(
+                skew < 60,
+                "today!() should be the current instant, off by {skew}s"
+            );
 
-            // Verify it can be parsed as a date
-            let parsed = chrono::DateTime::parse_from_rfc3339(&date_str);
-            assert!(parsed.is_ok(), "today!() should produce valid RFC3339 date");
+            // And it must round-trip through RFC 3339, which is how it reaches
+            // the server.
+            let rendered = dt.to_rfc3339();
+            assert!(rendered.contains('T'));
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(&rendered).is_ok(),
+                "today!() should render as valid RFC3339, got {rendered}"
+            );
         }
-        _ => panic!("Expected Data string value from today!()"),
+        other => panic!("Expected a DateTime data value from today!(), got {other:?}"),
     }
 }
 

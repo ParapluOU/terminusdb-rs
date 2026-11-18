@@ -791,22 +791,24 @@ shared tier is genuinely new work attributable to it.
    (GraphQL responses) or M5 (fragments) comes first.
 2. **Protocol priority.** GraphQL first, or the document API first? The document
    API is far easier to analyze and is what the old prototype actually cached.
-3. **How does the cluster actually replicate, and are replicas read-only?**
-   Scheduled `pull` from a primary, push-on-commit, or something else? And do
-   writes go to one designated node or to any node (which allows divergent
-   branch histories that later reconcile — survivable, but it makes
-   non-fast-forward head movement the common case rather than the exception)?
-   This is the one answer I need before M3's design is final.
+3. ~~**How does the cluster actually replicate?**~~ **Answered 2026-11-18:**
+   single-writer/many-reader over **shared disk on NAS** today, with **Kafka**
+   or **hypercore** stream sync as future options. Folded into §5.7 and into the
+   `CommitSource` design: head-poll is a first-class driver, not a fallback,
+   because a shared-disk reader has no local write path at all. Still open, and
+   now the top spike (S1): whether a reader observes another process's commits
+   through its HTTP API at all, and how fast.
 4. **Do we want the Skip resource API at all**, or is transparent caching the
    whole ask? M7 roughly doubles the surface area.
 5. **Staleness budget.** Is "bounded staleness with read-your-writes on the same
    node" acceptable, or does some path need §5.5 (5)'s `fail` policy plus
    affinity routing from day one? And does anything need strict snapshot
    consistency across a whole composed response (§5.5 (7))?
-6. **Shared fragment tier: wanted, or deliberately not?** You said a private
-   per-node view is fine, which lets us skip it entirely. I'd default to private
-   (§5.7 mode 1) and only add the shared tier in M8 if fill cost measured across
-   nodes justifies the dependency. Confirm that's the preference.
+6. ~~**Shared fragment tier?**~~ **Answered 2026-11-18:** either is fine —
+   nodes may replicate the same cache or keep a private view — so the default is
+   private per-node (§5.7 mode 1) and the shared tier stays an M8 option. Note
+   the pleasing coincidence: the NAS that makes shared-disk replication work is
+   also, pointed at `[cache].dir`, the entire shared-tier implementation.
 7. **Name.** `terminusdb-reactor` / `tdb-reactor`, or something else?
 
 ---

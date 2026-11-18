@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate TerminusDB schemas
     println!("🔧 Generating TerminusDB schemas...\n");
-    let generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/terminusdb#");
+    let mut generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/terminusdb#");
     let schemas = generator.generate(&xsd_schema)?;
 
     println!("✅ Generated {} TerminusDB schemas\n", schemas.len());

@@ -38,6 +38,17 @@ pub struct BlogPost {
 // ============================================================================
 
 /// Test that TdbLazy fields create proper document links in the schema.
+/// GraphQL's `id:` argument matches on the full document IRI, while
+/// v12.1.0-rc3 answers inserts with compressed ids (`BlogPost/abc`).
+/// Expand before querying, accepting either form.
+fn graphql_id(id: &str) -> String {
+    if id.contains("://") {
+        id.to_string()
+    } else {
+        format!("terminusdb:///data/{id}")
+    }
+}
+
 #[db_test(db = "tdblazy_schema_test")]
 async fn test_tdblazy_schema_creates_link(client: _, spec: _) -> anyhow::Result<()> {
     // Insert schemas
@@ -164,7 +175,7 @@ async fn test_tdblazy_forward_relation(client: _, spec: _) -> anyhow::Result<()>
             }}
         }}
     "#,
-        post_id
+        graphql_id(&post_id)
     );
 
     println!("Executing forward relation query:\n{}", query);
@@ -250,7 +261,7 @@ async fn test_tdblazy_reverse_relation(client: _, spec: _) -> anyhow::Result<()>
             }}
         }}
     "#,
-        writer_id
+        graphql_id(&writer_id)
     );
 
     println!("Executing reverse relation query:\n{}", query);

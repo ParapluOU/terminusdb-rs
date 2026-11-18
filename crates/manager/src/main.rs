@@ -1,3 +1,8 @@
+// Rocket's `#[launch]` builds a deeply nested async body; computing its layout
+// exceeds the default query depth limit ("queries overflow the depth limit",
+// +130 for the rocket() body).
+#![recursion_limit = "256"]
+
 use rocket::{get, launch, routes};
 use terminusdb_manager::{assets, AppState};
 

@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         learning_dir
     );
 
-    let generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/learning#");
+    let mut generator = XsdToSchemaGenerator::with_namespace("http://dita.oasis-open.org/learning#");
 
     // First, analyze entry point candidates
     println!("🔍 Analyzing entry point candidates...\n");

@@ -1,11 +1,39 @@
 use serde_json::json;
 use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
+/// Both tests here assert against a developer's private `.secrets.env`
+/// (a non-local TerminusDB host and its credentials), which is gitignored and
+/// therefore absent in a clean checkout — without it they failed for everyone
+/// else. Skip instead of failing when it is not there; with the file present
+/// they run exactly as before.
+fn secrets_env() -> Option<std::path::PathBuf> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".secrets.env");
+    path.exists().then_some(path)
+}
+
+macro_rules! require_secrets_env {
+    () => {
+        match secrets_env() {
+            Some(path) => path,
+            None => {
+                eprintln!(
+                    "skipping: no .secrets.env in {} (see the module docs)",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                return;
+            }
+        }
+    };
+}
+
 #[test]
 fn test_connect_with_env_file() {
+    let _secrets = require_secrets_env!();
+
     // Build the MCP server binary first
     let output = Command::new("cargo")
         .args(&["build", "--bin", "terminusdb-mcp"])
@@ -258,7 +286,8 @@ fn test_env_variable_loading() {
     let original_pass = env::var("TERMINUSDB_PASS").ok();
 
     // Load the .secrets.env file
-    dotenv::from_path(".secrets.env").ok();
+    let secrets = require_secrets_env!();
+    dotenv::from_path(&secrets).ok();
 
     // Check that the variables were loaded
     let host = env::var("TERMINUSDB_HOST").expect("TERMINUSDB_HOST should be set");

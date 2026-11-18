@@ -1492,7 +1492,10 @@ fn test_triple_count() {
 
     match final_query {
         Woql2Query::TripleCount(tc_q) => {
-            assert_eq!(tc_q.resource, "schema/main");
+            // `resource` is Optional since 12.1.0-rc3 gave TripleCount a
+            // pattern form (subject/predicate/object) alongside the resource
+            // form; the builder only ever produces the resource form.
+            assert_eq!(tc_q.resource.as_deref(), Some("schema/main"));
             assert!(matches!(tc_q.count, DataValue::Variable(v) if v == "TripleCount"));
         }
         _ => panic!("Expected TripleCount query, found {:?}", final_query),

@@ -135,9 +135,18 @@ fn test_complex_integration() {
             matches!(secondary_contacts_prop.r#type, Some(prop_type) if prop_type == TypeFamily::List)
         );
 
-        // Verify HashMap<String, String> property
+        // Verify HashMap<String, String> property. It is a single `sys:JSON`
+        // object, not a Set of HashMapStringEntry subdocuments — see the note in
+        // crates/schema/src/impl/map.rs (the subdocument form was write-only).
         let metadata_prop = props.iter().find(|p| p.name == "profileMetadata").unwrap();
-        assert!(matches!(metadata_prop.r#type, Some(prop_type) if prop_type.is_set()));
+        // This field carries an explicit `class = "xsd:string"` override, so the
+        // class is the override rather than the map's own `sys:JSON`.
+        assert_eq!(metadata_prop.class, "xsd:string");
+        assert!(
+            metadata_prop.r#type.is_none(),
+            "expected no type family for a JSON map, got {:?}",
+            metadata_prop.r#type
+        );
     }
 
     // Verify UserStatus enum values

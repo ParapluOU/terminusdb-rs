@@ -37,12 +37,26 @@ client = ["dep:terminusdb-client"]
 name = "showcase"
 required-features = ["client"]
 
+# These two drive a live server through Session<TerminusDBHttpClient>, whose
+# CatalogBackend impl is gated behind the `client` feature. Without the
+# declaration `cargo test --all-targets` builds them featureless and fails on
+# the unsatisfied CatalogBackend bound.
+[[test]]
+name = "e2e_test"
+required-features = ["client"]
+
+[[test]]
+name = "object_ref_test"
+required-features = ["client"]
+
 [dev-dependencies]
 # Full DataFusion engine, used ONLY as the differential-test oracle.
 datafusion = "=54.0.0"
 terminusdb-client = { path = "../client" }
 terminusdb-bin    = { path = "../bin" }
 terminusdb-schema-derive = { path = "../schema/derive" }
+# The TerminusDBModel derive expands to paths in this crate.
+terminusdb-relation = { path = "../relation" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
