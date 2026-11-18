@@ -64,7 +64,11 @@ production-ready: see the honest reading of those results below.
 
 **Soundness is demonstrated** against a live node: answers are correct after a
 commit, high-precision `xsd:decimal` responses are byte-identical through
-Reactor and direct, wrong credentials cannot read a populated cache,
+Reactor and direct (note what that does and does not say: inserting
+`0.1234567890123456789012345` gets `0.1234567890123456789` back, because the
+*server* keeps ~19 significant digits. `arbitrary_precision` is doing its job —
+f64 would have given `0.12345678901234568` — so the test proves Reactor adds no
+corruption of its own, not that full precision survives TerminusDB), wrong credentials cannot read a populated cache,
 read-your-writes holds, the poll and subscription drivers both advance the
 watermark, a 5-commit gap is recovered in order, and a `reset` is handled as a
 non-fast-forward.
