@@ -155,6 +155,13 @@ every commit fired `Everything`. A correct cache with no precision, and silent
 about it. All commit ids now funnel through one normalizer
 (`capture::commit_id_from_any`).
 
+## Adopting it in an application
+
+[`INTEGRATION.md`](INTEGRATION.md) is the adopter's guide: configure, run, point
+a client at it, the header protocol, stating WOQL conditions, the operational
+endpoints, and a staged rollout. Every command in it was run against a live
+12.1 server.
+
 ## Running it
 
 ```bash

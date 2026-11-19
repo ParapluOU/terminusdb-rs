@@ -1,5 +1,39 @@
 //! Cache conditions: telling a caching proxy when a query's answer dies.
 //!
+//! # Example
+//!
+//! ```
+//! use terminusdb_client::CacheCondition;
+//!
+//! // "This result dies when any Person changes, or when one is added or
+//! // removed." State the *weakest* condition that is still true: too weak
+//! // serves stale data, too strong needlessly throws the entry away.
+//! let conditions = [
+//!     CacheCondition::class("Person"),
+//!     CacheCondition::members("Person"),
+//! ];
+//!
+//! // What a caching proxy receives, as `X-Reactor-Invalidate-On`:
+//! assert_eq!(
+//!     CacheCondition::header_value(&conditions).as_deref(),
+//!     Some("class:Person,members:Person"),
+//! );
+//!
+//! // Narrower: only this document, and only its `title` property.
+//! assert_eq!(
+//!     CacheCondition::doc_field("Note/1", "title").to_string(),
+//!     "docfield:Note/1.title",
+//! );
+//!
+//! // No conditions means no header, and therefore no caching of a WOQL read.
+//! assert_eq!(CacheCondition::header_value(&[]), None);
+//! ```
+//!
+//! Pass them with
+//! [`query_with_conditions`](crate::TerminusDBHttpClient::query_with_conditions).
+//! Plain [`query`](crate::TerminusDBHttpClient::query) states nothing and is
+//! therefore not cacheable by a proxy. See `crates/reactor/INTEGRATION.md`.
+//!
 //! # Why this exists
 //!
 //! A WOQL query can return data **without revealing which entities the data was
