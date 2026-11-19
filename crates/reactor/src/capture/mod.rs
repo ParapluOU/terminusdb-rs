@@ -493,6 +493,171 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_subscription_limit_refusal_is_recognized() {
+        // The fork answers 429 with this body; the driver surfaces it as an
+        // error string, so the classification is on the message.
+        for text in [
+            "429 Too Many Requests {\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Subscription limit exceeded\"}",
+            "subscription limit exceeded",
+            "TOO_MANY_REQUESTS",
+            // Verified against the embedded server: the client renders the
+            // refusal as "GraphQL subscription refused (429 Too Many
+            // Requests): ...", so every real refusal carries one of the
+            // phrases above. A bare "429" is deliberately NOT recognized —
+            // see `is_subscription_limit`.
+            "GraphQL subscription refused (429 Too Many Requests): {\"errors\":[]}",
+        ] {
+            assert!(
+                is_subscription_limit(&anyhow::anyhow!("{text}")),
+                "{text:?} must be recognized as a subscription refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_error_is_not_mistaken_for_a_subscription_limit() {
+        // Mistaking a transient failure for a cap would permanently demote a
+        // namespace to polling for no reason.
+        for text in [
+            "connection reset by peer",
+            "error sending request",
+            "500 Internal Server Error",
+            "unknown database",
+        ] {
+            assert!(
+                !is_subscription_limit(&anyhow::anyhow!("{text}")),
+                "{text:?} must NOT be treated as a subscription refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subscription_limit_is_recognized_through_an_error_chain() {
+        // The client wraps errors, so the marker is usually not the outermost
+        // message.
+        let inner = anyhow::anyhow!("TOO_MANY_REQUESTS: Subscription limit exceeded");
+        let wrapped = inner.context("opening the _ChangeSet subscription");
+        assert!(is_subscription_limit(&wrapped));
+    }
+
+    /// Demotion is sticky, so misreading an unrelated error as a cap silently
+    /// gives up low-latency capture for the whole process.
+    #[test]
+    fn an_unrelated_error_that_merely_contains_429_is_not_a_limit() {
+        for text in [
+            "error sending request for url (http://localhost:42900/api/graphql/admin/db)",
+            "connection refused talking to 127.0.0.1:4296",
+            "commit 429abc3f is not on this branch",
+        ] {
+            assert!(
+                !is_subscription_limit(&anyhow::anyhow!("{text}")),
+                "{text} must not be read as a subscription-limit refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn the_class_fingerprint_ignores_changes_the_query_does_not_depend_on() {
+        use crate::schema_index::SchemaIndex;
+        use terminusdb_format::schema_doc::{RawClass, RawProperty, RawSchema};
+
+        let class = |id: &str, prop: &str| RawClass {
+            id: id.to_owned(),
+            is_abstract: false,
+            is_subdocument: false,
+            inherits: Vec::new(),
+            properties: vec![RawProperty {
+                name: prop.to_owned(),
+                class: "xsd:string".to_owned(),
+                family: None,
+                force_nullable: false,
+            }],
+        };
+        let schema_of = |classes: Vec<RawClass>| {
+            SchemaIndex::from_raw(RawSchema {
+                classes,
+                enums: Vec::new(),
+            })
+        };
+
+        let before = schema_of(vec![class("Person", "name")]);
+        // A renamed property does not change the generated subscription query,
+        // so it must not cost us a resubscribe.
+        let renamed = schema_of(vec![class("Person", "fullName")]);
+        assert_eq!(
+            class_fingerprint(&before),
+            class_fingerprint(&renamed),
+            "only the class list is what the query is generated from"
+        );
+
+        // A new class does.
+        let added = schema_of(vec![class("Person", "name"), class("Company", "name")]);
+        assert_ne!(class_fingerprint(&before), class_fingerprint(&added));
+
+        // And the order the server listed them in must not matter.
+        let reordered = schema_of(vec![class("Company", "name"), class("Person", "name")]);
+        assert_eq!(class_fingerprint(&added), class_fingerprint(&reordered));
+    }
+
+    /// A source that refuses with a 429 the way the server does.
+    struct RefusingSource;
+
+    impl CommitSource for RefusingSource {
+        fn name(&self) -> &'static str {
+            "refusing"
+        }
+
+        fn subscribe(
+            &self,
+            _ns: &Namespace,
+            _after: Option<CommitId>,
+        ) -> BoxStream<'static, anyhow::Result<CommitEvent>> {
+            Box::pin(futures_util::stream::once(async {
+                Err(anyhow::anyhow!(
+                    "429 Too Many Requests {{\"code\":\"TOO_MANY_REQUESTS\",\"message\":\"Subscription limit exceeded\"}}"
+                ))
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_subscription_is_a_demotion_and_polling_still_applies_commits() {
+        // The product bug this guards: a Reactor that keeps reopening a refused
+        // subscription burns slots and, with `driver = "both"`, loses low-latency
+        // capture silently. The refusal must be recognized once, counted, and
+        // then left alone while another source carries the namespace.
+        use futures_util::StreamExt;
+        let mut h = harness(&["c1", "c2"], FakeGate::open());
+        h.apply(CommitEvent::new(CommitId::new("c1")))
+            .await
+            .unwrap();
+
+        // Drain the refusing source exactly as the supervisor's loop does.
+        let mut stream = RefusingSource.subscribe(&ns(), None);
+        let first = stream.next().await.expect("one event");
+        let err = first.expect_err("a refusal");
+        assert!(
+            is_subscription_limit(&err),
+            "the supervisor must classify this as a demotion: {err:#}"
+        );
+        assert!(
+            stream.next().await.is_none(),
+            "and the stream ends, so the loop does not spin on it"
+        );
+
+        // Meanwhile a poll-shaped event still drives capture.
+        let outcome = h
+            .apply(CommitEvent::with_parent(
+                CommitId::new("c2"),
+                Some(CommitId::new("c1")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(outcome, Applied::FastForward);
+        assert_eq!(h.head().as_deref(), Some("c2"));
+    }
+
     #[tokio::test]
     async fn the_first_event_bootstraps_the_watermark() {
         let mut h = harness(&["c1"], FakeGate::open());
@@ -888,9 +1053,26 @@ impl Supervisor {
         }
 
         let driver = self.config.driver_for(&ns);
-        // Outer loop: rebuild the drivers when the schema changes, because the
-        // subscription query is generated from the class list.
+
+        // One subscription per namespace, held for as long as it stays valid.
+        //
+        // Three things used to churn it, and churn is expensive: the fork caps
+        // SSE subscriptions **per user** (default 20), and a Reactor tracking
+        // several namespaces and reopening streams will exhaust that cap and be
+        // refused — losing low-latency capture for the whole process. So:
+        //
+        // * resubscribe only when the thing the query is generated from (the
+        //   class list) actually changed, not on every schema-dirty signal;
+        // * drop the old stream before opening a new one, so we never hold two
+        //   slots for one namespace;
+        // * back off between attempts instead of reopening every poll interval.
+        let mut classes = class_fingerprint(&self.engine.schema(&ns));
+        let mut demoted = false;
+        let mut backoff =
+            std::time::Duration::from_millis(self.config.capture.poll_interval_ms.max(100));
+
         loop {
+            let want_subscription = driver.subscribes() && !demoted;
             let mut sources: Vec<BoxStream<'static, anyhow::Result<CommitEvent>>> = Vec::new();
             let after = self.engine.watermark(&ns).map(|w| w.commit);
             if driver.polls() {
@@ -900,14 +1082,30 @@ impl Supervisor {
                 );
                 sources.push(poll.subscribe(&ns, after.clone()));
             }
-            if driver.subscribes() {
+            if want_subscription {
                 let sub = subscription::ChangeSetSubscription::new(
                     Arc::clone(&self.client),
                     self.engine.schema(&ns),
                 );
                 sources.push(sub.subscribe(&ns, after));
+                self.engine.metrics().subscription_resubscribes.inc();
             }
+
+            if sources.is_empty() {
+                // Subscription-only and demoted: there is nothing left to drive
+                // capture. Say so loudly and keep the task alive, because the
+                // namespace is now only as fresh as the next operator action.
+                tracing::error!(
+                    %ns,
+                    "capture has no usable driver: the subscription was refused and polling \
+                     is disabled for this namespace. Set driver = \"both\" or \"poll\"."
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                continue;
+            }
+
             let mut merged = futures_util::stream::select_all(sources);
+            let mut rebuild_subscription = false;
 
             loop {
                 tokio::select! {
@@ -919,25 +1117,123 @@ impl Supervisor {
                                 }
                             }
                             Some(Err(err)) => {
+                                if is_subscription_limit(&err) {
+                                    // A demotion, not a failure: the server has
+                                    // no slot for us. Polling still carries the
+                                    // namespace, so correctness is unaffected —
+                                    // but latency is, and with `driver = both`
+                                    // that would otherwise be invisible.
+                                    tracing::warn!(
+                                        %ns,
+                                        error = %err,
+                                        "the server refused our _ChangeSet subscription \
+                                         (subscription limit). Giving it up and relying on \
+                                         head polling; raise \
+                                         TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER if this \
+                                         recurs."
+                                    );
+                                    self.engine.metrics().subscription_demotions.inc();
+                                    demoted = true;
+                                    break;
+                                }
                                 tracing::debug!(%ns, error = %err, "capture driver error");
                             }
-                            // Every driver ended. Rebuild them; the poll driver
-                            // never ends, so this means a subscription-only
-                            // namespace lost its stream.
+                            // Every driver ended. The poll driver never does,
+                            // so this means a subscription-only namespace lost
+                            // its stream.
                             None => break,
                         }
                     }
                     _ = self.engine.await_schema_refresh(&ns) => {
                         self.refresh_schema(&ns).await;
-                        // Rebuild so the subscription query matches the schema.
-                        break;
+                        // Wait for the writer to acknowledge the new index,
+                        // otherwise the flag stays set and this arm spins.
+                        self.await_schema_settled(&ns).await;
+                        let next = class_fingerprint(&self.engine.schema(&ns));
+                        if next != classes {
+                            classes = next;
+                            rebuild_subscription = true;
+                            break;
+                        }
+                        // The class list is unchanged, so the generated query
+                        // would be identical: keep the stream we have.
+                        tracing::debug!(
+                            %ns,
+                            "schema refreshed but the class list is unchanged; keeping the \
+                             existing subscription"
+                        );
                     }
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(
-                self.config.capture.poll_interval_ms,
-            ))
-            .await;
+
+            // Release the slot BEFORE any sleep or reopen, so a namespace never
+            // holds two subscriptions at once.
+            drop(merged);
+
+            if rebuild_subscription {
+                // The query really is stale; reopen promptly.
+                continue;
+            }
+            if want_subscription {
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
+            } else {
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    self.config.capture.poll_interval_ms,
+                ))
+                .await;
+            }
         }
     }
+
+    /// Wait briefly for the writer to apply a schema refresh.
+    ///
+    /// `await_schema_refresh` resolves immediately while the dirty flag is set,
+    /// and only the writer clears it, so without this the schema arm of the
+    /// select spins until the writer happens to drain.
+    async fn await_schema_settled(&self, ns: &Namespace) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if !self.engine.schema_refresh_requested(ns) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+}
+
+/// A fingerprint of everything the `_ChangeSet` query is generated from.
+///
+/// The query lists one block per concrete class, so the class list is exactly
+/// what makes a subscription stale — and comparing it is what lets us ignore a
+/// schema change that does not affect it (a renamed property, a documentation
+/// edit) instead of reopening the stream for nothing.
+fn class_fingerprint(schema: &crate::schema_index::SchemaIndex) -> String {
+    let mut classes: Vec<&str> = schema
+        .classes()
+        .filter(|class| !schema.is_enum(class) && !schema.is_abstract(class))
+        .map(|class| class.as_str())
+        .collect();
+    classes.sort_unstable();
+    classes.join(",")
+}
+
+/// Is this the server refusing us a subscription slot?
+///
+/// Matched on the message because the client surfaces the body as an error
+/// string. The fork answers `429` with
+/// `{"code":"TOO_MANY_REQUESTS","message":"Subscription limit exceeded"}`.
+fn is_subscription_limit(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    // Deliberately NOT a bare "429" substring test. Demotion is sticky — the
+    // namespace stops subscribing for the rest of the process — so a false
+    // positive silently costs low-latency capture. "429" occurs in plenty of
+    // unrelated text, a random server port (`localhost:42900`) or a commit id
+    // among it, and a mere connection refusal would then look like a cap.
+    // These three phrases all come from the server's own refusal, which sends
+    // `TOO_MANY_REQUESTS` as the code and "Subscription limit exceeded" as the
+    // message, and which the client renders as "(429 Too Many Requests)".
+    text.contains("too_many_requests")
+        || text.contains("too many requests")
+        || text.contains("subscription limit")
 }

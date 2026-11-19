@@ -45,14 +45,17 @@ pub fn init_tracing() {
 /// How many databases one embedded server is asked to host before we replace
 /// it.
 ///
-/// WHY THIS EXISTS: the embedded memory-mode server stops answering after a
-/// number of databases have been created and dropped in one process. The
-/// observed signature is a `Plugin handler failed` or
-/// `Document operation failed: unwind(halt(1))` on some operation — `halt(1)`
-/// meaning the server process *exited* — after which every later test in the
-/// binary gets `Connection refused`. It correlates with the **count of
-/// databases created**, not with elapsed time or with any one operation: it has
-/// fired after as few as 6 and as many as 17, earlier when the machine is busy.
+/// NOTE: this is no longer the main defence. What actually killed servers was
+/// the per-user SSE subscription cap (see `embedded_server`), not database
+/// churn — 40 create/delete cycles and 60 schema commits both survive. The
+/// budget stays as cheap insurance against the server dying for some *other*
+/// reason, since a retirement costs one boot (~1-2s) and a cascade costs the
+/// whole binary.
+///
+/// Historical signature of the deaths, kept because it is what you will see if
+/// it ever recurs: `Plugin handler failed` or
+/// `Document operation failed: unwind(halt(1))` — `halt(1)` meaning the server
+/// process *exited* — after which every later test gets `Connection refused`.
 /// `with_tmp_db` does delete each database, so this looks like the memory-mode
 /// store not reclaiming.
 ///
@@ -135,6 +138,19 @@ async fn embedded_server() -> Result<Arc<TerminusDBServer>> {
         pool.server = None;
         pool.databases = 0;
     }
+
+    // Raise the per-user SSE subscription cap for every server we boot.
+    //
+    // ROOT CAUSE of what looked like server instability: the fork limits SSE
+    // subscriptions per *user* (`SubscriptionLimiter`, default 20). Every test
+    // authenticates as `admin`, and every Reactor's capture supervisor opens a
+    // `_ChangeSet` subscription, so one test binary shares a budget of 20 and
+    // the ~20th test onwards got `429 Too Many Requests` — which read as "the
+    // server died under load". The server now sweeps stale slots before
+    // checking the limit; this is belt and braces, so a missed sweep cannot
+    // decide our test results. Set in the process env because `ServerConfig`
+    // has no typed field for it and `crates/bin` is not ours to change.
+    std::env::set_var("TERMINUSDB_SSE_MAX_SUBSCRIPTIONS_PER_USER", "10000");
 
     let mut last = None;
     for attempt in 1..=BOOT_ATTEMPTS {

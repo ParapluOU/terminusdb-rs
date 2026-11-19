@@ -113,6 +113,13 @@ metrics! {
         store_put_errors: "Content-addressed store writes that failed (body kept inline).",
         store_promotions: "Bodies promoted from the warm tier into the hot tier on read.",
         store_evictions: "Bodies evicted from the hot tier to stay within budget.",
+        subscription_demotions: "Namespaces whose _ChangeSet subscription was given up \
+                                 because the server refused it (429 / subscription limit). \
+                                 Capture continues by polling; a non-zero value means the \
+                                 SSE cap is too low for the number of namespaces tracked.",
+        subscription_resubscribes: "Times a namespace's _ChangeSet subscription was \
+                                    reopened. Should stay near zero: a rising count means \
+                                    we are churning subscription slots.",
         woql_without_conditions: "WOQL reads bypassed because the client stated no \
                                   invalidation condition. WOQL can return data without \
                                   revealing which entities it was derived from, so a \
