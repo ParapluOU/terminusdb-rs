@@ -47,19 +47,21 @@ Everything else follows from these, and each is load-bearing:
 
 ## Status
 
-All five phases of [`SPEC.md`](SPEC.md) are implemented. **403 tests pass,
-including integration tests against an embedded TerminusDB 12.1.0-rc3 server.**
-Not production-ready — see the scope limits below — but soundness *and*
-precision are now both demonstrated.
+All five phases of [`SPEC.md`](SPEC.md) are implemented, russian-doll
+decomposition of document lists included. **485 tests pass (428 unit, 57
+integration against an embedded TerminusDB 12.1.0-rc3 server.)** Not
+production-ready — see the scope limits below — but soundness, precision *and*
+fragment-level reuse are all demonstrated.
 
 | Module | What | State |
 |---|---|---|
 | `ids`, `term`, `schema_index`, `change` | identity, the invalidation algebra, `fire()` | done |
 | `engine/*`, `store/*` | the dependency graph, single writer per namespace, content-addressed bodies | done |
 | `analyze/*` | request → plan, for document / GraphQL / WOQL | done |
+| `compose` | russian-doll decomposition: a list is a spine over per-document fragments | done |
 | `capture/*` | `CommitSource` / `ChangeResolver` / `ReadinessGate` / `CommitHistory` + applier | done |
 | `frontend/*`, `config`, `main` | the proxy itself | done |
-| `tests/*` | fidelity, caching, auth, capture, spikes | done |
+| `tests/*` | fidelity, caching, decomposition, auth, capture, spikes | done |
 
 ### What is cached, and what has to be asked for
 
@@ -67,6 +69,11 @@ precision are now both demonstrated.
 read set is derivable from the request: `id=` is one document, `type=` is a
 class's membership, `graph_type=schema` is the schema. GraphQL likewise, because
 Reactor injects `_id`/`_type` and maps the response back to documents.
+
+**And a document list is not cached as one blob.** `GET /api/document/<ns>?type=Note`
+is cached as a *membership spine* over **one fragment per document**, so a field
+change to one member costs one child refill rather than the whole list — see
+[Russian-doll decomposition](#russian-doll-decomposition) below.
 
 **WOQL is opt-in.** A WOQL query can return data without revealing which
 entities the data was derived from:
@@ -131,6 +138,64 @@ path:Person,Company       schema                       everything
 string — a bare `=Ann` is rejected rather than guessed at, because guessing the
 type wrong produces a condition that silently never fires.
 
+### Russian-doll decomposition
+
+Caching a document list as one response is nearly useless: a field change to any
+single member throws the whole list away, and the list read is the hot path. So
+a `/api/document` read that selects documents by `id`, `ids` or `type` is cached
+as **one fragment per document plus a parent that holds only the ordered
+membership and the framing** — design doc §5.4 as revised by R4, and the thing
+the prototype this project replaces did by hand for exactly one route.
+
+The split that makes it work is **projection versus framing**:
+
+* *Projection* is which bytes one document renders as — `unfold`, `minimized`,
+  `compress_ids`, `identifiers`, `raw_id`, `xsd`, `format`. It lives in the
+  **child**'s shape.
+* *Framing* is how documents are joined — NDJSON versus `as_list`, plus
+  `skip`/`count` and the origin's order. It lives in the **parent**.
+
+Three consequences, in descending order of how easy they are to break:
+
+1. **The parent depends on membership only** — `Members(C)`, never
+   `Term::Class(C)`. `Class` fires on every field change to every instance, so a
+   parent holding it would be refetched by precisely the change this feature
+   exists to absorb, and the cache would look correct while doing nothing. There
+   is a comment saying so where it matters, because it is the easiest thing for
+   someone to "fix" later.
+2. **Children are shared.** A by-id read and a list read compute the *same*
+   child key, so a list read warms by-id reads and vice versa. A by-id read of a
+   member the list already fetched is a hit with no upstream request at all.
+3. **One request, not N.** A parent with a hundred dirty children costs one
+   pinned `?ids=[…]` fetch. A composition whose children cannot all be resolved
+   falls back to a whole upstream fetch — never a partial body.
+
+Framing is **learned from the origin, never assumed**: `compose.rs` keeps the
+verbatim bytes before, between and after the documents it found, and refuses a
+body whose separators are not uniform. Nothing in the code knows what `[` means,
+which is why `minimized=false`, `as_list=true` and `unfold=true` needed no
+special cases — and why `tests/decompose.rs` asserts, against a live node, that
+a composed response equals the origin's bytes for every one of them.
+
+Two findings came out of building it, both pinned by tests:
+
+* **`?ids=` wants a JSON array.** `?ids=["Note/1","Note/2"]` works;
+  `?ids=Note/1,Note/2` is a 400 (`api:JSONInvalid`). The analyzer used to split
+  that parameter on commas, which produced a dependency term no commit can ever
+  fire — so an `?ids=` entry was cached and then never invalidated. Stale
+  forever, and invisible. Fixed, and `the_origin_wants_ids_as_a_json_array`
+  keeps it fixed. (Nothing else in this workspace sends ids through the query
+  string: `terminusdb-client` POSTs them in a body with
+  `X-HTTP-Method-Override: GET`, which is why it went unnoticed.)
+* **A field update does not move the origin's list order**, which is what makes
+  the membership-only parent dependency sound. Asserted directly against the
+  node in `the_origin_keeps_its_order_when_a_middle_document_changes`, rather
+  than assumed.
+
+`[cache].decompose = false` is the escape hatch: it falls back to whole-response
+caching, which is unconditionally byte-faithful because the bytes are never
+taken apart. Everything still passes with it off.
+
 ### What the tests actually prove, and what they don't
 
 **Soundness is demonstrated** against a live node: answers are correct after a
@@ -154,6 +219,19 @@ every before-state read failed, so every changeset was `complete: false`, so
 every commit fired `Everything`. A correct cache with no precision, and silent
 about it. All commit ids now funnel through one normalizer
 (`capture::commit_id_from_any`).
+
+**Fragment-level reuse is demonstrated** on the same server: a composed list is
+byte-identical to the origin's for every framing and projection we support; a
+change to one member of a four-member list refills exactly one child in exactly
+one upstream request; three changes still cost one request; a member the list
+warmed is a hit on its first by-id read; inserting and deleting a member moves
+the list without ever abandoning a composition; and reverting a change restores
+the composed `ETag`, because a composed response's identity comes from its
+children's hashes rather than from the spliced bytes.
+
+What is **not** demonstrated: decomposition under concurrent writers at scale
+(the single-flight path is exercised by unit tests, not by a live contention
+test), and composition for anything other than `/api/document` list reads.
 
 ## Adopting it in an application
 
@@ -219,6 +297,11 @@ Then `change.rs::fire` (commit → fired terms; the reason we pay for before-sta
 is that it makes `Index` and `Backlink` firing exact), and
 `engine/writer.rs::on_insert` — the protocol that makes the fill/apply race
 *exactly* solvable rather than merely unlikely.
+
+For the russian doll, read `compose.rs` and then `analyze::ListSpec`. The whole
+feature turns on two paragraphs of doc comment: why the parent's dependency is
+membership and not the class, and why the framing is learned instead of
+written down.
 
 ## Known risks
 

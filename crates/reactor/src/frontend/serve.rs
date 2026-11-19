@@ -26,14 +26,18 @@ use bytes::Bytes;
 use http::header::{HeaderMap, HeaderValue};
 use http::{Method, Request, StatusCode};
 
-use crate::analyze::{self, Augment, Plan, ReqView, Rewrite, Target};
+use crate::analyze::{self, Augment, Decompose, ListSpec, Plan, ReqView, Rewrite, Target};
 use crate::capture::CaptureHint;
+use crate::compose::{self, Spine};
 use crate::config::MinVersionPolicy;
-use crate::engine::{BodyRef, CommitLookup, FragmentKey, FragmentVersion, Lookup, ResponseMeta};
+use crate::engine::{
+    BodyRef, CommitLookup, Decomposition, FragmentKey, FragmentVersion, Lookup, ResponseMeta,
+    RootKey,
+};
 use crate::frontend::fill::{FillOutcome, SharedOutcome};
 use crate::frontend::proxy::{self, UpstreamRequest};
 use crate::frontend::AppState;
-use crate::ids::{Namespace, Position, Watermark};
+use crate::ids::{ContentHash, DocId, Namespace, Position, Watermark};
 use crate::term::Term;
 use terminusdb_client::CommitId;
 
@@ -156,7 +160,34 @@ fn hit_response(
     watermark: &Watermark,
     request_headers: &HeaderMap,
 ) -> Response {
-    let etag = format!("\"{}\"", version.hash.to_hex());
+    hit_response_tagged(
+        state,
+        version,
+        version.hash,
+        body,
+        watermark,
+        request_headers,
+        None,
+    )
+}
+
+/// As [`hit_response`], with the `ETag` stated separately.
+///
+/// A composed response's identity is not the hash of its own bytes: it is the
+/// combination of its parent's and its children's hashes. Deriving it that way
+/// rather than from the spliced bytes is what makes backdating visible to a
+/// client — a refilled child whose content did not actually move leaves the
+/// `ETag` alone, so a conditional request still gets a 304.
+fn hit_response_tagged(
+    state: &AppState,
+    version: &FragmentVersion,
+    hash: ContentHash,
+    body: Bytes,
+    watermark: &Watermark,
+    request_headers: &HeaderMap,
+    detail: Option<&str>,
+) -> Response {
+    let etag = format!("\"{}\"", hash.to_hex());
     let not_modified = request_headers
         .get(http::header::IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
@@ -184,7 +215,7 @@ fn hit_response(
             http::header::AGE,
             HeaderValue::from(version.age().as_secs()),
         );
-        decorate(headers, state, Some(watermark), CacheState::Hit, None);
+        decorate(headers, state, Some(watermark), CacheState::Hit, detail);
     }
 
     if not_modified {
@@ -387,6 +418,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
             immutable,
             rewrite,
             augment,
+            decompose,
         } => {
             serve_read(
                 &state,
@@ -399,6 +431,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, request: Request<Body>) 
                 immutable,
                 rewrite,
                 augment,
+                decompose,
             )
             .await
         }
@@ -451,6 +484,9 @@ async fn purge_now(state: &AppState, target: &Namespace, scope: analyze::PurgeSc
             tracing::debug!(%ns, "no writer to purge");
             continue;
         }
+        // Learned framings need no invalidating — nothing a commit does changes
+        // what `[` means — but "purge" should mean it, so they go too.
+        state.framings.clear();
         tracing::info!(%ns, ?scope, "purging after a topology call");
 
         // With no watermark nothing can have been cached (a read without one
@@ -587,6 +623,7 @@ async fn serve_read(
     immutable: bool,
     rewrite: Option<Rewrite>,
     augment: Augment,
+    decompose: Decompose,
 ) -> Response {
     // Without a watermark there is no position to pin a fill at, so there is
     // nothing we can honestly cache.
@@ -636,26 +673,95 @@ async fn serve_read(
     }
 
     let at = watermark.pos;
+    let policy = state
+        .engine
+        .config()
+        .policy
+        .for_path(request.path_and_query.as_str())
+        .clone();
+
+    // Russian-doll composition applies only where the analyzer said the response
+    // is a sequence of documents *and* the operator left it on. A pinned read is
+    // excluded because it is immortal: there is no invalidation for a child to
+    // absorb, so splitting it would be pure overhead.
+    let spec: Option<ListSpec> = match (&decompose, policy.decompose, immutable) {
+        (Decompose::Documents(spec), Decomposition::NdjsonList, false) => Some(spec.clone()),
+        _ => None,
+    };
+
     if let Lookup::Hit(version) = state.engine.lookup(&key, at) {
         if let Some(body) = resolve_body(state, &version) {
-            if state
-                .config
-                .engine_config()
-                .policy
-                .for_path(request.path_and_query.as_str())
-                .fresh_enough(version.age())
-            {
-                state.engine.metrics().lookup_hits.inc();
-                return hit_response(state, &version, body, &watermark, &request.headers);
+            if policy.fresh_enough(version.age()) {
+                match composition(state, ns, &version, &body, spec.as_ref(), at) {
+                    // Every child resolved from cache: no upstream request at
+                    // all, which is the point of the whole feature.
+                    Composition::Ready { body, hash } => {
+                        state.engine.metrics().lists_composed.inc();
+                        state.engine.metrics().lookup_hits.inc();
+                        return hit_response_tagged(
+                            state,
+                            &version,
+                            hash,
+                            body,
+                            &watermark,
+                            &request.headers,
+                            Some("composed"),
+                        );
+                    }
+                    // A plain, undecomposed entry. Serve the bytes.
+                    Composition::Plain => {
+                        state.engine.metrics().lookup_hits.inc();
+                        return hit_response(state, &version, body, &watermark, &request.headers);
+                    }
+                    // The parent is valid but some children are not: fill them
+                    // all in ONE batched upstream request and splice.
+                    Composition::Incomplete { spine, resolved } => {
+                        return recompose(
+                            state,
+                            request,
+                            ns,
+                            target,
+                            &key,
+                            &watermark,
+                            &version,
+                            spine,
+                            resolved,
+                            spec.as_ref().expect("a spine implies a spec"),
+                            augment,
+                        )
+                        .await;
+                    }
+                    // Decomposition was turned off while a spine was cached, so
+                    // these bytes are a membership list and must never reach a
+                    // client. Treat it as a miss and refill whole: that is what
+                    // makes the switch an escape hatch rather than a trap.
+                    Composition::StaleSpine => {
+                        tracing::debug!(
+                            "discarding a cached spine because decomposition is disabled"
+                        );
+                    }
+                }
             }
         }
         // The body was evicted from the store, or the entry is past its TTL:
         // both are plain misses.
     }
 
+    // Sharing, the other direction. A by-id read whose child fragment a list
+    // read already warmed can be answered outright, as soon as we know how this
+    // shape wraps one document — and framing is a property of the parameters,
+    // not of the data, so one observation of the shape is enough. Without this
+    // the warming would be one-way: the list would populate the child and the
+    // by-id read would still pay an upstream request to learn its own wrapper.
+    if let Some(response) = compose_single(state, ns, spec.as_ref(), at, &watermark, &key, request)
+    {
+        return response;
+    }
+
     // Miss: fill once, pinned, however many callers are waiting.
     let outcome = fill_now(
         state, request, ns, target, query, &key, &watermark, terms, immutable, rewrite, augment,
+        spec,
     )
     .await;
 
@@ -735,6 +841,162 @@ async fn resolve_fence(
     }
 }
 
+/// What resolving a cached parent against its children produced.
+enum Composition {
+    /// Not a decomposed entry: the bytes are the response.
+    Plain,
+    /// Composed from children with no upstream request.
+    Ready {
+        /// The spliced response.
+        body: Bytes,
+        /// Its identity, derived from the parent's and children's hashes.
+        hash: ContentHash,
+    },
+    /// The parent is valid; these children still have to be fetched.
+    Incomplete {
+        /// The parent's framing and ordered membership.
+        spine: Spine,
+        /// One slot per member, `None` where the child is missing.
+        resolved: Vec<Option<(Bytes, ContentHash)>>,
+    },
+    /// A spine is cached but decomposition is off, so it cannot be composed and
+    /// must not be served.
+    StaleSpine,
+}
+
+/// Resolve a cached parent against its children.
+///
+/// The hash is `combine(parent, children…)` rather than a hash of the spliced
+/// bytes, for two reasons. It is cheaper — no second pass over the body — and it
+/// is what makes backdating observable: the writer gives a refilled child whose
+/// content did not move the *same* hash, so the combination is unchanged and a
+/// client's `If-None-Match` still gets a 304.
+fn composition(
+    state: &AppState,
+    ns: &Namespace,
+    version: &FragmentVersion,
+    body: &Bytes,
+    spec: Option<&ListSpec>,
+    at: Position,
+) -> Composition {
+    let Some(spine) = Spine::decode(body) else {
+        // Not a spine. Either decomposition is off, or this key was filled
+        // before it was turned on; either way the bytes are a response.
+        return Composition::Plain;
+    };
+    let Some(spec) = spec else {
+        return Composition::StaleSpine;
+    };
+
+    let mut resolved: Vec<Option<(Bytes, ContentHash)>> = Vec::with_capacity(spine.ids.len());
+    let mut complete = true;
+    for id in &spine.ids {
+        let child = child_key(ns, id, spec);
+        let found = match state.engine.lookup(&child, at) {
+            Lookup::Hit(child) => resolve_body(state, &child).map(|bytes| (bytes, child.hash)),
+            Lookup::Miss => None,
+        };
+        complete &= found.is_some();
+        resolved.push(found);
+    }
+
+    if !complete {
+        return Composition::Incomplete { spine, resolved };
+    }
+    let parts: Vec<(Bytes, ContentHash)> = resolved
+        .into_iter()
+        .map(|slot| slot.expect("checked complete"))
+        .collect();
+    Composition::Ready {
+        hash: composed_hash(version.hash, &parts),
+        body: compose::compose(
+            &spine.framing,
+            &parts
+                .iter()
+                .map(|(bytes, _)| bytes.clone())
+                .collect::<Vec<_>>(),
+        ),
+    }
+}
+
+/// The identity of a composed response: the parent's content hash combined with
+/// its children's.
+///
+/// The children's *stored* hashes, not a rehash of the spliced bytes. That is
+/// the backdating guarantee: the writer hands a refilled child the same hash
+/// when its content did not move, so an unchanged refill leaves this value — and
+/// therefore the client's `ETag` — alone.
+fn composed_hash(spine_hash: ContentHash, parts: &[(Bytes, ContentHash)]) -> ContentHash {
+    let mut hashes = Vec::with_capacity(parts.len() + 1);
+    hashes.push(spine_hash);
+    hashes.extend(parts.iter().map(|(_, hash)| *hash));
+    ContentHash::combine(&mut hashes)
+}
+
+/// Answer a single-document read from its cached child plus a learned framing,
+/// with no upstream request and no parent fragment.
+///
+/// Soundness, which is not obvious: the composed answer asserts both that the
+/// document's bytes are these *and* that the document exists. The second half
+/// comes free, because a delete fires `Doc(id)` and the child's only dependency
+/// is `Doc(id)` — so a child that is a valid hit at this position is a document
+/// that existed at this position. There is nothing left for a parent fragment to
+/// contribute.
+fn compose_single(
+    state: &AppState,
+    ns: &Namespace,
+    spec: Option<&ListSpec>,
+    at: Position,
+    watermark: &Watermark,
+    parent_key: &FragmentKey,
+    request: &UpstreamRequest,
+) -> Option<Response> {
+    let spec = spec?;
+    let id = spec.single()?;
+    let framing = state.framings.get(ns, parent_key.shape)?;
+    let child = match state.engine.lookup(&child_key(ns, id, spec), at) {
+        Lookup::Hit(child) => child,
+        Lookup::Miss => return None,
+    };
+    let bytes = resolve_body(state, &child)?;
+    // Reconstruct the parent this read *would* have had, so the `ETag` is the
+    // one a parent-composed answer gives. Two paths to the same bytes must not
+    // produce two identities, or a client's `If-None-Match` would miss for no
+    // reason the client can see.
+    let spine = Spine {
+        framing,
+        ids: vec![id.clone()],
+    };
+    let spine_hash = ContentHash::of(&spine.encode());
+    let parts = [(bytes, child.hash)];
+    let body = compose::compose(
+        &spine.framing,
+        &parts
+            .iter()
+            .map(|(bytes, _)| bytes.clone())
+            .collect::<Vec<_>>(),
+    );
+    state.engine.metrics().lists_composed.inc();
+    Some(hit_response_tagged(
+        state,
+        &child,
+        composed_hash(spine_hash, &parts),
+        body,
+        watermark,
+        &request.headers,
+        Some("composed-shared"),
+    ))
+}
+
+/// The key of the child fragment holding one document of a decomposed response.
+fn child_key(ns: &Namespace, id: &DocId, spec: &ListSpec) -> FragmentKey {
+    FragmentKey {
+        ns: ns.clone(),
+        root: RootKey::Doc(id.clone()),
+        shape: spec.child_shape,
+    }
+}
+
 /// Fetch a version's bytes, wherever they live.
 fn resolve_body(state: &AppState, version: &FragmentVersion) -> Option<Bytes> {
     match &version.body {
@@ -743,6 +1005,304 @@ fn resolve_body(state: &AppState, version: &FragmentVersion) -> Option<Bytes> {
         // refilled.
         BodyRef::Cas(hash) => state.engine.store().get(hash),
     }
+}
+
+/// Response headers for a body we assembled rather than relayed.
+fn headers_from_meta(meta: &ResponseMeta) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(content_type) = &meta.content_type {
+        if let Some(value) = proxy::header_value(content_type) {
+            headers.insert(http::header::CONTENT_TYPE, value);
+        }
+    }
+    if let Some(data_version) = &meta.data_version {
+        if let Some(value) = proxy::header_value(data_version) {
+            headers.insert("terminusdb-data-version", value);
+        }
+    }
+    headers
+}
+
+/// A valid parent with missing children: fetch them all in **one** request and
+/// splice.
+///
+/// The batch is the whole point. A list of a thousand documents with a hundred
+/// dirtied members must cost one upstream request, not a hundred: N+1 fan-out
+/// against the node the cache exists to protect would dominate every other cost
+/// in the system, and the hand-written prototype this replaces got that right.
+///
+/// Routed through the fill coordinator so the batch is single-flighted and takes
+/// an upstream permit, exactly like an ordinary fill.
+#[allow(clippy::too_many_arguments)]
+async fn recompose(
+    state: &AppState,
+    request: &UpstreamRequest,
+    ns: &Namespace,
+    target: &Target,
+    key: &FragmentKey,
+    watermark: &Watermark,
+    parent: &FragmentVersion,
+    spine: Spine,
+    resolved: Vec<Option<(Bytes, ContentHash)>>,
+    spec: &ListSpec,
+    augment: Augment,
+) -> Response {
+    let outcome = {
+        let state_for_fill = state.clone_handle();
+        let request = request.clone();
+        let ns = ns.clone();
+        let target = target.clone();
+        let watermark = watermark.clone();
+        let parent_hash = parent.hash;
+        let meta = parent.meta.clone();
+        let spec = spec.clone();
+        state
+            .fills
+            .fill(key.clone(), watermark.pos, move || async move {
+                execute_recompose(
+                    state_for_fill,
+                    request,
+                    ns,
+                    target,
+                    watermark,
+                    parent_hash,
+                    meta,
+                    spine,
+                    resolved,
+                    spec,
+                    augment,
+                )
+                .await
+            })
+            .await
+    };
+
+    match outcome.as_ref().as_ref() {
+        Ok(fill) => fill_response(state, fill, Some(watermark), "recomposed", &request.headers),
+        Err(err) => {
+            tracing::warn!(error = %err, "recomposition failed");
+            bad_gateway(state, "recomposition failed")
+        }
+    }
+}
+
+/// Issue the one batched child fetch, store what came back, and splice.
+#[allow(clippy::too_many_arguments)]
+async fn execute_recompose(
+    state: Arc<AppState>,
+    request: UpstreamRequest,
+    ns: Namespace,
+    target: Target,
+    watermark: Watermark,
+    parent_hash: ContentHash,
+    meta: ResponseMeta,
+    spine: Spine,
+    mut resolved: Vec<Option<(Bytes, ContentHash)>>,
+    spec: ListSpec,
+    augment: Augment,
+) -> anyhow::Result<FillOutcome> {
+    // Which documents are missing, deduplicated: one `?ids=` list, one request.
+    let mut missing: Vec<DocId> = spine
+        .ids
+        .iter()
+        .zip(&resolved)
+        .filter(|(_, slot)| slot.is_none())
+        .map(|(id, _)| id.clone())
+        .collect();
+    missing.sort();
+    missing.dedup();
+
+    let query = analyze::projection_query(&spec.projection, &missing);
+    let Some(path) = pinned_path(&target, &watermark.commit, &query) else {
+        return abandon(&state, &request, "unpinnable").await;
+    };
+
+    let mut pinned = request.clone();
+    pinned.path_and_query = path;
+    pinned.body = Bytes::new();
+    pinned.headers.remove(http::header::CONTENT_LENGTH);
+
+    state.engine.metrics().child_batches.inc();
+    let upstream = state.proxy.send(&pinned).await?;
+    if !upstream.is_success() {
+        tracing::debug!(
+            %ns, status = %upstream.status, path = %pinned.path_and_query,
+            "batched child fetch was not successful"
+        );
+        return abandon(&state, &request, "child-fetch-failed").await;
+    }
+
+    let fetched = match compose::decompose(&upstream.body) {
+        Ok(fetched) => fetched,
+        Err(why) => {
+            tracing::debug!(%ns, ?why, "batched child fetch did not split into documents");
+            return abandon(&state, &request, "child-fetch-unsplittable").await;
+        }
+    };
+
+    // The commit these child bytes are from, on the same terms as any other
+    // fill: without a position we cannot say when they are valid, so we serve
+    // them and store nothing.
+    let placement = child_placement(&state, &ns, &watermark, &upstream);
+
+    let child_meta = ResponseMeta {
+        status: upstream.status.as_u16(),
+        content_type: upstream.content_type(),
+        data_version: upstream.data_version(),
+    };
+
+    let mut filled = 0u64;
+    for member in &fetched.members {
+        let mut deps = vec![Term::Doc(member.id.clone())];
+        if augment == Augment::DocIds {
+            // An unfolded document embeds others, and only its own bytes say
+            // which. Per child, so a list no longer has to settle for the
+            // `Everything` an unparseable NDJSON body forced.
+            crate::analyze::augment_terms_from_response(&member.bytes, &mut deps);
+        }
+        let hash = ContentHash::of(&member.bytes);
+        for (id, slot) in spine.ids.iter().zip(resolved.iter_mut()) {
+            if slot.is_none() && id == &member.id {
+                *slot = Some((member.bytes.clone(), hash));
+            }
+        }
+        if let Some((position, commit)) = &placement {
+            let stored = state.engine.send(
+                &ns,
+                crate::engine::WriterMsg::Insert(Box::new(crate::engine::FillResult {
+                    key: child_key(&ns, &member.id, &spec),
+                    at: *position,
+                    commit: commit.clone(),
+                    body: member.bytes.clone(),
+                    meta: child_meta.clone(),
+                    deps,
+                    children: Vec::new(),
+                    reply: None,
+                })),
+            );
+            if stored.is_ok() {
+                filled += 1;
+            }
+        }
+    }
+    state.engine.metrics().children_filled.add(filled);
+
+    // Constraint: never serve a half-composed answer. A document the origin did
+    // not return (deleted between the parent's fill and now, with the commit not
+    // yet applied here) leaves a hole, and a hole is not an answer.
+    let mut parts = Vec::with_capacity(resolved.len());
+    for slot in resolved {
+        match slot {
+            Some(part) => parts.push(part),
+            None => {
+                tracing::debug!(%ns, "a child could not be resolved; forwarding whole");
+                return abandon(&state, &request, "child-missing").await;
+            }
+        }
+    }
+
+    let body = compose::compose(
+        &spine.framing,
+        &parts
+            .iter()
+            .map(|(bytes, _)| bytes.clone())
+            .collect::<Vec<_>>(),
+    );
+    state.engine.metrics().lists_composed.inc();
+    Ok(FillOutcome {
+        status: meta.status,
+        headers: headers_from_meta(&meta),
+        body,
+        version: None,
+        etag: Some(composed_hash(parent_hash, &parts)),
+    })
+}
+
+/// Give up on composing and forward the client's own request instead.
+///
+/// The one rule this enforces: a composition that cannot be completed produces a
+/// whole upstream fetch, never a partial body.
+async fn abandon(
+    state: &AppState,
+    request: &UpstreamRequest,
+    reason: &str,
+) -> anyhow::Result<FillOutcome> {
+    state.engine.metrics().compositions_abandoned.inc();
+    let upstream = state.proxy.send(request).await?;
+    Ok(uncacheable(upstream, reason))
+}
+
+/// Where a child fetch's bytes belong in this namespace's history.
+///
+/// `None` means we cannot place them, and therefore must not store them —
+/// invariant 2. The bytes are still a correct answer at the pin, so the caller
+/// serves them uncached rather than failing.
+fn child_placement(
+    state: &AppState,
+    ns: &Namespace,
+    watermark: &Watermark,
+    upstream: &proxy::UpstreamResponse,
+) -> Option<(Position, CommitId)> {
+    match upstream.commit_id() {
+        Some(returned) if returned != watermark.commit => {
+            match state.engine.position_of(ns, &returned) {
+                CommitLookup::Applied(pos) => Some((pos, returned)),
+                CommitLookup::Unknown => None,
+            }
+        }
+        Some(returned) => Some((watermark.pos, returned)),
+        None => None,
+    }
+}
+
+/// Turn a completed fill (or composition) into a client response.
+fn fill_response(
+    state: &AppState,
+    fill: &FillOutcome,
+    watermark: Option<&Watermark>,
+    detail: &str,
+    request_headers: &HeaderMap,
+) -> Response {
+    let etag = fill.etag.map(|hash| format!("\"{}\"", hash.to_hex()));
+    if let Some(etag) = &etag {
+        let matched = request_headers
+            .get(http::header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.split(',').any(|candidate| candidate.trim() == etag))
+            .unwrap_or(false);
+        if matched {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            decorate(
+                response.headers_mut(),
+                state,
+                watermark,
+                CacheState::Miss,
+                Some(detail),
+            );
+            return response;
+        }
+    }
+
+    let mut builder =
+        Response::builder().status(StatusCode::from_u16(fill.status).unwrap_or(StatusCode::OK));
+    {
+        let headers = builder.headers_mut().expect("a fresh builder has headers");
+        proxy::copy_response_headers(&fill.headers, headers);
+        if let Some(etag) = &etag {
+            if let Some(value) = proxy::header_value(etag) {
+                headers.insert(http::header::ETAG, value);
+            }
+        }
+        let detail = if fill.version.is_none() && fill.etag.is_none() {
+            Some("uncacheable")
+        } else {
+            Some(detail)
+        };
+        decorate(headers, state, watermark, CacheState::Miss, detail);
+    }
+    builder
+        .body(Body::from(fill.body.clone()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Run (or join) the pinned fill for this key.
@@ -759,6 +1319,7 @@ async fn fill_now(
     immutable: bool,
     rewrite: Option<Rewrite>,
     augment: Augment,
+    spec: Option<ListSpec>,
 ) -> SharedOutcome {
     let state_for_fill = state.clone_handle();
     let request = request.clone();
@@ -783,6 +1344,7 @@ async fn fill_now(
                 immutable,
                 rewrite,
                 augment,
+                spec,
             )
             .await
         })
@@ -803,6 +1365,7 @@ async fn execute_fill(
     immutable: bool,
     rewrite: Option<Rewrite>,
     augment: Augment,
+    spec: Option<ListSpec>,
 ) -> anyhow::Result<FillOutcome> {
     // Invariant 2: fills are pinned. A request we cannot pin is forwarded and
     // never cached.
@@ -858,16 +1421,90 @@ async fn execute_fill(
         None => return Ok(uncacheable(upstream, "no-data-version")),
     };
 
-    // Complete the read set from the response where the request alone could not
-    // determine it.
-    if augment == Augment::DocIds {
-        crate::analyze::augment_terms_from_response(&body, &mut terms);
-    }
-
     let meta = ResponseMeta {
         status: upstream.status.as_u16(),
         content_type: upstream.content_type(),
         data_version: upstream.data_version(),
+    };
+
+    // Decompose, if the analyzer said this is a list of documents and the bytes
+    // bear that out. The response we return is still the origin's own body, so
+    // the first read of a list is byte-identical by construction; only *later*
+    // reads are composed, and `compose` reproduces exactly these bytes from the
+    // same pieces.
+    let mut spine_body: Option<(Bytes, Vec<FragmentKey>, Vec<Term>)> = None;
+    if let Some(spec) = &spec {
+        match compose::decompose(&body) {
+            Ok(parts) => {
+                state.engine.metrics().lists_decomposed.inc();
+                if spec.single().is_some() {
+                    // One member, so this wrapper fits any other single
+                    // document of the same shape. See `FramingCache`: that is
+                    // why only single-document shapes are remembered.
+                    state.framings.remember(&ns, key.shape, &parts.framing);
+                }
+                let mut children = Vec::with_capacity(parts.members.len());
+                for member in &parts.members {
+                    let mut deps = vec![Term::Doc(member.id.clone())];
+                    if augment == Augment::DocIds {
+                        crate::analyze::augment_terms_from_response(&member.bytes, &mut deps);
+                    }
+                    let key = child_key(&ns, &member.id, spec);
+                    children.push(key.clone());
+                    // No reply channel: the parent's own insert is what the
+                    // request waits on, and a child that the writer rejects
+                    // simply costs a refill later.
+                    state.engine.send(
+                        &ns,
+                        crate::engine::WriterMsg::Insert(Box::new(crate::engine::FillResult {
+                            key,
+                            at: position,
+                            commit: commit.clone(),
+                            body: member.bytes.clone(),
+                            meta: meta.clone(),
+                            deps,
+                            children: Vec::new(),
+                            reply: None,
+                        })),
+                    )?;
+                }
+                state
+                    .engine
+                    .metrics()
+                    .children_filled
+                    .add(parts.members.len() as u64);
+                spine_body = Some((
+                    Spine::of(&parts).encode(),
+                    children,
+                    spec.parent_terms.clone(),
+                ));
+            }
+            Err(why) => {
+                // Not a clean sequence of documents. Cache the whole response,
+                // which is what Reactor did before decomposition existed.
+                state.engine.metrics().lists_undecomposable.inc();
+                tracing::debug!(%ns, ?why, "list response not decomposable; caching whole");
+            }
+        }
+    }
+
+    // Complete the read set from the response where the request alone could not
+    // determine it. Skipped for a decomposed parent: its dependencies are
+    // membership, and an unfolded document's embedded ids are the *children's*
+    // business — which is also strictly better, because an NDJSON list body
+    // does not parse as one JSON value and this call would have fired
+    // `Everything`.
+    if augment == Augment::DocIds && spine_body.is_none() {
+        crate::analyze::augment_terms_from_response(&body, &mut terms);
+    }
+
+    let (stored_body, children, deps) = match spine_body {
+        Some((spine, children, parent_terms)) => (spine, children, parent_terms),
+        None => (
+            body.clone(),
+            Vec::new(),
+            if immutable { Vec::new() } else { terms },
+        ),
     };
 
     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -875,10 +1512,10 @@ async fn execute_fill(
         key,
         at: position,
         commit,
-        body: body.clone(),
+        body: stored_body,
         meta,
-        deps: if immutable { Vec::new() } else { terms },
-        children: Vec::new(),
+        deps,
+        children,
         reply: Some(reply_tx),
     };
     state
@@ -897,6 +1534,7 @@ async fn execute_fill(
         headers,
         body,
         version: cached,
+        etag: None,
     })
 }
 
@@ -908,6 +1546,7 @@ fn uncacheable(upstream: proxy::UpstreamResponse, reason: &str) -> FillOutcome {
         headers: upstream.headers,
         body: upstream.body,
         version: None,
+        etag: None,
     }
 }
 

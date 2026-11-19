@@ -242,6 +242,8 @@ pub async fn invalidate(
         },
     ) {
         Ok(()) => {
+            // "Empty the cache" should mean it, learned framings included.
+            state.framings.clear();
             state.auth.clear();
             tracing::info!(%ns, "namespace invalidated by operator request");
             (StatusCode::ACCEPTED, format!("purged {ns}\n")).into_response()

@@ -127,6 +127,24 @@ metrics! {
         woql_bad_conditions: "WOQL reads bypassed because a stated invalidation \
                               condition did not parse.",
         woql_with_conditions: "WOQL reads cached against client-stated conditions.",
+        lists_decomposed: "Document-list responses split into per-document child fragments \
+                           plus a membership spine.",
+        lists_undecomposable: "Document-list responses that did not split into @id-bearing \
+                               documents joined by uniform framing, and were therefore \
+                               cached whole. A rising count means the origin's list \
+                               rendering has moved and decomposition is quietly doing \
+                               nothing.",
+        lists_composed: "Responses assembled from cached child fragments instead of being \
+                         fetched. This is the feature working.",
+        children_filled: "Child document fragments filled from a batched upstream request. \
+                          Compare with child_batches: the ratio is the fan-out a request \
+                          would have cost without batching.",
+        child_batches: "Upstream requests issued to refill missing children. One per \
+                        composition, however many children are missing — an N+1 fan-out \
+                        here would dominate every other cost in the system.",
+        compositions_abandoned: "Compositions given up on because a child could not be \
+                                 resolved even after a refill, so the whole request was \
+                                 forwarded. Never a partial body.",
     }
     gauges {
         store_bytes: "Approximate bytes held by the fragment store.",

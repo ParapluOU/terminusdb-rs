@@ -291,7 +291,84 @@ pub enum Plan {
         rewrite: Option<Rewrite>,
         /// Whether the response must be walked for ids to complete the read set.
         augment: Augment,
+        /// Whether this response may be cached as a spine over per-document
+        /// fragments instead of as one blob.
+        decompose: Decompose,
     },
+}
+
+/// Whether a response may be cached as per-document fragments plus a spine.
+///
+/// Russian-doll decomposition, design doc §5.4 as revised by R4. The point is
+/// that a field change to one member of a list must not throw the list away.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Default)]
+pub enum Decompose {
+    /// One fragment for the whole response. Always correct, and the fallback
+    /// whenever the bytes turn out not to be a clean sequence of documents.
+    #[default]
+    No,
+    /// The response is a sequence of `@id`-bearing documents joined by uniform
+    /// framing: cache one child fragment per document, plus a parent holding
+    /// only the ordered membership and the framing.
+    Documents(ListSpec),
+}
+
+impl Decompose {
+    /// The list spec, when decomposition applies.
+    pub fn spec(&self) -> Option<&ListSpec> {
+        match self {
+            Decompose::Documents(spec) => Some(spec),
+            Decompose::No => None,
+        }
+    }
+}
+
+/// Everything the serve path needs to decompose and recompose one list route.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ListSpec {
+    /// The shape of a child fragment: the *projection*, with the selection and
+    /// the framing factored out. Shared with a by-id read of the same
+    /// projection, which is what makes a list read warm by-id reads.
+    pub child_shape: ShapeId,
+    /// The projection parameters, for the one batched `?ids=` request that
+    /// refills every missing child.
+    pub projection: Vec<(String, String)>,
+    /// The **parent's** dependencies, which are membership only.
+    ///
+    /// Deliberately *not* the whole-response read set in
+    /// [`Plan::Read::terms`]: that set contains [`Term::Class`], which fires on
+    /// every field change to any instance. A parent that depended on it would
+    /// be dirtied — and so refetched upstream — by exactly the change
+    /// decomposition exists to absorb, which would defeat the entire feature
+    /// while still looking correct. Soundness does not suffer: the parent's
+    /// content is the framing plus the ordered membership, and nothing but a
+    /// create or a delete can change that. A field update is absorbed by the
+    /// child whose `Doc(id)` dependency does fire.
+    ///
+    /// If `/api/document` ever grows a value filter, an
+    /// [`Term::Index`] belongs here too, because then membership would depend
+    /// on a field.
+    pub parent_terms: Vec<Term>,
+    /// The documents the request named by id, if it named any. Empty for
+    /// `?type=`, where only the origin knows the membership.
+    pub named: Vec<DocId>,
+}
+
+impl ListSpec {
+    /// The one document this request returns, when it returns exactly one.
+    ///
+    /// This is what makes a learned framing reusable: a one-member body's
+    /// wrapper is the same whichever document is in it, so a by-id read whose
+    /// child fragment is already cached — warmed by a list read, or by an
+    /// earlier by-id read — can be answered with no upstream request at all. A
+    /// multi-document selector cannot borrow a framing, because the origin's
+    /// suffix after one member is not its suffix after three.
+    pub fn single(&self) -> Option<&DocId> {
+        match self.named.as_slice() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
 }
 
 impl Plan {
@@ -567,6 +644,9 @@ fn plan_pinned(
                 immutable: true,
                 rewrite,
                 augment,
+                // A pinned answer is immortal, so splitting it would buy
+                // nothing: there is no invalidation for a child to absorb.
+                decompose: Decompose::No,
             },
             other => other,
         };
@@ -582,6 +662,7 @@ fn plan_pinned(
         immutable: true,
         rewrite: None,
         augment: Augment::None,
+        decompose: Decompose::No,
     }
 }
 
@@ -593,6 +674,96 @@ pub fn is_read_method(method: &http::Method) -> bool {
 /// Query-parameter names whose *value* selects which content is returned rather
 /// than how it is shaped. Their values are placeholders in a [`ShapeId`].
 const CONTENT_SELECTING_PARAMS: &[&str] = &["id", "ids", "skip", "count", "id_prefix"];
+
+/// Document parameters that change how **one document** renders.
+///
+/// This is the *projection* half of the projection/framing split that
+/// decomposition rests on (see [`crate::compose`]). A child fragment holds one
+/// document's bytes, so its shape must depend on exactly these and on nothing
+/// else — in particular not on `id`/`ids`/`type` (which document), nor on
+/// `as_list`/`skip`/`count` (how documents are joined). That is what lets a
+/// by-id read and a `?type=` list read share one child fragment, so each warms
+/// the other.
+///
+/// `graph_type` is here because the schema graph renders entirely differently
+/// from the instance graph. Deliberately absent: `as_list`, which the origin
+/// applies as a wrapper around unchanged document bytes — an assumption
+/// `the_per_document_rendering_does_not_depend_on_framing` checks against a
+/// live node, because if it ever stopped holding, children could not be shared
+/// across the two framings.
+const PROJECTION_PARAMS: &[&str] = &[
+    "unfold",
+    "minimized",
+    "compress_ids",
+    "prefixed",
+    "raw_json",
+    "format",
+    "identifiers",
+    "raw_id",
+    "xsd",
+    "graph_type",
+];
+
+/// Build the `?ids=`-style query that fetches one document with the same
+/// projection a list used, so a refilled child's bytes match the ones the list
+/// was decomposed from.
+///
+/// Only projection parameters survive: `type`, `as_list`, `skip` and `count`
+/// would change which documents come back or how they are wrapped, and the
+/// caller splits the framing off anyway.
+pub fn projection_query(params: &[(String, String)], ids: &[crate::ids::DocId]) -> String {
+    let mut out = url::form_urlencoded::Serializer::new(String::new());
+    for (name, value) in params {
+        if PROJECTION_PARAMS.contains(&name.as_str()) {
+            out.append_pair(name, value);
+        }
+    }
+    if !ids.is_empty() {
+        out.append_pair("ids", &render_ids(ids));
+    }
+    out.finish()
+}
+
+/// Render an `ids` query-parameter value.
+///
+/// MEASURED against 12.1.0-rc3: the document API wants a **JSON array** here,
+/// not a comma-separated list. `?ids=Person/p1,Person/p2` is rejected with
+/// `api:JSONInvalid` / `illegal_json`; `?ids=["Person/p1","Person/p2"]` returns
+/// both documents. Pinned by `the_origin_wants_ids_as_a_json_array`.
+pub fn render_ids(ids: &[crate::ids::DocId]) -> String {
+    let array: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| serde_json::Value::String(id.as_str().to_owned()))
+        .collect();
+    serde_json::Value::Array(array).to_string()
+}
+
+/// Parse an `ids` query-parameter value into document ids.
+///
+/// A JSON array is the form the server accepts (see [`render_ids`]), so it is
+/// the form we must be able to read: getting this wrong is not a cosmetic bug
+/// but a stale-forever one, because an entry keyed on `Doc("[\"Person/p1\"")`
+/// depends on a term no commit can ever fire. The comma-separated fallback is
+/// kept because it costs nothing and a coarser-but-parsed id is better than an
+/// unparsed one.
+pub fn parse_ids(raw: &str) -> Vec<DocId> {
+    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(raw) {
+        if items.iter().all(serde_json::Value::is_string) {
+            return items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(DocId::parse)
+                .collect();
+        }
+    }
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(DocId::parse)
+        .collect()
+}
 
 /// The normalized form a cache key is built from.
 ///
@@ -712,6 +883,44 @@ impl CanonicalRequest {
             root: RootKey::Doc(id),
             shape: self.shape_id(),
         }
+    }
+
+    /// The *projection* shape: which bytes one document renders as, with both
+    /// the selection (`id`, `ids`, `type`) and the framing (`as_list`, `skip`,
+    /// `count`) factored out.
+    ///
+    /// Distinct from [`CanonicalRequest::shape_id`] by construction — the two
+    /// encodings start with different tags — so a child fragment can never
+    /// collide with the whole-response entry for the same document.
+    pub fn projection_shape_id(&self) -> ShapeId {
+        let mut out = String::new();
+        push_field(&mut out, "projection");
+        push_field(&mut out, &self.endpoint);
+        for (name, value) in &self.params {
+            if PROJECTION_PARAMS.contains(&name.as_str()) {
+                push_field(&mut out, name);
+                push_field(&mut out, value);
+            }
+        }
+        ShapeId::of(out.as_bytes())
+    }
+
+    /// The key of the child fragment holding one document of this response.
+    pub fn child_key(&self, ns: &Namespace, id: DocId) -> FragmentKey {
+        FragmentKey {
+            ns: ns.clone(),
+            root: RootKey::Doc(id),
+            shape: self.projection_shape_id(),
+        }
+    }
+
+    /// The projection parameters, for building a child refill request.
+    pub fn projection_params(&self) -> Vec<(String, String)> {
+        self.params
+            .iter()
+            .filter(|(name, _)| PROJECTION_PARAMS.contains(&name.as_str()))
+            .cloned()
+            .collect()
     }
 }
 

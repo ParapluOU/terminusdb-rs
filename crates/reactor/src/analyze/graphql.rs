@@ -289,6 +289,11 @@ pub(super) fn plan(
         // response are what make the entry entity-precise, and they are the
         // whole reason `_id` is injected.
         augment: Augment::DocIds,
+        // GraphQL body splicing is deliberately deferred (design doc R4): a
+        // GraphQL response is a nested selection, not a sequence of documents,
+        // so there is no framing to learn and composition would mean rewriting
+        // the body — which invariant 1 forbids.
+        decompose: crate::analyze::Decompose::No,
     }
 }
 
@@ -1517,6 +1522,7 @@ mod tests {
         match plan_body(json!({"query": "query { Person { name } }"})) {
             Plan::Read {
                 augment,
+                decompose: crate::analyze::Decompose::No,
                 immutable,
                 terms,
                 ..

@@ -45,6 +45,9 @@ ids.rs          Namespace, DocId, ClassName, PropName, ContentHash, ShapeId,
 term.rs         Term, TermBucket, ValueKey, TermSet                      [A]
 schema_index.rs SchemaIndex: props (value vs link), hierarchy, backlinks  [A]
 change.rs       DocChange, ChangeSet, fire()                             [A]
+compose.rs      russian-doll decomposition of document lists: split a list
+                into per-document byte ranges + learned framing, and splice
+                it back; Spine, Framing, FramingCache                     [B]
 engine/
   mod.rs        Engine facade + WriterMsg mailbox protocol               [B]
   fragment.rs   FragmentKey, FragmentVersion, FragmentSlot, BodyRef      [B]
@@ -523,11 +526,39 @@ pub trait FragmentStore: Send + Sync {
   coherence protocol. Reads must tolerate a concurrently-written file.
 - `Tiered { hot: Memory, warm: Option<FsCas> }` composes them.
 
-**Scope note for Phase B:** fragments are **whole responses**. Decomposition
-(`children`) is carried in the types and populated for the NDJSON document-list
-case only (Phase E, if time allows), where composition is pure concatenation.
-GraphQL body splicing is explicitly out of scope tonight — say so in the README
-rather than half-building it.
+**Decomposition (`children`), as built.** A `/api/document` read selecting
+documents by `id`, `ids` or `type` is cached as a **parent holding only the
+ordered membership and the framing**, over **one child fragment per document**.
+`compose.rs` owns the splitting and splicing; `Decomposition::NdjsonList`
+(config `[cache].decompose`, default on) enables it, and a response that is not
+a clean sequence of `@id`-bearing objects falls back to a whole-response entry
+per *response*, not per route.
+
+Three rules decide whether it is sound, and each has a named test:
+
+1. **Projection versus framing.** A child's `ShapeId` covers only the parameters
+   that change how one document renders (`unfold`, `minimized`, `compress_ids`,
+   `identifiers`, `raw_id`, `xsd`, `format`, `prefixed`, `raw_json`,
+   `graph_type`). Framing — NDJSON versus `as_list`, plus `skip`/`count` and the
+   origin's order — belongs to the parent. That is what lets a by-id read and a
+   `?type=` list share one child, so each warms the other.
+2. **The parent depends on membership only** (`Members(C)`, or the members of
+   the named ids' classes), and **never** on `Term::Class`, which fires on every
+   field change and would make the parent refetch exactly the change
+   decomposition exists to absorb.
+3. **Framing is learned, not assumed.** `compose.rs` records the verbatim bytes
+   before, between and after the documents it found and refuses a body whose
+   separators are not uniform. Nothing in the code knows what `[` means, so
+   `minimized=false`, `as_list=true` and `unfold=true` need no special cases.
+
+On a read: resolve the parent, look up each child, and fill **all** missing
+children in ONE pinned `?ids=[…]` request. A composition whose children cannot
+all be resolved falls back to a plain upstream fetch — never a partial body.
+
+GraphQL body splicing stays out of scope (design doc R4): a GraphQL response is
+a nested selection rather than a sequence of documents, so there is no framing
+to learn and composition would mean re-emitting a body, which invariant 1
+forbids.
 
 ## Phase C — analyze
 

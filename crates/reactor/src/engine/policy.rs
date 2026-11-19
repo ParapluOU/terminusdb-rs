@@ -52,13 +52,15 @@ impl Default for FencePolicy {
 /// How a response is split into fragments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Decomposition {
-    /// One fragment per response. Always correct, and the only mode implemented
-    /// so far.
+    /// One fragment per response. Always correct, and the escape hatch: it is
+    /// unconditionally byte-faithful because the bytes are never taken apart.
     #[default]
     Whole,
-    /// One fragment per NDJSON line plus a spine, so one changed document does
-    /// not invalidate a whole document list. Composition is pure concatenation,
-    /// which is why this is the one decomposition worth doing first.
+    /// One fragment per document plus a spine, so one changed document does not
+    /// invalidate a whole document list. Composition is pure concatenation,
+    /// which is why this is the one decomposition worth doing first. See
+    /// [`crate::compose`]; a response that does not split cleanly falls back to
+    /// [`Decomposition::Whole`] per response, not per route.
     NdjsonList,
 }
 

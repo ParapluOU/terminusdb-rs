@@ -759,7 +759,7 @@ suite still passes through the proxy".
 | **M2** | Immutable cache: pinned-commit requests + ETag/304. Zero invalidation logic — and therefore already multi-node-safe. | measurable hit rate on a time-travel workload; suite green; same fragment served from both nodes |
 | **M3** | `capture` pipeline behind the `CommitSource` trait — **both** subscription and head-poll drivers — gap recovery, non-fast-forward detection, diff-based changesets → terms → index → invalidation. Document API caching. `min-version` fencing with all three miss policies. | invalidation integration tests on a replica pair; shadow mode reports zero divergence; a pull-induced head move invalidates correctly |
 | **M4** | GraphQL: normalize, inject `_id`/`_type`, extract terms, whole-response caching | Stellate-parity on a real app workload |
-| **M5** | Fragment decomposition + composition + backdating. The russian doll. | one-chunk-changed rebuild touches O(1) fragments, not O(chunks) |
+| **M5** | Fragment decomposition + composition + backdating. The russian doll. **Done** for `/api/document` list reads (`crates/reactor/src/compose.rs`), by reference per R4: the parent holds framing + ordered membership and depends on membership *only*, children are per-document and shared with by-id reads, refills are one batched `?ids=[…]` request, and a composed response's ETag comes from its children's hashes. GraphQL splicing stays deferred. | **met:** a one-member change refills exactly one child in one upstream request, and the composed body is byte-identical to the origin's for NDJSON, `minimized=false`, `as_list=true` and `unfold=true` (`crates/reactor/tests/decompose.rs`) |
 | **M6** | WOQL AST analysis + caching | property tests vs oracle on generated WOQL |
 | **M7** | Resources: declarative views, eager maintenance, SSE streams, subscription multiplexing with working filters | Skip-shaped API; a demo app |
 | **M8** | Eviction/memory budgets (Noria-style partial state), **shared immutable fragment tier (§5.7 mode 2)** if measurements justify it, optional write routing, ops hardening | soak test under memory pressure; cross-node reuse rate |
@@ -889,6 +889,25 @@ and strictly better. *Scope note:* the first implementation caches whole
 responses and composes by reference only for the NDJSON document-list case,
 where composition is concatenation. GraphQL body splicing is deferred, and
 flagged as such in the crate README rather than half-built.
+
+**As built.** Two things were not obvious from this paragraph and are worth
+recording:
+
+* *Framing is learned, not assumed.* The implementation does not know what
+  NDJSON or `as_list` look like. It finds the `@id`-bearing top-level objects
+  and keeps everything else — the bytes before, between and after them —
+  verbatim as a prefix, one separator and a suffix, refusing any body whose
+  separators are not uniform. Recomposition is then byte-exact by construction
+  for the membership it was learned from, and `minimized=false`, `as_list=true`
+  and `unfold=true` needed no code of their own.
+* *The parent must not depend on `Class`.* R4 says a child change does not dirty
+  the parent, but §5.2's read set for a `?type=C` read contains `Class(C)`,
+  which fires on every field change to every instance. Carrying that onto the
+  spine would refetch the list for exactly the change the doll exists to absorb.
+  The spine depends on `Members(C)` alone, which is sound because its content is
+  the framing plus the ordered membership and only a create or a delete can move
+  that — a claim that in turn rests on the origin's list order being a function
+  of membership, which is asserted against a live node rather than assumed.
 
 **R5 — Capture is three roles, not one trait (refines §6.1).**
 `CommitSource` merely *notices* commits and is explicitly untrusted:

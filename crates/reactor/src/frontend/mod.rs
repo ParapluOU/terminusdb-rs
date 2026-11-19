@@ -45,6 +45,10 @@ pub struct AppState {
     pub fills: Arc<FillCoordinator>,
     /// The authorization gate.
     pub auth: Arc<Gate>,
+    /// Framings learned from the origin, so a single-document read whose child
+    /// fragment is already cached needs no upstream request to know how the
+    /// origin wraps it. See [`crate::compose::FramingCache`].
+    pub framings: Arc<crate::compose::FramingCache>,
     /// Nudges to capture: a write's commit, or a resync after a topology call.
     pub hints: tokio::sync::mpsc::UnboundedSender<CaptureHint>,
     /// A self-reference, so a detached fill can keep the state alive.
@@ -73,6 +77,7 @@ impl AppState {
             proxy,
             fills,
             auth,
+            framings: Arc::new(crate::compose::FramingCache::default()),
             hints,
             this: std::sync::OnceLock::new(),
         }

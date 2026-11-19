@@ -290,6 +290,25 @@ impl Upstream {
 }
 
 impl Upstream {
+    /// A raw authenticated GET straight at the node, bypassing Reactor.
+    ///
+    /// The comparison half of every byte-fidelity claim: "the same bytes the
+    /// node would have returned" is only checkable against the node.
+    pub async fn get(&self, path_and_query: &str) -> Result<Probe> {
+        Probe::of(
+            reqwest::Client::new()
+                .get(format!(
+                    "http://localhost:{}{}",
+                    self.port(),
+                    path_and_query
+                ))
+                .basic_auth("admin", Some("root"))
+                .send()
+                .await?,
+        )
+        .await
+    }
+
     /// The node's reported version, e.g. `12.1.0-rc3` or `12.0.6`.
     pub async fn version(&self) -> Result<String> {
         let info: serde_json::Value = serde_json::from_slice(

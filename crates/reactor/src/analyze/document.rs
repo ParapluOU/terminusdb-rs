@@ -7,7 +7,9 @@
 //! not know about it, two different responses would collide on one key. The
 //! only safe response to an unknown parameter is to stop caching.
 
-use crate::analyze::{is_read_method, Augment, CanonicalRequest, Plan, ReqView};
+use crate::analyze::{
+    is_read_method, Augment, CanonicalRequest, Decompose, ListSpec, Plan, ReqView,
+};
 use crate::ids::{DocId, Namespace};
 use crate::schema_index::SchemaIndex;
 use crate::term::Term;
@@ -115,6 +117,10 @@ pub(super) fn plan(
             immutable: false,
             rewrite: None,
             augment: Augment::None,
+            // Class definitions are not documents with a `Doc` identity in the
+            // instance graph, and a schema change invalidates every shape in
+            // the namespace anyway, so there is nothing for a child to absorb.
+            decompose: Decompose::No,
         };
     }
 
@@ -130,35 +136,49 @@ pub(super) fn plan(
     };
 
     let ids: Vec<DocId> = get("ids")
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(DocId::parse)
-                .collect()
-        })
+        .map(crate::analyze::parse_ids)
         .unwrap_or_default();
+
+    // The spine of a decomposed read, built once and used by every selector
+    // below that names documents.
+    let spine = |named: &[DocId]| {
+        Decompose::Documents(ListSpec {
+            child_shape: canonical.projection_shape_id(),
+            projection: canonical.projection_params(),
+            parent_terms: existence_terms(named),
+            named: named.to_vec(),
+        })
+    };
 
     match (get("id"), get("type")) {
         // One document. Rooted at the document, so two spellings of the same
         // request for the same projection share one entry.
+        //
+        // Decomposed as a one-member list, which is not pedantry: it is what
+        // puts the document's bytes under the *projection* key that a `?type=`
+        // list also uses, so a by-id read warms the list and the list warms the
+        // by-id read. The framing a by-id read wraps the document in (a
+        // trailing newline, or `as_list`'s array) then lives on the parent,
+        // where it belongs.
         (Some(id), None) if ids.is_empty() => {
             let id = DocId::parse(id);
             Plan::Read {
                 key: canonical.doc_key(ns, id.clone()),
-                terms: vec![Term::Doc(id)],
+                terms: vec![Term::Doc(id.clone())],
                 immutable: false,
                 rewrite: None,
                 augment,
+                decompose: spine(std::slice::from_ref(&id)),
             }
         }
         // A list of named documents.
         (None, None) if !ids.is_empty() => Plan::Read {
             key: canonical.request_key(ns, None),
-            terms: ids.into_iter().map(Term::Doc).collect(),
+            terms: ids.iter().cloned().map(Term::Doc).collect(),
             immutable: false,
             rewrite: None,
             augment,
+            decompose: spine(&ids),
         },
         // Every instance of a class. `Members` covers creates and deletes,
         // `Class` covers updates to any instance — including instances of
@@ -166,12 +186,20 @@ pub(super) fn plan(
         (None, Some(class)) if ids.is_empty() => {
             let class = crate::ids::ClassName::new(class);
             let mut terms = vec![Term::Members(class.clone()), Term::Class(class.clone())];
+            // The parent of a decomposed list depends on membership ONLY. See
+            // `ListSpec::parent_terms`: adding `Class` here would make every
+            // field change refetch the list, which is the whole thing this
+            // feature exists to stop.
+            let mut parent = vec![Term::Members(class.clone())];
             if schema.is_empty() {
                 // Without a hierarchy we cannot know which subclasses the
-                // query also returns, and `Class` only matches a class and its
-                // known descendants. Fall back to the one term that is
-                // unconditionally sound.
+                // query also returns, and `Class`/`Members` only match a class
+                // and its known descendants. Fall back to the one term that is
+                // unconditionally sound. The children stay precise, so a
+                // composed read still costs one `?ids=` refill rather than a
+                // full list refetch.
                 terms.push(Term::Everything);
+                parent.push(Term::Everything);
             }
             Plan::Read {
                 key: canonical.request_key(ns, None),
@@ -179,21 +207,56 @@ pub(super) fn plan(
                 immutable: false,
                 rewrite: None,
                 augment,
+                decompose: Decompose::Documents(ListSpec {
+                    child_shape: canonical.projection_shape_id(),
+                    projection: canonical.projection_params(),
+                    parent_terms: parent,
+                    // A class listing's membership is the origin's to state.
+                    named: Vec::new(),
+                }),
             }
         }
         // Everything in the instance graph. There is no term for "all classes",
         // and enumerating the schema's classes would miss a class added by a
         // later commit, so this is genuinely an `Everything` dependency.
+        //
+        // Not decomposed: the parent would depend on `Everything` whatever we
+        // did, so it is refetched upstream on every commit and a spine over it
+        // would cost a split for no saved request.
         (None, None) if ids.is_empty() => Plan::Read {
             key: canonical.request_key(ns, None),
             terms: vec![Term::Everything],
             immutable: false,
             rewrite: None,
             augment,
+            decompose: Decompose::No,
         },
         // `id` together with `type`/`ids` is not a shape we model.
         _ => Plan::bypass("ambiguous document selector"),
     }
+}
+
+/// The parent dependency for a read that names its documents by id: "do these
+/// documents still exist, and is this still the set that comes back".
+///
+/// `Members(class)` rather than `Doc(id)` on purpose. `Doc(id)` fires on a mere
+/// field change, which would dirty the parent and force a full refetch — the
+/// exact cost decomposition removes. What the parent's content actually depends
+/// on is existence, and only a create or a delete changes that, which is what
+/// `Members` fires on. An id with no class prefix has no class whose membership
+/// we could name, so it falls back to `Doc(id)`: coarser for that one entry,
+/// and still sound.
+fn existence_terms(ids: &[DocId]) -> Vec<Term> {
+    let mut terms: Vec<Term> = ids
+        .iter()
+        .map(|id| match id.class() {
+            Some(class) => Term::Members(class),
+            None => Term::Doc(id.clone()),
+        })
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
 }
 
 #[cfg(test)]
@@ -301,13 +364,39 @@ mod tests {
 
     #[test]
     fn multiple_ids_depend_on_each_document() {
-        match plan_get("ids=Person/alice,Person/bob") {
-            Plan::Read { terms, .. } => assert_eq!(
-                terms,
-                vec![Term::Doc(doc("Person/alice")), Term::Doc(doc("Person/bob"))]
-            ),
-            other => panic!("expected a read, got {other:?}"),
+        // The JSON-array form is the one the server accepts, and therefore the
+        // one that must parse. REGRESSION: it used to be split on commas, which
+        // produced `Doc("[\"Person/alice\"")` — a term no commit can fire, so
+        // the entry was cached and then never invalidated. Stale forever, and
+        // invisible.
+        for query in [
+            "ids=%5B%22Person%2Falice%22%2C%22Person%2Fbob%22%5D",
+            "ids=Person/alice,Person/bob",
+        ] {
+            match plan_get(query) {
+                Plan::Read { terms, .. } => assert_eq!(
+                    terms,
+                    vec![Term::Doc(doc("Person/alice")), Term::Doc(doc("Person/bob"))],
+                    "{query}"
+                ),
+                other => panic!("expected a read for {query}, got {other:?}"),
+            }
         }
+    }
+
+    #[test]
+    fn an_ids_array_round_trips_through_the_query_we_send() {
+        // What we build for a child refill must be what we would parse back.
+        let ids = vec![doc("Person/alice"), doc("Person/bob")];
+        let rendered = crate::analyze::render_ids(&ids);
+        assert_eq!(rendered, r#"["Person/alice","Person/bob"]"#);
+        assert_eq!(crate::analyze::parse_ids(&rendered), ids);
+        // Including ids a comma split would have mangled.
+        let awkward = vec![doc("Person/hello, world")];
+        assert_eq!(
+            crate::analyze::parse_ids(&crate::analyze::render_ids(&awkward)),
+            awkward
+        );
     }
 
     #[test]
@@ -411,6 +500,157 @@ mod tests {
         assert_eq!(alice.shape, bob.shape);
         assert_ne!(alice.root, bob.root);
         assert_ne!(alice.shape, alice_verbose.shape);
+    }
+
+    /// The spec of a decomposed read, or a panic saying what we got instead.
+    fn spec_of(query: &str) -> ListSpec {
+        match plan_get(query) {
+            Plan::Read { decompose, .. } => match decompose {
+                Decompose::Documents(spec) => spec,
+                Decompose::No => panic!("{query} should be decomposed"),
+            },
+            other => panic!("expected a read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_class_list_parent_depends_on_membership_but_never_on_the_class() {
+        // THE subtlest property in the whole feature. `Class(Person)` fires on
+        // every field change to every Person, so a parent holding it would be
+        // refetched by exactly the change decomposition exists to absorb — and
+        // the cache would look correct while doing nothing. The whole-response
+        // read set still carries `Class`, because a whole-response entry really
+        // does depend on it; only the spine is narrower.
+        let spec = spec_of("type=Person");
+        assert_eq!(spec.parent_terms, vec![Term::Members(cls("Person"))]);
+        assert!(
+            !spec.parent_terms.contains(&Term::Class(cls("Person"))),
+            "a membership spine must not depend on the class"
+        );
+        match plan_get("type=Person") {
+            Plan::Read { terms, .. } => assert!(
+                terms.contains(&Term::Class(cls("Person"))),
+                "the undecomposed fallback still needs Class"
+            ),
+            other => panic!("expected a read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_parent_that_names_its_documents_depends_on_their_existence() {
+        // `Doc(id)` would fire on a field change; what the parent's content
+        // actually depends on is whether the document is still there.
+        assert_eq!(
+            spec_of("ids=Person/alice,Person/bob").parent_terms,
+            vec![Term::Members(cls("Person"))],
+            "one Members term covers both ids, deduplicated"
+        );
+        assert_eq!(
+            spec_of("id=Person/alice").parent_terms,
+            vec![Term::Members(cls("Person"))]
+        );
+        assert_eq!(
+            spec_of("ids=Person/alice,Company/acme").parent_terms,
+            vec![Term::Members(cls("Company")), Term::Members(cls("Person"))]
+        );
+        // An id with no class prefix has no membership to name, so it falls
+        // back to the coarser-for-this-entry but sound `Doc`.
+        assert_eq!(
+            spec_of("id=loose").parent_terms,
+            vec![Term::Doc(doc("loose"))]
+        );
+    }
+
+    #[test]
+    fn a_by_id_read_and_a_class_list_share_one_child_shape() {
+        // The sharing property the feature is for: a list read warms by-id
+        // reads and vice versa, which only happens if both compute the same
+        // child key.
+        assert_eq!(
+            spec_of("id=Person/alice").child_shape,
+            spec_of("type=Person").child_shape
+        );
+        assert_eq!(
+            spec_of("ids=Person/alice,Person/bob").child_shape,
+            spec_of("type=Person").child_shape
+        );
+        // Framing is the parent's business, so it must not move the child.
+        assert_eq!(
+            spec_of("type=Person&as_list=true").child_shape,
+            spec_of("type=Person").child_shape
+        );
+        assert_eq!(
+            spec_of("type=Person&skip=10&count=5").child_shape,
+            spec_of("type=Person").child_shape
+        );
+    }
+
+    #[test]
+    fn the_child_shape_separates_different_document_renderings() {
+        // And the other half: anything that changes how one document renders
+        // MUST change the child key, or two projections would collide on one
+        // entry and we would serve one request's bytes for another.
+        let base = spec_of("type=Person").child_shape;
+        for query in [
+            "type=Person&minimized=false",
+            "type=Person&unfold=true",
+            "type=Person&compress_ids=false",
+            "type=Person&identifiers=true",
+            "type=Person&raw_id=true",
+            "type=Person&xsd=true",
+            "type=Person&format=markdown",
+            "type=Person&prefixed=false",
+            "type=Person&raw_json=true",
+        ] {
+            assert_ne!(spec_of(query).child_shape, base, "{query}");
+        }
+    }
+
+    #[test]
+    fn a_child_shape_never_collides_with_a_whole_response_shape() {
+        // The two hashes are tagged differently on purpose: a child fragment
+        // and a whole-response entry for the same document would otherwise be
+        // one slot holding two different bodies.
+        match plan_get("id=Person/alice") {
+            Plan::Read { key, decompose, .. } => {
+                let spec = decompose.spec().expect("decomposed");
+                assert_ne!(key.shape, spec.child_shape);
+                assert_eq!(key.root, RootKey::Doc(doc("Person/alice")));
+            }
+            other => panic!("expected a read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_child_refill_query_carries_only_the_projection() {
+        let spec = spec_of("type=Person&as_list=true&minimized=false&skip=3&count=2");
+        let query = crate::analyze::projection_query(
+            &spec.projection,
+            &[doc("Person/alice"), doc("Person/bob")],
+        );
+        assert_eq!(
+            query, "minimized=false&ids=%5B%22Person%2Falice%22%2C%22Person%2Fbob%22%5D",
+            "the document API wants a JSON array here, not a comma-separated list"
+        );
+        assert!(
+            !query.contains("as_list") && !query.contains("skip") && !query.contains("count"),
+            "framing and windowing would change which documents come back: {query}"
+        );
+    }
+
+    #[test]
+    fn the_shapes_we_do_not_decompose_say_so() {
+        // The schema graph is not a sequence of instance documents, and an
+        // unfiltered list already depends on `Everything`, so its parent would
+        // be refetched on every commit regardless.
+        for query in ["graph_type=schema", "as_list=true", ""] {
+            match plan_get(query) {
+                Plan::Read { decompose, .. } => {
+                    assert_eq!(decompose, Decompose::No, "{query:?}")
+                }
+                other => panic!("expected a read for {query:?}, got {other:?}"),
+            }
+        }
     }
 
     #[test]

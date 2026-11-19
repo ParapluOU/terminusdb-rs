@@ -92,6 +92,26 @@ $ curl -su admin:root "http://localhost:6464/api/document/admin/mydb?id=Note/1"
 cache-status: Reactor; miss          # and the body is the new one
 ```
 
+A document list is cached as a spine over one fragment per document, so a change
+to one member costs one child refill rather than the whole list:
+
+```console
+$ curl -su admin:root -D - "http://localhost:6464/api/document/admin/mydb?type=Note"
+cache-status: Reactor; miss                     # fetched and split into children
+
+$ curl -su admin:root -D - "http://localhost:6464/api/document/admin/mydb?type=Note"
+cache-status: Reactor; hit; detail=composed     # assembled from children, no upstream read
+
+# ... after a PUT that changes one Note ...
+$ curl -su admin:root -D - "http://localhost:6464/api/document/admin/mydb?type=Note"
+cache-status: Reactor; miss; detail=recomposed  # ONE `?ids=[…]` fetch for the changed member
+```
+
+`detail=composed-shared` on a `?id=` read means it was answered out of a child
+the list read had already warmed, with no upstream request at all. The bytes are
+the origin's either way — `tests/decompose.rs` compares them against the node
+directly for every framing and projection combination.
+
 `cache-status: Reactor; bypass; detail=…` means Reactor decided not to cache,
 and the detail says why (`unknown endpoint`, `unrecognized document parameter`,
 `woql needs an explicit invalidation condition`, …). A bypass is always correct;
@@ -177,10 +197,20 @@ $ curl -su admin:root http://localhost:6464/_reactor/head
 
 Metrics worth a dashboard: `reactor_hits` / `reactor_misses` / `reactor_bypass`
 (by reason — a surprising bypass reason is the usual cause of a low hit rate),
-`reactor_commits_applied`, `reactor_backdated` (work avoided because a
+`reactor_commits_applied`, `reactor_fills_backdated` (work avoided because a
 recomputed fragment was unchanged), `reactor_subscription_demotions` (a
 namespace that gave up its change subscription and fell back to polling — it
 still works, with higher latency), and `reactor_watermark_lag`.
+
+For document lists specifically (see §3), the four that say whether
+decomposition is earning its keep:
+
+| Counter | What a bad value looks like |
+|---|---|
+| `reactor_lists_composed` | near zero while list reads are hot: lists are being refetched, not composed |
+| `reactor_lists_undecomposable` | rising: the origin's list rendering has moved and decomposition is quietly doing nothing |
+| `reactor_children_filled` / `reactor_child_batches` | a ratio near 1 means almost every refill fetches a single document; the batch is not being filled |
+| `reactor_compositions_abandoned` | anything but near zero: compositions are falling back to whole fetches |
 
 ## 8. Rolling it out
 
@@ -197,9 +227,10 @@ still works, with higher latency), and `reactor_watermark_lag`.
 
 ## Limits worth knowing before adopting
 
-- **Responses are cached whole.** There is no per-document fragment composition
-  yet, so a 500-document list is one cache entry and any change to any member
-  rebuilds all of it. Fine for document-by-id reads, weaker for large lists.
+- **Composition covers `/api/document` list reads, and nothing else.** A GraphQL
+  or WOQL response is still cached whole, so a change to anything it depends on
+  rebuilds all of it. For GraphQL that is deliberate: a nested selection has no
+  framing to learn, and splicing one would mean re-emitting a body.
 - **No eager recomputation.** Invalidation drops an entry; the next reader pays
   to refill it.
 - **The shared cache tier is unproven across nodes.** The filesystem store works

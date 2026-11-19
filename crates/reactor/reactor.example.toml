@@ -43,6 +43,15 @@ max_versions_per_key = 4
 # need the whole body in memory to hash it, and that is not worth it past a
 # point. Bypassed and streaming responses are never buffered regardless.
 max_cacheable_body_mb = 8
+# Russian-doll decomposition: cache a document list as a membership spine over
+# one fragment per document, so a field change to any single member costs one
+# child refill instead of throwing the whole list away. The hot path for most
+# applications is exactly `GET /api/document/<ns>?type=X`, so this is on by
+# default. Turning it off falls back to caching each response as one blob, which
+# is unconditionally byte-faithful — the escape hatch if composition ever
+# returns bytes that differ from the origin's. If you need it, that is a bug;
+# please say so rather than leaving it off.
+decompose = true
 
 [consistency]
 # What to do when a request carries `X-Reactor-Min-Version: <commit>` and this

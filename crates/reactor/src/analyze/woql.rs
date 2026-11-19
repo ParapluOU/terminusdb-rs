@@ -215,6 +215,7 @@ pub(super) fn plan(
         // WOQL bindings are variable values, not documents; there is no
         // reliable id field to harvest, so the read set stands as stated.
         augment: Augment::None,
+        decompose: crate::analyze::Decompose::No,
     }
 }
 
@@ -1346,6 +1347,7 @@ mod tests {
                 terms,
                 immutable,
                 augment,
+                decompose: crate::analyze::Decompose::No,
                 ..
             } => {
                 assert_eq!(

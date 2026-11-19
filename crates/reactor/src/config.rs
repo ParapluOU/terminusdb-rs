@@ -18,7 +18,7 @@ use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::AnalyzeConfig;
-use crate::engine::{EngineConfig, Policy, PolicySet, Refresh};
+use crate::engine::{Decomposition, EngineConfig, Policy, PolicySet, Refresh};
 use crate::ids::Namespace;
 
 /// The whole configuration.
@@ -140,6 +140,16 @@ pub struct CacheConfig {
     /// a tuning knob, but it has to be settable because "how big is a big
     /// response" is a property of the data, not of Reactor.
     pub max_cacheable_body_mb: u64,
+    /// Cache document lists as a spine over per-document fragments, so a field
+    /// change to one member does not throw the whole list away.
+    ///
+    /// On by default, because the list read is the hot path and whole-response
+    /// caching makes it nearly useless. Off is the **escape hatch**: it falls
+    /// back to caching each response as one blob, which is unconditionally
+    /// byte-faithful. Turn it off if composition ever returns bytes that differ
+    /// from the origin's, and say so, because that is a bug and not a tuning
+    /// problem.
+    pub decompose: bool,
 }
 
 impl Default for CacheConfig {
@@ -149,6 +159,7 @@ impl Default for CacheConfig {
             dir: None,
             max_versions_per_key: 4,
             max_cacheable_body_mb: 8,
+            decompose: true,
         }
     }
 }
@@ -464,6 +475,11 @@ impl Config {
             policy: PolicySet::new(Policy {
                 refresh,
                 max_body_bytes: self.cache.max_cacheable_body_mb * 1024 * 1024,
+                decompose: if self.cache.decompose {
+                    Decomposition::NdjsonList
+                } else {
+                    Decomposition::Whole
+                },
                 ..Policy::default()
             }),
             max_versions_per_key: self.cache.max_versions_per_key,

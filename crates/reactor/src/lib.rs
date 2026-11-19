@@ -37,14 +37,17 @@
 //!   for multi-node deployments.
 //! * [`analyze`] — request → plan. Where soundness is decided: a dependency
 //!   this layer fails to emit is data that goes stale and never recovers.
+//! * [`compose`] — russian-doll decomposition: a document list is cached as a
+//!   spine over one fragment per document, so one changed member costs one
+//!   child refill rather than the whole list.
 //!
 //! # Implementation status
 //!
-//! Phases A through D are implemented: identity, terms, the schema index,
-//! firing, the engine state machine, the fragment store, request analysis,
-//! commit capture and the HTTP front end. What remains (phase E) is integration
-//! testing against a live `terminusdb_bin::TerminusDBServer`, plus the
-//! russian-doll decomposition that the `children` field is reserved for.
+//! All five phases are implemented: identity, terms, the schema index, firing,
+//! the engine state machine, the fragment store, request analysis, commit
+//! capture, the HTTP front end, integration tests against a live
+//! `terminusdb_bin::TerminusDBServer`, and the russian-doll decomposition of
+//! document lists in [`compose`].
 
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
@@ -52,6 +55,7 @@
 pub mod analyze;
 pub mod capture;
 pub mod change;
+pub mod compose;
 pub mod config;
 pub mod engine;
 pub mod frontend;
@@ -65,11 +69,12 @@ pub mod term;
 mod testutil;
 
 pub use analyze::{
-    augment_terms_from_response, AnalyzeConfig, Augment, InjectedField, Plan, ReqView, Rewrite,
-    Target,
+    augment_terms_from_response, AnalyzeConfig, Augment, Decompose, InjectedField, ListSpec, Plan,
+    ReqView, Rewrite, Target,
 };
 pub use capture::{Applier, ChangeResolver, CommitEvent, CommitSource, ReadinessGate};
 pub use change::{fire, ChangeSet, DocChange};
+pub use compose::{compose, decompose, Decomposed, Framing, Member, Spine};
 pub use config::{Cli, Config, Driver, MinVersionPolicy};
 pub use engine::{
     BodyRef, Engine, EngineConfig, FillResult, FragmentKey, FragmentSlot, FragmentVersion, Lookup,

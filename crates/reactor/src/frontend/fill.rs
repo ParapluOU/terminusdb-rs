@@ -28,6 +28,7 @@ use parking_lot::Mutex;
 use tokio::sync::{watch, Semaphore};
 
 use crate::engine::{FragmentKey, FragmentVersion};
+use crate::ids::ContentHash;
 use crate::ids::Position;
 
 /// What a completed fill produced.
@@ -43,6 +44,12 @@ pub struct FillOutcome {
     /// bytes are a correct answer that we chose not to (or could not) cache: an
     /// unpinnable response, an oversized body, a non-2xx status.
     pub version: Option<Arc<FragmentVersion>>,
+    /// The identity to publish as an `ETag`, for a body we assembled ourselves.
+    ///
+    /// Only composed responses have one. For anything we merely relayed, the
+    /// bytes are the origin's and an `ETag` we did not compute is not ours to
+    /// claim — the next *hit* on the entry provides it.
+    pub etag: Option<ContentHash>,
 }
 
 /// A fill result shared between the leader and its followers.
@@ -162,7 +169,7 @@ async fn wait_for(mut receiver: watch::Receiver<Option<SharedOutcome>>) -> Share
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::{ContentHash, Epoch, Namespace, Seq, ShapeId};
+    use crate::ids::{Epoch, Namespace, Seq, ShapeId};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -187,6 +194,7 @@ mod tests {
             headers: HeaderMap::new(),
             body: Bytes::from_static(body.as_bytes()),
             version: None,
+            etag: None,
         }
     }
 
