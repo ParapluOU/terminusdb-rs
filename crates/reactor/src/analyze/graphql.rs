@@ -24,6 +24,7 @@
 //! printers, so the executed query and the shape text cannot drift apart.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use graphql_parser::query::{
     Definition, Mutation, OperationDefinition, Query as GqlQuery, Selection, SelectionSet,
@@ -34,6 +35,7 @@ use crate::analyze::{
     AnalyzeConfig, Augment, CanonicalRequest, InjectedField, Plan, ReqView, Rewrite,
 };
 use crate::ids::{ClassName, DocId, Namespace, PropName};
+use crate::predicate::{order_of_range, CmpOp, Lit, Order, Pred, Predicate};
 use crate::schema_index::{PropKind, SchemaIndex};
 use crate::term::{Term, ValueKey};
 
@@ -967,7 +969,7 @@ fn extract_root(
                 for (arg, value) in args {
                     let class = ClassName::new(arg.as_str());
                     if known_class(schema, &class) {
-                        count_terms(&class, Some(value), out);
+                        count_terms(&class, Some(value), schema, out);
                         matched = true;
                     }
                 }
@@ -995,9 +997,10 @@ fn extract_root(
                         .iter()
                         .find(|(name, _)| name == "filter")
                         .map(|(_, value)| value);
+                    let paged = page_sensitive(args);
                     match reads {
-                        Reads::Values => collection_terms(&class, filter, out),
-                        Reads::IdsOnly => membership_terms(&class, filter, out),
+                        Reads::Values => collection_terms(&class, filter, paged, schema, out),
+                        Reads::IdsOnly => membership_terms(&class, filter, paged, schema, out),
                     }
                 }
             }
@@ -1016,8 +1019,14 @@ fn extract_root(
 /// Removing it from a value-bearing collection would serve stale bodies; adding
 /// it to a count or an id list makes both die on every unrelated field edit,
 /// which is the bug this split fixes. Do not "simplify" the three into one.
-fn collection_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<Term>) {
-    match filter_shape(filter) {
+fn collection_terms(
+    class: &ClassName,
+    filter: Option<&ArgValue>,
+    paged: bool,
+    schema: &SchemaIndex,
+    out: &mut Vec<Term>,
+) {
+    match filter_shape(filter, class, paged, schema) {
         // `filter: {p: {eq: v}}` is exactly a value index. The members' own
         // field values are covered by the response augmentation, which adds a
         // `Doc` term per id actually returned.
@@ -1026,8 +1035,13 @@ fn collection_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<
             prop,
             value,
         }),
-        // Some other filter shape (ranges, `and`, substring, …). We cannot name
-        // the bucket, but every member of the result is an instance of the
+        // Any other shape we can *evaluate*: a range, a conjunction, a
+        // negation. The dependency is membership of that predicate, decided
+        // per commit from the before and after documents.
+        FilterShape::Predicate(pred) => out.push(Term::Predicate(pred)),
+        // A shape we cannot evaluate — an unverified operator, a property whose
+        // range we have not measured, a nested filter across a link. We cannot
+        // name the set, but every member of the result is an instance of the
         // class, so the class is a sound dependency.
         FilterShape::Opaque | FilterShape::Unfiltered => {
             out.push(Term::Members(class.clone()));
@@ -1045,8 +1059,14 @@ fn collection_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<
 /// collection form must) would discard the entry on every field change to any
 /// instance, so paging metadata would thrash on every write, which is precisely
 /// the moment it most needs to survive.
-fn membership_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<Term>) {
-    match filter_shape(filter) {
+fn membership_terms(
+    class: &ClassName,
+    filter: Option<&ArgValue>,
+    paged: bool,
+    schema: &SchemaIndex,
+    out: &mut Vec<Term>,
+) {
+    match filter_shape(filter, class, paged, schema) {
         // Membership of the bucket, and nothing else. A document moving in or
         // out fires this on both the old and the new value, so a count cannot
         // miss a crossing.
@@ -1055,6 +1075,9 @@ fn membership_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<
             prop,
             value,
         }),
+        // Membership of an evaluated predicate. Exactly the same claim as the
+        // equality case, for a set we can decide rather than name.
+        FilterShape::Predicate(pred) => out.push(Term::Predicate(pred)),
         FilterShape::Unfiltered => out.push(Term::Members(class.clone())),
         // We cannot name the bucket, so we cannot say which field values move a
         // document into or out of it. Stay conservative.
@@ -1067,8 +1090,14 @@ fn membership_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<
 
 /// The dependency of a `_count`. See [`membership_terms`] — a count is the
 /// purest membership question there is.
-fn count_terms(class: &ClassName, filter: Option<&ArgValue>, out: &mut Vec<Term>) {
-    membership_terms(class, filter, out)
+fn count_terms(
+    class: &ClassName,
+    filter: Option<&ArgValue>,
+    schema: &SchemaIndex,
+    out: &mut Vec<Term>,
+) {
+    // A count has no page to be reshuffled out from under it.
+    membership_terms(class, filter, false, schema, out)
 }
 
 /// "Does this document still exist", for an answer that carries its id and
@@ -1089,11 +1118,24 @@ enum FilterShape {
     Unfiltered,
     /// `{prop: {eq: value}}`: one nameable value-index bucket.
     Equality(PropName, ValueKey),
+    /// A shape we can evaluate against a document: ranges, conjunctions,
+    /// disjunctions, negations. Membership is *decided* per commit rather than
+    /// named. See [`crate::predicate`].
+    Predicate(Arc<Predicate>),
     /// Anything else: we cannot name the bucket.
     Opaque,
 }
 
-fn filter_shape(filter: Option<&ArgValue>) -> FilterShape {
+/// Classify a filter argument.
+///
+/// `paged` says the collection is both ordered and windowed, which makes
+/// membership an insufficient dependency — see [`page_sensitive`].
+fn filter_shape(
+    filter: Option<&ArgValue>,
+    class: &ClassName,
+    paged: bool,
+    schema: &SchemaIndex,
+) -> FilterShape {
     let filter = match filter {
         Some(filter) => filter,
         None => return FilterShape::Unfiltered,
@@ -1101,9 +1143,172 @@ fn filter_shape(filter: Option<&ArgValue>) -> FilterShape {
     if matches!(filter, ArgValue::Object(fields) if fields.is_empty()) {
         return FilterShape::Unfiltered;
     }
-    match equality_filter(filter) {
-        Some((prop, value)) => FilterShape::Equality(prop, value),
+    if paged {
+        // A window over an ordering is not determined by membership alone: a
+        // member whose ordering key moves can cross a page boundary, and the
+        // page it lands on never depended on it. Both the equality and the
+        // predicate term would miss that, so neither is used here.
+        return FilterShape::Opaque;
+    }
+    if let Some((prop, value)) = equality_filter(filter) {
+        return FilterShape::Equality(prop, value);
+    }
+    match build_pred(filter, class, schema, 0) {
+        Some(pred) => FilterShape::Predicate(Arc::new(Predicate::new(class.clone(), pred))),
         None => FilterShape::Opaque,
+    }
+}
+
+/// True when a collection field is both **ordered** and **windowed**.
+///
+/// That combination is the one case where membership is not enough. With a
+/// window but no explicit order the server returns a prefix of a stable
+/// internal order, so only members entering or leaving can change the page;
+/// with an order but no window every member is in the response, so the
+/// per-document terms the augmentation adds cover any reshuffle. With both, a
+/// member on page two whose ordering key moves can appear on page one — and
+/// page one never depended on that document, so nothing would invalidate it.
+///
+/// Rather than try to name the ordering property (it may be a list, it may be
+/// a variable, and `orderBy` can name a field we do not index), such a read
+/// keeps the conservative dependency. This also closes the same hole for the
+/// pre-existing single-`eq` path, which had it too.
+fn page_sensitive(args: &[(String, ArgValue)]) -> bool {
+    let has = |name: &str| args.iter().any(|(arg, _)| arg == name);
+    has("orderBy") && (has("limit") || has("offset"))
+}
+
+/// Build a predicate from a filter object, or `None` if any part of it is
+/// outside what we have verified against the server.
+///
+/// Refusing is the normal outcome for anything unfamiliar: a predicate that is
+/// wrong about one leaf produces entries that are never invalidated by the
+/// change that should have killed them. The caller falls back to `Class(C)`,
+/// which is merely slow.
+fn build_pred(
+    filter: &ArgValue,
+    class: &ClassName,
+    schema: &SchemaIndex,
+    depth: usize,
+) -> Option<Pred> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let ArgValue::Object(fields) = filter else {
+        return None;
+    };
+    // Several keys in one filter object are ANDed — verified against the
+    // server, which agrees for *distinct properties*. (It does not agree for
+    // several operators on one property; see `field_pred`.)
+    let mut conjuncts: Vec<Pred> = Vec::with_capacity(fields.len());
+    for (name, value) in fields {
+        let pred = match name.as_str() {
+            "_and" => Pred::All(sub_preds(value, class, schema, depth)?),
+            "_or" => Pred::Any(sub_preds(value, class, schema, depth)?),
+            "_not" => Pred::Not(Box::new(build_pred(value, class, schema, depth + 1)?)),
+            // Membership by id. Not indexed: `_id` did not select anything at
+            // all in our probe of 12.1.0-rc3, so its semantics are not
+            // established, and `_ids` would need a set term we do not have.
+            "_id" | "_ids" => return None,
+            prop => field_pred(prop, value, class, schema)?,
+        };
+        conjuncts.push(pred);
+    }
+    Some(match conjuncts.len() {
+        1 => conjuncts.pop()?,
+        // `{}` is every document, which is `All([])`. It cannot reach here (the
+        // caller treats it as unfiltered), but the arithmetic has to be right.
+        _ => Pred::All(conjuncts),
+    })
+}
+
+fn sub_preds(
+    value: &ArgValue,
+    class: &ClassName,
+    schema: &SchemaIndex,
+    depth: usize,
+) -> Option<Vec<Pred>> {
+    let ArgValue::List(items) = value else {
+        return None;
+    };
+    items
+        .iter()
+        .map(|item| build_pred(item, class, schema, depth + 1))
+        .collect()
+}
+
+/// One `prop: {op: literal}` leaf.
+fn field_pred(
+    prop: &str,
+    value: &ArgValue,
+    class: &ClassName,
+    schema: &SchemaIndex,
+) -> Option<Pred> {
+    let prop = PropName::new(prop);
+    // The property has to be one the schema declares as a stored scalar. A
+    // link's filter is a nested filter, i.e. a join, which we cannot evaluate
+    // from one document; a property the index does not know might be anything.
+    let (range, family) = match schema.prop(class, &prop)? {
+        PropKind::Value { range, family } => (range, family),
+        PropKind::Link { .. } => return None,
+    };
+    // A collection-valued property gets a `CollectionXFilter` with a different
+    // operator set, which we have not implemented or measured.
+    if family.map(|f| f.is_multivalued()).unwrap_or(false) {
+        return None;
+    }
+    let order = order_of_range(range)?;
+
+    let ArgValue::Object(ops) = value else {
+        return None;
+    };
+    // **Exactly one operator.** The server does not AND several operators on
+    // one field: it honours one, by its own declaration order, and silently
+    // drops the rest (`{ge: 0, lt: 10}` returns the `lt: 10` set). Reproducing
+    // that would be encoding a server bug into our invalidation; refusing it
+    // costs precision on a filter whose meaning the client probably mistook
+    // anyway.
+    let [(op_name, literal)] = &ops[..] else {
+        return None;
+    };
+    let op = CmpOp::parse(op_name)?;
+    // `BooleanFilter` has no ordering operators.
+    if order == Order::Bool && !op.is_equality() {
+        return None;
+    }
+    Some(Pred::Cmp {
+        prop,
+        op,
+        value: literal_for(literal, order)?,
+        order,
+    })
+}
+
+/// Convert a filter literal, rejecting anything whose comparison we would have
+/// to guess at.
+fn literal_for(value: &ArgValue, order: Order) -> Option<Lit> {
+    match (order, value) {
+        (Order::Text, ArgValue::Str(s)) => Some(Lit::Text(s.clone())),
+        (Order::Bool, ArgValue::Bool(b)) => Some(Lit::Bool(*b)),
+        // An integer literal for `IntFilter`'s ranges, a *string* literal for
+        // `BigIntFilter`'s — the server takes the two forms for different
+        // ranges, and sending the wrong one is its own error, never a cached
+        // answer. Both are accepted here; the string must still be a decimal
+        // integer.
+        (Order::Integer, ArgValue::Int(n)) => Some(Lit::Num(n.to_string())),
+        (Order::Integer, ArgValue::Str(s)) => {
+            let body = s.strip_prefix('-').unwrap_or(s);
+            (!body.is_empty() && body.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| Lit::Num(s.clone()))
+        }
+        (Order::Float, ArgValue::Int(n)) => Some(Lit::Num(n.to_string())),
+        // `{:?}` keeps a whole-numbered float's point, and round-trips through
+        // `f64::from_str` exactly, which is how the evaluator reads it back.
+        (Order::Float, ArgValue::Float(f)) => Some(Lit::Num(format!("{f:?}"))),
+        // A variable: we do not know the value, so we cannot build the
+        // predicate. (Reactor normalizes variables into the shape id, so this
+        // is reachable.)
+        _ => None,
     }
 }
 
@@ -1191,7 +1396,7 @@ fn extract_object(
                         .iter()
                         .find(|(name, _)| name == "filter")
                         .map(|(_, value)| value);
-                    count_terms(class, filter, out);
+                    count_terms(class, filter, schema, out);
                     continue;
                 }
                 // `_path_to_C(path: "film,<film")`: a traversal. We cannot prove
@@ -1260,9 +1465,14 @@ fn extract_object(
                             .find(|(name, _)| name == "filter")
                             .map(|(_, v)| v)
                         {
+                            let paged = page_sensitive(args);
                             match reads {
-                                Reads::Values => collection_terms(&range, Some(filter), out),
-                                Reads::IdsOnly => membership_terms(&range, Some(filter), out),
+                                Reads::Values => {
+                                    collection_terms(&range, Some(filter), paged, schema, out)
+                                }
+                                Reads::IdsOnly => {
+                                    membership_terms(&range, Some(filter), paged, schema, out)
+                                }
                             }
                         }
                         extract_object(children, &range, schema, cfg, reads, out, depth + 1)?;
@@ -1606,6 +1816,242 @@ mod tests {
         let terms = terms(r#"query { Person(filter: {name: {regex: "A.*"}}) { name } }"#);
         assert!(terms.contains(&Term::Class(cls("Person"))));
         assert!(!terms.iter().any(|t| matches!(t, Term::Index { .. })));
+        assert!(
+            !terms.iter().any(|t| matches!(t, Term::Predicate(_))),
+            "`regex` is not an operator we have verified against the server, so it must \
+             not become a predicate"
+        );
+    }
+
+    // ------------------------------------------------- filters as predicates
+
+    /// The one term a predicate-bearing read may take for its membership.
+    fn only_predicate(query: &str) -> Arc<Predicate> {
+        let terms = terms(query);
+        let preds: Vec<Arc<Predicate>> = terms
+            .iter()
+            .filter_map(|t| match t {
+                Term::Predicate(pred) => Some(Arc::clone(pred)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(preds.len(), 1, "expected one predicate in {terms:?}");
+        assert!(
+            !terms.contains(&Term::Class(cls("Person"))),
+            "a predicate replaces the coarse class dependency, it does not join it: \
+             {terms:?}"
+        );
+        preds.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn a_range_filter_is_a_predicate_not_the_class() {
+        let pred = only_predicate(r#"query { Person(filter: {age: {ge: "30"}}) { name } }"#);
+        assert_eq!(pred.class, cls("Person"));
+        assert_eq!(
+            pred.pred,
+            Pred::Cmp {
+                prop: prop("age"),
+                op: CmpOp::Ge,
+                value: Lit::Num("30".to_owned()),
+                order: Order::Integer,
+            }
+        );
+    }
+
+    #[test]
+    fn a_conjunction_of_two_properties_is_one_predicate() {
+        let pred = only_predicate(
+            r#"query { Person(filter: {_and: [{age: {ge: "30"}}, {name: {lt: "B"}}]}) { name } }"#,
+        );
+        assert_eq!(
+            pred.pred,
+            // A filter object with one key collapses to that key's predicate,
+            // so this is `All([age >= 30, name < "B"])` and not `All([All([…])])`
+            // — which matters only because the encoding is the identity.
+            Pred::All(vec![
+                Pred::Cmp {
+                    prop: prop("age"),
+                    op: CmpOp::Ge,
+                    value: Lit::Num("30".to_owned()),
+                    order: Order::Integer,
+                },
+                Pred::Cmp {
+                    prop: prop("name"),
+                    op: CmpOp::Lt,
+                    value: Lit::Text("B".to_owned()),
+                    order: Order::Text,
+                },
+            ])
+        );
+        assert_eq!(pred.props(), vec![prop("age"), prop("name")]);
+    }
+
+    #[test]
+    fn several_keys_in_one_filter_object_are_anded() {
+        // Verified against the server: distinct properties in one filter
+        // object behave exactly like `_and`.
+        let pred = only_predicate(
+            r#"query { Person(filter: {age: {ge: "30"}, name: {lt: "B"}}) { name } }"#,
+        );
+        assert!(matches!(&pred.pred, Pred::All(items) if items.len() == 2));
+    }
+
+    #[test]
+    fn disjunction_and_negation_are_predicates() {
+        let pred = only_predicate(
+            r#"query { Person(filter: {_or: [{age: {lt: "0"}}, {_not: {name: {eq: "Ann"}}}]}) { name } }"#,
+        );
+        match &pred.pred {
+            Pred::Any(items) => {
+                assert_eq!(items.len(), 2);
+                assert!(matches!(items[1], Pred::Not(_)));
+            }
+            other => panic!("expected a disjunction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_double_and_a_boolean_are_indexable() {
+        only_predicate(r#"query { Person(filter: {height: {gt: 1.5}}) { name } }"#);
+        only_predicate(r#"query { Person(filter: {active: {ne: false}}) { name } }"#);
+    }
+
+    #[test]
+    fn a_count_over_a_range_depends_on_the_predicate_alone() {
+        let terms = terms(r#"query { _count(Person: {age: {ge: "30"}}) }"#);
+        assert_eq!(
+            terms
+                .iter()
+                .filter(|t| matches!(t, Term::Predicate(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !terms.contains(&Term::Class(cls("Person")))
+                && !terms.contains(&Term::Members(cls("Person"))),
+            "a filtered count is a statement about one predicate's membership: {terms:?}"
+        );
+    }
+
+    /// Every one of these is a shape we have NOT verified, so each must keep
+    /// the coarse dependency. This is the list that stops the feature from
+    /// quietly growing past what the server agreed to.
+    #[test]
+    fn unverified_shapes_stay_coarse() {
+        let cases: Vec<(&str, &str)> = vec![
+            (
+                "an unverified operator",
+                r#"query { Person(filter: {name: {startsWith: "A"}}) { name } }"#,
+            ),
+            (
+                "two operators on one field, which the server does not AND",
+                r#"query { Person(filter: {age: {ge: "0", lt: "10"}}) { name } }"#,
+            ),
+            (
+                "an empty field filter, which the server answers with a panic",
+                r#"query { Person(filter: {age: {}}) { name } }"#,
+            ),
+            (
+                "a range we have not measured (xsd:decimal compares `eq` lexically)",
+                r#"query { Employee(filter: {salary: {gt: 100}}) { name } }"#,
+            ),
+            (
+                "a collection-valued property, which gets a different filter type",
+                r#"query { Person(filter: {nicknames: {eq: "Annie"}}) { name } }"#,
+            ),
+            (
+                "a nested filter across a link, which is a join",
+                r#"query { Person(filter: {employer: {name: {eq: "Acme"}}}) { name } }"#,
+            ),
+            (
+                "a property the schema does not declare",
+                r#"query { Person(filter: {mystery: {eq: "x"}}) { name } }"#,
+            ),
+            (
+                "an ordered operator on a boolean, which GraphQL does not offer",
+                r#"query { Person(filter: {active: {gt: false}}) { name } }"#,
+            ),
+            (
+                "a literal of the wrong shape for the range",
+                r#"query { Person(filter: {age: {ge: "thirty"}}) { name } }"#,
+            ),
+            (
+                "membership by id",
+                r#"query { Person(filter: {_id: "Person/alice"}) { name } }"#,
+            ),
+        ];
+        for (why, query) in cases {
+            let terms = terms(query);
+            assert!(
+                !terms.iter().any(|t| matches!(t, Term::Predicate(_))),
+                "{why}: must not be indexed, got {terms:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_filter_on_a_variable_is_not_indexable() {
+        // The value is not in the query, so there is no predicate to build.
+        let body = json!({
+            "query": "query Q($a: BigInt) { Person(filter: {age: {ge: $a}}) { name } }",
+            "variables": {"a": "30"}
+        });
+        match plan_body(body) {
+            Plan::Read { terms, .. } => assert!(
+                !terms.iter().any(|t| matches!(t, Term::Predicate(_))),
+                "got {terms:?}"
+            ),
+            other => panic!("expected a read, got {other:?}"),
+        }
+    }
+
+    /// An ordered *window* is not determined by membership: a member can cross
+    /// a page boundary without the page ever having depended on it. Both the
+    /// predicate and the older single-`eq` index term would miss that.
+    #[test]
+    fn an_ordered_window_keeps_the_coarse_dependency() {
+        for query in [
+            r#"query { Person(filter: {age: {ge: "30"}}, orderBy: {name: asc}, limit: 2) { name } }"#,
+            r#"query { Person(filter: {name: {eq: "Ann"}}, orderBy: {age: asc}, offset: 2) { name } }"#,
+        ] {
+            let terms = terms(query);
+            assert!(
+                terms.contains(&Term::Class(cls("Person"))),
+                "{query} must stay coarse, got {terms:?}"
+            );
+            assert!(
+                !terms.iter().any(|t| matches!(t, Term::Predicate(_)))
+                    && !terms.iter().any(|t| matches!(t, Term::Index { .. })),
+                "{query} must name neither a predicate nor a bucket, got {terms:?}"
+            );
+        }
+        // An order with no window is fine: every member is in the response, so
+        // the per-document terms cover a reshuffle. A window with no order is
+        // fine too: only membership can move the page.
+        for query in [
+            r#"query { Person(filter: {age: {ge: "30"}}, orderBy: {name: asc}) { name } }"#,
+            r#"query { Person(filter: {age: {ge: "30"}}, limit: 2) { name } }"#,
+        ] {
+            let found = terms(query);
+            assert!(
+                found.iter().any(|t| matches!(t, Term::Predicate(_))),
+                "{query} should still be indexed, got {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_filter_written_differently_is_the_same_predicate() {
+        // Key order in the request must not produce two predicates, or the
+        // registry fills up with duplicates that all evaluate the same thing.
+        let a = only_predicate(
+            r#"query { Person(filter: {age: {ge: "30"}, name: {lt: "B"}}) { name } }"#,
+        );
+        let b = only_predicate(
+            r#"query { Person(filter: {name: {lt: "B"}, age: {ge: "30"}}) { name } }"#,
+        );
+        assert_eq!(a.id(), b.id());
     }
 
     #[test]

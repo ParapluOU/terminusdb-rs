@@ -39,7 +39,10 @@ reqwest = { workspace = true }
 
 # Serialization. NB: arbitrary_precision is feature-unified workspace-wide;
 # cached bodies are stored as raw bytes and never round-tripped through Value.
-serde = { workspace = true }
+# `rc`: `Term::Predicate` holds an `Arc<Predicate>` so a term can carry the
+# predicate structure without cloning it per fragment, and terms are stored and
+# logged, so they must serialize.
+serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 toml = "0.8"
 
@@ -48,6 +51,11 @@ graphql-parser = "0.3"
 
 # Hashing (cache keys, content addresses)
 blake3 = "1"
+
+# Predicate evaluation: CPU work, parallel, off the request path. The writer
+# blocks on the pool for exactly as long as the evaluation takes, which is what
+# makes the watermark *lag* rather than advance past unapplied invalidations.
+rayon = { workspace = true }
 
 # Concurrency primitives
 dashmap = "5"

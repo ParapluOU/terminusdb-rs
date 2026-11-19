@@ -18,7 +18,7 @@ use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::analyze::AnalyzeConfig;
-use crate::engine::{Decomposition, EngineConfig, Policy, PolicySet, Refresh};
+use crate::engine::{Decomposition, EngineConfig, EvalLimits, Policy, PolicySet, Refresh};
 use crate::ids::Namespace;
 
 /// The whole configuration.
@@ -40,6 +40,8 @@ pub struct Config {
     pub namespaces: Vec<NamespaceConfig>,
     /// Analyzer behaviour.
     pub analyze: AnalyzeSection,
+    /// Filter-predicate indexing bounds.
+    pub predicates: PredicateSection,
     /// Logging and online auditing.
     pub observability: ObservabilityConfig,
 }
@@ -176,6 +178,45 @@ impl Default for CacheConfig {
             max_tracked_keys: 50_000,
             max_cacheable_body_mb: 8,
             decompose: true,
+        }
+    }
+}
+
+/// `[predicates]`
+///
+/// A GraphQL filter that is more than a single `eq` is indexed as a
+/// *predicate*: the writer decides, per commit, whether each change moved a
+/// document into or out of the set, from the whole before and after document.
+/// That is exact, and it is the only way a filtered read survives an unrelated
+/// write — but it is CPU proportional to the live predicates on the classes a
+/// commit touches, and the commit path **waits** for it, because the watermark
+/// must not advance past invalidations we have not applied.
+///
+/// These are therefore latency bounds dressed as precision bounds. Over either
+/// one, the commit invalidates every predicate on the classes it touched
+/// instead of deciding each one — coarse, bounded, and counted as
+/// `reactor_predicate_evaluations_skipped`. Watch that counter together with
+/// `reactor_watermark_lag_ms`: backpressure here must degrade precision, never
+/// latency, because a stalled watermark stalls every read.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PredicateSection {
+    /// `(change, predicate)` pairs one commit may evaluate.
+    pub max_evaluations_per_commit: usize,
+    /// Distinct predicates one namespace may index.
+    pub max_predicates: usize,
+    /// Threads in the shared evaluation pool. `0` uses rayon's default, which
+    /// is the number of cores.
+    pub workers: usize,
+}
+
+impl Default for PredicateSection {
+    fn default() -> Self {
+        let defaults = EvalLimits::default();
+        Self {
+            max_evaluations_per_commit: defaults.max_evaluations,
+            max_predicates: defaults.max_predicates,
+            workers: defaults.workers,
         }
     }
 }
@@ -412,6 +453,12 @@ impl Config {
         if self.cache.max_versions_per_key == 0 {
             bail!("[cache].max_versions_per_key must be at least 1");
         }
+        if self.predicates.max_evaluations_per_commit == 0 {
+            bail!(
+                "[predicates].max_evaluations_per_commit must be at least 1 — 0 would make \
+                 every filtered read coarse, which is what this feature exists to avoid"
+            );
+        }
         if self.cache.max_tracked_keys == 0 {
             bail!("[cache].max_tracked_keys must be at least 1");
         }
@@ -503,6 +550,13 @@ impl Config {
             }),
             max_versions_per_key: self.cache.max_versions_per_key,
             max_tracked_keys: self.cache.max_tracked_keys,
+            predicates: EvalLimits {
+                max_evaluations: self.predicates.max_evaluations_per_commit,
+                max_predicates: self.predicates.max_predicates,
+                workers: self.predicates.workers,
+                // Fault injection only; never configurable from a file.
+                delay_ms: 0,
+            },
             ..EngineConfig::default()
         }
     }

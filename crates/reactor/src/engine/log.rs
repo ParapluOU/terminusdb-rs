@@ -95,6 +95,17 @@ impl FiredLog {
     ///
     /// `None` means nothing invalidated these dependencies, so a fill pinned at
     /// `pin` is still current.
+    ///
+    /// Matching here is [`Term::subsumes_pessimistically`], not
+    /// [`Term::subsumes`]. The difference is confined to
+    /// [`Term::Predicate`] and it is load-bearing: a predicate fire is only
+    /// emitted for predicates the writer had *registered* when the commit was
+    /// applied, and this fill's predicate was by definition not registered
+    /// while the fill was in flight. So for the replay — and only for the
+    /// replay — a predicate dependency is treated as dirtied by the coarse
+    /// footprint of a change on its class. The cost is an occasional needless
+    /// refill; the alternative is a fragment that is stale forever because the
+    /// commit that invalidated it could not name it yet.
     pub fn first_invalidating_after(
         &self,
         pin: Position,
@@ -107,10 +118,10 @@ impl FiredLog {
         }
         self.after(pin)
             .find(|entry| {
-                entry
-                    .fired
-                    .iter()
-                    .any(|f| deps.iter().any(|dep| dep.subsumes(f, schema)))
+                entry.fired.iter().any(|f| {
+                    deps.iter()
+                        .any(|dep| dep.subsumes_pessimistically(f, schema))
+                })
             })
             .map(|entry| entry.pos)
     }

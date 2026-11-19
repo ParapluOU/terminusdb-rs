@@ -32,6 +32,8 @@
 //! on Commit(cs):
 //!   pos   = head.next()
 //!   fired = fire(&cs, &schema)
+//!   fired |= fire_predicates(&cs, &schema, &predicates)   // on a worker pool,
+//!                                                         // awaited here
 //!   fired_log.push(pos, cs.commit, fired)
 //!   for entry in term_index.candidates(&fired, &schema):
 //!       if entry.deps.any(|d| fired.any(|f| d.subsumes(f, &schema))):
@@ -46,6 +48,29 @@
 //! A reader that latches the new position therefore cannot see a stale version
 //! that the commit should have closed. The reverse order would be a silent
 //! correctness bug under load and almost impossible to reproduce.
+//!
+//! # Why predicate evaluation is awaited rather than deferred
+//!
+//! Deciding which filtered sets a commit moved documents into or out of is CPU
+//! work proportional to the live predicates on the touched classes, and it runs
+//! on a worker pool ([`crate::engine::fire_predicates`]). It is tempting to let
+//! the watermark advance and apply those invalidations when they arrive —
+//! "eventually consistent indexing".
+//!
+//! It is not available to us. `X-Reactor-Head` is a claim that everything up to
+//! that watermark is reflected in what we serve; read-your-writes and the
+//! `X-Reactor-Min-Version` fence are both built on it (SPEC §5.5). Publishing a
+//! watermark while invalidations for that commit are outstanding would make the
+//! claim false in the one window where a client is most likely to be checking
+//! it.
+//!
+//! So eventual consistency here means **the watermark lags**: a read during the
+//! window is answered from the previous watermark, which is an older but
+//! self-consistent snapshot — bounded staleness, which §5.5(4) already allows —
+//! and never a current-looking answer that is wrong. The lag is reported as
+//! `reactor_watermark_lag_ms`, and the evaluation bounds in
+//! [`EngineConfig::predicates`] keep it finite by degrading precision, never
+//! latency.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -55,11 +80,12 @@ use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use crate::change::{fire, ChangeSet};
+use crate::engine::predicates::{fire_predicates, PredicateRegistry};
 use crate::ids::{ContentHash, Position, Watermark};
 use crate::metrics::Metrics;
 use crate::schema_index::SchemaIndex;
 use crate::store::FragmentStore;
-use crate::term::TermSet;
+use crate::term::{Term, TermSet};
 use terminusdb_client::CommitId;
 
 use super::fragment::{BodyRef, FragmentKey, FragmentVersion, ResponseMeta};
@@ -83,6 +109,11 @@ pub struct NamespaceWriter {
     /// can keep a plain `Arc` and publish to the shared slot on change.
     schema: Arc<SchemaIndex>,
     index: TermIndex,
+    /// Live filter predicates, reference counted by the registered fragment
+    /// versions that depend on them. Updated in lockstep with `index`: a
+    /// predicate this registry has forgotten while a fragment still depends on
+    /// it is a fragment that never invalidates.
+    predicates: PredicateRegistry,
     log: FiredLog,
     head: Position,
     head_commit: Option<CommitId>,
@@ -108,6 +139,7 @@ impl NamespaceWriter {
             metrics,
             schema,
             index: TermIndex::new(),
+            predicates: PredicateRegistry::new(),
             log,
             head: Position::ZERO,
             head_commit: None,
@@ -165,6 +197,11 @@ impl NamespaceWriter {
         &self.index
     }
 
+    /// The live predicate registry, for admin output and tests.
+    pub fn predicates(&self) -> &PredicateRegistry {
+        &self.predicates
+    }
+
     /// The fired log, for admin output and tests.
     pub fn fired_log(&self) -> &FiredLog {
         &self.log
@@ -193,8 +230,37 @@ impl NamespaceWriter {
     // ------------------------------------------------------------------ apply
 
     fn on_commit(&mut self, cs: &ChangeSet) {
+        let started = Instant::now();
         let pos = self.head.next();
-        let fired = fire(cs, &self.schema);
+        let mut fired = fire(cs, &self.schema);
+
+        // Decide which filtered sets moved. On a worker pool, and **awaited**:
+        // see the module docs on why the watermark may lag but must not be
+        // wrong. Skipped entirely when the set is already a barrier, since
+        // `Everything` dirties every predicate dependency anyway.
+        if !fired.contains(&Term::Everything) {
+            let firing = fire_predicates(cs, &self.schema, &self.predicates, self.cfg.predicates);
+            self.metrics.predicate_evaluations.add(firing.evaluated);
+            self.metrics
+                .predicate_evaluations_skipped
+                .add(firing.skipped);
+            if firing.coarse {
+                self.metrics.predicate_fires_coarse.inc();
+            }
+            if !firing.terms.is_empty() {
+                tracing::debug!(
+                    ns = %self.state.ns,
+                    commit = %cs.commit,
+                    predicates = firing.terms.len(),
+                    evaluated = firing.evaluated,
+                    skipped = firing.skipped,
+                    coarse = firing.coarse,
+                    "filter predicates whose membership moved"
+                );
+            }
+            fired.extend(firing.terms);
+        }
+
         tracing::debug!(
             ns = %self.state.ns,
             commit = %cs.commit,
@@ -223,6 +289,12 @@ impl NamespaceWriter {
             pos,
             commit: cs.commit.clone(),
         }));
+        // How long a reader saw the *previous* watermark while this commit's
+        // invalidations were being applied. Bounded staleness, reported so the
+        // operator can see indexing falling behind.
+        self.metrics
+            .watermark_lag_ms
+            .set(started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
     }
 
     fn on_non_fast_forward(
@@ -309,16 +381,25 @@ impl NamespaceWriter {
                 // would deadlock the shard.
                 self.state.slots.remove(&key);
             }
-            self.index.unregister(id);
+            if let Some(entry) = self.index.unregister(id) {
+                self.predicates.release(&entry.deps);
+            }
         }
         self.metrics.tracked_keys.set(self.state.slots.len() as u64);
+        self.metrics
+            .live_predicates
+            .set(self.predicates.len() as u64);
     }
 
     fn purge_state(&mut self, floor: Position) {
         self.state.slots.clear();
         self.index.clear();
+        // The fragments that referred to these predicates are gone in the same
+        // breath, so no reference can outlive the registry entry.
+        self.predicates.clear();
         self.log.clear(floor);
         self.metrics.tracked_keys.set(0);
+        self.metrics.live_predicates.set(0);
         // The commit ring is NOT cleared: which commit we applied at which
         // position is still true, and a fence asking about one of them deserves
         // a real answer. Only cached content was ever wrong.
@@ -465,8 +546,20 @@ impl NamespaceWriter {
 
         match to {
             None => {
+                // Slot and registry move together, in the single writer, so
+                // nothing can observe one without the other. The replaced
+                // registration's predicates are released *before* the new ones
+                // are retained — a key refilled with the same predicate keeps a
+                // refcount of one rather than leaking upwards.
+                if let Some(replaced) = self.index.unregister_key(&key) {
+                    self.predicates.release(&replaced.deps);
+                }
+                self.predicates.retain(&deps);
                 self.index.register(key, at, deps);
                 self.metrics.fills_stored.inc();
+                self.metrics
+                    .live_predicates
+                    .set(self.predicates.len() as u64);
             }
             Some(end) => {
                 // Deliberately not registered: a bounded interval cannot be
@@ -542,12 +635,17 @@ impl NamespaceWriter {
                 break;
             }
             // Together, and in the writer: see above.
-            self.index.unregister_key(&key);
+            if let Some(entry) = self.index.unregister_key(&key) {
+                self.predicates.release(&entry.deps);
+            }
             self.state.slots.remove(&key);
             evicted += 1;
         }
         if evicted > 0 {
             self.metrics.keys_evicted.add(evicted);
+            self.metrics
+                .live_predicates
+                .set(self.predicates.len() as u64);
             tracing::debug!(
                 ns = %self.state.ns,
                 evicted,
@@ -1659,6 +1757,313 @@ mod tests {
         assert_eq!(engine.store().size(), 0);
     }
 
+    // ------------------------------------------------- predicate invalidation
+
+    fn age_at_least(n: &str) -> Arc<crate::predicate::Predicate> {
+        use crate::predicate::{CmpOp, Lit, Order, Pred, Predicate};
+        Arc::new(Predicate::new(
+            cls("Person"),
+            Pred::Cmp {
+                prop: prop("age"),
+                op: CmpOp::Ge,
+                value: Lit::Num(n.to_owned()),
+                order: Order::Integer,
+            },
+        ))
+    }
+
+    #[test]
+    fn a_filtered_fragment_survives_a_move_inside_the_set_and_dies_on_a_crossing() {
+        let (engine, mut writer) = harness();
+        writer.handle(commit("c0", vec![]));
+        let k = key("over-30");
+        let deps = vec![Term::Predicate(age_at_least("30"))];
+        writer.handle(insert(k.clone(), writer.head(), deps.clone(), "[alice]"));
+        assert_eq!(writer.predicates().len(), 1, "registered on insert");
+
+        // 40 -> 50 is a move *within* the set.
+        writer.handle(commit(
+            "c1",
+            vec![update(
+                "Person/alice",
+                "Person",
+                json!({"age": 40}),
+                json!({"age": 50}),
+            )],
+        ));
+        assert!(
+            matches!(engine.lookup(&k, writer.head()), Lookup::Hit(_)),
+            "a field change that does not cross the boundary must not invalidate"
+        );
+
+        // 50 -> 20 leaves it.
+        writer.handle(commit(
+            "c2",
+            vec![update(
+                "Person/alice",
+                "Person",
+                json!({"age": 50}),
+                json!({"age": 20}),
+            )],
+        ));
+        assert!(
+            matches!(engine.lookup(&k, writer.head()), Lookup::Miss),
+            "a crossing must invalidate"
+        );
+    }
+
+    #[test]
+    fn a_predicate_is_released_when_its_last_fragment_goes() {
+        let (_engine, mut writer) = harness();
+        writer.handle(commit("c0", vec![]));
+        let deps = vec![Term::Predicate(age_at_least("30"))];
+        writer.handle(insert(key("a"), writer.head(), deps.clone(), "a"));
+        writer.handle(insert(key("b"), writer.head(), deps.clone(), "b"));
+        assert_eq!(writer.predicates().len(), 1);
+        assert_eq!(writer.predicates().refs(&age_at_least("30").id()), 2);
+
+        // A crossing invalidates both, which unregisters both.
+        writer.handle(commit(
+            "c1",
+            vec![update(
+                "Person/alice",
+                "Person",
+                json!({"age": 40}),
+                json!({"age": 20}),
+            )],
+        ));
+        assert!(
+            writer.predicates().is_empty(),
+            "nothing depends on it any more, so the dispatch index must not keep it"
+        );
+    }
+
+    #[test]
+    fn a_refill_of_the_same_key_does_not_leak_a_reference() {
+        let (_engine, mut writer) = harness();
+        writer.handle(commit("c0", vec![]));
+        let deps = vec![Term::Predicate(age_at_least("30"))];
+        for _ in 0..5 {
+            writer.handle(commit("cn", vec![]));
+            writer.handle(insert(key("a"), writer.head(), deps.clone(), "a"));
+        }
+        assert_eq!(
+            writer.predicates().refs(&age_at_least("30").id()),
+            1,
+            "one key, one reference, however often it is refilled"
+        );
+    }
+
+    #[test]
+    fn a_purge_drops_every_predicate() {
+        let (_engine, mut writer) = harness();
+        writer.handle(commit("c0", vec![]));
+        writer.handle(insert(
+            key("a"),
+            writer.head(),
+            vec![Term::Predicate(age_at_least("30"))],
+            "a",
+        ));
+        assert_eq!(writer.predicates().len(), 1);
+        writer.handle(WriterMsg::Purge {
+            forget_watermark: false,
+        });
+        assert!(writer.predicates().is_empty());
+    }
+
+    /// A fill in flight when a commit lands cannot be validated against the
+    /// *exact* predicate fire, because the predicate was not registered yet.
+    /// The replay has to be pessimistic, or this fragment is stale forever.
+    #[test]
+    fn a_fill_that_raced_a_relevant_commit_is_not_stored_as_current() {
+        let (engine, mut writer) = harness();
+        writer.handle(commit("c0", vec![]));
+        let pinned = writer.head();
+
+        // The commit lands while the fill is in flight, so no predicate is
+        // registered and no `Predicate` term is fired.
+        writer.handle(commit(
+            "c1",
+            vec![update(
+                "Person/alice",
+                "Person",
+                json!({"age": 20}),
+                json!({"age": 40}),
+            )],
+        ));
+        assert!(
+            !writer
+                .fired_log()
+                .iter()
+                .any(|entry| entry.fired.iter().any(|t| matches!(t, Term::Predicate(_)))),
+            "nothing was registered, so nothing could be decided"
+        );
+
+        let k = key("over-30");
+        writer.handle(insert(
+            k.clone(),
+            pinned,
+            vec![Term::Predicate(age_at_least("30"))],
+            "[]",
+        ));
+        assert!(
+            matches!(engine.lookup(&k, writer.head()), Lookup::Miss),
+            "the fill is valid at its pin but not at the head: a document entered the \
+             set while it was in flight"
+        );
+        // And it is still the right answer for a reader latched at the pin.
+        assert!(matches!(engine.lookup(&k, pinned), Lookup::Hit(_)));
+    }
+
+    #[test]
+    fn over_the_evaluation_bound_the_fallback_is_coarse_and_counted() {
+        let (engine, mut writer) = harness_with(EngineConfig {
+            predicates: crate::engine::EvalLimits {
+                max_evaluations: 1,
+                ..crate::engine::EvalLimits::default()
+            },
+            ..EngineConfig::default()
+        });
+        writer.handle(commit("c0", vec![]));
+        // Two predicates on the class, so one change exceeds a bound of one.
+        let k1 = key("over-30");
+        let k2 = key("over-99");
+        writer.handle(insert(
+            k1.clone(),
+            writer.head(),
+            vec![Term::Predicate(age_at_least("30"))],
+            "a",
+        ));
+        writer.handle(insert(
+            k2.clone(),
+            writer.head(),
+            vec![Term::Predicate(age_at_least("99"))],
+            "b",
+        ));
+
+        // 40 -> 50 crosses neither boundary, so a precise run would keep both.
+        writer.handle(commit(
+            "c1",
+            vec![update(
+                "Person/alice",
+                "Person",
+                json!({"age": 40}),
+                json!({"age": 50}),
+            )],
+        ));
+        let m = engine.metrics();
+        assert_eq!(m.predicate_evaluations_skipped.get(), 2);
+        assert_eq!(m.predicate_evaluations.get(), 0);
+        assert_eq!(m.predicate_fires_coarse.get(), 1);
+        assert!(
+            matches!(engine.lookup(&k1, writer.head()), Lookup::Miss)
+                && matches!(engine.lookup(&k2, writer.head()), Lookup::Miss),
+            "over the bound, every predicate on the class is invalidated — coarse, \
+             bounded, and counted"
+        );
+    }
+
+    /// **The non-negotiable one.** With evaluation artificially slowed, a read
+    /// taken while a commit is mid-indexing must be answered from the
+    /// *previous* watermark, and must never return a value that the in-flight
+    /// commit invalidates.
+    ///
+    /// Spelled out, because the failure this guards against is the one that
+    /// cannot be caught later: if the watermark were published before the
+    /// invalidations were applied, `X-Reactor-Head` would tell a client it is
+    /// current while we serve entries that commit should have killed — and
+    /// read-your-writes and the `X-Reactor-Min-Version` fence are both built on
+    /// that header (SPEC §5.5). Eventual consistency here has to mean the
+    /// watermark *lags*, never that it is current but wrong.
+    #[test]
+    fn the_watermark_never_advances_past_an_unapplied_invalidation() {
+        use std::sync::atomic::AtomicBool;
+
+        let (engine, mut writer) = harness_with(EngineConfig {
+            predicates: crate::engine::EvalLimits {
+                // Enough to make the window wide enough to observe reliably,
+                // without making the test slow.
+                delay_ms: 400,
+                ..crate::engine::EvalLimits::default()
+            },
+            ..EngineConfig::default()
+        });
+        writer.handle(commit("c0", vec![]));
+        let k = key("over-30");
+        writer.handle(insert(
+            k.clone(),
+            writer.head(),
+            vec![Term::Predicate(age_at_least("30"))],
+            "[alice]",
+        ));
+        let before = engine
+            .watermark(&ns())
+            .expect("a watermark to read against");
+        assert!(matches!(engine.lookup(&k, before.pos), Lookup::Hit(_)));
+
+        // The commit moves alice out of the set, so the fragment must die —
+        // but only once the watermark that includes the commit is published.
+        let done = Arc::new(AtomicBool::new(false));
+        let applying = {
+            let engine = Arc::clone(&engine);
+            let done = Arc::clone(&done);
+            std::thread::spawn(move || {
+                writer.handle(commit(
+                    "c1",
+                    vec![update(
+                        "Person/alice",
+                        "Person",
+                        json!({"age": 40}),
+                        json!({"age": 20}),
+                    )],
+                ));
+                done.store(true, Ordering::Release);
+                // Hand the writer back so the test can assert on it after.
+                (writer, engine)
+            })
+        };
+
+        // Read *during* the indexing, the way a request would: latch the
+        // published watermark, then look up at it.
+        let mut observations = 0;
+        while !done.load(Ordering::Acquire) {
+            let latched = engine.watermark(&ns()).expect("still a watermark");
+            assert_eq!(
+                latched.commit, before.commit,
+                "the watermark must not advance to c1 while its invalidations are \
+                 outstanding — a reader latching it would be told it is current"
+            );
+            assert!(
+                matches!(engine.lookup(&k, latched.pos), Lookup::Hit(_)),
+                "and at that older watermark the fragment is still the right answer: \
+                 an older but self-consistent snapshot"
+            );
+            observations += 1;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let (writer, _) = applying.join().expect("the writer thread");
+        assert!(
+            observations > 3,
+            "the test did not actually observe the window ({observations} reads); \
+             without it this asserts nothing"
+        );
+
+        // And once published, the commit is reflected: the entry is gone at the
+        // new watermark, and the lag was reported.
+        let after = engine.watermark(&ns()).expect("a new watermark");
+        assert_ne!(after.commit, before.commit);
+        assert!(
+            matches!(engine.lookup(&k, after.pos), Lookup::Miss),
+            "the invalidation was applied before the watermark moved"
+        );
+        assert!(
+            engine.metrics().watermark_lag_ms.get() >= 300,
+            "the lag must be visible to an operator, got {}ms",
+            engine.metrics().watermark_lag_ms.get()
+        );
+        drop(writer);
+    }
+
     // ------------------------------------------------------------ the oracle
     //
     // A pseudo-random stream of commits, fills and history rewrites, checked
@@ -1672,11 +2077,23 @@ mod tests {
     // after every one of a few thousand steps, the index pruning, the interval
     // bookkeeping and the race handling are all consistent with the contract.
     //
-    // Only the *newest* admissible fill per key needs checking, because
-    // validity is monotone in the pin position: if a fire in `(P_new, H]`
-    // invalidates the newer fill then, since `(P_new, H] ⊆ (P_old, H]`, that
-    // same fire invalidates every older one. So "the newest fill, if valid,
-    // else a miss" is exactly the engine's contract.
+    // The model tracks **the open version per key** rather than "the newest
+    // fill, if valid". Those were the same thing until predicates arrived, by
+    // monotonicity in the pin position: a fire in `(P_new, H]` that invalidates
+    // the newer fill also invalidates every older one, since
+    // `(P_new, H] ⊆ (P_old, H]`.
+    //
+    // Predicates break that, and the break is instructive rather than a bug.
+    // A fill that was *in flight* when a commit landed is validated by the
+    // pessimistic replay (its predicate was not registered yet, so the absence
+    // of a predicate fire proves nothing — see
+    // `Term::subsumes_pessimistically`), while a fill that was already
+    // registered is decided exactly. So a newly landed fill can be closed
+    // conservatively while an older, registered one is genuinely still valid —
+    // and the engine then correctly serves the older one. The model therefore
+    // transcribes the insert protocol's open-version rule directly: at most one
+    // open version per key, which is the only thing that can be the answer at
+    // the head.
 
     /// A seeded linear congruential generator (Knuth's MMIX constants) so the
     /// stream is reproducible without a dependency.
@@ -1696,9 +2113,58 @@ mod tests {
         }
     }
 
+    /// The predicates the oracle keys depend on, as the analyzer would have
+    /// built them from `Person(filter: …)`.
+    fn oracle_predicates() -> Vec<Arc<crate::predicate::Predicate>> {
+        use crate::predicate::{CmpOp, Lit, Order, Pred, Predicate};
+        let cmp = |op, v: &str| Pred::Cmp {
+            prop: prop("name"),
+            op,
+            value: Lit::Text(v.to_owned()),
+            order: Order::Text,
+        };
+        vec![
+            // A range, which a name change may or may not cross.
+            Arc::new(Predicate::new(cls("Person"), cmp(CmpOp::Ge, "n1"))),
+            // A negation, so the "a missing document is not a member" rule and
+            // the create/delete arithmetic are exercised too.
+            Arc::new(Predicate::new(
+                cls("Person"),
+                Pred::Not(Box::new(cmp(CmpOp::Eq, "n0"))),
+            )),
+        ]
+    }
+
+    /// The model's own predicate firing: evaluate **every** oracle predicate
+    /// against every change, with no dispatch index, no bounds and no
+    /// short-cuts. That is the point — the engine's answer has to agree with the
+    /// brute-force one, which is what tests that the `(class, property)`
+    /// dispatch never skips a predicate it should have evaluated.
+    fn oracle_predicate_fires(cs: &ChangeSet, schema: &SchemaIndex) -> TermSet {
+        use crate::predicate::Truth;
+        let mut out = TermSet::new();
+        for change in &cs.changes {
+            let classes = schema.ancestors(&change.class);
+            for pred in oracle_predicates() {
+                if !classes.contains(&pred.class) {
+                    continue;
+                }
+                let before = pred.member(change.before.as_ref());
+                let after = pred.member(change.after.as_ref());
+                if before != after || before == Truth::Unknown || after == Truth::Unknown {
+                    out.insert(Term::Predicate(pred));
+                }
+            }
+        }
+        out
+    }
+
     /// Dependency list for oracle key `i`. Fixed per key: a shape always reads
     /// the same thing, which is what makes "the newest valid fill" well defined.
     fn oracle_deps(i: usize) -> Vec<Term> {
+        if i >= 6 {
+            return vec![Term::Predicate(Arc::clone(&oracle_predicates()[i - 6]))];
+        }
         match i % 6 {
             0 => vec![Term::Doc(doc("Person/p0"))],
             1 => vec![Term::DocField(doc("Person/p1"), prop("name"))],
@@ -1716,7 +2182,27 @@ mod tests {
         }
     }
 
-    const ORACLE_KEYS: usize = 6;
+    const ORACLE_KEYS: usize = 8;
+
+    /// Does `fired` dirty `deps`? `replayed` picks the matcher the engine would
+    /// have used: pessimistic while a fill was in flight, exact once it is
+    /// registered.
+    fn oracle_dirties(
+        fired: &TermSet,
+        deps: &[Term],
+        schema: &SchemaIndex,
+        replayed: bool,
+    ) -> bool {
+        fired.iter().any(|f| {
+            deps.iter().any(|dep| {
+                if replayed {
+                    dep.subsumes_pessimistically(f, schema)
+                } else {
+                    dep.subsumes(f, schema)
+                }
+            })
+        })
+    }
 
     /// Several seeds, so a green run is not one lucky stream.
     #[test]
@@ -1749,8 +2235,9 @@ mod tests {
         let mut docs: HashMap<String, serde_json::Value> = HashMap::new();
         // Every fire, ever, in ascending position order.
         let mut history: Vec<(Position, TermSet)> = Vec::new();
-        // The newest admissible fill per key.
-        let mut latest_fill: Vec<Option<Position>> = vec![None; ORACLE_KEYS];
+        // The open version per key: `(pin, head when it was inserted)`. `None`
+        // means the key has no answer at the head.
+        let mut open: Vec<Option<(Position, Position)>> = vec![None; ORACLE_KEYS];
         // Positions below which everything was dropped.
         let mut clear_floor = Position::ZERO;
 
@@ -1809,9 +2296,21 @@ mod tests {
                         schema_changed: rng.below(50) == 0,
                         complete: rng.below(40) != 0,
                     };
-                    let expected_fired = fire(&cs, &schema);
+                    let mut expected_fired = fire(&cs, &schema);
+                    if !expected_fired.contains(&Term::Everything) {
+                        expected_fired.extend(oracle_predicate_fires(&cs, &schema));
+                    }
                     last_event = format!("commit (complete={})", cs.complete);
                     writer.handle(WriterMsg::Commit(Box::new(cs)));
+                    // An open version is registered, so a commit decides it
+                    // exactly.
+                    for (i, slot) in open.iter_mut().enumerate() {
+                        if slot.is_some()
+                            && oracle_dirties(&expected_fired, &oracle_deps(i), &schema, false)
+                        {
+                            *slot = None;
+                        }
+                    }
                     history.push((writer.head(), expected_fired));
                     assert_eq!(writer.head(), head_before.next());
                 }
@@ -1836,17 +2335,25 @@ mod tests {
                     writer.handle(insert(
                         keys[i].clone(),
                         at,
-                        deps,
+                        deps.clone(),
                         &format!("body {i} at {at}"),
                     ));
                     // Admissible iff the epoch still matches. (The retention
                     // rule is disabled by configuration above.)
                     if at.epoch == head_before.epoch && at >= clear_floor {
-                        // A newer pin always wins; an older one landing late is
-                        // bounded by the newer one and can never be the answer
-                        // at the head.
-                        if latest_fill[i].map_or(true, |prev| at >= prev) {
-                            latest_fill[i] = Some(at);
+                        // The insert protocol's `min(K1, K2)`: K1 is anything in
+                        // `(at, head]` that invalidated these deps — replayed,
+                        // so pessimistically — and K2 is a newer open version of
+                        // the same key. Either one bounds this version's
+                        // interval, which means it does not become the open one.
+                        let raced_by_commit = history
+                            .iter()
+                            .rev()
+                            .take_while(|(pos, _)| *pos > at)
+                            .any(|(_, fired)| oracle_dirties(fired, &deps, &schema, true));
+                        let raced_by_fill = open[i].map_or(false, |(pin, _)| pin > at);
+                        if !raced_by_commit && !raced_by_fill {
+                            open[i] = Some((at, head_before));
                         }
                     }
                 }
@@ -1864,6 +2371,12 @@ mod tests {
                         new_head: CommitId::new(format!("rebase{step}")),
                         fired: Some(terms.clone()),
                     });
+                    for (i, slot) in open.iter_mut().enumerate() {
+                        if slot.is_some() && oracle_dirties(&terms, &oracle_deps(i), &schema, false)
+                        {
+                            *slot = None;
+                        }
+                    }
                     history.push((writer.head(), terms));
                     assert_eq!(writer.head(), head_before.next_epoch());
                 }
@@ -1883,6 +2396,7 @@ mod tests {
                         });
                     }
                     clear_floor = writer.head();
+                    open = vec![None; ORACLE_KEYS];
                     history.push((writer.head(), TermSet::new()));
                 }
             }
@@ -1891,22 +2405,7 @@ mod tests {
             //      recorded history
             let head = writer.head();
             for (i, key) in keys.iter().enumerate() {
-                let deps = oracle_deps(i);
-                let expected = latest_fill[i].filter(|from| {
-                    *from >= clear_floor
-                        // Scan backwards only as far as the pin: history is in
-                        // ascending position order, and every entry is at or
-                        // below the head.
-                        && !history
-                            .iter()
-                            .rev()
-                            .take_while(|(at, _)| *at > *from)
-                            .any(|(_, fired)| {
-                                fired
-                                    .iter()
-                                    .any(|f| deps.iter().any(|dep| dep.subsumes(f, &schema)))
-                            })
-                });
+                let expected = open[i].map(|(pin, _)| pin);
 
                 let explain = || {
                     let slot = engine
@@ -1979,5 +2478,12 @@ mod tests {
         assert!(m.versions_invalidated.get() > 50);
         assert!(m.epoch_bumps.get() > 5);
         assert!(m.purges.get() > 2);
+        // And the predicate keys were actually exercised: without this a green
+        // run could mean the stream never registered a predicate at all.
+        assert!(
+            m.predicate_evaluations.get() > 50,
+            "predicate evaluations: {}",
+            m.predicate_evaluations.get()
+        );
     }
 }

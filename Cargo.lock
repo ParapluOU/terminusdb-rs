@@ -8105,6 +8105,7 @@ dependencies = [
  "hyper-util",
  "parking_lot",
  "pretty_assertions",
+ "rayon",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

@@ -28,12 +28,14 @@ mod fragment;
 mod index;
 mod log;
 mod policy;
+mod predicates;
 mod writer;
 
 pub use fragment::{BodyRef, FragmentKey, FragmentSlot, FragmentVersion, ResponseMeta, RootKey};
 pub use index::{EntryId, IndexEntry, TermIndex};
 pub use log::{FiredEntry, FiredLog};
 pub use policy::{Decomposition, FencePolicy, Policy, PolicySet, Refresh};
+pub use predicates::{fire_predicates, EvalLimits, Firing, PredicateRegistry};
 pub use writer::NamespaceWriter;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -128,6 +130,14 @@ pub struct EngineConfig {
     /// client fencing on a commit older than this gets `Unknown`, and therefore
     /// the configured miss policy, rather than a wrong answer.
     pub commit_ring_capacity: usize,
+    /// Bounds and knobs for filter-predicate evaluation.
+    ///
+    /// The commit path blocks on this work — deliberately, because the
+    /// watermark must not advance past invalidations we have not applied — so
+    /// these bounds are what keep commit latency, and therefore watermark lag,
+    /// finite. Over a bound the commit invalidates every predicate on the
+    /// classes it touched instead of deciding each one.
+    pub predicates: EvalLimits,
 }
 
 impl Default for EngineConfig {
@@ -144,6 +154,7 @@ impl Default for EngineConfig {
             max_tracked_keys: 50_000,
             version_retention: 64,
             commit_ring_capacity: 1024,
+            predicates: EvalLimits::default(),
         }
     }
 }

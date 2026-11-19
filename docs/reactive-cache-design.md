@@ -234,12 +234,63 @@ in an inverted index, and is *fired* by a commit. Granularity ladder, precise �
 | `Edge(id, prop)` | the outgoing `prop` edge set of `id` changed | (was conflated into `Field`) |
 | `Backlink(id, prop, Class)` | the set of `Class` documents pointing at `id` via `prop` changed | the three-spellings hack in `review_state.rs` |
 | `Index(Class, prop, value)` | the set of `Class` docs with `prop == value` changed | `field!(C, p => v)` |
+| `Predicate(pred)` | the set a *filter* selects gained or lost a document | — (every non-`eq` filter used to fall back to `Class`) |
 | `ClassField(Class, prop)` | any instance's `prop` changed | — |
 | `Members(Class)` | an instance of `Class` (or subclass) was added/deleted | `count_changed!` |
 | `Class(Class)` | anything about any instance of `Class` changed | `any_changed!` |
 | `Path(from, pattern)` | conservative: any change to any class on the pattern | — (unsupported before) |
 | `Schema` | the schema graph changed | — |
 | `Ttl(d)` / `Always` | time / never cache | `Ttl` |
+
+`Predicate` is the one term whose firing is **decided rather than derived**, and
+it is worth saying why that was available to us. Every other term is a function
+of the change alone. A filter, though, selects a set that no finite term can
+name once it is more than a single `eq` — a range, a conjunction, a negation —
+and the prototype's answer, which this design inherited, was to fall back to
+`Class(C)`: fired by any field change to any instance, so filtered lists and the
+counts over them were discarded on every write.
+
+But §5.3 already pays for the **whole before and after document** of every
+change, in order to make `Index` and `Backlink` exact. With both documents in
+hand, membership of a filter is not something to be inferred from the change —
+it can simply be evaluated on each side:
+
+```text
+entered   = !member(before) &&  member(after)
+left      =  member(before) && !member(after)
+unchanged =  member(before) == member(after)   // fires nothing
+```
+
+with `member(doc) = doc exists && pred(doc)`, which also disposes of creates and
+deletes without a special case. Conjunctions and negations are exact for the
+same reason: we hold every field, not only the one that moved. Each live
+predicate is registered under the `(class, property)` pairs it mentions, so a
+commit evaluates only predicates mentioning a property that actually changed —
+that dispatch index is what keeps the cost proportional to the relevant
+predicates rather than to all of them.
+
+Three bounds make it safe:
+
+- **Agreement with the server is the gate, and it is narrow on purpose.** An
+  evaluator that disagrees with TerminusDB about collation, numeric coercion or
+  a missing field under `ne` produces *silent* staleness — the entry is never
+  invalidated by the change that should have killed it, and no counter moves. So
+  only operators and declared ranges verified against a live node are indexed,
+  and anything else is unindexable **by construction**, keeping `Class(C)`. The
+  verified set on 12.1.0-rc3 is `eq`/`ne`/`lt`/`le`/`gt`/`ge` plus
+  `_and`/`_or`/`_not` over `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:int`
+  and `xsd:integer`. The measurements, including several the server gets wrong
+  (`xsd:long` filters crash it; `xsd:decimal`'s `eq` is lexical; on the narrow
+  and derived integer types `eq` matches some stored values and not others; two
+  operators on one property are not ANDed but silently reduced to one), are
+  recorded in `crates/reactor/src/predicate.rs` and re-checked against the
+  server by `crates/reactor/tests/predicates.rs`.
+- **Backpressure degrades precision, not latency.** Over a configured bound on
+  `(change, predicate)` pairs per commit, or on live predicates, the commit
+  invalidates every predicate on the classes it touched instead — as coarse as
+  the old fallback, bounded, and counted.
+- **The watermark waits for it** (§5.5). Evaluation is CPU on a worker pool, but
+  the writer publishes the watermark only after the invalidations are applied.
 
 Two rules keep this honest:
 
@@ -337,6 +388,21 @@ namespace (the last commit of its local node fully applied to the index).
    `W' <= W`; we report `W'` in `TerminusDB-Data-Version`, the node identity in
    `X-Reactor-Node`, the node's current head in `X-Reactor-Head`, and `Age`. The
    staleness is visible, not implicit.
+
+   This is also the clause that makes *slow indexing* safe, and the distinction
+   is worth being exact about because one reading of it is a correctness bug.
+   `W` is defined as the last commit **fully applied to the index** — so if
+   applying a commit is expensive (predicate evaluation, §5.2), `W` lags and
+   reads are answered from an older but self-consistent snapshot, which is
+   precisely the bounded staleness this clause permits. What is *not* permitted
+   is advancing `W` while that commit's invalidations are outstanding: `W` is
+   published in `X-Reactor-Head` and both (2) and (5) are built on it, so a
+   watermark that ran ahead of the index would make read-your-writes and the
+   `X-Reactor-Min-Version` fence silently false in exactly the window where a
+   client is most likely to be checking them. "Eventually consistent indexing"
+   therefore means the watermark lags, never that it is current but wrong. The
+   lag is reported (`reactor_watermark_lag_ms`) and bounded by the evaluation
+   limits.
 5. **Across nodes, we fence but cannot conjure.** If a request asserts
    `X-Reactor-Min-Version: C` and the local node has not replicated `C`, Reactor
    has three honest options, selected per route by policy:

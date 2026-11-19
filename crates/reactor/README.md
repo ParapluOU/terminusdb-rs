@@ -36,9 +36,13 @@ Everything else follows from these, and each is load-bearing:
    fragment is exactly "the value at that commit", never a read torn across two.
 3. **Commit ids carry no order.** They are content hashes. Ordering is a
    Reactor-local `Position = (Epoch, Seq)`; nothing compares `CommitId`s.
-4. **The watermark only advances past a commit we have actually read.** Capture
-   lag then costs staleness, never correctness — which is what makes a
-   shared-disk reader node safe even if its filesystem view is strange.
+4. **The watermark only advances past a commit we have actually read, and whose
+   invalidations we have actually applied.** Capture lag then costs staleness,
+   never correctness — which is what makes a shared-disk reader node safe even
+   if its filesystem view is strange. The second half is what makes indexing
+   work (predicate evaluation) safe to be slow: the watermark *lags*, so a read
+   in that window is answered from an older but self-consistent snapshot, and
+   never told it is current when it is not.
 5. **Soundness over precision.** An analyzer that cannot prove a tight term
    emits a coarser one, or bypasses. Over-invalidation is a performance bug;
    under-invalidation serves wrong bytes.
@@ -48,7 +52,7 @@ Everything else follows from these, and each is load-bearing:
 ## Status
 
 All five phases of [`SPEC.md`](SPEC.md) are implemented, russian-doll
-decomposition of document lists included. **485 tests pass (428 unit, 57
+decomposition of document lists included. **565 tests pass (493 unit, 72
 integration against an embedded TerminusDB 12.1.0-rc3 server.)** Not
 production-ready — see the scope limits below — but soundness, precision *and*
 fragment-level reuse are all demonstrated.
@@ -56,12 +60,13 @@ fragment-level reuse are all demonstrated.
 | Module | What | State |
 |---|---|---|
 | `ids`, `term`, `schema_index`, `change` | identity, the invalidation algebra, `fire()` | done |
+| `predicate`, `engine/predicates` | filter predicates: the IR, the evaluator verified against the server, and the refcounted `(class, property)` dispatch index | done |
 | `engine/*`, `store/*` | the dependency graph, single writer per namespace, content-addressed bodies | done |
 | `analyze/*` | request → plan, for document / GraphQL / WOQL | done |
 | `compose` | russian-doll decomposition: a list is a spine over per-document fragments | done |
 | `capture/*` | `CommitSource` / `ChangeResolver` / `ReadinessGate` / `CommitHistory` + applier | done |
 | `frontend/*`, `config`, `main` | the proxy itself | done |
-| `tests/*` | fidelity, caching, decomposition, auth, capture, spikes | done |
+| `tests/*` | fidelity, caching, dependencies, predicates, decomposition, auth, capture, spikes | done |
 
 ### What is cached, and what has to be asked for
 
@@ -85,6 +90,7 @@ keeps them apart:
 |---|---|
 | `_count(Person: {})`, `?type=Person&counted=true` | `Members(Person)` — a create or a delete, nothing else |
 | `_count(Person: {name: {eq: "Ann"}})` | `Index{Person,name,"Ann"}` — a document entering or leaving the bucket |
+| `_count(Person: {age: {ge: "30"}})`, `_and`/`_or`/`_not` over the same | `Predicate(…)` — a document entering or leaving *that set*, decided per commit |
 | `{ Person { _id tickets { _id } } }` | membership, plus the traversed properties and their targets' membership |
 | `{ Person { _id name } }` | the above **and** every returned document's contents |
 
@@ -96,6 +102,48 @@ scalar field anywhere in the selection and it goes back to depending on field
 values, because then a field value is in the response. Reactor requires a
 *proof* of id-only-ness: an unknown field, a backlink or a `_path_to_` is enough
 to fall back, because under-invalidating an id list serves stale ids.
+
+**A filter is indexed as a predicate, not as a value.** A single `eq` names a
+bucket, so `Index{C,p,v}` can express it. Nothing else can: a range, a
+conjunction, a negation selects a set no term can name, and until now every one
+of them fell back to `Class(C)` — fired by *any* field change to *any* instance,
+so filtered lists and the counts over them thrashed on every write.
+
+Reactor instead indexes the **predicate**. Capture already hands the writer the
+whole before and after document for every change, so membership can be decided
+rather than guessed:
+
+```text
+entered   = !member(before) &&  member(after)
+left      =  member(before) && !member(after)
+unchanged =  member(before) == member(after)   // fires nothing
+```
+
+with `member(doc) = doc exists && pred(doc)` — which is why a create and a
+delete need no special case. Each live predicate is registered under the
+`(class, property)` pairs it mentions, so a commit only evaluates predicates
+mentioning a property that actually moved, and conjunctions and negations are
+exact because we hold every field and not just the one that changed.
+
+Three things bound it:
+
+* **Agreement with the server is the gate.** An evaluator that disagrees about
+  collation, numeric coercion or a missing field under `ne` produces *silent*
+  staleness. So only operators and declared ranges verified against a live node
+  are indexed — `eq`/`ne`/`lt`/`le`/`gt`/`ge` plus `_and`/`_or`/`_not`, on
+  `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:int` and `xsd:integer` — and
+  `tests/predicates.rs` re-checks every one of them against the server's own
+  filtered answer. `regex`, `startsWith`, the collection operators, nested
+  filters across links and several ranges the server mishandles are
+  **unindexable by construction** and keep `Class(C)`.
+* **Backpressure degrades precision, not latency.** Over
+  `[predicates].max_evaluations_per_commit` the commit invalidates every
+  predicate on the classes it touched instead — as coarse as before, bounded,
+  and counted as `reactor_predicate_evaluations_skipped`.
+* **The watermark waits for it.** Evaluation runs on a worker pool, but the
+  writer publishes the watermark only after the invalidations are applied, so
+  slow indexing makes the watermark *lag* rather than advance past work it has
+  not done. See "Consistency" below.
 
 **WOQL is opt-in.** A WOQL query can return data without revealing which
 entities the data was derived from:
@@ -298,6 +346,14 @@ Read-your-writes and monotonic reads hold **per node**. Across nodes, a request
 may assert `X-Reactor-Min-Version: <commit>`; if this node has not replicated it,
 Reactor will `wait`, `fail` (412, so the load balancer retries elsewhere), or
 `serve-stale` with a label — configurable, and never silently pretend.
+
+Both of those rest on `X-Reactor-Head` meaning what it says, which is why
+invalidation is applied *before* the watermark is published, for every kind of
+dependency including the predicates whose evaluation is the most expensive thing
+in the commit path. The cost is **watermark lag**, reported as
+`reactor_watermark_lag_ms` and bounded by the predicate evaluation limits: under
+load the node serves a slightly older snapshot rather than a confidently wrong
+current one.
 
 State splits in two, which is what makes a shared cache optional:
 

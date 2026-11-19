@@ -61,6 +61,7 @@ pub mod engine;
 pub mod frontend;
 pub mod ids;
 pub mod metrics;
+pub mod predicate;
 pub mod schema_index;
 pub mod store;
 pub mod term;

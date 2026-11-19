@@ -119,6 +119,30 @@ the list read had already warmed, with no upstream request at all. The bytes are
 the origin's either way — `tests/decompose.rs` compares them against the node
 directly for every framing and projection combination.
 
+A filtered read survives a write that does not change *which* documents it
+selects, even when the filter is a range or a conjunction:
+
+```console
+$ curl -su admin:root -D - -X POST "http://localhost:6464/api/graphql/admin/mydb" \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"query { _count(Note: {priority: {ge: \"3\"}}) }"}'
+cache-status: Reactor; miss
+
+# ... a PUT that moves a Note's priority from 5 to 4 — still >= 3 ...
+$ curl -su admin:root -D - -X POST "http://localhost:6464/api/graphql/admin/mydb" \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"query { _count(Note: {priority: {ge: \"3\"}}) }"}'
+cache-status: Reactor; hit           # membership did not move, so nothing fired
+
+# ... a PUT that moves it to 1 ...
+cache-status: Reactor; miss          # it left the set
+```
+
+Which filters get that treatment is **not** a matter of degree: see the limits
+section at the end. A filter Reactor has not verified against the server keeps
+the coarse dependency and behaves as it did before — correct, and discarded by
+any write to the class.
+
 `cache-status: Reactor; bypass; detail=…` means Reactor decided not to cache,
 and the detail says why (`unknown endpoint`, `unrecognized document parameter`,
 `woql needs an explicit invalidation condition`, …). A bypass is always correct;
@@ -185,6 +209,18 @@ replicated that commit yet, Reactor will — per `[consistency].min_version_poli
 — wait, answer `412 Precondition Failed` so a load balancer retries elsewhere,
 or serve stale and label it. It will not silently pretend.
 
+One deliberate consequence of that promise: the watermark in `X-Reactor-Head`
+never advances past a commit whose invalidations are still being applied. Some
+of that work — deciding which filtered sets a commit moved documents into or out
+of — is proportional to how many distinct filters are live, so under a burst of
+writes the watermark can **lag** by a few milliseconds. Reads in that window are
+answered from the previous watermark: an older, self-consistent snapshot, which
+is exactly the bounded staleness `X-Reactor-Max-Staleness` lets a client reason
+about. The alternative — advancing the watermark and applying invalidations
+afterwards — would make `X-Reactor-Head` claim currency the node does not have,
+and would break both read-your-writes and the `X-Reactor-Min-Version` fence.
+Watch `reactor_watermark_lag_ms`.
+
 ## 7. Operating it
 
 | Endpoint | Purpose |
@@ -219,6 +255,16 @@ decomposition is earning its keep:
 | `reactor_children_filled` / `reactor_child_batches` | a ratio near 1 means almost every refill fetches a single document; the batch is not being filled |
 | `reactor_compositions_abandoned` | anything but near zero: compositions are falling back to whole fetches |
 
+For filtered reads, two that belong on the same graph:
+
+| Metric | What a bad value looks like |
+|---|---|
+| `reactor_predicate_evaluations_skipped` | rising: commits are exceeding `[predicates].max_evaluations_per_commit`, so filtered reads on those classes are being invalidated as if unfiltered. Correct, but it is the precision you were paying for |
+| `reactor_watermark_lag_ms` | rising: indexing is falling behind, so reads are answered from an older snapshot. This is the quantity the bound above is protecting — if it has headroom, raise the bound; if it does not, lower it |
+
+`reactor_live_predicates` is how many distinct filters are currently indexed,
+and `reactor_predicate_evaluations` the work they cost per commit.
+
 And one for memory: `reactor_keys_evicted` rising steadily means the working set
 is larger than `[cache].max_tracked_keys`, so keys are being dropped and
 refilled. That is correct behaviour (an evicted key is a miss, never a wrong
@@ -252,6 +298,41 @@ answer) but it costs upstream requests; raise the cap if there is memory for it.
   is why `terminusdb-orm`'s two-step pattern (ids by GraphQL, bodies by
   `get_documents`) caches so much better than one fat query: the id list survives
   writes, and the per-document fragments invalidate one at a time.
+- **Only verified filter operators are indexed precisely.** A filter made of
+  `eq`/`ne`/`lt`/`le`/`gt`/`ge` and `_and`/`_or`/`_not`, on single-valued
+  properties of type `xsd:string`, `xsd:boolean`, `xsd:double`, `xsd:int` or
+  `xsd:integer`, is indexed as a predicate and survives writes that do not move
+  documents in or out of it. Everything else — `regex`, `startsWith`,
+  `allOfTerms`/`anyOfTerms`, `relationship`, `_id`/`_ids`, a filter *through* a
+  link (`{author: {name: {eq: …}}}`), a set-valued property, a value passed as a
+  GraphQL variable, or two operators on one property — keeps the coarse
+  dependency and is discarded by any write to the class.
+
+  That list is short on purpose. The gate is agreement with the server: an
+  evaluator that disagrees about a missing field under `ne`, or about
+  collation, would serve stale data with nothing to show for it. Several things
+  are excluded because this server gets them wrong, not because we did not get
+  round to them — `xsd:long` and `xsd:unsignedInt` filters crash it,
+  `xsd:float`'s crash it differently, `xsd:decimal`'s and `xsd:dateTime`'s `eq`
+  compares the lexical form (`10.250` does not match `10.25`), and on the narrow
+  and derived integer types (`xsd:byte`, `xsd:nonNegativeInteger`, …) `eq`
+  matches some stored values and not others. Each is recorded in
+  `src/predicate.rs` and re-checked by `tests/predicates.rs`.
+
+  Practical consequence for schema authors: a Rust `i32` becomes `xsd:integer`
+  and filters precisely; `i64` becomes `xsd:long`, whose filters the server
+  cannot answer at all. Prefer `i32` and `f64` for properties you intend to
+  filter on. Note also that a `BigInt` filter literal must be written as a
+  **quoted** decimal (`{age: {ge: "30"}}`); a bare `30` is a request error.
+- **Two operators on one property are not a range.** `{age: {ge: 0, lt: 10}}`
+  looks like `0 <= age < 10`; this server honours one of the two and silently
+  drops the other. Write `_and: [{age: {ge: 0}}, {age: {lt: 10}}]`, which both
+  the server and Reactor read as the conjunction.
+- **An ordered page keeps the coarse dependency.** A collection with `orderBy`
+  *and* `limit`/`offset` is not determined by membership — a member whose
+  ordering key moves can cross a page boundary into a page that never depended
+  on it — so such a read is invalidated by any write to the class whatever its
+  filter.
 - **No eager recomputation.** Invalidation drops an entry; the next reader pays
   to refill it.
 - **The shared cache tier is unproven across nodes.** The filesystem store works

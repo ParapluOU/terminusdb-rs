@@ -16,7 +16,9 @@ use crate::schema_index::SchemaIndex;
 ///
 /// ```text
 /// Agent (abstract)            name: xsd:string
-///  ├── Person                 nicknames: Set<xsd:string>, favourite: Colour,
+///  ├── Person                 age: xsd:integer, height: xsd:double,
+///  │                          active: xsd:boolean,
+///  │                          nicknames: Set<xsd:string>, favourite: Colour,
 ///  │                          employer: Optional<Company>, address: Address,
 ///  │                          friends: Set<Person>
 ///  │    └── Employee          salary: xsd:decimal,
@@ -43,6 +45,13 @@ pub fn schema_fixture_docs() -> Vec<Value> {
             "@id": "Person",
             "@type": "Class",
             "@inherits": ["Agent"],
+            // An indexable integer, double and boolean, so predicate tests have
+            // a verified range of each comparison discipline to work with, plus
+            // `Employee.salary` (xsd:decimal) as a deliberately *unindexable*
+            // one. See `crate::predicate::INDEXABLE_RANGES`.
+            "age": "xsd:integer",
+            "height": "xsd:double",
+            "active": "xsd:boolean",
             "nicknames": {"@type": "Set", "@class": "xsd:string"},
             "favourite": "Colour",
             "employer": {"@type": "Optional", "@class": "Company"},

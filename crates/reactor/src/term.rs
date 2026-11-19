@@ -20,9 +20,12 @@
 //!   `Ord` follows it, so sorting a dependency list puts the cheap, specific
 //!   terms first.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{ClassName, DocId, PropName};
+use crate::predicate::Predicate;
 use crate::schema_index::SchemaIndex;
 
 /// Normalized scalar for value-indexed terms: canonical JSON text, so `1`,
@@ -151,6 +154,27 @@ pub enum Term {
         /// The indexed value, canonicalized.
         value: ValueKey,
     },
+    /// **Membership of a predicate changed**: some document entered or left the
+    /// set a filter selects.
+    ///
+    /// This is the one term whose firing is *decided* rather than derived. The
+    /// writer evaluates the predicate against the whole before and after
+    /// document of every change that touches a property the predicate mentions
+    /// (and against every change on the class for a create or a delete), and
+    /// fires this only when the two disagree. A field edit that moves a
+    /// document *within* the set — or that leaves a non-member a non-member —
+    /// fires nothing, which is the whole point: that is the case
+    /// [`Term::Class`] could not express and so invalidated unconditionally.
+    ///
+    /// The predicate travels **inside the term**, not behind an id in a side
+    /// table. The analyzer runs on the read path and the registry lives in the
+    /// writer, so an id-only term would have to be resolved across that
+    /// boundary, and a fragment registered before its predicate reached the
+    /// writer would be a fragment the writer could not evaluate — i.e. silently
+    /// stale. Carrying the structure makes the term self-contained; the
+    /// `Arc` keeps cloning it cheap, and [`crate::predicate::PredicateId`] is
+    /// derived from the structure whenever an identity is wanted.
+    Predicate(Arc<Predicate>),
     /// `prop` on any instance of `class`.
     ClassField(ClassName, PropName),
     /// The *membership* of a class: an instance was created or deleted. Does not
@@ -204,6 +228,7 @@ impl Term {
             | Term::ClassField(class, _)
             | Term::Members(class)
             | Term::Class(class) => Some(class.clone()),
+            Term::Predicate(pred) => Some(pred.class.clone()),
             Term::Path { .. } | Term::Schema | Term::Everything => None,
         }
     }
@@ -223,6 +248,7 @@ impl Term {
             | Term::ClassField(class, _)
             | Term::Members(class)
             | Term::Class(class) => vec![TermBucket::Class(class.clone())],
+            Term::Predicate(pred) => vec![TermBucket::Class(pred.class.clone())],
             Term::Path { classes, .. } => {
                 if classes.is_empty() {
                     // A path with no derivable class subsumes everything, so it
@@ -362,6 +388,34 @@ impl Term {
                 _ => false,
             },
 
+            // Exact, and *only* exact. A fired `Predicate(q)` is a decision
+            // the writer made by evaluating the predicate against the whole
+            // before and after document, so its absence is proof that
+            // membership did not move — which is the entire value of the term.
+            //
+            // In particular a fired `Class`, `ClassField`, `DocField` or
+            // `Members` must NOT match here. `fire` emits `Class(c)` for every
+            // change unconditionally, so matching it would invalidate every
+            // filtered read on every write and leave us exactly where we
+            // started. The soundness obligations that buys are discharged in
+            // two places, both of which must stay true:
+            //
+            // * **The writer evaluates every registered predicate** that could
+            //   be affected by a commit, and when it cannot — the evaluation
+            //   bound was exceeded, a value was undecidable, a document was
+            //   retyped — it fires the predicate terms *coarsely* instead of
+            //   skipping them. Absence of a fire is never "we did not get
+            //   round to it".
+            // * **A fill that was in flight when a commit landed** cannot rely
+            //   on that, because the predicate may not have been registered
+            //   yet. The insert protocol's replay therefore uses
+            //   [`Term::subsumes_pessimistically`], which does match the coarse
+            //   footprint. See its documentation.
+            Term::Predicate(pred) => match fired {
+                Term::Predicate(fired) => pred == fired,
+                _ => false,
+            },
+
             Term::Backlink {
                 target,
                 prop,
@@ -395,6 +449,54 @@ impl Term {
                     None => false,
                 }
             }
+        }
+    }
+
+    /// As [`Term::subsumes`], but treating a [`Term::Predicate`] dependency as
+    /// dirtied by the *coarse footprint* of a change as well as by an exact
+    /// predicate fire.
+    ///
+    /// This exists for one narrow case, and using it anywhere else would throw
+    /// away the feature. A fill is issued pinned at position `P` and lands
+    /// later; before storing it the writer replays the fired log over `(P,
+    /// head]` to ask whether anything invalidated its dependencies. For every
+    /// other term that question is answerable from the log, because firing is a
+    /// pure function of the commit. A predicate fire is not: the writer only
+    /// evaluates predicates that are *registered*, and this fill's predicate
+    /// was by definition not registered while it was in flight. So the log may
+    /// legitimately contain a commit that moved a document into this
+    /// predicate's set without naming the predicate.
+    ///
+    /// The replay therefore asks the weaker question — "did anything happen on
+    /// this class that could have moved membership?" — and answers it from the
+    /// terms `fire` always emits: `ClassField(c, p)` for each changed property,
+    /// and `Members(c)` for a create or delete. A false positive costs a
+    /// refill. A false negative would be a fragment that is stale forever.
+    ///
+    /// Live invalidation, by contrast, runs *after* registration, in the same
+    /// single writer, so there the absence of a predicate fire is proof.
+    pub fn subsumes_pessimistically(&self, fired: &Term, schema: &SchemaIndex) -> bool {
+        if self.subsumes(fired, schema) {
+            return true;
+        }
+        let Term::Predicate(pred) = self else {
+            return false;
+        };
+        match fired {
+            Term::ClassField(class, prop) => {
+                schema.is_subclass_of(class, &pred.class) && pred.props().contains(prop)
+            }
+            Term::DocField(id, prop) | Term::Edge(id, prop) => {
+                class_of_doc_is_under(id, &pred.class, schema) && pred.props().contains(prop)
+            }
+            // The property set is unknown, so anything on the class counts.
+            Term::Doc(id) => class_of_doc_is_under(id, &pred.class, schema),
+            // A create or a delete moves membership whatever the predicate says.
+            Term::Members(class) | Term::Class(class) => schema.is_subclass_of(class, &pred.class),
+            Term::Index { class, prop, .. } => {
+                schema.is_subclass_of(class, &pred.class) && pred.props().contains(prop)
+            }
+            _ => false,
         }
     }
 }
@@ -446,6 +548,7 @@ pub type TermSet = std::collections::BTreeSet<Term>;
 /// class:Person
 /// classfield:Person.name
 /// index:Person.name="Ann"
+/// pred:{"class":"Person","pred":{"Cmp":{"prop":"age","op":"Ge","value":{"Num":"30"},"order":"Integer"}}}
 /// backlink:Person/alice.friend<-Person
 /// path:Person,Company
 /// path:Person/alice>Person,Company
@@ -465,6 +568,14 @@ pub type TermSet = std::collections::BTreeSet<Term>;
 ///   so the entry is never invalidated by the change it named. Stale forever, and
 ///   invisible. Rejecting is the only safe answer, and it matches
 ///   [`ValueKey::of`] exactly.
+/// * **`pred:` carries the predicate's canonical JSON, opaquely.** A predicate
+///   is *derived* from a filter and the schema, never authored: the only
+///   encoding that is any use is the one the analyzer would have produced
+///   byte-for-byte, because a predicate that differs by one operator is a
+///   different term that nothing fires. So the payload is the structure's own
+///   serialization rather than a friendly surface grammar — round-trippable and
+///   honest about not being an invitation. It is the one tag whose payload may
+///   contain `{`, `"` and `,`.
 /// * **The last separator wins.** A document id may contain dots and slashes
 ///   (`Person/alice.v2`), so `docfield:`/`edge:`/`classfield:` split on the
 ///   *last* `.` and `backlink:` on the last `<-`. Property names containing a
@@ -484,6 +595,7 @@ impl std::fmt::Display for Term {
             Term::Index { class, prop, value } => {
                 write!(f, "index:{class}.{prop}={}", value.as_str())
             }
+            Term::Predicate(pred) => write!(f, "pred:{}", pred.encode()),
             Term::ClassField(class, prop) => write!(f, "classfield:{class}.{prop}"),
             Term::Members(class) => write!(f, "members:{class}"),
             Term::Class(class) => write!(f, "class:{class}"),
@@ -534,11 +646,15 @@ impl Term {
         // being absorbed into a name: `class:Person,typo` must fail, not become
         // a condition on a class called `Person,typo` that nothing ever fires.
         // `path:` is the one tag whose payload is itself comma-separated.
-        if tag.trim() != "path" && rest.contains(',') {
+        // `path:` has a comma-separated payload of its own, and `pred:` carries
+        // JSON. Both are exempt; everything else must not contain a comma.
+        if !matches!(tag.trim(), "path" | "pred") && rest.contains(',') {
             return None;
         }
         match tag.trim() {
             "doc" => Some(Term::Doc(DocId::parse(rest))),
+            "pred" => crate::predicate::Predicate::decode(rest)
+                .map(|pred| Term::Predicate(Arc::new(pred))),
             "members" => Some(Term::Members(ClassName::new(rest))),
             "class" => Some(Term::Class(ClassName::new(rest))),
             "docfield" => {
@@ -658,6 +774,7 @@ fn split_conditions(text: &str) -> Vec<&str> {
         "class:",
         "classfield:",
         "index:",
+        "pred:",
         "backlink:",
         "path:",
         "schema",
@@ -888,6 +1005,39 @@ mod tests {
                 });
             }
         }
+        // Two predicates: a plain range and a nested boolean shape, so the
+        // cross-product tests cover the exact-match rule and the round trip
+        // covers a payload with braces, quotes and commas in it.
+        out.push(Term::Predicate(std::sync::Arc::new(
+            crate::predicate::Predicate::new(
+                cls("Person"),
+                crate::predicate::Pred::Cmp {
+                    prop: prop("name"),
+                    op: crate::predicate::CmpOp::Ge,
+                    value: crate::predicate::Lit::Text("Ann".to_owned()),
+                    order: crate::predicate::Order::Text,
+                },
+            ),
+        )));
+        out.push(Term::Predicate(std::sync::Arc::new(
+            crate::predicate::Predicate::new(
+                cls("Employee"),
+                crate::predicate::Pred::Any(vec![
+                    crate::predicate::Pred::Not(Box::new(crate::predicate::Pred::Cmp {
+                        prop: prop("name"),
+                        op: crate::predicate::CmpOp::Eq,
+                        value: crate::predicate::Lit::Text("a,b".to_owned()),
+                        order: crate::predicate::Order::Text,
+                    })),
+                    crate::predicate::Pred::Cmp {
+                        prop: prop("age"),
+                        op: crate::predicate::CmpOp::Lt,
+                        value: crate::predicate::Lit::Num("30".to_owned()),
+                        order: crate::predicate::Order::Integer,
+                    },
+                ]),
+            ),
+        )));
         out.push(Term::Path {
             from: None,
             classes: vec![cls("Person")],

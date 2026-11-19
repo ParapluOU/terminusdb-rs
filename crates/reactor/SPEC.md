@@ -45,6 +45,9 @@ ids.rs          Namespace, DocId, ClassName, PropName, ContentHash, ShapeId,
 term.rs         Term, TermBucket, ValueKey, TermSet                      [A]
 schema_index.rs SchemaIndex: props (value vs link), hierarchy, backlinks  [A]
 change.rs       DocChange, ChangeSet, fire()                             [A]
+predicate.rs    Pred/Predicate/PredicateId: the filter-predicate IR and its
+                evaluator, plus INDEXABLE_RANGES — the verified-against-the-
+                server table of what may be indexed at all               [A]
 compose.rs      russian-doll decomposition of document lists: split a list
                 into per-document byte ranges + learned framing, and splice
                 it back; Spine, Framing, FramingCache                     [B]
@@ -53,6 +56,8 @@ engine/
   fragment.rs   FragmentKey, FragmentVersion, FragmentSlot, BodyRef      [B]
   index.rs      TermIndex (TermBucket -> entries), subsumption matching  [B]
   log.rs        FiredLog: ring of (Position, CommitId, TermSet)          [B]
+  predicates.rs PredicateRegistry ((class,prop) -> predicates, refcounted)
+                + fire_predicates(): parallel membership decisions       [B]
   writer.rs     single writer task per namespace: apply/insert/nff       [B]
   policy.rs     Policy: eager|lazy, ttl, fence policy, decomposition     [B]
 store/
@@ -179,6 +184,12 @@ pub enum Term {
     Edge(DocId, PropName),
     Backlink { target: DocId, prop: PropName, from_class: ClassName },
     Index { class: ClassName, prop: PropName, value: ValueKey },
+    /// Membership of a filter predicate changed: some document entered or left
+    /// the set a filter selects. The only term whose firing is *decided*
+    /// (by evaluating the predicate against the whole before and after
+    /// document) rather than derived from the change. Carries the predicate
+    /// structure so the term is self-contained — see `predicate.rs`.
+    Predicate(Arc<Predicate>),
     ClassField(ClassName, PropName),
     Members(ClassName),
     Class(ClassName),
@@ -203,6 +214,11 @@ impl Term {
     /// True if `self` (a fragment's dependency) is dirtied by `fired`.
     /// Matching is *subsumption*, not equality.
     pub fn subsumes(&self, fired: &Term, schema: &SchemaIndex) -> bool;
+    /// As `subsumes`, but a `Predicate` dependency is also dirtied by the
+    /// coarse footprint of a change on its class. Used **only** by the insert
+    /// protocol's fired-log replay, where the predicate was not yet registered
+    /// and so the absence of a predicate fire proves nothing.
+    pub fn subsumes_pessimistically(&self, fired: &Term, schema: &SchemaIndex) -> bool;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -356,6 +372,79 @@ pub fn fire(cs: &ChangeSet, schema: &SchemaIndex) -> TermSet;
     - unknown prop kind (empty/incomplete schema index) → fire BOTH the `Index`
       form for scalars and the `Edge`/`Backlink` form for anything that parses
       as a doc id. Over-firing is correct; under-firing is not.
+
+### Predicate firing
+
+`fire` stays pure; predicate firing is a second pure function, because it needs
+the live predicate set and so belongs to the writer:
+
+```rust
+pub fn fire_predicates(
+    cs: &ChangeSet, schema: &SchemaIndex,
+    registry: &PredicateRegistry, limits: EvalLimits,
+) -> Firing;   // { terms, evaluated, skipped, coarse }
+```
+
+Rules:
+
+- The registry maps `(ClassName, PropName) -> [PredicateId]`, with predicates
+  reference counted by the registered fragment versions depending on them and
+  dropped when the last one goes. Retain/release happen in the writer, in the
+  same places the term index is updated.
+- For each `DocChange`: candidates are the predicates on
+  `schema.ancestors(class)` that mention a property in `changed_props()`. A
+  **create or delete** takes *every* predicate on those classes instead, since a
+  created document's changed-property set does not mention the properties it
+  lacks — and `_not: {p: {eq: v}}` is satisfied by lacking `p`.
+- `member(doc) = doc.is_some() && pred(doc)`. A document that does not exist is
+  not a member whatever the predicate says, which is what makes creates and
+  deletes fall out of the same arithmetic as updates. Fire
+  `Predicate(pred)` iff `member(before) != member(after)`.
+- `Truth::Unknown` on either side (a value our measured rules do not cover) →
+  fire anyway and set `coarse`. A retyped document (`@type` in
+  `changed_props()`) → fire every predicate on the touched classes.
+- **Backpressure degrades precision, not latency.** Over
+  `limits.max_evaluations` pairs or `limits.max_predicates` live predicates,
+  fire every predicate on the touched classes without evaluating, count the
+  pairs as `skipped`, and set `coarse`.
+- Evaluation runs on a shared rayon pool. The writer **awaits** it before
+  publishing the watermark — see the invariant below.
+
+### The watermark gate (§5.5)
+
+Predicate evaluation is the first thing in the commit path whose cost is
+unbounded by the commit itself, which makes it tempting to let the watermark
+advance and apply the invalidations later. That is not available:
+`X-Reactor-Head` is a claim that everything up to that watermark is reflected in
+what we serve, and read-your-writes and the `X-Reactor-Min-Version` fence are
+both built on it. So:
+
+> **The watermark must not advance past a commit whose invalidations have not
+> been applied.** "Eventually consistent indexing" means the watermark *lags* —
+> a read in the window is answered from the previous watermark, an older but
+> self-consistent snapshot, which §5.5(4) already permits as bounded staleness —
+> never that it is current but wrong.
+
+The lag is reported as `reactor_watermark_lag_ms` and bounded by the two
+`EvalLimits` above. Asserted by
+`writer::tests::the_watermark_never_advances_past_an_unapplied_invalidation`,
+which slows evaluation and reads concurrently.
+
+### The replay asymmetry
+
+A predicate fire is only emitted for predicates that were **registered** when
+the commit was applied. A fill in flight was not registered, so for the insert
+protocol's fired-log replay the absence of a predicate fire proves nothing:
+that replay uses `Term::subsumes_pessimistically`, which also matches the coarse
+footprint (`ClassField(c,p)` for a mentioned `p`, `Members(c)`, `Doc(id)`) of a
+change on the predicate's class. Live invalidation runs after registration, in
+the same single writer, and so can and does use the exact rule.
+
+A consequence worth knowing: validity is no longer monotone in the pin
+position. A freshly landed fill can be closed conservatively while an older,
+registered fill of the same key is genuinely still valid — and the engine then
+correctly serves the older one. The oracle model in `writer.rs` transcribes the
+open-version rule for exactly this reason.
 
 ## Phase B — engine and store
 
@@ -664,18 +753,35 @@ GraphQL handling, in order:
    recording which were injected so the response can be stripped before it goes
    to the client. Keep them in the stored fragment.
 4. **Extract terms** against `SchemaIndex`:
-   - root field `C(filter: {p: {eq: v}})` → `Index{C,p,v}`; any other filter
-     shape → `Class(C)` + `Members(C)`; no filter → `Members(C)` + `Class(C)`.
+   - root field `C(filter: {p: {eq: v}})` → `Index{C,p,v}`; a filter we can
+     **evaluate** → `Predicate(pred)`; any other filter shape → `Class(C)` +
+     `Members(C)`; no filter → `Members(C)` + `Class(C)`.
      `Class(C)` is there because the members' **field values are in the
      response**; it must not appear in the read set of an answer that carries no
      field value (see `_count` and the id-only rule below).
+   - A filter is evaluable iff every leaf is `prop: {op: literal}` with **one**
+     operator from `eq|ne|lt|le|gt|ge`, on a single-valued datatype property
+     whose declared range is a row of `predicate::INDEXABLE_RANGES`, combined
+     only by `_and`/`_or`/`_not` and by several distinct properties in one
+     object. Everything else — `regex`, `startsWith`, `allOfTerms`,
+     `anyOfTerms`, `relationship`, `_id`, `_ids`, a nested filter across a link,
+     a collection-valued property, a variable literal, two operators on one
+     property — is **unindexable by construction** and keeps `Class(C)`. The
+     table and the operator set are not a wish list: each entry is verified
+     against a live server by `tests/predicates.rs`, and anything unverified is
+     left coarse rather than approximated.
+   - A collection that is both **ordered and windowed** (`orderBy` together with
+     `limit`/`offset`) keeps `Class(C)` whatever its filter, including a single
+     `eq`. Membership is not enough there: a member whose ordering key moves can
+     cross a page boundary, and the page it lands on never depended on it.
    - nested link field `p` on class `C` → `ClassField(C,p)` and, per returned
      parent id, `Edge(id,p)` (added post-hoc from the response ids — see below).
    - backlink field `_p_of_F` on class `C` → `Backlink{target: <each id>, p, F}`
      and `ClassField(F,p)`.
    - `_path_to_C` → `Path { from: None, classes: <C and descendants> }`.
    - `_count(C: <filter>)` → *membership only*: no filter (or `{}`) →
-     `Members(C)`; `{p: {eq: v}}` → `Index{C,p,v}`; any other filter shape →
+     `Members(C)`; `{p: {eq: v}}` → `Index{C,p,v}`; an evaluable filter →
+     `Predicate(pred)`; any other filter shape →
      `Members(C)` + `Class(C)`, since the bucket cannot be named. A count is a
      statement about how many documents exist, so it cannot depend on what any of
      them contains — `Class(C)` here made paging metadata die on every write.

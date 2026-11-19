@@ -130,6 +130,26 @@ woql = true
 # zero-risk case; there is no reason to turn it off.
 pinned = true
 
+[predicates]
+# A GraphQL filter that is more than a single `eq` — a range, an `_and`, a
+# `_not` — is indexed as a *predicate*: on every commit the writer decides,
+# from the whole before and after document, whether each change moved a
+# document into or out of the set. A field edit that does not cross the
+# boundary then invalidates nothing, which is what makes a filtered list (and
+# the counts over it) survive unrelated writes.
+#
+# The work is CPU, it runs on a worker pool, and the commit path WAITS for it:
+# the watermark must never advance past invalidations we have not applied, or
+# `X-Reactor-Head` would claim currency we do not have. So these bounds are
+# really latency bounds. Over either one the commit invalidates every predicate
+# on the classes it touched instead — coarse, bounded, and counted as
+# `reactor_predicate_evaluations_skipped`. Raise them if that counter climbs and
+# `reactor_watermark_lag_ms` has room; lower them if the lag does not.
+max_evaluations_per_commit = 50000
+max_predicates = 5000
+# 0 = one thread per core.
+workers = 0
+
 [observability]
 # Serve from cache AND re-execute against the local node at the same pinned
 # commit, comparing bytes, reporting divergence with the dependency trace.

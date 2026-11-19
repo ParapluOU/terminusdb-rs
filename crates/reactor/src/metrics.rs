@@ -150,10 +150,34 @@ metrics! {
         compositions_abandoned: "Compositions given up on because a child could not be \
                                  resolved even after a refill, so the whole request was \
                                  forwarded. Never a partial body.",
+        predicate_evaluations: "(change, predicate) pairs evaluated to decide whether a \
+                                document entered or left a filtered set. This is the CPU \
+                                the precision costs, and it is spent on a worker pool.",
+        predicate_evaluations_skipped: "(change, predicate) pairs NOT evaluated because the \
+                                        commit exceeded [engine].max_predicate_evaluations \
+                                        or [engine].max_predicates, so invalidation went \
+                                        coarse for that commit. Backpressure degrades \
+                                        precision, never latency: an unbounded evaluation \
+                                        would stall the watermark, which stalls every read. \
+                                        A rising count means filtered reads on busy classes \
+                                        are being invalidated as if unfiltered — raise the \
+                                        bounds, or expect refills.",
+        predicate_fires_coarse: "Commits in which at least one predicate was fired without \
+                                 deciding membership — the bound was exceeded, a document \
+                                 was retyped, or a value was undecidable.",
     }
     gauges {
         store_bytes: "Approximate bytes held by the fragment store.",
         tracked_keys: "Fragment keys with at least one retained version.",
+        live_predicates: "Distinct filter predicates currently indexed, i.e. referred to by \
+                          at least one registered fragment version.",
+        watermark_lag_ms: "Milliseconds between observing a commit and publishing the \
+                           watermark that includes it — dominated by predicate evaluation. \
+                           This is bounded staleness, not error: reads in the window are \
+                           answered from the previous watermark, which is an older but \
+                           self-consistent snapshot. If it grows, lower \
+                           [engine].max_predicate_evaluations so backpressure trades \
+                           precision for it.",
     }
 }
 
